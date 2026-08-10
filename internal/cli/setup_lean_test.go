@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"os"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -34,7 +34,7 @@ func leanWriters() []leanWriter {
 // decoded through that client's own parser (TOML for Codex, JSON for the rest).
 func readLeanPlumbEntry(t *testing.T, c leanClient, path string) map[string]any {
 	t.Helper()
-	assertNoSentinelOnDisk(t, path)
+	assertNoSentinelOnDisk(t, c, path)
 	cfg, err := c.parse(path)
 	if err != nil {
 		t.Fatalf("parsing %s: %v", path, err)
@@ -52,25 +52,45 @@ func readLeanPlumbEntry(t *testing.T, c leanClient, path string) map[string]any 
 
 // assertNoSentinelOnDisk is the canary for removeKey, mergeServerEntry's
 // "delete this key" value. The merge deletes rather than assigns it, so it never
-// reaches a serialiser — but it is now general vocabulary on a helper ten
-// clients and three serialisers share, and a sentinel that DID reach one would
-// not fail loudly: json.Marshal renders the empty struct as `{}` and TOML as an
-// empty inline table, i.e. a silently malformed config rather than an error.
+// reaches a serialiser — but it is now general vocabulary on a helper ten clients
+// and three serialisers share, and a sentinel that DID reach one would not fail
+// loudly: it marshals as an empty group, producing a silently malformed config
+// rather than an error.
 //
-// Every read in these tests runs through readLeanPlumbEntry, so this scans the
-// bytes of every config the writers produce. `{}` is the exact shape a leak
-// takes and no plumb-written config contains one otherwise, which makes it a
-// precise canary rather than a broad ban.
-func assertNoSentinelOnDisk(t *testing.T, path string) {
+// It checks the DECODED config, not the bytes. A byte scan for `{}` was the
+// obvious first cut and it was a no-op for the one client whose config carries
+// unrelated user state: go-toml does not write an empty inline table, it writes a
+// table HEADER — `[mcp_servers.plumb.enabled_tools]` — with no braces anywhere.
+// An empty map after decoding is what a leak looks like in every format plumb
+// writes, so that is what this walks. Every read in these tests runs through
+// readLeanPlumbEntry, so it covers every config the writers produce.
+func assertNoSentinelOnDisk(t *testing.T, c leanClient, path string) {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	cfg, err := c.parse(path)
 	if err != nil {
-		return // the caller's own read reports a missing file better than this can
+		return // the caller's own read reports an unreadable file better than this can
 	}
-	for _, leak := range []string{"{}", "removeKey"} {
-		if strings.Contains(string(data), leak) {
-			t.Errorf("written config contains %q — the removeKey sentinel reached a serialiser:\n%s", leak, data)
+	assertNoEmptyGroup(t, path, "", cfg)
+}
+
+func assertNoEmptyGroup(t *testing.T, path, at string, v any) {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		if list, isList := v.([]any); isList {
+			for i, e := range list {
+				assertNoEmptyGroup(t, path, fmt.Sprintf("%s[%d]", at, i), e)
+			}
 		}
+		return
+	}
+	if len(m) == 0 && at != "" {
+		t.Errorf("%s: %s decoded to an empty object/table — the removeKey sentinel reached a serialiser",
+			path, at)
+		return
+	}
+	for k, e := range m {
+		assertNoEmptyGroup(t, path, strings.TrimPrefix(at+"."+k, "."), e)
 	}
 }
 
@@ -519,16 +539,30 @@ func TestBareRepointDoesNotSilentlyDropTheAllowlist(t *testing.T) {
 	}
 
 	// Kimi preserves the key on a bare re-register, so its repoint was never
-	// destructive — but --lean is still the better suggestion, because it also
-	// refreshes a snapshot that may have aged past the current lean set.
+	// destructive — and there `--lean` can only make things WORSE, because it
+	// REPLACES the list. The suggestion therefore turns on the grade, not on mere
+	// presence: only a list that reads as plumb's own aged snapshot is worth
+	// refreshing, and a hand-picked one must be left exactly alone.
 	t.Run("kimi-code", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "mcp.json")
-		if _, _, err := kimiCodeInto(path, movedBin, true); err != nil {
-			t.Fatalf("lean register: %v", err)
-		}
-		res := classifyClientBinary(shippedTarget(t, "kimi-code"), path, currentBin)
-		if !strings.Contains(res.fix, "plumb setup kimi-code --lean") {
-			t.Errorf("repoint fix %q should refresh the allowlist it can see", res.fix)
+		lean := tools.LeanToolNames()
+		for _, tc := range []struct {
+			name      string
+			allowlist []string
+			wantLean  bool
+		}{
+			{"hand-picked list is not plumb's to replace", []string{"read_file", "edit_file", "git"}, false},
+			{"a current snapshot has nothing to refresh", lean, false},
+			{"an aged snapshot is worth refreshing", lean[:len(lean)-1], true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "mcp.json")
+				writeKimiAllowlist(t, path, movedBin, tc.allowlist)
+				res := classifyClientBinary(shippedTarget(t, "kimi-code"), path, currentBin)
+				if got := strings.Contains(res.fix, "--lean"); got != tc.wantLean {
+					t.Errorf("repoint fix %q suggests --lean = %v, want %v — a bare re-register "+
+						"preserves the key here, so --lean is the destructive option", res.fix, got, tc.wantLean)
+				}
+			})
 		}
 	})
 }
@@ -578,6 +612,44 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 			}
 		})
 	}
+
+	// The note must not claim anything it cannot substantiate. It used to close
+	// with "the previous config was backed up alongside it", which is false on a
+	// first-ever registration — mergeServerEntry skips the backup when the file is
+	// new — and on an idempotent second run, which writes nothing at all.
+	t.Run("no unsubstantiated backup claim", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, filepath.Base(mustPath(t, codexLeanClient.pathFn)))
+		target := shippedTarget(t, "codex")
+		target.pathFn = func() (string, error) { return path, nil }
+		target.skillsDirFn = nil
+		setupCodexLeanFlag = false
+
+		first := captureStdout(t, func() {
+			if err := runSetupTarget(target); err != nil {
+				t.Errorf("first-ever bare register: %v", err)
+			}
+		})
+		second := captureStdout(t, func() {
+			if err := runSetupTarget(target); err != nil {
+				t.Errorf("idempotent second run: %v", err)
+			}
+		})
+		if !strings.Contains(second, "already registered") {
+			t.Fatalf("expected the second run to write nothing:\n%s", second)
+		}
+		backups, err := filepath.Glob(filepath.Join(dir, "*.bak"))
+		if err != nil {
+			t.Fatalf("globbing backups: %v", err)
+		}
+		for _, out := range []string{first, second} {
+			for _, claim := range []string{"backed up", "backup"} {
+				if strings.Contains(out, claim) && len(backups) == 0 {
+					t.Errorf("the note claims %q but no backup exists (%v):\n%s", claim, backups, out)
+				}
+			}
+		}
+	})
 
 	// Kimi's bare re-register preserves the key, so it has nothing to announce —
 	// and must stay silent rather than claim a change it did not make.

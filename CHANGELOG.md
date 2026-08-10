@@ -148,6 +148,32 @@
 
 ### Fixed
 
+- **`plumb doctor` no longer suggests a repoint command that would overwrite a
+  hand-picked Kimi Code allowlist.** The `--lean` suffix was appended on the
+  mere PRESENCE of an allowlist, which is right for Codex and Gemini CLI — a
+  bare re-register deletes the key there, so `--lean` is strictly safer whatever
+  the list holds — but wrong for Kimi Code, whose bare re-register preserves it.
+  A user who had hand-picked `enabledTools = [read_file, edit_file, git]` (which
+  `plumb doctor` deliberately passes in silence: a working allowlist is the
+  user's business) would have had those three names replaced by plumb's 21 by
+  running the command doctor printed about a moved binary. The contract is now
+  data on the client descriptor (`bareClears`), and for a preserve-on-bare
+  client `--lean` is suggested only when the list grades as plumb's own aged
+  snapshot — the one case where replacing it is the refresh doctor recommends
+  elsewhere anyway. Guarded by three new `TestBareRepointDoesNotSilentlyDropTheAllowlist`
+  cases: hand-picked (no `--lean`), current snapshot (no `--lean`, nothing to
+  refresh), aged snapshot (`--lean`).
+
+- **The bare-setup note no longer claims a backup that may not exist.** Its
+  closing "(the previous config was backed up alongside it)" was false in two
+  reachable states — a first-ever registration, where `mergeServerEntry` skips
+  the backup because the file is new, and an idempotent second bare run, which
+  writes nothing at all and printed the claim anyway. Deleted rather than
+  hedged: the note is now three lines that are all true, which also lightens
+  what a first-time user reads about an allowlist they never had. Guarded by a
+  new subtest that drives both states and fails on any backup claim unmatched by
+  a `.bak` on disk.
+
 - **`session_start` no longer steers a `--lean` Codex or Gemini CLI at tools
   their own config filtered out.** Kimi Code's guidance block has always been
   restricted to the lean set, because a client-side allowlist removes a tool
