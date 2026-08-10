@@ -177,15 +177,17 @@ func setSpan(node *topology.Node, tn *tsg.Node) {
 //
 // The backward walk goes through the DECLARATION's sibling list by index rather
 // than by chaining PrevSibling off each comment, because a comment cannot be
-// relied on to know where it sits. In the tree-sitter JavaScript grammar a
-// comment that precedes every other top-level node reports a nil Parent, so
-// PrevSibling — which resolves through the parent link — returns nil from the
-// first hop and the run collapses to its last line: a three-line `//` doc block
-// above the first declaration in a .js file yielded only its third line, which
-// include_doc_comment then split, moving half a comment. The declaration's own
-// parent link is sound (that is how last was found at all), and its child list
-// contains the whole run, so resolving the run there is immune to the quirk in
-// every grammar.
+// relied on to know where it sits. In the tree-sitter JavaScript grammar EVERY
+// comment ahead of the first non-comment top-level node reports a nil Parent —
+// the whole leading run, not just its first line — so PrevSibling, which
+// resolves through the parent link, returns nil from the first hop on any of
+// them and the run collapses to its last line: a three-line `//` doc block above
+// the first declaration in a .js file yielded only its third line, which
+// include_doc_comment then split, moving half a comment. A run further down the
+// file has sound parent links, which is why only the leading one was affected.
+// The declaration's own parent link is sound in both positions (that is how last
+// was found at all), and its child list contains the whole run, so resolving the
+// run there is immune to the quirk in every grammar.
 func docSpanBefore(decl *tsg.Node, lang *tsg.Language, src []byte, isComment func(typ string) bool) (start, end int) {
 	last := decl.PrevSibling() // the comment closest to the declaration
 	if last == nil || !isComment(last.Type(lang)) || !commentFlushBefore(src, last, decl.StartByte()) {

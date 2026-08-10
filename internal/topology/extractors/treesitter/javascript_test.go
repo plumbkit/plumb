@@ -315,10 +315,12 @@ func TestJavaScript_CommentInsideExportWrapperKeepsItsSpan(t *testing.T) {
 
 // TestJavaScript_MultiLineCommentRunIsCollectedWhole pins the backward half of
 // the run-walk for JavaScript, where a previous-sibling chain cannot find it.
-// In this grammar a comment that precedes every other top-level node reports a
-// nil Parent, so PrevSibling returns nil from the first hop and a `//` doc
-// block collapsed to its LAST line. Nothing caught it because no test used a
-// multi-comment run in JavaScript, and every other grammar chains fine.
+// In this grammar every comment ahead of the first non-comment top-level node
+// reports a nil Parent — the whole leading run, not just its first line — so
+// PrevSibling returns nil from the first hop on any of them and a `//` doc
+// block collapsed to its LAST line. A run further down the file chains fine,
+// which is why `third` was never affected. Nothing caught it because no test
+// used a multi-comment run in JavaScript, and every other grammar chains fine.
 //
 // A collapsed span is not merely short: include_doc_comment (default TRUE on
 // move_symbol) starts the edit at the doc span, so replacing `add` would have
