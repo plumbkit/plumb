@@ -58,6 +58,25 @@ type Capabilities struct {
 	// reviewed data change, not an inference.
 	ReliableDeferredToolDiscovery bool
 
+	// ClientSideAllowlist is true when `plumb setup <client> --lean` can write a
+	// tool allowlist into THIS client's own MCP config — Kimi Code's
+	// enabledTools, Codex's enabled_tools, Gemini CLI's includeTools.
+	//
+	// It governs what plumb may SAY, never what it serves. The filter is applied
+	// by the client before a call reaches plumb, and plumb cannot observe whether
+	// it is in force: tools/call arrives identically either way, and the daemon is
+	// shared and long-lived, so its environment and home directory are not
+	// reliably the connecting client's — reading the client's config from here
+	// would sometimes read a different machine account's file and claim knowledge
+	// plumb does not have. So the honest response is to write guidance that is
+	// correct in BOTH states: for these clients, name only tools in the lean set
+	// (the set --lean pins), because anything else may have been filtered out.
+	//
+	// This is strictly stronger than the lean PROFILE's constraint. A profile-lean
+	// tool is merely undisplayed and stays callable by name; a client-side
+	// allowlist removes it, and there is no escape hatch.
+	ClientSideAllowlist bool
+
 	Tokeniser Family
 }
 
@@ -96,7 +115,10 @@ var registry = []Capabilities{
 		NativeFileRead: true,
 		NativeSearch:   true,
 		NativeShell:    true,
-		Tokeniser:      FamilyGPT,
+		// `plumb setup codex --lean` writes tools.LeanToolNames() into the
+		// enabled_tools key of [mcp_servers.plumb] in the user's config.toml.
+		ClientSideAllowlist: true,
+		Tokeniser:           FamilyGPT,
 	},
 	{
 		Name:           "gemini",
@@ -104,7 +126,10 @@ var registry = []Capabilities{
 		NativeFileRead: true,
 		NativeSearch:   true,
 		NativeShell:    true,
-		Tokeniser:      FamilyGemini,
+		// `plumb setup gemini --lean` writes tools.LeanToolNames() into the
+		// includeTools key of mcpServers.plumb in the user's settings.json.
+		ClientSideAllowlist: true,
+		Tokeniser:           FamilyGemini,
 	},
 	{
 		// Kimi Code is schema-discovery-only: it builds its tool set purely from
@@ -116,6 +141,9 @@ var registry = []Capabilities{
 		// demonstrated here. The token relief for Kimi Code comes instead from a
 		// CLIENT-side allowlist — `plumb setup kimi-code --lean` writes
 		// tools.LeanToolNames() into the enabledTools key of Kimi's own mcp.json.
+		// Kimi Code was the first client to get one, not the only one: Codex and
+		// Gemini CLI now carry the same ClientSideAllowlist flag, and it is that
+		// flag, not this entry, that guidance keys off.
 		//
 		// Tokeniser: Kimi K2's BPE is tiktoken-lineage, so FamilyGPT is the
 		// closest modelled family; a FamilyKimi with invented ratios would be fake
@@ -165,6 +193,7 @@ var registry = []Capabilities{
 		NativeSearch:        true,
 		NativeShell:         true,
 		SchemaDiscoveryOnly: true,
+		ClientSideAllowlist: true,
 		Tokeniser:           FamilyGPT,
 	},
 }

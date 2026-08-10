@@ -148,6 +148,39 @@
 
 ### Fixed
 
+- **`session_start` no longer steers a `--lean` Codex or Gemini CLI at tools
+  their own config filtered out.** Kimi Code's guidance block has always been
+  restricted to the lean set, because a client-side allowlist removes a tool
+  before plumb is ever called and plumb cannot see that filter. Adding the same
+  allowlist to Codex and Gemini made that rule load-bearing for two more
+  clients, but both fall through to the generic guidance block, whose
+  lean-awareness keyed off the SERVER-side profile — which for these clients is
+  always `full`. So plumb went on naming `workspace_search` and
+  `search_in_files`, neither of which is in `tools.LeanToolNames()`. The
+  capability is now declared data (`clientcaps.ClientSideAllowlist`, true for
+  exactly the three `--lean` clients) and drives both affected places: the
+  generic block names lean tools only (`nameLeanToolsOnly`, independent of the
+  profile), and the no-language-server/no-index fallbacks — plumb's only
+  guidance that offers `find_files`/`search_in_files` as the move to make now —
+  point such a client at its own file search instead of naming a plumb tool it
+  may not have. Every client with an allowlist has native search; every client
+  without one (Claude Desktop especially, which has no native replacement) keeps
+  the plumb tools unchanged. **What the server can know is unchanged**: plumb
+  still cannot detect an allowlist — the daemon is shared and long-lived, so its
+  environment and home directory are not reliably the connecting client's, and
+  reading the client's config from it would sometimes read the wrong file — so
+  the guidance is written to be correct in both states rather than guessing which
+  one holds. `ProfileNote` deliberately still reports `full` for these clients:
+  it describes what plumb advertised, which is exactly true, and hedging it on
+  every Codex/Gemini session would trade a precise statement for a vague one.
+  Guarded by `TestGenericGuidance_AllowlistClientNamesLeanToolsOnly` (the
+  Codex/Gemini equivalent of `TestKimiCodeGuidance_LeanSetOnly`, forbidden set
+  derived from `nonLeanToolSet()`, both profiles, both topology states),
+  `TestGenericGuidance_AllowlistClientStillGetsRouting`,
+  `TestRecommendedStart_LastResortSearch` (with a Claude Desktop control), and
+  the cross-package pair `TestClientSideAllowlistEntries` /
+  `TestLeanClientsDeclareTheirCapability`.
+
 - **`plumb doctor`'s own repoint advice no longer deletes a client-side tool
   allowlist, and the command that clears one no longer does it silently.** Two
   halves of one reproduction: `plumb setup codex --lean` pins 21 tools, the

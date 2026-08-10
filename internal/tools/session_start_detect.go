@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/clientcaps"
 )
 
 // workspaceScale returns a human-readable file-count summary for the workspace
@@ -321,6 +323,26 @@ func isKimiCode(fn func() string) bool {
 	}
 	n := strings.ToLower(fn())
 	return n == "kimi-code" || strings.HasPrefix(n, "kimi-code/")
+}
+
+// clientSideAllowlistCapable reports whether the connected client can filter
+// plumb's tools in its OWN MCP config — the `plumb setup <client> --lean`
+// allowlist (see clientcaps.Capabilities.ClientSideAllowlist).
+//
+// Guidance for such a client must name only lean-set tools. plumb cannot see
+// whether the allowlist is in force, so anything outside that set may already
+// have been removed client-side, before a call could reach plumb. Unlike the
+// lean PROFILE, there is no "hidden but callable by name" escape hatch.
+//
+// Unlike isKimiCode this goes through clientcaps.Lookup, aliases and all: the
+// question is a capability of the product, not a licence to show one product's
+// prose to another, so a sibling build that resolves to the same entry should
+// get the same restraint.
+func clientSideAllowlistCapable(fn func() string) bool {
+	if fn == nil {
+		return false
+	}
+	return clientcaps.Lookup(fn()).ClientSideAllowlist
 }
 
 // isClaudeDesktop reports whether fn identifies the MCP client as Claude Desktop.

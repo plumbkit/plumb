@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -547,5 +548,26 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 	setupKimiLeanFlag = false
 	if got := kimiLeanNote(); got != "" {
 		t.Errorf("Kimi preserves on a bare re-register, so its note must stay silent, got %q", got)
+	}
+}
+
+// TestLeanClientsDeclareTheirCapability ties the two halves of the client-side
+// allowlist across the package boundary. internal/cli decides which clients
+// `--lean` can write an allowlist for; internal/tools decides what session_start
+// may then SAY to them, keyed off clientcaps.ClientSideAllowlist. Nothing in the
+// type system connects the two, so adding a fourth --lean client without the
+// clientcaps flag would ship guidance naming tools that client's own config had
+// just removed — the exact failure this test exists to prevent.
+func TestLeanClientsDeclareTheirCapability(t *testing.T) {
+	for _, c := range leanAllowlistClients() {
+		// The setup subcommand doubles as the clientInfo.name prefix for all
+		// three; that coincidence is what makes the lookup work, so assert it
+		// rather than assume it.
+		caps := clientcaps.Lookup(c.setupCmd)
+		if !caps.ClientSideAllowlist {
+			t.Errorf("`plumb setup %s --lean` writes a %s allowlist, but clientcaps.Lookup(%q) reports "+
+				"ClientSideAllowlist=false (entry %q) — session_start will steer that client at tools "+
+				"its own config filtered out", c.setupCmd, c.key, c.setupCmd, caps.Name)
+		}
 	}
 }

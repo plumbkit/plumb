@@ -163,3 +163,24 @@ func TestScoreBatchAvoidsPerCallOverhead(t *testing.T) {
 		t.Errorf("batch of 1 = %+v, want zero", single)
 	}
 }
+
+// TestClientSideAllowlistEntries pins exactly which clients declare a
+// client-side tool allowlist. The flag makes plumb's guidance quieter (lean-set
+// names only), so setting it on a client that has no such allowlist would
+// silently withhold routing, and failing to set it on one that does would put
+// broken pointers in front of a --lean user. Either way it is a reviewed data
+// change, not something to acquire by accident — and the set must stay in step
+// with `plumb setup <client> --lean`, which internal/cli asserts from its end
+// (TestLeanClientsDeclareTheirCapability).
+func TestClientSideAllowlistEntries(t *testing.T) {
+	want := map[string]bool{"codex": true, "gemini": true, "kimi-code": true}
+	for _, c := range registry {
+		if got := c.ClientSideAllowlist; got != want[c.Name] {
+			t.Errorf("%s: ClientSideAllowlist = %v, want %v — plumb writes an allowlist for exactly %v",
+				c.Name, got, want[c.Name], []string{"codex", "gemini", "kimi-code"})
+		}
+	}
+	if unknownCaps.ClientSideAllowlist {
+		t.Error("an unrecognised client must not be assumed to hold a plumb-written allowlist")
+	}
+}
