@@ -393,7 +393,9 @@ func assertDocSpans(t *testing.T, src []byte, nodes []topology.Node, want map[st
 }
 
 // assertNoDocSpan checks that the named node was extracted and claims no doc
-// comment at all — the sentinel a detached comment block must produce.
+// comment at all — the sentinel a comment that is not flush against the
+// declaration must produce, whether a blank line separates them or the comment
+// trails other code on its own line.
 func assertNoDocSpan(t *testing.T, src []byte, nodes []topology.Node, name string) {
 	t.Helper()
 	n := docNodeNamed(nodes, name)
@@ -402,7 +404,25 @@ func assertNoDocSpan(t *testing.T, src []byte, nodes []topology.Node, name strin
 		return
 	}
 	if n.HasDocSpan() {
-		t.Errorf("%q claims the detached comment %q as its doc span; a blank line separates them",
+		t.Errorf("%q claims the non-flush comment %q as its doc span",
 			name, string(src[n.DocStartByte:n.DocEndByte]))
 	}
+}
+
+// TestJavaScript_TrailingClassHeaderCommentIsNotADocSpan pins the cross-language
+// half of the same-row flushness rule. A comment trailing the `class C {` header
+// is the first method's previous sibling inside the class_body, so the method
+// claimed it and got a doc span starting mid-header-line. The rule lives in the
+// shared commentFlushBefore, so JavaScript is pinned alongside Python and Rust
+// — this shape predates the Python doc-span work and was fixed with it.
+func TestJavaScript_TrailingClassHeaderCommentIsNotADocSpan(t *testing.T) {
+	src := []byte(`class Widget { // trailing note about the class header
+  bump() { return 1; }
+}
+`)
+	nodes, _, err := NewJavaScript().Extract(context.Background(), "trailing.js", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertNoDocSpan(t, src, nodes, "bump")
 }

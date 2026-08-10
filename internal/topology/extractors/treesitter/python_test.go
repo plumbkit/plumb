@@ -345,3 +345,51 @@ func TestPython_BannerAcrossBlankLineIsNotAClassBodyDocSpan(t *testing.T) {
 	}
 	assertNoDocSpan(t, src, nodes, "bump")
 }
+
+// TestPython_TrailingHeaderCommentIsNotADocSpan pins the same-row half of
+// flushness at the suite boundary the block climb reaches. The grammar makes a
+// trailing comment on a compound-statement header a sibling of the `block`,
+// sitting after the `:`, so the climb lands on it and the first declaration in
+// the body claimed it — with a DocStartByte in the MIDDLE of the header line.
+//
+// That is worse than a missing span. The span is an edit-range start
+// (docCommentStartPreferTopology → replace_symbol_body / move_symbol, whose
+// include_doc_comment defaults true), so replacing `Widget/bump` would have
+// started the edit at line 0 char 15 and produced `class Widget:  def bump...`
+// — syntactically broken Python. All four shapes here previously resolved to no
+// span at all, which was correct, so this is the regression the climb had to
+// not introduce.
+func TestPython_TrailingHeaderCommentIsNotADocSpan(t *testing.T) {
+	for _, tc := range []struct{ name, src, sym string }{
+		{"class header", "class Widget:  # trailing note about the class header\n    def bump(self):\n        return 1\n", "bump"},
+		{"class header, decorated", "class Widget:  # trailing note\n    @property\n    def area(self):\n        return 1\n", "area"},
+		{"def header, nested", "def outer():  # why outer exists\n    def inner():\n        return 1\n    return inner\n", "inner"},
+		{"if header", "if True:  # platform note\n    def helper():\n        return 1\n", "helper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := []byte(tc.src)
+			nodes, _, err := NewPython().Extract(context.Background(), "trailing.py", src)
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			assertNoDocSpan(t, src, nodes, tc.sym)
+		})
+	}
+}
+
+// TestPython_TrailingHeaderCommentDoesNotExtendARealRun is the mixed case: a
+// trailing header comment directly above a genuine doc comment. The backward
+// run-walk must stop at the trailing one rather than swallowing the header line
+// into the span.
+func TestPython_TrailingHeaderCommentDoesNotExtendARealRun(t *testing.T) {
+	src := []byte(`class Widget:  # trailing note
+    # Documents bump.
+    def bump(self):
+        return 1
+`)
+	nodes, _, err := NewPython().Extract(context.Background(), "mixed.py", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{"bump": "# Documents bump."})
+}

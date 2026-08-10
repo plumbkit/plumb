@@ -303,6 +303,31 @@
   CONTENT, and the first two were confirmed to fail before the fix on exactly
   `bump`, `cached` and `area`.
 
+- **A comment trailing a body's header line is no longer collected as the first
+  declaration's doc span.** Every language that opens a body with a header line
+  parses a comment trailing that header as a sibling sitting syntactically ahead
+  of the body's first declaration — `class Widget:  # note` in Python,
+  `class Widget { // note` in JavaScript, `impl Widget { // note` in Rust — and
+  it satisfied `commentFlushBefore`, which only asked for at most one newline
+  before the declaration. So the first member claimed it, with a `DocStartByte`
+  in the MIDDLE of the header line. That is worse than a missing span: the span
+  is an **edit-range start** (`docCommentStartPreferTopology` feeds
+  `replace_symbol_body`, `insert_before_symbol` and `move_symbol`, whose
+  `include_doc_comment` defaults true), so the edit began mid-header and emitted
+  syntactically broken source — `class Widget:  def bump(self):`.
+  `commentFlushBefore` now also requires a comment on an earlier line to OWN
+  that line, which fixes all three languages at once; a same-row comment
+  (`export /** … */ class C {}`) is exempt, being the one shape where a comment
+  legitimately shares a line with what it documents. The rule also stops the
+  backward run-walk from swallowing a header line that sits above a genuine doc
+  comment. Guarded by `TestPython_TrailingHeaderCommentIsNotADocSpan` (class,
+  decorated, nested-`def` and `if` headers),
+  `TestPython_TrailingHeaderCommentDoesNotExtendARealRun`,
+  `TestJavaScript_TrailingClassHeaderCommentIsNotADocSpan` and
+  `TestRust_TrailingImplHeaderCommentIsNotADocSpan`; all six confirmed to fail
+  before the fix. JavaScript and Rust carried this independently of the Python
+  work above — it is fixed in the shared helper, not per language.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
