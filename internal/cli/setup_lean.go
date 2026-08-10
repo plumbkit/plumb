@@ -73,8 +73,9 @@ var (
 	// of exact tool names with no globbing (openai/codex#5367).
 	codexLeanClient = leanClient{
 		setupCmd: "codex", name: "Codex", key: "enabled_tools", serversKey: "mcp_servers",
-		bareNote: "A later bare `plumb setup codex` clears the key and restores the full tool\n" +
-			"surface; the bulk `plumb setup --all`/`--repair` sweeps preserve it.",
+		bareNote: "A later bare `plumb setup codex`\n" +
+			"clears the key and restores the full tool surface; the bulk\n" +
+			"`plumb setup --all`/`--repair` sweeps preserve it.",
 		pathFn: CodexConfigPath, read: readOrInitCodexConfig, write: writeTOML, parse: parseTOMLConfig,
 	}
 	// Gemini CLI: "includeTools" on mcpServers.plumb in settings.json — a
@@ -85,8 +86,9 @@ var (
 	// tools.exclude settings.
 	geminiLeanClient = leanClient{
 		setupCmd: "gemini", name: "Gemini CLI", key: "includeTools", serversKey: "mcpServers",
-		bareNote: "A later bare `plumb setup gemini` clears the key and restores the full tool\n" +
-			"surface; the bulk `plumb setup --all`/`--repair` sweeps preserve it. Gemini's\n" +
+		bareNote: "A later bare `plumb setup gemini`\n" +
+			"clears the key and restores the full tool surface; the bulk\n" +
+			"`plumb setup --all`/`--repair` sweeps preserve it. Gemini's\n" +
 			"`excludeTools` wins wherever both keys are present.",
 		pathFn: GeminiConfigPath, read: readOrInitClaudeConfig, write: writeJSON, parse: parseJSONConfig,
 	}
