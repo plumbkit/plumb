@@ -49,6 +49,21 @@
   whether to trust them; the daemon logs a breadcrumb at attach; and the TUI
   settings editor marks the row.
 
+### Changed
+
+
+- **The TUI settings editor offers the `[git]` tier rows and the exec-deciding
+  `[lsp.<lang>]` rows at a workspace scope again.** They were withdrawn when a
+  project config could never have them honoured — a control that writes TOML
+  plumb ignores is worse than no control — and a workspace-scope edit is
+  meaningful again now that the root can be trusted. The untrusted state is
+  declared rather than hidden: a third row marker (`⁶`, joining `⁴` override and
+  `⁵` inherited) flags a key the project sets that plumb is ignoring, such a row
+  shows the value **actually in force** rather than the one in the project file,
+  and editing it reports "written, NOT in effect — run `plumb trust` in this
+  workspace" instead of plain success. Granting trust remains a deliberate CLI
+  act that prints the whole argv first, not a UI gesture.
+
 ### Fixed
 
 - **A project's `.plumb/config.toml` could run arbitrary code, and could open
