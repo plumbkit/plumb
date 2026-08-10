@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -439,4 +441,88 @@ func ratioBar(percent, width int) (string, string) {
 	}
 	filled = min(max(filled, 0), width)
 	return strings.Repeat("■", filled), strings.Repeat("■", width-filled)
+}
+
+// dashFailureRow is one line of the failure widget: a kind and its counts.
+type dashFailureRow struct {
+	label     string
+	calls     int64
+	retryable int64
+}
+
+// failuresByKind collapses the (kind × tool × client) buckets FailureSummary
+// returns down to the kind alone.
+//
+// Kind is the one dimension the dashboard does not already show: "Top Tools
+// (uptime)" carries a per-tool Errors column, so repeating the tool here would
+// restate it while crowding out the fact that is new — WHAT the failures were.
+// The tool and client breakdown stays one command away in `plumb stats
+// --failures`, where there is room for it.
+//
+// Ordering is busiest-first, ties broken by label, so the widget does not
+// reshuffle between polls.
+func failuresByKind(buckets []stats.FailureCount) []dashFailureRow {
+	byLabel := make(map[string]dashFailureRow, len(buckets))
+	for _, b := range buckets {
+		row := byLabel[b.Label()]
+		row.label = b.Label()
+		row.calls += b.Calls
+		row.retryable += b.Retryable
+		byLabel[b.Label()] = row
+	}
+	out := make([]dashFailureRow, 0, len(byLabel))
+	for _, row := range byLabel {
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b dashFailureRow) int {
+		if a.calls != b.calls {
+			return cmp.Compare(b.calls, a.calls)
+		}
+		return cmp.Compare(a.label, b.label)
+	})
+	return out
+}
+
+// dashFailuresWidget renders uptime failures grouped by kind, or nil when this
+// daemon run has recorded none — an empty box would claim shelf space to say
+// nothing, and "no failures" is already the dashboard's resting state.
+func (m Model) dashFailuresWidget(width int) []string {
+	rows := failuresByKind(m.dashUptimeFailures)
+	if len(rows) == 0 {
+		return nil
+	}
+	inner := max(width-2, 40)
+	content := dashFailuresTable(max(inner-6, 20), rows)
+	for i, line := range content {
+		content[i] = "   " + line + "   "
+	}
+	return dashBox(" Failures by Kind (uptime) ", inner, content)
+}
+
+func dashFailuresTable(width int, rows []dashFailureRow) []string {
+	const (
+		callsW     = 9
+		retryableW = 12
+	)
+	kindW := max(width-callsW-retryableW, 12)
+	if len(rows) > 10 {
+		rows = rows[:10]
+	}
+
+	header := HintStyle.Width(kindW).Render("Kind") +
+		HintStyle.Width(callsW).Align(lipgloss.Right).Render("Calls") +
+		HintStyle.Width(retryableW).Align(lipgloss.Right).Render("Retryable")
+	content := make([]string, 0, len(rows)+2)
+	content = append(content, header, SepStyle.Render(strings.Repeat("╌", width)))
+	for _, r := range rows {
+		retryable := MutedStyle.Render("—")
+		if r.retryable > 0 {
+			retryable = DetailStyle.Render(formatLargeInt(r.retryable))
+		}
+		content = append(content,
+			WarnStyle.Width(kindW).Render(textfmt.Ellipsis(r.label, kindW-1))+
+				DetailStyle.Width(callsW).Align(lipgloss.Right).Render(formatLargeInt(r.calls))+
+				lipgloss.NewStyle().Width(retryableW).Align(lipgloss.Right).Render(retryable))
+	}
+	return content
 }

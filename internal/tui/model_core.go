@@ -160,6 +160,7 @@ type Model struct {
 	dashLifetimeFirstAt     time.Time
 	dashLifetimeTopTools    []stats.ToolStat
 	dashUptimeTopTools      []stats.ToolStat
+	dashUptimeFailures      []stats.FailureCount
 	dashLifetimeBuckets     []int64
 	dashDaemBuckets         []int64
 	dashChartWidth          int

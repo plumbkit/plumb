@@ -508,6 +508,13 @@
   — never dropped, and never folded into `internal`, which is a deliberate
   classification rather than an absence of one.
 
+- **A "Failures by Kind (uptime)" widget on the TUI dashboard.** It appears only
+  when this daemon run has recorded a failure, and collapses the buckets to the
+  kind alone: the existing "Top Tools (uptime)" widget already carries a
+  per-tool error count, so the kind is the dimension the dashboard was missing.
+  The tool and client breakdown stays one command away in
+  `plumb stats --failures`, where there is room for it.
+
 ### Changed
 
 - **A failure is now classified exactly once per call, at the MCP dispatch
