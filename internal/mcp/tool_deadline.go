@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // ExecTimeoutBounded is an optional Tool capability. A tool that implements it
@@ -62,9 +64,10 @@ func (s *Server) execTool(ctx context.Context, t Tool, name string, args json.Ra
 		return r.text, r.err
 	case <-timer.C:
 		cancel() // unwind a ctx-honouring tool; a blocked syscall is orphaned
-		return "", fmt.Errorf("%s: exceeded its %s execution deadline — the target path may be "+
+		return "", toolerror.Wrap(fmt.Errorf("%s: exceeded its %s execution deadline — the target path may be "+
 			"on a slow or unresponsive filesystem (a stalled network, iCloud, or FUSE mount); "+
-			"the call was abandoned. Raise PLUMB_TOOL_EXEC_TIMEOUT or check the mount", name, s.ToolExecTimeout)
+			"the call was abandoned. Raise PLUMB_TOOL_EXEC_TIMEOUT or check the mount", name, s.ToolExecTimeout),
+			toolerror.KindClientTimeout, toolerror.ClassRetryAfterWait, toolerror.Retry())
 	case <-ctx.Done():
 		return "", ctx.Err() // parent cancelled (daemon shutdown / idle eviction)
 	}

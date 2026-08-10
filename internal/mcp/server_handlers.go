@@ -237,13 +237,29 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	return okResp(req.ID, map[string]any{"tools": defs})
 }
 
+// content is one MCP text block in a tools/call result.
+type content struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// callResult is the tools/call result payload. Meta carries per-result `_meta`;
+// omitempty keeps a successful call — and a failure plumb cannot classify —
+// byte-identical to the pre-envelope payload.
+type callResult struct {
+	Content []content      `json:"content"`
+	IsError bool           `json:"isError"`
+	Meta    map[string]any `json:"_meta,omitempty"`
+}
+
 func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpResponse {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return errResp(req.ID, codeInvalidParams, "invalid params: "+err.Error())
+		msg := "invalid params: " + err.Error()
+		return errRespData(req.ID, codeInvalidParams, msg, invalidCallEnvelope(msg, ""))
 	}
 
 	// A retired tool name is resolved onto its canonical tool BEFORE the registry
@@ -258,7 +274,8 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	t, ok := s.tools[params.Name]
 	s.mu.RUnlock()
 	if !ok {
-		return errResp(req.ID, codeMethodNotFound, s.unknownToolMessage(params.Name))
+		msg := s.unknownToolMessage(params.Name)
+		return errRespData(req.ID, codeMethodNotFound, msg, invalidCallEnvelope(msg, params.Name))
 	}
 
 	if s.OnBeforeTool != nil {
@@ -288,14 +305,6 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		})
 	}
 
-	type content struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	type callResult struct {
-		Content []content `json:"content"`
-		IsError bool      `json:"isError"`
-	}
 	if err != nil {
 		slog.Warn("mcp: tool error", "tool", params.Name, "err", err)
 		// The notice leads the FAILURE too. An aliased call that errors reports a
@@ -309,6 +318,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return okResp(req.ID, callResult{
 			Content: []content{{Type: "text", Text: msg}},
 			IsError: true,
+			Meta:    toolErrorMeta(err, params.Name),
 		})
 	}
 	if len(warnings) > 0 {
@@ -449,5 +459,16 @@ func okResp(id, result any) mcpResponse {
 }
 
 func errResp(id any, code int, msg string) mcpResponse {
-	return mcpResponse{JSONRPC: "2.0", ID: id, Error: &mcpError{Code: code, Message: msg}}
+	return errRespData(id, code, msg, nil)
+}
+
+// errRespData is errResp plus the structured error envelope. An empty or nil
+// data map leaves `error.data` off the wire entirely, so every existing
+// errResp caller produces a byte-identical payload.
+func errRespData(id any, code int, msg string, data map[string]any) mcpResponse {
+	e := &mcpError{Code: code, Message: msg}
+	if len(data) > 0 {
+		e.Data = data
+	}
+	return mcpResponse{JSONRPC: "2.0", ID: id, Error: e}
 }

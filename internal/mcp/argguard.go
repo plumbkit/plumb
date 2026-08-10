@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // shape is the parsed argument contract for one object level of a tool's JSON
@@ -488,7 +490,7 @@ func unknownErr(sh *shape, obj map[string]any, key, toolName string, synth alias
 		prefix = toolName + ": "
 	}
 	if len(sh.order) == 0 {
-		return fmt.Errorf("%sunknown parameter %q: this tool accepts no parameters", prefix, key)
+		return badArgument(fmt.Errorf("%sunknown parameter %q: this tool accepts no parameters", prefix, key))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%sunknown parameter %q", prefix, key)
@@ -526,7 +528,14 @@ func unknownErr(sh *shape, obj map[string]any, key, toolName string, synth alias
 	if strings.HasSuffix(msg, "?") {
 		sep = " "
 	}
-	return fmt.Errorf("%s%sValid parameters: %s", msg, sep, strings.Join(sh.order, ", "))
+	return badArgument(fmt.Errorf("%s%sValid parameters: %s", msg, sep, strings.Join(sh.order, ", ")))
+}
+
+// badArgument classifies a call plumb rejected before it reached the tool: the
+// arguments themselves are wrong. Not retryable — the identical call is refused
+// identically, and the remedy is a different call, not a wait.
+func badArgument(err error) error {
+	return toolerror.Wrap(err, toolerror.KindInvalidArguments, toolerror.ClassFixArguments)
 }
 
 // collidingCanonical returns the canonical parameter key is a curated alias of
