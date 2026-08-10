@@ -136,7 +136,8 @@ type findFilesConfig struct {
 	matchFn         func(string) bool
 	patternHasSlash bool
 	globPrefix      string
-	note            string // leading advisory prepended to the result, "" when there is none
+	note            string        // leading advisory prepended to the result, "" when there is none
+	guard           BoundaryGuard // consulted by the walk for every symlink it meets
 }
 
 // findFilesWalker accumulates results for a single find_files call. Keeping
@@ -150,6 +151,9 @@ type findFilesWalker struct {
 	stat       bool // populate each hit's size/mtime/symlink fields
 	hits       []findFileHit
 	truncated  bool
+	// withheld holds the relative paths of entries the walk skipped for
+	// resolving outside the boundary.
+	withheld []string
 }
 
 func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -167,7 +171,8 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "", err
 	}
 
-	hits, truncated, walkErr := findFilesWalkTree(ctx, a, cfg)
+	hits, truncated, withheld, walkErr := findFilesWalkTree(ctx, a, cfg)
+	withheldNote := withheldSymlinkNote(withheld)
 	sortFindFileHits(hits, a.SortBy)
 	if len(hits) > a.MaxResults {
 		hits, truncated = hits[:a.MaxResults], true
@@ -177,9 +182,9 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		if err != nil {
 			return "", err
 		}
-		return cfg.note + out, nil
+		return cfg.note + out + withheldNote, nil
 	}
-	return cfg.note + formatFindFilesOutput(hits, a, cfg.root, truncated, walkErr), nil
+	return cfg.note + formatFindFilesOutput(hits, a, cfg.root, truncated, walkErr) + withheldNote, nil
 }
 
 func parseFindFilesArgs(raw json.RawMessage) (findFilesArgs, error) {
@@ -263,11 +268,11 @@ func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) 
 	}
 	return findFilesConfig{
 		root: root, ext: ext, matchFn: matchFn,
-		patternHasSlash: patternHasSlash, globPrefix: globPrefix, note: note,
+		patternHasSlash: patternHasSlash, globPrefix: globPrefix, note: note, guard: guard,
 	}, nil
 }
 
-func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig) ([]findFileHit, bool, error) {
+func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig) ([]findFileHit, bool, []string, error) {
 	ranked := a.SortBy == "size" || a.SortBy == "modified"
 	collectCap := a.MaxResults
 	if ranked && findFilesSortScanCap > collectCap {
@@ -279,9 +284,21 @@ func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig
 		maxDepth:      a.MaxDepth,
 		includeHidden: a.IncludeHidden,
 		respectIgnore: true,
+		boundary:      cfg.guard,
+		onWithheld:    w.withhold,
 	}
 	walkErr := walk(ctx, opts, w.visit)
-	return w.hits, w.truncated, walkErr
+	return w.hits, w.truncated, w.withheld, walkErr
+}
+
+// withhold records an entry the walk skipped for resolving outside the
+// boundary, relative to the walk root so the note names an in-workspace path.
+func (w *findFilesWalker) withhold(absPath string) {
+	rel, err := filepath.Rel(w.cfg.root, absPath)
+	if err != nil {
+		rel = filepath.Base(absPath)
+	}
+	w.withheld = append(w.withheld, filepath.ToSlash(rel))
 }
 
 func (w *findFilesWalker) visit(path string, d fs.DirEntry, depth int) error {

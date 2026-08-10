@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/langsupport"
@@ -22,6 +23,12 @@ import (
 
 func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	absPath := filepath.Join(idx.workspace, relPath)
+	if symlinkEscapesWorkspace(idx.workspace, absPath) {
+		// Drop anything a previous (unguarded) index recorded for this path, so a
+		// database poisoned before this guard existed heals on the next resync
+		// rather than keeping the outside file's symbols searchable forever.
+		return idx.processDelete(ctx, relPath)
+	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -52,6 +59,40 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 		return idx.recordFileError(relPath, info, err)
 	}
 	return idx.persistFile(fileID, relPath, info, hash, lang, nodes, edges)
+}
+
+// symlinkEscapesWorkspace reports whether absPath is a symlink whose target
+// resolves outside the workspace.
+//
+// The indexer must refuse those. os.Stat below follows the link and the target
+// is read, parsed, and PERSISTED into .plumb/topology.db, where topology_search
+// and workspace_search surface its symbols long after the call that indexed it
+// — so an out-of-tree read here outlives the read. Git stores symlinks natively,
+// so cloning a repository that commits one is enough to plant it.
+//
+// This is the same escape internal/tools' walk guards (escapesBoundary), decided
+// against a different authority: the indexer has one workspace root, not the MCP
+// connection's multi-root path policy, and Intelligence may not import
+// Application. An unresolvable link is treated as escaping — it has no readable
+// target either way, so failing closed costs nothing.
+func symlinkEscapesWorkspace(workspace, absPath string) bool {
+	fi, err := os.Lstat(absPath)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return true
+	}
+	root, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		root = filepath.Clean(workspace)
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // isStale returns true when either the mtime or the content hash differs from

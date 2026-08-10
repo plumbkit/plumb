@@ -175,12 +175,14 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 
 	var paths []searchPathPair
+	var withheld []string
 	var walkErr error
 	if onlyFile != "" {
 		paths = []searchPathPair{{abs: onlyFile, rel: filepath.Base(onlyFile)}}
 	} else {
-		paths, walkErr = t.collectSearchPaths(ctx, a, root)
+		paths, withheld, walkErr = t.collectSearchPaths(ctx, a, root)
 	}
+	withheldNote := withheldSymlinkNote(withheld)
 	results, totalLines, totalSkipped, truncated := t.runParallelScan(ctx, paths, a, re)
 
 	sort.Slice(results, func(i, j int) bool { return results[i].relPath < results[j].relPath })
@@ -194,11 +196,11 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		if cancelled {
 			return "", walkErr
 		}
-		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern) + literalMetacharHint(a), nil
+		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern) + literalMetacharHint(a) + withheldNote, nil
 	}
 
 	ann := t.annotateWithSymbols(ctx, a, results)
-	return pathNote + formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped), nil
+	return pathNote + formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped) + withheldNote, nil
 }
 
 func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
