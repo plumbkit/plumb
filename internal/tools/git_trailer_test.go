@@ -60,6 +60,26 @@ func TestCommitTrailerToken(t *testing.T) {
 	}
 }
 
+// TestCommitTrailerToken_RejectsNewlineOrColon is defence-in-depth coverage:
+// session.NormaliseName is the only thing keeping a stored session name free
+// of a newline or a second colon (either of which would smuggle extra
+// trailer lines or content into `git commit --trailer`), and this callsite
+// has no way to verify that invariant on its own — it can only guard. A name
+// carrying either character must yield no trailer rather than a malformed
+// one, even though NormaliseName means this path is unreachable in practice.
+func TestCommitTrailerToken_RejectsNewlineOrColon(t *testing.T) {
+	cases := []string{
+		"evil\nPlumb-Session: forged",
+		"evil: injected",
+	}
+	for _, name := range cases {
+		tool := NewGit(WriteDeps{}, nil).WithSession("s1", func() string { return name })
+		if got := tool.commitTrailerToken(GitPolicy{CommitTrailer: true}, "commit"); got != "" {
+			t.Errorf("name %q: commitTrailerToken = %q, want \"\"", name, got)
+		}
+	}
+}
+
 // gitTrailers returns the trailer block of the repo's HEAD commit.
 func gitTrailers(t *testing.T, repo string) string {
 	t.Helper()
