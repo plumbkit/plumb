@@ -32,6 +32,23 @@ func dirtyWrite(err error) error {
 	return toolerror.Wrap(err, toolerror.KindDirtyFile, toolerror.ClassPassDirtyOk)
 }
 
+// staleOverride classifies a refusal the caller can knowingly override with a
+// force-style flag — the write_file overwrite_changed guard and undo_edit's
+// changed-under-you guards. It is the same "your view is stale" family as
+// staleRead, but the remedy differs: re-reading is one answer, and deliberately
+// proceeding anyway is the other, so the class names the flag rather than the
+// read.
+func staleOverride(err error) error {
+	return toolerror.Wrap(err, toolerror.KindUnreadOrStale, toolerror.ClassPassForce)
+}
+
+// badArgument classifies a value the caller supplied that plumb cannot use — a
+// malformed timestamp, a parameter the tool does not declare. Distinct from
+// staleRead: nothing changed under the caller, the call itself is wrong.
+func badArgument(err error) error {
+	return toolerror.Wrap(err, toolerror.KindInvalidArguments, toolerror.ClassFixArguments)
+}
+
 // lspTimedOut classifies a language server that did not answer within the
 // operation's deadline. Retryable: a server that is indexing answers the same
 // question once it is done.
@@ -57,6 +74,12 @@ func lspNotReady(err error) error {
 // again for as long as the pin stands. The remedy is a different pin, not a
 // wait, so the remediation names session_start rather than a delay.
 func ClassifyPathRefusal(err error) error {
+	if err == nil {
+		// It crosses a package boundary, so it can be handed a nil from a caller
+		// whose refusal did not fire. Classifying nothing must stay nothing —
+		// otherwise the caller returns a non-nil error whose text is empty.
+		return nil
+	}
 	return toolerror.New(toolerror.KindWorkspaceBoundary, err, toolerror.Remediation{
 		Class: toolerror.ClassRepinWorkspace,
 		Tool:  "session_start",

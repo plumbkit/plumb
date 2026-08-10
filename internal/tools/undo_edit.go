@@ -103,12 +103,12 @@ func (t *UndoEdit) checkUndoSafe(path string, snap undoSnapshot, force bool) err
 	cur, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("undo_edit: refusing to undo — %q no longer exists (deleted or moved since plumb wrote it); pass force:true to restore it anyway", path)
+			return staleOverride(fmt.Errorf("undo_edit: refusing to undo — %q no longer exists (deleted or moved since plumb wrote it); pass force:true to restore it anyway", path))
 		}
 		return fmt.Errorf("undo_edit: reading %q: %w", path, err)
 	}
 	if sha256OfString(string(cur)) != snap.afterSHA {
-		return fmt.Errorf("undo_edit: refusing to undo — %q changed since plumb's %s wrote it (an external or peer edit), so undoing would discard that change; pass force:true to override", path, snap.tool)
+		return staleOverride(fmt.Errorf("undo_edit: refusing to undo — %q changed since plumb's %s wrote it (an external or peer edit), so undoing would discard that change; pass force:true to override", path, snap.tool))
 	}
 	return nil
 }

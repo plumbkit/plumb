@@ -24,7 +24,7 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 	if expectedMtime != "" {
 		want, err := time.Parse(time.RFC3339Nano, expectedMtime)
 		if err != nil {
-			return fmt.Errorf("%s: expected_mtime is not RFC3339Nano: %w", tool, err)
+			return badArgument(fmt.Errorf("%s: expected_mtime is not RFC3339Nano: %w", tool, err))
 		}
 		info, err := os.Stat(path)
 		if err != nil {

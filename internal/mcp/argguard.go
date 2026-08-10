@@ -432,7 +432,7 @@ func validateObject(sh *shape, obj map[string]any, path, toolName string, synth 
 	}
 	for _, req := range sh.required {
 		if _, ok := obj[req]; !ok {
-			return fmt.Errorf("missing required parameter %q (required: %s)", joinPath(path, req), strings.Join(sh.required, ", "))
+			return badArgument(fmt.Errorf("missing required parameter %q (required: %s)", joinPath(path, req), strings.Join(sh.required, ", ")))
 		}
 	}
 	for key, child := range sh.children {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,8 @@ func TestClassificationHelpers_PreserveText(t *testing.T) {
 	}{
 		{"staleRead", staleRead, toolerror.KindUnreadOrStale, toolerror.ClassReRead, true, "read_file"},
 		{"dirtyWrite", dirtyWrite, toolerror.KindDirtyFile, toolerror.ClassPassDirtyOk, true, ""},
+		{"staleOverride", staleOverride, toolerror.KindUnreadOrStale, toolerror.ClassPassForce, true, ""},
+		{"badArgument", badArgument, toolerror.KindInvalidArguments, toolerror.ClassFixArguments, true, ""},
 		{"lspTimedOut", lspTimedOut, toolerror.KindLSPTimeout, toolerror.ClassRetryWhenReady, true, ""},
 		{"lspNotReady", lspNotReady, toolerror.KindLSPUnavailable, toolerror.ClassRetryWhenReady, true, ""},
 		{
@@ -152,11 +155,64 @@ func TestVerifyExpectedVersion_Classified(t *testing.T) {
 	err = verifyExpectedVersion("write_file", path, "", "0000000000000000000000000000000000000000000000000000000000000000")
 	assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassReRead, true)
 
-	// A non-mismatch failure must NOT be dressed up as a stale read: a malformed
-	// expected_mtime is the caller's argument, not a concurrent change.
-	if _, ok := toolerror.Classify(verifyExpectedVersion("write_file", path, "not-a-time", "")); ok {
-		t.Error("a malformed expected_mtime was classified as a staleness refusal")
+	// A malformed expected_mtime is the caller's argument, not a concurrent
+	// change — so it is classified, but as invalid_arguments, never as a
+	// staleness refusal that would send the caller to re-read a fine file.
+	err = verifyExpectedVersion("write_file", path, "not-a-time", "")
+	assertClassified(t, err, toolerror.KindInvalidArguments, toolerror.ClassFixArguments, true)
+}
+
+// TestOverwriteChangedGuard_Classified covers the OTHER stale-write path in
+// write_file: it sits three lines below the classified expected_mtime guard, so
+// leaving it bare meant one tool emitted _meta for one stale write and nothing
+// for the other.
+func TestOverwriteChangedGuard_Classified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	reads := NewReadTracker()
+	// Recorded as read with an old mtime and a SHA that no longer matches, so
+	// changedSinceSessionRead fires.
+	reads.Record(path, time.Now().Add(-time.Hour), "stale-sha")
+
+	tool := &WriteFile{deps: WriteDeps{Reads: reads}}
+	err := tool.writeFilePreconditions(t.Context(), path, writeFileArgs{DirtyOk: true, Content: "new"})
+	assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassPassForce, true)
+	if !strings.Contains(err.Error(), "overwrite_changed: true") {
+		t.Errorf("message lost the flag it advertises: %q", err.Error())
+	}
+}
+
+// TestUndoEditForceGuards_Classified covers undo_edit's two "pass force:true"
+// refusals. They are one seam with one recovery, so classifying only the
+// changed-under-you branch would leave the deleted-file branch silent for the
+// identical remedy.
+func TestUndoEditForceGuards_Classified(t *testing.T) {
+	dir := t.TempDir()
+	tool := &UndoEdit{}
+
+	t.Run("file changed since plumb wrote it", func(t *testing.T) {
+		path := filepath.Join(dir, "changed.txt")
+		if err := os.WriteFile(path, []byte("edited by a peer"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		snap := undoSnapshot{before: "old", existedBefore: true, afterSHA: "a-different-hash", tool: "edit_file"}
+		err := tool.checkUndoSafe(path, snap, false)
+		assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassPassForce, true)
+	})
+
+	t.Run("file no longer exists", func(t *testing.T) {
+		err := tool.checkUndoSafe(filepath.Join(dir, "gone.txt"), undoSnapshot{existedBefore: true}, false)
+		assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassPassForce, true)
+	})
+
+	t.Run("force skips the guard entirely", func(t *testing.T) {
+		if err := tool.checkUndoSafe(filepath.Join(dir, "gone.txt"), undoSnapshot{}, true); err != nil {
+			t.Errorf("force must skip the check, got %v", err)
+		}
+	})
 }
 
 // TestBoundaryRefusalKeepsItsContract pins the two behaviours the boundary doc
@@ -175,6 +231,12 @@ func TestBoundaryRefusalKeepsItsContract(t *testing.T) {
 	var recovered WorkspaceBoundaryError
 	if !errors.As(err, &recovered) || recovered.Path != "/elsewhere/f.go" {
 		t.Errorf("errors.As could not recover the typed refusal: %+v", recovered)
+	}
+
+	// It crosses a package boundary (internal/cli calls it), so a nil in must
+	// stay a nil out rather than becoming an error with no text.
+	if got := ClassifyPathRefusal(nil); got != nil {
+		t.Errorf("ClassifyPathRefusal(nil) = %v (text %q), want nil", got, got.Error())
 	}
 
 	unattached := ClassifyPathRefusal(UnattachedWorkspaceError{Path: "/p"})

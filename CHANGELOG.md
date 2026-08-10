@@ -39,7 +39,13 @@
   `repin_workspace` (naming `session_start`); the write-rate budget reports
   `rate_limited` + `retry_after_wait`; a language-server deadline reports
   `lsp_timeout` and a still-warming hard failure `lsp_unavailable`, both with
-  `retry_when_ready`. **No message text changed** — the classification rides
+  `retry_when_ready`; `write_file`'s `overwrite_changed` guard and `undo_edit`'s
+  two `force: true` guards report `unread_or_stale` + `pass_force`; and a
+  malformed `expected_mtime` (in `write_file`/`edit_file` and
+  `transaction_apply`) reports `invalid_arguments` + `fix_arguments` — the
+  caller's argument is wrong, so it is deliberately NOT dressed up as a
+  staleness refusal that would send them to re-read a file that is fine.
+  **No message text changed** — the classification rides
   alongside — and the existing markers still resolve exactly as before:
   `isEditLogicError` and `IsWorkspaceBoundaryError` remain `errors.As`-based and
   fire through the new wrapper. A malformed `expected_mtime` is deliberately
@@ -84,8 +90,9 @@
   The envelope rides `_meta`, which is valid in the negotiated `2024-11-05`
   revision; `structuredContent` (a 2025-06-18 field) is deliberately not used.
   The MCP-side seams are classified to match: the per-tool execution deadline
-  reports `client_timeout` + `retry_after_wait`, and an unknown or colliding
-  parameter reports `invalid_arguments` + `fix_arguments`.
+  reports `client_timeout` + `retry_after_wait`, and both halves of the
+  argument guard — an unknown or colliding parameter, and a missing required
+  one — report `invalid_arguments` + `fix_arguments`.
 
 ## 0.16.3 (2026-08-10)
 
