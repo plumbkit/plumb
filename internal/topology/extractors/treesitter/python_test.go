@@ -243,3 +243,105 @@ func TestPython_ByteSpanReconstructsDeclaration(t *testing.T) {
 		t.Errorf("doc span = %q", doc)
 	}
 }
+
+// TestPython_ClassBodyDeclarationsCarryDocSpans pins the doc-comment anchor
+// across Python's suite boundary. A comment that precedes the FIRST statement of
+// a suite is hoisted OUT of the `block` by the grammar and becomes a sibling of
+// the block itself, so the declaration — now the block's first child — has no
+// previous sibling at all and lost its doc span. The same declaration written
+// second in the body kept one, which is why nothing caught it: whether a Python
+// method is documented depended on whether something else preceded it in the
+// class body.
+//
+// `top_level` is the control that must not regress, `second` the in-body
+// control that always worked, and `bump` the case that was broken. Contrast the
+// docstrings: a Python docstring lives INSIDE the declaration's own span, so it
+// is not a doc span here — the span must precede the declaration, which is the
+// contract every consumer of it relies on (move_symbol's include_doc_comment
+// starts its edit there).
+func TestPython_ClassBodyDeclarationsCarryDocSpans(t *testing.T) {
+	src := []byte(`# Documents top_level.
+def top_level(a):
+    """Not the doc span."""
+    return a
+
+
+# Documents Widget.
+class Widget:
+    # Documents bump.
+    def bump(self):
+        """Not the doc span either."""
+        return 1
+
+    # Documents second.
+    def second(self):
+        return 2
+
+    def undocumented(self):
+        return 3
+`)
+	nodes, _, err := NewPython().Extract(context.Background(), "doc.py", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"top_level": "# Documents top_level.",
+		"Widget":    "# Documents Widget.",
+		"bump":      "# Documents bump.",
+		"second":    "# Documents second.",
+	})
+	assertNoDocSpan(t, src, nodes, "undocumented")
+}
+
+// TestPython_DecoratedDeclarationsCarryDocSpans is the other half of the same
+// anchor: a decorated declaration is a CHILD of its decorated_definition, so its
+// own previous sibling is the `@decorator` and the comment above the decorator
+// is never reached — the exact shape the `export` wrapper produces in ES
+// modules. It compounds with the suite hoisting for the commonest method form
+// there is (`@property`, `@staticmethod`, `@pytest.fixture`), where the doc
+// comment sits two anchors up: above a decorated_definition that is itself the
+// first child of the class body's block.
+func TestPython_DecoratedDeclarationsCarryDocSpans(t *testing.T) {
+	src := []byte(`import functools
+
+
+# Documents cached.
+@functools.cache
+def cached(a):
+    return a
+
+
+class Widget:
+    # Documents area.
+    @property
+    def area(self):
+        return 1
+`)
+	nodes, _, err := NewPython().Extract(context.Background(), "deco.py", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"cached": "# Documents cached.",
+		"area":   "# Documents area.",
+	})
+}
+
+// TestPython_BannerAcrossBlankLineIsNotAClassBodyDocSpan holds the flushness
+// half of the anchor at the suite boundary the fix newly reaches. Climbing to
+// the block widens what the scan can see, so the blank-line stop has to keep
+// holding there too — otherwise a detached note above a class body would become
+// its first method's "doc comment", which move_symbol would then move.
+func TestPython_BannerAcrossBlankLineIsNotAClassBodyDocSpan(t *testing.T) {
+	src := []byte(`class Widget:
+    # A detached note.
+
+    def bump(self):
+        return 1
+`)
+	nodes, _, err := NewPython().Extract(context.Background(), "banner.py", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertNoDocSpan(t, src, nodes, "bump")
+}

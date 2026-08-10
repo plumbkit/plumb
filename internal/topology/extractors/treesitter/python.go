@@ -160,13 +160,61 @@ func (w *pyWalk) addClass(n *tsg.Node) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, pyIsComment)
+	node.DocStartByte, node.DocEndByte = pyDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	return idx
 }
 
 // pyIsComment reports whether a Python grammar node type is a comment.
 func pyIsComment(typ string) bool { return typ == "comment" }
+
+// pyDocSpan returns the doc-comment span of a Python declaration, and is the
+// seam the walk uses instead of calling docSpanBefore directly.
+//
+// Python puts a declaration's doc comment out of reach of its own previous
+// siblings in two ways, and the two compound. A comment preceding the FIRST
+// statement of a suite is hoisted OUT of the `block` and parsed as a sibling of
+// the block, leaving the declaration as the block's first child with no
+// previous sibling at all — so whether a method carried a doc span depended on
+// whether something else happened to precede it in the class body. And a
+// decorated declaration is a CHILD of its decorated_definition, so its own
+// previous sibling is the `@decorator`, exactly as an exported ES declaration
+// sits under its export_statement. `@property` on the first method of a class
+// hits both at once, which is why the scan climbs in a loop rather than once.
+//
+// Note what is NOT collected: a Python docstring is the first statement INSIDE
+// the declaration, already within its byte span. The span here must precede the
+// declaration — move_symbol's include_doc_comment starts its edit range at it —
+// so a docstring is out of contract, not merely unimplemented.
+func pyDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) {
+	for n := decl; n != nil; n = pyDocAnchor(n, lang) {
+		if start, end = docSpanBefore(n, lang, src, pyIsComment); end > start {
+			return start, end
+		}
+	}
+	return 0, 0
+}
+
+// pyDocAnchor returns the enclosing node whose previous siblings a doc comment
+// for n could occupy, or nil when n is already anchored where the comment would
+// be. Climbing out of a block is gated on n being its FIRST child: a later
+// statement's doc comment is its own previous sibling, and the comment above
+// the block belongs to the statement that opens it.
+func pyDocAnchor(n *tsg.Node, lang *tsg.Language) *tsg.Node {
+	p := n.Parent()
+	if p == nil {
+		return nil
+	}
+	switch p.Type(lang) {
+	case "decorated_definition":
+		return p
+	case "block":
+		if n.PrevSibling() == nil {
+			return p
+		}
+	}
+	return nil
+}
 
 func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 	name := w.fieldName(n)
@@ -191,7 +239,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, pyIsComment)
+	node.DocStartByte, node.DocEndByte = pyDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingClass >= 0 {
