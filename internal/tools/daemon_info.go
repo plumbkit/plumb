@@ -50,6 +50,46 @@ type daemonInfo struct {
 	lspStatus     func() LSPStatus                                   // optional; nil when no LSP accessor is wired
 	toolProfile   func() (profile string, hidden int, reason string) // optional; nil when no tool-profile accessor is wired
 	pinProvenance func() PinProvenance                               // optional; nil when no provenance accessor is wired
+	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
+}
+
+// sourceRevision is the build-time provenance of the running daemon binary: the
+// commit it was built from, and whether that tree was clean. The daemon resolves
+// it (ldflags stamps first, embedded VCS settings second) and hands the result
+// down as primitives, since internal/tools sits below internal/cli.
+//
+// dirtyKnown is separate from dirty on purpose: an unstamped build must never be
+// reported as clean.
+type sourceRevision struct {
+	revision   string
+	dirty      bool
+	dirtyKnown bool
+}
+
+// String renders the source-revision row's value. The revision is shown in full
+// (this is a bug-report field, not a status line), with the dirty state appended
+// only when the build actually knows it.
+func (s sourceRevision) String() string {
+	if s.revision == "" {
+		return "unknown (binary built without a revision stamp)"
+	}
+	switch {
+	case s.dirtyKnown && s.dirty:
+		return s.revision + " (dirty)"
+	case s.dirtyKnown:
+		return s.revision
+	default:
+		return s.revision + " (dirty state unknown)"
+	}
+}
+
+// WithSourceRevision records the source commit this binary was built from and
+// whether that tree was dirty (dirtyKnown false when the build could not tell).
+// An empty revision leaves the row reporting "unknown". Returns the receiver for
+// chaining.
+func (t *daemonInfo) WithSourceRevision(revision string, dirty, dirtyKnown bool) *daemonInfo {
+	t.sourceRev = sourceRevision{revision: revision, dirty: dirty, dirtyKnown: dirtyKnown}
+	return t
 }
 
 // WithLSPStatus wires an accessor returning the session's live language-server
@@ -121,7 +161,8 @@ func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. swift-falcon), session ID, daemon version, Go runtime, OS/arch, " +
+		"session name (e.g. swift-falcon), session ID, daemon version, the source commit the binary " +
+		"was built from (with a dirty marker, or an explicit unknown), Go runtime, OS/arch, " +
 		"start timestamp, and uptime, " +
 		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
 		"for a pending restart-bound change), and — when available — this connection's workspace-pin " +
@@ -160,12 +201,16 @@ func formatUptime(up time.Duration) string {
 func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
 	// The go runtime and os/arch rows are the two facts the retired `version`
 	// tool reported that daemon_info lacked; they are unconditional so a bug
-	// report can be filed from this one call.
+	// report can be filed from this one call. The source commit joins that set
+	// for the same reason — a version string alone cannot say which commit the
+	// running daemon was built from — and is likewise unconditional, so an
+	// unstamped build says "unknown" out loud instead of omitting the row.
 	out := fmt.Sprintf(
-		"session name:   %s\nsession id:     %s\ndaemon version: %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
+		"session name:   %s\nsession id:     %s\ndaemon version: %s\nsource commit:  %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
 		t.sessID,
 		t.daemonVersion,
+		t.sourceRev,
 		runtime.Version(),
 		runtime.GOOS,
 		runtime.GOARCH,

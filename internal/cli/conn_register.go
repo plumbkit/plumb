@@ -144,7 +144,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(boundary).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFindReplace(wd))
+	prov := Provenance()
 	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt).
+		WithSourceRevision(prov.Revision, prov.Dirty, prov.DirtyKnown).
 		WithConfigStatus(func() tools.ConfigStatus {
 			return tools.ConfigStatus{
 				Generation:    s.store.Generation(),

@@ -32,6 +32,58 @@ func TestDaemonInfo_ReportsRuntimeAndArch(t *testing.T) {
 	}
 }
 
+// TestDaemonInfo_ReportsSourceCommit pins the source-commit row. It joins the
+// unconditional bug-report set (daemon version, go runtime, os/arch) because a
+// version string alone cannot say which commit a daemon was built from — and an
+// unstamped build must say "unknown" out loud rather than omit the row or, worse,
+// read as clean.
+func TestDaemonInfo_ReportsSourceCommit(t *testing.T) {
+	const rev = "4c6e4da9d8fafc5ca36d762460caf6abf46c5ca6"
+	tests := []struct {
+		name string
+		tool *daemonInfo
+		want string
+	}{
+		{
+			name: "unstamped",
+			tool: NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now()),
+			want: "source commit:  unknown (binary built without a revision stamp)",
+		},
+		{
+			name: "clean",
+			tool: NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now()).
+				WithSourceRevision(rev, false, true),
+			want: "source commit:  " + rev,
+		},
+		{
+			name: "dirty",
+			tool: NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now()).
+				WithSourceRevision(rev, true, true),
+			want: "source commit:  " + rev + " (dirty)",
+		},
+		{
+			name: "dirty state unknown",
+			tool: NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now()).
+				WithSourceRevision(rev, false, false),
+			want: "source commit:  " + rev + " (dirty state unknown)",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := tc.tool.Execute(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			// Matched with the trailing newline so the clean case cannot be
+			// satisfied by a line that goes on to say "(dirty)".
+			if !strings.Contains(out, tc.want+"\n") {
+				t.Errorf("daemon_info output missing %q:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
 // TestDaemonInfo_UptimeSpansSuspend pins the monotonic strip: startedAt must
 // not carry a monotonic clock reading, or time.Since would exclude
 // system-suspend time (CLOCK_MONOTONIC stops while suspended) and uptime

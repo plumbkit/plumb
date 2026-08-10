@@ -103,8 +103,11 @@ session list, `daemon_info`, and `workspace_sessions`. An invalid value is
 rejected with a clear error).
 
 ### `daemon_info`
-Current session name and ID, daemon version, Go runtime, OS/arch, start time,
-and uptime; the session's `purpose` tag when set; the workspace pin's provenance when known
+Current session name and ID, daemon version, the source commit the daemon binary
+was built from (`(dirty)` when the source tree had uncommitted changes, or an
+explicit `unknown` for a binary built without a revision stamp — see
+[`docs/cli-reference.md`](cli-reference.md#plumb-version)), Go runtime, OS/arch,
+start time, and uptime; the session's `purpose` tag when set; the workspace pin's provenance when known
 (how, when, and from where the pin was last set — pin-drift observability,
 issue #182); live config-store state (generation, last reload time, whether a
 restart is needed); and this session's tool-call count plus its slowest calls
