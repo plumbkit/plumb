@@ -1,6 +1,7 @@
 package treesitter
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -162,7 +163,7 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, zigIsComment)
+	node.DocStartByte, node.DocEndByte = zigDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	return idx
 }
@@ -174,6 +175,38 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 // grammar emits, which made the predicate always false and left every Zig
 // symbol with no doc span at all.
 func zigIsComment(typ string) bool { return typ == "comment" }
+
+// zigDocSpan returns the doc-comment span of a Zig declaration, dropping any
+// leading `//!` lines, and is the seam the walk uses instead of docSpanBefore.
+//
+// `//!` is Zig's CONTAINER doc comment: it documents the file or struct it
+// opens, never the declaration that happens to follow it. Because the grammar
+// gives it the same "comment" node type as `///` (see zigIsComment), the run
+// scan cannot tell them apart, so a module header written flush against the
+// first declaration became that declaration's doc span. The span is an
+// edit-range start, so move_symbol — include_doc_comment defaults true — would
+// have carried the file's own header out of the file along with the symbol.
+//
+// Zig only permits `//!` at the start of a container, so it can only ever lead
+// a run and trimming from the front is sufficient: a pure `//!` run collapses to
+// the no-doc sentinel, and `//! header` above `/// doc` keeps just the `///`.
+func zigDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) {
+	start, end = docSpanBefore(decl, lang, src, zigIsComment)
+	for start < end && bytes.HasPrefix(bytes.TrimLeft(src[start:end], " \t"), []byte("//!")) {
+		nl := bytes.IndexByte(src[start:end], '\n')
+		if nl < 0 {
+			return 0, 0
+		}
+		start += nl + 1
+		for start < end && (src[start] == ' ' || src[start] == '\t') {
+			start++
+		}
+	}
+	if start >= end {
+		return 0, 0
+	}
+	return start, end
+}
 
 // addContainerFields records the members of a container literal: struct/union
 // fields become variables, enum members become constants — each contained in
@@ -246,7 +279,7 @@ func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, zigIsComment)
+	node.DocStartByte, node.DocEndByte = zigDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {

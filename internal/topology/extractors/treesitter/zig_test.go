@@ -304,3 +304,36 @@ pub fn undocumented() void {}
 	})
 	assertNoDocSpan(t, src, nodes, "undocumented")
 }
+
+// TestZig_ContainerDocCommentIsNotTheNextDeclarationsDocSpan pins the one thing
+// the merged "comment" node type costs. `//!` is Zig's CONTAINER doc comment —
+// it documents the file or struct it opens, not whatever follows — but the
+// grammar types it identically to `///`, so collecting Zig doc spans at all
+// made a module header flush against the first declaration become that
+// declaration's doc span. Since the span is an edit-range start, a move_symbol
+// of `main` (include_doc_comment defaults true) would have carried the file's
+// own header out of the file with it.
+//
+// The mixed case is why zigDocSpan trims rather than discards: `//!` can only
+// lead a run, so the `///` below it must survive.
+func TestZig_ContainerDocCommentIsNotTheNextDeclarationsDocSpan(t *testing.T) {
+	pure := []byte(`//! Module of widgets.
+pub fn main() void {}
+`)
+	nodes, _, err := NewZig().Extract(context.Background(), "mod.zig", pure)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertNoDocSpan(t, pure, nodes, "main")
+
+	run := []byte(`//! Module of widgets.
+//! Second header line.
+/// Documents main.
+pub fn main() void {}
+`)
+	nodes, _, err = NewZig().Extract(context.Background(), "mixed.zig", run)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, run, nodes, map[string]string{"main": "/// Documents main."})
+}
