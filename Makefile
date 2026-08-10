@@ -11,7 +11,25 @@ BINDIR    := $(DESTDIR)$(PREFIX)/bin
 # Try an exact git tag first (release builds), then fall back to VERSION file,
 # then fall back to the short commit hash.
 VERSION   := $(shell git describe --tags --exact-match 2>/dev/null || cat VERSION 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)
-LDFLAGS   := -X github.com/plumbkit/plumb/internal/cli.Version=$(VERSION)
+
+# Build-time source provenance. This Makefile always runs with its working
+# directory inside the PUBLIC plumb repository, so these git commands describe
+# this repository even when the build is invoked from the private plumb-ops
+# superproject (`make -C plumb build`), which mounts it as a submodule. That is
+# precisely why they are stamped explicitly: Go's own debug.ReadBuildInfo()
+# resolves vcs.revision/vcs.modified against the OUTER module there, naming the
+# wrong commit and calling a clean tree dirty. Outside a git checkout (a tarball
+# build) REVISION is empty, and an unstamped revision is reported as unknown
+# rather than as clean — the dirty stamp is only read alongside a revision.
+# No build timestamp is injected, deliberately: dev builds stay reproducible.
+REVISION       := $(shell git rev-parse HEAD 2>/dev/null)
+REVISION_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo true || echo false)
+BUILD_CHANNEL  := dev
+
+LDFLAGS   := -X github.com/plumbkit/plumb/internal/cli.Version=$(VERSION) \
+             -X github.com/plumbkit/plumb/internal/cli.Revision=$(REVISION) \
+             -X github.com/plumbkit/plumb/internal/cli.RevisionDirty=$(REVISION_DIRTY) \
+             -X github.com/plumbkit/plumb/internal/cli.BuildChannel=$(BUILD_CHANNEL)
 
 # macOS-only codesign settings. CODESIGN_IDENTITY can be:
 #   - unset/empty: ad-hoc sign (`-s -`). Gives the binary a stable identifier

@@ -451,11 +451,87 @@ Daemon introspection over the control socket. Requires a running daemon.
 ## `plumb version`
 
 ```
-plumb version
+plumb version [--json]
 ```
 
-Print the plumb build version and the Go runtime version. The build version is
-stamped at compile time (see [Versioning in AGENTS.md](../AGENTS.md)).
+Print the plumb build version, the Go runtime version, and — when the binary
+carries one — the source commit it was built from. The build version is stamped
+at compile time (see [Versioning in AGENTS.md](../AGENTS.md)).
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--json` | `false` | Print a machine-readable report instead of the human line. Suppresses the logo banner. |
+
+### Human output
+
+A binary with no revision stamp prints exactly what plumb has always printed:
+
+```
+plumb 0.16.3 (go1.26.4)
+```
+
+A stamped binary extends that same single line with the abbreviated (12-char)
+commit, suffixed `-dirty` when the source tree had uncommitted changes:
+
+```
+plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa)
+plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa-dirty)
+```
+
+It stays one line on purpose — `make install` echoes `plumb version | tail -1`,
+and assorted tooling scrapes the first line.
+
+### JSON output
+
+```json
+{
+  "version": "0.16.3",
+  "revision": "4c6e4da9d8fafc5ca36d762460caf6abf46c5ca6",
+  "revision_known": true,
+  "dirty": false,
+  "dirty_known": true,
+  "go_version": "go1.26.4",
+  "os": "darwin",
+  "arch": "arm64",
+  "build_channel": "dev"
+}
+```
+
+`revision_known` and `dirty_known` exist so a consumer can tell "clean" from "we
+have no idea". An unstamped binary reports `revision: ""`, `revision_known:
+false`, `dirty: false`, `dirty_known: false` — reading `dirty` without
+`dirty_known` would misreport an unknown build as clean. `build_channel` is
+`release` (GoReleaser), `dev` (the Makefile), or `""` when unknown.
+
+The same source commit is reported by the `daemon_info` MCP tool, on its
+`source commit:` row, so the commit a *running daemon* was built from can be read
+without shelling out to the binary.
+
+### How the revision is stamped
+
+The revision, its dirty flag, and the build channel are injected at link time,
+alongside the version:
+
+```
+-X github.com/plumbkit/plumb/internal/cli.Revision=<full sha>
+-X github.com/plumbkit/plumb/internal/cli.RevisionDirty=true|false
+-X github.com/plumbkit/plumb/internal/cli.BuildChannel=dev|release
+```
+
+They are resolved in a fixed order: the ldflags stamps first, then Go's own
+embedded `vcs.revision` / `vcs.modified` build settings, then unknown. Dirtiness
+is always read from the same source as the revision — never mixed.
+
+The explicit stamps exist because `debug.ReadBuildInfo()` alone gets this wrong
+for plumb: the private plumb-ops superproject mounts this repository as a
+submodule through `go.work`, so a build launched from the ops root resolves the
+embedded VCS settings against the *outer* module — naming the wrong commit (or
+none) and marking a clean tree modified. The `Makefile` always runs with its
+working directory inside this repository, so `git rev-parse HEAD` there is
+correct, and `.goreleaser.yml` passes `{{ .FullCommit }}` for releases.
+
+No build timestamp is stamped, deliberately: development builds stay
+reproducible.
 
 ---
 
