@@ -21,6 +21,7 @@ import (
 var (
 	statsFlagWorkspace string
 	statsFlagLimit     int
+	statsFlagFailures  bool
 )
 
 var statsCmd = &cobra.Command{
@@ -33,6 +34,14 @@ var statsCmd = &cobra.Command{
 func init() {
 	statsCmd.Flags().StringVar(&statsFlagWorkspace, "workspace", "", "workspace path to inspect (defaults to current directory)")
 	statsCmd.Flags().IntVar(&statsFlagLimit, "limit", 20, "number of recent calls to show")
+	// A flag rather than an extra section, because the failure breakdown is a
+	// different GRAIN, not more columns: the default table is one row per tool,
+	// while a failure bucket is (kind × tool × client build). Folding it in
+	// would either duplicate tool rows or drop the kind — the one fact the view
+	// exists for — and the default table already carries nine columns. Triage is
+	// also a distinct occasion: you reach for it when something is failing, not
+	// on every `plumb stats`.
+	statsCmd.Flags().BoolVar(&statsFlagFailures, "failures", false, "show failures grouped by kind, tool and client instead of the default view")
 }
 
 func runStats(_ *cobra.Command, _ []string) error {
@@ -92,6 +101,10 @@ func runStats(_ *cobra.Command, _ []string) error {
 		tui.SepStyle,
 	))
 	fmt.Println()
+
+	if statsFlagFailures {
+		return printStatsFailures(os.Stdout, db, filter, ws)
+	}
 
 	// Tool summary table
 	fmt.Println("Tool Call Summary")

@@ -495,6 +495,19 @@
   GROUP BY keys, and one invented label would split a bucket in every failure
   report that ever reads the table.
 
+- **`plumb stats --failures` — a failure breakdown by kind.** A new
+  `stats.FailureSummary` groups failed calls by kind, tool, client name and
+  client version — every key low-cardinality by construction, none of them a
+  value an agent supplies — and reports the call count and how many were
+  retryable per bucket. It reuses the existing `Filter` predicate, so
+  `--workspace` and any other scoping applies unchanged. The CLI shows it as
+  its own view rather than more columns on the default table, because the grain
+  differs: the default table is one row per tool, a failure bucket is one row
+  per (kind × tool × client build). Rows with no classification are reported
+  under an explicit `unclassified` label with a note explaining what that means
+  — never dropped, and never folded into `internal`, which is a deliberate
+  classification rather than an absence of one.
+
 ### Changed
 
 - **A failure is now classified exactly once per call, at the MCP dispatch

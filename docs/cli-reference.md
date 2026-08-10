@@ -346,7 +346,7 @@ session name, ID, resolved workspace, and client identity.
 ## `plumb stats`
 
 ```
-plumb stats [--workspace <dir>] [--limit <n>]
+plumb stats [--workspace <dir>] [--limit <n>] [--failures]
 ```
 
 Aliases: **`plumb status`**.
@@ -359,6 +359,18 @@ of the most recent calls.
 |---|---|---|
 | `--workspace <dir>` | current dir | Workspace to inspect. |
 | `--limit <n>` | `20` | Number of recent calls to show. |
+| `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. |
+
+`--failures` is the triage view. It groups failed calls by their machine-readable
+kind (`dirty_file`, `lsp_timeout`, …), the tool, and the client build, and reports
+how many of each were retryable. It is a separate view rather than extra columns
+because the grain differs: the default table is one row per tool, a failure bucket
+is one row per (kind × tool × client).
+
+Failures plumb makes no structured claim about — and every call recorded before
+the classification columns existed — appear under an explicit `unclassified`
+label. Nothing is inferred from the stored error text, so that bucket is honest
+about what is unknown rather than folded into `internal`.
 
 > Statistics are global to the daemon (`stats.db`) but filtered to the requested
 > workspace. `plumb status` is identical to `plumb stats` — it does **not**
