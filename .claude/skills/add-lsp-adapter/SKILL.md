@@ -41,8 +41,8 @@ minimal worked example (46 lines); full guide in `docs/adding-an-lsp.md`.
 An adapter stays **Experimental** until the `DidChangeWatchedFiles`+`DidOpen` →
 `publishDiagnostics` round-trip runs green against a **real server binary**, in an
 integration test gated `//go:build integration` — mock-transport unit tests passing is not
-enough to promote. Update the adapter's `doc.go` and the validation table in `AGENTS.md`
-("## Adapter validation status") when a real-binary retest goes green.
+enough to promote. Update the adapter's `doc.go` and the validation table in
+`docs/adding-an-lsp.md` ("## Validation levels") when a real-binary retest goes green.
 
 ## Recurring gotchas (from the adapter validation table)
 
