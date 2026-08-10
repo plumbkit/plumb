@@ -710,6 +710,12 @@ write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
 
+**Attribution:** with `[git] commit_trailer = true` (default off) every
+plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
+trailer; regardless of that knob, `workspace_sessions` always lists recent
+commits per session (short SHA, subject, repository) from its recent-writes
+feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
+
 **Inputs:** `subcommand` (required), `args` (array), `files` (array, for `add`),
 `message` (string, for `commit`), `confirm` (bool).
 

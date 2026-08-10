@@ -85,6 +85,12 @@
   ≥ 2.32 requirement and its failure mode explicitly rather than as a
   parenthetical.
 
+- **The `git` tool's own `docs/tools.md` section never mentioned
+  `commit_trailer` or the `Plumb-Session` attribution**, unlike every other
+  config-gated behaviour documented there (tiers, ambiguous-subcommand
+  classification, add/commit typing). Added a concise mention consistent
+  with the tool's `Description()` wording.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed
