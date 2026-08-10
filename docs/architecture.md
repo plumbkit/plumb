@@ -726,8 +726,8 @@ only triggered on `textDocument/publishDiagnostics` notifications.
 
 ## Adding features
 
-- **New MCP tool**: see `docs/adding-an-lsp.md` for the pattern; for tools
-  see the checklist in `AGENTS.md` → "How to add an MCP tool".
+- **New MCP tool**: follow the `add-mcp-tool` project skill in `.claude/skills/`
+  (the full checklist), summarised in `docs/contributing.md`.
 - **New LSP adapter**: see `docs/adding-an-lsp.md`.
 - **New config field**: add to `config.Config`, update `defaults`, add
   validation in `validate()`, document in this file and in
