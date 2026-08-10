@@ -167,9 +167,13 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 	return idx
 }
 
-// zigIsComment reports whether a Zig grammar node type is a comment. Zig has
-// only line comments; doc comments (`///`) parse as line_comment or doc_comment.
-func zigIsComment(typ string) bool { return typ == "line_comment" || typ == "doc_comment" }
+// zigIsComment reports whether a Zig grammar node type is a comment. The
+// grammar emits ONE type, "comment", for every form — `//`, `///` and `//!`
+// alike — so a doc comment is not distinguishable here by node type. It was
+// previously matched as "line_comment"/"doc_comment", neither of which this
+// grammar emits, which made the predicate always false and left every Zig
+// symbol with no doc span at all.
+func zigIsComment(typ string) bool { return typ == "comment" }
 
 // addContainerFields records the members of a container literal: struct/union
 // fields become variables, enum members become constants — each contained in

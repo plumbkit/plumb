@@ -253,6 +253,27 @@
   `TestBareSetupAnnouncesTheClearedAllowlist` (end to end through the shipped
   target; Kimi stays silent because it changes nothing).
 
+### Fixed
+
+- **Zig symbols carry their `///` doc-comment span.** `zigIsComment` — the
+  predicate `docSpanBefore` uses to decide whether a previous sibling is a
+  comment — matched `"line_comment"` and `"doc_comment"`, and the gotreesitter
+  Zig grammar emits neither: it produces a single `"comment"` type for every
+  form, `//`, `///` and `//!` alike. The predicate was therefore always false,
+  so no Zig function, method or type has carried a doc span since spans were
+  introduced (0.13.0, "populate byte/column declaration + doc-comment spans in
+  all extractors"). An always-false comment predicate is invisible from the
+  outside — every node is still emitted, with a correct declaration span — and
+  only shows up downstream, where `move_symbol`/`replace_symbol_body` with
+  `include_doc_comment` fall back to the line-scan heuristic instead of the
+  byte-precise span, leaving a `///` block orphaned above the relocated
+  declaration. The node type was confirmed against the grammar rather than
+  assumed. `TestZig_DocCommentsAreCollected` asserts the span CONTENT (not
+  merely that one exists) for a multi-line run on a function, a `///` on a
+  struct-bound type, and a method inside the struct literal, with a detached
+  banner as the negative control; confirmed to fail before the fix on exactly
+  `add`, `Widget` and `bump`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
