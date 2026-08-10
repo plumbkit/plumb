@@ -169,8 +169,15 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 // commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
 // stamp on this call's commit, or "" when the call is not a commit, the [git]
 // commit_trailer knob is off (the default), or the connection has no session
-// name to attribute. The trailer is attribution metadata only — it never
-// gates the operation.
+// name to attribute. The trailer only ever ADDS metadata to a commit that was
+// going to happen anyway — it never blocks a commit on its own account. But
+// the token this returns feeds straight into a `--trailer` argument
+// (buildGitArgv), and `git commit --trailer` is itself gated on the git
+// binary: the flag does not exist before git 2.32 (June 2021), so turning
+// commit_trailer on against an older git makes EVERY commit issued through
+// this tool fail with "error: unknown option 'trailer'" — plumb runs no
+// runtime version probe to catch that ahead of time. See the git ≥ 2.32
+// requirement on the [git] commit_trailer row in docs/configuration.md.
 func (t *Git) commitTrailerToken(p GitPolicy, sub string) string {
 	if sub != "commit" || !p.CommitTrailer || t.sessNameFn == nil {
 		return ""
