@@ -42,26 +42,63 @@ func checkLeanAllowlists() []checkResult {
 // parent directory for an absent config — a doctor check must never write to the
 // filesystem it is inspecting.
 func leanHintAt(c leanClient, cfgPath string) (checkResult, bool) {
-	cfg, err := c.parse(cfgPath)
-	if err != nil {
-		// checkOneClient already fails the run for a config that will not parse
-		// (classifyClientBinary); reporting the same fault twice would put two
-		// lines against one broken file.
-		return checkResult{}, false
-	}
-	servers, ok := cfg[c.serversKey].(map[string]any)
+	raw, has, ok := leanAllowlistValue(c, cfgPath)
 	if !ok {
 		return checkResult{}, false
 	}
-	entry, ok := servers["plumb"].(map[string]any)
-	if !ok {
-		return checkResult{}, false
-	}
-	raw, has := entry[c.key]
 	if !has {
 		return leanFullSurfaceHint(c), true
 	}
 	return leanAllowlistResult(c, gradeToolAllowlist(raw, registeredToolNames(), tools.LeanToolNames()))
+}
+
+// leanAllowlistValue reads c's allowlist value out of cfgPath, creating nothing.
+// ok is false when the config is absent, will not parse, or does not register
+// plumb — there is nothing to say about any of those here (checkOneClient
+// already fails the run for a config that will not parse, and reporting the same
+// fault twice would put two lines against one broken file). has distinguishes a
+// plumb entry carrying the key from one without it.
+func leanAllowlistValue(c leanClient, cfgPath string) (raw any, has, ok bool) {
+	cfg, err := c.parse(cfgPath)
+	if err != nil {
+		return nil, false, false
+	}
+	servers, isMap := cfg[c.serversKey].(map[string]any)
+	if !isMap {
+		return nil, false, false
+	}
+	entry, isMap := servers["plumb"].(map[string]any)
+	if !isMap {
+		return nil, false, false
+	}
+	raw, has = entry[c.key]
+	return raw, has, true
+}
+
+// leanAllowlistPresent reports whether cfgPath currently carries c's allowlist
+// key on its plumb entry — the signal repointFix needs to keep `--lean` on the
+// command it tells the user to run.
+func leanAllowlistPresent(c leanClient, cfgPath string) bool {
+	_, has, ok := leanAllowlistValue(c, cfgPath)
+	return ok && has
+}
+
+// repointFix is the fix line for a client whose registered binary is missing or
+// stale: the `plumb setup` invocation that repoints it.
+//
+// It keeps `--lean` when that client's config carries a tool allowlist today,
+// and that is not cosmetic. For Codex and Gemini CLI a bare re-register CLEARS
+// the key, so the unqualified command doctor used to print would have widened
+// the user's tool surface from 21 back to 57 as a side effect of following
+// doctor's own advice about a moved binary. Kimi Code preserves the key either
+// way, but `--lean` is still the better suggestion there: it refreshes a
+// snapshot that may have aged past the current lean set.
+func repointFix(c setupTarget, cfgPath string) string {
+	cmd := "plumb setup " + c.use
+	if lc, ok := leanClientFor(c.use); ok && leanAllowlistPresent(lc, cfgPath) {
+		cmd += " --lean"
+	}
+	return fmt.Sprintf("run `%s` to repoint at the current binary", cmd)
 }
 
 // registeredToolNames is the live set of tool names plumb advertises, used to

@@ -265,7 +265,7 @@ func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 		return checkResult{
 			ok:     false,
 			detail: detail + "\nregistered binary missing: " + render.ContractPath(regPath),
-			fix:    fmt.Sprintf("run `plumb setup %s` to repoint at the current binary", c.use),
+			fix:    repointFix(c, cfgPath),
 		}
 	}
 	if selfPath != "" && !sameBinary(regPath, selfPath) {
@@ -273,7 +273,7 @@ func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 			ok:     true,
 			warn:   true,
 			detail: detail + "\nregistered: " + render.ContractPath(regPath) + "\ncurrent:    " + render.ContractPath(selfPath),
-			fix:    fmt.Sprintf("run `plumb setup %s` to repoint at the current binary", c.use),
+			fix:    repointFix(c, cfgPath),
 		}
 	}
 	return checkResult{ok: true, detail: detail}

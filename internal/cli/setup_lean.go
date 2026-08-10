@@ -99,6 +99,17 @@ func leanAllowlistClients() []leanClient {
 	return []leanClient{kimiLeanClient, codexLeanClient, geminiLeanClient}
 }
 
+// leanClientFor resolves a `plumb setup` subcommand name to its allowlist
+// descriptor. ok is false for the ten clients that have no allowlist key.
+func leanClientFor(use string) (leanClient, bool) {
+	for _, c := range leanAllowlistClients() {
+		if c.setupCmd == use {
+			return c, true
+		}
+	}
+	return leanClient{}, false
+}
+
 // leanChoice is what one registration should do with the client-side allowlist.
 type leanChoice int
 
@@ -210,18 +221,49 @@ func leanFlagRegistrar(v *bool, c leanClient) func(*cobra.Command) {
 	}
 }
 
-// leanSetupNote is the setupTarget.note hook body: it explains the allowlist's
-// staleness contract, and only when --lean actually fired (a bare register
-// prints nothing).
-func leanSetupNote(c leanClient, on bool) string {
-	if !on {
-		return ""
+// leanSetupNote is the setupTarget.note hook body. It reports what the run did
+// to the client-side allowlist — including, crucially, when it REMOVED one.
+//
+// A bare `plumb setup codex` resolves to leanClear and deletes the key. That is
+// the only path in this feature that destroys user configuration, and it used to
+// be the only silent one: the note short-circuited on "no --lean", so a user who
+// followed `plumb doctor`'s own repoint advice went from 21 tools to 57 with
+// nothing said. (The other half of that fix is repointFix, which keeps --lean on
+// doctor's suggested command when an allowlist is in place.) The clear line is
+// worded from the END STATE rather than from a diff, so it is true whether or not
+// a key was actually there — the writer does not report which, and inventing a
+// "removed" claim it cannot substantiate would be worse than describing what the
+// entry now says.
+//
+// leanKeep says nothing: that is a bulk sweep, or Kimi's bare re-register, and
+// neither touches the key.
+func leanSetupNote(c leanClient, choice leanChoice) string {
+	switch choice {
+	case leanPin:
+		return fmt.Sprintf(
+			"Tool allowlist: %s now pins the %d lean plumb tools client-side.\n"+
+				"It is a snapshot, not a live view — re-run `plumb setup %s --lean` after a\n"+
+				"plumb upgrade to refresh it. %s",
+			c.key, len(tools.LeanToolNames()), c.setupCmd, c.bareNote)
+	case leanClear:
+		return fmt.Sprintf(
+			"Tool allowlist: no --lean, so the plumb entry carries no client-side %s\n"+
+				"allowlist — %s loads plumb's full tool surface. Any allowlist that was there\n"+
+				"has been cleared (the previous config was backed up alongside it).\n"+
+				"Run `plumb setup %s --lean` to pin the %d lean tools instead.",
+			c.key, c.name, c.setupCmd, len(tools.LeanToolNames()))
 	}
-	return fmt.Sprintf(
-		"Tool allowlist: %s now pins the %d lean plumb tools client-side.\n"+
-			"It is a snapshot, not a live view — re-run `plumb setup %s --lean` after a\n"+
-			"plumb upgrade to refresh it. %s",
-		c.key, len(tools.LeanToolNames()), c.setupCmd, c.bareNote)
+	return ""
+}
+
+// kimiLeanChoice maps Kimi Code's boolean --lean flag to a choice. Kimi never
+// clears: its shipped contract preserves the key on a bare re-register (see
+// kimiCodeInto), so the flag is pin-or-leave-alone.
+func kimiLeanChoice(lean bool) leanChoice {
+	if lean {
+		return leanPin
+	}
+	return leanKeep
 }
 
 // codexLeanInto registers plumb in Codex's TOML config, managing the per-server

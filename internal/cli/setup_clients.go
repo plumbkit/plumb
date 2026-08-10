@@ -108,13 +108,13 @@ var (
 		use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupGeminiInto,
 		extractFn: claudeDesktopCommandExtractor,
 		flags:     leanFlagRegistrar(&setupGeminiLeanFlag, geminiLeanClient),
-		note:      func() string { return leanSetupNote(geminiLeanClient, setupGeminiLeanFlag) },
+		note:      func() string { return leanSetupNote(geminiLeanClient, leanChoiceOf(setupGeminiLeanFlag)) },
 	}
 	codexTarget = setupTarget{
 		use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto,
 		extractFn:   mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
 		flags:       leanFlagRegistrar(&setupCodexLeanFlag, codexLeanClient),
-		note:        func() string { return leanSetupNote(codexLeanClient, setupCodexLeanFlag) },
+		note:        func() string { return leanSetupNote(codexLeanClient, leanChoiceOf(setupCodexLeanFlag)) },
 		skillsDirFn: codexSkillsDir,
 	}
 )
