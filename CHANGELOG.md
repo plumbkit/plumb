@@ -16,11 +16,14 @@
   `workspace_sessions`' recent-writes feed now renders a successful git commit
   as a full attribution line — session name, short SHA, subject, and
   repository — recovered from the stats record every tool call already gets
-  (the feed query now selects `output_text` for git rows only, so no parallel
-  store and no payload change for the file tools). A failed commit or a
-  non-commit git op keeps the previous bare line. Documented in the `git` and
-  `workspace_sessions` tool descriptions, the `[git]` config section, and
-  `docs/configuration.md`. Guarded by `TestGit_CommitSessionTrailer` /
+  (the feed query now selects `output_text` for every row of the `git` tool —
+  keyed on the tool name, not the subcommand, so a `log`/`diff`/`show`/`status`
+  row carries the payload too; the renderer discards it for anything that is
+  not a successful `commit` — so no parallel store and no payload change for
+  the file tools). A failed commit or a non-commit git op keeps the previous
+  bare line. Documented in the `git` and `workspace_sessions` tool
+  descriptions, the `[git]` config section, and `docs/configuration.md`.
+  Guarded by `TestGit_CommitSessionTrailer` /
   `…DefaultOff` (real temp repos, trailer asserted via `%(trailers)`),
   `TestBuildGitArgv_CommitTrailer` and `TestCommitTrailerToken` (argv shape
   and the gate matrix), `TestFormatWorkspaceSessions_CommitAttribution`
