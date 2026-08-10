@@ -245,10 +245,15 @@ func stripSkillMarker(data string) string {
 }
 
 // versionOlder reports whether a is an older release than b. The comparison
-// is semver-ish: a leading "v" and any pre-release/build suffix are ignored
-// and numeric segments are compared in order, with missing segments read as
-// zero. An unparseable side (a hand-typed marker, the "dev" build stamp) is
-// never "older" — the caller falls back to plain wording rather than
+// is semver-ish: a leading "v" is stripped and numeric segments are compared
+// in order, with missing segments read as zero. Any pre-release/build suffix
+// (the "-rc.1" in "0.16.3-rc.1") is stripped before comparison rather than
+// ordered against it, so a pre-release compares EQUAL to its release —
+// "0.16.3-rc.1" is never "older" than "0.16.3". That is dormant today (the
+// project reserves rc tags for v1.x, so no installed marker carries one yet)
+// but is the actual behaviour, not merely "ignored" as ordering input. An
+// unparseable side (a hand-typed marker, the "dev" build stamp) is never
+// "older" either — the caller falls back to plain wording rather than
 // inventing an ordering. Equal and newer are both false; only strictly older
 // earns the "installed by" phrasing.
 func versionOlder(a, b string) bool {

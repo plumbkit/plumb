@@ -34,6 +34,15 @@
   is byte-identical to the embedded source — a regression that wrote
   `content` instead of the restamped `stamped` there would fail it.
 
+### Docs
+
+- **Corrected `versionOlder`'s doc comment on pre-release handling.** It
+  said pre-release/build suffixes are "ignored"; in fact they are stripped
+  before comparison, so a pre-release compares EQUAL to its release
+  (`0.16.3-rc.1` never reads as older than `0.16.3`) rather than being
+  ordered against it. Comment-only — the comparison itself is unchanged,
+  and is dormant today since the project reserves rc tags for v1.x.
+
 ### Added
 
 - **The git tool now surfaces peer `share_intent` claims that cover the
