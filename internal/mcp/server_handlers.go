@@ -289,6 +289,11 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 	dur := time.Since(start)
 
+	// Classify ONCE, here, and hand the same value to both consumers below: the
+	// observer that records the failure and the `_meta` envelope the client
+	// reads. See classifyOnce.
+	failure := classifyOnce(err, params.Name)
+
 	if s.OnAfterTool != nil {
 		errMsg := ""
 		afterText := text
@@ -300,7 +305,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			afterText = ""
 		}
 		runHookSafely("OnAfterTool", func() {
-			s.OnAfterTool(ctx, params.Name, params.Arguments, afterText, errMsg, dur, err != nil)
+			s.OnAfterTool(ctx, params.Name, params.Arguments, afterText, errMsg, dur, err != nil, failure)
 		})
 	}
 
@@ -317,7 +322,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return okResp(req.ID, callResult{
 			Content: []content{{Type: "text", Text: msg}},
 			IsError: true,
-			Meta:    toolErrorMeta(err, params.Name),
+			Meta:    toolErrorMeta(failure),
 		})
 	}
 	if len(warnings) > 0 {

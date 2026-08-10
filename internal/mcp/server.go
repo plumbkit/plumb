@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 const protocolVersion = "2024-11-05"
@@ -49,66 +51,6 @@ const (
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
 )
-
-// MetaAllowDirsKey is the MCP initialize-params `_meta` key under which
-// `plumb serve` transports per-connection extra read-write roots (`--allow-dir`
-// / PLUMB_ALLOWED_DIRS). It travels inside the captured initialize frame, so the
-// resilient proxy's handshake replay re-applies it on every reconnect for free.
-// Reverse-DNS namespaced per the MCP `_meta` convention.
-const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
-
-// MetaProxySessionKey is the MCP initialize-params `_meta` key under which
-// `plumb serve` transports its stable per-proxy session ID. It is identical
-// across every handshake replay, so the daemon can recognise a reconnected
-// connection (after a daemon restart) as a continuation of the previous one and
-// rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
-const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
-
-// MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
-// `plumb serve` transports its own working directory as an ADVISORY workspace
-// attach hint. Unlike a client-reported root it is not authoritative: the
-// daemon consults it only after every stronger signal (a session_start-origin
-// pin, client roots, a roots-origin pin) has failed, and always validates it through
-// workspace detection before attaching. Identical across every handshake
-// replay. Reverse-DNS namespaced per the MCP `_meta` convention.
-const MetaWorkspaceKey = "dev.plumbkit/workspace"
-
-// MetaPinnedWorkspaceKey is the MCP initialize-params `_meta` key under which
-// `plumb serve` replays the workspace the caller last chose with an explicit
-// `session_start(workspace=…)` call.
-//
-// Unlike MetaWorkspaceKey — the proxy's launch directory, a mere hint — this is
-// AUTHORITATIVE: it is the same declaration of intent as the live tool call that
-// produced it, merely re-delivered to a daemon that restarted underneath the
-// connection. It therefore outranks a client-reported root, which only says
-// where the client happened to start. The proxy injects it at replay time (the
-// pin is learned after the handshake), never on the first connect, so a session
-// that never re-pins sends a byte-identical frame.
-//
-// An older daemon simply ignores the unknown key. Reverse-DNS namespaced per the
-// MCP `_meta` convention.
-const MetaPinnedWorkspaceKey = "dev.plumbkit/pinned-workspace"
-
-// MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
-// exempt a tool from MCP tool-search deferral: a tool advertised with
-// `_meta["anthropic/alwaysLoad"] = true` is loaded into the client's context at
-// session start instead of being deferred behind a ToolSearch round-trip.
-// Unlike plumb's own `dev.plumbkit/…` keys, this one deliberately carries
-// Anthropic's namespace because it is a client-recognised key, not a
-// plumb-private one. Clients that predate the convention ignore the unknown
-// `_meta` field, so emitting it is forward-compatible.
-const MetaAlwaysLoadKey = "anthropic/alwaysLoad"
-
-// MetaToolErrorKey is the `_meta` key under which a FAILED tools/call result
-// carries plumb's structured error envelope: the failure's kind, whether it is
-// retryable, the remediation, and any low-cardinality details. The key is
-// present only when the error classifies, so a client can treat its absence as
-// "plumb has nothing structured to say" rather than as a shape to parse.
-//
-// `_meta` is valid in the negotiated 2024-11-05 revision; the envelope is
-// deliberately NOT emitted as `structuredContent`, which is a 2025-06-18 field.
-// Reverse-DNS namespaced per the MCP `_meta` convention.
-const MetaToolErrorKey = "dev.plumbkit/error"
 
 // RequestFn sends a server-initiated JSON-RPC request to the MCP client and
 // returns the decoded result payload, or an error if the call fails or times out.
@@ -197,7 +139,14 @@ type Server struct {
 	// separate so observers can record them without conflating success and
 	// failure paths — e.g. the stats DB stores errMsg in error_msg and only
 	// stores output in output_text.
-	OnAfterTool func(ctx context.Context, name string, args json.RawMessage, output, errMsg string, duration time.Duration, isError bool)
+	//
+	// failure is the SAME classification this call put on the wire in its
+	// `_meta` envelope, not a second derivation of it — see classifyOnce. It is
+	// nil when the call succeeded and when the failure carries no
+	// classification; an observer must record that as "no structured claim"
+	// rather than substituting a default, because that is exactly what the
+	// client was told by the envelope's absence.
+	OnAfterTool func(ctx context.Context, name string, args json.RawMessage, output, errMsg string, duration time.Duration, isError bool, failure *toolerror.Error)
 
 	// EnrichToolOutput, if set, may append advisory text to a SUCCESSFUL tool
 	// result before it is returned to the client (OnAfterTool cannot — it is

@@ -14,6 +14,7 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
@@ -294,8 +295,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnPinnedWorkspace = func(_ context.Context, dir string) {
 		s.onPinnedWorkspace(dir)
 	}
-	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
-		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
+	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
+		s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure)
 	}
 	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn, notify mcp.NotifyFn) {
 		// Capture the notifier and seed the last-advertised profile so a later
