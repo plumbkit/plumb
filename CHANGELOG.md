@@ -261,8 +261,8 @@
   Zig grammar emits neither: it produces a single `"comment"` type for every
   form, `//`, `///` and `//!` alike. The predicate was therefore always false,
   so no Zig function, method or type has carried a doc span since spans were
-  introduced (0.13.0, "populate byte/column declaration + doc-comment spans in
-  all extractors"). An always-false comment predicate is invisible from the
+  introduced (0.9.22, "Char-precise byte/column and doc-comment spans on
+  topology nodes"). An always-false comment predicate is invisible from the
   outside — every node is still emitted, with a correct declaration span — and
   only shows up downstream, where `move_symbol`/`replace_symbol_body` with
   `include_doc_comment` fall back to the line-scan heuristic instead of the
@@ -341,6 +341,20 @@
   `///`. A run that is entirely `//!` collapses to the no-doc sentinel. Guarded
   by `TestZig_ContainerDocCommentIsNotTheNextDeclarationsDocSpan` (pure and
   mixed runs), confirmed to fail before the fix.
+
+### Changed
+
+- **`include_doc_comment`'s schema now states that the extended range can cover
+  a declaration's wrapper.** The flag's description promised only "contiguous
+  comment lines directly above the symbol declaration", but where a declaration
+  is wrapped the doc comment sits above the WRAPPER, so the range necessarily
+  covers it: an exported ES declaration under its `export` statement (since
+  0.16.2) and, new here, a decorated Python `def` under its `@decorator`. That
+  is the correct range — a `move_symbol` must carry `@property` along with the
+  method it decorates — but for `replace_symbol_body` it means the replacement
+  content has to reproduce the decorator or the `export`, or it is silently
+  dropped, and `@property`/`@staticmethod`/`@pytest.fixture` change semantics in
+  a way `export` does not. Documentation only; no behaviour change.
 
 ## 0.16.3 (2026-08-10)
 
