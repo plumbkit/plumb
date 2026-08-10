@@ -328,6 +328,20 @@
   before the fix. JavaScript and Rust carried this independently of the Python
   work above — it is fixed in the shared helper, not per language.
 
+- **A Zig `//!` container doc comment no longer becomes the following
+  declaration's doc span.** `//!` documents the file or struct it opens, never
+  what follows it, but the grammar types it identically to `///` (one `"comment"`
+  type for every form), so collecting Zig doc spans at all made a module header
+  written flush against the first declaration that declaration's doc comment.
+  With the span used as an edit-range start, a `move_symbol` of that first
+  function would have carried the file's own header out of the file. The new
+  `zigDocSpan` seam trims leading `//!` lines from the collected run rather than
+  discarding it — Zig only permits `//!` at the start of a container, so it can
+  only ever lead, and `//! header` above `/// doc` correctly keeps just the
+  `///`. A run that is entirely `//!` collapses to the no-doc sentinel. Guarded
+  by `TestZig_ContainerDocCommentIsNotTheNextDeclarationsDocSpan` (pure and
+  mixed runs), confirmed to fail before the fix.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
