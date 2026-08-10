@@ -495,6 +495,21 @@
   GROUP BY keys, and one invented label would split a bucket in every failure
   report that ever reads the table.
 
+### Changed
+
+- **A failure is now classified exactly once per call, at the MCP dispatch
+  boundary, and the same value is handed to every consumer.** `handleToolsCall`
+  derives one `*toolerror.Error` and passes it both to the `_meta` envelope the
+  client reads and to the `OnAfterTool` observer that records it — so the claim
+  on the wire and the claim in the stats row agree by construction rather than
+  by two derivations happening to match. `OnAfterTool` gains a trailing
+  `failure *toolerror.Error` parameter to carry it; it is nil for a successful
+  call and for a failure plumb cannot classify, which an observer must record
+  as "no structured claim" rather than defaulting, because that is exactly what
+  the envelope's absence tells the client. `toolErrorMeta` now renders from the
+  already-classified error instead of re-classifying, and the telemetry path
+  never calls `Classify` at all.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

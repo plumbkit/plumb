@@ -12,6 +12,10 @@ package mcp
 // envelope is the single renderer of that shape. Both entry points go through
 // it so the key set cannot drift between the tool-result path and the
 // pre-dispatch rejection path.
+//
+// classifyOnce is the other half of the same discipline, one level up: the
+// classification itself is derived once per call and shared with the telemetry
+// observer, so what the client is told and what plumb records cannot diverge.
 
 import (
 	"maps"
@@ -19,25 +23,23 @@ import (
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
-// toolErrorMeta renders the `_meta` map for a failed tool result, or nil when
-// err carries no classification (which json omitempty then drops entirely).
-// op is the resolved tool name; see toolErrorEnvelope for how it is applied.
-func toolErrorMeta(err error, op string) map[string]any {
-	env := toolErrorEnvelope(err, op)
-	if env == nil {
-		return nil
-	}
-	return map[string]any{MetaToolErrorKey: env}
-}
-
-// toolErrorEnvelope renders the classification of err, or nil when there is
-// none.
+// classifyOnce derives THE classification of a failed tools/call. It is called
+// exactly once per call, and its result is handed to every consumer: the `_meta`
+// envelope on the wire and the OnAfterTool observer that records the failure as
+// telemetry. Classifying separately at each consumer would leave two derivations
+// free to disagree about the same error — a client told `dirty_file` while the
+// recorded row said something else is worse than either alone.
+//
+// Returns nil when err is nil or carries no classification. Both consumers read
+// nil as "plumb makes no structured claim about this failure": the envelope is
+// omitted, and the telemetry columns stay blank rather than being filled with a
+// guess.
 //
 // op names the operation the failure belongs to. It is applied only when the
 // error does not already carry one: the dispatch boundary is the place that
 // reliably knows the resolved tool name, but a call site that knew better must
 // not have its answer overwritten by the generic one.
-func toolErrorEnvelope(err error, op string) map[string]any {
+func classifyOnce(err error, op string) *toolerror.Error {
 	te, ok := toolerror.Classify(err)
 	if !ok {
 		return nil
@@ -45,7 +47,17 @@ func toolErrorEnvelope(err error, op string) map[string]any {
 	if te.Op == "" && op != "" {
 		te = te.WithOp(op)
 	}
-	return envelope(te.Kind, te.Op, te.Remediation, te.Details)
+	return te
+}
+
+// toolErrorMeta renders the `_meta` map for a failed tool result from the
+// classification classifyOnce derived, or nil when there is none (which json
+// omitempty then drops entirely).
+func toolErrorMeta(te *toolerror.Error) map[string]any {
+	if te == nil {
+		return nil
+	}
+	return map[string]any{MetaToolErrorKey: envelope(te.Kind, te.Op, te.Remediation, te.Details)}
 }
 
 // invalidCallEnvelope renders the envelope for a tools/call plumb refused

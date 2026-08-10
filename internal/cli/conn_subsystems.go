@@ -20,6 +20,7 @@ import (
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -238,11 +239,31 @@ func batchSizeFor(tool string, args json.RawMessage) int {
 	return 1
 }
 
+// withFailure stamps the failure-classification columns onto a stats row from
+// the classification the MCP dispatch boundary already derived for this call.
+//
+// It never classifies anything itself. The point of taking the value rather
+// than re-deriving it is that the row and the client's `_meta` envelope come
+// from ONE toolerror.Error: a second Classify here would be free to drift from
+// the first, and the two would then disagree about the same failure. A nil
+// failure — a successful call, or a failure plumb cannot classify — leaves the
+// columns blank, which is the same "no structured claim" the client reads from
+// the envelope's absence.
+func withFailure(c stats.Call, failure *toolerror.Error) stats.Call {
+	if failure == nil {
+		return c
+	}
+	c.ErrorKind = failure.Kind
+	c.RemediationClass = failure.Remediation.Class
+	c.ErrorRetryable = failure.Retryable()
+	return c
+}
+
 // onAfterTool records a completed tool call in the stats store and refreshes
 // the session's last-seen timestamp so idle detection stays accurate. Savings are
 // scored here, at write time: this is the single point where the tool name,
 // client identity, raw args and output all co-exist.
-func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
+func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 	session.Touch(s.sessID)
 	v := s.view()
 	root := v.acquiredRoot
@@ -258,7 +279,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	// Score savings under the counterfactual model. Failed calls (output cleared
 	// upstream) score 0 by construction inside Score.
 	saved := clientcaps.Score(toolName, clientName, len(output), baselineBytesFrom(output), batchSizeFor(toolName, args), !isError)
-	s.statsStore.Record(root, stats.Call{
+	s.statsStore.Record(root, withFailure(stats.Call{
 		SessionID:           s.sessID,
 		SessionName:         sessionName,
 		Tool:                toolName,
@@ -277,5 +298,5 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		EfficiencyTokens:    saved.Efficiency,
 		SavingsModelVersion: clientcaps.ModelVersion,
 		Purpose:             v.purpose,
-	})
+	}, failure))
 }
