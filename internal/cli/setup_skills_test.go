@@ -381,6 +381,85 @@ func TestStampSkillContent_CRLFFrontmatterNotCorrupted(t *testing.T) {
 	}
 }
 
+// TestInstallSkill_RestampsStaleMarkerInPlace exercises installSkill's
+// restamp-in-place branch (readErr == nil && stripSkillMarker(existing) ==
+// content): the same skill content behind a stale — or, per the second
+// subtest, missing — marker must still report "unchanged" while the file on
+// disk picks up the current version. Nothing else reaches this branch:
+// TestInstallSkillsFor_EveryCapableClientGetsEverySkill's idempotence check
+// hits the earlier "existing == stamped" case (both content and marker
+// already current), so a regression that dropped the restamp — writing
+// content instead of stamped, or skipping the write and returning
+// "unchanged" over the stale file unchanged — would pass every other test in
+// this file yet fail here.
+func TestInstallSkill_RestampsStaleMarkerInPlace(t *testing.T) {
+	embedded := embeddedSkills()
+	if len(embedded) == 0 {
+		t.Fatal("embeddedSkills() returned nothing — the embed is broken")
+	}
+	skill := embedded[0]
+
+	writeExisting := func(t *testing.T, dir string, existing string) string {
+		t.Helper()
+		skillDir := filepath.Join(dir, skill.Name)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(skillDir, "SKILL.md")
+		if err := os.WriteFile(dst, []byte(existing), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dst
+	}
+
+	assertRestamped := func(t *testing.T, dst string) {
+		t.Helper()
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatalf("reading restamped skill: %v", err)
+		}
+		if v, ok := skillMarkerVersion(string(got)); !ok || v != "9.9.9" {
+			t.Errorf("marker after restamp = (%q, %v), want (\"9.9.9\", true) — the stale/missing "+
+				"marker was not refreshed", v, ok)
+		}
+		if got := stripSkillMarker(string(got)); got != skill.Content {
+			t.Errorf("content around the marker differs from the embedded source after restamp:\ngot  %q\nwant %q",
+				got, skill.Content)
+		}
+	}
+
+	t.Run("stale marker version", func(t *testing.T) {
+		dir := t.TempDir()
+		pinVersion(t, "0.1.0")
+		dst := writeExisting(t, dir, stampSkillContent(skill.Content))
+
+		pinVersion(t, "9.9.9")
+		action, err := installSkill(dir, skill.Name, skill.Content)
+		if err != nil {
+			t.Fatalf("installSkill: %v", err)
+		}
+		if action != "unchanged" {
+			t.Fatalf("action = %q, want %q", action, "unchanged")
+		}
+		assertRestamped(t, dst)
+	})
+
+	t.Run("missing marker", func(t *testing.T) {
+		dir := t.TempDir()
+		dst := writeExisting(t, dir, skill.Content)
+
+		pinVersion(t, "9.9.9")
+		action, err := installSkill(dir, skill.Name, skill.Content)
+		if err != nil {
+			t.Fatalf("installSkill: %v", err)
+		}
+		if action != "unchanged" {
+			t.Fatalf("action = %q, want %q", action, "unchanged")
+		}
+		assertRestamped(t, dst)
+	})
+}
+
 // TestVersionOlder pins the semver-ish comparison behind the "installed by"
 // wording: only a strictly older marker is named; equal, newer, and
 // unparseable (either side, including the "dev" build stamp) all fall back
