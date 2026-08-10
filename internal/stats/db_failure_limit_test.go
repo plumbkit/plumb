@@ -64,8 +64,8 @@ func TestLimitCannotDeleteTheUnclassifiedBucket(t *testing.T) {
 	if report.TotalCalls != 520 {
 		t.Errorf("TotalCalls = %d, want 520", report.TotalCalls)
 	}
-	if !report.Truncated() {
-		t.Error("a view showing 3 of 20 classified buckets did not report itself as truncated")
+	if !report.Incomplete() {
+		t.Error("a view showing 3 of 20 classified buckets did not report itself as incomplete")
 	}
 	if report.ShownCalls() >= report.TotalCalls {
 		t.Errorf("ShownCalls %d >= TotalCalls %d; the footer would claim the view is complete",
@@ -103,8 +103,8 @@ func TestReportIsNotTruncatedWhenEverythingFits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
-	if report.Truncated() {
-		t.Errorf("a complete view reported itself truncated: %d of %d buckets",
+	if report.Incomplete() {
+		t.Errorf("a complete view reported itself incomplete: %d of %d buckets",
 			len(report.Buckets), report.TotalBuckets)
 	}
 	if report.ShownCalls() != report.TotalCalls {

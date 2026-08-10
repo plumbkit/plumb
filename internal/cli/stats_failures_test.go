@@ -108,6 +108,14 @@ func TestStatsClientCell(t *testing.T) {
 		{"anonymous client", "—", stats.FailureCount{}},
 		{"no version", "codex", stats.FailureCount{ClientName: "codex"}},
 		{"full build", "codex 2.1", stats.FailureCount{ClientName: "codex", ClientVersion: "2.1"}},
+		// The client strings are uncapped at the storage layer, and the query's
+		// LIMIT bounds rows rather than cell width, so one absurd version string
+		// would otherwise wreck the table at a single bucket.
+		{
+			name: "an absurd version cannot widen the column",
+			want: "codex " + strings.Repeat("9", maxClientCell-7) + "…",
+			in:   stats.FailureCount{ClientName: "codex", ClientVersion: strings.Repeat("9", 500)},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := statsClientCell(tc.in); got != tc.want {
