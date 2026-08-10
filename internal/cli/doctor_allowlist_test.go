@@ -35,6 +35,10 @@ func TestGradeToolAllowlist(t *testing.T) {
 		{name: "empty list", raw: []any{}, want: allowlistDegenerate, wantShape: shapeEmpty, wantFound: "an empty list"},
 		{name: "a string", raw: "a_tool", want: allowlistDegenerate, wantShape: shapeWrongType, wantFound: "a string"},
 		{name: "a number", raw: 1.0, want: allowlistDegenerate, wantShape: shapeWrongType, wantFound: "a number"},
+		// go-toml decodes `enabled_tools = 3` to an int64, not a float64: the same
+		// hand-edit that JSON reports as "a number" used to fall through to
+		// "a value plumb does not recognise" for Codex alone.
+		{name: "a TOML integer", raw: int64(3), want: allowlistDegenerate, wantShape: shapeWrongType, wantFound: "a number"},
 		{name: "a boolean", raw: true, want: allowlistDegenerate, wantShape: shapeWrongType, wantFound: "a boolean"},
 		{name: "an object", raw: map[string]any{"a_tool": true}, want: allowlistDegenerate, wantShape: shapeWrongType, wantFound: "an object"},
 		{name: "only empty strings", raw: []any{"", "  "}, want: allowlistDegenerate, wantShape: shapeEmpty, wantFound: "a list holding no tool name"},
@@ -385,6 +389,21 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 				}
 				if !strings.Contains(res.detail, "not_a_plumb_tool") {
 					t.Errorf("detail %q must name the entry that filters to nothing", res.detail)
+				}
+			})
+
+			t.Run("degenerate: a scalar is named in the user's vocabulary", func(t *testing.T) {
+				// int64 is what go-toml hands back for `enabled_tools = 3`; JSON
+				// yields float64 for the same edit. Both must read as "a number".
+				for _, scalar := range []any{3, int64(3), 3.5, "read_file", true} {
+					res, ok := leanHintAt(c, leanAllowlistFixture(t, c, scalar, true))
+					if !ok {
+						t.Fatalf("%v: a non-list allowlist must surface", scalar)
+					}
+					if strings.Contains(res.detail, "does not recognise") {
+						t.Errorf("%v: detail %q falls through to the unrecognised default", scalar, res.detail)
+					}
+					assertNoGoTypeNames(t, res.detail)
 				}
 			})
 

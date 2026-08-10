@@ -181,6 +181,20 @@
   the cross-package pair `TestClientSideAllowlistEntries` /
   `TestLeanClientsDeclareTheirCapability`.
 
+- **`plumb doctor` now names a mistyped Codex allowlist correctly, and the
+  removeKey sentinel has a canary.** Three small ones found in review.
+  `jsonTypeName` documented itself as speaking JSON's vocabulary but is now
+  reached for Codex's TOML, where `enabled_tools = 3` decodes to an `int64`
+  rather than a `float64` and fell through to "a value plumb does not
+  recognise"; it is now `configValueTypeName`, handling every integer width plus
+  date-times. `removeKey{}` — `mergeServerEntry`'s "delete this key" value —
+  became general vocabulary shared by ten clients and three serialisers, and a
+  nested one would marshal to a silent `{}` rather than an error, so the writer
+  tests now scan the bytes of every config they produce for that shape. And
+  `TestShippedLeanTargetsReadTheirFlags` asserted its bare run against a *fresh*
+  config, which proved nothing about clearing; it now drives one config through
+  both flag states in turn.
+
 - **`plumb doctor`'s own repoint advice no longer deletes a client-side tool
   allowlist, and the command that clears one no longer does it silently.** Two
   halves of one reproduction: `plumb setup codex --lean` pins 21 tools, the
