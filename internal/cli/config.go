@@ -322,13 +322,22 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 // half: the project asked for something here, and it is not what you are looking
 // at.
 func policySourceFor(st config.ProjectPolicyStatus, key, base string) string {
-	if !st.Asked(key) {
-		return base
+	if st.Asked(key) {
+		if st.Trusted {
+			return "project config (trusted)"
+		}
+		return base + " — project asked, UNTRUSTED"
 	}
-	if st.Trusted {
-		return "project config (trusted)"
+	// This key is capability-granting and the project did not ask for it, so the
+	// value cannot have come from the project — whatever sourceFor's value
+	// comparison inferred. Saying "project config" here would attribute a value to
+	// a file that does not set it, which is the misattribution this annotation
+	// exists to prevent, pointing the other way. Env keeps its own label: it
+	// really is the highest layer.
+	if base == "project config" {
+		return "global config"
 	}
-	return base + " — project asked, UNTRUSTED"
+	return base
 }
 
 // printProjectPolicyNotice states, in one place and in full, what this project's

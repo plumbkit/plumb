@@ -66,6 +66,53 @@
 
 ### Fixed
 
+- **A fold-variant `[lsp.<lang>]` key escaped the trust gate entirely.**
+  `go-toml/v2` matches a TOML key to a struct tag **case-insensitively**, so
+  `Command`, `COMMAND` and `Root_Markers` all decode into `LSPConfig` — but the
+  policy spec looked each gated field up by its exact canonical name, so none of
+  them appeared in it. A key absent from the spec is absent from the disclosure,
+  from `plumb doctor`, from `config show`'s annotation, and from the trust hash.
+  Two consequences, both live: a repository could ship `[git] commit_trailer =
+  true` plus `[lsp.go] Command = "/bin/sh"` and have `plumb trust` disclose only
+  the former while the latter reached `exec.CommandContext` on attach; and a
+  project trusted for something innocuous could **add** `COMMAND` afterwards
+  without changing the hash, so the grant stayed valid, no re-prompt fired, and
+  the new argv was honoured — walking around the exact TOCTOU the content binding
+  exists to close.
+
+  Both tables are now walked key by key over what the project actually wrote,
+  never by looking a name up. `[git]` already was. `[lsp.<lang>]` now enumerates
+  what is **safe** — `enabled`, `diagnostics`, `idle_timeout`, `max_workspaces` —
+  and gates everything else, so any spelling that is not provably inert (a fold
+  variant, a typo, a field added to `LSPConfig` by a later change and not thought
+  about here) is gated, disclosed and hashed rather than dropped. Keys keep the
+  spelling the project used, so two spellings of one field cannot mask one
+  another, and `Asked` compares case-insensitively so a variant still annotates
+  its row in `config show`.
+
+- **`plumb trust` now asks.** It printed the disclosure and granted
+  unconditionally — there was nothing to answer, and `plumb trust > /dev/null`
+  granted in silence. Defensible when the grant covered task commands; not now
+  that one grant covers the argv of a process spawned as the user on every attach
+  and the destructive and network git tiers. A `[y/N]` prompt gates it, `--yes`
+  is the escape, and a non-interactive stdin is **refused** rather than
+  auto-accepted so no script or agent pipeline acquires the grant by side effect.
+
+- **`protected_branches` warned only on an empty list.** The list is the complete
+  protected set, so `protected_branches = ["placeholder"]` unprotects `main` and
+  `master` exactly as thoroughly as `[]` does, while looking like a considered
+  value. The warning now fires on any project-supplied list that drops a branch
+  the global config protects, and names which ones are lost.
+  `PolicyEntry.Warning` also matches its key case-insensitively, so `[git]
+  Allow_Push = true` — which really does open the network tier — no longer prints
+  with no warning beside it.
+
+- **The trust disclosure could be flooded.** `[git]` is taken whole by design, so
+  the key set is attacker-chosen and a repository could pad it to push the
+  `lsp.*.command` warning off the scrollback. The per-key listing is capped and
+  the warnings are grouped after it, so they are the last thing above the prompt
+  whatever the repository writes.
+
 - **A project's `.plumb/config.toml` could run arbitrary code, and could open
   the git safety tiers. Both are fixed.** `config.LoadProject` merges a
   project's config over the global one and forced the trusted global value back

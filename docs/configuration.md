@@ -621,13 +621,17 @@ cost and its markers never enter detection.
 > `no (… not installed)` / `no (disabled in config)`); `plumb doctor` reports the
 > same.
 
-> **Per-workspace trust required for the exec fields.** `command`, `args`, `env`,
-> `initialization_options`, `root_markers` and `weak_root_markers` decide which
-> process plumb spawns and with what, so a project's `.plumb/config.toml` may set
-> them only for a workspace you have approved with `plumb trust`. `diagnostics`,
-> `enabled`, `idle_timeout` and `max_workspaces` cannot change the process and are
-> project-overridable with no trust. A language your global config does not define
-> is dropped from a project config either way — plumb has no adapter for it. See
+> **Per-workspace trust required for everything except four fields.** In a
+> project's `.plumb/config.toml`, only `enabled`, `diagnostics`, `idle_timeout`
+> and `max_workspaces` are honoured freely — none of them can change which process
+> runs. **Every other key** in an `[lsp.<lang>]` table, recognised or not, is
+> gated on `plumb trust`: `command`, `args`, `env`, `initialization_options`,
+> `root_markers` and `weak_root_markers` decide which process plumb spawns and
+> with what, and an unrecognised key is gated because plumb cannot prove it does
+> not. (TOML keys reach a field case-insensitively, so `Command` is `command`;
+> gating by exclusion is what stops a variant spelling slipping past.) A language
+> your global config does not define is dropped from a project config either way —
+> plumb has no adapter for it. See
 > [Project-config trust](#project-config-trust).
 
 ### Project-config trust
@@ -638,12 +642,16 @@ takes effect on attach with no prompt. Everything in it that grants a
 approval — the `[git]` tiers, and the `[lsp.<lang>]` fields above.
 
 `plumb trust` (run from the workspace, or `plumb trust <dir>`) is that approval.
-It prints every capability-granting key as `key = value` first, warning on each
-one that is execution or a tier grant, then records **one grant per workspace**
-covering the project's task commands, its `[[command]]` allow-list, its
-`[commands]` shell policy, its LSP exec config, and its git policy. The record
-lives in `DataDir/trust.json`, never in the project, so a repository cannot mark
-itself trusted.
+It prints every capability-granting key as `key = value`, then a block naming the
+ones that are execution or a tier grant, then **asks**. Answer `y` to grant.
+`--yes` skips the prompt; without a terminal and without `--yes` it refuses
+rather than granting, so nothing acquires the grant as a side effect of running
+in a script.
+
+One `plumb trust` records **one grant per workspace**, covering the project's
+task commands, its `[[command]]` allow-list, its `[commands]` shell policy, its
+LSP config, and its git policy. The record lives in `DataDir/trust.json`, never
+in the project, so a repository cannot mark itself trusted.
 
 The grant is **bound to content**. Each part is hashed independently, so editing a
 task command does not disturb the LSP grant — but rewriting a trusted `command`

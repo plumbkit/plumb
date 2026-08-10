@@ -54,7 +54,7 @@ func (m *Model) buildScopeItems() []settingItem {
 		merged = m.settingsCfg
 	}
 	raw, _ := config.LoadProjectRaw(scope.folder)
-	policy, _ := config.ProjectPolicyStatusFor(scope.folder)
+	policy, policyErr := projectPolicyStatus(scope.folder)
 	out := make([]settingItem, 0, len(buildSettingItems(merged)))
 	for _, it := range buildSettingItems(merged) {
 		if storeBackedWorkspaceKey(it.key) {
@@ -68,18 +68,45 @@ func (m *Model) buildScopeItems() []settingItem {
 			continue
 		}
 		if rawHasPath(raw, path) {
-			// A key the project sets but which is not trusted is set-and-ignored,
-			// never "override". Asked() is the authority: it is true exactly for the
-			// keys LoadProject gates on trust.
-			if policy.NeedsTrust() && policy.Asked(strings.Join(path, ".")) {
-				it.notInEffect = true
-			} else {
-				it.overridden = true
-			}
+			it.overridden, it.notInEffect = scopeRowState(policy, policyErr, path)
 		}
 		out = append(out, it)
 	}
 	return out
+}
+
+// projectPolicyStatus is the seam through which the settings rows read trust
+// state. A package-level indirection so a TUI test can substitute one rather than
+// reading — and depending on the contents of — the developer's real
+// <DataDir>/trust.json.
+var projectPolicyStatus = config.ProjectPolicyStatusFor
+
+// scopeRowState decides how a row the project config sets should present: a live
+// override, or set-and-ignored.
+//
+// A key the project sets but which is not trusted is set-and-ignored, never
+// "override" — Asked() is the authority, being true exactly for the keys
+// LoadProject gates on trust. When the status could not be read at all, a
+// capability-granting row presents as ignored rather than live: LoadProject fails
+// closed on the same fault and will have forced the value back, so claiming the
+// row is live would have the display disagree with the config in the one
+// direction that misleads.
+func scopeRowState(policy config.ProjectPolicyStatus, policyErr error, path []string) (overridden, notInEffect bool) {
+	key := strings.Join(path, ".")
+	if policyErr != nil {
+		return !isCapabilityKey(key), isCapabilityKey(key)
+	}
+	if policy.NeedsTrust() && policy.Asked(key) {
+		return false, true
+	}
+	return true, false
+}
+
+// isCapabilityKey reports whether a dotted settings key belongs to a section
+// LoadProject gates on trust, used only to decide the safe presentation when the
+// trust status itself is unreadable.
+func isCapabilityKey(key string) bool {
+	return strings.HasPrefix(key, "git.") || strings.HasPrefix(key, "lsp.")
 }
 
 // itemTOMLPath returns the TOML key path for a row, handling the dynamic
