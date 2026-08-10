@@ -73,6 +73,18 @@
   for the labelled shape, the stdout-only failure, the no-output failure, and
   truncation.
 
+- **`commit_trailer`'s doc comment overstated how harmless the knob is on an
+  old git binary.** `git commit --trailer` was added in git 2.32 (June 2021);
+  plumb runs no version probe, so turning `commit_trailer` on against an
+  older git fails every commit issued through the tool with
+  `error: unknown option 'trailer'` rather than silently skipping the
+  trailer. `commitTrailerToken`'s doc comment now states that contract
+  instead of calling the trailer "attribution metadata only" that "never
+  gates the operation", and the `[git] commit_trailer` row in
+  `docs/configuration.md` and its mention in `AGENTS.md` now name the git
+  ≥ 2.32 requirement and its failure mode explicitly rather than as a
+  parenthetical.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed
