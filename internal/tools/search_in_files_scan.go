@@ -16,11 +16,23 @@ import (
 	"unicode"
 )
 
-func (t *SearchInFiles) collectSearchPaths(ctx context.Context, a searchInFilesArgs, root string) ([]searchPathPair, error) {
+// collectSearchPaths walks root and returns the scan candidates, plus the
+// workspace-relative paths of any entries the walk withheld for resolving
+// outside the boundary (see escapesBoundary).
+func (t *SearchInFiles) collectSearchPaths(ctx context.Context, a searchInFilesArgs, root string) ([]searchPathPair, []string, error) {
+	var withheld []string
 	opts := walkOptions{
 		root:          root,
 		includeHidden: a.IncludeHidden,
 		respectIgnore: true,
+		boundary:      t.guard,
+		onWithheld: func(abs string) {
+			rel, err := filepath.Rel(root, abs)
+			if err != nil {
+				rel = filepath.Base(abs)
+			}
+			withheld = append(withheld, filepath.ToSlash(rel))
+		},
 	}
 	globPrefix := globLiteralPrefix(a.Glob)
 	var paths []searchPathPair
@@ -38,7 +50,7 @@ func (t *SearchInFiles) collectSearchPaths(ctx context.Context, a searchInFilesA
 		paths = append(paths, searchPathPair{abs: path, rel: filepath.ToSlash(rel)})
 		return nil
 	})
-	return paths, walkErr
+	return paths, withheld, walkErr
 }
 
 // searchDirFilter returns fs.SkipDir when the directory can be pruned from the

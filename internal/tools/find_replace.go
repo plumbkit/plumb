@@ -124,7 +124,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	files, err := findReplaceCollectFiles(ctx, a)
+	files, err := findReplaceCollectFiles(ctx, a, t.deps.Boundary)
 	if err != nil {
 		return "", err
 	}
@@ -191,7 +191,12 @@ func compileFindReplaceRegex(a findReplaceArgs) (*regexp.Regexp, error) {
 	return nil, nil
 }
 
-func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, error) {
+// findReplaceCollectFiles walks a.Path for candidate files. The guard is handed
+// to the walk, which withholds any symlink resolving outside the boundary — so
+// find_replace cannot preview or write THROUGH an in-tree link to a file the
+// connection may not touch. A single-file path is boundary-checked by Execute
+// before it gets here.
+func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs, guard BoundaryGuard) ([]string, error) {
 	info, err := os.Stat(a.Path)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", a.Path, err)
@@ -201,7 +206,7 @@ func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, 
 	}
 	globPrefix := globLiteralPrefix(a.Glob)
 	var files []string
-	opts := walkOptions{root: a.Path, respectIgnore: true}
+	opts := walkOptions{root: a.Path, respectIgnore: true, boundary: guard}
 	_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -326,16 +331,6 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 // The second return is false when the file should be skipped (no match, over
 // budget). On a write error or over-budget claim it cancels the shared context.
 func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, truncated *atomic.Bool, cancel context.CancelFunc) (fileChange, bool) {
-	// A regular file found by walking the (in-boundary) root is itself in-boundary;
-	// only a symlink can point outside it. Resolve + boundary-check symlinks so
-	// find_replace cannot read (preview) or write THROUGH an in-tree symlink to a
-	// target outside the workspace — the per-target guard every other write tool
-	// applies. checkBoundary resolves symlinks, so a symlink-to-outside is rejected.
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if t.deps.checkBoundary(path) != nil {
-			return fileChange{}, false
-		}
-	}
 	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff)
 	if count == 0 {
 		return fileChange{}, false

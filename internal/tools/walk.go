@@ -8,10 +8,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // ── gitignore ────────────────────────────────────────────────────────────────
@@ -243,6 +247,18 @@ type walkOptions struct {
 	maxDepth      int  // 0 = unlimited; N visits entries at depths 0..N-1
 	includeHidden bool // include dot-files/dirs
 	respectIgnore bool // honour .gitignore / .ignore
+
+	// boundary is the caller's per-connection path guard, consulted for every
+	// SYMLINK the walk meets. Callers pass the guard their tool holds, so the
+	// access level follows the tool: a read guard for the search tools, a write
+	// guard for find_replace. nil falls back to the walk root — see
+	// escapesBoundary.
+	boundary BoundaryGuard
+
+	// onWithheld, when set, is called with the absolute path of each entry the
+	// boundary check withheld, so the tool can report the omission instead of
+	// silently under-reporting.
+	onWithheld func(absPath string)
 }
 
 // walkFn is called for each non-ignored, non-hidden file.
@@ -262,6 +278,64 @@ func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
 		st = st.load(opts.root)
 	}
 	return walkDir(ctx, opts.root, 0, st, opts, fn)
+}
+
+// escapesBoundary reports whether an entry must be withheld from the walk
+// because it is a symlink resolving outside what the caller may read.
+//
+// Only a symlink can escape: every other entry was reached by descending from a
+// root the tool boundary-checked before the walk began. Git stores symlinks
+// natively, so a hostile repository can commit one pointing at an absolute path
+// (`innocent.env -> /home/you/.ssh/id_rsa`) and have a mere clone plant it —
+// which is why the check belongs HERE, in the shared traversal, rather than in
+// each tool that consumes it.
+//
+// The link type comes from the os.ReadDir entry, so a tree with no symlinks
+// pays no extra syscall. That same fact is why the walk never descends THROUGH
+// a link: ReadDir reports a symlink as a symlink, never as a directory, so a
+// link to an outside directory is withheld here as one entry instead of
+// becoming a whole subtree. A dangling link resolves to nothing outside the
+// workspace, so it is not withheld — it is simply unreadable further down.
+//
+// With a guard the decision is the connection's whole path policy, so a link
+// into a legitimately readable non-workspace root still resolves. Without one
+// the walk falls back to its own root and fails closed: no daemon-wired tool
+// passes a nil guard, but a future caller that forgets to should under-report,
+// never over-disclose.
+func escapesBoundary(absPath string, d fs.DirEntry, opts walkOptions) bool {
+	if d.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	if opts.boundary != nil {
+		return opts.boundary.check(absPath) != nil
+	}
+	return !PathWithinWorkspace(opts.root, absPath)
+}
+
+// maxWithheldNamed bounds how many withheld paths an advisory names, so a tree
+// full of escaping links cannot swamp the result it is annotating.
+const maxWithheldNamed = 5
+
+// withheldSymlinkNote renders the advisory for entries the boundary check
+// withheld. Skipping them silently would be its own hazard: an agent reads a
+// clean "no matches" as proof of absence, so the tool says what it did not look
+// at. Only the in-workspace link paths are named — naming their targets would
+// disclose the very out-of-workspace paths being withheld.
+func withheldSymlinkNote(rels []string) string {
+	if len(rels) == 0 {
+		return ""
+	}
+	sort.Strings(rels)
+	named := rels
+	var more string
+	if len(named) > maxWithheldNamed {
+		named = named[:maxWithheldNamed]
+		more = fmt.Sprintf(", +%d more", len(rels)-maxWithheldNamed)
+	}
+	return fmt.Sprintf("\n\nNote: %d %s withheld — %s resolving outside the workspace boundary: %s%s.",
+		len(rels), textfmt.Plural(len(rels), "entry", "entries"),
+		textfmt.Plural(len(rels), "a symlink", "symlinks"),
+		strings.Join(named, ", "), more)
 }
 
 // shouldVisitEntry reports whether an entry passes the .git, hidden-file, and
@@ -302,6 +376,12 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 		absPath := filepath.Join(dir, name)
 
 		if !shouldVisitEntry(name, absPath, d.IsDir(), opts, st) {
+			continue
+		}
+		if escapesBoundary(absPath, d, opts) {
+			if opts.onWithheld != nil {
+				opts.onWithheld(absPath)
+			}
 			continue
 		}
 
