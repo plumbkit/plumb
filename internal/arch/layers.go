@@ -90,6 +90,7 @@ var Layers = map[string]Layer{
 	"internal/sqlitex":              LayerFoundation, // the one place a SQLite DSN is built
 	"internal/tokenise":             LayerFoundation,
 	"internal/textfmt":              LayerFoundation, // stdlib-only text primitives, no lipgloss
+	"internal/toolerror":            LayerFoundation, // stdlib-only structured tool-error contract
 	"internal/redact":               LayerFoundation,
 	"internal/theme":                LayerFoundation, // UI-agnostic hex palettes, no lipgloss
 	"internal/render":               LayerFoundation, // pure presentation helpers
