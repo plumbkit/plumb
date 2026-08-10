@@ -82,7 +82,11 @@ func IsBootstrap(name string) bool { return BootstrapTools[name] }
 // LeanToolNames returns the sorted, deduplicated UNION of LeanTools and
 // BootstrapTools. It is the single source of truth for a CLIENT-SIDE tool
 // allowlist — the list `plumb setup <client> --lean` writes into the client's
-// own MCP config (today Kimi Code's mcp.json "enabledTools" key).
+// own MCP config: Kimi Code's mcp.json "enabledTools", Codex's "enabled_tools"
+// on [mcp_servers.plumb], and Gemini CLI's "includeTools" on mcpServers.plumb.
+// It is also the set session_start's guidance confines itself to for those
+// clients (clientcaps.ClientSideAllowlist), since plumb cannot see whether the
+// allowlist is in force and must be correct either way.
 //
 // The union, not LeanTools alone: a client-side allowlist is enforced by the
 // CLIENT, so plumb's "bootstrap tools are advertised whatever the profile"
@@ -134,6 +138,17 @@ func IsLean(name string) bool { return LeanTools[name] }
 // reason. A "full" profile with an EMPTY reason is the legacy/unwired default
 // (resolvedToolProfile's zero value) and produces no output at all, so a
 // caller that never wires a profile accessor sees no behaviour change.
+//
+// IT REPORTS ADVERTISEMENT, NOT AVAILABILITY, and deliberately says nothing
+// about a client-side allowlist. A --lean Codex user is told "full", which is
+// exactly true — plumb is advertising all 57 tools — while their own config
+// filters the list down to 21 afterwards. plumb cannot observe that filter
+// (clientcaps.ClientSideAllowlist), so the alternative is a hedge printed on
+// every Codex and Gemini session, most of which have no allowlist at all:
+// trading a precise statement about what plumb did for a vague one about what
+// the client might have done. The place that has to be right in both states is
+// the guidance, which never names a tool the allowlist could have removed
+// (nameLeanToolsOnly), and that is where the correctness lives.
 func ProfileNote(profile string, hidden int, reason string) string {
 	if profile == "lean" {
 		return fmt.Sprintf("Tool profile: lean — %d commodity tools hidden from "+

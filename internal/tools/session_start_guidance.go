@@ -32,19 +32,22 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 // place. This is the replacement the plan always specified and had not built:
 // the condensed render of the same authored source, "thinned, not deleted".
 //
-// WHY IT IS BLANDER than the client-specific blocks. It cannot assume anything
-// about the client — native file tools, a read-tracking harness, a client-side
-// allowlist — so it states plumb's own routing rather than arguing against an
-// alternative it cannot see, and it never quotes another product's error
-// strings. A client that earns specific advice should get its own branch above.
+// WHY IT IS BLANDER than the client-specific blocks. It cannot assume much
+// about the client — native file tools, a read-tracking harness — so it states
+// plumb's own routing rather than arguing against an alternative it cannot see,
+// and it never quotes another product's error strings. A client that earns
+// specific advice should get its own branch above.
 //
-// Lean-aware throughout: under the lean profile the tools it names are hidden
-// from tools/list, so naming one would be a broken pointer.
+// Lean-aware throughout, on TWO independent triggers (nameLeanToolsOnly):
+// under the lean profile the tools it names are hidden from tools/list, and for
+// a client that can hold a plumb-written allowlist in its own config — Codex and
+// Gemini CLI both route through here — a non-lean tool may have been removed
+// client-side entirely. Either way, naming one would be a broken pointer.
 func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance\n\n")
 
 	if t.topologyActive() {
-		if t.leanProfile() {
+		if t.nameLeanToolsOnly() {
 			sb.WriteString("- Discovery: start with **topology_search** (ranked, works while the language " +
 				"server warms), then **get_definition** / **find_references** for exact, type-aware answers.\n")
 		} else {
@@ -55,7 +58,7 @@ func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 		}
 		sb.WriteString("- **topology_affected** — which tests an edit touches (dependency edges + co-location, " +
 			"recall-biased and confidence-labelled). No language server gives this.\n")
-	} else if t.leanProfile() {
+	} else if t.nameLeanToolsOnly() {
 		sb.WriteString("- Discovery: **workspace_symbols** to find a symbol by name, then **get_definition** / " +
 			"**find_references** for exact, type-aware answers.\n")
 	} else {
@@ -85,6 +88,17 @@ func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 func (t *SessionStart) leanProfile() bool {
 	profile, _, _ := t.resolvedToolProfile()
 	return profile == "lean"
+}
+
+// nameLeanToolsOnly reports whether guidance must confine itself to the lean set.
+// Two independent reasons, and the second is invisible to the first: the SERVER
+// may have hidden the non-lean tools (leanProfile), or the CLIENT may have
+// filtered them out in its own config, which plumb cannot see at all — for a
+// --lean Codex or Gemini CLI the resolved profile is "full" and the tools are
+// still gone. Guidance that keyed only off the profile therefore steered those
+// users at tools their own config had removed.
+func (t *SessionStart) nameLeanToolsOnly() bool {
+	return t.leanProfile() || clientSideAllowlistCapable(t.clientNameFn)
 }
 
 // writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure
@@ -155,6 +169,12 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 // a non-lean tool would therefore be a broken pointer for every user who took
 // the --lean advice this block itself gives. Restricting the whole block to
 // tools.LeanTools is the only shape that is correct in both states.
+//
+// The rule is no longer Kimi's alone: Codex and Gemini CLI carry the same
+// client-side allowlist and get the same restraint through nameLeanToolsOnly in
+// writeGenericGuidance. This block keeps its unconditional form because every
+// line of it is already lean-only prose, and a flag it does not need would just
+// be a way to get it wrong later (TestKimiCodeGuidance_LeanSetOnly pins it).
 //
 // A SOFT edit lane, not nativeEditLaneWarning. Kimi Code has its own file
 // tools, but there is no evidence it enforces harness-side read-before-edit

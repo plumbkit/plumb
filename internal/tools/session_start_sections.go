@@ -44,24 +44,27 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 // ON NAMING NON-LEAN TOOLS HERE. The no-LSP fallbacks below steer to
 // `find_files` and `search_in_files`, neither of which is in LeanTools — which
 // looks like it contradicts the "never name a hidden tool" rule the Kimi
-// guidance block follows (TestKimiCodeGuidance_LeanSetOnly). The two situations
-// are not the same, and only one of them can strand an agent:
+// guidance block follows (TestKimiCodeGuidance_LeanSetOnly). Three cases, and
+// only one of them can strand an agent:
 //
-//   - The Kimi block is written for a CLIENT-SIDE allowlist. Kimi's enabledTools
-//     key removes the tool from the client before plumb is ever called, plumb
-//     cannot see that filter, and Kimi is schema-discovery-only — so a named
-//     non-lean tool is genuinely uncallable, and the rule is load-bearing.
+//   - A CLIENT-SIDE allowlist removes the tool from the client before plumb is
+//     ever called, and plumb cannot see that filter — so a named non-lean tool
+//     is genuinely uncallable and the rule is load-bearing. That is Kimi Code,
+//     and now Codex and Gemini CLI too. For them lastResortSearch names no
+//     plumb tool at all: it points at the client's own search, which every
+//     client carrying an allowlist has (clientcaps NativeSearch).
 //   - The lean PROFILE only hides a tool from tools/list; it stays callable by
 //     name (see "Hidden ≠ unregistered"), and auto mode serves lean solely to a
 //     client whose clientcaps entry declares ReliableDeferredToolDiscovery —
-//     i.e. one demonstrated to invoke a tool it was never advertised. A client
-//     that cannot do that (Claude Code, Kimi Code, anything unrecognised) is
+//     i.e. one demonstrated to invoke a tool it was never advertised.
+//   - Everyone else (Claude Code, Claude Desktop, anything unrecognised) is
 //     served full, where both tools are advertised anyway.
 //
-// So every client that can reach this text can act on it. Restricting these
-// fallbacks to the lean set would cost the case they exist for — a workspace
+// So every client that can reach this text can act on it. Restricting the last
+// two cases to the lean set would cost the case they exist for — a workspace
 // with no language server and no topology index, where `find_files` and
-// `search_in_files` are the only discovery left.
+// `search_in_files` are the only discovery left, and where Claude Desktop in
+// particular has no native search to fall back on.
 func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang, lspKey string) {
 	sb.WriteString("## Recommended first step\n\n")
 	switch {
@@ -87,8 +90,24 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErro
 	case lang != "":
 		t.writeNoLSPGuidance(sb, lang, lspKey)
 	default:
-		sb.WriteString("Use `find_files` to explore the codebase.\n\n")
+		fmt.Fprintf(sb, "No language server or index here — %s to explore the codebase.\n\n",
+			t.lastResortSearch())
 	}
+}
+
+// lastResortSearch names the discovery of last resort for a workspace with
+// neither a language server nor a topology index: plumb's own search tools, or —
+// for a client whose config may have filtered them out — its native ones.
+//
+// It deliberately names NO plumb tool in the allowlist case rather than naming
+// them with a caveat. A caveat still puts the name in front of a model that may
+// act on it, and these clients all have native search anyway; the honest, useful
+// instruction is the one that works in both states.
+func (t *SessionStart) lastResortSearch() string {
+	if clientSideAllowlistCapable(t.clientNameFn) {
+		return "use your client's own file search"
+	}
+	return "use `search_in_files` and `find_files`"
 }
 
 // writeNoLSPGuidance covers a recognised project with neither a language server
@@ -99,12 +118,13 @@ func (t *SessionStart) writeNoLSPGuidance(sb *strings.Builder, lang, lspKey stri
 	fmt.Fprintf(sb, "No language server is attached for %s. ", lang)
 	switch lspKey {
 	case "":
-		sb.WriteString("plumb has no language server for it yet — use `search_in_files` and `find_files`, " +
-			"or enable the topology index (`[topology] enabled = true`) for indexed symbol search.\n\n")
+		fmt.Fprintf(sb, "plumb has no language server for it yet — %s, "+
+			"or enable the topology index (`[topology] enabled = true`) for indexed symbol search.\n\n",
+			t.lastResortSearch())
 	case "go", "python":
-		sb.WriteString("Its server ships on by default, so it likely isn't installed or failed to start — " +
-			"check the server binary is on PATH. Meanwhile use `search_in_files`/`find_files`, or enable " +
-			"`[topology] enabled = true` for indexed search.\n\n")
+		fmt.Fprintf(sb, "Its server ships on by default, so it likely isn't installed or failed to start — "+
+			"check the server binary is on PATH. Meanwhile %s, or enable "+
+			"`[topology] enabled = true` for indexed search.\n\n", t.lastResortSearch())
 	default:
 		fmt.Fprintf(sb, "Its adapter is opt-in — set `[lsp.%s] enabled = true` and ensure the server is on PATH. "+
 			"For language-server-free symbol search, enable the topology index (`[topology] enabled = true`).\n\n", lspKey)
@@ -127,7 +147,7 @@ func (t *SessionStart) writeLSPRouted(sb *strings.Builder) bool {
 		sb.WriteString("For anything else, the topology index is active — use `topology_search` and `file_outline`.\n\n")
 		return true
 	}
-	sb.WriteString("For anything else, use `search_in_files` and `find_files`.\n\n")
+	fmt.Fprintf(sb, "For anything else, %s.\n\n", t.lastResortSearch())
 	return true
 }
 
