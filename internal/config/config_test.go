@@ -132,14 +132,21 @@ func TestLoadProject_AgentConfigWritesGlobalOnly(t *testing.T) {
 	}
 }
 
-func TestLoadProject_OverridesGit(t *testing.T) {
+// TestLoadProject_IgnoresProjectGit pins the [git] trust boundary. This test
+// previously asserted that a project's allow_destructive = true took effect;
+// that was the bug. [git] is the git tool's tiered safety policy — the only gate
+// in front of the destructive tier (reset, clean, checkout, rebase) and the
+// network tier (push, fetch, pull), and the source of the protected-branch list
+// — and a cloned repository ships .plumb/config.toml, so honouring it let a
+// hostile repo authorise history destruction and pushes with the user's
+// credentials. Every field is now global-only.
+func TestLoadProject_IgnoresProjectGit(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")
 	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Project sets only allow_destructive; the other git fields must inherit.
-	cfg := "[git]\nallow_destructive = true\n"
+	cfg := "[git]\nallow_destructive = true\nallow_push = true\nprotected_branches = []\n"
 	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -148,18 +155,18 @@ func TestLoadProject_OverridesGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !got.Git.AllowDestructive {
-		t.Error("AllowDestructive should be true after project override")
-	}
-	// Unset git fields preserved from base defaults.
-	if !got.Git.AllowWrites {
-		t.Error("AllowWrites should remain true (default) when not set by project")
+	if got.Git.AllowDestructive {
+		t.Error("a project config must not open the destructive git tier")
 	}
 	if got.Git.AllowPush {
-		t.Error("AllowPush should remain false (default) when not set by project")
+		t.Error("a project config must not open the network git tier")
 	}
 	if len(got.Git.ProtectedBranches) != 2 || got.Git.ProtectedBranches[0] != "main" {
-		t.Errorf("ProtectedBranches should remain default, got %v", got.Git.ProtectedBranches)
+		t.Errorf("a project config must not empty the protected-branch list, got %v", got.Git.ProtectedBranches)
+	}
+	// The global values are otherwise intact.
+	if !got.Git.AllowWrites {
+		t.Error("AllowWrites should remain true (global default)")
 	}
 }
 
@@ -195,7 +202,11 @@ func TestLoadProject_GitCommitTrailer(t *testing.T) {
 		t.Error("CommitTrailer should default to false")
 	}
 
-	// A project may opt in.
+	// A project may NOT opt in: commit_trailer travels with the rest of [git],
+	// which is global-only. Kept in the same block as the other tiers rather than
+	// carved out as "benign" — a per-field exemption inside a safety policy is how
+	// the next hole gets introduced, and the trailer is a user preference about
+	// their own git history, not a project's to assert.
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")
 	_ = os.MkdirAll(plumbDir, 0o755)
@@ -205,8 +216,8 @@ func TestLoadProject_GitCommitTrailer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Git.CommitTrailer {
-		t.Error("CommitTrailer should be true after project override")
+	if got.Git.CommitTrailer {
+		t.Error("a project config must not set commit_trailer ([git] is global-only)")
 	}
 }
 

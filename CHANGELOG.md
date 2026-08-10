@@ -2,6 +2,40 @@
 
 ## 0.16.4 (unreleased)
 
+### Fixed
+
+- **A project's `.plumb/config.toml` could run arbitrary code, and could open
+  the git safety tiers. Both are fixed.** `config.LoadProject` merges a
+  project's config over the global one and forced the trusted global value back
+  for only five settings. `[lsp.<lang>]` was not among them — so a cloned
+  repository shipping `command = "/bin/sh"`, `args = ["-c", "…"]` had that argv
+  reach `exec.CommandContext` through the workspace pool and
+  `lsp.NewSupervisor`, running as the user, unsandboxed, on session attach, with
+  no `plumb trust`, no confirmation and no agent involved. `env` was the same
+  primitive by another route (`PATH` re-points which binary a server invokes;
+  `DYLD_INSERT_LIBRARIES`/`LD_PRELOAD` inject into it), and so was
+  `initialization_options`, which real servers treat as a command channel —
+  rust-analyzer's `check.overrideCommand` runs an arbitrary argv and zls's
+  `enable_build_on_save` runs the project's own `build.zig`. `[git]` was
+  likewise unforced, so a hostile repo could set `allow_destructive = true`,
+  `allow_push = true` and `protected_branches = []` and obtain history
+  destruction plus arbitrary pushes to the user's remotes with the user's
+  credentials.
+
+  Every field that decides **which process runs, or with what** is now
+  global-only: per language, `command`, `args`, `env`, `initialization_options`,
+  `root_markers` and `weak_root_markers` are forced back to the global config,
+  and a language the global config does not define is dropped rather than
+  introduced by a project. A project may still override what cannot change the
+  process — `diagnostics`, `enabled`, `idle_timeout`, `max_workspaces` — so
+  per-project LSP tuning keeps working. `[git]` is forced back whole: every
+  field in it is a safety decision the user makes about a project, never one the
+  project makes about itself.
+
+  The `//nolint:gosec` on the `exec.CommandContext` call previously justified
+  itself with "not from user input", which was false and load-bearing; it now
+  states the actual invariant and points at the chokepoint that maintains it.
+
 ### Added
 
 - **Tool failures now carry a stable, machine-readable classification.** A new

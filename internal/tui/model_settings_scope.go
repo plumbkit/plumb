@@ -72,12 +72,31 @@ func (m *Model) buildScopeItems() []settingItem {
 func itemTOMLPath(it settingItem) ([]string, bool) {
 	if it.lspLang != "" {
 		field, ok := lspFieldName(it.key)
-		if !ok {
+		if !ok || !lspProjectOverridable(it.key) {
 			return nil, false
 		}
 		return []string{"lsp", it.lspLang, field}, true
 	}
 	return tomlPath(it.key)
+}
+
+// lspProjectOverridable reports whether a per-language LSP row may be written
+// into a workspace's .plumb/config.toml and still take effect.
+//
+// config.LoadProject forces every [lsp.<lang>] field that decides WHICH process
+// runs, or with what, back to the trusted global config — a project file is an
+// untrusted surface, and command/args/env/initialization_options/root_markers
+// reach exec. Offering those rows at a workspace scope would write TOML that
+// plumb then ignores, which is worse than not offering them: the user would
+// believe they had configured something. Only the two fields that cannot change
+// the process survive the merge, so only those two are editable here.
+func lspProjectOverridable(key settingKey) bool {
+	switch key {
+	case skLSPEnabled, skLSPDiagnostics:
+		return true
+	default:
+		return false
+	}
 }
 
 // lspFieldName maps an LSP setting key to its TOML field name under [lsp.<lang>].
@@ -245,19 +264,21 @@ var settingTOMLPaths = map[settingKey][]string{
 	skQualityMode:                {"quality", "mode"},
 	skQualityTimeoutMs:           {"quality", "timeout_ms"},
 	skQualityMaxFindings:         {"quality", "max_findings_per_file"},
-	skGitWrites:                  {"git", "allow_writes"},
-	skGitDestructive:             {"git", "allow_destructive"},
-	skGitPush:                    {"git", "allow_push"},
-	skGitCommitTrailer:           {"git", "commit_trailer"},
-	skAutoAttach:                 {"workspace", "auto_attach"},
-	skAutoAttachPersist:          {"workspace", "auto_attach_persist"},
-	skAllowDependencyReads:       {"workspace", "allow_dependency_reads"},
-	skChildScanDepth:             {"workspace", "child_scan_depth"},
+	// The [git] rows are deliberately ABSENT: allow_writes / allow_destructive /
+	// allow_push / commit_trailer / protected_branches are the git tool's tiered
+	// safety policy, and LoadProject forces the whole block back to the global
+	// config because a cloned repo's .plumb/config.toml would otherwise grant
+	// itself history destruction and pushes to the user's remotes. Writing them at
+	// a workspace scope would produce TOML plumb ignores, so the rows are
+	// global-only.
+	skAutoAttach:           {"workspace", "auto_attach"},
+	skAutoAttachPersist:    {"workspace", "auto_attach_persist"},
+	skAllowDependencyReads: {"workspace", "allow_dependency_reads"},
+	skChildScanDepth:       {"workspace", "child_scan_depth"},
 	// extra_roots/read_roots are global-only: LoadProject forces them back to base
 	// from an (untrusted) project config, so a workspace-scope override would never
 	// take effect. They are shown only in the Global scope (and remain in
 	// settingDottedKeys for that).
-	skProtectedBranches:         {"git", "protected_branches"},
 	skExcludePatterns:           {"topology", "exclude_patterns"},
 	skAnalysers:                 {"quality", "analysers"},
 	skMemoryEnabled:             {"memory", "enabled"},
