@@ -23,11 +23,21 @@ func confirmRequired(msg string) error {
 	return toolerror.Wrap(errors.New(msg), toolerror.KindGitPolicy, toolerror.ClassPassConfirm)
 }
 
-// pushRefused classifies a network-tier guard that no argument can satisfy: an
-// ad-hoc remote (a remote-helper RCE vector) and a protected-branch force push
-// are refused outright, so the remediation class is none rather than a flag the
-// caller might otherwise go looking for.
-func pushRefused(err error) error {
+// pushRecoverable classifies a network-tier guard the caller can satisfy by
+// changing the invocation — swapping an ad-hoc URL for a named remote, or
+// naming the destination branch of a force push. Both messages already say so;
+// classifying them as terminal would have the side-car contradict the prose
+// beside it, and a client keying on the class would abandon a push that a
+// one-token change completes.
+func pushRecoverable(err error) error {
+	return toolerror.Wrap(err, toolerror.KindGitPolicy, toolerror.ClassFixArguments)
+}
+
+// pushRefusedOutright classifies the one network-tier guard no argument can
+// satisfy: force-pushing a branch the policy names as protected. Unlike the
+// two above, there is no corrected invocation — the branch itself is the
+// objection — so the remediation class is none.
+func pushRefusedOutright(err error) error {
 	return toolerror.Wrap(err, toolerror.KindGitPolicy, toolerror.ClassNone)
 }
 
@@ -101,7 +111,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	}
 	for _, arg := range a.Args {
 		if looksLikeGitURL(arg) {
-			return pushRefused(fmt.Errorf("git %s: using an ad-hoc URL/remote is not permitted; use a named remote", a.Subcommand))
+			return pushRecoverable(fmt.Errorf("git %s: using an ad-hoc URL/remote is not permitted; use a named remote", a.Subcommand))
 		}
 	}
 	if a.Subcommand != "push" {
@@ -112,7 +122,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	}
 	for _, arg := range a.Args {
 		if isProtectedBranch(arg, p.ProtectedBranches) {
-			return pushRefused(fmt.Errorf("git push: force-pushing protected branch %q is not permitted", arg))
+			return pushRefusedOutright(fmt.Errorf("git push: force-pushing protected branch %q is not permitted", arg))
 		}
 	}
 	// A force push that targets the current branch (`+HEAD`, or no refspec) names
@@ -120,7 +130,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	// a protected branch. Refuse it (safe-bias) when any branch is protected,
 	// rather than let a possible protected-branch force-push slip through.
 	if len(p.ProtectedBranches) > 0 && forcePushTargetsCurrentBranch(a.Args) {
-		return pushRefused(errors.New("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`"))
+		return pushRecoverable(errors.New("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`"))
 	}
 	return nil
 }
