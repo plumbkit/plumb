@@ -236,6 +236,14 @@ as `not registered` — the reason `sync` would skip it. Every other client has
 no skills directory and receives the same routing as the condensed
 `session_start` guidance block instead.
 
+Skill capability is per-client data (`setupTarget.skillsDirFn`,
+`internal/cli/setup_skills.go`), verified against a live install rather than
+inferred. Every other client's `skillsDirFn` stays `nil` until someone
+verifies a real directory — writing files into a guessed path is worse than
+not writing them — so `TestSkillCapableClients_ArePinned` makes the
+skill-capable client set a deliberate edit, not something that drifts by
+accident.
+
 `plumb skills sync` installs or refreshes the seven embedded skills into the
 skills directories of every skill-capable client that **registers plumb**, or
 only the named client with `plumb skills sync <client>` (an unknown name is a
@@ -248,6 +256,15 @@ warning, not a failure. Sync is the only writer of skill files —
 Re-run `plumb skills sync` after upgrading plumb to pick up new skill content;
 `plumb doctor` prints an informational line (never a warning) for any
 registered client whose skills are missing or stale.
+
+Clients with no skill channel get the same routing as a condensed
+`session_start` block (`writeGenericGuidance`,
+`internal/tools/session_start_guidance.go`) — one authored source, two render
+targets: the skills are the canonical, expanded home for multi-tool
+workflows, and tool descriptions and `session_start` guidance point at them
+rather than restating them. Seven is a stated ceiling, not drift: the
+reasoning lives on `skillsFS` in `internal/cli/skills.go`, and an eighth
+skill has to argue against it.
 
 ---
 

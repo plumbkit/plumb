@@ -301,6 +301,12 @@
   the primary language server** — it fans out across every server for a
   multi-language monorepo root (the child-marker discovery case), merging and
   deduplicating results.
+- **Restored the skill-channel routing rationale dropped by the `AGENTS.md`
+  slim-down** — the `skillsDirFn`/`TestSkillCapableClients_ArePinned`
+  provenance rule, the `writeGenericGuidance` fallback for clients with no
+  skill channel, and the seven-skill stated ceiling now live in
+  `docs/cli-reference.md`'s `plumb skills` section, with a short pointer from
+  `AGENTS.md`.
 
 ### Tests
 
