@@ -168,8 +168,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 
 // commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
 // stamp on this call's commit, or "" when the call is not a commit, the [git]
-// commit_trailer knob is off (the default), or the connection has no session
-// name to attribute. The trailer only ever ADDS metadata to a commit that was
+// commit_trailer knob is off (the default), the connection has no session
+// name to attribute, or the name fails the newline/colon guard below. The
+// trailer only ever ADDS metadata to a commit that was
 // going to happen anyway — it never blocks a commit on its own account. But
 // the token this returns feeds straight into a `--trailer` argument
 // (buildGitArgv), and `git commit --trailer` is itself gated on the git
@@ -184,6 +185,16 @@ func (t *Git) commitTrailerToken(p GitPolicy, sub string) string {
 	}
 	name := strings.TrimSpace(t.sessNameFn())
 	if name == "" {
+		return ""
+	}
+	// Defence in depth: session.NormaliseName restricts a stored session name
+	// to [A-Za-z0-9-]+ (max 25 chars, no leading/trailing/consecutive
+	// hyphens), and generated names come from a fixed adjective-noun word
+	// list, so neither can carry a newline or colon today. This callsite has
+	// no way to see that invariant hold, only to trust it — so guard here
+	// too rather than build a malformed or multi-line trailer if it ever
+	// loosens: skip the trailer instead of emitting one.
+	if strings.ContainsAny(name, "\n:") {
 		return ""
 	}
 	return "Plumb-Session: " + name

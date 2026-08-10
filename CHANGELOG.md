@@ -94,6 +94,14 @@
   classification, add/commit typing). Added a concise mention consistent
   with the tool's `Description()` wording.
 
+- **`commitTrailerToken` now guards against a session name carrying a
+  newline or colon**, rather than trusting `session.NormaliseName`'s
+  `[A-Za-z0-9-]+` restriction alone. A name matching either character is
+  skipped (no trailer emitted) instead of risking a malformed or multi-line
+  `--trailer` argument to git. Unreachable today given `NormaliseName`, but
+  this callsite had no local guard and no comment recording the dependency;
+  guarded by `TestCommitTrailerToken_RejectsNewlineOrColon`.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed
