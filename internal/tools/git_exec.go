@@ -8,7 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 const maxGitBytes = 100 * 1024 // 100 KiB
@@ -186,16 +189,46 @@ func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, 
 	if truncated {
 		b.WriteString("\n" + gitRerunNote(argv, repoRoot))
 	}
-	return errors.New(b.String())
+	return toolerror.New(toolerror.KindGitCommandFailed, errors.New(b.String()),
+		toolerror.Remediation{
+			Class: toolerror.ClassInspectOutput,
+			Reason: "git itself declined the operation; the captured stderr/stdout above names the cause. " +
+				"plumb raised no objection, so no plumb setting or flag changes the outcome.",
+		},
+		gitFailureDetails(sub, runErr, truncated)...)
+}
+
+// gitFailureDetails carries the machine-readable half of a git failure: the
+// exit code, the subcommand, and whether the quoted streams were cut. All three
+// are low-cardinality by construction — the streams themselves stay in the
+// message, where a bounded quote is safe, and never in Details.
+func gitFailureDetails(sub string, runErr error, truncated bool) []toolerror.Option {
+	opts := []toolerror.Option{
+		toolerror.WithDetail("subcommand", sub),
+		toolerror.WithDetail("output_truncated", strconv.FormatBool(truncated)),
+	}
+	if code, ok := gitExitCode(runErr); ok {
+		opts = append(opts, toolerror.WithDetail("exit_code", strconv.Itoa(code)))
+	}
+	return opts
+}
+
+// gitExitCode reports the git child's exit code when it ran to completion, and
+// ok=false when there was none (a start failure or a cancellation).
+func gitExitCode(err error) (int, bool) {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), true
+	}
+	return 0, false
 }
 
 // gitExitDescription describes how the git child ended: its exit code when it
 // ran to a non-zero exit, or the raw error when there is no exit code (a
 // start failure or context cancellation).
 func gitExitDescription(err error) string {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		return fmt.Sprintf("exit code %d", ee.ExitCode())
+	if code, ok := gitExitCode(err); ok {
+		return fmt.Sprintf("exit code %d", code)
 	}
 	return err.Error()
 }
@@ -261,7 +294,8 @@ func quoteGitArgv(argv []string) string {
 // index.lock).
 func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier) (context.Context, func(), error) {
 	if gitWriteDrainActive() {
-		return nil, nil, fmt.Errorf("git %s: %w", sub, errGitDraining)
+		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, errGitDraining),
+			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait, toolerror.Retry())
 	}
 	gitWriteInflight.Add(1)
 	release, err := lockRepo(ctx, repoRoot)

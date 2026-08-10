@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // gitRefObservation is one session's last seen HEAD commit + branch for a
@@ -206,22 +208,35 @@ func (g *gitRefGuard) preExec(ctx context.Context, sub string) error {
 	detail := fmt.Sprintf("HEAD/branch moved since this session last observed it (was %s, now %s — moved by plumb session %q)",
 		prev, cur, mover.name)
 	if !g.confirm {
-		return fmt.Errorf("git %s: %s. Re-check the repository state (git log/status), then re-run with confirm: true to proceed against the new state", sub, detail)
+		return toolerror.Wrap(
+			fmt.Errorf("git %s: %s. Re-check the repository state (git log/status), then re-run with confirm: true to proceed against the new state", sub, detail),
+			toolerror.KindConcurrentRefMove, toolerror.ClassPassConfirm, toolerror.Retry())
 	}
 	g.warning = "# plumb-warning: " + detail + ". Proceeding against the new state because confirm: true was given — verify git log/status before building on this result.\n"
 	return nil
 }
 
+// checkExpectedHead enforces the caller's expected_head assertion. Both
+// refusals are KindConcurrentRefMove — the guard they belong to — but their
+// remediation is fix_arguments, NOT pass_confirm: confirm deliberately does not
+// bypass expected_head (preExec enforces it before the confirm-aware peer
+// check), so advising confirm here would send a caller round a loop that cannot
+// terminate. The remedy is to pass the current HEAD or drop the assertion.
 func (g *gitRefGuard) checkExpectedHead(ctx context.Context, sub string, cur gitRefObservation, headOK bool) error {
 	want, ok := resolveGitRev(ctx, g.repoRoot, g.expectedHead)
 	if !ok {
-		return fmt.Errorf("git %s: expected_head %q does not resolve to a commit in this repository — refusing to run", sub, g.expectedHead)
+		return expectedHeadRefusal(fmt.Errorf("git %s: expected_head %q does not resolve to a commit in this repository — refusing to run", sub, g.expectedHead))
 	}
 	if !headOK || cur.head != want {
-		return fmt.Errorf("git %s: expected_head mismatch: HEAD is at %s, but expected_head resolved to %.7s — refusing to run. "+
-			"Re-check the repository state and retry with the current HEAD, or omit expected_head", sub, cur, want)
+		return expectedHeadRefusal(fmt.Errorf("git %s: expected_head mismatch: HEAD is at %s, but expected_head resolved to %.7s — refusing to run. "+
+			"Re-check the repository state and retry with the current HEAD, or omit expected_head", sub, cur, want))
 	}
 	return nil
+}
+
+func expectedHeadRefusal(err error) error {
+	return toolerror.Wrap(err, toolerror.KindConcurrentRefMove, toolerror.ClassFixArguments,
+		toolerror.Retry())
 }
 
 // guardRefPreExec is runGit's nil-safe entry into the ref-movement guard: it
