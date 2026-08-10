@@ -125,6 +125,27 @@
   `TestShippedLeanTargetsReadTheirFlags`, `TestLeanSetupNote`, and
   `TestClaudeDesktopNeverGetsAnAllowlistKey`.
 
+### Changed
+
+- **`plumb doctor` now grades every client-side tool allowlist with one
+  parameterised check, not just Kimi Code's.** The Kimi-only
+  `checkKimiLeanHint` became `checkLeanAllowlists`, iterating the same
+  `leanClient` descriptors the setup writers use, so Codex's `enabled_tools`
+  and Gemini CLI's `includeTools` are graded identically and a client added to
+  that list arrives already graded. The four states it distinguishes are
+  unchanged, and so are their severities: an **absent** allowlist is
+  informational (a full surface is a valid default — a "!" there would mark a
+  healthy machine unhealthy), an allowlist **equal to today's lean set** passes
+  in silence, a **stale** snapshot earns an informational drift hint naming what
+  is missing or no longer registered, and one that filters plumb to nothing —
+  invalid names, or a value that cannot be an allowlist at all (`[]`, `null`, a
+  non-list) — earns a non-fatal warning with a fix, worded for that specific
+  shape. Every message now names the client and its own key rather than
+  hardcoding Kimi's. Guarded by `TestLeanHintAt_EveryClientEveryState` (four
+  states plus the degenerate and not-registered cases, across all three
+  clients) and `TestCheckMCPClientsGradesEveryLeanClient`, which pins the
+  doctor call site for each.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

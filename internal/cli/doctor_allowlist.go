@@ -3,47 +3,53 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
-// checkKimiLeanHint surfaces what `plumb doctor` can usefully say about Kimi
-// Code's tool surface beyond "registered": either plumb is advertising its whole
-// tool registry and Kimi's own mcp.json could trim it with an enabledTools
-// allowlist, or the allowlist that is there does not work. ok is false when the
-// config is absent, does not register plumb, or carries a working allowlist —
-// there is nothing to say in those cases.
-func checkKimiLeanHint() (checkResult, bool) {
-	path, err := KimiCodeConfigPath()
-	if err != nil {
-		return checkResult{}, false
+// checkLeanAllowlists surfaces what `plumb doctor` can usefully say about each
+// --lean-capable client's tool surface beyond "registered": either plumb is
+// advertising its whole tool registry and the client's own config could trim it
+// with an allowlist, or the allowlist that is there does not work.
+//
+// One parameterised check serves all three clients (leanAllowlistClients) —
+// their configs differ only in serialisation, server key, and the name of the
+// allowlist key, all of which the leanClient descriptor carries.
+func checkLeanAllowlists() []checkResult {
+	var out []checkResult
+	for _, c := range leanAllowlistClients() {
+		path, err := c.pathFn()
+		if err != nil {
+			continue
+		}
+		if r, ok := leanHintAt(c, path); ok {
+			out = append(out, r)
+		}
 	}
-	return kimiLeanHintAt(path)
+	return out
 }
 
-// kimiLeanHintAt is checkKimiLeanHint's path-injectable body, so a test can
-// drive an allowlist that is present, absent, degenerate, or in a config that
-// does not register plumb at all.
+// leanHintAt is checkLeanAllowlists' path-injectable body, so a test can drive
+// an allowlist that is present, absent, degenerate, or in a config that does not
+// register plumb at all. ok is false when the config is absent, does not register
+// plumb, or carries a working allowlist — there is nothing to say in those cases,
+// and an exactly-current allowlist passing in silence is deliberate: doctor
+// speaks up on drift and misconfiguration, not on a healthy default.
 //
-// It reads the file directly rather than through readOrInitClaudeConfig, which
-// creates the parent directory for an absent config — a doctor check must never
-// write to the filesystem it is inspecting.
-func kimiLeanHintAt(cfgPath string) (checkResult, bool) {
-	data, err := os.ReadFile(cfgPath)
+// It reads through c.parse rather than the setup-side reader, which creates the
+// parent directory for an absent config — a doctor check must never write to the
+// filesystem it is inspecting.
+func leanHintAt(c leanClient, cfgPath string) (checkResult, bool) {
+	cfg, err := c.parse(cfgPath)
 	if err != nil {
-		return checkResult{}, false
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
 		// checkOneClient already fails the run for a config that will not parse
 		// (classifyClientBinary); reporting the same fault twice would put two
 		// lines against one broken file.
 		return checkResult{}, false
 	}
-	servers, ok := cfg["mcpServers"].(map[string]any)
+	servers, ok := cfg[c.serversKey].(map[string]any)
 	if !ok {
 		return checkResult{}, false
 	}
@@ -51,14 +57,12 @@ func kimiLeanHintAt(cfgPath string) (checkResult, bool) {
 	if !ok {
 		return checkResult{}, false
 	}
-	raw, has := entry["enabledTools"]
+	raw, has := entry[c.key]
 	if !has {
-		return kimiFullSurfaceHint(), true
+		return leanFullSurfaceHint(c), true
 	}
-	return kimiAllowlistResult(gradeToolAllowlist(raw, registeredToolNames(), tools.LeanToolNames()))
+	return leanAllowlistResult(c, gradeToolAllowlist(raw, registeredToolNames(), tools.LeanToolNames()))
 }
-
-const kimiToolSurfaceCheck = "Kimi Code (tool surface)"
 
 // registeredToolNames is the live set of tool names plumb advertises, used to
 // tell a name that filters to a real tool from one that filters to nothing.
@@ -67,38 +71,39 @@ const kimiToolSurfaceCheck = "Kimi Code (tool surface)"
 // what a client can actually enable.
 func registeredToolNames() []string { return mcp.SelftestToolNames() }
 
-// kimiAllowlistResult turns a grade into the doctor line for it, or reports
+// leanAllowlistResult turns a grade into the doctor line for it, or reports
 // ok=false when the allowlist is doing its job and doctor has nothing to say.
-func kimiAllowlistResult(g allowlistGrade) (checkResult, bool) {
+func leanAllowlistResult(c leanClient, g allowlistGrade) (checkResult, bool) {
 	switch g.verdict {
 	case allowlistDegenerate:
-		return kimiDegenerateAllowlistResult(g), true
+		return degenerateAllowlistResult(c, g), true
 	case allowlistUnrecognised:
-		return kimiUnknownAllowlistResult(g), true
+		return unknownAllowlistResult(c, g), true
 	case allowlistStale:
-		return kimiStaleAllowlistResult(g), true
+		return staleAllowlistResult(c, g), true
 	default:
 		return checkResult{}, false
 	}
 }
 
-// kimiFullSurfaceHint is the no-allowlist result, and it is INFORMATIONAL:
+// leanFullSurfaceHint is the no-allowlist result, and it is INFORMATIONAL:
 // ok=true, warn=false, no fix line. A full registration is a perfectly valid
 // default — it is what every other client gets — so flagging it as a warning
 // would put a "!" against a healthy machine and inflate doctor's warning count
 // for a preference. The suggestion goes in the detail, which prints on a clean
 // pass; fix lines only render on attention.
-func kimiFullSurfaceHint() checkResult {
+func leanFullSurfaceHint(c leanClient) checkResult {
 	return checkResult{
-		name: kimiToolSurfaceCheck,
+		name: c.checkName(),
 		ok:   true,
-		detail: fmt.Sprintf("no client-side allowlist, so Kimi loads whatever plumb advertises "+
-			"(every tool under the default profile) — `plumb setup kimi-code --lean` writes an "+
-			"enabledTools allowlist trimming it to the %d-tool lean set", len(tools.LeanToolNames())),
+		detail: fmt.Sprintf("no client-side allowlist, so %s loads whatever plumb advertises "+
+			"(every tool under the default profile) — %s writes an "+
+			"%s allowlist trimming it to the %d-tool lean set",
+			c.name, c.leanCmd(), c.key, len(tools.LeanToolNames())),
 	}
 }
 
-// kimiDegenerateAllowlistResult grades an enabledTools key that cannot function
+// degenerateAllowlistResult grades an allowlist key that cannot function
 // as an allowlist. All three shapes are a WARNING (ok=true, warn=true, with a
 // fix) — none is a value plumb ever writes, and each leaves the integration in a
 // state the user cannot see from the outside. It stays non-fatal because
@@ -113,45 +118,45 @@ func kimiFullSurfaceHint() checkResult {
 //     filters every plumb tool out, so the server connects with nothing callable.
 //   - NULL — most clients read a null option as "unset", i.e. the full tool
 //     surface, so claiming it loads nothing is probably wrong. plumb cannot
-//     verify which way Kimi takes it, and says so rather than guessing.
-//   - NOT A LIST — plumb cannot verify how Kimi parses a value of the wrong
-//     type at all: ignored, coerced, or the whole server entry rejected.
-func kimiDegenerateAllowlistResult(g allowlistGrade) checkResult {
-	res := checkResult{name: kimiToolSurfaceCheck, ok: true, warn: true, fix: kimiAllowlistFix()}
+//     verify which way the client takes it, and says so rather than guessing.
+//   - NOT A LIST — plumb cannot verify how the client parses a value of the
+//     wrong type at all: ignored, coerced, or the whole server entry rejected.
+func degenerateAllowlistResult(c leanClient, g allowlistGrade) checkResult {
+	res := checkResult{name: c.checkName(), ok: true, warn: true, fix: leanAllowlistFix(c)}
 	switch g.shape {
 	case shapeNull:
-		res.detail = "enabledTools is null — a client most likely reads that as no allowlist at all " +
-			"(the full tool surface), but plumb cannot verify how Kimi takes it"
-		res.fix = fmt.Sprintf("delete the enabledTools key to mean the full tool surface unambiguously, "+
-			"or run `plumb setup kimi-code --lean` to pin the %d-tool lean allowlist", len(tools.LeanToolNames()))
+		res.detail = c.key + " is null — a client most likely reads that as no allowlist at all " +
+			"(the full tool surface), but plumb cannot verify how " + c.name + " takes it"
+		res.fix = fmt.Sprintf("delete the %s key to mean the full tool surface unambiguously, "+
+			"or run %s to pin the %d-tool lean allowlist", c.key, c.leanCmd(), len(tools.LeanToolNames()))
 	case shapeWrongType:
-		res.detail = "enabledTools is " + g.found + ", not a list — plumb cannot verify how Kimi parses " +
-			"that: it may ignore the key, or refuse the whole server entry"
+		res.detail = c.key + " is " + g.found + ", not a list — plumb cannot verify how " + c.name +
+			" parses that: it may ignore the key, or refuse the whole server entry"
 	default: // shapeEmpty
-		res.detail = "enabledTools is " + g.found + " — Kimi loads NO plumb tools at all; " +
+		res.detail = c.key + " is " + g.found + " — " + c.name + " loads NO plumb tools at all; " +
 			"the server connects but nothing it offers is callable"
 	}
 	return res
 }
 
-// kimiUnknownAllowlistResult grades a list that is shaped correctly and still
+// unknownAllowlistResult grades a list that is shaped correctly and still
 // filters plumb to nothing, because not one of its entries names a tool plumb
 // registers — a typo'd or wholly invented list. Same severity as a degenerate
 // value: the observable outcome is identical (zero plumb tools), and the user
 // cannot see it from the outside.
-func kimiUnknownAllowlistResult(g allowlistGrade) checkResult {
+func unknownAllowlistResult(c leanClient, g allowlistGrade) checkResult {
 	return checkResult{
-		name: kimiToolSurfaceCheck,
+		name: c.checkName(),
 		ok:   true,
 		warn: true,
-		detail: fmt.Sprintf("enabledTools lists %d name(s), none of which plumb registers (%s) — "+
-			"Kimi loads NO plumb tools at all; the server connects but nothing it offers is callable",
-			len(g.names), strings.Join(capNames(g.unknown, 3), ", ")),
-		fix: kimiAllowlistFix(),
+		detail: fmt.Sprintf("%s lists %d name(s), none of which plumb registers (%s) — "+
+			"%s loads NO plumb tools at all; the server connects but nothing it offers is callable",
+			c.key, len(g.names), strings.Join(capNames(g.unknown, 3), ", "), c.name),
+		fix: leanAllowlistFix(c),
 	}
 }
 
-// kimiStaleAllowlistResult grades a list that is recognisably plumb's own
+// staleAllowlistResult grades a list that is recognisably plumb's own
 // snapshot but no longer equals the lean set — the allowlist's one documented
 // failure mode, since it is written once and never refreshed.
 //
@@ -159,23 +164,24 @@ func kimiUnknownAllowlistResult(g allowlistGrade) checkResult {
 // list still works, every tool in it is still callable, and the user may be
 // pinning an older set deliberately. Drift is worth saying out loud, not worth a
 // "!".
-func kimiStaleAllowlistResult(g allowlistGrade) checkResult {
+func staleAllowlistResult(c leanClient, g allowlistGrade) checkResult {
 	var b strings.Builder
-	fmt.Fprintf(&b, "enabledTools is a snapshot of an older lean set (%d name(s) listed, %d today)",
-		len(g.names), len(tools.LeanToolNames()))
+	fmt.Fprintf(&b, "%s is a snapshot of an older lean set (%d name(s) listed, %d today)",
+		c.key, len(g.names), len(tools.LeanToolNames()))
 	if len(g.missing) > 0 {
 		fmt.Fprintf(&b, "; missing: %s", strings.Join(capNames(g.missing, 3), ", "))
 	}
 	if len(g.unknown) > 0 {
 		fmt.Fprintf(&b, "; no longer registered: %s", strings.Join(capNames(g.unknown, 3), ", "))
 	}
-	b.WriteString(" — re-run `plumb setup kimi-code --lean` to refresh it")
-	return checkResult{name: kimiToolSurfaceCheck, ok: true, detail: b.String()}
+	fmt.Fprintf(&b, " — re-run %s to refresh it", c.leanCmd())
+	return checkResult{name: c.checkName(), ok: true, detail: b.String()}
 }
 
-func kimiAllowlistFix() string {
-	return fmt.Sprintf("run `plumb setup kimi-code --lean` to write the %d-tool lean allowlist, "+
-		"or delete the enabledTools key to restore the full tool surface", len(tools.LeanToolNames()))
+func leanAllowlistFix(c leanClient) string {
+	return fmt.Sprintf("run %s to write the %d-tool lean allowlist, "+
+		"or delete the %s key to restore the full tool surface",
+		c.leanCmd(), len(tools.LeanToolNames()), c.key)
 }
 
 // capNames renders at most n names, appending "+N more" for the rest, so a

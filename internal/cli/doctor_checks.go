@@ -80,9 +80,7 @@ func checkMCPClients() []checkResult {
 	if r, ok := checkClaudeDesktopExtraProfiles(selfPath); ok {
 		results = append(results, r)
 	}
-	if r, ok := checkKimiLeanHint(); ok {
-		results = append(results, r)
-	}
+	results = append(results, checkLeanAllowlists()...)
 	results = append(results, checkSkillFreshness()...)
 	return results
 }
