@@ -39,9 +39,18 @@ type symbolEditArgs struct {
 }
 
 // docCommentSchemaFragment is the JSON schema snippet for the include_doc_comment
-// flag, shared by the three tools that respect it. Always prefixed with a comma
-// — call sites already terminate the previous property without a trailing comma.
-const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol. Note that where a declaration is WRAPPED — an exported ES declaration under its export statement, a decorated Python def under its @decorator — the doc comment sits above the wrapper, so the extended range covers the wrapper too: replacement content must reproduce the export keyword or the decorator, or it is dropped."}`
+// flag, shared by insert_before_symbol, replace_symbol_body and
+// safe_delete_symbol. move_symbol accepts the same flag — and defaults it to
+// TRUE — but hand-writes its own description, so a change here does not reach
+// it. Always prefixed with a comma — call sites already terminate the previous
+// property without a trailing comma.
+//
+// Only the first two climb above a wrapper: they hold a topologyStoreFn and go
+// through docCommentStartPreferTopology, whereas SafeDeleteSymbol has no
+// topology fallback and line-scans with docCommentStart, which stops at the
+// first non-comment line — a decorator or an export keyword — and so can never
+// extend past the declaration.
+const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol. A WRAPPED declaration (an exported ES declaration under its export statement, a decorated Python def under its @decorator) keeps its doc comment above the wrapper, so WHEN SUCH A COMMENT EXISTS insert_before_symbol and replace_symbol_body extend past the wrapper — replacement content must then reproduce the export keyword or the decorator, or it is dropped. With no doc comment above the wrapper the range starts at the declaration and the wrapper is untouched; safe_delete_symbol never extends past the declaration at all."}`
 
 // docCommentStart walks upward from symStart to find the first line of any
 // contiguous comment block flush against the symbol. Returns symStart if no

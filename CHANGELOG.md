@@ -344,17 +344,28 @@
 
 ### Changed
 
-- **`include_doc_comment`'s schema now states that the extended range can cover
-  a declaration's wrapper.** The flag's description promised only "contiguous
-  comment lines directly above the symbol declaration", but where a declaration
-  is wrapped the doc comment sits above the WRAPPER, so the range necessarily
-  covers it: an exported ES declaration under its `export` statement (since
-  0.16.2) and, new here, a decorated Python `def` under its `@decorator`. That
-  is the correct range — a `move_symbol` must carry `@property` along with the
-  method it decorates — but for `replace_symbol_body` it means the replacement
-  content has to reproduce the decorator or the `export`, or it is silently
-  dropped, and `@property`/`@staticmethod`/`@pytest.fixture` change semantics in
-  a way `export` does not. Documentation only; no behaviour change.
+- **`include_doc_comment`'s schema now states when the extended range covers a
+  declaration's wrapper — and when it does not.** The flag's description
+  promised only "contiguous comment lines directly above the symbol
+  declaration", but where a declaration is wrapped the doc comment sits above
+  the WRAPPER, so the range covers it: an exported ES declaration under its
+  `export` statement (since 0.16.2) and, new here, a decorated Python `def`
+  under its `@decorator`. That is the correct range — a `move_symbol` must carry
+  `@property` along with the method it decorates — but for `replace_symbol_body`
+  the replacement content has to reproduce the decorator or the `export`, or it
+  is silently dropped, and `@property`/`@staticmethod`/`@pytest.fixture` change
+  semantics in a way `export` does not. The wrapper coverage is **conditional**,
+  which the first draft of this note stated as an unconditional rule: it happens
+  only when a doc comment actually sits above the wrapper and the precise span
+  resolves. With no such comment `docCommentStart` line-scans, stops at the
+  decorator, and the range starts at the declaration — so an agent following the
+  unconditional wording would have emitted a duplicated `@property`. Scope is
+  now stated per tool: `insert_before_symbol` and `replace_symbol_body` climb
+  (they carry a topology fallback), `safe_delete_symbol` never does (it has
+  none, so its line-scan always stops at the declaration), and `move_symbol` —
+  which respects the flag, defaults it to **true**, and hand-writes its own
+  description rather than sharing the fragment — gains the note in its own
+  schema. Documentation only; no behaviour change.
 
 ## 0.16.3 (2026-08-10)
 
