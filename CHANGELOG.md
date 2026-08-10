@@ -314,6 +314,10 @@
   "document it" step was pointing at the wrong file), and
   `docs/getting-started.md` now all point at the real
   `docs/adding-an-lsp.md#validation-levels` table.
+- **`docs/architecture.md`'s "Adding features" guidance no longer tells
+  contributors to document a new config field in `AGENTS.md`** — the brief no
+  longer carries per-field config detail (and `check-agents-brief.sh` would
+  reject re-adding it); it now points at `docs/configuration.md`.
 
 ### Tests
 
