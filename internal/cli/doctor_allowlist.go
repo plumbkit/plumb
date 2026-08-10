@@ -76,30 +76,49 @@ func leanAllowlistValue(c leanClient, cfgPath string) (raw any, has, ok bool) {
 	return raw, has, true
 }
 
-// leanAllowlistPresent reports whether cfgPath currently carries c's allowlist
-// key on its plumb entry — the signal repointFix needs to keep `--lean` on the
-// command it tells the user to run.
-func leanAllowlistPresent(c leanClient, cfgPath string) bool {
-	_, has, ok := leanAllowlistValue(c, cfgPath)
-	return ok && has
-}
-
 // repointFix is the fix line for a client whose registered binary is missing or
 // stale: the `plumb setup` invocation that repoints it.
 //
-// It keeps `--lean` when that client's config carries a tool allowlist today,
-// and that is not cosmetic. For Codex and Gemini CLI a bare re-register CLEARS
-// the key, so the unqualified command doctor used to print would have widened
-// the user's tool surface from 21 back to 57 as a side effect of following
-// doctor's own advice about a moved binary. Kimi Code preserves the key either
-// way, but `--lean` is still the better suggestion there: it refreshes a
-// snapshot that may have aged past the current lean set.
+// Whether that invocation should carry `--lean` depends on what the BARE command
+// would do to the allowlist the config holds today — the fix must be the least
+// destructive of the two, not simply the one that mentions the flag:
+//
+//   - bareClears (Codex, Gemini CLI): bare DELETES the key, so `--lean` is
+//     strictly safer whatever the list contains. Without this, following
+//     doctor's own advice about a moved binary silently widened the user's tool
+//     surface from 21 tools back to the full registry.
+//   - preserve-on-bare (Kimi Code): bare is already non-destructive, so `--lean`
+//     can only make things worse — it REPLACES the list. A hand-picked
+//     `["read_file", "edit_file", "git"]` would be overwritten with plumb's 21
+//     names by a command the user ran to fix a moved binary. So it is suggested
+//     only for a list that grades as plumb's own aged snapshot, where replacing
+//     is the refresh doctor recommends elsewhere anyway (staleAllowlistResult).
+//
+// The grade, not mere presence, is the signal on that second path — and
+// gradeToolAllowlist already draws exactly this distinction.
 func repointFix(c setupTarget, cfgPath string) string {
 	cmd := "plumb setup " + c.use
-	if lc, ok := leanClientFor(c.use); ok && leanAllowlistPresent(lc, cfgPath) {
+	if leanRefreshWanted(c.use, cfgPath) {
 		cmd += " --lean"
 	}
 	return fmt.Sprintf("run `%s` to repoint at the current binary", cmd)
+}
+
+// leanRefreshWanted reports whether a repoint of the client registered in
+// cfgPath should carry `--lean` — see repointFix for the reasoning.
+func leanRefreshWanted(use, cfgPath string) bool {
+	lc, ok := leanClientFor(use)
+	if !ok {
+		return false
+	}
+	raw, has, readable := leanAllowlistValue(lc, cfgPath)
+	if !readable || !has {
+		return false
+	}
+	if lc.bareClears {
+		return true
+	}
+	return gradeToolAllowlist(raw, registeredToolNames(), tools.LeanToolNames()).verdict == allowlistStale
 }
 
 // registeredToolNames is the live set of tool names plumb advertises, used to

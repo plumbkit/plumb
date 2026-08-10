@@ -40,7 +40,13 @@ type leanClient struct {
 	// does to the key. It is per-client because the contracts differ — see
 	// kimiCodeInto (preserves) against codexLeanInto/geminiLeanInto (clear).
 	bareNote string
-	pathFn   func() (string, error)
+	// bareClears records which of the two contracts this client is on: true when
+	// a bare named re-register DELETES the key (Codex, Gemini CLI), false when it
+	// preserves it (Kimi Code, which shipped first with no clearing path). It is
+	// data rather than prose because repointFix has to reason about it — the
+	// safety of suggesting `--lean` depends on what the alternative would do.
+	bareClears bool
+	pathFn     func() (string, error)
 	// read/write are the setup-side serialisation pair handed to
 	// mergeServerEntry; read creates the parent directory for an absent config.
 	read  func(string) (map[string]any, bool, error)
@@ -76,7 +82,8 @@ var (
 		bareNote: "A later bare `plumb setup codex`\n" +
 			"clears the key and restores the full tool surface; the bulk\n" +
 			"`plumb setup --all`/`--repair` sweeps preserve it.",
-		pathFn: CodexConfigPath, read: readOrInitCodexConfig, write: writeTOML, parse: parseTOMLConfig,
+		bareClears: true,
+		pathFn:     CodexConfigPath, read: readOrInitCodexConfig, write: writeTOML, parse: parseTOMLConfig,
 	}
 	// Gemini CLI: "includeTools" on mcpServers.plumb in settings.json — a
 	// list-time filter over exact names, no globbing
@@ -90,7 +97,8 @@ var (
 			"clears the key and restores the full tool surface; the bulk\n" +
 			"`plumb setup --all`/`--repair` sweeps preserve it. Gemini's\n" +
 			"`excludeTools` wins wherever both keys are present.",
-		pathFn: GeminiConfigPath, read: readOrInitClaudeConfig, write: writeJSON, parse: parseJSONConfig,
+		bareClears: true,
+		pathFn:     GeminiConfigPath, read: readOrInitClaudeConfig, write: writeJSON, parse: parseJSONConfig,
 	}
 )
 
@@ -235,6 +243,15 @@ func leanFlagRegistrar(v *bool, c leanClient) func(*cobra.Command) {
 // "removed" claim it cannot substantiate would be worse than describing what the
 // entry now says.
 //
+// EVERY clause has to survive that test, not just the leading one. An earlier
+// draft closed with "(the previous config was backed up alongside it)", which is
+// false in two reachable states: a first-ever registration, where mergeServerEntry
+// skips backupFile because the file is new, and an idempotent second bare run,
+// which writes nothing at all and still printed the claim. It is deleted rather
+// than hedged — three lines that are all true beat four with a caveat, and it
+// also lightens the paragraph a first-time user sees about an allowlist they
+// never had.
+//
 // leanKeep says nothing: that is a bulk sweep, or Kimi's bare re-register, and
 // neither touches the key.
 func leanSetupNote(c leanClient, choice leanChoice) string {
@@ -248,9 +265,8 @@ func leanSetupNote(c leanClient, choice leanChoice) string {
 	case leanClear:
 		return fmt.Sprintf(
 			"Tool allowlist: no --lean, so the plumb entry carries no client-side %s\n"+
-				"allowlist — %s loads plumb's full tool surface. Any allowlist that was there\n"+
-				"has been cleared (the previous config was backed up alongside it).\n"+
-				"Run `plumb setup %s --lean` to pin the %d lean tools instead.",
+				"allowlist and any that was there has been cleared — %s loads plumb's full\n"+
+				"tool surface. Run `plumb setup %s --lean` to pin the %d lean tools instead.",
 			c.key, c.name, c.setupCmd, len(tools.LeanToolNames()))
 	}
 	return ""
