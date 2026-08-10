@@ -45,7 +45,7 @@ func TestPrintStatsFailures_RendersEachBucket(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	got := out.String()
@@ -57,7 +57,10 @@ func TestPrintStatsFailures_RendersEachBucket(t *testing.T) {
 	if strings.Contains(got, "read_file") {
 		t.Errorf("a successful call reached the failure view:\n%s", got)
 	}
-	if strings.Contains(got, "carry no classification") {
+	// Assert on wording common to BOTH the singular and plural branches: guarding
+	// only the plural would let a regression that fires the note for exactly one
+	// row slip through saying "1 failure carries no classification".
+	if strings.Contains(got, "no classification") {
 		t.Errorf("the unclassified note fired with no unclassified rows:\n%s", got)
 	}
 }
@@ -69,7 +72,7 @@ func TestPrintStatsFailures_LabelsUnclassified(t *testing.T) {
 	db := failuresDB(t, stats.Call{Tool: "git", ClientName: "claude-code", ErrorMsg: "boom"})
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	got := out.String()
@@ -88,7 +91,7 @@ func TestPrintStatsFailures_NoFailuresSaysSo(t *testing.T) {
 	db := failuresDB(t, stats.Call{Tool: "read_file", Success: true})
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	if !strings.Contains(out.String(), "No failures recorded") {
@@ -108,6 +111,66 @@ func TestStatsClientCell(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := statsClientCell(tc.in); got != tc.want {
 				t.Errorf("statsClientCell = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPrintStatsFailures_UnknownRetryabilityIsNotZero pins the distinction the
+// column must preserve: 0 means "checked, none were retryable"; the unclassified
+// bucket has no answer at all, and printing 0 there would be a claim about rows
+// plumb never classified.
+func TestPrintStatsFailures_UnknownRetryabilityIsNotZero(t *testing.T) {
+	unclassified := stats.FailureCount{Tool: "git", Calls: 4}
+	if got := retryableCell(unclassified); got != "—" {
+		t.Errorf("retryableCell(unclassified) = %q, want an em dash", got)
+	}
+	checked := stats.FailureCount{Kind: toolerror.KindGitPolicy, Tool: "git", Calls: 4}
+	if got := retryableCell(checked); got != "0" {
+		t.Errorf("retryableCell(classified, none retryable) = %q, want %q", got, "0")
+	}
+}
+
+func TestSinceSuffix_NamesTheWindow(t *testing.T) {
+	if got := sinceSuffix(stats.Filter{}); got != "" {
+		t.Errorf("an unscoped view claimed a window: %q", got)
+	}
+	got := sinceSuffix(stats.Filter{Since: time.Now().Add(-7 * 24 * time.Hour)})
+	if got != " (last 7d)" {
+		t.Errorf("sinceSuffix = %q, want %q", got, " (last 7d)")
+	}
+}
+
+func TestParseAge(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want time.Duration
+		bad  bool
+	}{
+		{in: "90m", want: 90 * time.Minute},
+		{in: "24h", want: 24 * time.Hour},
+		{in: "7d", want: 7 * 24 * time.Hour},
+		{in: "2w", want: 14 * 24 * time.Hour},
+		{in: "1d", want: 24 * time.Hour},
+		{in: "", bad: true},
+		{in: "yesterday", bad: true},
+		{in: "0d", bad: true},
+		{in: "-3h", bad: true},
+		{in: "1.5d", bad: true},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := parseAge(tc.in)
+			if tc.bad {
+				if err == nil {
+					t.Errorf("parseAge(%q) = %v, want an error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAge(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("parseAge(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}

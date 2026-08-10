@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/term"
@@ -22,6 +23,7 @@ var (
 	statsFlagWorkspace string
 	statsFlagLimit     int
 	statsFlagFailures  bool
+	statsFlagSince     string
 )
 
 var statsCmd = &cobra.Command{
@@ -42,6 +44,11 @@ func init() {
 	// also a distinct occasion: you reach for it when something is failing, not
 	// on every `plumb stats`.
 	statsCmd.Flags().BoolVar(&statsFlagFailures, "failures", false, "show failures grouped by kind, tool and client instead of the default view")
+	// `tool_calls` is never pruned, so without a window every view eventually
+	// reports mostly history. It matters most to --failures, where years of
+	// pre-classification rows would otherwise dominate, but the same is true of
+	// the per-tool averages, so the window scopes the whole command.
+	statsCmd.Flags().StringVar(&statsFlagSince, "since", "", "only count calls newer than this age, e.g. 24h, 7d, 2w (default: all history)")
 }
 
 func runStats(_ *cobra.Command, _ []string) error {
@@ -74,8 +81,15 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 	defer db.Close()
 
-	// Filter stats to the requested workspace.
+	// Filter stats to the requested workspace, and to the requested window.
 	filter := stats.Filter{Workspace: ws}
+	if statsFlagSince != "" {
+		window, err := parseAge(statsFlagSince)
+		if err != nil {
+			return err
+		}
+		filter.Since = time.Now().Add(-window)
+	}
 
 	total := db.TotalCalls(filter)
 	if total == 0 {
@@ -103,7 +117,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	if statsFlagFailures {
-		return printStatsFailures(os.Stdout, db, filter, ws)
+		return printStatsFailures(os.Stdout, db, filter, statsFlagLimit, ws)
 	}
 
 	// Tool summary table
@@ -152,6 +166,34 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// parseAge reads a --since value as an age. It accepts Go's own duration syntax
+// plus the day and week suffixes a reader reaches for when scoping months of
+// stats history, because "168h" is not what anyone means by a week.
+func parseAge(s string) (time.Duration, error) {
+	if unit, ok := strings.CutSuffix(s, "d"); ok {
+		return scaledAge(s, unit, 24*time.Hour)
+	}
+	if unit, ok := strings.CutSuffix(s, "w"); ok {
+		return scaledAge(s, unit, 7*24*time.Hour)
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("--since %q: expected an age like 90m, 24h, 7d or 2w", s)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("--since %q: expected a positive age", s)
+	}
+	return d, nil
+}
+
+func scaledAge(orig, n string, unit time.Duration) (time.Duration, error) {
+	v, err := strconv.Atoi(n)
+	if err != nil || v <= 0 {
+		return 0, fmt.Errorf("--since %q: expected a positive whole number of %s", orig, unit)
+	}
+	return time.Duration(v) * unit, nil
 }
 
 func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {

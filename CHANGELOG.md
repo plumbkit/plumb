@@ -505,16 +505,33 @@
 
 - **`plumb stats --failures` — a failure breakdown by kind.** A new
   `stats.FailureSummary` groups failed calls by kind, tool, client name and
-  client version — every key low-cardinality by construction, none of them a
-  value an agent supplies — and reports the call count and how many were
-  retryable per bucket. It reuses the existing `Filter` predicate, so
-  `--workspace` and any other scoping applies unchanged. The CLI shows it as
-  its own view rather than more columns on the default table, because the grain
+  client version, and reports the call count and how many were retryable per
+  bucket. It reuses the existing `Filter` predicate, so `--workspace`,
+  `--since` and any other scoping applies unchanged. Kind and tool are
+  low-cardinality by construction; the client name and version are **not** —
+  they are copied verbatim out of the MCP `initialize` frame's `clientInfo`
+  with no validation or length cap, so the query takes a limit and applies it
+  in SQL rather than trusting the shape of the data. The CLI shows it as its
+  own view rather than more columns on the default table, because the grain
   differs: the default table is one row per tool, a failure bucket is one row
-  per (kind × tool × client build). Rows with no classification are reported
-  under an explicit `unclassified` label with a note explaining what that means
-  — never dropped, and never folded into `internal`, which is a deliberate
-  classification rather than an absence of one.
+  per (kind × tool × client build); `--limit` caps the buckets shown.
+
+  Rows with no classification are reported under an explicit `unclassified`
+  label with a note explaining what that means — never dropped, and never
+  folded into `internal`, which is a deliberate classification rather than an
+  absence of one. Their retryable count renders as `—`, not `0`: the honest
+  answer is "unknown", and a zero would read as "we checked". Because
+  `tool_calls` is never pruned, **classified buckets sort ahead of the
+  unclassified one regardless of size** — ordering purely by count would bury
+  every actionable bucket, permanently, under a row whose only message is
+  "this predates the feature".
+
+- **`plumb stats --since <age>`.** Scopes the whole command — summary, recent
+  calls and the failure view — to calls newer than the given age. It accepts
+  Go's duration syntax plus the `d` and `w` suffixes, because `168h` is not
+  what anyone means by a week. The database is never pruned, so without a
+  window every view eventually reports mostly history;
+  `plumb stats --failures --since 7d` is the useful triage call.
 
 - **A "Failures by Kind (uptime)" widget on the TUI dashboard.** It appears only
   when this daemon run has recorded a failure, and collapses the buckets to the

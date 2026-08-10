@@ -21,13 +21,23 @@ import (
 // to decide whether plumb itself is broken.
 const UnclassifiedLabel = "unclassified"
 
+// defaultFailureBuckets bounds a FailureSummary that names no limit. It is a
+// backstop against the caller-supplied client identity in the grouping keys
+// (see FailureCount), not a display preference — a caller that wants fewer rows
+// should say so.
+const defaultFailureBuckets = 100
+
 // FailureCount is one bucket of the failure breakdown.
 //
-// The grouping keys are chosen to be low-cardinality BY CONSTRUCTION rather
-// than by hoping the data stays small: Kind is a closed thirteen-value set,
-// Tool is the fixed registry, and the client name/version pair is one per
-// client build in use. Nothing here groups by a value an agent supplies, so the
-// result set cannot be blown up by a caller.
+// Two of the four grouping keys are low-cardinality by construction: Kind is a
+// closed thirteen-value set and Tool is the fixed registry. The other two are
+// NOT. ClientName and ClientVersion are copied verbatim out of the MCP
+// `initialize` frame's `clientInfo`, with no validation, normalisation or length
+// cap anywhere on that path, so a client that varies its version string varies
+// the bucket count with it — 500 distinct versions produce 500 buckets. That is
+// why FailureSummary takes a limit and applies it in SQL rather than trusting
+// the shape of the data; do not remove it on the strength of "these are only
+// client builds".
 //
 // Retryable counts how many of Calls were recorded as retryable. The
 // remediation class is not a grouping key — a single kind can be reached from
@@ -52,15 +62,25 @@ func (f FailureCount) Label() string {
 	return string(f.Kind)
 }
 
-// FailureSummary returns failed calls matching filter, grouped by kind, tool
-// and client build, busiest bucket first.
+// FailureSummary returns the n busiest failure buckets matching filter, grouped
+// by kind, tool and client build. n <= 0 applies defaultFailureBuckets.
 //
-// Unclassified rows are reported, never dropped: a report that silently omitted
-// them would understate the failure count by exactly the amount it understands
-// least, which is the wrong way round.
-func (d *DB) FailureSummary(filter Filter) ([]FailureCount, error) {
+// CLASSIFIED BUCKETS SORT FIRST, ahead of the unclassified one regardless of
+// size. `tool_calls` is never pruned, so on any installation with history the
+// pre-v14 failures outnumber the classified ones for a long time — sorting
+// purely by count buries every actionable bucket under a row that says only
+// "this predates the feature", and the LIMIT would then spend itself on it. The
+// unclassified bucket is a known unknown, not a finding: it belongs last, where
+// its note explains it.
+//
+// It is reported, never dropped: a report that silently omitted it would
+// understate the failure count by exactly the amount it understands least.
+func (d *DB) FailureSummary(n int, filter Filter) ([]FailureCount, error) {
 	if d == nil {
 		return nil, nil
+	}
+	if n <= 0 {
+		n = defaultFailureBuckets
 	}
 	where, args := filter.where()
 	if where == "" {
@@ -74,7 +94,9 @@ func (d *DB) FailureSummary(filter Filter) ([]FailureCount, error) {
 	             COALESCE(SUM(error_retryable), 0) AS retryable
 	      FROM tool_calls` + where + `
 	      GROUP BY error_kind, tool, client_name, client_version
-	      ORDER BY calls DESC, error_kind, tool`
+	      ORDER BY (error_kind = '') ASC, calls DESC, error_kind, tool
+	      LIMIT ?`
+	args = append(args, n)
 
 	rows, err := d.db.Query(q, args...)
 	if err != nil {

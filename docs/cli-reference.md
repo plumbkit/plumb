@@ -346,7 +346,7 @@ session name, ID, resolved workspace, and client identity.
 ## `plumb stats`
 
 ```
-plumb stats [--workspace <dir>] [--limit <n>] [--failures]
+plumb stats [--workspace <dir>] [--limit <n>] [--since <age>] [--failures]
 ```
 
 Aliases: **`plumb status`**.
@@ -359,18 +359,27 @@ of the most recent calls.
 |---|---|---|
 | `--workspace <dir>` | current dir | Workspace to inspect. |
 | `--limit <n>` | `20` | Number of recent calls to show. |
+| `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. |
 | `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. |
 
 `--failures` is the triage view. It groups failed calls by their machine-readable
 kind (`dirty_file`, `lsp_timeout`, …), the tool, and the client build, and reports
 how many of each were retryable. It is a separate view rather than extra columns
 because the grain differs: the default table is one row per tool, a failure bucket
-is one row per (kind × tool × client).
+is one row per (kind × tool × client). `--limit` caps how many buckets are shown.
 
 Failures plumb makes no structured claim about — and every call recorded before
 the classification columns existed — appear under an explicit `unclassified`
-label. Nothing is inferred from the stored error text, so that bucket is honest
-about what is unknown rather than folded into `internal`.
+label, always last, with their retryable count shown as `—` because the honest
+answer is "unknown" rather than zero. Nothing is inferred from the stored error
+text, so that bucket is honest about what is unknown rather than folded into
+`internal`.
+
+> The database is never pruned, so on an installation with history the
+> pre-classification failures outnumber the classified ones for a long time.
+> Classified buckets therefore sort ahead of the unclassified one regardless of
+> size, and `--since` scopes the whole command to a window — `plumb stats
+> --failures --since 7d` is the useful triage call.
 
 > Statistics are global to the daemon (`stats.db`) but filtered to the requested
 > workspace. `plumb status` is identical to `plumb stats` — it does **not**
