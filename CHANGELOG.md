@@ -2,47 +2,6 @@
 
 ## 0.16.3 (unreleased)
 
-### Fixed
-
-- **`plumb skills sync` no longer corrupts a CRLF-encoded skill's
-  frontmatter.** `stampSkillContent` only recognised a bare `\n`-delimited
-  YAML frontmatter block; a CRLF skill file (e.g. hand-edited in a CRLF
-  editor) failed the `---\n` prefix check, fell into the no-frontmatter
-  branch, and got its provenance marker PREPENDED before the `---` line —
-  corrupting the very block claude-code, codex, and kimi-code parse for
-  `name`/`description`, so the skill would silently vanish from that
-  client's catalogue on the next sync. `stampSkillContent` and
-  `parseSkillMarker` now detect and preserve the file's own line-ending
-  style, never rewriting LF to CRLF or vice versa. Guarded by
-  `TestStampSkillContent`'s CRLF case and
-  `TestStampSkillContent_CRLFFrontmatterNotCorrupted` (confirmed to fail
-  against the pre-fix placement logic).
-
-### Tests
-
-- **`installSkill`'s restamp-in-place branch — the one that refreshes a
-  stale or missing provenance marker while still reporting a skill
-  `unchanged` — now has direct coverage.** It was previously reached only
-  indirectly, and no existing test forced execution down that path:
-  `TestInstallSkillsFor_EveryCapableClientGetsEverySkill`'s idempotence
-  check hits the earlier "content and marker both already current" case,
-  and the doctor/status tests only exercise the read/classify path, not
-  `installSkill` itself. `TestInstallSkill_RestampsStaleMarkerInPlace`
-  writes a skill to disk behind a stale or missing marker, calls
-  `installSkill`, and asserts the action is `unchanged`, the on-disk marker
-  now names the running version, and the content either side of the marker
-  is byte-identical to the embedded source — a regression that wrote
-  `content` instead of the restamped `stamped` there would fail it.
-
-### Docs
-
-- **Corrected `versionOlder`'s doc comment on pre-release handling.** It
-  said pre-release/build suffixes are "ignored"; in fact they are stripped
-  before comparison, so a pre-release compares EQUAL to its release
-  (`0.16.3-rc.1` never reads as older than `0.16.3`) rather than being
-  ordered against it. Comment-only — the comparison itself is unchanged,
-  and is dormant today since the project reserves rc tags for v1.x.
-
 ### Added
 
 - **The git tool now surfaces peer `share_intent` claims that cover the
@@ -149,7 +108,64 @@
   `TestSkillStateAt_Provenance` (the wording matrix), and
   `TestSkillFreshnessResult` (doctor's detail).
 
+- **Deterministic, API-key-free real-client conformance now gates releases and
+  runs nightly.** The new `clients_conformance` tier drives pinned Codex and
+  OpenCode binaries against loopback scripted Responses and Chat Completions
+  providers. Both clients must discover and invoke Plumb, complete a successful
+  path-bearing read, observe a strict unread-edit refusal, follow the advertised
+  read remediation and edit successfully, then survive an isolated daemon
+  restart and edit again from replayed read state. Separate assertions cover
+  discovery, invocation, recovery, reconnect, client exit/timeout, final
+  session identity, and stats evidence. HOME, XDG roots, client configuration,
+  daemon/session/stat storage, and `GOCACHE` are isolated; provider credentials
+  are removed from the client process, and preserved failure evidence excludes
+  credentials and client configs. The release and nightly workflow pins exact
+  clients, covers Linux and macOS, and repeats each matrix three times. Passing
+  this full-profile scenario deliberately does not change
+  `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a real
+  client can invoke a tool Plumb itself omitted from a lean `tools/list`.
+
+### Changed
+
+- **Client conformance now runs on relevant pull requests too, not only on
+  release/nightly.** `client-conformance.yml` gained a `pull_request` trigger
+  scoped to `cmd/clientsmoke/**`, the workflow file itself, and `Makefile`, so
+  a mistake in the workflow or a harness change that breaks the tier is caught
+  at review time instead of at release or overnight. PR runs use a single OS
+  (`ubuntu-latest`) rather than the full 2-OS matrix: cross-OS client
+  behaviour is exactly what the nightly run and release gate exist to prove,
+  and a broken harness or workflow edit is overwhelmingly OS-independent, so
+  doubling the PR cost buys little extra signal. The three-times-per-OS
+  determinism repeat is unchanged on every trigger — it is the point of the
+  tier, not matrix breadth. `workflow_call` behaviour (as used by
+  `release.yml`) is untouched; only `pull_request`-triggered runs see the
+  reduced matrix.
+
+- **The `deterministic` client conformance job now has an explicit
+  `timeout-minutes: 45`, replacing GitHub's 6-hour default.** The job runs
+  `make clients-test-conformance` three times per OS, each bounded by an
+  internal `-timeout=10m`, so 30 minutes is the worst case for the test loop
+  alone; 45 minutes leaves comfortable headroom for `npm install`ing the two
+  pinned client CLIs and the Go build/module warm-up on a cold runner, without
+  coming anywhere near the 6-hour ceiling. A hung client now fails the job in
+  under an hour instead of silently holding a release (or a PR check) for
+  hours.
+
 ### Fixed
+
+- **`plumb skills sync` no longer corrupts a CRLF-encoded skill's
+  frontmatter.** `stampSkillContent` only recognised a bare `\n`-delimited
+  YAML frontmatter block; a CRLF skill file (e.g. hand-edited in a CRLF
+  editor) failed the `---\n` prefix check, fell into the no-frontmatter
+  branch, and got its provenance marker PREPENDED before the `---` line —
+  corrupting the very block claude-code, codex, and kimi-code parse for
+  `name`/`description`, so the skill would silently vanish from that
+  client's catalogue on the next sync. `stampSkillContent` and
+  `parseSkillMarker` now detect and preserve the file's own line-ending
+  style, never rewriting LF to CRLF or vice versa. Guarded by
+  `TestStampSkillContent`'s CRLF case and
+  `TestStampSkillContent_CRLFFrontmatterNotCorrupted` (confirmed to fail
+  against the pre-fix placement logic).
 
 - **The repo-intent peer warning now honours `[collab] hint_budget_bytes`
   instead of its own hardcoded caps.** `conn_register.go` wired
@@ -263,51 +279,30 @@
   `TestCheckDaemon_ReportsVersionMismatch` (doctor keeps failing the version
   check on a stale daemon).
 
+### Tests
 
-### Added
+- **`installSkill`'s restamp-in-place branch — the one that refreshes a
+  stale or missing provenance marker while still reporting a skill
+  `unchanged` — now has direct coverage.** It was previously reached only
+  indirectly, and no existing test forced execution down that path:
+  `TestInstallSkillsFor_EveryCapableClientGetsEverySkill`'s idempotence
+  check hits the earlier "content and marker both already current" case,
+  and the doctor/status tests only exercise the read/classify path, not
+  `installSkill` itself. `TestInstallSkill_RestampsStaleMarkerInPlace`
+  writes a skill to disk behind a stale or missing marker, calls
+  `installSkill`, and asserts the action is `unchanged`, the on-disk marker
+  now names the running version, and the content either side of the marker
+  is byte-identical to the embedded source — a regression that wrote
+  `content` instead of the restamped `stamped` there would fail it.
 
-- **Deterministic, API-key-free real-client conformance now gates releases and
-  runs nightly.** The new `clients_conformance` tier drives pinned Codex and
-  OpenCode binaries against loopback scripted Responses and Chat Completions
-  providers. Both clients must discover and invoke Plumb, complete a successful
-  path-bearing read, observe a strict unread-edit refusal, follow the advertised
-  read remediation and edit successfully, then survive an isolated daemon
-  restart and edit again from replayed read state. Separate assertions cover
-  discovery, invocation, recovery, reconnect, client exit/timeout, final
-  session identity, and stats evidence. HOME, XDG roots, client configuration,
-  daemon/session/stat storage, and `GOCACHE` are isolated; provider credentials
-  are removed from the client process, and preserved failure evidence excludes
-  credentials and client configs. The release and nightly workflow pins exact
-  clients, covers Linux and macOS, and repeats each matrix three times. Passing
-  this full-profile scenario deliberately does not change
-  `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a real
-  client can invoke a tool Plumb itself omitted from a lean `tools/list`.
+### Docs
 
-### Changed
-
-- **Client conformance now runs on relevant pull requests too, not only on
-  release/nightly.** `client-conformance.yml` gained a `pull_request` trigger
-  scoped to `cmd/clientsmoke/**`, the workflow file itself, and `Makefile`, so
-  a mistake in the workflow or a harness change that breaks the tier is caught
-  at review time instead of at release or overnight. PR runs use a single OS
-  (`ubuntu-latest`) rather than the full 2-OS matrix: cross-OS client
-  behaviour is exactly what the nightly run and release gate exist to prove,
-  and a broken harness or workflow edit is overwhelmingly OS-independent, so
-  doubling the PR cost buys little extra signal. The three-times-per-OS
-  determinism repeat is unchanged on every trigger — it is the point of the
-  tier, not matrix breadth. `workflow_call` behaviour (as used by
-  `release.yml`) is untouched; only `pull_request`-triggered runs see the
-  reduced matrix.
-
-- **The `deterministic` client conformance job now has an explicit
-  `timeout-minutes: 45`, replacing GitHub's 6-hour default.** The job runs
-  `make clients-test-conformance` three times per OS, each bounded by an
-  internal `-timeout=10m`, so 30 minutes is the worst case for the test loop
-  alone; 45 minutes leaves comfortable headroom for `npm install`ing the two
-  pinned client CLIs and the Go build/module warm-up on a cold runner, without
-  coming anywhere near the 6-hour ceiling. A hung client now fails the job in
-  under an hour instead of silently holding a release (or a PR check) for
-  hours.
+- **Corrected `versionOlder`'s doc comment on pre-release handling.** It
+  said pre-release/build suffixes are "ignored"; in fact they are stripped
+  before comparison, so a pre-release compares EQUAL to its release
+  (`0.16.3-rc.1` never reads as older than `0.16.3`) rather than being
+  ordered against it. Comment-only — the comparison itself is unchanged,
+  and is dormant today since the project reserves rc tags for v1.x.
 
 ## 0.16.2 (2026-08-06)
 
