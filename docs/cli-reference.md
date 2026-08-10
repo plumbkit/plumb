@@ -526,12 +526,15 @@ They are resolved in a fixed order: the ldflags stamps first, then Go's own
 embedded `vcs.revision` / `vcs.modified` build settings, then unknown. Dirtiness
 is always read from the same source as the revision — never mixed.
 
-A revision stamp that is not a plausible commit SHA (seven or more hex digits
-and nothing else) is treated as no stamp at all and falls through to the next
-source. GoReleaser renders `{{ .FullCommit }}` as the literal string `none` when
-it cannot resolve git information, and reporting `revision: "none"` with
-`revision_known: true` would be exactly the unknown-presented-as-known this
-mechanism exists to prevent.
+The **presence** of a revision stamp — not its plausibility — decides which
+source answers. A stamp that is present but is not a plausible commit SHA (seven
+or more hex digits and nothing else) yields *unknown*; it does **not** fall
+through to the embedded VCS settings. GoReleaser renders `{{ .FullCommit }}` as
+the literal string `none` when it cannot resolve git information, and the only
+situations that produce such a stamp are also situations where the embedded
+settings describe the *outer* module — so deferring to them would report
+plumb-ops' HEAD as this repository's, confidently and wrongly. A wrong commit is
+strictly worse than an honest "unknown".
 
 Both stampers **measure** dirtiness rather than asserting it, and emit nothing
 when they cannot — which lands as `dirty_known: false`. The Makefile treats a
