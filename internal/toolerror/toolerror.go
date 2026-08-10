@@ -35,7 +35,7 @@
 // ACTING ON THE REMEDIATION ITSELF, WITH NO OUT-OF-BAND HUMAN ACTION.
 //
 // It is DERIVED, never set per call site: RemediationClass.Retryable is the one
-// table, and Error.Retryable merely reports it. So re_read, retry_after_wait,
+// table, and Error.Retryable reads straight through to it. So re_read, retry_after_wait,
 // pass_dirty_ok, pass_confirm, pass_force, fix_arguments, repin_workspace and
 // retry_when_ready are all retryable — each names something the agent can do
 // and then re-issue. enable_policy is not: a human must edit configuration
@@ -192,7 +192,7 @@ var defaultReasons = map[RemediationClass]string{ //nolint:gosec // G101: the Cl
 	ClassNone:           "This operation is refused by design; no argument or setting will permit it.",
 }
 
-// retryableByClass is the single source of truth for Error.Retryable. The
+// retryableByClass is the single source of truth for retryability. The
 // split is "can the calling agent alone act on this remedy and re-issue?":
 // enable_policy needs a human to edit configuration, and inspect_output/none
 // have no plumb-side remedy at all, so those three are the only false entries.
@@ -276,15 +276,24 @@ func (r Remediation) WithDefaults() Remediation {
 // subcommand) — never raw output, and never anything unbounded. It is optional
 // and usually nil.
 type Error struct {
-	Kind Kind
-	Op   string
-	// Retryable is derived from Remediation.Class at construction and is not
-	// independently settable. See the package doc's Retryable section.
-	Retryable   bool
+	Kind        Kind
+	Op          string
 	Remediation Remediation
 	Details     map[string]string
 
 	cause error
+}
+
+// Retryable reports whether acting on this error's remediation lets the calling
+// agent make the same operation succeed. It is a METHOD rather than a field so
+// there is exactly one representation of the fact: retryableByClass. A stored
+// copy would be a second one, free to drift from the table it was derived from.
+// A nil *Error is not retryable.
+func (e *Error) Retryable() bool {
+	if e == nil {
+		return false
+	}
+	return e.Remediation.Class.Retryable()
 }
 
 // Error returns EXACTLY the wrapped cause's text — no prefix, no suffix, no
@@ -318,7 +327,7 @@ func (e *Error) WithOp(op string) *Error {
 	return &clone
 }
 
-// Option adjusts an Error at construction. Options never touch Retryable —
+// Option adjusts an Error at construction. Options never affect retryability —
 // that is derived from the remediation class.
 type Option func(*Error)
 
@@ -355,7 +364,6 @@ func New(kind Kind, cause error, r Remediation, opts ...Option) *Error {
 		opt(e)
 	}
 	e.Remediation = e.Remediation.WithDefaults()
-	e.Retryable = e.Remediation.Class.Retryable()
 	return e
 }
 

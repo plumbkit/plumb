@@ -25,8 +25,8 @@ func assertClassified(t *testing.T, err error, wantKind toolerror.Kind, wantClas
 	if te.Remediation.Class != wantClass {
 		t.Errorf("Remediation.Class = %q, want %q", te.Remediation.Class, wantClass)
 	}
-	if te.Retryable != wantRetry {
-		t.Errorf("Retryable = %v, want %v", te.Retryable, wantRetry)
+	if te.Retryable() != wantRetry {
+		t.Errorf("Retryable = %v, want %v", te.Retryable(), wantRetry)
 	}
 	if te.Remediation.Reason == "" {
 		t.Error("Remediation.Reason is empty; every class must carry a sentence")
