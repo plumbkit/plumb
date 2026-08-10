@@ -88,6 +88,23 @@
 
 ### Fixed
 
+- **The repo-intent peer warning now honours `[collab] hint_budget_bytes`
+  instead of its own hardcoded caps.** `conn_register.go` wired
+  `WithPeerIntents` without the connection's resolved hint budget, unlike
+  every sibling peer-signal block (`peerHint`, `intentHint`, the
+  `session_start` digest), so `formatRepoIntentWarning` fell back to fixed
+  caps (3 quoted claims, 160 runes each) that can add up to roughly
+  700–900 bytes against the `hint_budget_bytes` default of 512 — and the
+  AGENTS.md/docs/configuration.md paragraph claiming "all injected blocks
+  share `hint_budget_bytes`" was, for this block, false. `WithPeerIntents`
+  now threads a `hintBudgetBytes func() int` alongside the existing two
+  arguments, and `formatRepoIntentWarning` clamps its rendered block to it on
+  a UTF-8 boundary via `textfmt.ClampBytes` — the same helper and convention
+  the sibling blocks use — after applying its existing per-entry caps.
+  `docs/configuration.md`'s `hint_budget_bytes` row now names the git warning
+  among the blocks it bounds. Guarded by
+  `TestFormatRepoIntentWarning_HonoursHintBudget`.
+
 - **The repo-intent peer warning's coverage check is now tier-aware, instead
   of treating a repository == workspace as an unconditional match.** In the
   common single-repo layout, `intentCoversRepo` returned `true` at

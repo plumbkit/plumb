@@ -325,7 +325,7 @@ When `peer_awareness` is on it adds three signals:
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `peer_awareness` | bool | `true` | Turn the three tier-1 signals on. Set `false` (globally or per project, either direction) to fall back to bare, unannotated output. |
-| `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and a delivered note body share it. |
+| `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, the git tool's repo-intent warning, and a delivered note body share it. |
 | `intents` | bool | `false` | Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
 | `mailbox` | bool | `false` | Tier 2, opt-in: the `leave_note` tool, note delivery at `session_start`, and pending-note listing in `workspace_sessions`. |
 | `knowledge_handoff` | bool | `false` | Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |

@@ -69,10 +69,13 @@ type Git struct {
 	policy     GitPolicyFn
 	sessID     string
 	sessNameFn func() string
-	// Peer repo-intent warning wiring (git_intent_warn.go), both nil-safe and
+	// Peer repo-intent warning wiring (git_intent_warn.go), all nil-safe and
 	// consulted lazily per call: unwired means no warning is ever computed.
-	intentsOn   func() bool
-	collabStore func() *collab.Store
+	// hintBudgetBytes is the [collab] hint_budget_bytes snapshot the rendered
+	// warning is clamped to, matching every other injected peer-signal block.
+	intentsOn       func() bool
+	collabStore     func() *collab.Store
+	hintBudgetBytes func() int
 }
 
 func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
@@ -92,11 +95,15 @@ func (t *Git) WithSession(id string, name func() string) *Git {
 // (git_intent_warn.go): before a repo-state verb runs, live peer intents
 // covering the repository are surfaced in the response as an advisory warning.
 // on is the [collab] intents snapshot; store opens the workspace's collab.db
-// ONLY when it already exists (a git call never creates one). Both are
-// nil-safe: unwired means no warnings. Returns the receiver for chaining.
-func (t *Git) WithPeerIntents(on func() bool, store func() *collab.Store) *Git {
+// ONLY when it already exists (a git call never creates one); hintBudgetBytes
+// is the [collab] hint_budget_bytes snapshot the rendered warning is clamped
+// to, the same budget every other injected peer-signal block shares. All
+// three are nil-safe: unwired means no warnings. Returns the receiver for
+// chaining.
+func (t *Git) WithPeerIntents(on func() bool, store func() *collab.Store, hintBudgetBytes func() int) *Git {
 	t.intentsOn = on
 	t.collabStore = store
+	t.hintBudgetBytes = hintBudgetBytes
 	return t
 }
 
