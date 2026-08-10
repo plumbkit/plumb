@@ -720,12 +720,17 @@ feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gati
 
 With `[collab] intents = true`, a **repo-state op** — every destructive-tier op,
 plus the write-tier HEAD movers `commit`/`switch`/`checkout` — also surfaces any
-live peer `share_intent` claims covering the repository (an unscoped broadcast
-always covers it; a scoped intent covers it when its globs match the repo root,
-or when the repo is the workspace root) as an advisory `# plumb-warning:` block
-naming the peer and the claim. Informational only: it never blocks the op, never
-requires `confirm`, and index-only writes (`add`, `restore --staged`) stay
-silent.
+live peer `share_intent` claims covering the repository as an advisory
+`# plumb-warning:` block naming the peer and the claim.
+
+Coverage is **tier-aware**. A destructive op can clobber anything in the
+repository, so any live claim whose paths lie inside it counts. A write-tier op
+(`commit`/`switch`) warns only for a claim that is genuinely repo-wide — an
+unscoped broadcast, or globs such as `**` that cover the repository root — so a
+narrowly scoped claim like `site/**` no longer fires on every commit.
+
+Informational only: it never blocks the op, never requires `confirm`, and
+index-only writes (`add`, `restore --staged`) stay silent.
 
 **Inputs:** `subcommand` (required), `args` (array), `files` (array, for `add`),
 `message` (string, for `commit`), `confirm` (bool).
