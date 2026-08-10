@@ -12,10 +12,12 @@
   op — every destructive-tier op, plus the write-tier HEAD movers
   `commit`/`switch`/`checkout` — now leads its response with an advisory
   `# plumb-warning:` block naming the peer session and its claim (and when it
-  expires) whenever a live peer intent covers the repository: an unscoped
-  broadcast always covers it; a scoped intent covers it when its globs match
-  the repo root's workspace-relative path, or when the repo is the workspace
-  root. Index-only writes (`add`, `restore --staged`, `stash push`) and purely
+  expires) whenever a live peer intent covers the repository, TIER-AWARE: an
+  unscoped broadcast always covers it; for a scoped intent, a destructive-tier
+  op (which can touch any path in the repository) is covered by any intent
+  reaching into it, while a write-tier repo-state op only warns for a
+  genuinely repo-wide claim (see the Fixed entry below for the full
+  breakdown). Index-only writes (`add`, `restore --staged`, `stash push`) and purely
   additive ones (branch/tag create) stay silent, as do all read and network
   ops. It reuses the collab intent store and glob matcher (no new storage),
   reads only an already-existing `collab.db` under a bounded timeout, and is
@@ -85,6 +87,27 @@
   detection) plus pure-ledger attribution and sweep unit tests.
 
 ### Fixed
+
+- **The repo-intent peer warning's coverage check is now tier-aware, instead
+  of treating a repository == workspace as an unconditional match.** In the
+  common single-repo layout, `intentCoversRepo` returned `true` at
+  `rel == "."` no matter how narrowly a peer's `share_intent` was scoped, so a
+  claim like `path_globs: ["site/**"]` warned on every ordinary `commit` or
+  `switch` — alarm fatigue defeating the feature's purpose of surfacing
+  repo-WIDE claims. The check is now tier-aware: a destructive-tier op
+  (`reset`, `clean`, `rebase`, `checkout`, branch/tag delete, `stash drop`, …)
+  keeps the broad match, since it can touch any path in the repository; a
+  write-tier repo-state op (`commit`, `switch`, `checkout -b`) now warns only
+  for a genuinely repo-wide claim — unscoped, or a glob spanning the whole
+  workspace (`**`/`*`/`.`) — never a narrow subtree. The same reasoning now
+  also reaches a workspace pinned to a SUBDIRECTORY of the git top-level
+  (previously any scoped intent there was invisible, since `filepath.Rel`
+  returns a `..`-prefixed path the old check rejected outright regardless of
+  whether the repo was truly unrelated or simply an ancestor of the
+  workspace). Guarded by `TestGitPeerIntentWarning_TierAwareCoverage` and
+  `TestGitPeerIntentWarning_AncestorRepoLayout` (real temp repos) plus the
+  updated `TestIntentCoversRepo` table and
+  `TestIntentCoversRepo_NarrowVsDestructive_FailsPreFix`.
 
 - **The repo-intent peer warning no longer disappears exactly when it is most
   useful: on a failing git command.** The advisory `# plumb-warning:` block
