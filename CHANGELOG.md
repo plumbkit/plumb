@@ -86,6 +86,20 @@
 
 ### Fixed
 
+- **The repo-intent peer warning no longer disappears exactly when it is most
+  useful: on a failing git command.** The advisory `# plumb-warning:` block
+  (added above) was computed before the git child ran, but the failure path
+  discarded it — only a successful call returned it — so a `commit`/`switch`/
+  `rebase` that failed BECAUSE a peer was mid-rebase never surfaced the claim
+  explaining why, after the query cost had already been paid. The warning now
+  leads the failure message too, ahead of the exit code line, using the same
+  bounded rendering as the success path. Refusals that happen before the
+  warning is computed — a policy gate or the cross-session ref-movement guard
+  — are unaffected: they still produce no warning, since nothing was ever
+  queried. Guarded by `TestGitPeerIntentWarning_SurfacesOnFailure` (a real
+  temp repo: a `commit` with nothing staged fails, and the peer's claim still
+  appears in the error) plus `TestGitCommandError_WarningLeadsMessage`.
+
 - **A failed git command no longer presents hook stdout as the error.** A
   commit blocked by a pre-commit hook that wrote only to stdout surfaced as
   `git commit: 0 issues. file-size: OK` — the hook's chatter standing in for
