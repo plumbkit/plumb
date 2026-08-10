@@ -221,10 +221,10 @@ func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, ds
 	}
 	if deps != nil && !dirtyOK {
 		if dirtyBlocksWrite(ctx, *deps, srcPath) {
-			return fmt.Errorf("move_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", srcPath)
+			return dirtyWrite(fmt.Errorf("move_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", srcPath))
 		}
 		if fileExists(dstPath) && dirtyBlocksWrite(ctx, *deps, dstPath) {
-			return fmt.Errorf("move_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", dstPath)
+			return dirtyWrite(fmt.Errorf("move_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", dstPath))
 		}
 	}
 	return nil

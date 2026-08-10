@@ -110,7 +110,7 @@ func cleanToolPath(path string) string {
 }
 
 func NewWorkspaceBoundaryError(workspace, path string) error {
-	return WorkspaceBoundaryError{Workspace: workspace, Path: path}
+	return ClassifyPathRefusal(WorkspaceBoundaryError{Workspace: workspace, Path: path})
 }
 
 // IsWorkspaceBoundaryError reports whether err (or anything wrapped in it via

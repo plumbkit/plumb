@@ -96,8 +96,8 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
-		return "", fmt.Errorf("delete_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to proceed", path)
+		return "", dirtyWrite(fmt.Errorf("delete_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", path))
 	}
 
 	// Summarise what is about to be removed (line + byte count) before deleting,

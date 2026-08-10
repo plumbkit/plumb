@@ -340,8 +340,8 @@ func recoverStringEncodedEdits(raw json.RawMessage) (editFileArgs, bool) {
 // strict-mode gates before any read or write.
 func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a editFileArgs) error {
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
-		return &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to proceed", path)}
+		return dirtyWrite(&editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", path)})
 	}
 	if err := checkExpectedVersion(path, a, t.isStrict()); err != nil {
 		return err

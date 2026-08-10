@@ -28,8 +28,8 @@ func withLSPDeadline(ctx context.Context, timeout time.Duration) (context.Contex
 // through wrapped unchanged.
 func lspTimeoutErr(tool string, timeout time.Duration, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%s: language server did not respond within %s "+
-			"(it may still be indexing the workspace — retry shortly; %s)", tool, timeout, ColdLSPToolsHint)
+		return lspTimedOut(fmt.Errorf("%s: language server did not respond within %s "+
+			"(it may still be indexing the workspace — retry shortly; %s)", tool, timeout, ColdLSPToolsHint))
 	}
 	return fmt.Errorf("%s: %w", tool, err)
 }

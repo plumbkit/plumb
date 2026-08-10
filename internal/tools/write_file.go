@@ -158,8 +158,8 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 		return fmt.Errorf("write_file: %q is a directory — pass a file path, not a directory", path)
 	}
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
-		return fmt.Errorf("write_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to overwrite", path)
+		return dirtyWrite(fmt.Errorf("write_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to overwrite", path))
 	}
 	if err := verifyExpectedVersion("write_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
 		return err

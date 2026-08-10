@@ -24,6 +24,26 @@
   message or error check changes. Registered as a Foundation package in
   `internal/arch`.
 
+- **plumb's write, boundary, rate-limit and language-server refusals are now
+  classified.** The strict-mode read-before-write guard and the
+  `expected_mtime`/`expected_sha` optimistic-concurrency guards (including
+  `transaction_apply`'s) report `unread_or_stale` + `re_read`; the
+  uncommitted-changes guard on `write_file`, `edit_file`, `transaction_apply`,
+  `delete_file`, `rename_file`, `copy_file` and `move_symbol` reports
+  `dirty_file` + `pass_dirty_ok`; a path outside the connection's roots, or a
+  path-bearing call on an unpinned connection, reports `workspace_boundary` +
+  `repin_workspace` (naming `session_start`); the write-rate budget reports
+  `rate_limited` + `retry_after_wait`; a language-server deadline reports
+  `lsp_timeout` and a still-warming hard failure `lsp_unavailable`, both with
+  `retry_when_ready`. **No message text changed** — the classification rides
+  alongside — and the existing markers still resolve exactly as before:
+  `isEditLogicError` and `IsWorkspaceBoundaryError` remain `errors.As`-based and
+  fire through the new wrapper. A malformed `expected_mtime` is deliberately
+  NOT classified as a staleness refusal: it is the caller's argument, not a
+  concurrent change. Guarded by `internal/tools/error_class_test.go`, which
+  pins each seam's kind, remediation and retry verdict together with the
+  byte-identical text.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

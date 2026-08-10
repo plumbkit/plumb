@@ -43,7 +43,7 @@ func (s *connSession) checkBoundary(path string, want tools.Access) error {
 	}
 	pol := s.boundaryPolicy()
 	if pol == nil {
-		return tools.UnattachedWorkspaceError{Path: path}
+		return tools.ClassifyPathRefusal(tools.UnattachedWorkspaceError{Path: path})
 	}
 	if _, err := pol.Check(path, want); err != nil {
 		s.markBoundaryViolation(err.Error())

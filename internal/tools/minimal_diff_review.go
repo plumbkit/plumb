@@ -111,7 +111,7 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 		ws = t.ws()
 	}
 	if ws == "" {
-		return "", UnattachedWorkspaceError{Path: "minimal_diff_review"}
+		return "", ClassifyPathRefusal(UnattachedWorkspaceError{Path: "minimal_diff_review"})
 	}
 	// Resolve each files entry once here — gitDiff and untrackedDiffs both need
 	// it as a git pathspec, and re-resolving per call site risked drifting out

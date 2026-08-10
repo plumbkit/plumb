@@ -33,23 +33,23 @@ func strictEnabled(fn StrictModeFn) bool {
 func requireStrictRead(reads *ReadTracker, tool, path string) error {
 	recorded := reads.Mtime(path)
 	if recorded.IsZero() {
-		return fmt.Errorf(
+		return staleRead(fmt.Errorf(
 			"%s: strict mode: %q has not been read in this daemon session — call read_file first",
 			tool, path,
-		)
+		))
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("%s: stat %q: %w", tool, path, err)
 	}
 	if !info.ModTime().Equal(recorded) {
-		return fmt.Errorf(
+		return staleRead(fmt.Errorf(
 			"%s: strict mode: %q has changed since you read it\n"+
 				"  recorded mtime: %s\n"+
 				"  current mtime:  %s\n"+
 				"  Re-read the file and try again",
 			tool, path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-		)
+		))
 	}
 	return nil
 }
