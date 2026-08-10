@@ -41,7 +41,7 @@ type symbolEditArgs struct {
 // docCommentSchemaFragment is the JSON schema snippet for the include_doc_comment
 // flag, shared by the three tools that respect it. Always prefixed with a comma
 // — call sites already terminate the previous property without a trailing comma.
-const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol."}`
+const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol. Note that where a declaration is WRAPPED — an exported ES declaration under its export statement, a decorated Python def under its @decorator — the doc comment sits above the wrapper, so the extended range covers the wrapper too: replacement content must reproduce the export keyword or the decorator, or it is dropped."}`
 
 // docCommentStart walks upward from symStart to find the first line of any
 // contiguous comment block flush against the symbol. Returns symStart if no
