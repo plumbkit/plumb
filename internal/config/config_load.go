@@ -2,10 +2,8 @@ package config
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"time"
 
@@ -269,22 +267,38 @@ func ProjectConfigPath(workspace string) string {
 // Call this once per connection, after the workspace has been resolved.
 // The result is what tools should consult for per-project settings (strict
 // mode, rate limit).
+//
+// This is also the ONE place the project-config trust boundary is decided. The
+// sections that grant capability — [git] and the exec-deciding [lsp.<lang>]
+// fields — are honoured only when the user has run `plumb trust` over this
+// project's exact request, and forced back to base otherwise. Deciding it here
+// rather than at each consumer is what makes the pool that spawns the language
+// server, `plumb config show`, the TUI, the web settings API and doctor all
+// correct without any of them knowing about trust.
 func LoadProject(base Config, workspace string) (Config, error) {
 	merged := cloneConfig(base)
 	path := ProjectConfigPath(workspace)
-	if path != "" {
-		data, err := os.ReadFile(path)
-		switch {
-		case err == nil:
-			if err := toml.Unmarshal(data, &merged); err != nil {
-				return base, fmt.Errorf("parsing project config %s: %w", path, err)
-			}
-		case os.IsNotExist(err):
-			// no project config — fall through, env still applied
-		default:
-			return base, fmt.Errorf("reading project config %s: %w", path, err)
+	data, present, err := readProjectConfigFile(path)
+	if err != nil {
+		return base, err
+	}
+	raw := map[string]any{}
+	if present {
+		if err := toml.Unmarshal(data, &merged); err != nil {
+			return base, fmt.Errorf("parsing project config %s: %w", path, err)
+		}
+		if err := toml.Unmarshal(data, &raw); err != nil {
+			return base, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
 	}
+	// The spec is computed from the same bytes that were just merged, so the
+	// content trust is checked against is exactly the content in play — a second
+	// read of the file could see a different version.
+	if spec := projectPolicySpecFrom(raw); spec.IsEmpty() ||
+		!projectPolicyTrust().IsTrustedForPolicy(workspace, spec) {
+		forceCapabilityFieldsToBase(base, &merged)
+	}
+	merged.LSP = dropUnknownLSPLanguages(base.LSP, merged.LSP)
 	forceGlobalOnlyToBase(base, &merged)
 	// Env is the highest-priority layer, so it is applied AFTER the untrusted
 	// project fields are forced back — otherwise forcing [git] to base would
@@ -297,13 +311,33 @@ func LoadProject(base Config, workspace string) (Config, error) {
 	return merged, nil
 }
 
+// readProjectConfigFile reads a project config, reporting an absent file as
+// present=false rather than an error. Returning the bytes lets LoadProject decode
+// them twice — once into the Config struct, once into the raw map the trust spec
+// is derived from — without reading the file twice.
+func readProjectConfigFile(path string) (data []byte, present bool, err error) {
+	if path == "" {
+		return nil, false, nil
+	}
+	data, err = os.ReadFile(path)
+	switch {
+	case err == nil:
+		return data, true, nil
+	case os.IsNotExist(err):
+		return nil, false, nil
+	default:
+		return nil, false, fmt.Errorf("reading project config %s: %w", path, err)
+	}
+}
+
 // forceGlobalOnlyToBase overwrites, in merged, every config section a project's
-// .plumb/config.toml must not be able to set. A project config is an UNTRUSTED
-// surface — cloning a repository ships it, and it takes effect on attach with no
-// prompt — so any setting that grants a capability rather than expressing a
-// preference is global-only, and the trusted global value is forced back here.
-// One chokepoint keeps the guarantee true for every consumer (the daemon gates,
-// `config show`, the TUI display, the web settings API).
+// .plumb/config.toml must not be able to set AT ALL — not even with the user's
+// approval. These are daemon-global concerns (one listener, one theme) or
+// user-only safety knobs whose whole purpose is that the thing they govern cannot
+// widen its own permission; a per-project grant would be meaningless for the
+// first group and self-defeating for the second. The sections a project MAY set
+// once trusted ([git], the exec-deciding [lsp.<lang>] fields) are handled by
+// forceCapabilityFieldsToBase instead.
 func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// agent_config_writes is a user-only, global-scope safety knob. A project's
 	// .plumb/config.toml is an untrusted surface (a cloned repo ships it), so it
@@ -336,73 +370,4 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// (the agent_config tool already treats them as un-writable); force them to base.
 	merged.Workspace.ExtraRoots = base.Workspace.ExtraRoots
 	merged.Workspace.ReadRoots = base.Workspace.ReadRoots
-	// [git] is the git tool's tiered safety policy in its entirety — the gate that
-	// decides whether the destructive tier (reset, clean, checkout, rebase) and the
-	// network tier (push, fetch, pull) may run at all, and which branches can never
-	// be force-pushed. The connection builds its live tools.GitPolicy straight from
-	// this block, with no per-call trust check anywhere behind it. A cloned hostile
-	// repo shipping allow_destructive = true, allow_push = true and an empty
-	// protected_branches would therefore grant itself history destruction and
-	// arbitrary pushes to the user's remotes, using the user's credentials, the
-	// moment a session attaches. Every field here is a safety decision the user
-	// makes about a project, never one the project makes about itself; force the
-	// whole block to base.
-	merged.Git = base.Git
-	// [lsp.<lang>] command/args/env are the argv and environment of a process the
-	// daemon spawns (pool → lsp.NewSupervisor → exec.CommandContext), so a project
-	// config that could set them is arbitrary code execution: cloning a repo whose
-	// .plumb/config.toml says `command = "/bin/sh"` would run the attacker's
-	// command as the user, unsandboxed, on attach, with no `plumb trust` and no
-	// agent involved. Force those — and the two fields one hop behind them — back
-	// to the trusted global config; see forceLSPExecToBase for the field-by-field
-	// reasoning and for what a project may still override.
-	merged.LSP = forceLSPExecToBase(base.LSP, merged.LSP)
-}
-
-// forceLSPExecToBase returns merged's per-language [lsp.<lang>] tables with every
-// field that decides WHICH process runs, or WITH WHAT, taken from base (the
-// trusted global config) rather than from the project's untrusted file:
-//
-//   - command, args, env — the literal argv and environment of the spawned
-//     language server (exec.CommandContext in lsp.Supervisor.spawn). Setting env
-//     is execution too, not merely configuration: PATH re-points which binary a
-//     server invokes, and DYLD_INSERT_LIBRARIES / LD_PRELOAD inject code into it.
-//   - initialization_options — passed verbatim to the server as LSP
-//     initializationOptions, which for real servers is a command channel:
-//     rust-analyzer's check.overrideCommand runs an arbitrary argv, and zls's
-//     enable_build_on_save runs the project's own build.zig on every save.
-//   - root_markers, weak_root_markers — workspace detection, i.e. which language
-//     server is elected for a directory. Rebinding them cannot invent a binary,
-//     but it does choose one from the installed set (electing java to get jdtls
-//     onto a repo's build.gradle, say), so it belongs with the rest.
-//
-// Everything else in the table stays project-overridable, because none of it can
-// change the process or its inputs: diagnostics (push/pull protocol negotiation),
-// enabled (a project switching a language off, or on against the user's own
-// trusted command), and idle_timeout / max_workspaces (hibernation and eviction
-// budgets). A language present in the project file but absent from base is
-// dropped entirely — there is no trusted command to fall back to, and plumb has
-// no adapter for a language its global config does not define.
-//
-// Values are cloned so the returned config never shares backing storage with
-// base (LoadProject's caller usually holds base in a live config store).
-func forceLSPExecToBase(base, merged map[string]LSPConfig) map[string]LSPConfig {
-	if merged == nil {
-		return nil
-	}
-	out := make(map[string]LSPConfig, len(merged))
-	for name, lspCfg := range merged {
-		trusted, ok := base[name]
-		if !ok {
-			continue
-		}
-		lspCfg.Command = trusted.Command
-		lspCfg.Args = slices.Clone(trusted.Args)
-		lspCfg.Env = maps.Clone(trusted.Env)
-		lspCfg.InitializationOptions = maps.Clone(trusted.InitializationOptions)
-		lspCfg.RootMarkers = slices.Clone(trusted.RootMarkers)
-		lspCfg.WeakRootMarkers = slices.Clone(trusted.WeakRootMarkers)
-		out[name] = lspCfg
-	}
-	return out
 }

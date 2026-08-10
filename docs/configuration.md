@@ -230,6 +230,14 @@ the workspace is refused by construction.
 The `git` tool's read tier always runs. Higher tiers are gated here; destructive
 and network calls additionally require `confirm: true` per call.
 
+> **Per-workspace trust required.** `[git]` is a safety policy, so a project's
+> `.plumb/config.toml` may set it only for a workspace you have approved with
+> `plumb trust` — a cloned repository would otherwise grant itself history
+> destruction and pushes with your credentials the moment a session attaches.
+> Until then the whole block falls back to your global config, and `plumb doctor`
+> plus `plumb config show` report which keys are being ignored. See
+> [Project-config trust](#project-config-trust).
+
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
 | `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `branch`/`tag` create, `stash` push/pop. |
@@ -612,6 +620,42 @@ cost and its markers never enter detection.
 > prints an `active` row per language (`yes (installed)` /
 > `no (… not installed)` / `no (disabled in config)`); `plumb doctor` reports the
 > same.
+
+> **Per-workspace trust required for the exec fields.** `command`, `args`, `env`,
+> `initialization_options`, `root_markers` and `weak_root_markers` decide which
+> process plumb spawns and with what, so a project's `.plumb/config.toml` may set
+> them only for a workspace you have approved with `plumb trust`. `diagnostics`,
+> `enabled`, `idle_timeout` and `max_workspaces` cannot change the process and are
+> project-overridable with no trust. A language your global config does not define
+> is dropped from a project config either way — plumb has no adapter for it. See
+> [Project-config trust](#project-config-trust).
+
+### Project-config trust
+
+A project config is an untrusted surface: cloning a repository ships one, and it
+takes effect on attach with no prompt. Everything in it that grants a
+**capability** rather than expressing a preference therefore needs your explicit
+approval — the `[git]` tiers, and the `[lsp.<lang>]` fields above.
+
+`plumb trust` (run from the workspace, or `plumb trust <dir>`) is that approval.
+It prints every capability-granting key as `key = value` first, warning on each
+one that is execution or a tier grant, then records **one grant per workspace**
+covering the project's task commands, its `[[command]]` allow-list, its
+`[commands]` shell policy, its LSP exec config, and its git policy. The record
+lives in `DataDir/trust.json`, never in the project, so a repository cannot mark
+itself trusted.
+
+The grant is **bound to content**. Each part is hashed independently, so editing a
+task command does not disturb the LSP grant — but rewriting a trusted `command`
+does mean the new command is not honoured until you re-run `plumb trust`. An
+unreadable or corrupt trust store fails closed.
+
+Nothing about this is silent. An untrusted request is reported by `plumb doctor`
+(a warning naming the keys and the fix), by `plumb config show` (the row's
+provenance reads `global config — project asked, UNTRUSTED`, and the requested
+values are printed in full below the table), by a daemon log line at attach, and
+in the TUI settings editor by a `⁶` marker on the row — which shows the value
+actually in force, not the one in the project file.
 
 | Field | Type | Effect |
 |---|---|---|

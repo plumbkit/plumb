@@ -2,6 +2,44 @@
 
 ## 0.16.4 (unreleased)
 
+### Added
+
+- **`plumb trust` now covers a project's `[lsp.<lang>]` and `[git]` settings, so
+  per-project configuration is possible again without re-opening the hole.**
+  Forcing those sections global-only was the right default and the wrong
+  ceiling: projects genuinely differ, and a user who wants `[lsp.html]
+  root_markers = ['index.html']` for one repository should be able to have it.
+  They are now honoured for a workspace whose exact request the user has
+  approved, following the model plumb already used for project-supplied task
+  commands.
+
+  The grant stays **one per workspace**. `plumb trust` approves a project's task
+  commands, its `[[command]]` allow-list, its `[commands]` shell policy, its
+  `[lsp.<lang>]` server command/args/env/initialization_options/root markers and
+  its `[git]` tier policy together — and because one act now approves more, it
+  discloses more: every capability-granting key is printed as `key = value`
+  before the grant, with a warning on each one that is execution (`command`,
+  `args`, `env`, `initialization_options`) or a tier grant. The record lives in
+  plumb's data dir, never in the project, so a cloned repository still cannot
+  mark itself trusted.
+
+  Trust is **bound to content**, and each binding independently: the record
+  carries a canonical hash of the task command set and a separate one of the
+  capability request, so editing a task command does not invalidate the LSP
+  grant, and rewriting a trusted `command` after `plumb trust` does not get the
+  new command run — it falls back to the global config until re-approved. The
+  hash reuses the netstring encoding of the task hash, extended to the nested
+  values TOML allows (arrays, tables) with a type tag per value, so it is
+  injective and ordering-independent: any add, removal, or modification changes
+  it, and `true` cannot collide with `"true"`. A read error, an absent record,
+  or a hash mismatch all fail closed. The coarse trust flag (set by a TUI
+  Commands-tab edit) never satisfies either binding.
+
+  The gate lives in `config.LoadProject` — the one place every consumer already
+  goes through — so the workspace pool that spawns the language server, `plumb
+  config show`, the TUI, the web settings API and doctor are all correct without
+  knowing trust exists.
+
 ### Fixed
 
 - **A project's `.plumb/config.toml` could run arbitrary code, and could open

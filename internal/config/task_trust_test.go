@@ -100,8 +100,8 @@ func TestTrustStore_TasksBoundToCommandSet(t *testing.T) {
 	if s.IsTrustedForTasks(root, cmds) {
 		t.Error("a never-trusted root must be untrusted for tasks")
 	}
-	if err := s.SetTrustedForTasks(root, cmds); err != nil {
-		t.Fatalf("SetTrustedForTasks: %v", err)
+	if err := s.SetTrustedForProject(root, cmds, nil); err != nil {
+		t.Fatalf("SetTrustedForProject: %v", err)
 	}
 	// Persists across store instances and matches the same command set.
 	if !newTrustStoreAt(path).IsTrustedForTasks(root, cmds) {
@@ -112,9 +112,9 @@ func TestTrustStore_TasksBoundToCommandSet(t *testing.T) {
 	if s.IsTrustedForTasks(root, changed) {
 		t.Error("a changed command set must not be trusted (TOCTOU)")
 	}
-	// The coarse grant is also set by SetTrustedForTasks (shared non-task surfaces).
+	// The coarse grant is also set by SetTrustedForProject (shared non-task surfaces).
 	if !s.IsTrusted(root) {
-		t.Error("SetTrustedForTasks must also grant the coarse trust flag")
+		t.Error("SetTrustedForProject must also grant the coarse trust flag")
 	}
 }
 
@@ -139,7 +139,7 @@ func TestTrustStore_CoarseGrantNotTaskTrust(t *testing.T) {
 	}
 
 	// Bind the task hash, then a coarse re-grant must not clear it.
-	if err := s.SetTrustedForTasks(root, cmds); err != nil {
+	if err := s.SetTrustedForProject(root, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetTrusted(root, true); err != nil {
@@ -170,7 +170,7 @@ func TestTrustStore_LegacyBooleanUntrusted(t *testing.T) {
 	}
 	// Re-confirming records the new bound record and grants trust.
 	cmds := []TaskCommandSpec{{Lang: "go", Slot: "build", Command: "go build ./..."}}
-	if err := s.SetTrustedForTasks(root, cmds); err != nil {
+	if err := s.SetTrustedForProject(root, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !s.IsTrustedForTasks(root, cmds) {
