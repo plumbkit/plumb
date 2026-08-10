@@ -317,7 +317,14 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 
 // spawn starts the subprocess and returns a Conn wired to its stdio.
 func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, s.command, s.args...) //nolint:gosec // G204: s.command and s.args are set from adapter config (gopls/pyright binary), not from user input
+	// The previous justification here claimed s.command and s.args were "not from
+	// user input". That was false, and it was load-bearing: until
+	// config.LoadProject forced [lsp.<lang>] exec fields back to the global config,
+	// a cloned repository's .plumb/config.toml could set them, and this line ran the
+	// attacker's argv as the user on attach. The suppression is correct only because
+	// that chokepoint now guarantees command/args/env come from the TRUSTED global
+	// config; do not widen what reaches here without revisiting it.
+	cmd := exec.CommandContext(ctx, s.command, s.args...) //nolint:gosec // G204: command/args are global-config-only by construction — config.LoadProject forces the project file's [lsp.<lang>] exec fields back to base
 	if len(s.env) > 0 {
 		cmd.Env = s.env
 	}

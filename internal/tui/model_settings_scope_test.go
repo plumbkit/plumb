@@ -11,7 +11,7 @@ import (
 // TestTomlPath_ProjectVsGlobalOnly pins the single source of truth for which
 // settings are project-overridable (have a TOML path) vs global-only.
 func TestTomlPath_ProjectVsGlobalOnly(t *testing.T) {
-	for _, k := range []settingKey{skStrict, skRateLimit, skGitPush, skTopoWatch, skQualityMode, skAllowDependencyReads} {
+	for _, k := range []settingKey{skStrict, skRateLimit, skTopoWatch, skQualityMode, skAllowDependencyReads} {
 		if _, ok := tomlPath(k); !ok {
 			t.Errorf("key %v should be project-overridable", k)
 		}
@@ -21,13 +21,21 @@ func TestTomlPath_ProjectVsGlobalOnly(t *testing.T) {
 			t.Errorf("key %v should be global-only (no project path)", k)
 		}
 	}
+	// The [git] tier policy is global-only: LoadProject forces the whole block
+	// back to base, so a workspace-scope row would write TOML plumb ignores.
+	// A regression here re-offers a control that silently does nothing.
+	for _, k := range []settingKey{skGitWrites, skGitDestructive, skGitPush, skGitCommitTrailer, skProtectedBranches} {
+		if _, ok := tomlPath(k); ok {
+			t.Errorf("git key %v must be global-only — LoadProject forces [git] back to base", k)
+		}
+	}
 }
 
 // TestBuildScopeItems_WorkspaceFiltersAndAnnotates verifies a workspace scope
 // hides global-only rows and marks the keys present in the project file.
 func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 	ws := t.TempDir()
-	if err := config.SetProjectValue(ws, []string{"git", "allow_push"}, true); err != nil {
+	if err := config.SetProjectValue(ws, []string{"topology", "watch"}, false); err != nil {
 		t.Fatal(err)
 	}
 	m := &Model{
@@ -47,19 +55,21 @@ func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 	var found bool
 	for _, it := range items {
 		switch it.key {
-		case skGitPush:
+		case skTopoWatch:
 			found = true
 			if !it.overridden {
-				t.Error("git allow_push should be marked overridden")
+				t.Error("topology watch should be marked overridden")
 			}
 		case skStrict:
 			if it.overridden {
 				t.Error("strict should be inherited, not overridden")
 			}
+		case skGitWrites, skGitDestructive, skGitPush, skGitCommitTrailer, skProtectedBranches:
+			t.Errorf("git tier row %v leaked into a workspace scope — [git] is global-only", it.key)
 		}
 	}
 	if !found {
-		t.Error("git allow_push row missing from workspace scope")
+		t.Error("topology watch row missing from workspace scope")
 	}
 }
 
@@ -287,28 +297,21 @@ func TestLSPRows_WorkspaceEditsWriteNestedKeys(t *testing.T) {
 		t.Errorf("merged lsp.%s.enabled = %v, want %v", lang, merged.LSP[lang].Enabled, want)
 	}
 
-	// Edit command via the text editor → writes lsp.<lang>.command only.
+	// command / args / root_markers must NOT be offered at a workspace scope.
+	// They decide which process the daemon spawns and with what, so LoadProject
+	// forces them back to the trusted global config — a row here would write TOML
+	// plumb ignores, leaving the user believing they had configured something.
+	// This is the UI half of the project-config trust boundary; the config half is
+	// TestLoadProject_ForcesLSPExecFieldsToBase.
 	m.settingsItems = m.buildScopeItems()
-	cmdIdx := -1
-	for i, it := range m.settingsItems {
-		if it.lspLang == lang && it.key == skLSPCommand {
-			cmdIdx = i
-			break
+	for _, it := range m.settingsItems {
+		if it.lspLang == "" {
+			continue
 		}
-	}
-	if cmdIdx < 0 {
-		t.Fatalf("no command row for %s", lang)
-	}
-	m.settingsCursor = cmdIdx
-	m = m.activateSetting()
-	if m.settingsTextEditor == nil {
-		t.Fatal("activating command should open the text editor")
-	}
-	m.settingsTextEditor.input = "/custom/bin/server"
-	m = m.commitTextEditor()
-	merged, _ = config.LoadProject(config.Defaults(), ws)
-	if merged.LSP[lang].Command != "/custom/bin/server" {
-		t.Errorf("merged lsp.%s.command = %q, want /custom/bin/server", lang, merged.LSP[lang].Command)
+		switch it.key {
+		case skLSPCommand, skLSPArgs, skLSPRootMarkers:
+			t.Errorf("lsp.%s.%v leaked into a workspace scope — exec-deciding LSP fields are global-only", it.lspLang, it.key)
+		}
 	}
 }
 
