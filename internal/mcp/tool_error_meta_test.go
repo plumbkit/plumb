@@ -183,6 +183,35 @@ func TestToolsCall_ArgumentGuardFailureIsClassified(t *testing.T) {
 	}
 }
 
+// TestToolsCall_MissingRequiredParameterIsClassified is the other half of
+// validateObject. The unknown-parameter branch was classified and this one was
+// not — same function, same seam, same recovery, opposite signal.
+func TestToolsCall_MissingRequiredParameterIsClassified(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(strictTool{})
+	resps := serveOn(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rename_thing","arguments":{}}}`)
+	result := resultByID(t, resps, 1)
+
+	meta, ok := result["_meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("no _meta on a missing-required-parameter failure: %v", result)
+	}
+	env, _ := meta["dev.plumbkit/error"].(map[string]any)
+	if env["kind"] != "invalid_arguments" {
+		t.Errorf("kind = %v, want invalid_arguments", env["kind"])
+	}
+	if env["operation"] != "rename_thing" {
+		t.Errorf("operation = %v, want rename_thing", env["operation"])
+	}
+	if env["retryable"] != true {
+		t.Errorf("retryable = %v, want true", env["retryable"])
+	}
+	if msg := toolText(result); !strings.Contains(msg, `missing required parameter "name"`) {
+		t.Errorf("content text lost the guard's wording: %q", msg)
+	}
+}
+
 // jsonRPCError pulls the error object out of a raw response.
 func jsonRPCError(t *testing.T, resps []map[string]any, id float64) map[string]any {
 	t.Helper()

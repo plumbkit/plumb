@@ -291,7 +291,7 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 	if op.ExpectedMtime != "" {
 		want, perr := time.Parse(time.RFC3339Nano, op.ExpectedMtime)
 		if perr != nil {
-			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: expected_mtime not RFC3339Nano: %w", i, perr)}
+			return txPrepared{}, badArgument(&editLogicErr{fmt.Errorf("transaction_apply: op[%d]: expected_mtime not RFC3339Nano: %w", i, perr)})
 		}
 		if !info.ModTime().Equal(want) {
 			return txPrepared{}, staleRead(&editLogicErr{fmt.Errorf(

@@ -169,9 +169,9 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	// overwrite would silently discard that change. Refuse unless overridden.
 	if a.ExpectedMtime == "" && a.ExpectedSha == "" && !a.OverwriteChanged &&
 		changedSinceSessionRead(t.deps.Reads, path) {
-		return fmt.Errorf("write_file: %q changed on disk since you read it this session — "+
+		return staleOverride(fmt.Errorf("write_file: %q changed on disk since you read it this session — "+
 			"a peer agent or process edited it after your read, and a full overwrite would discard that change. "+
-			"Re-read to merge, or pass overwrite_changed: true to overwrite anyway", path)
+			"Re-read to merge, or pass overwrite_changed: true to overwrite anyway", path))
 	}
 	createDirs := a.CreateDirs == nil || *a.CreateDirs
 	if !createDirs {
