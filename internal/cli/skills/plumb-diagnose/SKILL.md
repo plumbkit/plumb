@@ -9,7 +9,7 @@ Under a lean tool profile `daemon_info`, `topology_status`, and `file_status` ar
 
 ## 1. Read the classification first, the sentence second
 
-A failed `tools/call` carries a machine-readable verdict beside the prose, in the result's `_meta` under the key `dev.plumbkit/error`. Read that before matching any English — it is plumb's own statement about the failure, and it needs no parsing:
+A failed call carries a machine-readable verdict beside the prose, under the key `dev.plumbkit/error`. Read that before matching any English — it is plumb's own statement about the failure, and it needs no parsing:
 
     "_meta": {
       "dev.plumbkit/error": {
@@ -25,7 +25,9 @@ A failed `tools/call` carries a machine-readable verdict beside the prose, in th
 
 **`retryable` means: you can make this same operation succeed by performing the remediation yourself, with no human action.** It is derived from the class, so one remedy always gives one answer. It is **never** a licence to replay the call as it stands — most retryable plumb failures guard a non-idempotent mutation, and re-issuing the identical write without first doing the remediation performs exactly the clobber the guard exists to prevent. `enable_policy` is not retryable because a human must edit configuration; `inspect_output` and `none` because nothing you pass changes the outcome.
 
-**An absent key is information, not an omission**: it means plumb has no structured claim about this failure. Only then fall back to reading the message, which still names its own fix:
+**It travels in two places, so look in both before concluding there is nothing.** A tool that ran and failed puts it in the result's `_meta`. The two rejections that happen *before* any tool runs — malformed params, and a tool name plumb does not register — have no result to carry it, so it rides the JSON-RPC `error.data` instead, with `code` and `message` unchanged. A mistyped tool name therefore has no `_meta` at all and still says `invalid_arguments` / `fix_arguments`; reading only `_meta` turns a stated answer into an apparent silence.
+
+**An absent key in both places is information, not an omission**: it means plumb has no structured claim about this failure. Only then fall back to reading the message, which still names its own fix:
 
 - **"has not been read"** — strict mode wants a `read_file` with a matching mtime before the edit, or the read happened in the *other* lane. Read with plumb, then edit with plumb.
 - **"uncommitted changes"** — the dirty-write guard: the file carried changes plumb did not make this session. Commit it, or pass `dirty_ok` deliberately.

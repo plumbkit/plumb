@@ -23,12 +23,21 @@ import (
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
-// classifyOnce derives THE classification of a failed tools/call. It is called
-// exactly once per call, and its result is handed to every consumer: the `_meta`
-// envelope on the wire and the OnAfterTool observer that records the failure as
-// telemetry. Classifying separately at each consumer would leave two derivations
-// free to disagree about the same error — a client told `dirty_file` while the
-// recorded row said something else is worse than either alone.
+// classifyOnce derives THE classification of a DISPATCHED tools/call. It is
+// called exactly once per such call, and its result is handed to every consumer:
+// the `_meta` envelope on the wire and the OnAfterTool observer that records the
+// failure as telemetry. Classifying separately at each consumer would leave two
+// derivations free to disagree about the same error — a client told `dirty_file`
+// while the recorded row said something else is worse than either alone.
+//
+// SCOPE. "Dispatched" is load-bearing. The two pre-dispatch rejections —
+// malformed params and an unknown tool name — never reach a tool, never fire
+// OnBeforeTool/OnAfterTool, and so are absent from the stats table and from
+// every failure report built on it. Their envelope comes from
+// invalidCallEnvelope, which is a SECOND, independent construction of the same
+// wire shape (it shares `envelope`, so the key set cannot drift, but not this
+// function). Anyone extending failure telemetry to cover them must route them
+// through a hook first; counting them is not a query change.
 //
 // Returns nil when err is nil or carries no classification. Both consumers read
 // nil as "plumb makes no structured claim about this failure": the envelope is
@@ -63,7 +72,9 @@ func toolErrorMeta(te *toolerror.Error) map[string]any {
 // invalidCallEnvelope renders the envelope for a tools/call plumb refused
 // before any tool ran — malformed params, an unknown tool name. These two never
 // reach the tool-result path, so they are the only failures whose envelope
-// travels as a JSON-RPC error rather than as `_meta` on a result.
+// travels as a JSON-RPC error rather than as `_meta` on a result. They are also
+// the only classified failures with no telemetry: no hook fires for them, so
+// they never reach the stats table. See classifyOnce's scope note.
 //
 // It names the classification directly instead of wrapping an error: the
 // rejection text is already on the wire as `error.message`, and the envelope
