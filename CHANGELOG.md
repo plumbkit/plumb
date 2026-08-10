@@ -401,6 +401,15 @@
   `plumb version | tail -1`. Guarded by `TestVersionJSONKeys` (pins the exact
   key set), `TestVersionLineUnstampedIsUnchanged`, and `TestVersionLineWithRevision`.
 
+- **`daemon_info` reports the source commit too**, on a new `source commit:` row
+  alongside `daemon version`, `go runtime`, and `os/arch` — the unconditional
+  set a bug report can be filed from. The full SHA is shown, with `(dirty)` when
+  known dirty, `(dirty state unknown)` when the build could not tell, and an
+  explicit `unknown (binary built without a revision stamp)` rather than a
+  missing row, so a running daemon's commit can be read without shelling out to
+  the binary. Documented in `docs/tools.md`; guarded by
+  `TestDaemonInfo_ReportsSourceCommit`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
