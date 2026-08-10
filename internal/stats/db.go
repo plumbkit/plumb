@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/sqlitex"
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // episodicMemoriesDDL is the single source of truth for the episodic_memories
@@ -63,7 +65,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     savings_model_version INTEGER NOT NULL DEFAULT 0,
     capability_tokens     INTEGER NOT NULL DEFAULT 0,
     efficiency_tokens     INTEGER NOT NULL DEFAULT 0,
-    purpose               TEXT    NOT NULL DEFAULT ''
+    purpose               TEXT    NOT NULL DEFAULT '',
+    error_kind            TEXT    NOT NULL DEFAULT '',
+    error_retryable       INTEGER NOT NULL DEFAULT 0,
+    remediation_class     TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -110,6 +115,14 @@ var migrations = []migration{
 	// v13 adds the optional human-readable session purpose tag. Defaults to '',
 	// so every existing row reads as "no purpose set".
 	{from: 12, to: 13, addColumn: "purpose", sql: `ALTER TABLE tool_calls ADD COLUMN purpose               TEXT NOT NULL DEFAULT ''`},
+	// v14–v16 add the failure-classification columns (internal/toolerror). All
+	// three default to the "no structured claim" value, which is exactly what a
+	// pre-v14 row is: plumb never classified it, and nothing here infers a kind
+	// from the stored error_msg prose. A legacy failure reads back as
+	// unclassified, never as a guess.
+	{from: 13, to: 14, addColumn: "error_kind", sql: `ALTER TABLE tool_calls ADD COLUMN error_kind            TEXT NOT NULL DEFAULT ''`},
+	{from: 14, to: 15, addColumn: "error_retryable", sql: `ALTER TABLE tool_calls ADD COLUMN error_retryable       INTEGER NOT NULL DEFAULT 0`},
+	{from: 15, to: 16, addColumn: "remediation_class", sql: `ALTER TABLE tool_calls ADD COLUMN remediation_class     TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -197,7 +210,10 @@ func DBPathFor() string {
 //	11 — added capability_tokens column (tokens-saved redesign P0)
 //	12 — added efficiency_tokens column (tokens-saved redesign P0)
 //	13 — added purpose column (session purpose-tagging)
-const SchemaVersion = 13
+//	14 — added error_kind column (failure telemetry)
+//	15 — added error_retryable column (failure telemetry)
+//	16 — added remediation_class column (failure telemetry)
+const SchemaVersion = 16
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -302,6 +318,23 @@ type Call struct {
 	// Purpose is the optional human-readable session purpose tag (e.g.
 	// "deploy-fix"), set via session_start. Empty when unset.
 	Purpose string
+
+	// Failure classification, mirroring the `_meta` envelope the same call put on
+	// the wire. Both are stamped from ONE classification made at the MCP dispatch
+	// boundary, so the recorded row and the client's copy can never disagree.
+	//
+	// A blank ErrorKind means "plumb makes no structured claim about this
+	// failure" — the same thing the envelope's absence means — and it is also
+	// what every pre-v14 row reads back as. Nothing infers a kind from ErrorMsg
+	// prose, so an unclassified failure stays honestly unclassified rather than
+	// being folded into KindInternal.
+	//
+	// ErrorRetryable is derived from RemediationClass at write time (see
+	// toolerror.RemediationClass.Retryable) — stored so a query can count
+	// retryable failures without re-deriving, never set independently.
+	ErrorKind        toolerror.Kind
+	ErrorRetryable   bool
+	RemediationClass toolerror.RemediationClass
 }
 
 // maxStoredBytes caps the size of input_json and output_text stored per call.
@@ -318,10 +351,15 @@ func capString(s string) string {
 
 // insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
 const insertCallSQL = `INSERT INTO tool_calls
-	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose, error_kind, error_retryable, remediation_class)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
+//
+// The classification fields are checked against their closed vocabularies
+// rather than stored as free text: error_kind and remediation_class exist to be
+// GROUPed, and one invented label would quietly split a bucket in every failure
+// report that ever reads the table.
 func validateCall(c Call) error {
 	switch {
 	case c.Workspace == "":
@@ -330,6 +368,10 @@ func validateCall(c Call) error {
 		return errors.New("stats: session_id is required")
 	case c.Tool == "":
 		return errors.New("stats: tool is required")
+	case c.ErrorKind != "" && !c.ErrorKind.Valid():
+		return fmt.Errorf("stats: %q is not a declared toolerror.Kind", c.ErrorKind)
+	case c.RemediationClass != "" && !slices.Contains(toolerror.AllRemediationClasses(), c.RemediationClass):
+		return fmt.Errorf("stats: %q is not a declared toolerror.RemediationClass", c.RemediationClass)
 	}
 	return nil
 }
@@ -340,6 +382,10 @@ func callArgs(c Call) []any {
 	if !c.Success {
 		success = 0
 	}
+	retryable := 0
+	if c.ErrorRetryable {
+		retryable = 1
+	}
 	return []any{
 		c.SessionID, c.SessionName, c.Workspace, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
@@ -349,6 +395,7 @@ func callArgs(c Call) []any {
 		c.ClientName, c.ClientVersion,
 		c.TokensSaved, c.SavingsModelVersion, c.CapabilityTokens, c.EfficiencyTokens,
 		c.Purpose,
+		string(c.ErrorKind), retryable, string(c.RemediationClass),
 	}
 }
 

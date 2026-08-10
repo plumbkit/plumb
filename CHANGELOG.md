@@ -481,6 +481,20 @@
   input is fixed at link time, so re-reading the build info and rebuilding a
   settings map on each connection's tool registration was pure waste.
 
+- **The stats database can now count failures by kind.** Schema `user_version`
+  13 → 16 adds three columns to `tool_calls`, one per migration step in the
+  existing one-column-per-step style: `error_kind`, `error_retryable` and
+  `remediation_class`. All three default to the "no structured claim" value,
+  which is exactly what a pre-v14 row is. **Legacy rows stay blank on purpose**
+  — nothing infers a kind from historical `error_msg` prose, so a failure plumb
+  never classified reads back as unclassified everywhere it surfaces rather
+  than as a guess. `error_retryable` is derived from the remediation class at
+  write time (`toolerror.RemediationClass.Retryable`), stored so a query need
+  not re-derive it, never set independently. `validateCall` now rejects an
+  `error_kind` or `remediation_class` outside its declared vocabulary: both are
+  GROUP BY keys, and one invented label would split a bucket in every failure
+  report that ever reads the table.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
