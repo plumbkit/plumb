@@ -471,11 +471,14 @@ plumb 0.16.3 (go1.26.4)
 ```
 
 A stamped binary extends that same single line with the abbreviated (12-char)
-commit, suffixed `-dirty` when the source tree had uncommitted changes:
+commit. The suffix distinguishes all three tree states — measured clean,
+measured dirty, and not measurable — so `dirty` is never readable here without
+its `known` counterpart either:
 
 ```
-plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa)
-plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa-dirty)
+plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa)         # measured, clean
+plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa-dirty)   # measured, dirty
+plumb 0.16.3 (go1.26.4, rev 4c6e4da9d8fa-dirty?)  # could not be measured
 ```
 
 It stays one line on purpose — `make install` echoes `plumb version | tail -1`,
@@ -501,7 +504,8 @@ and assorted tooling scrapes the first line.
 have no idea". An unstamped binary reports `revision: ""`, `revision_known:
 false`, `dirty: false`, `dirty_known: false` — reading `dirty` without
 `dirty_known` would misreport an unknown build as clean. `build_channel` is
-`release` (GoReleaser), `dev` (the Makefile), or `""` when unknown.
+`release` (a GoReleaser release build), `dev` (the Makefile, or a GoReleaser
+`--snapshot` dry run), or `""` when unknown.
 
 The same source commit is reported by the `daemon_info` MCP tool, on its
 `source commit:` row, so the commit a *running daemon* was built from can be read
@@ -521,6 +525,20 @@ alongside the version:
 They are resolved in a fixed order: the ldflags stamps first, then Go's own
 embedded `vcs.revision` / `vcs.modified` build settings, then unknown. Dirtiness
 is always read from the same source as the revision — never mixed.
+
+A revision stamp that is not a plausible commit SHA (seven or more hex digits
+and nothing else) is treated as no stamp at all and falls through to the next
+source. GoReleaser renders `{{ .FullCommit }}` as the literal string `none` when
+it cannot resolve git information, and reporting `revision: "none"` with
+`revision_known: true` would be exactly the unknown-presented-as-known this
+mechanism exists to prevent.
+
+Both stampers **measure** dirtiness rather than asserting it, and emit nothing
+when they cannot — which lands as `dirty_known: false`. The Makefile treats a
+failing `git status` as unknown rather than as clean (`git rev-parse` can succeed
+while `git status` fails), and `.goreleaser.yml` uses `{{ .IsGitDirty }}` rather
+than a hard-coded `false`, because `goreleaser --snapshot` skips the dirty-tree
+validation a real release run enforces.
 
 The explicit stamps exist because `debug.ReadBuildInfo()` alone gets this wrong
 for plumb: the private plumb-ops superproject mounts this repository as a

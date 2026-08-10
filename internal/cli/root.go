@@ -2,12 +2,10 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -110,8 +108,6 @@ func init() {
 	})
 
 	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, restartCmd, initCmd, setupCmd, skillsCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd, enableLSPCmd, debugCmd, webCmd)
-	versionCmd.Flags().BoolVar(&versionJSON, "json", false, "Print machine-readable JSON (version, source revision, runtime)")
-
 	rootCmd.AddCommand(trustCmd)
 	rootCmd.AddCommand(taskCmds...)
 }
@@ -180,63 +176,4 @@ func setupLogging(level, format string) error {
 	}
 	slog.SetDefault(slog.New(h))
 	return nil
-}
-
-// versionJSON backs `plumb version --json`. The flag is named "json" so the
-// shared suppressLogo rule withholds the banner for this invocation — a logo on
-// stdout ahead of the payload is a parse error on line 1 for every consumer.
-var versionJSON bool
-
-// versionReport is the --json payload. Its key set is pinned by
-// TestVersionJSONKeys, so renaming a key is a deliberate act rather than a
-// refactor side effect.
-//
-// revision_known and dirty_known exist so a consumer can tell "clean" from "we
-// have no idea": an unstamped build reports dirty=false with dirty_known=false,
-// and reading the first without the second is exactly the bug they prevent.
-type versionReport struct {
-	Version       string `json:"version"`
-	Revision      string `json:"revision"`
-	RevisionKnown bool   `json:"revision_known"`
-	Dirty         bool   `json:"dirty"`
-	DirtyKnown    bool   `json:"dirty_known"`
-	GoVersion     string `json:"go_version"`
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	BuildChannel  string `json:"build_channel"`
-}
-
-// newVersionReport assembles the payload from the resolved provenance plus the
-// runtime facts a bug report needs.
-func newVersionReport(p BuildProvenance, goVersion string) versionReport {
-	return versionReport{
-		Version:       Version,
-		Revision:      p.Revision,
-		RevisionKnown: p.RevisionKnown,
-		Dirty:         p.Dirty,
-		DirtyKnown:    p.DirtyKnown,
-		GoVersion:     goVersion,
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		BuildChannel:  p.Channel,
-	}
-}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version information",
-	RunE: func(_ *cobra.Command, _ []string) error {
-		p := Provenance()
-		goVersion := goRuntimeVersion()
-		if versionJSON {
-			out, err := json.MarshalIndent(newVersionReport(p, goVersion), "", "  ")
-			if err != nil {
-				return fmt.Errorf("encoding version report: %w", err)
-			}
-			fmt.Println(string(out))
-			return nil
-		}
-		fmt.Print(versionLine(p, goVersion))
-		return nil
-	},
 }
