@@ -259,11 +259,11 @@ func txDirtyCheck(ctx context.Context, deps WriteDeps, paths []string, dirtyOk b
 	}
 	if len(dirtyPaths) > 0 {
 		sort.Strings(dirtyPaths)
-		return &editLogicErr{fmt.Errorf(
+		return dirtyWrite(&editLogicErr{fmt.Errorf(
 			"transaction_apply: %d file(s) have uncommitted changes; "+
 				"review and commit first, or pass dirty_ok: true to overwrite:\n  %s",
 			len(dirtyPaths), strings.Join(dirtyPaths, "\n  "),
-		)}
+		)})
 	}
 	return nil
 }
@@ -294,10 +294,10 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: expected_mtime not RFC3339Nano: %w", i, perr)}
 		}
 		if !info.ModTime().Equal(want) {
-			return txPrepared{}, &editLogicErr{fmt.Errorf(
+			return txPrepared{}, staleRead(&editLogicErr{fmt.Errorf(
 				"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
 				i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-			)}
+			)})
 		}
 	}
 	if op.ExpectedSha != "" {
@@ -306,12 +306,12 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: computing sha256 of %q: %w", i, path, err)}
 		}
 		if current != op.ExpectedSha {
-			return txPrepared{}, &editLogicErr{fmt.Errorf(
+			return txPrepared{}, staleRead(&editLogicErr{fmt.Errorf(
 				"transaction_apply: op[%d]: %q content has changed since you read it\n"+
 					"  expected sha256: %s\n"+
 					"  current  sha256: %s",
 				i, path, op.ExpectedSha, current,
-			)}
+			)})
 		}
 	}
 	data, err := os.ReadFile(path)

@@ -31,12 +31,12 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 			return fmt.Errorf("%s: stat %q: %w", tool, path, err)
 		}
 		if !info.ModTime().Equal(want) {
-			return fmt.Errorf(
+			return staleRead(fmt.Errorf(
 				"%s: file %q was modified since you read it\n"+
 					"  expected_mtime: %s\n"+
 					"  current mtime:  %s\n"+
 					"  Re-read the file and try again",
-				tool, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano))
+				tool, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano)))
 		}
 	}
 	if expectedSha != "" {
@@ -45,12 +45,12 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 			return fmt.Errorf("%s: computing sha256 of %q: %w", tool, path, err)
 		}
 		if current != expectedSha {
-			return fmt.Errorf(
+			return staleRead(fmt.Errorf(
 				"%s: file %q content has changed since you read it\n"+
 					"  expected sha256: %s\n"+
 					"  current  sha256: %s\n"+
 					"  Re-read the file and try again",
-				tool, path, expectedSha, current)
+				tool, path, expectedSha, current))
 		}
 	}
 	return nil

@@ -69,8 +69,8 @@ func coldLSPWarmingErr(tool string, fn LSPWarmupFn, uri string) error {
 	if !warming {
 		return nil
 	}
-	return fmt.Errorf("%s: language server still warming%s — this tool needs a ready server; "+
-		"retry shortly (%s; see daemon_info)", tool, warmupElapsedSuffix(elapsed), ColdLSPToolsHint)
+	return lspNotReady(fmt.Errorf("%s: language server still warming%s — this tool needs a ready server; "+
+		"retry shortly (%s; see daemon_info)", tool, warmupElapsedSuffix(elapsed), ColdLSPToolsHint))
 }
 
 // coldLSPEmptyNote is the caveat appended to an EMPTY but otherwise successful
@@ -107,8 +107,8 @@ func coldLSPIncompleteNote(fn LSPWarmupFn, uri string) string {
 // lspTimeout returns a timeout error when err is a deadline overrun, else nil.
 func lspTimeout(tool string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%s: language server did not respond in time "+
-			"(it may still be indexing the workspace — retry shortly; %s)", tool, ColdLSPToolsHint)
+		return lspTimedOut(fmt.Errorf("%s: language server did not respond in time "+
+			"(it may still be indexing the workspace — retry shortly; %s)", tool, ColdLSPToolsHint))
 	}
 	return nil
 }

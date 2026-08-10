@@ -102,9 +102,9 @@ func (p *PathPolicy) Check(path string, want Access) (AllowedRoot, error) {
 	cleaned := cleanToolPath(path)
 	if ok {
 		// Matched a root, but its access level is insufficient (e.g. write to a read-only dep root).
-		return AllowedRoot{}, WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, ReadOnlyRoot: r.Label}
+		return AllowedRoot{}, ClassifyPathRefusal(WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, ReadOnlyRoot: r.Label})
 	}
-	return AllowedRoot{}, WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, Provenance: p.provenance}
+	return AllowedRoot{}, ClassifyPathRefusal(WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, Provenance: p.provenance})
 }
 
 // OutsideWorkspaceLabel returns the matched root's label when path resolves

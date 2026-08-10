@@ -139,8 +139,8 @@ func renameFilePreconditions(ctx context.Context, deps WriteDeps, from, to strin
 		return fmt.Errorf("rename_file: %q is a directory — refusing to move recursively", from)
 	}
 	if !a.DirtyOk && dirtyBlocksMove(ctx, deps, from) {
-		return fmt.Errorf("rename_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to proceed", from)
+		return dirtyWrite(fmt.Errorf("rename_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", from))
 	}
 	if !a.Overwrite {
 		if _, err := os.Stat(to); err == nil {

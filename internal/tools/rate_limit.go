@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // RateLimiter is a sliding-window rate limiter used to cap how many write
@@ -180,8 +182,9 @@ func (r *RateLimiter) Snapshot() (count int, limit int, window time.Duration) {
 // user-friendly message about throttling.
 func rateLimitError(tool string, lim *RateLimiter) error {
 	count, limit, window := lim.Snapshot()
-	return &editLogicErr{fmt.Errorf(
+	return toolerror.Wrap(&editLogicErr{fmt.Errorf(
 		"%s: rate limit exceeded — %d writes in the last %s (limit %d). "+
 			"Slow down or set PLUMB_WRITE_RATE_LIMIT=0 to disable",
-		tool, count, window, limit)}
+		tool, count, window, limit)},
+		toolerror.KindRateLimited, toolerror.ClassRetryAfterWait, toolerror.Retry())
 }

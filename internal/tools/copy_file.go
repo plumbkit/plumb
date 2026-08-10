@@ -136,8 +136,8 @@ func copyFilePreconditions(ctx context.Context, deps WriteDeps, from, to string,
 		return nil, 0, fmt.Errorf("copy_file: %q is a directory — refusing to copy recursively", from)
 	}
 	if !a.DirtyOk && dirtyBlocksMove(ctx, deps, from) {
-		return nil, 0, fmt.Errorf("copy_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to proceed", from)
+		return nil, 0, dirtyWrite(fmt.Errorf("copy_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", from))
 	}
 	if !a.Overwrite {
 		if _, err := os.Stat(to); err == nil {
