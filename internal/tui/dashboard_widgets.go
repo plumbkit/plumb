@@ -443,6 +443,12 @@ func ratioBar(percent, width int) (string, string) {
 	return strings.Repeat("■", filled), strings.Repeat("■", width-filled)
 }
 
+// dashFailureBucketLimit bounds the buckets the dashboard asks for. The widget
+// renders ten kinds at most, and a bucket is per (kind × tool × client build),
+// so this leaves generous room to collapse from without letting a client that
+// varies its version string grow the query without bound.
+const dashFailureBucketLimit = 200
+
 // dashFailureRow is one line of the failure widget: a kind and its counts.
 type dashFailureRow struct {
 	label     string

@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func findBucket(t *testing.T, got []FailureCount, label, tool, version string) F
 func TestFailureSummaryGroupsByKindToolAndClient(t *testing.T) {
 	db := failureFixture(t)
 
-	got, err := db.FailureSummary(Filter{})
+	got, err := db.FailureSummary(0, Filter{})
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestFailureSummaryGroupsByKindToolAndClient(t *testing.T) {
 func TestFailureSummaryReportsUnclassifiedSeparately(t *testing.T) {
 	db := failureFixture(t)
 
-	got, err := db.FailureSummary(Filter{})
+	got, err := db.FailureSummary(0, Filter{})
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 	db := failureFixture(t)
 
 	var total int64
-	all, err := db.FailureSummary(Filter{})
+	all, err := db.FailureSummary(0, Filter{})
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 		t.Errorf("counted %d failures, want 5 (the successful call must not appear)", total)
 	}
 
-	scoped, err := db.FailureSummary(Filter{Tool: "edit_file"})
+	scoped, err := db.FailureSummary(0, Filter{Tool: "edit_file"})
 	if err != nil {
 		t.Fatalf("FailureSummary(Tool): %v", err)
 	}
@@ -147,11 +148,131 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 		t.Errorf("got %d buckets for edit_file, want 2 (one per client build): %+v", len(scoped), scoped)
 	}
 
-	empty, err := db.FailureSummary(Filter{Workspace: "/elsewhere"})
+	empty, err := db.FailureSummary(0, Filter{Workspace: "/elsewhere"})
 	if err != nil {
 		t.Fatalf("FailureSummary(Workspace): %v", err)
 	}
 	if len(empty) != 0 {
 		t.Errorf("Filter.Workspace ignored: %+v", empty)
+	}
+}
+
+// TestFailureSummaryPutsClassifiedFirst reproduces the shape every existing
+// installation has after the upgrade: a long tail of pre-v14 failures and a
+// handful of newly classified ones. `tool_calls` is never pruned, so ordering
+// purely by count would bury every actionable bucket — permanently — under a row
+// whose only message is "this predates the feature".
+func TestFailureSummaryPutsClassifiedFirst(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	at := time.UnixMilli(1_000_000)
+	for i := range 120 {
+		tool := []string{"edit_file", "git", "write_file"}[i%3]
+		if err := db.Record(Call{
+			SessionID: "legacy", Workspace: "/w", Tool: tool, CalledAt: at,
+			ClientName: "claude-code", ClientVersion: "1.0", ErrorMsg: "some old prose",
+		}); err != nil {
+			t.Fatalf("Record legacy: %v", err)
+		}
+	}
+	for range 3 {
+		if err := db.Record(Call{
+			SessionID: "now", Workspace: "/w", Tool: "edit_file", CalledAt: at,
+			ClientName: "claude-code", ClientVersion: "1.0",
+			ErrorKind: toolerror.KindDirtyFile, RemediationClass: toolerror.ClassPassDirtyOk, ErrorRetryable: true,
+		}); err != nil {
+			t.Fatalf("Record classified: %v", err)
+		}
+	}
+
+	got, err := db.FailureSummary(0, Filter{})
+	if err != nil {
+		t.Fatalf("FailureSummary: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("no buckets")
+	}
+	if got[0].Kind != toolerror.KindDirtyFile {
+		t.Errorf("first bucket is %q with %d calls; the 3-call classified bucket must lead the "+
+			"40-call unclassified ones", got[0].Label(), got[0].Calls)
+	}
+	if last := got[len(got)-1]; last.Kind != "" {
+		t.Errorf("last bucket is %q; the unclassified bucket belongs last", last.Label())
+	}
+}
+
+// TestFailureSummaryBoundsTheResultSet pins the LIMIT. client_version is copied
+// verbatim from the MCP handshake with no cap, so the bucket count is
+// caller-influenced and the query must bound it rather than trust the data.
+func TestFailureSummaryBoundsTheResultSet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	for i := range defaultFailureBuckets + 50 {
+		if err := db.Record(Call{
+			SessionID: "s", Workspace: "/w", Tool: "edit_file", CalledAt: time.UnixMilli(1_000_000),
+			ClientName: "claude-code", ClientVersion: strconv.Itoa(i),
+			ErrorKind: toolerror.KindDirtyFile, RemediationClass: toolerror.ClassPassDirtyOk,
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	got, err := db.FailureSummary(0, Filter{})
+	if err != nil {
+		t.Fatalf("FailureSummary: %v", err)
+	}
+	if len(got) != defaultFailureBuckets {
+		t.Errorf("got %d buckets with no explicit limit, want the %d default", len(got), defaultFailureBuckets)
+	}
+	got, err = db.FailureSummary(5, Filter{})
+	if err != nil {
+		t.Fatalf("FailureSummary(5): %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("got %d buckets for limit 5", len(got))
+	}
+}
+
+// TestFailureSummaryHonoursSince proves the --since window reaches the query
+// through the shared Filter, which is what makes the CLI flag able to exclude
+// the pre-classification tail.
+func TestFailureSummaryHonoursSince(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	if err := db.Record(Call{SessionID: "old", Workspace: "/w", Tool: "git", CalledAt: now.Add(-48 * time.Hour)}); err != nil {
+		t.Fatalf("Record old: %v", err)
+	}
+	if err := db.Record(Call{
+		SessionID: "new", Workspace: "/w", Tool: "edit_file", CalledAt: now,
+		ErrorKind: toolerror.KindDirtyFile, RemediationClass: toolerror.ClassPassDirtyOk,
+	}); err != nil {
+		t.Fatalf("Record new: %v", err)
+	}
+
+	got, err := db.FailureSummary(0, Filter{Since: now.Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("FailureSummary: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != toolerror.KindDirtyFile {
+		t.Fatalf("Since did not exclude the 48h-old unclassified failure: %+v", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -16,8 +17,8 @@ import (
 // printStatsFailures renders failures grouped by kind, tool and client build.
 // It replaces the default per-tool table rather than joining it: see the flag's
 // registration for why the two views do not share a grain.
-func printStatsFailures(w io.Writer, db *stats.DB, filter stats.Filter, ws string) error {
-	buckets, err := db.FailureSummary(filter)
+func printStatsFailures(w io.Writer, db *stats.DB, filter stats.Filter, limit int, ws string) error {
+	buckets, err := db.FailureSummary(limit, filter)
 	if err != nil {
 		return fmt.Errorf("querying failure summary: %w", err)
 	}
@@ -25,12 +26,12 @@ func printStatsFailures(w io.Writer, db *stats.DB, filter stats.Filter, ws strin
 		printCLIDiagnostic(w, cliDiagnostic{
 			Kind:  "info",
 			Title: "No failures recorded",
-			Body:  fmt.Sprintf("Every recorded call for %s succeeded.", render.ContractPath(ws)),
+			Body:  fmt.Sprintf("Every recorded call for %s succeeded.", render.ContractPath(ws)) + sinceSuffix(filter),
 		})
 		return nil
 	}
 
-	fmt.Fprintln(w, "Failures by Kind")
+	fmt.Fprintln(w, "Failures by Kind"+sinceSuffix(filter))
 	fmt.Fprintln(w, statsFailureTable(buckets))
 	if note := unclassifiedNote(buckets); note != "" {
 		fmt.Fprintln(w, tui.MutedStyle.Render(note))
@@ -47,10 +48,45 @@ func statsFailureTable(buckets []stats.FailureCount) string {
 			f.Tool,
 			statsClientCell(f),
 			strconv.FormatInt(f.Calls, 10),
-			strconv.FormatInt(f.Retryable, 10),
+			retryableCell(f),
 		)
 	}
 	return t.Render()
+}
+
+// retryableCell renders how many of a bucket's calls were retryable — or an em
+// dash for the unclassified bucket, where the honest answer is "unknown". A
+// literal 0 there would read as "we checked, none of them were", which is a
+// claim about rows plumb never classified in the first place.
+func retryableCell(f stats.FailureCount) string {
+	if f.Kind == "" {
+		return "—"
+	}
+	return strconv.FormatInt(f.Retryable, 10)
+}
+
+// sinceSuffix names the window a view was scoped to, so a reader is never left
+// guessing whether a count covers an hour or the whole history of the database.
+func sinceSuffix(filter stats.Filter) string {
+	if filter.Since.IsZero() {
+		return ""
+	}
+	return " (last " + humanWindow(time.Since(filter.Since)) + ")"
+}
+
+// humanWindow labels a --since window in the largest unit that still reads as a
+// whole number, so "7d" comes back as "7d" rather than "168h0m0.0002s".
+func humanWindow(d time.Duration) string {
+	switch {
+	case d >= 48*time.Hour:
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
+	case d >= 2*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + "h"
+	case d >= 2*time.Minute:
+		return strconv.Itoa(int(d.Minutes())) + "m"
+	default:
+		return strconv.Itoa(int(d.Seconds())) + "s"
+	}
 }
 
 // statsClientCell renders the client build that made the failing calls, or an
