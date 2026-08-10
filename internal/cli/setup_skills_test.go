@@ -304,10 +304,16 @@ func TestRefreshClient_NoSkillRowWithoutASkillChannel(t *testing.T) {
 // frontmatter delimiter when there is one (inside the block it would corrupt
 // the YAML the clients parse), leading the file otherwise, and always
 // strippable back to the exact source — the property the content comparison
-// relies on to keep a version bump from reading as drift.
+// relies on to keep a version bump from reading as drift. It also pins CRLF
+// handling: a CRLF skill must be recognised as carrying frontmatter (not
+// fall through to the no-frontmatter branch, which would prepend the marker
+// before "---" and corrupt the block every verified client parses), and the
+// inserted marker must match the file's own line-ending style rather than
+// always LF.
 func TestStampSkillContent(t *testing.T) {
 	pinVersion(t, "9.9.9")
-	const marker = "<!-- plumb: 9.9.9 -->\n"
+	const markerLF = "<!-- plumb: 9.9.9 -->\n"
+	const markerCRLF = "<!-- plumb: 9.9.9 -->\r\n"
 
 	cases := []struct {
 		name    string
@@ -315,11 +321,26 @@ func TestStampSkillContent(t *testing.T) {
 		want    string
 	}{
 		{
-			"after frontmatter", "---\nname: x\ndescription: y\n---\nbody\n",
-			"---\nname: x\ndescription: y\n---\n" + marker + "body\n",
+			"LF with frontmatter", "---\nname: x\ndescription: y\n---\nbody\n",
+			"---\nname: x\ndescription: y\n---\n" + markerLF + "body\n",
 		},
-		{"no frontmatter leads the file", "body\n", marker + "body\n"},
-		{"unterminated frontmatter leads the file", "---\nname: x\nbody\n", marker + "---\nname: x\nbody\n"},
+		{
+			"CRLF with frontmatter", "---\r\nname: x\r\ndescription: y\r\n---\r\nbody\r\n",
+			"---\r\nname: x\r\ndescription: y\r\n---\r\n" + markerCRLF + "body\r\n",
+		},
+		{"no frontmatter leads the file", "body\n", markerLF + "body\n"},
+		{"unterminated frontmatter leads the file", "---\nname: x\nbody\n", markerLF + "---\nname: x\nbody\n"},
+		{"empty file", "", markerLF},
+		{
+			"body contains a delimiter-like line but no frontmatter",
+			"body\n---\nmore\n",
+			markerLF + "body\n---\nmore\n",
+		},
+		{
+			"marker on the last line (frontmatter with no body)",
+			"---\nname: x\n---\n",
+			"---\nname: x\n---\n" + markerLF,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,7 +351,33 @@ func TestStampSkillContent(t *testing.T) {
 			if got := stripSkillMarker(stamped); got != tc.content {
 				t.Errorf("stripSkillMarker(stampSkillContent(c)) = %q, want the original %q", got, tc.content)
 			}
+			if v, ok := skillMarkerVersion(stamped); !ok || v != "9.9.9" {
+				t.Errorf("skillMarkerVersion(stamped) = (%q, %v), want (\"9.9.9\", true)", v, ok)
+			}
 		})
+	}
+}
+
+// TestStampSkillContent_CRLFFrontmatterNotCorrupted is a focused regression
+// for the CRLF finding: stamping a CRLF skill must never change what precedes
+// the closing "---" delimiter. Before the fix, a CRLF file failed the bare
+// "---\n" prefix check, fell into the no-frontmatter branch, and got its
+// marker PREPENDED — so byte 0 was no longer "-", and claude-code/codex/
+// kimi-code (which all parse frontmatter as the block between the leading
+// "---" lines) would stop seeing the skill's name/description and it would
+// silently vanish from that client's catalogue.
+func TestStampSkillContent_CRLFFrontmatterNotCorrupted(t *testing.T) {
+	pinVersion(t, "9.9.9")
+	content := "---\r\nname: x\r\ndescription: y\r\n---\r\nbody\r\n"
+
+	stamped := stampSkillContent(content)
+
+	if !strings.HasPrefix(stamped, "---\r\n") {
+		t.Fatalf("stamped content does not open with the frontmatter delimiter: %q", stamped)
+	}
+	wantFrontmatter := "---\r\nname: x\r\ndescription: y\r\n---\r\n"
+	if !strings.HasPrefix(stamped, wantFrontmatter) {
+		t.Errorf("frontmatter block was altered: got %q, want it to start with %q", stamped, wantFrontmatter)
 	}
 }
 
