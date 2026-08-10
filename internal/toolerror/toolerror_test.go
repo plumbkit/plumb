@@ -77,7 +77,7 @@ func TestError_TextIsByteIdenticalToCause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := Wrap(tt.cause, KindDirtyFile, ClassPassDirtyOk, Retry())
+			e := Wrap(tt.cause, KindDirtyFile, ClassPassDirtyOk)
 			if got, want := e.Error(), tt.cause.Error(); got != want {
 				t.Errorf("Error() = %q, want the cause verbatim %q", got, want)
 			}
@@ -105,7 +105,7 @@ func TestError_NilSafe(t *testing.T) {
 func TestErrorsIsAndAs_PassThroughToCause(t *testing.T) {
 	sentinel := errors.New("the underlying cause")
 	wrapped := fmt.Errorf("write_file: %w", sentinel)
-	classified := Wrap(wrapped, KindUnreadOrStale, ClassReRead, Retry())
+	classified := Wrap(wrapped, KindUnreadOrStale, ClassReRead)
 
 	if !errors.Is(classified, sentinel) {
 		t.Error("errors.Is could not reach the sentinel through the classification")
@@ -127,7 +127,7 @@ func TestErrorsIsAndAs_PassThroughToCause(t *testing.T) {
 }
 
 func TestClassify(t *testing.T) {
-	classified := Wrap(errors.New("boom"), KindRateLimited, ClassRetryAfterWait, Retry())
+	classified := Wrap(errors.New("boom"), KindRateLimited, ClassRetryAfterWait)
 
 	tests := []struct {
 		name     string
@@ -171,7 +171,7 @@ func TestKindOf(t *testing.T) {
 		{"classified reports its kind", Wrap(errors.New("x"), KindGitPolicy, ClassEnablePolicy), KindGitPolicy},
 		{
 			"classified under a wrap still reports its kind",
-			fmt.Errorf("ctx: %w", Wrap(errors.New("x"), KindLSPTimeout, ClassRetryWhenReady, Retry())),
+			fmt.Errorf("ctx: %w", Wrap(errors.New("x"), KindLSPTimeout, ClassRetryWhenReady)),
 			KindLSPTimeout,
 		},
 	}
@@ -194,15 +194,16 @@ func TestRemediationDefaults(t *testing.T) {
 		wantRetry  bool
 	}{
 		{
-			name:       "class-only wrap takes the default reason",
+			name:       "class-only wrap takes the default reason and the class's retryability",
 			build:      func() *Error { return Wrap(errors.New("x"), KindDirtyFile, ClassPassDirtyOk) },
 			wantClass:  ClassPassDirtyOk,
 			wantReason: defaultReasons[ClassPassDirtyOk],
+			wantRetry:  true,
 		},
 		{
-			name: "WithTool and Retry apply, reason still defaulted",
+			name: "WithTool applies, reason still defaulted",
 			build: func() *Error {
-				return Wrap(errors.New("x"), KindUnreadOrStale, ClassReRead, WithTool("read_file"), Retry())
+				return Wrap(errors.New("x"), KindUnreadOrStale, ClassReRead, WithTool("read_file"))
 			},
 			wantClass:  ClassReRead,
 			wantTool:   "read_file",
@@ -216,6 +217,7 @@ func TestRemediationDefaults(t *testing.T) {
 			},
 			wantClass:  ClassRepinWorkspace,
 			wantReason: "Pin it.",
+			wantRetry:  true,
 		},
 		{
 			name: "New keeps an explicit Remediation verbatim",
@@ -229,6 +231,7 @@ func TestRemediationDefaults(t *testing.T) {
 			wantClass:  ClassRepinWorkspace,
 			wantTool:   "session_start",
 			wantReason: "Re-pin, then retry.",
+			wantRetry:  true,
 		},
 		{
 			name: "an unknown class gets no invented prose",
@@ -258,16 +261,63 @@ func TestRemediationDefaults(t *testing.T) {
 	}
 }
 
-func TestDefaultRetryableIsFalse(t *testing.T) {
+func TestZeroOptionDefaults(t *testing.T) {
 	e := Wrap(errors.New("x"), KindGitPolicy, ClassEnablePolicy)
-	if e.Retryable {
-		t.Error("Retryable defaults to true; it must default to false")
-	}
 	if e.Op != "" {
 		t.Errorf("Op = %q, want empty by default", e.Op)
 	}
 	if e.Details != nil {
 		t.Errorf("Details = %v, want nil by default", e.Details)
+	}
+}
+
+// TestEveryRemediationClassHasARetryability is the guard that makes derivation
+// safe: a new class added without an entry would read false from the map, which
+// looks conservative but silently tells clients "nothing you can do" about a
+// remedy the agent could perform.
+func TestEveryRemediationClassHasARetryability(t *testing.T) {
+	for _, c := range AllRemediationClasses() {
+		if _, ok := retryableByClass[c]; !ok {
+			t.Errorf("remediation class %q has no retryability entry", c)
+		}
+	}
+	if len(retryableByClass) != len(AllRemediationClasses()) {
+		t.Errorf("retryableByClass has %d entries but %d classes are declared",
+			len(retryableByClass), len(AllRemediationClasses()))
+	}
+}
+
+// TestRetryableIsDerivedFromClass pins the table itself, and that Error just
+// reports it — the incoherence this replaced was the same class carrying
+// opposite flags at two seams.
+func TestRetryableIsDerivedFromClass(t *testing.T) {
+	tests := []struct {
+		class RemediationClass
+		want  bool
+	}{
+		{ClassReRead, true},
+		{ClassRetryAfterWait, true},
+		{ClassPassDirtyOk, true},
+		{ClassPassConfirm, true},
+		{ClassPassForce, true},
+		{ClassFixArguments, true},
+		{ClassRepinWorkspace, true},
+		{ClassRetryWhenReady, true},
+		{ClassEnablePolicy, false},
+		{ClassInspectOutput, false},
+		{ClassNone, false},
+		{RemediationClass("not_a_class"), false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.class), func(t *testing.T) {
+			if got := tt.class.Retryable(); got != tt.want {
+				t.Errorf("%q.Retryable() = %v, want %v", tt.class, got, tt.want)
+			}
+			e := Wrap(errors.New("x"), KindInternal, tt.class)
+			if e.Retryable != tt.want {
+				t.Errorf("Error.Retryable = %v, want the class's %v", e.Retryable, tt.want)
+			}
+		})
 	}
 }
 
@@ -288,7 +338,7 @@ func TestWithDetail(t *testing.T) {
 }
 
 func TestWithOp_CopiesRatherThanMutates(t *testing.T) {
-	original := Wrap(errors.New("boom"), KindClientTimeout, ClassRetryAfterWait, Retry())
+	original := Wrap(errors.New("boom"), KindClientTimeout, ClassRetryAfterWait)
 	named := original.WithOp("read_file")
 
 	if original.Op != "" {

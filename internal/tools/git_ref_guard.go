@@ -210,7 +210,7 @@ func (g *gitRefGuard) preExec(ctx context.Context, sub string) error {
 	if !g.confirm {
 		return toolerror.Wrap(
 			fmt.Errorf("git %s: %s. Re-check the repository state (git log/status), then re-run with confirm: true to proceed against the new state", sub, detail),
-			toolerror.KindConcurrentRefMove, toolerror.ClassPassConfirm, toolerror.Retry())
+			toolerror.KindConcurrentRefMove, toolerror.ClassPassConfirm)
 	}
 	g.warning = "# plumb-warning: " + detail + ". Proceeding against the new state because confirm: true was given — verify git log/status before building on this result.\n"
 	return nil
@@ -235,8 +235,7 @@ func (g *gitRefGuard) checkExpectedHead(ctx context.Context, sub string, cur git
 }
 
 func expectedHeadRefusal(err error) error {
-	return toolerror.Wrap(err, toolerror.KindConcurrentRefMove, toolerror.ClassFixArguments,
-		toolerror.Retry())
+	return toolerror.Wrap(err, toolerror.KindConcurrentRefMove, toolerror.ClassFixArguments)
 }
 
 // guardRefPreExec is runGit's nil-safe entry into the ref-movement guard: it

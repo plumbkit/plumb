@@ -31,8 +31,22 @@
 //
 // # Retryable
 //
-// Retryable means: THIS OPERATION CAN SUCCEED AFTER THE STATED REMEDIATION IS
-// PERFORMED. It is a statement about the remedy, not about the call.
+// Retryable means: THE CALLING AGENT CAN MAKE THIS SAME OPERATION SUCCEED BY
+// ACTING ON THE REMEDIATION ITSELF, WITH NO OUT-OF-BAND HUMAN ACTION.
+//
+// It is DERIVED, never set per call site: RemediationClass.Retryable is the one
+// table, and Error.Retryable merely reports it. So re_read, retry_after_wait,
+// pass_dirty_ok, pass_confirm, pass_force, fix_arguments, repin_workspace and
+// retry_when_ready are all retryable — each names something the agent can do
+// and then re-issue. enable_policy is not: a human must edit configuration
+// first. inspect_output and none are not: nothing the agent does on plumb's
+// side changes the outcome.
+//
+// Deriving it is the point. When the class and the flag were independent they
+// drifted immediately — the same remediation class shipped with opposite flags
+// at two seams — and a client keying on the flag then gets a different answer
+// for the same remedy. If a seam appears to need a retryability its class does
+// not imply, the class is wrong; change the class, not the flag.
 //
 // It NEVER means a client may automatically replay the call. Most plumb
 // failures that carry Retryable=true guard a NON-IDEMPOTENT mutation — a write
@@ -178,6 +192,32 @@ var defaultReasons = map[RemediationClass]string{ //nolint:gosec // G101: the Cl
 	ClassNone:           "This operation is refused by design; no argument or setting will permit it.",
 }
 
+// retryableByClass is the single source of truth for Error.Retryable. The
+// split is "can the calling agent alone act on this remedy and re-issue?":
+// enable_policy needs a human to edit configuration, and inspect_output/none
+// have no plumb-side remedy at all, so those three are the only false entries.
+//
+// A class with no entry here reads as false, which is why
+// TestEveryRemediationClassHasARetryability asserts the map is total — a new
+// class must state its answer rather than inherit the safe-looking one.
+var retryableByClass = map[RemediationClass]bool{
+	ClassReRead:         true,
+	ClassRetryAfterWait: true,
+	ClassPassDirtyOk:    true,
+	ClassPassConfirm:    true,
+	ClassPassForce:      true,
+	ClassFixArguments:   true,
+	ClassRepinWorkspace: true, // the agent itself calls session_start
+	ClassRetryWhenReady: true,
+	ClassEnablePolicy:   false, // a human must edit configuration
+	ClassInspectOutput:  false, // nothing plumb-side changes the outcome
+	ClassNone:           false,
+}
+
+// Retryable reports whether acting on this remediation lets the calling agent
+// re-issue the operation successfully, unaided. See the package doc.
+func (c RemediationClass) Retryable() bool { return retryableByClass[c] }
+
 // allRemediationClasses lists every RemediationClass in sorted order, on the
 // same terms as allKinds.
 var allRemediationClasses = []RemediationClass{
@@ -234,8 +274,10 @@ func (r Remediation) withDefaults() Remediation {
 // subcommand) — never raw output, and never anything unbounded. It is optional
 // and usually nil.
 type Error struct {
-	Kind        Kind
-	Op          string
+	Kind Kind
+	Op   string
+	// Retryable is derived from Remediation.Class at construction and is not
+	// independently settable. See the package doc's Retryable section.
 	Retryable   bool
 	Remediation Remediation
 	Details     map[string]string
@@ -274,15 +316,9 @@ func (e *Error) WithOp(op string) *Error {
 	return &clone
 }
 
-// Option adjusts an Error at construction. The zero set of options yields a
-// non-retryable error with no operation and no details.
+// Option adjusts an Error at construction. Options never touch Retryable —
+// that is derived from the remediation class.
 type Option func(*Error)
-
-// Retry marks the failure as recoverable once the remediation is performed.
-// See the package doc: this is never a licence to replay the call unchanged.
-func Retry() Option {
-	return func(e *Error) { e.Retryable = true }
-}
 
 // WithTool names the plumb tool the caller should reach for.
 func WithTool(tool string) Option {
@@ -317,6 +353,7 @@ func New(kind Kind, cause error, r Remediation, opts ...Option) *Error {
 		opt(e)
 	}
 	e.Remediation = e.Remediation.withDefaults()
+	e.Retryable = e.Remediation.Class.Retryable()
 	return e
 }
 

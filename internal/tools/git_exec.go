@@ -295,7 +295,7 @@ func quoteGitArgv(argv []string) string {
 func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier) (context.Context, func(), error) {
 	if gitWriteDrainActive() {
 		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, errGitDraining),
-			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait, toolerror.Retry())
+			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait)
 	}
 	gitWriteInflight.Add(1)
 	release, err := lockRepo(ctx, repoRoot)

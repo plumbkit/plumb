@@ -67,7 +67,7 @@ func (s *Server) execTool(ctx context.Context, t Tool, name string, args json.Ra
 		return "", toolerror.Wrap(fmt.Errorf("%s: exceeded its %s execution deadline — the target path may be "+
 			"on a slow or unresponsive filesystem (a stalled network, iCloud, or FUSE mount); "+
 			"the call was abandoned. Raise PLUMB_TOOL_EXEC_TIMEOUT or check the mount", name, s.ToolExecTimeout),
-			toolerror.KindClientTimeout, toolerror.ClassRetryAfterWait, toolerror.Retry())
+			toolerror.KindClientTimeout, toolerror.ClassRetryAfterWait)
 	case <-ctx.Done():
 		return "", ctx.Err() // parent cancelled (daemon shutdown / idle eviction)
 	}

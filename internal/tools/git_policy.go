@@ -20,8 +20,7 @@ func policyDisabled(msg string) error {
 // caller alone can satisfy it — by re-checking the state and re-issuing with
 // confirm: true, never by replaying the identical call.
 func confirmRequired(msg string) error {
-	return toolerror.Wrap(errors.New(msg), toolerror.KindGitPolicy, toolerror.ClassPassConfirm,
-		toolerror.Retry())
+	return toolerror.Wrap(errors.New(msg), toolerror.KindGitPolicy, toolerror.ClassPassConfirm)
 }
 
 // pushRefused classifies a network-tier guard that no argument can satisfy: an

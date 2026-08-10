@@ -105,7 +105,7 @@ func TestToolsCall_ClassifiedErrorEmitsMeta(t *testing.T) {
 func TestToolsCall_MetaCarriesToolAndRetryable(t *testing.T) {
 	failure := toolerror.Wrap(errors.New("write_file: stale"),
 		toolerror.KindUnreadOrStale, toolerror.ClassReRead,
-		toolerror.WithTool("read_file"), toolerror.WithReason("Re-read it."), toolerror.Retry())
+		toolerror.WithTool("read_file"), toolerror.WithReason("Re-read it."))
 	result := callFailing(t, &failingTool{name: "write_file", err: failure})
 
 	want := decodeJSON(t, `{
@@ -173,8 +173,9 @@ func TestToolsCall_ArgumentGuardFailureIsClassified(t *testing.T) {
 	if env["operation"] != "rename_thing" {
 		t.Errorf("operation = %v, want rename_thing", env["operation"])
 	}
-	if env["retryable"] != false {
-		t.Errorf("retryable = %v, want false", env["retryable"])
+	// fix_arguments is retryable: the agent corrects the call and re-issues it.
+	if env["retryable"] != true {
+		t.Errorf("retryable = %v, want true", env["retryable"])
 	}
 	// The rendered text must still be the guard's own sentence.
 	if msg := toolText(result); !strings.Contains(msg, `unknown parameter "zzz"`) {
@@ -213,7 +214,7 @@ func TestJSONRPCError_UnknownToolCarriesData(t *testing.T) {
 	want := decodeJSON(t, `{
 		"kind": "invalid_arguments",
 		"operation": "nope",
-		"retryable": false,
+		"retryable": true,
 		"remediation": {"class": "fix_arguments", "reason": "Correct the call's arguments and retry."}
 	}`)
 	if got := mustJSON(t, e["data"]); !reflect.DeepEqual(got, want) {

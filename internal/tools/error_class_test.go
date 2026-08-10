@@ -61,8 +61,9 @@ func TestClassificationHelpers_PreserveText(t *testing.T) {
 		{"lspTimedOut", lspTimedOut, toolerror.KindLSPTimeout, toolerror.ClassRetryWhenReady, true, ""},
 		{"lspNotReady", lspNotReady, toolerror.KindLSPUnavailable, toolerror.ClassRetryWhenReady, true, ""},
 		{
+			// repin_workspace is retryable: the agent itself calls session_start.
 			"ClassifyPathRefusal", ClassifyPathRefusal,
-			toolerror.KindWorkspaceBoundary, toolerror.ClassRepinWorkspace, false, "session_start",
+			toolerror.KindWorkspaceBoundary, toolerror.ClassRepinWorkspace, true, "session_start",
 		},
 	}
 	for _, tt := range tests {
@@ -180,7 +181,7 @@ func TestBoundaryRefusalKeepsItsContract(t *testing.T) {
 	if !IsWorkspaceBoundaryError(unattached) {
 		t.Error("IsWorkspaceBoundaryError no longer recognises a classified unattached refusal")
 	}
-	assertClassified(t, unattached, toolerror.KindWorkspaceBoundary, toolerror.ClassRepinWorkspace, false)
+	assertClassified(t, unattached, toolerror.KindWorkspaceBoundary, toolerror.ClassRepinWorkspace, true)
 }
 
 func TestLSPTimeoutSeams_Classified(t *testing.T) {
