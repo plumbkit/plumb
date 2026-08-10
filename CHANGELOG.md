@@ -307,6 +307,13 @@
   skill channel, and the seven-skill stated ceiling now live in
   `docs/cli-reference.md`'s `plumb skills` section, with a short pointer from
   `AGENTS.md`.
+- **Fixed three dangling `## Adapter validation status` cross-references**
+  left over from the `AGENTS.md` slim-down (the heading no longer exists
+  there) — `.claude/skills/add-lsp-adapter/SKILL.md`,
+  `docs/adding-an-lsp.md` (which now hosts the table itself, so its own
+  "document it" step was pointing at the wrong file), and
+  `docs/getting-started.md` now all point at the real
+  `docs/adding-an-lsp.md#validation-levels` table.
 
 ### Tests
 

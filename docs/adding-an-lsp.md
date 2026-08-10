@@ -493,10 +493,10 @@ language of an *ancestor* directory (`package.json`, `index.html`).
 
 ### 9. Document it
 
-Add a row to the adapter reference below and to the validation table in
-`AGENTS.md` ("## Adapter validation status"), describing any server-specific
-behaviour: workspace model, sync requirements, cold-start cost, and any
-per-document quirk that forced a shadowed method.
+Add a row to the adapter reference below and to the validation table above
+("## Validation levels"), describing any server-specific behaviour: workspace
+model, sync requirements, cold-start cost, and any per-document quirk that
+forced a shadowed method.
 
 ---
 
