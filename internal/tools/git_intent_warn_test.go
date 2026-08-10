@@ -185,6 +185,130 @@ func TestGitPeerIntentWarning_NestedRepoGlobs(t *testing.T) {
 	}
 }
 
+// TestGitPeerIntentWarning_TierAwareCoverage is the Finding-1 acceptance
+// scenario end-to-end, with a real git binary, in the common single-repo
+// layout (repo == workspace): a narrow-scoped peer intent must not warn on a
+// write-tier repo-state op (commit) but must still warn on a destructive-tier
+// op (reset), while an unscoped broadcast warns on both.
+func TestGitPeerIntentWarning_TierAwareCoverage(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	store := openIntentStore(t, repo)
+	sessA := intentGitTool(repo, "sess-a", "amber-fox", store, true)
+
+	putPeerIntent(t, store, "sess-b", "blue-heron", "working on the site", []string{"site/**"})
+
+	// Narrow glob + commit (write-tier): no warning — this is the exact
+	// scenario that regresses to `true` on the pre-fix code (rel == "."
+	// returned true unconditionally, regardless of tier or glob scope).
+	stageFile(t, sessA, repo, "one.txt", "one\n", false)
+	out, err := callGit(t, sessA, map[string]any{"subcommand": "commit", "message": "one"})
+	if err != nil {
+		t.Fatalf("commit one: %v", err)
+	}
+	if strings.Contains(out, "plumb-warning") {
+		t.Errorf("narrow glob must not warn on a write-tier commit, got:\n%s", out)
+	}
+
+	// The same narrow glob + reset (destructive-tier): warns.
+	out, err = callGit(t, sessA, map[string]any{"subcommand": "reset", "args": []string{"--soft", "HEAD~1"}, "confirm": true})
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if !strings.Contains(out, `peer blue-heron claimed: "working on the site"`) {
+		t.Errorf("narrow glob must still warn on a destructive-tier reset, got:\n%s", out)
+	}
+
+	// An unscoped broadcast intent + commit (write-tier): warns.
+	stageFile(t, sessA, repo, "one.txt", "one\n", false)
+	putPeerIntent(t, store, "sess-c", "calm-crow", "rebasing ops main", nil)
+	out, err = callGit(t, sessA, map[string]any{"subcommand": "commit", "message": "one again"})
+	if err != nil {
+		t.Fatalf("commit again: %v", err)
+	}
+	if !strings.Contains(out, `peer calm-crow claimed: "rebasing ops main"`) {
+		t.Errorf("unscoped intent must warn on a write-tier commit, got:\n%s", out)
+	}
+}
+
+// TestGitPeerIntentWarning_AncestorRepoLayout is the Finding-4 live-git
+// scenario: the workspace is a SUBDIRECTORY of the git top-level (a monorepo
+// pinned to one service). A scoped intent can now match, tier-aware the same
+// as the repo == workspace case.
+func TestGitPeerIntentWarning_AncestorRepoLayout(t *testing.T) {
+	requireGit(t)
+	repoRoot := t.TempDir()
+	runGitDirect(t, repoRoot, "init")
+	runGitDirect(t, repoRoot, "config", "user.email", "test@example.com")
+	runGitDirect(t, repoRoot, "config", "user.name", "Test User")
+	ws := repoRoot + "/services/api"
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ws+"/init.txt", []byte("init\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitDirect(t, repoRoot, "add", "services/api/init.txt")
+	runGitDirect(t, repoRoot, "commit", "-m", "initial")
+	store := openIntentStore(t, ws)
+	sessA := intentGitTool(ws, "sess-a", "amber-fox", store, true)
+
+	commit := func(msg string) string {
+		t.Helper()
+		if err := os.WriteFile(ws+"/"+msg+".txt", []byte(msg+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// files are relative to the git TOPLEVEL, not the subdirectory repo —
+		// see TestGit_AddRelativePathFromSubdirRepo.
+		if _, err := callGit(t, sessA, map[string]any{"subcommand": "add", "files": []string{"services/api/" + msg + ".txt"}}); err != nil {
+			t.Fatalf("add %s: %v", msg, err)
+		}
+		out, err := callGit(t, sessA, map[string]any{"subcommand": "commit", "message": msg})
+		if err != nil {
+			t.Fatalf("commit %s: %v", msg, err)
+		}
+		return out
+	}
+
+	// A narrow, workspace-scoped glob must not warn on a write-tier commit —
+	// pre Finding-4 the ancestor direction fell through to "outside the
+	// workspace" and never matched at all, unscoped broadcast excepted.
+	putPeerIntent(t, store, "sess-b", "blue-heron", "touching a handler", []string{"handlers/**"})
+	if out := commit("one"); strings.Contains(out, "plumb-warning") {
+		t.Errorf("narrow glob must not warn on a write-tier commit, got:\n%s", out)
+	}
+
+	// A workspace-wide glob DOES warn — it is the best expressible proxy for
+	// "repo-wide" from a workspace pinned below the git top-level.
+	putPeerIntent(t, store, "sess-c", "calm-crow", "broad claim", []string{"**"})
+	if out := commit("two"); !strings.Contains(out, `peer calm-crow claimed: "broad claim"`) {
+		t.Errorf("workspace-wide glob should warn even though it names a subset of the full repo, got:\n%s", out)
+	}
+}
+
+// TestGitPeerIntentWarning_SurfacesOnFailure is the Finding-3 test: the
+// warning is computed BEFORE the git child runs, so it must still surface
+// when that child then fails — exactly when a peer's claim is most likely to
+// explain the failure, and the query cost has already been paid.
+func TestGitPeerIntentWarning_SurfacesOnFailure(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	store := openIntentStore(t, repo)
+	sessA := intentGitTool(repo, "sess-a", "amber-fox", store, true)
+
+	putPeerIntent(t, store, "sess-b", "blue-heron", "rebasing ops main", nil)
+
+	// Nothing staged: commit fails ("nothing to commit"), but the warning
+	// that was computed before the git child ran must still appear.
+	_, err := callGit(t, sessA, map[string]any{"subcommand": "commit", "message": "nothing to commit"})
+	if err == nil {
+		t.Fatal("expected the commit to fail with nothing staged")
+	}
+	if !strings.Contains(err.Error(), `peer blue-heron claimed: "rebasing ops main"`) {
+		t.Errorf("a failed commit must still surface the peer intent warning, got:\n%s", err.Error())
+	}
+}
+
 // TestFormatRepoIntentWarning pins the filtering and rendering without a git
 // binary: own and expired rows are excluded, non-covering scopes are excluded,
 // and matches render as advisory claims.
@@ -209,7 +333,12 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 		row("sess-d", "dim-dove", "elsewhere", []string{"other/**"}, live),
 		row("sess-e", "eager-emu", "covering glob", []string{"plumb/**"}, live),
 	}
-	out := formatRepoIntentWarning(intents, ws, repo, "self", now)
+	// tierDestructive here so the "covering glob" case (a glob matching the
+	// nested repo's own path) and the unscoped broadcasts all still match —
+	// tier only changes behaviour for a SCOPED intent at rel == "." or the
+	// ancestor layout, neither of which this table exercises; see
+	// TestIntentCoversRepo for the tier-specific cases.
+	out := formatRepoIntentWarning(intents, ws, repo, "self", now, tierDestructive)
 	for _, want := range []string{`peer blue-heron claimed: "rebasing ops main"`, `peer eager-emu claimed: "covering glob"`, "expires in 40 min"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("warning missing %q:\n%s", want, out)
@@ -221,7 +350,7 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 		}
 	}
 
-	if got := formatRepoIntentWarning(nil, ws, repo, "self", now); got != "" {
+	if got := formatRepoIntentWarning(nil, ws, repo, "self", now, tierDestructive); got != "" {
 		t.Errorf("no intents should render no warning, got %q", got)
 	}
 
@@ -230,7 +359,7 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		many = append(many, row("sess-"+id, "name-"+id, "claim "+id, nil, live))
 	}
-	out = formatRepoIntentWarning(many, ws, repo, "self", now)
+	out = formatRepoIntentWarning(many, ws, repo, "self", now, tierDestructive)
 	if !strings.Contains(out, "… and 2 more peer intent claim(s)") {
 		t.Errorf("expected the overflow count line, got:\n%s", out)
 	}
@@ -272,23 +401,70 @@ func TestRepoStateVerb(t *testing.T) {
 func TestIntentCoversRepo(t *testing.T) {
 	ws := t.TempDir()
 	nested := ws + "/plumb"
+	// ancestorWS is a subdirectory workspace pinned under a larger git
+	// top-level (Finding 4): the repo is an ANCESTOR of the workspace, the
+	// opposite direction from nested above (repo nested under the workspace).
+	ancestorRepo := t.TempDir()
+	ancestorWS := ancestorRepo + "/services/api"
 	cases := []struct {
 		name     string
 		globs    []string
 		repoRoot string
+		tier     gitTier
+		ws       string // defaults to ws when empty
 		want     bool
 	}{
-		{"unscoped always covers", nil, nested, true},
-		{"unscoped covers outside-workspace repo", nil, "/elsewhere/repo", true},
-		{"repo is the workspace root: any scope covers", []string{"internal/tools/**"}, ws, true},
-		{"glob matching the repo's relative path", []string{"plumb/**"}, nested, true},
-		{"slashless glob matching the repo basename", []string{"plumb"}, nested, true},
-		{"glob away from the repo", []string{"other/**"}, nested, false},
-		{"scoped intent cannot cover an outside-workspace repo", []string{"repo/**"}, "/elsewhere/repo", false},
+		{"unscoped always covers (write)", nil, nested, tierWrite, "", true},
+		{"unscoped always covers (destructive)", nil, nested, tierDestructive, "", true},
+		{"unscoped covers outside-workspace repo", nil, "/elsewhere/repo", tierWrite, "", true},
+
+		// Finding 1 — the acceptance scenario: repo IS the workspace root
+		// (the common single-repo layout). A narrow glob no longer covers a
+		// write-tier repo-state op (this is the case that FAILS on the
+		// pre-fix code, which returned true unconditionally at rel == ".").
+		{"repo is the workspace root: narrow glob does NOT cover a write-tier op", []string{"site/**"}, ws, tierWrite, "", false},
+		{"repo is the workspace root: narrow glob covers a destructive-tier op", []string{"site/**"}, ws, tierDestructive, "", true},
+		{"repo is the workspace root: workspace-wide glob covers a write-tier op", []string{"**"}, ws, tierWrite, "", true},
+		{"repo is the workspace root: bare '.' glob covers a write-tier op", []string{"."}, ws, tierWrite, "", true},
+
+		{"glob matching the repo's relative path", []string{"plumb/**"}, nested, tierWrite, "", true},
+		{"slashless glob matching the repo basename", []string{"plumb"}, nested, tierWrite, "", true},
+		{"glob away from the repo", []string{"other/**"}, nested, tierDestructive, "", false},
+		{"scoped intent cannot cover an outside-workspace repo", []string{"repo/**"}, "/elsewhere/repo", tierWrite, "", false},
+
+		// Finding 4 — the workspace is a SUBDIRECTORY of the git top-level
+		// (repoRoot is an ancestor of ws): a scoped intent can still match,
+		// using the same reasoning as the repo == workspace case, since
+		// every workspace-relative path is inside the larger repository.
+		{"ancestor repo: narrow glob does NOT cover a write-tier op", []string{"handlers/**"}, ancestorRepo, tierWrite, ancestorWS, false},
+		{"ancestor repo: narrow glob covers a destructive-tier op", []string{"handlers/**"}, ancestorRepo, tierDestructive, ancestorWS, true},
+		{"ancestor repo: workspace-wide glob covers a write-tier op", []string{"**"}, ancestorRepo, tierWrite, ancestorWS, true},
 	}
 	for _, c := range cases {
-		if got := intentCoversRepo(c.globs, ws, c.repoRoot); got != c.want {
-			t.Errorf("%s: intentCoversRepo(%v, %s) = %v, want %v", c.name, c.globs, c.repoRoot, got, c.want)
+		effWS := c.ws
+		if effWS == "" {
+			effWS = ws
 		}
+		if got := intentCoversRepo(c.globs, effWS, c.repoRoot, c.tier); got != c.want {
+			t.Errorf("%s: intentCoversRepo(%v, %s, %s, tier=%d) = %v, want %v", c.name, c.globs, effWS, c.repoRoot, c.tier, got, c.want)
+		}
+	}
+}
+
+// TestIntentCoversRepo_NarrowVsDestructive_FailsPreFix documents, standalone,
+// the specific Finding-1 regression: at rel == "." a narrow glob must NOT
+// cover a write-tier repo-state op, even though the same glob DOES cover a
+// destructive-tier op. On the pre-fix code (intentCoversRepo with no tier
+// parameter, unconditionally returning true at rel == ".") the write-tier
+// case here fails: both assertions would observe `true`. See the PR
+// verification notes for confirmation by temporary revert.
+func TestIntentCoversRepo_NarrowVsDestructive_FailsPreFix(t *testing.T) {
+	ws := t.TempDir()
+	narrow := []string{"site/**"}
+	if got := intentCoversRepo(narrow, ws, ws, tierWrite); got {
+		t.Error("narrow glob must NOT cover a write-tier repo-state op at rel == \".\" — this is the Finding 1 regression")
+	}
+	if got := intentCoversRepo(narrow, ws, ws, tierDestructive); !got {
+		t.Error("the same narrow glob must still cover a destructive-tier op — the broad behaviour is intentionally kept there")
 	}
 }

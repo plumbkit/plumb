@@ -61,13 +61,16 @@ func (t *Git) peerIntentWarnFn(sub string, tier gitTier) func(context.Context, s
 	if !t.intentsOn() {
 		return nil
 	}
-	return t.peerRepoIntentWarning
+	return func(ctx context.Context, repoRoot string) string {
+		return t.peerRepoIntentWarning(ctx, repoRoot, tier)
+	}
 }
 
 // peerRepoIntentWarning renders the advisory warning for live peer intents
-// covering the repository rooted at repoRoot. Best-effort: any query failure
-// yields no warning — this is surfacing, never a gate.
-func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string) string {
+// covering the repository rooted at repoRoot, tier-aware (see
+// intentCoversRepo). Best-effort: any query failure yields no warning — this
+// is surfacing, never a gate.
+func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string, tier gitTier) string {
 	store := t.collabStore()
 	if store == nil {
 		return ""
@@ -83,19 +86,19 @@ func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string) string
 	if err != nil {
 		return ""
 	}
-	return formatRepoIntentWarning(intents, ws, repoRoot, t.sessID, now)
+	return formatRepoIntentWarning(intents, ws, repoRoot, t.sessID, now, tier)
 }
 
 // formatRepoIntentWarning renders the warning block for the matching claims.
 // The session's own intent and expired rows (defensive — LiveIntents already
 // filters them) never warn.
-func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, now time.Time) string {
+func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, now time.Time, tier gitTier) string {
 	var matched []collab.Row
 	for _, r := range intents {
 		if r.AuthorID == selfID || !r.ExpiresAt.After(now) {
 			continue
 		}
-		if intentCoversRepo(r.PathGlobs, ws, repoRoot) {
+		if intentCoversRepo(r.PathGlobs, ws, repoRoot, tier) {
 			matched = append(matched, r)
 		}
 	}
@@ -116,14 +119,41 @@ func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, 
 }
 
 // intentCoversRepo reports whether a peer intent's claim reaches the
-// repository rooted at repoRoot. An UNSCOPED intent (no path globs) is a
-// whole-workspace broadcast — "rebasing ops main" — and always covers it. A
-// scoped intent covers the repo when the repo IS the workspace root (every
-// workspace-relative glob names paths inside it) or when a glob matches the
-// repo root's workspace-relative path (e.g. "plumb/**" for a nested repo).
-// Globs are workspace-relative, so a repo outside the workspace can only be
-// covered by an unscoped broadcast.
-func intentCoversRepo(globs []string, ws, repoRoot string) bool {
+// repository rooted at repoRoot, TIER-AWARE. An UNSCOPED intent (no path
+// globs) is a whole-workspace broadcast — "rebasing ops main" — and always
+// covers it regardless of tier.
+//
+// For a SCOPED intent the required breadth depends on the op's blast radius:
+// a destructive-tier op (reset, clean, rebase, checkout, branch/tag delete,
+// stash drop, …) can touch any path in the repository, so any live peer
+// intent whose scope reaches into the repository counts. A write-tier
+// repo-state op (commit, switch, checkout -b) only moves HEAD/refs and writes
+// what this session explicitly asked for, so it warns only for a genuinely
+// repo-wide claim — never a narrow subtree that merely happens to sit inside
+// the repository, or every commit in the common single-repo layout (repo ==
+// workspace) would warn on any live intent no matter how narrowly scoped.
+//
+// Three repo/workspace layouts:
+//   - repo IS the workspace (rel == "."): every workspace-relative glob names
+//     a path inside the repo, so destructive always covers it; write-tier
+//     covers only for a glob that spans the whole workspace ("**", "*", ".") —
+//     collab.MatchPath already treats those as matching rel "." and a
+//     narrower glob as not, so no extra logic is needed here.
+//   - the workspace sits INSIDE the repo (rel is a pure ".." chain — a
+//     pinned subdirectory workspace under a larger git top-level): identical
+//     reasoning applies, since every workspace-relative path is still inside
+//     the (larger) repository, so it is treated the same as rel == ".".
+//   - the repo is nested INSIDE the workspace (rel names a subpath, e.g.
+//     "plumb" for repoRoot <ws>/plumb): a glob covers the repo only when it
+//     matches the repo's own workspace-relative path (e.g. "plumb/**") —
+//     unchanged from before this fix, and the same test for both tiers (a
+//     narrower glob strictly inside such a repo is out of scope for this fix;
+//     see the PR discussion for the destructive-tier case left untouched).
+//
+// A repo outside the workspace tree entirely (neither of the above) can only
+// be covered by an unscoped broadcast, since a workspace-relative glob cannot
+// name anything in it.
+func intentCoversRepo(globs []string, ws, repoRoot string, tier gitTier) bool {
 	if len(globs) == 0 {
 		return true
 	}
@@ -137,11 +167,32 @@ func intentCoversRepo(globs []string, ws, repoRoot string) bool {
 		ws = resolved
 	}
 	rel, err := filepath.Rel(ws, repoRoot)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil {
 		return false
 	}
-	if rel == "." {
-		return true
+	if rel == "." || pureAncestorRel(rel) {
+		if tier == tierDestructive {
+			return true
+		}
+		return collab.MatchPath(globs, ".")
 	}
+	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false // repoRoot sits outside the workspace tree entirely
+	}
+	// repo nested under the workspace at rel: unchanged for both tiers.
 	return collab.MatchPath(globs, rel)
+}
+
+// pureAncestorRel reports whether rel — a filepath.Rel(ws, repoRoot) result —
+// is a PURE ".." chain: every path component is "..", meaning repoRoot is an
+// ancestor of ws with no additional path segment naming some other, unrelated
+// location. A mixed result ("../sibling") means repoRoot sits outside the
+// workspace tree entirely, not above it.
+func pureAncestorRel(rel string) bool {
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part != ".." {
+			return false
+		}
+	}
+	return true
 }
