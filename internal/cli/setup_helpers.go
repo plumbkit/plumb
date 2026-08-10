@@ -295,6 +295,35 @@ func readOrInitCodexConfig(path string) (m map[string]any, isNew bool, err error
 	return m, false, nil
 }
 
+// parseJSONConfig reads cfgPath as JSON, creating NOTHING — not the file, not
+// its parent directory. It is the inspection-only counterpart to
+// readOrInitClaudeConfig, for `plumb doctor` checks: a check must never write to
+// the filesystem it is reporting on.
+func parseJSONConfig(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parsing %s as JSON: %w", path, err)
+	}
+	return m, nil
+}
+
+// parseTOMLConfig is parseJSONConfig for Codex's TOML config.
+func parseTOMLConfig(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := toml.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parsing %s as TOML: %w", path, err)
+	}
+	return m, nil
+}
+
 // setupWriteOptions is the write policy for every file `plumb setup` touches.
 //
 // These land in OTHER tools' directories — ~/.codex, the Claude skills dir, a
@@ -366,6 +395,14 @@ func writeYAML(path string, m map[string]any) error {
 	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.yaml"))
 }
 
+// removeKey is the entry VALUE meaning "delete this key from the existing
+// server entry". mergeServerEntry merges rather than replaces, so deletion is
+// the one edit its vocabulary otherwise lacks — needed by
+// `plumb setup <client>` (no --lean), which must be able to take a client-side
+// tool allowlist back off. It never reaches a serialiser: the merge loop deletes
+// the key instead of assigning the sentinel.
+type removeKey struct{}
+
 // mergeServerEntry is the shared, format-agnostic merge used by every
 // `plumb setup <client>` command. It reads cfgPath via read, finds (or creates)
 // the server map under serversKey, and inserts entry under the "plumb" key —
@@ -421,6 +458,10 @@ func mergeServerEntry(
 		existing = map[string]any{}
 	}
 	for k, v := range entry {
+		if _, drop := v.(removeKey); drop {
+			delete(existing, k)
+			continue
+		}
 		existing[k] = v
 	}
 	servers["plumb"] = existing

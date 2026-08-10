@@ -101,8 +101,22 @@ var extraSetupTargets = []setupTarget{
 var (
 	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: claudeSkillsDir}
 	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
-	geminiTarget        = setupTarget{use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
-	codexTarget         = setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"), skillsDirFn: codexSkillsDir}
+	// Gemini CLI shares Claude Desktop's mcpServers shape but has its own writer
+	// (setup_lean.go): --lean writes an includeTools allowlist Claude Desktop
+	// does not read.
+	geminiTarget = setupTarget{
+		use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupGeminiInto,
+		extractFn: claudeDesktopCommandExtractor,
+		flags:     leanFlagRegistrar(&setupGeminiLeanFlag, geminiLeanClient),
+		note:      func() string { return leanSetupNote(geminiLeanClient, setupGeminiLeanFlag) },
+	}
+	codexTarget = setupTarget{
+		use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto,
+		extractFn:   mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
+		flags:       leanFlagRegistrar(&setupCodexLeanFlag, codexLeanClient),
+		note:        func() string { return leanSetupNote(codexLeanClient, setupCodexLeanFlag) },
+		skillsDirFn: codexSkillsDir,
+	}
 )
 
 // allSetupClients lists every client `plumb setup` supports, for the `config show`
@@ -181,10 +195,18 @@ func init() {
 			Short: fmt.Sprintf("Register plumb as an MCP server in %s's config", t.name),
 			RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(t) },
 		}
-		if t.flags != nil {
-			t.flags(cmd)
-		}
+		registerTargetFlags(cmd, t)
 		setupCmd.AddCommand(cmd)
+	}
+}
+
+// registerTargetFlags applies a target's optional flags hook to its command.
+// Shared by the generated commands here and the two hand-written ones in
+// setup.go (gemini, codex), so a target that grows an option gets it wherever
+// its command is built.
+func registerTargetFlags(cmd *cobra.Command, t setupTarget) {
+	if t.flags != nil {
+		t.flags(cmd)
 	}
 }
 
@@ -286,6 +308,18 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 
 	printSetupAllSummary(changed, unregistered)
 	return nil
+}
+
+// bulkSetupRunning reports whether this invocation is a bulk
+// `plumb setup --all`/`--repair` sweep rather than a named client subcommand.
+// The three flags are only ever set by `plumb setup` itself; a subcommand run
+// cannot see them, so their state is a reliable signal.
+//
+// It exists for the --lean clients: a sweep carries no --lean state, so it must
+// preserve whatever allowlist is on disk rather than read its own silence as
+// "the user wants the full surface back" and strip a key they set on purpose.
+func bulkSetupRunning() bool {
+	return setupRepairFlag || setupAllFlag || setupInstallMissingFlag
 }
 
 // bulkRegistersMissing reports whether the bulk run registers

@@ -96,6 +96,35 @@
   argument guard — an unknown or colliding parameter, and a missing required
   one — report `invalid_arguments` + `fix_arguments`.
 
+- **`plumb setup codex --lean` and `plumb setup gemini --lean` write a
+  client-side tool allowlist, generalising the pattern Kimi Code shipped
+  with.** None of these clients carries a verified deferred-discovery
+  capability, so plumb's own `[tools] profile = "lean"` would remove capability
+  rather than schemas — the saving has to be taken in the client's own config,
+  where a filtered-out tool is the user's explicit choice. Each client's key is
+  its own and holds exact tool names (no globbing): `enabled_tools` on
+  `[mcp_servers.plumb]` in Codex's `config.toml` (openai/codex#5367) and
+  `includeTools` on `mcpServers.plumb` in Gemini CLI's `settings.json`
+  (google-gemini/gemini-cli#2976, whose sibling `excludeTools` wins wherever
+  both are present). The value is always `tools.LeanToolNames()` — the only
+  permitted source, since a client-enforced filter cannot be rescued by plumb's
+  server-side bootstrap guarantee. Gemini CLI gains its own writer instead of
+  borrowing Claude Desktop's, so Claude Desktop can never grow an `includeTools`
+  key it does not read. Both clients take the symmetric contract: `--lean` pins
+  the set, a **bare** named re-register clears the key, and re-running with
+  `--lean` replaces a hand-edited list — while the bulk `plumb setup
+  --all`/`--repair` sweeps carry no `--lean` state at all and therefore preserve
+  whatever is on disk, so a routine binary repoint never widens a surface the
+  user narrowed. (Kimi Code keeps its shipped preserve-on-bare contract.) The
+  three writers share one lean-aware idempotence seam (`leanClient`,
+  `mergeLeanEntry`), which defeats `mergeServerEntry`'s same-binary
+  short-circuit so `--lean` is not a silent no-op on an already-registered
+  machine. Guarded by `TestLeanClientWriters` (fresh, short-circuit defeat,
+  idempotence, clearing, bulk preservation, hand-edited replacement, unrelated
+  servers — per client), `TestLeanChoiceOf`, `TestLeanFlagsOnTheCommands`,
+  `TestShippedLeanTargetsReadTheirFlags`, `TestLeanSetupNote`, and
+  `TestClaudeDesktopNeverGetsAnAllowlistKey`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
