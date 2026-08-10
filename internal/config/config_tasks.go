@@ -115,7 +115,7 @@ func ParseTaskCommand(s string) ([]string, error) {
 // need no trust and are not included). It reads the raw project TOML so the set
 // is provenance-filtered by construction and independent of which language is
 // currently detected. This is the command set the trust hash binds to (see
-// TrustStore.SetTrustedForTasks / IsTrustedForTasks).
+// TrustStore.SetTrustedForProject / IsTrustedForTasks).
 func ProjectTaskCommands(root string) ([]TaskCommandSpec, error) {
 	raw, err := LoadProjectRaw(root)
 	if err != nil {

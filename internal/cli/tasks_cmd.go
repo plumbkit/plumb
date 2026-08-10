@@ -34,9 +34,27 @@ var taskCmds = func() []*cobra.Command {
 
 var trustCmd = &cobra.Command{
 	Use:   "trust [directory]",
-	Short: "Trust this workspace's project-supplied task commands (.plumb/config.toml)",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runTrust,
+	Short: "Trust everything this workspace's .plumb/config.toml supplies",
+	Long: `Approve the settings a project's .plumb/config.toml supplies that plumb
+otherwise ignores. This is ONE grant per workspace, and it covers all of them:
+
+  · [tasks.<lang>]        build/lint/test/e2e commands run by run_task
+  · [[command]]           the named command allow-list run by run_command
+  · [commands]            the shell policy, including allow_shell
+  · [lsp.<lang>]          command, args, env, initialization_options and the
+                          root markers — the argv of a process plumb spawns
+  · [git]                 the destructive and network tiers, and the
+                          protected-branch list
+
+A project config is an untrusted surface — cloning a repository ships one — so
+none of that takes effect until you approve it here. Everything about to be
+trusted is printed first, values and all: read it before answering for it.
+
+Trust is bound to the exact content shown. Changing any of it (by hand, or by an
+agent) invalidates that part of the grant, and plumb falls back to your global
+config until you run this again.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runTrust,
 }
 
 // resolveTaskWorkspace resolves the workspace root and its primary language for
@@ -130,22 +148,54 @@ func runTrust(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Informed consent: show every project-supplied command trust is about to
-	// bind to — config.ProjectTaskCommands, the same set SetTrustedForTasks
-	// hashes below, covering every language the project configures, not just
-	// the one currently detected. Trust is enforced against the command at run
-	// time, so surfacing it here is the user's chance to spot a hostile argv
-	// (e.g. an interpreter invocation) a project shipped — and re-running
-	// `plumb trust` after a command changes re-confirms the current set.
-	printTrustedTaskCommands(root, cmds)
-	if err := config.NewTrustStore().SetTrustedForTasks(root, cmds); err != nil {
+	spec, err := config.ProjectPolicySpecFor(root)
+	if err != nil {
 		return err
 	}
-	// Trust is bound to the exact command set above: changing any task command
-	// invalidates it and re-prompts. A trust.json upgraded from the old boolean
+	// Informed consent: show everything trust is about to bind to — the exact
+	// sets SetTrustedForProject hashes below, covering every language the project
+	// configures rather than just the one currently detected. Trust is enforced
+	// against this content at run time, so surfacing it here is the user's chance
+	// to spot a hostile argv a project shipped, and re-running `plumb trust`
+	// after any of it changes re-confirms the current content.
+	printTrustedTaskCommands(root, cmds)
+	printTrustedPolicy(root, spec)
+	if len(cmds) == 0 && spec.IsEmpty() {
+		fmt.Printf("%s supplies nothing that needs trust; recording the grant anyway so a later addition re-prompts\n", root)
+	}
+	if err := config.NewTrustStore().SetTrustedForProject(root, cmds, spec); err != nil {
+		return err
+	}
+	// Trust is bound to the exact content above: changing any of it invalidates
+	// that binding and re-prompts. A trust.json upgraded from the old boolean
 	// format re-confirms here once.
-	fmt.Printf("trusted project task commands for %s (trust is bound to these commands; changing them requires re-running `plumb trust`)\n", root)
+	fmt.Printf("trusted %s\n", root)
+	fmt.Println("  this grant covers the project's task commands, its [[command]] allow-list and [commands] shell policy,")
+	fmt.Println("  its [lsp.<lang>] server command/args/env, and its [git] tier policy.")
+	fmt.Println("  it is bound to the content shown above; changing any of it requires re-running `plumb trust`.")
 	return nil
+}
+
+// printTrustedPolicy lists every capability-granting key the project's
+// .plumb/config.toml sets — the [git] safety tiers and the [lsp.<lang>] fields
+// that decide which process the daemon spawns and with what — as `key = value`,
+// with a per-key warning for the ones that are execution or a tier grant.
+//
+// The values, not just the keys, are the point. A user approving a `command`
+// deserves to see the argv before approving it, since after this the daemon runs
+// it as them, unsandboxed, on every attach. A no-op when the project asks for
+// nothing (no prompt, nothing to show).
+func printTrustedPolicy(root string, spec config.ProjectPolicySpec) {
+	if spec.IsEmpty() {
+		return
+	}
+	fmt.Printf("about to trust these capability-granting settings in %s:\n", root)
+	for i, line := range spec.Describe() {
+		fmt.Printf("    %s\n", line)
+		if w := spec[i].Warning(); w != "" {
+			fmt.Printf("    %s\n", "!! WARNING: "+w)
+		}
+	}
 }
 
 // printTrustedTaskCommands lists every project-supplied task command in cmds

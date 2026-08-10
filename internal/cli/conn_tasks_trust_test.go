@@ -49,7 +49,7 @@ func TestTaskResolver_TrustBoundToCommandSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.NewTrustStore().SetTrustedForTasks(ws, cmds); err != nil {
+	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.taskResolver("build", ""); err != nil {
