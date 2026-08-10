@@ -218,6 +218,13 @@ var retryableByClass = map[RemediationClass]bool{
 // re-issue the operation successfully, unaided. See the package doc.
 func (c RemediationClass) Retryable() bool { return retryableByClass[c] }
 
+// Valid reports whether c is one of the declared classes, on the same terms as
+// Kind.Valid: the empty class is not valid — it is the absence of a remediation,
+// not one of them. It reads the package's own list rather than cloning through
+// AllRemediationClasses, so a hot caller (the stats write path checks every row)
+// pays no allocation to ask.
+func (c RemediationClass) Valid() bool { return slices.Contains(allRemediationClasses, c) }
+
 // allRemediationClasses lists every RemediationClass in sorted order, on the
 // same terms as allKinds.
 var allRemediationClasses = []RemediationClass{

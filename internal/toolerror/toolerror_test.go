@@ -63,6 +63,32 @@ func TestAllRemediationClasses_SortedAndDefaulted(t *testing.T) {
 	if len(defaultReasons) != len(classes) {
 		t.Errorf("defaultReasons has %d entries but %d classes are declared", len(defaultReasons), len(classes))
 	}
+	for _, c := range classes {
+		if !c.Valid() {
+			t.Errorf("AllRemediationClasses() contains %q, which Valid() rejects", c)
+		}
+	}
+}
+
+func TestRemediationClassValid(t *testing.T) {
+	tests := []struct {
+		name  string
+		class RemediationClass
+		want  bool
+	}{
+		{"declared class", ClassPassDirtyOk, true},
+		{"none is declared", ClassNone, true},
+		{"empty is the absence of a remediation, not one", RemediationClass(""), false},
+		{"unknown label", RemediationClass("do_a_barrel_roll"), false},
+		{"near miss on case", RemediationClass("Pass_Dirty_Ok"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.class.Valid(); got != tt.want {
+				t.Errorf("RemediationClass(%q).Valid() = %v, want %v", tt.class, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestError_TextIsByteIdenticalToCause(t *testing.T) {

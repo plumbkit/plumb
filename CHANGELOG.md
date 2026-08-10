@@ -493,7 +493,15 @@
   not re-derive it, never set independently. `validateCall` now rejects an
   `error_kind` or `remediation_class` outside its declared vocabulary: both are
   GROUP BY keys, and one invented label would split a bucket in every failure
-  report that ever reads the table.
+  report that ever reads the table. An undeclared label costs the LABEL, not the
+  row: `normaliseCall` blanks it (and the retryability derived from it), logs
+  what it dropped, and stores everything else — the classification is the
+  optional part of a telemetry row, the duration, savings, tool and client
+  identity are not. `stats.Writer` now also logs rows a batch skipped, which it
+  previously discarded without a trace. `toolerror` gains
+  `RemediationClass.Valid()` to match `Kind.Valid()`; it reads the package's own
+  list rather than cloning through `AllRemediationClasses()`, so checking every
+  row on the write path allocates nothing.
 
 - **`plumb stats --failures` — a failure breakdown by kind.** A new
   `stats.FailureSummary` groups failed calls by kind, tool, client name and

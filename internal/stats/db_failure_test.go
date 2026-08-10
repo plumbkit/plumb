@@ -245,36 +245,96 @@ func TestFailureClassificationRoundTrips(t *testing.T) {
 	}
 }
 
-// TestValidateCallRejectsUndeclaredClassification guards the low-cardinality
-// promise: error_kind and remediation_class are GROUP BY keys, so an invented
-// label would split a bucket in every failure report thereafter.
-func TestValidateCallRejectsUndeclaredClassification(t *testing.T) {
+// TestUndeclaredClassificationIsBlankedNotDropped pins the trade at the write
+// path: an invented label must not reach the GROUP BY keys, but the answer is to
+// drop the LABEL, not the row. The classification is the optional part of a
+// telemetry row; the duration, savings, tool and client identity are not.
+func TestUndeclaredClassificationIsBlankedNotDropped(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	bad := Call{
+		SessionID: "s1", Workspace: "/w", Tool: "edit_file", CalledAt: time.Now(),
+		DurationMs: 42, TokensSaved: 99,
+		ErrorKind: "made_up", RemediationClass: "do_a_barrel_roll", ErrorRetryable: true,
+	}
+	if err := db.Record(bad); err != nil {
+		t.Fatalf("Record with an undeclared classification returned %v; the row must still be stored", err)
+	}
+
+	var kind, class string
+	var retryable int
+	var durationMs, tokens int64
+	if err := db.db.QueryRow(
+		`SELECT error_kind, error_retryable, remediation_class, duration_ms, tokens_saved FROM tool_calls WHERE session_id='s1'`,
+	).Scan(&kind, &retryable, &class, &durationMs, &tokens); err != nil {
+		t.Fatalf("the row was not stored at all: %v", err)
+	}
+	if kind != "" || class != "" || retryable != 0 {
+		t.Errorf("undeclared classification survived as (%q, %d, %q), want all blank", kind, retryable, class)
+	}
+	if durationMs != 42 || tokens != 99 {
+		t.Errorf("the rest of the row was lost: duration=%d tokens=%d, want 42/99", durationMs, tokens)
+	}
+}
+
+// TestBatchKeepsRowsWithUndeclaredClassification is the same guarantee on the
+// path telemetry actually takes — the Writer's batched transaction — where a
+// rejection would have been counted as `skipped` and thrown away.
+func TestBatchKeepsRowsWithUndeclaredClassification(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	base := Call{Workspace: "/w", Tool: "edit_file", CalledAt: time.Now()}
+	good, bad := base, base
+	good.SessionID, good.ErrorKind, good.RemediationClass = "good", toolerror.KindDirtyFile, toolerror.ClassPassDirtyOk
+	bad.SessionID, bad.ErrorKind = "bad", "made_up"
+
+	skipped, err := db.RecordBatch([]Call{good, bad})
+	if err != nil {
+		t.Fatalf("RecordBatch: %v", err)
+	}
+	if skipped != 0 {
+		t.Errorf("RecordBatch skipped %d rows; an undeclared label must not cost the row", skipped)
+	}
+	var n int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("stored %d rows, want 2", n)
+	}
+}
+
+// TestDeclaredClassificationsAllSurvive is the other half: every value the
+// closed vocabularies declare must pass the normaliser untouched, so the guard
+// cannot quietly start blanking real classifications.
+func TestDeclaredClassificationsAllSurvive(t *testing.T) {
 	base := Call{SessionID: "s", Workspace: "/w", Tool: "edit_file"}
-
-	bad := base
-	bad.ErrorKind = "made_up"
-	if err := validateCall(bad); err == nil {
-		t.Error("validateCall accepted an undeclared Kind")
-	}
-
-	bad = base
-	bad.RemediationClass = "do_a_barrel_roll"
-	if err := validateCall(bad); err == nil {
-		t.Error("validateCall accepted an undeclared RemediationClass")
-	}
-
 	for _, k := range toolerror.AllKinds() {
-		ok := base
-		ok.ErrorKind = k
-		if err := validateCall(ok); err != nil {
-			t.Errorf("validateCall rejected the declared kind %q: %v", k, err)
+		in := base
+		in.ErrorKind = k
+		if got, dropped := normaliseCall(in); dropped != "" || got.ErrorKind != k {
+			t.Errorf("declared kind %q was blanked (dropped=%q)", k, dropped)
 		}
 	}
 	for _, c := range toolerror.AllRemediationClasses() {
-		ok := base
-		ok.RemediationClass = c
-		if err := validateCall(ok); err != nil {
-			t.Errorf("validateCall rejected the declared class %q: %v", c, err)
+		in := base
+		in.RemediationClass = c
+		in.ErrorRetryable = c.Retryable()
+		got, dropped := normaliseCall(in)
+		if dropped != "" || got.RemediationClass != c || got.ErrorRetryable != c.Retryable() {
+			t.Errorf("declared class %q was blanked (dropped=%q)", c, dropped)
 		}
 	}
 }
