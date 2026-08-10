@@ -28,15 +28,30 @@ builds:
       - -trimpath
     ldflags:
       # Mirrors the Makefile's version and provenance injection; GoReleaser
-      # supplies the tag and the commit. RevisionDirty is hard-coded false: a
-      # release is always cut from a tagged commit. No build timestamp is
-      # stamped, deliberately — it would make builds non-reproducible.
+      # supplies the tag and the commit.
+      #
+      # Dirtiness is MEASURED via .IsGitDirty, never asserted. A `goreleaser
+      # release` refuses to run on a dirty tree, so hard-coding false would be
+      # true for a real release — but `--snapshot` skips that validation, and
+      # snapshot is this project's documented local dry-run path. A dirty
+      # snapshot would then claim a clean tree: precisely the lie this stamping
+      # exists to prevent. Verified against goreleaser v2.17.1: a dirty snapshot
+      # renders .IsGitDirty true, a clean release build false.
+      #
+      # BuildChannel likewise distinguishes a snapshot from a release, so a local
+      # dry-run binary cannot self-identify as an official build. A snapshot maps
+      # to "dev" rather than a fourth channel name: the field answers "is this an
+      # official release?", and a snapshot's answer is the same no as the
+      # Makefile's.
+      #
+      # No build timestamp is stamped, deliberately — it would make builds
+      # non-reproducible.
       - >-
         -s -w
         -X github.com/plumbkit/plumb/internal/cli.Version={{ .Version }}
         -X github.com/plumbkit/plumb/internal/cli.Revision={{ .FullCommit }}
-        -X github.com/plumbkit/plumb/internal/cli.RevisionDirty=false
-        -X github.com/plumbkit/plumb/internal/cli.BuildChannel=release
+        -X github.com/plumbkit/plumb/internal/cli.RevisionDirty={{ .IsGitDirty }}
+        -X github.com/plumbkit/plumb/internal/cli.BuildChannel={{ if .IsSnapshot }}dev{{ else }}release{{ end }}
 
 archives:
   - id: plumb

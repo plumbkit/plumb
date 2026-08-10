@@ -410,6 +410,35 @@
   the binary. Documented in `docs/tools.md`; guarded by
   `TestDaemonInfo_ReportsSourceCommit`.
 
+### Fixed
+
+- **Both build stampers now MEASURE source-tree dirtiness instead of asserting
+  it.** `.goreleaser.yml` hard-coded `RevisionDirty=false` on the reasoning that
+  a release is always cut from a tagged commit — true for `goreleaser release`,
+  which refuses to run on a dirty tree, but false for `goreleaser
+  build/release --snapshot`, which skips that validation and is this project's
+  documented local dry-run path. A dirty snapshot therefore claimed a clean
+  tree: exactly the lie this stamping exists to prevent, and the only place in
+  the mechanism that asserted a dirtiness value rather than measuring one. It
+  now uses `{{ .IsGitDirty }}` (verified against goreleaser v2.17.1: a dirty
+  snapshot renders `true`, a clean release build `false`). `BuildChannel` is
+  likewise `{{ if .IsSnapshot }}dev{{ else }}release{{ end }}`, so a local
+  dry-run binary can no longer self-identify as an official release; a snapshot
+  maps onto the existing `dev` channel rather than a fourth value, since the
+  field answers "is this an official release?".
+
+- **The Makefile can no longer confuse "clean" with "`git status` failed".** The
+  old `test -n "$(git status --porcelain 2>/dev/null)"` form discarded stderr
+  and read an empty stdout as a clean tree — but `git rev-parse` can succeed
+  while `git status` fails (an unreadable `.git/index`, reproducibly), which
+  stamped a positive claim of cleanliness about a tree that was never inspected
+  and was in fact dirty. The expression now captures `git status`'s output in
+  one invocation and emits **nothing** when it fails, so the empty stamp flows
+  through `parseBoolStamp` to `dirty_known: false`, in the spirit of the same
+  unparseable-stamp-is-unknown rule the resolver already applied. The
+  `TestResolveProvenance` case covering that path now names this as the reason
+  it exists.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

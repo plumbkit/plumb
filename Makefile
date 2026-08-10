@@ -22,8 +22,17 @@ VERSION   := $(shell git describe --tags --exact-match 2>/dev/null || cat VERSIO
 # build) REVISION is empty, and an unstamped revision is reported as unknown
 # rather than as clean — the dirty stamp is only read alongside a revision.
 # No build timestamp is injected, deliberately: dev builds stay reproducible.
+#
+# REVISION_DIRTY emits NOTHING when `git status` itself fails, so the binary
+# reports the tree state as unknown rather than as clean. The distinction is
+# reachable: `git rev-parse` can succeed while `git status` fails (an unreadable
+# .git/index, say), and the obvious `test -n "$(git status --porcelain)"` form
+# cannot tell an empty stdout that means "clean" from an empty stdout that means
+# "the command died" — it stamps a positive claim of cleanliness about a tree it
+# never managed to inspect. The assignment's exit status is git's, so one
+# invocation both gates and measures.
 REVISION       := $(shell git rev-parse HEAD 2>/dev/null)
-REVISION_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo true || echo false)
+REVISION_DIRTY := $(shell out=$$(git status --porcelain 2>/dev/null) && { test -n "$$out" && echo true || echo false; })
 BUILD_CHANNEL  := dev
 
 LDFLAGS   := -X github.com/plumbkit/plumb/internal/cli.Version=$(VERSION) \
