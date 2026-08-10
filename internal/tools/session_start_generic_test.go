@@ -151,8 +151,11 @@ var allowlistClients = []string{"codex", "codex/0.5.1", "gemini", "gemini-cli/1.
 // --lean Codex user at workspace_search and search_in_files — tools their own
 // enabled_tools list had removed.
 //
-// The forbidden set is derived from nonLeanToolSet(), not hand-picked, so a tool
-// leaving LeanTools fails here instead of silently becoming a broken pointer.
+// The forbidden set comes from nonLeanToolSet(), which is itself maintained by
+// hand — it is tied to the real registry only transitively, via
+// TestFullToolSet_Count deriving its expected count from registerAllTools. So it
+// is a stronger guard than a sample listed here, but not a derivation from the
+// registry: a tool leaving LeanTools fails here once nonLeanToolSet gains it.
 // Both profiles are exercised: "full" is the one that actually ships for these
 // clients, and it is the state the bug lived in.
 func TestGenericGuidance_AllowlistClientNamesLeanToolsOnly(t *testing.T) {

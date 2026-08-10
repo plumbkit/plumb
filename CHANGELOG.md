@@ -207,6 +207,17 @@
   the cross-package pair `TestClientSideAllowlistEntries` /
   `TestLeanClientsDeclareTheirCapability`.
 
+- **The removeKey canary now covers Codex, where it was a no-op.** It scanned
+  the written bytes for `{}`, which is what a leaked sentinel looks like in JSON
+  and YAML — but go-toml writes no empty inline table, it writes a table HEADER
+  (`[mcp_servers.plumb.enabled_tools]`), so the one client whose config carries
+  unrelated user state was unguarded. It now decodes each written config and
+  rejects an empty object/table anywhere in it, naming the path; verified by
+  removing the sentinel branch from `mergeServerEntry` and watching Codex fail.
+  Also pins that every client declaring `ClientSideAllowlist` has `NativeSearch`
+  — `session_start`'s fallback tells exactly those clients to use their own file
+  search, which is only sound while they have one.
+
 - **`plumb doctor` now names a mistyped Codex allowlist correctly, and the
   removeKey sentinel has a canary.** Three small ones found in review.
   `jsonTypeName` documented itself as speaking JSON's vocabulary but is now

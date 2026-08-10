@@ -183,4 +183,14 @@ func TestClientSideAllowlistEntries(t *testing.T) {
 	if unknownCaps.ClientSideAllowlist {
 		t.Error("an unrecognised client must not be assumed to hold a plumb-written allowlist")
 	}
+	// The guidance that fires for these clients tells them to use their OWN file
+	// search in place of plumb's, which their allowlist may have filtered out
+	// (session_start's lastResortSearch). That advice is only sound while every
+	// allowlist client actually has native search.
+	for _, c := range registry {
+		if c.ClientSideAllowlist && !c.NativeSearch {
+			t.Errorf("%s declares a client-side allowlist but no native search — session_start's "+
+				"fallback would leave it with no discovery at all", c.Name)
+		}
+	}
 }
