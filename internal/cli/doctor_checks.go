@@ -336,24 +336,71 @@ func checkConfigs(ws string) []checkResult {
 			ok:     true,
 			detail: "not present (inheriting global)",
 		})
-	} else {
-		base, _ := config.Load()
-		if _, err := config.LoadProject(base, ws); err != nil {
-			results = append(results, checkResult{
-				name:   "project config",
-				ok:     false,
-				detail: err.Error(),
-				fix:    "fix TOML syntax in " + contractConfigPath(projectPath),
-			})
-		} else {
-			results = append(results, checkResult{
-				name:   "project config",
-				ok:     true,
-				detail: contractConfigPath(projectPath),
-			})
-		}
+		return results
+	}
+	base, _ := config.Load()
+	if _, err := config.LoadProject(base, ws); err != nil {
+		results = append(results, checkResult{
+			name:   "project config",
+			ok:     false,
+			detail: err.Error(),
+			fix:    "fix TOML syntax in " + contractConfigPath(projectPath),
+		})
+		return results
+	}
+	results = append(results, checkResult{
+		name:   "project config",
+		ok:     true,
+		detail: contractConfigPath(projectPath),
+	})
+	if r, ok := checkProjectPolicyTrust(ws); ok {
+		results = append(results, r)
 	}
 	return results
+}
+
+// checkProjectPolicyTrust reports whether this workspace's project config asks
+// for capability-granting settings ([git], the exec-deciding [lsp.<lang>]
+// fields) and whether they are actually in effect.
+//
+// It exists because the alternative is silence. plumb ignores an untrusted
+// project config's [git] and [lsp.*] request, which is the correct default and a
+// terrible thing to do quietly: a user who wrote `[lsp.html] root_markers` and
+// saw nothing happen has no way to tell a typo from a trust boundary. ok is
+// false when the project asks for nothing — the row is then omitted rather than
+// shown as a pass with nothing to say.
+func checkProjectPolicyTrust(ws string) (checkResult, bool) {
+	st, err := config.ProjectPolicyStatusFor(ws)
+	if err != nil || st.Spec.IsEmpty() {
+		return checkResult{}, false
+	}
+	return projectPolicyTrustResult(ws, st), true
+}
+
+// projectPolicyTrustResult is the pure decision half of checkProjectPolicyTrust.
+//
+// An untrusted request is a WARNING, not a failure: the settings being ignored is
+// the safe state, not a broken one, and doctor's exit code is reserved for things
+// that are actually broken. It still gets the attention colour and a fix line,
+// because it is the answer to "why did my project config do nothing".
+func projectPolicyTrustResult(ws string, st config.ProjectPolicyStatus) checkResult {
+	const name = "project capability config"
+	keys := strings.Join(st.Spec.Keys(), ", ")
+	if st.Trusted {
+		return checkResult{
+			name:   name,
+			ok:     true,
+			detail: fmt.Sprintf("trusted — %d key(s) in effect: %s", len(st.Spec), keys),
+		}
+	}
+	return checkResult{
+		name: name,
+		ok:   true,
+		warn: true,
+		detail: fmt.Sprintf("NOT in effect — this project's config sets %d capability-granting key(s) plumb is ignoring: %s\n"+
+			"the global config's values are in force instead", len(st.Spec), keys),
+		fix: "review them with `plumb config show --workspace " + ws + "`, then run `plumb trust " + ws + "` to honour them",
+	}
 }
 
 // checkStatsDB verifies the global stats DB is readable.

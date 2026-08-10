@@ -40,6 +40,15 @@
   config show`, the TUI, the web settings API and doctor are all correct without
   knowing trust exists.
 
+- **A project config that plumb is ignoring now says so, in four places.** A
+  setting that silently does nothing is the same defect as one silently
+  honoured, pointing the other way. `plumb doctor` reports a warning naming the
+  ignored keys and the fix; `plumb config show` annotates each affected row's
+  provenance (`global config — project asked, UNTRUSTED`) and prints the
+  requested values in full, since those are what a user needs in order to decide
+  whether to trust them; the daemon logs a breadcrumb at attach; and the TUI
+  settings editor marks the row.
+
 ### Fixed
 
 - **A project's `.plumb/config.toml` could run arbitrary code, and could open
