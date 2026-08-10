@@ -404,10 +404,11 @@ func writeYAML(path string, m map[string]any) error {
 //
 // That holds at the TOP level of a server entry, which is the only place any
 // caller puts one. A sentinel NESTED inside a value would be marshalled like any
-// other empty struct — `{}` in JSON, an empty inline table in TOML — producing a
-// silently malformed config rather than an error. Nothing constructs one, and
-// the writer tests scan every config they produce for that shape
-// (assertNoSentinelOnDisk) so it stays that way.
+// other empty struct — `{}` in JSON, and in TOML an empty table HEADER
+// (`[mcp_servers.plumb.enabled_tools]`, no braces at all) — producing a silently
+// malformed config rather than an error. Nothing constructs one, and the writer
+// tests decode every config they produce and reject an empty group anywhere in
+// it (assertNoSentinelOnDisk) so it stays that way.
 type removeKey struct{}
 
 // mergeServerEntry is the shared, format-agnostic merge used by every
