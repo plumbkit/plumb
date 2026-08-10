@@ -254,8 +254,8 @@ func TestRemediationDefaults(t *testing.T) {
 			if e.Remediation.Reason != tt.wantReason {
 				t.Errorf("Reason = %q, want %q", e.Remediation.Reason, tt.wantReason)
 			}
-			if e.Retryable != tt.wantRetry {
-				t.Errorf("Retryable = %v, want %v", e.Retryable, tt.wantRetry)
+			if e.Retryable() != tt.wantRetry {
+				t.Errorf("Retryable = %v, want %v", e.Retryable(), tt.wantRetry)
 			}
 		})
 	}
@@ -314,8 +314,8 @@ func TestRetryableIsDerivedFromClass(t *testing.T) {
 				t.Errorf("%q.Retryable() = %v, want %v", tt.class, got, tt.want)
 			}
 			e := Wrap(errors.New("x"), KindInternal, tt.class)
-			if e.Retryable != tt.want {
-				t.Errorf("Error.Retryable = %v, want the class's %v", e.Retryable, tt.want)
+			if e.Retryable() != tt.want {
+				t.Errorf("Error.Retryable = %v, want the class's %v", e.Retryable(), tt.want)
 			}
 		})
 	}
@@ -350,7 +350,7 @@ func TestWithOp_CopiesRatherThanMutates(t *testing.T) {
 	if named.Error() != original.Error() {
 		t.Errorf("copy text = %q, want %q", named.Error(), original.Error())
 	}
-	if named.Kind != original.Kind || named.Retryable != original.Retryable {
+	if named.Kind != original.Kind || named.Retryable() != original.Retryable() {
 		t.Errorf("copy lost classification: %+v vs %+v", named, original)
 	}
 }
