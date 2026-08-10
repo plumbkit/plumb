@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,7 +109,7 @@ func TestKimiLeanHintAt_GradesContent(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "mcp.json")
 			writeKimiAllowlist(t, path, bin, tc.allowlist)
 
-			res, ok := kimiLeanHintAt(path)
+			res, ok := leanHintAt(kimiLeanClient, path)
 			if !ok {
 				t.Fatalf("an allowlist matching no plumb tool leaves the server inert — doctor must not stay silent")
 			}
@@ -130,7 +131,7 @@ func TestKimiLeanHintAt_GradesContent(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "mcp.json")
 		writeKimiAllowlist(t, path, bin, stale)
 
-		res, ok := kimiLeanHintAt(path)
+		res, ok := leanHintAt(kimiLeanClient, path)
 		if !ok {
 			t.Fatal("a snapshot that no longer equals the lean set must surface — that is the allowlist's one failure mode")
 		}
@@ -202,7 +203,7 @@ func TestKimiDegenerateAllowlist_MessageIsPerShape(t *testing.T) {
 			if g.verdict != allowlistDegenerate {
 				t.Fatalf("verdict = %v, want allowlistDegenerate", g.verdict)
 			}
-			res := kimiDegenerateAllowlistResult(g)
+			res := degenerateAllowlistResult(kimiLeanClient, g)
 
 			// Every shape stays a non-fatal warning carrying a fix: the value is
 			// never one plumb writes, whatever the client makes of it.
@@ -231,7 +232,7 @@ func TestKimiDegenerateAllowlist_MessageIsPerShape(t *testing.T) {
 	// everywhere.
 	var claimed int
 	for _, raw := range []any{[]any{}, []any{""}, nil, 3.0, "x", true, map[string]any{}} {
-		if strings.Contains(kimiDegenerateAllowlistResult(gradeToolAllowlist(raw, gradeRegistered, gradePinned)).detail, inert) {
+		if strings.Contains(degenerateAllowlistResult(kimiLeanClient, gradeToolAllowlist(raw, gradeRegistered, gradePinned)).detail, inert) {
 			claimed++
 		}
 	}
@@ -285,4 +286,183 @@ func sameNames(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// leanAllowlistFixture writes a config for c whose plumb entry carries the given
+// allowlist value verbatim — including shapes plumb would never produce, which
+// is exactly what a doctor check has to survive. Pass nil for `value` absent.
+func leanAllowlistFixture(t *testing.T, c leanClient, value any, present bool) string {
+	t.Helper()
+	entry := map[string]any{"command": "/usr/local/bin/plumb", "args": []string{"serve"}}
+	if present {
+		entry[c.key] = value
+	}
+	path := filepath.Join(t.TempDir(), filepath.Base(mustPath(t, c.pathFn)))
+	if err := c.write(path, map[string]any{c.serversKey: map[string]any{"plumb": entry}}); err != nil {
+		t.Fatalf("writing %s fixture: %v", c.name, err)
+	}
+	return path
+}
+
+// TestLeanHintAt_EveryClientEveryState is the parameterised check's contract: the
+// same four states, graded the same way, for every client that can hold an
+// allowlist. Only the key name and the serialisation differ, which is the whole
+// point of the leanClient descriptor — a client added to leanAllowlistClients()
+// with no doctor work of its own must land here already graded.
+//
+// The severities are the ones Kimi shipped with and are deliberate: an absent
+// allowlist and an aged snapshot are INFORMATIONAL (a full surface is a valid
+// default, and a snapshot still works — a "!" there would mark a healthy machine
+// unhealthy), while a list that filters plumb to nothing is a WARNING with a fix,
+// because it is this feature's one failure mode a user cannot see from outside.
+func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
+	lean := tools.LeanToolNames()
+
+	for _, c := range leanAllowlistClients() {
+		t.Run(c.name, func(t *testing.T) {
+			t.Run("absent: informational, names the command", func(t *testing.T) {
+				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, nil, false))
+				if !ok {
+					t.Fatal("a registration with no allowlist must still say the flag exists")
+				}
+				if !res.ok || res.warn {
+					t.Errorf("no allowlist is a valid default, not a fault: %+v", res)
+				}
+				if res.fix != "" {
+					t.Errorf("an informational pass must carry no fix line, got %q", res.fix)
+				}
+				for _, want := range []string{"plumb setup " + c.setupCmd + " --lean", c.key, c.name} {
+					if !strings.Contains(res.detail, want) {
+						t.Errorf("detail %q should mention %q", res.detail, want)
+					}
+				}
+			})
+
+			t.Run("current: passes in silence", func(t *testing.T) {
+				if res, ok := leanHintAt(c, leanAllowlistFixture(t, c, lean, true)); ok {
+					t.Errorf("an allowlist equal to the lean set is doing its job — doctor has nothing to say: %+v", res)
+				}
+			})
+
+			t.Run("stale: informational drift naming the missing name", func(t *testing.T) {
+				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, lean[:len(lean)-1], true))
+				if !ok {
+					t.Fatal("a snapshot that no longer equals the lean set must surface — that is the allowlist's one failure mode")
+				}
+				if !res.ok || res.warn {
+					t.Errorf("drift is a hint, not a misconfiguration: %+v", res)
+				}
+				for _, want := range []string{lean[len(lean)-1], "plumb setup " + c.setupCmd + " --lean", c.key} {
+					if !strings.Contains(res.detail, want) {
+						t.Errorf("detail %q should name %q", res.detail, want)
+					}
+				}
+			})
+
+			t.Run("invalid: warns, naming the offender", func(t *testing.T) {
+				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, []string{"not_a_plumb_tool", "nope"}, true))
+				if !ok {
+					t.Fatal("an allowlist matching no plumb tool leaves the server inert — doctor must not stay silent")
+				}
+				if !res.ok || !res.warn {
+					t.Errorf("want a non-fatal warning (ok=true warn=true), got %+v", res)
+				}
+				if res.fix == "" {
+					t.Error("a warning must carry a fix line — it is the only part that renders on attention")
+				}
+				for _, want := range []string{"not_a_plumb_tool", "NO plumb tools", c.name} {
+					if !strings.Contains(res.detail, want) {
+						t.Errorf("detail %q should mention %q", res.detail, want)
+					}
+				}
+			})
+
+			t.Run("invalid name among valid ones is still named", func(t *testing.T) {
+				mixed := append(append([]string{}, lean...), "not_a_plumb_tool")
+				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, mixed, true))
+				if !ok {
+					t.Fatal("a list naming a tool plumb does not register must surface, however many real ones surround it")
+				}
+				if !strings.Contains(res.detail, "not_a_plumb_tool") {
+					t.Errorf("detail %q must name the entry that filters to nothing", res.detail)
+				}
+			})
+
+			t.Run("degenerate: empty list warns", func(t *testing.T) {
+				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, []string{}, true))
+				if !ok {
+					t.Fatal("an empty allowlist disables every plumb tool — doctor must not stay silent")
+				}
+				if !res.ok || !res.warn || res.fix == "" {
+					t.Errorf("want a non-fatal warning carrying a fix, got %+v", res)
+				}
+				if !strings.Contains(res.detail, "an empty list") {
+					t.Errorf("detail %q should name the shape", res.detail)
+				}
+			})
+
+			t.Run("a config without a plumb entry stays silent", func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "cfg")
+				if err := c.write(path, map[string]any{c.serversKey: map[string]any{
+					"other": map[string]any{"command": "/bin/other"},
+				}}); err != nil {
+					t.Fatalf("seeding config: %v", err)
+				}
+				if _, ok := leanHintAt(c, path); ok {
+					t.Error("the check must not fire when plumb is not registered")
+				}
+			})
+
+			t.Run("an absent config stays silent and is not created", func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "nested", "cfg")
+				if _, ok := leanHintAt(c, path); ok {
+					t.Error("the check must not fire for an absent config")
+				}
+				if _, err := os.Stat(filepath.Join(dir, "nested")); !os.IsNotExist(err) {
+					t.Error("a doctor check must not create directories while inspecting")
+				}
+			})
+		})
+	}
+}
+
+// TestCheckMCPClientsGradesEveryLeanClient pins the doctor CALL SITE for all
+// three clients. Every subtest above drives leanHintAt directly, so they stay
+// green if checkLeanAllowlists is dropped from checkMCPClients — and the one
+// failure mode a user cannot see from the outside vanishes from `plumb doctor`
+// with nothing failing. The fixture uses the degenerate case deliberately.
+func TestCheckMCPClientsGradesEveryLeanClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	for _, c := range leanAllowlistClients() {
+		path := mustPath(t, c.pathFn)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("creating %s config dir: %v", c.name, err)
+		}
+		if err := c.write(path, map[string]any{c.serversKey: map[string]any{
+			"plumb": map[string]any{"command": "/usr/local/bin/plumb", c.key: []string{}},
+		}}); err != nil {
+			t.Fatalf("seeding %s config: %v", c.name, err)
+		}
+	}
+
+	seen := map[string]checkResult{}
+	for _, r := range checkMCPClients() {
+		seen[r.name] = r
+	}
+	for _, c := range leanAllowlistClients() {
+		r, ok := seen[c.checkName()]
+		if !ok {
+			t.Errorf("checkMCPClients must surface %q — it is the only path that reports a degenerate %s allowlist",
+				c.checkName(), c.key)
+			continue
+		}
+		if !r.warn || r.fix == "" {
+			t.Errorf("%s: an empty allowlist must raise attention with a fix: %+v", c.name, r)
+		}
+	}
 }

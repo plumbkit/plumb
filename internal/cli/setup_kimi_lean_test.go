@@ -318,7 +318,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 		if _, _, err := kimiCodeInto(path, bin, false); err != nil {
 			t.Fatalf("bare register: %v", err)
 		}
-		res, ok := kimiLeanHintAt(path)
+		res, ok := leanHintAt(kimiLeanClient, path)
 		if !ok {
 			t.Fatal("expected the hint to fire for a registration with no enabledTools")
 		}
@@ -338,7 +338,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 		if _, _, err := kimiCodeInto(path, bin, true); err != nil {
 			t.Fatalf("lean register: %v", err)
 		}
-		if _, ok := kimiLeanHintAt(path); ok {
+		if _, ok := leanHintAt(kimiLeanClient, path); ok {
 			t.Error("the hint must not fire once enabledTools is set")
 		}
 	})
@@ -349,7 +349,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 		if err := writeJSON(path, seed); err != nil {
 			t.Fatalf("seeding config: %v", err)
 		}
-		if _, ok := kimiLeanHintAt(path); ok {
+		if _, ok := leanHintAt(kimiLeanClient, path); ok {
 			t.Error("the hint must not fire when plumb is not registered")
 		}
 	})
@@ -357,7 +357,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 	t.Run("absent config stays silent and is not created", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "nested", "mcp.json")
-		if _, ok := kimiLeanHintAt(path); ok {
+		if _, ok := leanHintAt(kimiLeanClient, path); ok {
 			t.Error("the hint must not fire for an absent config")
 		}
 		if _, err := os.Stat(filepath.Join(dir, "nested")); !os.IsNotExist(err) {
@@ -381,7 +381,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "mcp.json")
 			writeKimiAllowlist(t, path, bin, tc.allowlist)
 
-			res, ok := kimiLeanHintAt(path)
+			res, ok := leanHintAt(kimiLeanClient, path)
 			if !ok {
 				t.Fatalf("enabledTools (%s) disables every plumb tool — doctor must not stay silent", tc.name)
 			}
@@ -403,7 +403,7 @@ func TestKimiLeanHintAt(t *testing.T) {
 	t.Run("a non-empty hand-edited allowlist stays silent", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "mcp.json")
 		writeKimiAllowlist(t, path, bin, []any{"read_file", "edit_file"})
-		if _, ok := kimiLeanHintAt(path); ok {
+		if _, ok := leanHintAt(kimiLeanClient, path); ok {
 			t.Error("a working allowlist is the user's business — doctor has nothing to say")
 		}
 	})
@@ -526,7 +526,7 @@ func TestCheckMCPClientsIncludesTheKimiHint(t *testing.T) {
 
 	var found *checkResult
 	for _, r := range checkMCPClients() {
-		if r.name == kimiToolSurfaceCheck {
+		if r.name == kimiLeanClient.checkName() {
 			found = &r
 			break
 		}
