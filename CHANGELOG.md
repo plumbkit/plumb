@@ -517,6 +517,16 @@
 
 ### Changed
 
+- **The `plumb-diagnose` skill now teaches the structured lane first.** Step 1
+  reads `_meta["dev.plumbkit/error"]`'s `kind` and `remediation.class` and
+  branches on them, and only falls back to matching English when the key is
+  absent — which now honestly means "plumb has no structured claim about this
+  failure" rather than "look harder at the prose". It states the `retryable`
+  contract as it is: the operation can succeed once the calling agent performs
+  the remediation, and it is **never** a licence to replay a non-idempotent
+  mutation unchanged, which for most of plumb's write guards would perform
+  exactly the clobber the guard prevents.
+
 - **A failure is now classified exactly once per call, at the MCP dispatch
   boundary, and the same value is handed to every consumer.** `handleToolsCall`
   derives one `*toolerror.Error` and passes it both to the `_meta` envelope the

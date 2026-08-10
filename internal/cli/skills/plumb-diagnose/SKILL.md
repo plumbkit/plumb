@@ -7,9 +7,25 @@ Almost every plumb failure is one of three things: a guard doing its job, a lang
 
 Under a lean tool profile `daemon_info`, `topology_status`, and `file_status` are not advertised; set `[tools] profile = "full"` in `.plumb/config.toml` to see them.
 
-## 1. Read the rejection — it names its own fix
+## 1. Read the classification first, the sentence second
 
-Plumb's refusals are contract errors with a stated remedy, not crashes:
+A failed `tools/call` carries a machine-readable verdict beside the prose, in the result's `_meta` under the key `dev.plumbkit/error`. Read that before matching any English — it is plumb's own statement about the failure, and it needs no parsing:
+
+    "_meta": {
+      "dev.plumbkit/error": {
+        "kind": "dirty_file",
+        "retryable": true,
+        "remediation": { "class": "pass_dirty_ok", "reason": "…" }
+      }
+    }
+
+**`kind` is what went wrong**, from a closed set of thirteen — `invalid_arguments`, `unread_or_stale`, `dirty_file`, `workspace_boundary`, `rate_limited`, `git_policy`, `git_command_failed`, `concurrent_ref_move`, `lsp_unavailable`, `lsp_timeout`, `daemon_transport`, `client_timeout`, `internal`. Note the git split: `git_policy` is plumb refusing, so the fix is on plumb's side; `git_command_failed` is git itself exiting non-zero (a failing hook, a rejected push), so the fix is in the repository and the answer is already in the captured output.
+
+**`remediation.class` is what to do**, and is the field to branch on: `re_read`, `retry_after_wait`, `pass_dirty_ok`, `pass_confirm`, `pass_force`, `fix_arguments`, `repin_workspace`, `retry_when_ready`, `enable_policy`, `inspect_output`, `none`.
+
+**`retryable` means: you can make this same operation succeed by performing the remediation yourself, with no human action.** It is derived from the class, so one remedy always gives one answer. It is **never** a licence to replay the call as it stands — most retryable plumb failures guard a non-idempotent mutation, and re-issuing the identical write without first doing the remediation performs exactly the clobber the guard exists to prevent. `enable_policy` is not retryable because a human must edit configuration; `inspect_output` and `none` because nothing you pass changes the outcome.
+
+**An absent key is information, not an omission**: it means plumb has no structured claim about this failure. Only then fall back to reading the message, which still names its own fix:
 
 - **"has not been read"** — strict mode wants a `read_file` with a matching mtime before the edit, or the read happened in the *other* lane. Read with plumb, then edit with plumb.
 - **"uncommitted changes"** — the dirty-write guard: the file carried changes plumb did not make this session. Commit it, or pass `dirty_ok` deliberately.
