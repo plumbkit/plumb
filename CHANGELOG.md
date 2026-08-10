@@ -18,6 +18,22 @@
   `TestStampSkillContent_CRLFFrontmatterNotCorrupted` (confirmed to fail
   against the pre-fix placement logic).
 
+### Tests
+
+- **`installSkill`'s restamp-in-place branch — the one that refreshes a
+  stale or missing provenance marker while still reporting a skill
+  `unchanged` — now has direct coverage.** It was previously reached only
+  indirectly, and no existing test forced execution down that path:
+  `TestInstallSkillsFor_EveryCapableClientGetsEverySkill`'s idempotence
+  check hits the earlier "content and marker both already current" case,
+  and the doctor/status tests only exercise the read/classify path, not
+  `installSkill` itself. `TestInstallSkill_RestampsStaleMarkerInPlace`
+  writes a skill to disk behind a stale or missing marker, calls
+  `installSkill`, and asserts the action is `unchanged`, the on-disk marker
+  now names the running version, and the content either side of the marker
+  is byte-identical to the embedded source — a regression that wrote
+  `content` instead of the restamped `stamped` there would fail it.
+
 ### Added
 
 - **The git tool now surfaces peer `share_intent` claims that cover the
