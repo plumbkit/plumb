@@ -153,6 +153,49 @@ mode, API keys, and the `agent_config_writes` enable knob itself) are never
 agent-writable, so an agent cannot widen its own permissions through
 `agent_config`.
 
+### Project configuration is untrusted
+
+A4's mitigation depends on a boundary worth stating on its own, because it was
+wrong until 2026-08-10 and the failure was instructive.
+
+`config.LoadProject` merges `<workspace>/.plumb/config.toml` over the global
+config. **That file is attacker-controlled** — cloning a repository ships it, and
+it takes effect on attach with no prompt. So the merge cannot be uniform: a
+setting that expresses a *preference* may come from the project, but a setting
+that grants a *capability* must come from the user.
+
+Forced to the global config regardless of what the project file says:
+
+| Section | Why |
+|---|---|
+| `agent_config_writes` | otherwise an agent could enable its own config writes |
+| `[web]`, `[ui]` | daemon-global; a project must not rebind the listener |
+| `[semantics]` | provider/base URL/API-key env — an SSRF and secret-exfil primitive |
+| `workspace.extra_roots`, `read_roots` | widen filesystem access outside the workspace |
+| `[git]` | the whole tiered safety policy, including `protected_branches` |
+| `[lsp.<lang>]` exec fields | `command`, `args`, `env`, `initialization_options`, `root_markers`, `weak_root_markers` — these decide **which process the daemon spawns and with what** |
+
+The LSP row is the one that was missing. Its `command`/`args` reach
+`exec.CommandContext` through the workspace pool, so a repository shipping
+`command = "/bin/sh"` ran its own argv as the user, unsandboxed, on attach — no
+trust gate, no confirmation, no agent involved. `env` is the same primitive by
+another route (`PATH`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`), and
+`initialization_options` is a command channel for several real servers.
+
+**The capability is not simply removed.** A user with a genuine per-project need
+may grant it with `plumb trust`, which binds the grant to a content hash of the
+exact settings approved — the same mechanism `[tasks.*]` uses. Editing them
+afterwards stops them being honoured until the grant is renewed, which closes
+the TOCTOU. An ungranted setting is **reported, not silently dropped**:
+`plumb doctor` warns, `plumb config show` marks the row `project asked,
+UNTRUSTED` and prints the requested values, and the TUI marks the row inert
+while showing the value actually in force.
+
+The trust record lives in plumb's own data dir, never in the project, so a
+repository can never mark itself trusted.
+
+See Known gaps 7 and 8 for what this boundary still does *not* cover.
+
 ### A5 — Secret disclosure through persisted or shared data
 
 *A credential reaches a memory, a stats row, a collab note, or a support bundle.*
@@ -163,8 +206,16 @@ authorization headers, and generic `key = value` assignments) and is deliberatel
 biased toward over-matching. It is applied on the generated-memory, episodic,
 collab, and shared-findings paths. Stored tool output is byte-capped.
 
-Residual: redaction is pattern-based and cannot catch a secret with no
-recognisable shape. Support bundles are covered by [Known gaps](#known-gaps).
+Residual, and it is larger than the mitigation list implies. **The stats
+database is not redacted.** `tool_calls` persists `input_json` and `output_text`
+— the raw tool arguments and the full tool output, each capped at 64 KiB — and
+that write path does not call `internal/redact`. So a `write_file` whose content
+is a `.env`, or a command whose output contains a token, is stored verbatim, in
+the **global** stats DB shared across every workspace on the machine. Capping is
+not redaction.
+
+Redaction is also pattern-based and cannot catch a secret with no recognisable
+shape. Support bundles are covered by [Known gaps](#known-gaps).
 
 ### A6 — Peer-agent interference
 
@@ -206,14 +257,35 @@ Stated plainly, because an unclaimed property is not a guarantee:
 
 - **A process already running as the user.** plumb has no privilege boundary
   against it and does not attempt one.
-- **The sandbox is integrity-only.** The OS sandbox around configured commands
-  confines *writes*. It does **not** confine reads: a sandboxed command runs with
-  the user's credentials and can read any file and any secret the user can,
-  including `~/.ssh` and API keys. Network egress is denied only when
-  `deny_network` is set on that command. This is documented at the tool surface
-  and is a deliberate design point, not an oversight.
-- **A malicious language server.** LSP binaries are chosen by the user and run
-  with their privileges.
+- **The sandbox is integrity-only, and it is best-effort.** The OS sandbox around
+  configured commands confines *writes*. It does **not** confine reads: a
+  sandboxed command runs with the user's credentials and can read any file and
+  any secret the user can, including `~/.ssh` and API keys. This is a deliberate
+  design point, documented at the tool surface.
+
+  Less obviously, **the sandbox may be absent entirely**. It needs
+  `sandbox-exec` on macOS (deprecated in macOS 15) or `bwrap` on Linux (not
+  installed by default on most distributions); on any other platform it is a
+  no-op by construction. When the helper is missing the command runs **unwrapped**
+  with a status line saying so, because `require_sandbox` defaults to false. The
+  default posture is therefore "run unsandboxed and report it", not "refuse".
+
+  Network egress differs by tool and the default is not uniform:
+  `execute_shell_command` denies egress by default (`[commands] deny_network`),
+  precisely because an integrity-only sandbox would otherwise let a shell command
+  read a secret and post it; a `[[command]]` entry defaults to **allowing**
+  egress unless its own `deny_network` is set.
+- **A malicious language server.** An LSP binary named in the *global* config is
+  the user's own choice and runs with their privileges; plumb does not sandbox
+  it or inspect what it does.
+
+  This bullet previously read "LSP binaries are chosen by the user" without
+  qualification. That was **false**, and an adversarial review of this document
+  proved it: `[lsp.<lang>] command`/`args`/`env` were project-overridable, so a
+  cloned repository chose the binary and its argv, and plumb ran it on attach.
+  See [Project configuration is untrusted](#project-configuration-is-untrusted)
+  for the boundary that now holds. The episode is the reason gap 6 below is
+  stated as strongly as it is.
 - **Content-based secret classification.** plumb redacts by pattern; it does not
   understand which of your files are sensitive.
 - **Multi-user or multi-tenant isolation.** plumb is single-user by design.
@@ -243,6 +315,32 @@ Tracked, not hidden. Each is real today.
 6. **This document has not had an independent security review.** It is an
    author's threat model, which is the weakest kind. Treat it as a starting
    point for one, not as its result.
+
+   This is not a formality. The first adversarial pass over this document — one
+   reviewer, asked specifically to hunt for gaps it had failed to disclose —
+   found a live arbitrary-code-execution path that had been sitting behind a
+   `//nolint` comment asserting the opposite. The parsers named in gap 3 have
+   had no equivalent pass.
+
+7. **The project-config trust boundary has not been exhaustively audited.** The
+   two holes that prompted the boundary were found by inspection, not by
+   enumerating every `Config` field. `[edits] strict` (which disables
+   read-before-edit), `[edits] rate_limit_per_minute`, `[commands]`,
+   `[[command]]`, `[collab]`, `[tools]`, `[session]` and `[memory]` are all
+   still merged from an untrusted project file. Some are preferences; at least
+   the first deserves the same treatment and has not had it.
+
+8. **Trust binding is uneven.** `[tasks.*]` and the capability config are bound
+   to a content hash, so an edit after the grant stops being honoured. The
+   `[[command]]` allow-list and `[commands] allow_shell` are gated on the coarse
+   per-root boolean instead, so the same TOCTOU close does not extend to them.
+
+9. **Writing a file inside the workspace is an execution primitive.** A3's
+   residual understates this: `.git/hooks/*` runs on the next commit,
+   `.plumb/config.toml` feeds the trust-gated surfaces above, and a project's
+   own `Makefile`, `package.json` scripts, `conftest.py` or `.envrc` may execute
+   through tooling the user runs by hand. plumb bounds *its own* capability; it
+   does not make the workspace inert.
 
 ## Out of scope
 
