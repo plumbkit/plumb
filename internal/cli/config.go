@@ -125,6 +125,11 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	if perr != nil {
 		return fmt.Errorf("loading project config: %w", perr)
 	}
+	// What this project ASKED for in the capability-granting sections, which is
+	// not the same question as what is in effect — the table below can only ever
+	// show the latter. Errors are non-fatal: an unreadable project file is
+	// already reported by the Workspace Context section and by doctor.
+	policy, _ := config.ProjectPolicyStatusFor(ws)
 
 	PrintLogo()
 	printRecoveredHijacks()
@@ -226,10 +231,10 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	addConfigSection(cfgTable, "workspace", wsRows)
 
 	addConfigSection(cfgTable, "git", [][]string{
-		{"allow_writes", strconv.FormatBool(projectCfg.Git.AllowWrites), sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites)},
-		{"allow_destructive", strconv.FormatBool(projectCfg.Git.AllowDestructive), sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive)},
-		{"allow_push", strconv.FormatBool(projectCfg.Git.AllowPush), sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush)},
-		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches)},
+		{"allow_writes", strconv.FormatBool(projectCfg.Git.AllowWrites), policySourceFor(policy, "git.allow_writes", sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites))},
+		{"allow_destructive", strconv.FormatBool(projectCfg.Git.AllowDestructive), policySourceFor(policy, "git.allow_destructive", sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive))},
+		{"allow_push", strconv.FormatBool(projectCfg.Git.AllowPush), policySourceFor(policy, "git.allow_push", sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush))},
+		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), policySourceFor(policy, "git.protected_branches", sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches))},
 	})
 
 	addConfigSection(cfgTable, "lsp_query", [][]string{
@@ -275,18 +280,20 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		globCfg := globalCfg.LSP[lang]
 		defCfg := defaultsCfg.LSP[lang]
 
+		prefix := "lsp." + lang + "."
 		addConfigSection(cfgTable, "lsp."+lang, [][]string{
 			{"enabled", strconv.FormatBool(cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
 			{"active", lspActiveStatus(cfg), "derived"},
-			{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
-			{"args", fmt.Sprintf("%v", cfg.Args), sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},
-			{"root_markers", fmt.Sprintf("%v", cfg.RootMarkers), sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers)},
-			{"weak_root_markers", fmt.Sprintf("%v", cfg.WeakRootMarkers), sourceFor("weak_root_markers", defCfg.WeakRootMarkers, globCfg.WeakRootMarkers, cfg.WeakRootMarkers)},
-			{"env", fmt.Sprintf("%v", cfg.Env), sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env)},
+			{"command", cfg.Command, policySourceFor(policy, prefix+"command", sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command))},
+			{"args", fmt.Sprintf("%v", cfg.Args), policySourceFor(policy, prefix+"args", sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args))},
+			{"root_markers", fmt.Sprintf("%v", cfg.RootMarkers), policySourceFor(policy, prefix+"root_markers", sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers))},
+			{"weak_root_markers", fmt.Sprintf("%v", cfg.WeakRootMarkers), policySourceFor(policy, prefix+"weak_root_markers", sourceFor("weak_root_markers", defCfg.WeakRootMarkers, globCfg.WeakRootMarkers, cfg.WeakRootMarkers))},
+			{"env", fmt.Sprintf("%v", cfg.Env), policySourceFor(policy, prefix+"env", sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env))},
 		})
 	}
 
 	fmt.Println(renderConfigShowTable(cfgTable))
+	printProjectPolicyNotice(ws, policy)
 
 	// 4. Reload behaviour — which groups the running daemon applies live versus
 	// those that need a restart. Mirrors config.RestartSensitiveEqual; the daemon
@@ -304,6 +311,56 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	printAgentProvenance(ws)
 	return nil
+}
+
+// policySourceFor annotates a provenance label for a key in one of the
+// capability-granting sections.
+//
+// The plain label answers "where did the value in effect come from", and for a
+// forced-back key that answer is "global config" — true, and exactly the thing
+// that makes an ignored project setting invisible. The suffix restores the other
+// half: the project asked for something here, and it is not what you are looking
+// at.
+func policySourceFor(st config.ProjectPolicyStatus, key, base string) string {
+	if !st.Asked(key) {
+		return base
+	}
+	if st.Trusted {
+		return "project config (trusted)"
+	}
+	return base + " — project asked, UNTRUSTED"
+}
+
+// printProjectPolicyNotice states, in one place and in full, what this project's
+// config asked for in the capability-granting sections and whether it is in
+// force. It prints the requested VALUES, not just the key names, because that is
+// what a user needs in order to decide whether to trust them — and because there
+// is otherwise nowhere at all to see them: the resolved table above shows the
+// value in effect, which for an untrusted request is precisely not what the
+// project wrote.
+func printProjectPolicyNotice(ws string, st config.ProjectPolicyStatus) {
+	if st.Spec.IsEmpty() {
+		return
+	}
+	if st.Trusted {
+		fmt.Println(configShowOkStyle().Render(
+			fmt.Sprintf("✓ this project's capability-granting config is trusted — %d key(s) in effect:", len(st.Spec))))
+		for _, line := range st.Spec.Describe() {
+			fmt.Println(configShowMutedStyle().Render("    " + line))
+		}
+		fmt.Println()
+		return
+	}
+	fmt.Println(configShowWarnStyle().Render(
+		fmt.Sprintf("! this project's .plumb/config.toml sets %d capability-granting key(s) that are NOT in effect —", len(st.Spec)) +
+			"\n  plumb ignores [git] and the exec-deciding [lsp.<lang>] fields from an untrusted project config" +
+			"\n  (a cloned repository ships one, and it would otherwise run its own argv on attach):"))
+	for _, line := range st.Spec.Describe() {
+		fmt.Println(configShowWarnStyle().Render("    " + line))
+	}
+	fmt.Println(configShowWarnStyle().Render(
+		"  → run `plumb trust " + ws + "` to honour them; the values above are what you would be approving"))
+	fmt.Println()
 }
 
 // printDirectoriesSection lists the base directories plumb resolves through

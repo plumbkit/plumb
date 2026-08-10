@@ -24,6 +24,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
 		return
 	}
+	s.logProjectPolicy(workspace)
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -81,6 +82,26 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// client to re-list when the resolved profile changed. Runs after the mutate
 	// above has returned, so it holds no lock when it calls view()/mutate().
 	s.maybeNotifyToolProfileChange()
+}
+
+// logProjectPolicy leaves the attach-time breadcrumb for a workspace whose
+// project config asks for capability-granting settings ([git], the exec-deciding
+// [lsp.<lang>] fields). Untrusted, those are silently forced back to the global
+// config — correct, but a user debugging "my project config does nothing" needs
+// something in the daemon log to find. Silent on the common case, where the
+// project asks for none.
+func (s *connSession) logProjectPolicy(workspace string) {
+	st, err := config.ProjectPolicyStatusFor(workspace)
+	if err != nil || st.Spec.IsEmpty() {
+		return
+	}
+	if st.Trusted {
+		s.log().Info("daemon: project capability config trusted and applied",
+			"workspace", workspace, "keys", st.Spec.Keys())
+		return
+	}
+	s.log().Warn("daemon: project capability config IGNORED (untrusted) — global values in force; run `plumb trust` to honour them",
+		"workspace", workspace, "keys", st.Spec.Keys())
 }
 
 func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig) {
