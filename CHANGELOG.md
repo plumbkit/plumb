@@ -274,6 +274,35 @@
   banner as the negative control; confirmed to fail before the fix on exactly
   `add`, `Widget` and `bump`.
 
+- **Python methods in a class body, and every decorated declaration, carry
+  their doc-comment span.** Python puts a declaration's leading `#` comment out
+  of reach of its own previous siblings in two ways, and real code hits both at
+  once. A comment preceding the FIRST statement of a suite is hoisted OUT of the
+  `block` by the grammar and parsed as a sibling of the block itself, leaving
+  the declaration as the block's first child with no previous sibling at all —
+  so whether a method carried a doc span depended on whether something else
+  happened to precede it in the class body, which is why the defect was
+  intermittent rather than total and no test caught it. And a decorated
+  declaration is a CHILD of its `decorated_definition`, so its own previous
+  sibling is the `@decorator` and the comment above it is never reached — the
+  same shape the `export` wrapper produces in ES modules, but not limited to
+  class bodies: a decorated module-level function was affected too. `@property`
+  on the first method of a class hits both anchors at once. The new `pyDocSpan`
+  seam (mirroring `jsDocSpan`) scans the declaration first and climbs only on
+  the empty sentinel, gating the climb out of a block on the declaration being
+  that block's first child so a later statement cannot claim its neighbour's
+  comment. A Python *docstring* is deliberately still not collected: it is the
+  first statement inside the declaration's own byte span, whereas a doc span
+  must precede the declaration — `move_symbol`'s `include_doc_comment` starts
+  its edit range at it. Guarded by
+  `TestPython_ClassBodyDeclarationsCarryDocSpans` (module-level and
+  second-in-body controls that must not regress),
+  `TestPython_DecoratedDeclarationsCarryDocSpans`, and
+  `TestPython_BannerAcrossBlankLineIsNotAClassBodyDocSpan`, which holds the
+  flushness stop at the suite boundary the climb newly reaches; all assert span
+  CONTENT, and the first two were confirmed to fail before the fix on exactly
+  `bump`, `cached` and `area`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
