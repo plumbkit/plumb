@@ -543,14 +543,19 @@
 ### Changed
 
 - **The `plumb-diagnose` skill now teaches the structured lane first.** Step 1
-  reads `_meta["dev.plumbkit/error"]`'s `kind` and `remediation.class` and
-  branches on them, and only falls back to matching English when the key is
-  absent — which now honestly means "plumb has no structured claim about this
+  reads `dev.plumbkit/error`'s `kind` and `remediation.class` and branches on
+  them, and only falls back to matching English when the key is absent — which now honestly means "plumb has no structured claim about this
   failure" rather than "look harder at the prose". It states the `retryable`
   contract as it is: the operation can succeed once the calling agent performs
   the remediation, and it is **never** a licence to replay a non-idempotent
   mutation unchanged, which for most of plumb's write guards would perform
-  exactly the clobber the guard prevents.
+  exactly the clobber the guard prevents. It also teaches **both** places the
+  envelope travels: a tool that ran and failed carries it in the result's
+  `_meta`, while the two pre-dispatch rejections — malformed params and an
+  unknown tool name — have no result and carry it in the JSON-RPC `error.data`.
+  An agent that checked only `_meta` would read a mistyped tool name as "no
+  structured claim" when plumb had in fact said `invalid_arguments` /
+  `fix_arguments`.
 
 - **A failure is now classified exactly once per call, at the MCP dispatch
   boundary, and the same value is handed to every consumer.** `handleToolsCall`

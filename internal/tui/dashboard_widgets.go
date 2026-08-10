@@ -511,6 +511,10 @@ func dashFailuresTable(width int, rows []dashFailureRow) []string {
 		retryableW = 12
 	)
 	kindW := max(width-callsW-retryableW, 12)
+	// Below 33 cells the kind clamp wins and the rows are wider than the width
+	// asked for. The rule stretches to the rows rather than the request, so the
+	// separator never comes up short under a narrow terminal.
+	rowW := max(width, kindW+callsW+retryableW)
 	if len(rows) > 10 {
 		rows = rows[:10]
 	}
@@ -519,7 +523,7 @@ func dashFailuresTable(width int, rows []dashFailureRow) []string {
 		HintStyle.Width(callsW).Align(lipgloss.Right).Render("Calls") +
 		HintStyle.Width(retryableW).Align(lipgloss.Right).Render("Retryable")
 	content := make([]string, 0, len(rows)+2)
-	content = append(content, header, SepStyle.Render(strings.Repeat("╌", width)))
+	content = append(content, header, SepStyle.Render(strings.Repeat("╌", rowW)))
 	for _, r := range rows {
 		retryable := MutedStyle.Render("—")
 		if r.retryable > 0 {
