@@ -99,6 +99,17 @@ const MetaPinnedWorkspaceKey = "dev.plumbkit/pinned-workspace"
 // `_meta` field, so emitting it is forward-compatible.
 const MetaAlwaysLoadKey = "anthropic/alwaysLoad"
 
+// MetaToolErrorKey is the `_meta` key under which a FAILED tools/call result
+// carries plumb's structured error envelope: the failure's kind, whether it is
+// retryable, the remediation, and any low-cardinality details. The key is
+// present only when the error classifies, so a client can treat its absence as
+// "plumb has nothing structured to say" rather than as a shape to parse.
+//
+// `_meta` is valid in the negotiated 2024-11-05 revision; the envelope is
+// deliberately NOT emitted as `structuredContent`, which is a 2025-06-18 field.
+// Reverse-DNS namespaced per the MCP `_meta` convention.
+const MetaToolErrorKey = "dev.plumbkit/error"
+
 // RequestFn sends a server-initiated JSON-RPC request to the MCP client and
 // returns the decoded result payload, or an error if the call fails or times out.
 type RequestFn func(ctx context.Context, method string, params any) (json.RawMessage, error)
@@ -126,6 +137,10 @@ type mcpResponse struct {
 type mcpError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	// Data carries the structured error envelope for a request plumb rejected
+	// before any tool ran. omitempty keeps every existing errResp caller
+	// byte-identical to the pre-envelope payload.
+	Data any `json:"data,omitempty"`
 }
 
 // scanLine carries one message from the reader goroutine to the main loop.

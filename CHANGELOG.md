@@ -62,6 +62,23 @@
   full shape — exit code, labelled stderr, 40-line-capped stdout, and the
   re-run note.
 
+- **A failed `tools/call` now carries its classification on the wire.** When the
+  error classifies, the result's `_meta` gains
+  `dev.plumbkit/error` = `{kind, operation, retryable, remediation:{class, tool,
+  reason}, details}` — `operation` filled with the resolved tool name at the
+  dispatch boundary, so no call site needs to know it. The `content` text and
+  `isError` are **unchanged**, and an unclassified failure emits no `_meta` at
+  all, so a client can read the key's absence as "plumb has no structured claim"
+  rather than parsing a hollow object. The two `tools/call` rejections that
+  never reach a tool — malformed params and an unknown tool name — carry the
+  same envelope under the JSON-RPC `error.data` instead, with `code` and
+  `message` untouched; every other `errResp` caller still emits no `data` field.
+  The envelope rides `_meta`, which is valid in the negotiated `2024-11-05`
+  revision; `structuredContent` (a 2025-06-18 field) is deliberately not used.
+  The MCP-side seams are classified to match: the per-tool execution deadline
+  reports `client_timeout` + `retry_after_wait`, and an unknown or colliding
+  parameter reports `invalid_arguments` + `fix_arguments`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
