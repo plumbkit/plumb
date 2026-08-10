@@ -110,7 +110,7 @@ func exitError(t *testing.T) error {
 // context, never the error message itself.
 func TestGitCommandError_LabelsStreams(t *testing.T) {
 	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t),
-		"0 issues. file-size: OK\n", "hook: lint failed\n")
+		"0 issues. file-size: OK\n", "hook: lint failed\n", "")
 	msg := err.Error()
 	firstLine, _, _ := strings.Cut(msg, "\n")
 	if !strings.Contains(firstLine, "git commit: exit code 1") {
@@ -130,7 +130,7 @@ func TestGitCommandError_LabelsStreams(t *testing.T) {
 // failing with output on stdout alone. Previously that stdout became the bare
 // error string; now it is quoted under its own label beneath the exit code.
 func TestGitCommandError_StdoutOnlyFailure(t *testing.T) {
-	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t), "0 issues. file-size: OK\n", "")
+	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t), "0 issues. file-size: OK\n", "", "")
 	msg := err.Error()
 	firstLine, _, _ := strings.Cut(msg, "\n")
 	if !strings.Contains(firstLine, "exit code 1") || strings.Contains(firstLine, "0 issues") {
@@ -147,7 +147,7 @@ func TestGitCommandError_StdoutOnlyFailure(t *testing.T) {
 // TestGitCommandError_NoOutput covers a failure with nothing on either stream
 // (e.g. a rejected push): the error is just the exit code, no empty labels.
 func TestGitCommandError_NoOutput(t *testing.T) {
-	err := gitCommandError("/r", "push", []string{"push"}, exitError(t), "", "")
+	err := gitCommandError("/r", "push", []string{"push"}, exitError(t), "", "", "")
 	if got, want := err.Error(), "git push: exit code 1"; got != want {
 		t.Errorf("got %q, want exactly %q", got, want)
 	}
@@ -156,7 +156,7 @@ func TestGitCommandError_NoOutput(t *testing.T) {
 // TestGitCommandError_NonExitError covers a child that never produced an exit
 // code (start failure, cancellation): the raw error text stands in.
 func TestGitCommandError_NonExitError(t *testing.T) {
-	err := gitCommandError("/r", "status", []string{"status"}, context.Canceled, "", "")
+	err := gitCommandError("/r", "status", []string{"status"}, context.Canceled, "", "", "")
 	if got, want := err.Error(), "git status: context canceled"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -166,7 +166,7 @@ func TestGitCommandError_NonExitError(t *testing.T) {
 // bounded and the response says so, pointing at how to re-run directly.
 func TestGitCommandError_TruncationNote(t *testing.T) {
 	big := strings.Repeat("noise line\n", 3000) // ~33 KB, over the 16 KiB cap
-	err := gitCommandError("/r", "commit", []string{"commit", "-m", "my message"}, exitError(t), "", big)
+	err := gitCommandError("/r", "commit", []string{"commit", "-m", "my message"}, exitError(t), "", big, "")
 	msg := err.Error()
 	for _, want := range []string{"truncated", "re-run `git commit -m 'my message'` in /r"} {
 		if !strings.Contains(msg, want) {
@@ -175,6 +175,23 @@ func TestGitCommandError_TruncationNote(t *testing.T) {
 	}
 	if len(msg) > maxGitErrStreamBytes+1024 {
 		t.Errorf("error should stay bounded, got %d bytes", len(msg))
+	}
+}
+
+// TestGitCommandError_WarningLeadsMessage covers the Finding-3 fix: a non-empty
+// warning (the repo-intent advisory computed before the git child ran) leads
+// the failure message, ahead of the exit code line — the one path where
+// dropping it would be worst, since the warning may explain the failure.
+func TestGitCommandError_WarningLeadsMessage(t *testing.T) {
+	warning := "# plumb-warning: peer intent claims cover this repository (advisory, unverified — not a lock):\n" +
+		"#   peer blue-heron claimed: \"rebasing ops main\" (expires in 40 min)\n"
+	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t), "", "", warning)
+	msg := err.Error()
+	if !strings.HasPrefix(msg, warning) {
+		t.Errorf("warning must lead the failure message, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "git commit: exit code 1") {
+		t.Errorf("exit code line must still follow the warning, got:\n%s", msg)
 	}
 }
 

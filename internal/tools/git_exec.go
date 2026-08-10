@@ -135,7 +135,10 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
 			return postProcessGit(ctx, repoRoot, sub, stdout.String())
 		}
-		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String())
+		// warning is attached here too, not just on the success path below: a
+		// failure is exactly when a peer's claim ("rebasing ops main") is most
+		// likely to be the explanation, and the query cost was already paid.
+		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String(), warning)
 	}
 	guard.postExec(execCtx)
 	out := stdout.String()
@@ -154,14 +157,19 @@ const (
 )
 
 // gitCommandError builds the tool-facing error for a failed git subprocess.
-// The exit code leads, then stderr and stdout are each quoted under their own
-// label (bounded). Previously whichever stream was non-empty became the error
-// string itself — so a failing pre-commit hook that wrote only to stdout
-// surfaced as `git commit: 0 issues. file-size: OK`, the hook's chatter
-// standing in for the real cause. Success-path output is unaffected; this
-// runs only on a non-zero exit.
-func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr string) error {
+// warning (may be "") is the repo-intent advisory block computed before the
+// git child ran (git_intent_warn.go) — it leads the message on a failure just
+// as it leads the response on success, so a peer's live claim explaining the
+// failure (e.g. a rebase collision) is not silently dropped by the one path
+// where it matters most. After that, the exit code leads, then stderr and
+// stdout are each quoted under their own label (bounded). Previously whichever
+// stream was non-empty became the error string itself — so a failing
+// pre-commit hook that wrote only to stdout surfaced as `git commit: 0
+// issues. file-size: OK`, the hook's chatter standing in for the real cause.
+// Success-path output is unaffected; this runs only on a non-zero exit.
+func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr, warning string) error {
 	var b strings.Builder
+	b.WriteString(warning)
 	fmt.Fprintf(&b, "git %s: %s", sub, gitExitDescription(runErr))
 	truncated := false
 	if msg, cut := boundGitErrStream(stderr); msg != "" {
