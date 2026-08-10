@@ -232,7 +232,8 @@ func nodeIndexIn(sibs []*tsg.Node, target *tsg.Node) int {
 }
 
 // commentFlushBefore reports whether comment sits directly above whatever starts
-// at byte offset next, with no blank line between the two.
+// at byte offset next: at most one newline between them, and — when it is on an
+// earlier line — the comment owning that line rather than trailing other code.
 //
 // The blank line is invisible to the node tree, and in two different ways. No
 // grammar emits a node for it, so a bare previous-sibling scan walks past one
@@ -244,6 +245,20 @@ func nodeIndexIn(sibs []*tsg.Node, target *tsg.Node) int {
 // whitespace is trimmed off first and everything from there to next must hold at
 // most one newline. Same row (`export /** … */ class C {}`) and the row directly
 // above both pass; anything further does not.
+//
+// The own-line rule is the other half, and it exists because "the row directly
+// above" is also where a TRAILING comment lives. Every language that opens a
+// body with a header line puts a comment trailing that header syntactically
+// ahead of the body's first declaration — `class Widget:  # note` in Python,
+// `class Widget { // note` in JavaScript, `impl Widget { // note` in Rust — so
+// the first member claimed it and got a doc span starting in the MIDDLE of the
+// header line. Since consumers use the span as an edit-range start
+// (include_doc_comment defaults true on move_symbol), that span turns a correct
+// "no doc comment" into an edit that begins mid-header and produces
+// syntactically broken source. A trailing comment documents the line it sits on,
+// never the declaration below it. The rule is skipped for a same-row comment,
+// which is the one shape where a comment legitimately shares its line with the
+// declaration it documents.
 func commentFlushBefore(src []byte, comment *tsg.Node, next uint32) bool {
 	lo, hi, to := clampU32(comment.StartByte()), clampU32(comment.EndByte()), clampU32(next)
 	if hi > len(src) {
@@ -256,7 +271,15 @@ func commentFlushBefore(src []byte, comment *tsg.Node, next uint32) bool {
 	if to < hi {
 		return false
 	}
-	return bytes.Count(src[hi:to], []byte{'\n'}) <= 1
+	gap := src[hi:to]
+	if bytes.Count(gap, []byte{'\n'}) > 1 {
+		return false
+	}
+	if !bytes.Contains(gap, []byte{'\n'}) {
+		return true // same row as the declaration
+	}
+	lineStart := bytes.LastIndexByte(src[:lo], '\n') + 1
+	return len(bytes.TrimSpace(src[lineStart:lo])) == 0
 }
 
 // clampU32 narrows a tree-sitter uint32 offset/column into int range.

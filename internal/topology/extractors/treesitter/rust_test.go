@@ -353,3 +353,20 @@ pub fn attached(b: i32) -> i32 {
 		}
 	}
 }
+
+// TestRust_TrailingImplHeaderCommentIsNotADocSpan is the Rust half of the shared
+// same-row flushness rule: a comment trailing the `impl Widget {` header is the
+// first method's previous sibling in the declaration_list, so the method claimed
+// a doc span starting mid-header-line. Predates the Python doc-span work and was
+// fixed with it, in commentFlushBefore.
+func TestRust_TrailingImplHeaderCommentIsNotADocSpan(t *testing.T) {
+	src := []byte(`impl Widget { // trailing note about the impl header
+    pub fn bump(&self) -> i32 { 1 }
+}
+`)
+	nodes, _, err := NewRust().Extract(context.Background(), "trailing.rs", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertNoDocSpan(t, src, nodes, "bump")
+}
