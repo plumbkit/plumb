@@ -259,3 +259,48 @@ const Color = enum { red, green };
 		}
 	}
 }
+
+// TestZig_DocCommentsAreCollected pins the Zig doc-span anchor to the node type
+// the grammar actually emits. zigIsComment matched "line_comment"/"doc_comment"
+// — neither of which exists in this grammar, which emits a single "comment"
+// type for `//`, `///` and `//!` alike — so docSpanBefore's isComment predicate
+// rejected every candidate and NO Zig symbol carried a doc span at all. An
+// always-false predicate is invisible: the extractor still emits every node, and
+// the doc span it silently drops is only noticed by move_symbol /
+// replace_symbol_body leaving the `///` block orphaned above the new
+// declaration. The container method is the case that also proves the run is
+// resolved inside the struct literal, not only at file scope.
+func TestZig_DocCommentsAreCollected(t *testing.T) {
+	src := []byte(`const std = @import("std");
+
+/// Adds two numbers.
+/// Both arguments are comptime-known.
+pub fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+/// A widget.
+const Widget = struct {
+    count: i32,
+
+    /// Bumps the counter.
+    pub fn bump(self: *Widget) void {
+        self.count += 1;
+    }
+};
+
+// Detached banner note.
+
+pub fn undocumented() void {}
+`)
+	nodes, _, err := NewZig().Extract(context.Background(), "doc.zig", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"add":    "/// Adds two numbers.\n/// Both arguments are comptime-known.",
+		"Widget": "/// A widget.",
+		"bump":   "/// Bumps the counter.",
+	})
+	assertNoDocSpan(t, src, nodes, "undocumented")
+}
