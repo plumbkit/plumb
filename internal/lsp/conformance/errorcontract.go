@@ -147,8 +147,8 @@ func RunErrorContract(t *testing.T, factory Factory, initParams InitParamsFactor
 }
 
 // writeContractDocument materialises name in a fresh temp directory and returns
-// its URI. The file MUST exist: the sourcekit-lsp, zls and
-// vscode-html-language-server adapters lazily os.ReadFile the document and send
+// its URI. The file MUST exist: the sourcekit-lsp, zls, vscode-html-language-server
+// and kotlin-lsp adapters lazily os.ReadFile the document and send
 // didOpen before their per-document queries, so a missing file would pin their
 // "open <uri>" label instead of the request label under test. Owning the fixture
 // here means no future adapter test can forget that precondition — the "open"
@@ -166,7 +166,7 @@ func writeContractDocument(t *testing.T, name, contents string) string {
 // pins the REQUEST labels, which leaves this branch unpinned — and it is
 // exactly the branch a shared base adapter would normalise away.
 //
-// Call this from the three adapters that open lazily (swift, zig, html) and
+// Call this from the adapters that open lazily (swift, zig, html, kotlin) and
 // nowhere else. The per-adapter call is deliberate: auto-detecting lazy-open
 // behaviour inside the shared harness would make an adapter's participation
 // invisible at its own call site.

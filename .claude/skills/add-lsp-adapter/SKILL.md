@@ -49,7 +49,9 @@ enough to promote. Update the adapter's `doc.go` and the validation table in
 - **Some servers resolve nothing for an unopened document.** zls needs the file opened via
   `didOpen` before any per-document query (documentSymbol, definition, references, hover,
   hierarchy prepares) resolves. Fix: `base.OpenTracker` — open lazily on first query, close
-  on a watched-file change. sourcekit-lsp and vscode-html-language-server are the other two.
+  on a watched-file change. sourcekit-lsp, vscode-html-language-server and kotlin-lsp are
+  the others — but the set of methods differs per server and must be MEASURED, not copied:
+  kotlin-lsp needs it for `documentSymbol` alone and answers everything else unopened.
 - **Some servers publish nothing unless the client advertises
   `textDocument.publishDiagnostics`.** typescript-language-server does not implement pull
   diagnostics (`textDocument/diagnostic` returns -32601) — it silently produces no
@@ -57,9 +59,15 @@ enough to promote. Update the adapter's `doc.go` and the validation table in
   `DefaultClientCapabilities()`. If a new adapter's diagnostics round-trip test fails with
   no published diagnostics and no error, check this first before chasing a pull-diagnostics
   theory.
-- **Some servers need a real project layout, not a bare temp workspace**, to publish
-  diagnostics at all (kotlin-language-server needs a real Gradle/Maven project) — a
-  same-symptom failure with a different root cause from the two gotchas above.
+- **Some servers need a real project layout, not a bare temp workspace**, to produce
+  diagnostics at all (kotlin-lsp needs a *resolvable* Gradle/Maven project — a build that
+  actually completes, not just the files) — a same-symptom failure with a different root
+  cause from the two gotchas above.
+- **And some genuinely do not push.** kotlin-lsp sends zero `publishDiagnostics` however
+  the client is configured, and answers `textDocument/diagnostic` in under a second. Rule
+  them out in this order — client capability, then project realness, then pull — because
+  all three present identically as "no diagnostics". A green PULL round-trip promotes an
+  adapter exactly as a push one does.
 
 ## Level-3 reference
 

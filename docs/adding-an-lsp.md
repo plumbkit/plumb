@@ -55,7 +55,7 @@ never a method: `base.Call[T]`, `base.CallPtr[T]`, `base.CallRaw`, `base.Notify`
 `lsp.Client` declares it **in its own package**, implemented over those helpers —
 see `typescript.Adapter.Diagnostic`.
 
-The same reasoning applies to `base.OpenTracker`: the three lazy-open adapters
+The same reasoning applies to `base.OpenTracker`: the lazy-open adapters
 hold it as a **named field** (`open *base.OpenTracker`), never embedded, because
 embedding would promote `Ensure` and `Refresh` into the adapter's exported
 surface.
@@ -98,7 +98,7 @@ goes wrong.
 
 Since the `base.Adapter` migration the asymmetry is carried by method
 **absence** — an adapter that does not shadow a method inherits the base's plain
-forward, with no ensure-open — so making the three adapters "consistent" looks
+forward, with no ensure-open — so making the adapters "consistent" looks
 like tidying and is not: it changes what plumb puts on the wire to three real
 servers, under cover of a refactor.
 `TestLazyOpenAdapters_DidOpenMatrix`
@@ -115,7 +115,20 @@ ensure-open set — including your own adapter's.
 | Level | What it means | Example |
 |---|---|---|
 | **Validated** | Integration tests spawn the real binary and pass. | `internal/lsp/adapters/gopls`, `.../rust` |
-| **Experimental** | Real Go code, unit-tested with a mocked transport; the integration test exists but has not run green against a real binary. | `internal/lsp/adapters/kotlin`, `.../html` |
+| **Experimental** | Real Go code, unit-tested with a mocked transport; the integration test exists but has not run green against a real binary. | `internal/lsp/adapters/html` |
+
+**The promotion rule.** An adapter stays *experimental* until the diagnostics
+round-trip runs green against a real server binary **by whichever model that
+server advertises** — push, via `DidChangeWatchedFiles`+`DidOpen` →
+`publishDiagnostics`; or pull, via `textDocument/diagnostic` returning real
+items. A mock-transport test never promotes anything, whichever model it uses.
+
+The rule used to name `publishDiagnostics` alone, which was accurate while every
+server plumb spoke to pushed. kotlin-lsp is the first that does not push at all
+(measured: zero notifications in 75 s on a file with real errors, with the client
+capability advertised, while a pull answered in 0.8 s), so the push wording would
+have left a demonstrably working server permanently unpromotable. What the rule
+is for is evidence from a real binary, not a particular notification.
 
 Real-binary validation has been exercised on macOS only; Linux integration runs
 in CI and is being hardened pre-v1; Windows is not yet supported. Current status
@@ -130,12 +143,13 @@ of every shipped adapter (details in the *Adapter reference* below):
 | `sourcekit-lsp` | Swift | **Validated** — ships with the Swift toolchain / Xcode. |
 | `zls` | Zig | **Validated** — real-binary retest (2026-06-17, zls 0.16) passes both integration tests once the `publishDiagnostics` client capability is advertised. |
 | `typescript-language-server` | TypeScript / JavaScript | **Validated** — publishes nothing unless the client advertises `textDocument.publishDiagnostics` (now in `DefaultClientCapabilities`); does not implement pull diagnostics. |
-| `kotlin-language-server` | Kotlin | **Experimental** — passes document symbols against a real binary, fails `TestIntegration_DidChangeWatchedFiles` (needs a real Gradle/Maven project to publish diagnostics). |
+| `kotlin-lsp` | Kotlin | **Validated (pull)** — JetBrains' Kotlin/kotlin-lsp 262.9593.0, 2026-08-11, on a resolvable Gradle project. The only adapter whose server never pushes: diagnostics come from `textDocument/diagnostic`. No Kotlin Multiplatform. |
 | `vscode-html-language-server` | HTML | **Experimental** — no filesystem access; answers only from documents the client has opened. |
 
 Promote from experimental to validated by getting the integration test (step 6)
 green against a real server binary, then updating the adapter's `doc.go` status
-comment and the status table above.
+comment and the status table above. Record the binary version and the date
+tested: "validated" with no build behind it ages into a claim nobody can check.
 
 ---
 
@@ -214,7 +228,7 @@ change it casually.
 
 `DefaultInitParams` is the one genuinely per-server function. Most servers need
 no `initializationOptions` at all (rust-analyzer, sourcekit-lsp, zls,
-typescript-language-server, vscode-html-language-server, kotlin-language-server
+typescript-language-server, vscode-html-language-server, kotlin-lsp
 all send none). When a server does need them, declare an unexported options
 struct next to it:
 
@@ -237,7 +251,7 @@ Every method not shadowed is inherited from the base. When you do shadow one,
 call through with `a.Adapter.X(ctx, params)` so the base still does the
 transport, the labelling, and the watcher filtering.
 
-**Pre-flight before the base call** (lazy open, swift/zig/html):
+**Pre-flight before the base call** (lazy open, swift/zig/html/kotlin):
 
 ```go
 type Adapter struct {
@@ -427,9 +441,20 @@ The test should:
    `internal/lsp/adapters/rust/integration_test.go`. Copy the fixture into a
    temp workspace first if the test mutates it, so a run cannot dirty
    `testdata/`.
-5. Assert the `DidChangeWatchedFiles` + `DidOpen` → `publishDiagnostics`
-   round-trip. **This is the promotion gate** (see the rule in
-   `.claude/skills/add-lsp-adapter/SKILL.md`).
+5. Assert the diagnostics round-trip. **This is the promotion gate** (see the
+   rule in *Validation levels* above and in
+   `.claude/skills/add-lsp-adapter/SKILL.md`). Write the external change, send
+   `DidChangeWatchedFiles` + `DidOpen`, then complete it by whichever model the
+   server advertises: wait for `publishDiagnostics`, or call
+   `textDocument/diagnostic` and assert real items back (see
+   `internal/lsp/adapters/kotlin/integration_test.go`). Gate a pull assertion on
+   `SupportsPullDiagnostics` so a server that stops advertising it fails loudly
+   rather than silently taking the other path.
+
+   Poll; do not sample once. A server whose workspace has not finished resolving
+   answers a pull instantly with zero items, which is indistinguishable from
+   "no errors" — and a fixture whose build never resolved does the same thing
+   forever.
 
 ```sh
 go test -tags integration ./internal/lsp/adapters/<name>/...
@@ -679,31 +704,64 @@ forced a shadowed method.
   name (not import path) with the topology `typescript` *extractor* package; the
   daemon imports the adapter aliased as `tsls` in `internal/cli/pool_adapters.go`.
 
-### kotlin-language-server (Kotlin)
+### kotlin-lsp (Kotlin)
 
-- **Binary**: `kotlin-language-server` — install with
-  `brew install kotlin-language-server` or build from
-  https://github.com/fwcd/kotlin-language-server (needs a JDK).
-- **Status**: experimental — unit-tested with a mocked transport; the
-  integration test (`internal/lsp/adapters/kotlin/`, repo-root
-  `testdata/kotlin-fixture/`)
-  is written and gated `//go:build integration`. The 2026-06-10 real-binary
-  retest passed document-symbol extraction but failed the
-  `DidChangeWatchedFiles`+`DidOpen` → `publishDiagnostics` round-trip: the
-  server needs a real Gradle/Maven project to publish diagnostics at all, not a
-  bare temp workspace. The binary is not on the current validation machine, so
-  the test skips rather than fails. Promote once it runs green.
-- **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. Note the
-  `build.gradle.kts` overlap with Java's markers — with both `[lsp.java]` and
-  `[lsp.kotlin]` active, the alphabetical detect order makes Java win for a
-  shared marker. Both activate automatically when their server is on PATH; if
-  both are present, force Kotlin with `session_start({"language": "kotlin"})` or
-  set `[lsp.java] enabled = false`.
-- **Workspace model**: requires `rootUri` at the project root; resolves the
-  classpath from the Gradle/Maven build files (slow on first attach).
+- **Binary**: `kotlin-lsp` — JetBrains' Kotlin/kotlin-lsp (Apache 2.0), built on
+  the IntelliJ platform. Install with `brew install --cask kotlin-lsp`
+  (JetBrains also publish `JetBrains/utils`; both resolve to the same CDN
+  artifact). **1.3 GB installed.**
+  **macOS:** the downloaded binary is unsigned and carries `com.apple.quarantine`;
+  Gatekeeper DELETES it on first execution and the error lies — *"No such file or
+  directory"* for a file that was just there. Run
+  `xattr -dr com.apple.quarantine /opt/homebrew/Caskroom/kotlin-lsp` after
+  installing. (Observed on macOS 27; unconfirmed on a released macOS.)
+  `kotlin-lsp` is a deprecated shim that `exec`s `bin/intellij-server` with the
+  same arguments and warns on stderr at every start. It is the default because it
+  is the only PATH-portable name; point `[lsp.kotlin] command` at
+  `.../kotlin-server-<version>/bin/intellij-server` to skip the shim.
+- **Status**: **validated (pull)** — kotlin-lsp 262.9593.0, 2026-08-11,
+  macOS/arm64. `TestIntegration_DocumentSymbols` and
+  `TestIntegration_PullDiagnostics` both run green against the real binary on a
+  resolvable Gradle project (Gradle 8.13, Kotlin 2.1.0).
+- **Args**: `--stdio`, plus a per-root `--system-path <dir>` appended by
+  `internal/cli/pool_adapters.go argsFor` (the same mechanism as jdtls's `-data`)
+  and pruned by the pool janitor. **`--stdio` is mandatory**: the server defaults
+  to a TCP socket on `127.0.0.1:9999` and **ignores unknown flags silently**, so
+  a wrong invocation presents as a hang, not an error.
+- **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. `build.gradle.kts`
+  is also one of Java's, and a contested directory is resolved by whichever of
+  the two owns more source files beneath it (see `strongLangAt`), so a Kotlin
+  Gradle project attaches as Kotlin and a Java one using the Kotlin DSL as Java.
+  Deliberately NOT widened to `pom.xml` / `build.gradle`: that would contest
+  every Java project's root for the sake of the rarer Kotlin-Maven one, and a
+  `.kt` file reaches this adapter by extension whatever language owns the root.
+- **Workspace model**: requires `rootUri` at the project root and derives the
+  classpath from the build, so a bare directory of `.kt` files resolves nothing.
+  `initialize` answers in 2–5 s, but the WORKSPACE takes appreciably longer, and
+  an unresolved workspace answers a pull instantly with zero items —
+  indistinguishable from "no errors".
 - **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
-- **Adapter-specific surface**: none.
-- **Notifications**: emits `textDocument/publishDiagnostics`.
+- **Adapter-specific surface**: the optional document-pull surface
+  (`SupportsPullDiagnostics` + `Diagnostic`), and **lazy open for
+  `DocumentSymbols` only** — unopened, the server fails that one method outright
+  with *"no stub serializer for kotlin.PACKAGE_DIRECTIVE"*, while `Definition`,
+  `References`, `Hover`, `PrepareCallHierarchy` and the pull diagnostics all
+  resolve for a document plumb never opened.
+- **Diagnostics**: **pull only.** This is the one adapter whose server never
+  pushes — zero `publishDiagnostics` in 75 s on a file with two real errors, with
+  the client capability advertised, while `textDocument/diagnostic` answered in
+  0.8 s with severity, code (`RETURN_TYPE_MISMATCH`), source `"Kotlin"`,
+  `relatedInformation` and a FIR diagnostic class in `data`. It advertises
+  `diagnosticProvider` with `interFileDependencies: true`,
+  `workspaceDiagnostics: false`.
+- **Sync**: advertises `textDocumentSync: 2` (Incremental) but **accepts
+  plumb's full-document sync** — verified by pushing whole-document changes and
+  seeing diagnostics track text that exists only on the wire.
+- **Not supported**: **Kotlin Multiplatform** (do not claim it), and
+  `textDocument/prepareRename` has no handler despite `renameProvider` being
+  advertised (harmless — `rename_symbol` calls `Rename` directly). The bundled
+  `java` plugins serve JVM interop and JDK resolution; **jdtls remains the Java
+  adapter**.
 
 ### vscode-html-language-server (HTML)
 
