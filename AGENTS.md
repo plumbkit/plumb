@@ -162,6 +162,7 @@ make verify      # build + test + lint + integration/clients tag-compile + check
 make cover       # statement coverage, failing under the floor in scripts/check-coverage.sh
 make cover-report # same, plus the 20 least-covered packages
 make vuln        # govulncheck over the module graph
+make fuzz        # fuzz targets, discovered (FUZZTIME=60s)
 make tidy        # go mod tidy
 make clean       # remove ./plumb
 make install-hooks  # install pre-commit hook (required after every fresh clone; `make hooks` is an alias)

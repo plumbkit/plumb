@@ -908,6 +908,49 @@
   each time, which is the churn the persistence exists to prevent — so the row is
   replaced with the name actually in use and converges after one reconnect.
 
+### Added
+
+- **Fuzz targets, and a `make fuzz` that finds them.** TODO_IMPROVE_3 §9 named
+  the parsers taking attacker-influenced input and recorded that **zero** fuzz
+  targets existed. `FuzzResolveArgs` covers the parameter-alias and
+  argument-correction engine, whose input arrives from an MCP client whose
+  instructions any file it has read can steer — and which *rewrites* those
+  arguments before a tool sees them, which is what makes a rewrite worth fuzzing
+  rather than merely testing.
+
+  Its sharpest assertion is that the engine never **synthesises** a safety flag
+  (`dirty_ok`, `force`, `confirm`) the caller did not supply: filling in a missing
+  guard-lifting flag would be privilege escalation, not a spelling correction.
+
+  `make fuzz` **discovers** targets rather than listing them (`FUZZTIME=60s` by
+  default), because a hand-maintained list stops covering a target the day
+  someone adds one. It is deliberately not part of `verify` — fuzzing is
+  time-boxed exploration, not a gate — but the retained corpora under
+  `<pkg>/testdata/fuzz/` are run by plain `make test` as ordinary cases, so every
+  payload already found stays a regression test whether or not anyone fuzzes
+  again.
+
+### Fixed
+
+- **The argument guard and the tools it guards disagreed about what the same
+  bytes meant.** `decodeArgsObject` validated arguments with a `json.Decoder`,
+  which stops at the end of the first value and ignores whatever follows, while
+  tools decode with plain `json.Unmarshal`, which refuses trailing data. So
+  `{"file_path":"a"}garbage` passed the guard — and then failed inside the tool
+  with a bare JSON error instead of this layer's remediation-bearing one.
+
+  Worse, the outcome depended on something unrelated. When an alias rewrite fired,
+  `resolveArgs` re-marshalled the decoded map and **silently dropped** the
+  trailing bytes, so the identical input was accepted or rejected according to
+  whether the caller happened to spell a parameter with an alias.
+
+  Found by `FuzzResolveArgs` within a second of its first run — and the first
+  attempt at the fix, `dec.More()`, was wrong: the standard library defines it as
+  "the next byte is not `]` or `}`", because it exists to iterate a container's
+  elements, so it reported "nothing more" for a trailing `}` and let
+  `{"file_path":"a"} }` through. The fuzzer found that hole nine seconds into the
+  next run. Both payloads are retained as corpus.
+
 ### Changed
 
 - **Kotlin's language server is now JetBrains' `kotlin-lsp`, and the adapter is

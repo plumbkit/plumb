@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -190,6 +191,13 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 // decodeArgsObject parses raw arguments into a top-level map, preserving numeric
 // fidelity (UseNumber) so re-marshalling after an alias rewrite never reshapes
 // untouched values. Absent/empty/null arguments decode to an empty map.
+//
+// Trailing bytes are REJECTED so this layer and the tools agree on what the same
+// bytes mean: json.Decoder stops after the first value, tools use json.Unmarshal,
+// which refuses the remainder. The second Decode-to-io.EOF is the check;
+// dec.More() cannot serve, as the stdlib defines it as "next byte is not ] or }"
+// and so waves a trailing `}` through. Both shapes came from FuzzResolveArgs —
+// see its doc comment for the full account.
 func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -199,6 +207,10 @@ func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
+		return nil, errors.New("arguments must be a JSON object")
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("arguments must be a JSON object")
 	}
 	obj, ok := v.(map[string]any)
