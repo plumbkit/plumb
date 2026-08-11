@@ -146,12 +146,21 @@ func (t *FileStatus) run(ctx context.Context, args fileStatusArgs) []fileStatusR
 // circuits to an error entry; an absent file yields exists=false; otherwise the
 // git, last-writer and stat signals are combined.
 func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
-	resolved := filepath.Clean(resolvePath(raw, t.ws))
+	// Guard the path as GIVEN, before cleaning it. Cleaning first would cancel an
+	// unresolved ".." that the kernel resolves through a symlink, so this tool
+	// alone would answer about a different file than the caller named — silently,
+	// as exists=false with no error. That is the outcome ParentTraversalError
+	// exists to refuse; file_status must not be the one exception to it.
+	resolved := resolvePath(raw, t.ws)
 	res := fileStatusResult{path: resolved}
 	if err := t.guard.check(resolved); err != nil {
 		res.err = err.Error()
 		return res
 	}
+	// Safe to clean now: the guard has just established there is no unresolved
+	// ".." left for Clean to cancel, so this only tidies "." and separators.
+	resolved = filepath.Clean(resolved)
+	res.path = resolved
 	info, err := os.Stat(resolved)
 	if err != nil {
 		// Absent (or unreadable) file: report it as not-existing rather than

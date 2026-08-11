@@ -59,6 +59,16 @@
   before any check, so the anchored result is the single path both the check and
   the operation use and there is no divergence to refuse.
 
+  Two companions the refusal made necessary, both found by an independent review
+  of the fix. `SynthesiseRoot` returned its seed verbatim on the filesystem-root
+  fallback, so an explicit markerless pin could store a workspace root containing
+  `..` — and because several tools boundary-check that workspace string itself
+  rather than a path derived from it, the whole session would then be refused
+  access to its own project. And `file_status` cleaned the path *before*
+  guarding it, making it the one tool where the refusal could not fire; it
+  answered about a file the caller had not named, as `exists: false` with no
+  error, which is the silent retargeting this change exists to prevent.
+
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
   clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
   reconnecting proxy, so from the client's side the server never goes away — it
