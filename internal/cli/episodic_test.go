@@ -116,7 +116,7 @@ func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
 // never robs a session of its episodic summary.
 func TestEvictIdle_SummarisesBeforeCancel(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	sessID, err := session.Register(session.Info{Name: "evict-test", DaemonVersion: "test"})
+	sessID, err := registerID(session.Info{Name: "evict-test", DaemonVersion: "test"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestEvictIdle_SummarisesBeforeCancel(t *testing.T) {
 // so a per-project episodic opt-in (re-checked inside the closure) is reachable.
 func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	sessID, err := session.Register(session.Info{Name: "reaper-test", DaemonVersion: "test"})
+	sessID, err := registerID(session.Info{Name: "reaper-test", DaemonVersion: "test"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestEpisodicRelPath(t *testing.T) {
 // idle spell (re-arming only after new activity).
 func TestSummariseIdle_FiresClosureOncePerSpell(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	sessID, err := session.Register(session.Info{Name: "idle-test", DaemonVersion: "test"})
+	sessID, err := registerID(session.Info{Name: "idle-test", DaemonVersion: "test"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -383,4 +383,11 @@ func TestSummariseIdle_FiresClosureOncePerSpell(t *testing.T) {
 	if n := atomic.LoadInt32(&fired); n != 1 {
 		t.Errorf("expected exactly one summarise per idle spell, got %d", n)
 	}
+}
+
+// registerID registers info and returns just the session ID — Register itself
+// returns the completed record so its caller can read back the assigned name.
+func registerID(info session.Info) (string, error) {
+	reg, err := session.Register(info)
+	return reg.ID, err
 }

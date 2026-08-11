@@ -44,6 +44,39 @@
   this change was guarded only at the flag level, and a review showed the whole
   feature could be deleted with the suite still green.
 
+- **Two live sessions can no longer share a name, so a mailbox address always
+  reaches the session it names.** A session name is an address: `collab_rows`
+  stores the `addressee` as the name string and `collab.NotifyKey` makes a name
+  its own wake key. But nothing kept one unique. Names were drawn at random from
+  a pool of ~6k with no check, and `rename_session` let a session adopt any name
+  it liked — including one a live peer already answered to.
+
+  The failure is quiet rather than loud. `ClaimNotes` claims each row with a
+  single atomic `UPDATE … RETURNING`, so duplicate names do not duplicate a
+  message: the first session to ask wins it and the session the sender meant
+  never learns it existed. `target_workspace` closed the cross-project version of
+  this; same-workspace addressing still trusted the name.
+
+  Both assignment paths now check. `session.Register` re-draws until the name is
+  free, falling back to a numeric suffix if the draw stays unlucky, and
+  `session.Rename` refuses a name a live session holds with `ErrNameTaken`.
+  Crucially the check runs *inside* the session-directory flock that performs the
+  write, so it cannot race a concurrent rename — checking first and writing after
+  would let every contender see the name free and all of them take it.
+
+  Renaming to the name you already hold still works (`restoreName` re-applies the
+  persisted name on every reconnect), an ended session does not reserve its name,
+  and the comparison is case-insensitive — deliberately stricter than delivery's
+  case-sensitive match, since refusing a confusable name is safe and admitting an
+  ambiguous address is not. `next` is now reserved: it is the mailbox's
+  next-arrival sentinel, which `leave_note` resolves before any session lookup,
+  so a session holding that name could never be addressed while shadowing the
+  broadcast address for everyone else.
+
+  `session.Register` now returns the completed `session.Info` rather than just
+  the ID, so its caller can read back the name it was assigned instead of
+  generating one itself — that pre-generated name was what bypassed the check.
+
 ### Changed
 
 - **`[collab]`'s channel switches are gated on `plumb trust` rather than being

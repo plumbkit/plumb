@@ -130,11 +130,11 @@ func TestWorkspaceSessions_ConcurrentNoDeadlock(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	const ws = "/tmp/plumb-ws-sessions-concurrency-v3"
 
-	selfID, err := session.Register(session.Info{ID: "self-nd", Name: "self-nd", Folder: ws})
+	selfID, err := registerID(session.Info{ID: "self-nd", Name: "self-nd", Folder: ws})
 	if err != nil {
 		t.Fatalf("register self: %v", err)
 	}
-	if _, err := session.Register(session.Info{ID: "peer-nd", Name: "peer-nd", Folder: ws}); err != nil {
+	if _, err := registerID(session.Info{ID: "peer-nd", Name: "peer-nd", Folder: ws}); err != nil {
 		t.Fatalf("register peer: %v", err)
 	}
 
@@ -229,4 +229,11 @@ func TestFormatWorkspaceSessions_CommitAttribution(t *testing.T) {
 	if got := strings.Count(out, "git commit"); got != 2 {
 		t.Errorf("expected exactly 2 attributed commits (failed commit and add stay bare), got %d:\n%s", got, out)
 	}
+}
+
+// registerID registers info and returns just the session ID — Register itself
+// returns the completed record so its caller can read back the assigned name.
+func registerID(info session.Info) (string, error) {
+	reg, err := session.Register(info)
+	return reg.ID, err
 }

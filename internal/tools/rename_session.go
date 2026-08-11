@@ -31,8 +31,8 @@ func (t *renameSession) Name() string { return "rename_session" }
 
 func (t *renameSession) Description() string {
 	return fmt.Sprintf(
-		"Renames the current MCP session. Pass the new name as the `name` parameter — letters (any case), digits, and hyphens, capped at %d characters, with no leading/trailing or consecutive hyphens. User-provided case is preserved; auto-generated names are lowercase.",
-		session.MaxNameLength,
+		"Renames the current MCP session. Pass the new name as the `name` parameter — letters (any case), digits, and hyphens, capped at %d characters, with no leading/trailing or consecutive hyphens. User-provided case is preserved; auto-generated names are lowercase. The name must be free: a session name is the address the mailbox delivers to, so a name another LIVE session already answers to is refused (compared case-insensitively) and %q is reserved for the next-arrival address. Renaming to the name you already hold is fine.",
+		session.MaxNameLength, "next",
 	)
 }
 
@@ -45,7 +45,7 @@ func (t *renameSession) InputSchema() json.RawMessage {
       "minLength": 1,
       "maxLength": %d,
       "pattern": "%s",
-      "description": "New session name. Letters, digits, and hyphens only; max %d characters. Cannot start/end with hyphen or contain consecutive hyphens. Case is preserved as entered."
+      "description": "New session name. Letters, digits, and hyphens only; max %d characters. Cannot start/end with hyphen or contain consecutive hyphens. Case is preserved as entered. Must not be a name a live session already uses, and must not be 'next'."
     }
   },
   "required": ["name"],
@@ -65,6 +65,11 @@ func (t *renameSession) Execute(_ context.Context, args json.RawMessage) (string
 	}
 	name, err := t.rename(a.Name)
 	if err != nil {
+		if errors.Is(err, session.ErrNameTaken) {
+			// Say why it is refused rather than just that it is: an agent that
+			// reads "taken" as an arbitrary rule tends to retry the same name.
+			return "", fmt.Errorf("%w — a session name is the address the mailbox delivers to, so two live sessions cannot share one; pick another", err)
+		}
 		return "", err
 	}
 	return "session renamed to " + name, nil
