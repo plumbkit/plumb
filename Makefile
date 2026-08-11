@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -97,6 +97,34 @@ test-race: $(TESTCACHE)
 
 integration-test: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=10m ./...
+
+# fuzz runs every fuzz target in the tree for FUZZTIME each (default 60s).
+#
+# Targets are DISCOVERED, not listed. `go test` fuzzes one target per invocation
+# (`-fuzz .` over ./... refuses with "matches more than one target"), so this has
+# to iterate either way — and a hand-maintained list silently stops covering a
+# target the day someone adds one, which is the failure mode a fuzzing target can
+# least afford. Discovery also keeps this independent of which branch a given
+# target happens to land on.
+#
+# Not in `verify`: fuzzing is time-boxed exploration, not a pass/fail gate, and
+# the edit loop cannot afford it. The retained corpora under <pkg>/testdata/fuzz/
+# ARE run by plain `make test` as ordinary cases, so every payload a fuzz run has
+# already found stays a regression test whether or not anyone fuzzes again.
+FUZZTIME ?= 60s
+
+fuzz: $(TESTCACHE)
+	@set -e; \
+	found=0; \
+	for f in $$(grep -rEl '^func Fuzz[A-Za-z0-9_]*\(' --include='*_test.go' . | sort); do \
+		pkg=$$(dirname $$f); \
+		for fn in $$(grep -hoE '^func Fuzz[A-Za-z0-9_]*' $$f | sed 's/^func //' | sort -u); do \
+			found=1; \
+			echo "==> fuzzing $$fn in $$pkg for $(FUZZTIME)"; \
+			GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test $$pkg -run '^$$' -fuzz "^$$fn$$" -fuzztime $(FUZZTIME); \
+		done; \
+	done; \
+	if [ $$found -eq 0 ]; then echo "no fuzz targets found"; exit 1; fi
 
 # build-integration compiles and vets the //go:build integration files, which
 # test/lint skip without the tag — catching an integration-only compile error or
