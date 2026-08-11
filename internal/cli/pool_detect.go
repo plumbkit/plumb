@@ -171,17 +171,73 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 	}
 }
 
-// strongLangAt returns the first active language whose RootMarkers exist
-// directly in dir, or "". Single directory, no ascent.
+// strongLangAt returns the active language whose RootMarkers exist directly in
+// dir, or "". Single directory, no ascent.
+//
+// Several languages can claim the SAME directory, because a build file is not
+// always specific to one language: `build.gradle.kts` is a strong marker for
+// both java and kotlin. Language order alone cannot resolve that — it is
+// alphabetical, so java would win every Kotlin Gradle project purely because of
+// its name, starting a jdtls JVM that serves none of the project's sources and
+// answering URI-less queries (workspace_symbols, the hierarchies) from a server
+// that cannot see them. So a contested directory is decided by what the project
+// actually contains: the tied language owning the most source files beneath it.
+// The scan runs ONLY on a tie, which is rare, and falls back to the
+// deterministic language order when it cannot separate the candidates.
+//
+// A candidate holding a marker no rival claims does NOT win outright: a
+// directory carrying both pom.xml (java's alone) and build.gradle.kts (shared)
+// is contested, and its sources decide it. An exclusive marker is evidence, not
+// a veto — a Gradle build that keeps a legacy pom.xml around should still
+// attach the language its sources are written in. Pinned by the
+// "exclusive java marker beside the contested one" case.
 func (p *workspacePool) strongLangAt(dir string) string {
+	var matched []langConfig
 	for _, l := range p.langsSnapshot() {
 		for _, marker := range l.cfg.RootMarkers {
 			if markerPresent(dir, marker) {
-				return l.name
+				matched = append(matched, l)
+				break
 			}
 		}
 	}
-	return ""
+	if len(matched) == 0 {
+		return ""
+	}
+	names := make([]string, len(matched))
+	for i, l := range matched {
+		names[i] = l.name
+	}
+	// PERFORMANCE, not correctness — stated because it reads like a guard and is
+	// not one. With a single candidate the scan below cannot change the answer:
+	// dominantAmong is restricted to `names`, so it returns either that one name
+	// or "", and both paths end at names[0]. Deleting this return leaves the whole
+	// internal/cli suite green (verified by mutation), which is exactly why it is
+	// worth keeping AND worth labelling: strongLangAt runs at every level of
+	// Detect's ascent and once per child in discoverChildLanguages, so without it
+	// every ordinary single-claim directory would pay a depth-5, 2000-file walk
+	// for an answer already known. Nothing test-pins it, because the cost it
+	// avoids is invisible through the return value.
+	if len(matched) == 1 {
+		return names[0]
+	}
+	counts, truncated := p.sniffCounts(dir, tieScanDepth, contestedMarkerPatterns(matched))
+	// A truncated count is not weaker evidence, it is evidence about the wrong
+	// thing: the walk stopped at a file cap, so the counts describe whichever
+	// prefix of the tree it happened to reach first — and the order is a LIFO
+	// over directory listings, i.e. reverse-alphabetical, which has nothing to
+	// do with where a project keeps its code. A repo of 200 Java files and 3
+	// Kotlin ones, with a large asset directory sorting between them, counted
+	// the 3 and then ran out; the tie-break believed it and answered kotlin.
+	// Trusting a complete count and discarding a partial one is the whole
+	// distinction; without it the scan is confidently wrong rather than unsure.
+	if truncated {
+		return names[0]
+	}
+	if lang := dominantAmong(counts, names); lang != "" {
+		return lang
+	}
+	return names[0]
 }
 
 // discoveredRoot pairs a subdirectory carrying a strong language root marker
@@ -308,95 +364,6 @@ func (p *workspacePool) weakLangAt(dir string) string {
 		}
 	}
 	return ""
-}
-
-// extScanDepth / extScanMaxFiles bound the content sniff so it can never stall
-// detection on a large tree: it descends at most this many levels below the root
-// and examines at most this many files before giving up.
-const (
-	extScanDepth    = 2
-	extScanMaxFiles = 2000
-)
-
-// extLangAt is the last-resort content sniff for a resolved LanguageNone root:
-// it returns the ACTIVE language (installed + enabled — fileLanguage gates on
-// the effective set) owning the most source files in a bounded shallow scan of
-// dir, or "". This is what lets a git repo full of .py files with no
-// pyproject.toml attach Python when pyright is installed, matching the
-// "install → on" philosophy for ecosystems that have no mandatory manifest. It
-// runs at attach only AFTER strong-marker child discovery finds nothing (so a
-// true monorepo is rooted per-child, not collapsed to one language here), and
-// scans dir without ascending. Defensive throughout — any read error skips that
-// entry rather than failing, so detection never crashes on an odd filesystem;
-// noise dirs (.git, node_modules, build outputs) are pruned. The dominant-file
-// count is a coarse heuristic — a large generated/vendored tree with a
-// non-standard dir name (not caught by skipChildDir) can skew it — but as a
-// last resort it is strictly better than LanguageNone and never overrides a
-// strong or weak marker.
-func (p *workspacePool) extLangAt(dir string) string {
-	if len(p.langsSnapshot()) == 0 {
-		return ""
-	}
-	type item struct {
-		dir   string
-		depth int
-	}
-	counts := map[string]int{}
-	scanned := 0
-	stack := []item{{dir: dir, depth: 0}}
-	for len(stack) > 0 && scanned < extScanMaxFiles {
-		it := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		entries, err := os.ReadDir(it.dir)
-		if err != nil {
-			continue
-		}
-		for _, de := range entries {
-			if de.IsDir() {
-				if it.depth < extScanDepth && !skipChildDir(de.Name()) {
-					stack = append(stack, item{dir: filepath.Join(it.dir, de.Name()), depth: it.depth + 1})
-				}
-				continue
-			}
-			if scanned >= extScanMaxFiles {
-				break
-			}
-			scanned++
-			if lang := p.fileLanguage(de.Name()); lang != "" {
-				counts[lang]++
-			}
-		}
-	}
-	return bestSniffedLang(counts)
-}
-
-// bestSniffedLang picks the dominant language from a sniff count map with a
-// deterministic total order (independent of map iteration): most files wins,
-// then "go" first, then alphabetical. Returns "" for an empty map.
-func bestSniffedLang(counts map[string]int) string {
-	if len(counts) == 0 {
-		return ""
-	}
-	best := ""
-	for lang := range counts {
-		if best == "" || sniffLess(lang, counts[lang], best, counts[best]) {
-			best = lang
-		}
-	}
-	return best
-}
-
-func sniffLess(a string, na int, b string, nb int) bool {
-	if na != nb {
-		return na > nb
-	}
-	if a == "go" {
-		return true
-	}
-	if b == "go" {
-		return false
-	}
-	return a < b
 }
 
 // languageForRoot resolves the language for an already-determined workspace root
