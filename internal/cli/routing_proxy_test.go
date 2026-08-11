@@ -11,6 +11,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // stubClient is a minimal lsp.Client that records which URIs it was called
@@ -107,9 +108,15 @@ var _ lsp.Client = (*stubClient)(nil)
 
 // setupTwoProjects creates two go.mod-rooted project directories under a
 // shared tempdir. Returns (rootA, rootB).
+//
+// The base is canonicalised because pool.Detect's roots are (issue #263): route
+// compares the root it detects for a file against the registered primaryRoot, so
+// a fixture holding the /var spelling of a /private/var directory would make
+// every routed call miss the primary and acquire a second language server for
+// the same project — the production bug these roots stand in for.
 func setupTwoProjects(t *testing.T) (string, string) {
 	t.Helper()
-	base := t.TempDir()
+	base := paths.Canonical(t.TempDir())
 	a := filepath.Join(base, "projA")
 	b := filepath.Join(base, "projB")
 	for _, p := range []string{a, b} {

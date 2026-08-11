@@ -70,6 +70,10 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		root = s.pool.SynthesiseRoot(folder)
 		language = LanguageNone
 	}
+	// root is canonical here — both Detect and SynthesiseRoot resolve symlinks
+	// (issue #263) — which is what lets the sticky-pin guard below recognise a
+	// re-pin naming the SAME project by a different spelling as the no-op it is,
+	// rather than refusing it as a peer trying to steal the pin.
 	langForced := false
 	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
 		language = langOverride

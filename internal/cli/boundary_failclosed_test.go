@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -90,7 +91,9 @@ func TestCheckBoundary_UnattachedRefusalClearsOnAttach(t *testing.T) {
 		t.Fatal("unattached relative path was allowed")
 	}
 
-	root := t.TempDir()
+	// Canonical because the pin is (issue #263): on macOS t.TempDir() hands back
+	// a /var spelling of a directory that really lives under /private/var.
+	root := paths.Canonical(t.TempDir())
 	mkTestFile(t, filepath.Join(root, "go.mod"), "module x\n")
 	s.attachWorkspace(context.Background(), "file://"+root)
 	if got := s.workspace(); got != root {
@@ -157,7 +160,7 @@ func TestOnBeforeTool_AbsoluteSeedStillAttaches(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	s := newUnattachedSession(t)
 
-	root := t.TempDir()
+	root := paths.Canonical(t.TempDir()) // see TestCheckBoundary_UnattachedRefusalClearsOnAttach
 	mkTestFile(t, filepath.Join(root, "go.mod"), "module x\n")
 	src := filepath.Join(root, "main.go")
 	mkTestFile(t, src, "package main\n")
