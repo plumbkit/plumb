@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -162,7 +163,7 @@ func (l *Log) Rollback() {
 		return
 	}
 	for _, op := range l.manifest.Ops {
-		restoreOp(l.dir, op, op.Perm)
+		restoreOp(l.dir, op, op.Perm, op.Path)
 	}
 	if err := os.RemoveAll(l.dir); err != nil {
 		slog.Error("txlog: failed to remove log dir after rollback", "dir", l.dir, "err", err)
@@ -335,33 +336,78 @@ func replayOrphan(dir string, guard PathGuard) {
 				"path", op.Path, "manifest", manifestPath, "err", err)
 			continue
 		}
-		// The boundary guard is necessary but NOT sufficient, because the write
-		// primitive here follows symlinks and the guard was built for one that does
-		// not. A path policy canonicalises through the nearest EXISTING ancestor, so
-		// a DANGLING link at <workspace>/payload resolves to <workspace>/payload and
-		// is admitted — correctly, for a caller that replaces the link. os.WriteFile
-		// instead opens O_CREATE and follows it, creating the target wherever it
-		// points. A cloned repository committing `payload -> ~/.zshenv` (a path that
-		// need not exist) therefore had an admitted in-workspace op write outside
-		// every allowed root. Refuse a symlink outright on this path: a crashed
-		// transaction that wrote through one loses that single restore, which is
-		// logged, and is a far better trade than following an attacker's link.
-		if err := refuseSymlink(op.Path); err != nil {
-			slog.Error("txlog: replay REFUSED — manifest path is a symlink",
+		// The guard is necessary but not sufficient: it rules on the path as
+		// WRITTEN, and os.WriteFile follows a symlink to somewhere else. Resolve the
+		// path to the file the write will actually reach, and put THAT through the
+		// guard too.
+		//
+		// Resolving rather than refusing a symlink outright is deliberate. The
+		// earlier version refused, on the stated premise that the write primitive
+		// "replaces a link rather than following it" — the opposite of what safeWrite
+		// does ("resolve to the real target so we write through the link", and only a
+		// DANGLING link gets replaced). On that false premise the blanket refusal
+		// looked free; in fact it silently dropped crash recovery for any legitimately
+		// symlinked source file, which is ordinary in a monorepo.
+		target, err := replayTarget(op.Path)
+		if err != nil {
+			slog.Error("txlog: replay REFUSED — cannot determine which file this op would write",
 				"path", op.Path, "manifest", manifestPath, "err", err)
 			continue
+		}
+		if target != op.Path {
+			if err := admitReplayPath(target, guard); err != nil {
+				slog.Error("txlog: replay REFUSED — manifest path is a symlink resolving outside the session's roots",
+					"path", op.Path, "target", target, "manifest", manifestPath, "err", err)
+				continue
+			}
 		}
 		// The snapshot is read with os.ReadFile, which follows symlinks too, and its
 		// content is then written to the admitted path. A repository shipping
 		// `0-before -> ~/.ssh/id_ed25519` would otherwise copy that file into the
 		// workspace, where the agent reads it or a later commit carries it away.
+		// Refused outright rather than resolved: a snapshot is a file THIS daemon
+		// wrote, so a link in its place is never legitimate.
 		if err := refuseSymlink(snapshotPath(dir, op.N)); err != nil {
 			slog.Error("txlog: replay REFUSED — snapshot file is a symlink",
 				"snap", snapshotPath(dir, op.N), "manifest", manifestPath, "err", err)
 			continue
 		}
-		restoreOp(dir, op, replayPerm)
+		// Write to the RESOLVED target, not to op.Path: the guard has just ruled on
+		// target, and handing the syscall a different string is exactly the bug this
+		// function exists to close.
+		restoreOp(dir, op, replayPerm, target)
 	}
+}
+
+// replayTarget returns the file a write to path would actually modify, so the
+// caller can re-check THAT against the boundary guard.
+//
+// It mirrors the write primitive: a resolvable symlink is followed (safeWrite
+// writes through a link), a non-link is itself, and a missing path is itself —
+// the replay may legitimately recreate a file the transaction deleted.
+//
+// A DANGLING link is refused rather than followed or replaced. os.WriteFile
+// would follow it and create the target wherever it points, and there is no
+// resolved name to re-check because the target does not exist; a policy
+// canonicalises a missing path through its nearest existing ancestor, so
+// <workspace>/payload -> ~/.zshenv is admitted as <workspace>/payload. Refusing
+// costs one logged restore and closes an arbitrary-write primitive.
+func replayTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, nil
+		}
+		return "", fmt.Errorf("cannot stat path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("path is a dangling symlink: %w", err)
+	}
+	return resolved, nil
 }
 
 // refuseSymlink reports an error when path exists and is a symbolic link.
@@ -376,7 +422,15 @@ func replayOrphan(dir string, guard PathGuard) {
 func refuseSymlink(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil //nolint:nilerr // a path that does not exist cannot be a link
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		// Any OTHER Lstat failure — a permission denial on the parent, an I/O
+		// error — leaves us unable to say whether this is a link, and the previous
+		// version returned nil for all of them while its comment claimed it was
+		// only forgiving a missing file. "I could not check" must not read as
+		// "I checked and it is fine".
+		return fmt.Errorf("cannot determine whether path is a symlink: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("path is a symlink")
@@ -404,15 +458,28 @@ func admitReplayPath(path string, guard PathGuard) error {
 		// happened to spawn it, i.e. an unrelated project.
 		return errors.New("manifest op path is relative")
 	}
+	if filepath.Clean(path) != path {
+		// A boundary policy canonicalises with filepath.Abs, which cancels "sub/.."
+		// LEXICALLY; the kernel follows `sub` first and applies ".." to wherever
+		// that landed. With `sub` a committed symlink the two name different files,
+		// so the guard would admit an in-workspace path while the write escaped.
+		// A manifest is machine-written, so demanding canonical form costs nothing.
+		return errors.New("manifest op path is not in canonical form")
+	}
 	if guard == nil {
 		return errors.New("no boundary guard supplied")
 	}
 	return guard(path)
 }
 
-// restoreOp restores one op's snapshot to its recorded path. perm is used only
-// when the target does not already exist — see replayPerm.
-func restoreOp(dir string, op opMeta, perm os.FileMode) {
+// restoreOp restores one op's snapshot to target. perm is used only when the
+// target does not already exist — see replayPerm.
+//
+// target is passed separately from op.Path because the two differ on the
+// untrusted path: replayOrphan resolves op.Path and re-checks the resolved file,
+// then writes to THAT. Rollback, whose ops this process recorded in memory,
+// passes op.Path itself.
+func restoreOp(dir string, op opMeta, perm os.FileMode, target string) {
 	if !op.Snapshotted {
 		slog.Warn("txlog: rollback: no snapshot for large file — cannot restore",
 			"path", op.Path)
@@ -432,11 +499,11 @@ func restoreOp(dir string, op opMeta, perm os.FileMode) {
 	// narrow: the previous suppression claimed the manifest itself was
 	// trustworthy, which was true of one caller and false of the other, and that
 	// is what made an attacker-authored manifest an arbitrary-write primitive.
-	if err := os.WriteFile(op.Path, content, perm); err != nil { //nolint:gosec // G703: path is either in-process-recorded (Rollback) or guard-admitted (replayOrphan); see admitReplayPath
-		slog.Error("txlog: rollback: cannot restore file", "path", op.Path, "err", err)
+	if err := os.WriteFile(target, content, perm); err != nil { //nolint:gosec // G703: target is either in-process-recorded (Rollback) or resolved-and-guard-admitted (replayOrphan); see admitReplayPath and replayTarget
+		slog.Error("txlog: rollback: cannot restore file", "path", target, "err", err)
 		return
 	}
-	slog.Info("txlog: rollback: restored", "path", op.Path)
+	slog.Info("txlog: rollback: restored", "path", target)
 }
 
 func (l *Log) writeManifest() error {
