@@ -56,13 +56,16 @@ type Inbox struct {
 }
 
 // Keys are the notifier keys this inbox is woken by: its own name, plus the
-// "next arrival" address. Cross-project messages are addressed by name, so they
-// share the name key and need no separate wake-up.
+// "next arrival" address of ITS OWN workspace. Cross-project messages are
+// addressed by name, so they share the name key and need no separate wake-up;
+// "next" has to be scoped, or a note left for the next arrival in any project in
+// the daemon would wake every session in every other project (see
+// collab.NotifyKey). Senders must derive the key the same way.
 func (i Inbox) Keys() []string {
 	if i.Self == "" {
 		return nil
 	}
-	return []string{i.Self, collab.AddresseeNext}
+	return []string{i.Self, collab.NotifyKey(i.Root, collab.AddresseeNext)}
 }
 
 // stores returns the stores to read, workspace first so a same-project message
