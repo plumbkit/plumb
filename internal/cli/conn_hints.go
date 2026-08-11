@@ -80,10 +80,21 @@ var mailboxSilentTools = map[string]bool{
 // Cheap and non-blocking, as required of an EnrichToolOutput hook: the message
 // check short-circuits on an in-process generation counter and touches the
 // database only when a peer has actually written something (see conn_chat.go).
-func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
-	if !mailboxSilentTools[name] {
-		text += s.messageHint(ctx)
-	}
+func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) (out string) {
+	// Message delivery runs LAST, and deliberately so. It is the only enrich step
+	// that mutates state — claiming marks a row delivered for good — while
+	// runHookSafely discards this whole string if a later step panics. Running the
+	// read-only path hints first means such a panic costs a hint, not a message
+	// that has already been marked as read and can never be offered again.
+	//
+	// The named return plus defer is what puts it after every early return below,
+	// so a message is delivered on EVERY tool call rather than only on the
+	// path-bearing ones the hints are restricted to.
+	defer func() {
+		if !mailboxSilentTools[name] {
+			out += s.messageHint(ctx)
+		}
+	}()
 	if !hintAllowedTools[name] {
 		return text
 	}

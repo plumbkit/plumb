@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +209,35 @@ func TestChatWatch_ResetForcesRecheck(t *testing.T) {
 	w.reset()
 	if !w.due(keys, gens, now.Add(2*time.Second)) {
 		t.Error("after a re-pin the store must be consulted again")
+	}
+}
+
+// TestEnrichOrder_MessagesComeAfterPathHints pins the ordering, which is a
+// correctness property rather than a cosmetic one. Claiming a message marks it
+// delivered for good, and runHookSafely discards the entire enriched string if a
+// later step panics — so the mutating step must run after the read-only ones. If
+// delivery moved back ahead of the hints, a panic in a hint would destroy a
+// message that can never be offered again.
+func TestEnrichOrder_MessagesComeAfterPathHints(t *testing.T) {
+	ws := t.TempDir()
+	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
+	s.applyProjectConfig(ws)
+	writePathMemory(t, ws, "auth-gotchas", "internal/auth/**")
+	seedMessage(t, s, ws, "bob", "alice", "message body here")
+
+	args := json.RawMessage(`{"file_path":"` + filepath.Join(ws, "internal/auth/token.go") + `"}`)
+	got := s.enrichToolOutput(context.Background(), "read_file", args, "FILE OUTPUT")
+
+	hintAt := strings.Index(got, "auth-gotchas")
+	msgAt := strings.Index(got, "message body here")
+	if hintAt < 0 {
+		t.Fatalf("precondition: the memory hint should have fired; got %q", got)
+	}
+	if msgAt < 0 {
+		t.Fatalf("precondition: the message should have been delivered; got %q", got)
+	}
+	if msgAt < hintAt {
+		t.Errorf("messages must be appended AFTER the path hints, so a panic in a hint "+
+			"cannot destroy an already-claimed message; got:\n%s", got)
 	}
 }

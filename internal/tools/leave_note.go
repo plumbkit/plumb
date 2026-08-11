@@ -246,7 +246,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// Wake the recipient's fast path. Best-effort and in-process: a missed bump
 	// costs delivery latency (the next periodic check still finds the row), never
 	// the message.
-	t.deps.Notifier.Bump(args.To)
+	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
 	return formatNoteResult(body, args.To, conv, ttl, redacted, target), nil
 }
 
