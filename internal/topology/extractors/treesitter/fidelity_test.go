@@ -39,6 +39,7 @@ func fidelityCases() []fidelityCase {
 		// guard must measure a cascade we introduced, not re-measure a pinned
 		// upstream defect. Those are covered in scss_test.go instead.
 		{"scss", grammars.ScssLanguage, func() topology.Extractor { return NewSCSS() }, string(scssSrc), "focus-ring"},
+		{"xml", grammars.XmlLanguage, func() topology.Extractor { return NewXML() }, string(xmlSrc), "Invoice"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 

@@ -83,6 +83,32 @@
   75.0%, with zero invalid byte spans. Three vendored FontAwesome icon-variable
   files are excluded from those figures and reported separately — the unicode
   escape defeats them almost entirely (~2,500 declarations, 1 recovered).
+- **XML is now indexed by the topology Map** — `.xml`, `.xsd` and `.xsl`.
+  `xs:import`/`xs:include`/`xsl:import` and `<?xml-stylesheet href=…?>` become
+  imports; elements carrying a `name`, `id`, `key`, `match` or `ref` become
+  addressable constants (which is what makes `<bean id=…>`, `<xs:element name=…>`,
+  `<xsl:template match=…>` and `<activity android:name=…>` navigable); and the
+  root element plus its direct children become sections, so a document with no
+  attributes anywhere — a Maven pom, the common case — still has an outline.
+  Element nesting becomes certain (1.0) containment, with XPath-style qualified
+  names (`project/dependencies/dependency`).
+
+  **Everything else is transparent**, following the rule HTMLExtractor arrived
+  at: classify, do not enumerate. An unremarkable wrapper emits nothing and
+  passes its parent through, so an identified element buried under layers of
+  wrappers is still recorded under the nearest landmark above it.
+
+  A long run of same-tag siblings is bounded at 500 per parent — the JSON
+  extractor's `jsonMaxArrayElements` rule translated, since a repeated tag is a
+  data array rather than structure. The number is measured, not chosen: over
+  1,201 real files (26.8 MB), an unbounded walk let a single CPU-intrinsics file
+  emit 14,188 nodes and bury every document around it, while the worst-case file
+  barely moves between a cap of 200 and 500 (2,947 → 2,993) and recall gains
+  nearly ten points. The full curve is recorded on the constant.
+
+  One grammar quirk is worth noting: the XML grammar returns a **nil root** for
+  empty input, which no other grammar in the package does, so the guard lives in
+  the extractor — without it an empty `.xml` file panics the indexer.
 
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside

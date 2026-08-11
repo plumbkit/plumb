@@ -27,7 +27,7 @@ func allExtractors() []topology.Extractor {
 	return []topology.Extractor{
 		goext.New(),
 		ts.NewPython(), ts.NewJavaScript(), ts.NewTypeScript(), ts.NewTSX(),
-		ts.NewRuby(), ts.NewC(), ts.NewJSON(), ts.NewCSS(), ts.NewPHP(), ts.NewSCSS(), ts.NewRust(), ts.NewZig(), ts.NewKotlin(),
+		ts.NewRuby(), ts.NewC(), ts.NewJSON(), ts.NewCSS(), ts.NewPHP(), ts.NewSCSS(), ts.NewXML(), ts.NewRust(), ts.NewZig(), ts.NewKotlin(),
 		ts.NewSwift(), ts.NewJava(), ts.NewBash(), ts.NewHCL(), ts.NewSQL(),
 		ts.NewDockerfile(), ts.NewTOML(), ts.NewYAML(), ts.NewMarkdown(), ts.NewHTML(),
 	}
