@@ -80,37 +80,43 @@ var mailboxSilentTools = map[string]bool{
 // Cheap and non-blocking, as required of an EnrichToolOutput hook: the message
 // check short-circuits on an in-process generation counter and touches the
 // database only when a peer has actually written something (see conn_chat.go).
-func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) (out string) {
-	// Message delivery runs LAST, and deliberately so. It is the only enrich step
-	// that mutates state — claiming marks a row delivered for good — while
-	// runHookSafely discards this whole string if a later step panics. Running the
-	// read-only path hints first means such a panic costs a hint, not a message
-	// that has already been marked as read and can never be offered again.
+func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
+	// Order matters for correctness, not presentation. Delivery is the only enrich
+	// step that MUTATES state — claiming marks a row delivered for good — while
+	// runHookSafely discards this entire string if anything here panics. So the
+	// read-only hints run first and delivery is an ordinary statement after them:
+	// a panic in a hint aborts the function before anything is claimed, costing a
+	// hint rather than a message that can never be offered again.
 	//
-	// The named return plus defer is what puts it after every early return below,
-	// so a message is delivered on EVERY tool call rather than only on the
-	// path-bearing ones the hints are restricted to.
-	defer func() {
-		if !mailboxSilentTools[name] {
-			out += s.messageHint(ctx)
-		}
-	}()
+	// This deliberately does NOT use defer. A deferred call runs DURING panic
+	// unwinding, so deferring the delivery would claim the message on exactly the
+	// path the ordering exists to protect — the earlier attempt at this fix did
+	// precisely that and was no better than delivering first.
+	//
+	// Extracting the hints is what lets delivery sit after their early returns, so
+	// a message still arrives on EVERY tool call rather than only the path-bearing
+	// ones the hints are restricted to.
+	text += s.pathHints(ctx, name, args)
+	if !mailboxSilentTools[name] {
+		text += s.messageHint(ctx)
+	}
+	return text
+}
+
+// pathHints returns the three path-derived advisory blocks, or "" when this tool
+// carries no usable path. Each is self-gated on its own config: the
+// relevant-memory hint ([memory] inject_hints), the phase-1 peer-activity hint
+// ([collab] peer_awareness, an observed fact), and the phase-2 peer-intent hint
+// ([collab] intents, an unverified claim). All are read-only and byte-budgeted.
+func (s *connSession) pathHints(ctx context.Context, name string, args json.RawMessage) string {
 	if !hintAllowedTools[name] {
-		return text
+		return ""
 	}
 	ws := s.view().acquiredRoot
 	if ws == "" {
-		return text
+		return ""
 	}
-	// Three independent path-derived signals, each self-gated on its own config:
-	// the relevant-memory hint ([memory] inject_hints), the phase-1 peer-activity
-	// hint ([collab] peer_awareness, an observed fact), and the phase-2 peer-intent
-	// hint ([collab] intents, an unverified claim). All are advisory,
-	// byte-budgeted, and appended after the tool's own output.
-	text += s.memoryHint(ctx, name, args, ws)
-	text += s.peerHint(args, ws)
-	text += s.intentHint(args, ws)
-	return text
+	return s.memoryHint(ctx, name, args, ws) + s.peerHint(args, ws) + s.intentHint(args, ws)
 }
 
 // memoryHint returns the relevant-memory "[Hint: …]" block for the tool's target

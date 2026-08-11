@@ -199,3 +199,53 @@ func TestNotifier_NilSafe(t *testing.T) {
 		t.Errorf("nil Gens returned %d entries, want 2", len(got))
 	}
 }
+
+// TestNotifier_BumpThenEvictStillReadsAsNewer exercises the ordering that
+// actually breaks the invariant, which the neighbouring eviction test does not:
+// the bump happens BEFORE the eviction, so the key a caller snapshotted is
+// dropped while carrying a stamp newer than that snapshot.
+//
+// Without an eviction floor the dropped key reads back as 0, Wait compares with
+// >, and a parked check_messages concludes nothing arrived — sleeping through a
+// send already committed to the database and reporting "no messages" to its
+// agent. The floor makes an absent key read as NEWER than any pre-eviction
+// snapshot, so the failure direction is one spurious query instead.
+func TestNotifier_BumpThenEvictStillReadsAsNewer(t *testing.T) {
+	n := NewNotifier()
+	keys := []string{"alice"}
+
+	n.Bump("alice")
+	since := n.Gens(keys) // the caller's snapshot, taken while alice is tracked
+
+	n.Bump("alice") // the send the caller is waiting for
+	// Push alice out of the map with unrelated traffic; no waiter is parked yet,
+	// which is exactly the window between a caller's Gens and its Wait.
+	for i := range maxTrackedKeys * 2 {
+		n.Bump("filler-" + strconv.Itoa(i))
+	}
+	if n.tracked("alice") {
+		t.Skip("alice survived eviction; the ceiling did not force the case under test")
+	}
+
+	if got := n.Gens(keys); got[0] <= since[0] {
+		t.Fatalf("an evicted key read as %d against a snapshot of %d — a send after the "+
+			"snapshot must never read as older, or a parked Wait sleeps through it",
+			got[0], since[0])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if !n.Wait(ctx, keys, since) {
+		t.Error("Wait must return immediately: a bump happened after this snapshot")
+	}
+}
+
+// tracked reports whether a key still has its own entry, as opposed to reading
+// through the eviction floor. Test-only: production code must never care, since
+// the floor makes the distinction invisible.
+func (n *Notifier) tracked(key string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, ok := n.gen[key]
+	return ok
+}

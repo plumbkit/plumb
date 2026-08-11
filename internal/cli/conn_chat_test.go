@@ -241,3 +241,54 @@ func TestEnrichOrder_MessagesComeAfterPathHints(t *testing.T) {
 			"cannot destroy an already-claimed message; got:\n%s", got)
 	}
 }
+
+// panicHintSession returns a session whose path hints panic, standing in for any
+// bug in the read-only hint path — the reason runHookSafely exists at all.
+func panicHintSession(t *testing.T, ws, name string, cc config.CollabConfig) *connSession {
+	t.Helper()
+	s := newChatTestSession(t, ws, name, cc)
+	s.applyProjectConfig(ws) // turns memory hint injection on, so the path runs
+	s.hintCache = nil        // memoryHint dereferences this, so the hint path panics
+	return s
+}
+
+// TestEnrichPanic_InAPathHintDoesNotConsumeAMessage pins the property the
+// ordering exists for, and which an earlier attempt at this fix got wrong.
+//
+// Claiming marks a row delivered irreversibly, while runHookSafely discards the
+// entire enriched string when the hook panics. So if delivery can run while the
+// stack is unwinding, the message is claimed and then thrown away — lost for
+// good. A `defer` would do exactly that, because deferred calls run DURING panic
+// unwinding; delivery must therefore be an ordinary statement that the panic
+// skips. This test fails if anyone reintroduces the defer.
+func TestEnrichPanic_InAPathHintDoesNotConsumeAMessage(t *testing.T) {
+	ws := t.TempDir()
+	s := panicHintSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
+	writePathMemory(t, ws, "auth-gotchas", "**")
+	seedMessage(t, s, ws, "bob", "alice", "must survive the panic")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("precondition: the path hint was expected to panic")
+			}
+		}()
+		args := json.RawMessage(`{"file_path":"` + filepath.Join(ws, "a.go") + `"}`)
+		_ = s.enrichToolOutput(context.Background(), "read_file", args, "OUT")
+	}()
+
+	// The enriched text was discarded by the panic, so the message must NOT have
+	// been claimed — it has to still be waiting for the next call.
+	store := s.collabPool.get(ws)
+	if store == nil {
+		t.Fatal("expected the seeded store to exist")
+	}
+	pending, err := store.PendingNotes(context.Background(), "alice", ws, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("a message must not be consumed by a hook that panicked and discarded "+
+			"its output; pending = %d, want 1", len(pending))
+	}
+}
