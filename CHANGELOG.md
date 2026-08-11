@@ -177,6 +177,51 @@
   parse at all; and macro-bracketed namespaces (`ABSL_NAMESPACE_BEGIN`)
   mis-parse **silently, with no ERROR node at all**, which is the entire cause of
   the lower class-recall figure and is not something an extractor can detect.
+- **Objective-C is now indexed by the topology Map** (`.m`, `.mm`) —
+  `@interface`/`@implementation`, categories and class extensions as classes,
+  `@protocol` as a type (the Java-interface precedent for a contract), methods,
+  `@property`, ivars and `@synthesize`/`@dynamic` as fields, and `#import`,
+  `@import` and `@class` as imports.
+
+  **Methods are named by their full selector** — `displayNameForLocale:fallback:`,
+  colons kept. Naming by the first keyword would merge `initWithFrame:` and
+  `initWithCoder:` into one symbol, and the full selector is what a backtrace, a
+  `@selector()` literal and the documentation all print. Qualification splits
+  deliberately: methods use Objective-C's own `-[Foo doThing:]` / `+[Foo shared]`
+  while data members use `Foo.name`. Inheriting C's dotted join would be actively
+  wrong, because dot syntax in Objective-C *is* property access — a class with a
+  `name` property and a `- (void)name` method would collapse to a single
+  qualified name — and the `-`/`+` carries instance-vs-class for free.
+
+  `@class` is an import rather than a type: it names a class defined in another
+  file, so a type node would be a definition-shaped node with no definition
+  behind it.
+
+  As with C++, `cWalk`'s recursing cases had to be re-owned rather than
+  delegated: an `@implementation` inside `#if TARGET_OS_IPHONE` is ordinary Apple
+  platform code, and dispatching it through C's switch would drop it silently.
+
+  Measured over **541 real `.m`/`.mm` files** (AFNetworking, SDWebImage, Mantle,
+  YYKit, CocoaLumberjack, Masonry, MBProgressHUD, fmdb): 11,091 nodes, 11,136
+  edges, **zero extraction errors and zero invalid byte spans**;
+  `@implementation` recall 96.4%, `@interface` 95.5%, methods 93.1%.
+
+  Two recoveries earned most of that. Walking into ERROR nodes lifts method
+  recall 89.5% → 93.1%. The larger one came from a tree census: one AFNetworking
+  file produces **no `class_implementation` at all**, yet 132
+  `implementation_definition` and 82 sound `method_definition` nodes sit directly
+  under the top-level ERROR — real typed nodes that were being dropped for want
+  of a case. Handling them took that file from 1 to 83 of its 84 methods.
+
+  Three grammar defects are pinned by tripwire tests that fail if upstream fixes
+  them: `NS_ASSUME_NONNULL_BEGIN` before an `@implementation` is unrecoverable
+  (a function-like macro with no trailing semicolon merges with the class that
+  follows — adding a `;` parses cleanly, which is the whole trigger);
+  `NS_ENUM`/`NS_OPTIONS` with a body produces a top-level ERROR whose only direct
+  `type_identifier` is the *macro* name, so C's handler would emit a symbol
+  called `NS_ENUM`; and block typedefs (`typedef void (^Handler)(…)`) bury their
+  name two declarators deep, out of reach of C's direct-child scan — which is how
+  every async Objective-C API spells its callback.
 
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside
