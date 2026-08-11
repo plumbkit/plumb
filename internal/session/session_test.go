@@ -2,11 +2,13 @@ package session_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 // real hazard now that List has write side effects and is called from the TUI.
 func TestWriteSessionFileAtomic_NoTornReads(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	id, err := session.Register(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
+	id, err := registerID(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -83,7 +85,7 @@ func TestWriteSessionFileAtomic_NoTornReads(t *testing.T) {
 
 func TestSessionPatchesSerializeReadModifyWrite(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	id, err := session.Register(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
+	id, err := registerID(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestSessionPatchesSerializeReadModifyWrite(t *testing.T) {
 func TestRegisterUnregister(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{
+	id, err := registerID(session.Info{
 		Language: "go",
 		Folder:   "/tmp/myproject",
 		Adapter:  "gopls",
@@ -251,7 +253,7 @@ func TestNormaliseName(t *testing.T) {
 func TestRenameUpdatesSessionFile(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{Name: "OLD-NAME"})
+	id, err := registerID(session.Info{Name: "OLD-NAME"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -305,7 +307,7 @@ func TestList_StaleFileCleaned(t *testing.T) {
 func TestUnregister_MarksEndedAt(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	id, err := registerID(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -334,7 +336,7 @@ func TestUnregister_MarksEndedAt(t *testing.T) {
 func TestTouch_UpdatesLastSeenAt(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	id, err := registerID(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -364,7 +366,7 @@ func TestTouch_UpdatesLastSeenAt(t *testing.T) {
 func TestTouch_ConcurrentWithWriters_NoCorruption(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	id, err := registerID(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -412,7 +414,7 @@ func TestTouch_ConcurrentWithWriters_NoCorruption(t *testing.T) {
 func TestFindEnded_MatchesExternalID(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls", Name: "BRAVE-DEER"})
+	id, err := registerID(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls", Name: "BRAVE-DEER"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -443,9 +445,9 @@ func TestList_SortedByStartedAt(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	// Register two sessions; their StartedAt is set by Register.
-	id1, _ := session.Register(session.Info{Language: "go", Folder: "/a", Adapter: "gopls"})
+	id1, _ := registerID(session.Info{Language: "go", Folder: "/a", Adapter: "gopls"})
 	time.Sleep(5 * time.Millisecond) // ensure distinct timestamps
-	id2, _ := session.Register(session.Info{Language: "go", Folder: "/b", Adapter: "gopls"})
+	id2, _ := registerID(session.Info{Language: "go", Folder: "/b", Adapter: "gopls"})
 	defer session.Unregister(id1)
 	defer session.Unregister(id2)
 
@@ -502,7 +504,7 @@ func TestNormalisePurpose(t *testing.T) {
 
 func TestSetPurposePersists(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	id, err := session.Register(session.Info{Language: "go", Folder: "/a", Adapter: "gopls"})
+	id, err := registerID(session.Info{Language: "go", Folder: "/a", Adapter: "gopls"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -519,5 +521,209 @@ func TestSetPurposePersists(t *testing.T) {
 	}
 	if sessions[0].Purpose != "deploy-fix" {
 		t.Fatalf("Purpose = %q, want deploy-fix", sessions[0].Purpose)
+	}
+}
+
+// registerID registers info and returns just the session ID — the shape these
+// tests want now that Register returns the completed record so its caller can
+// read back the name it was assigned.
+func registerID(info session.Info) (string, error) {
+	reg, err := session.Register(info)
+	return reg.ID, err
+}
+
+// TestRename_RefusesNameHeldByLiveSession is the guard that makes a session name
+// usable as an address at all. collab_rows.addressee stores the name string and
+// ClaimNotes' atomic claim hands each message to whichever session asks first,
+// so two live sessions under one name do not duplicate a message — they
+// silently misdeliver it, and the intended recipient never learns it existed.
+func TestRename_RefusesNameHeldByLiveSession(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	holder, err := registerID(session.Info{Name: "reviewer"})
+	if err != nil {
+		t.Fatalf("Register holder: %v", err)
+	}
+	defer session.Unregister(holder)
+	other, err := registerID(session.Info{Name: "coder"})
+	if err != nil {
+		t.Fatalf("Register other: %v", err)
+	}
+	defer session.Unregister(other)
+
+	if _, err := session.Rename(other, "reviewer"); !errors.Is(err, session.ErrNameTaken) {
+		t.Fatalf("Rename onto a live peer's name = %v, want ErrNameTaken", err)
+	}
+	if _, err := session.Rename(other, "REVIEWER"); !errors.Is(err, session.ErrNameTaken) {
+		t.Fatalf("Rename onto a case variant of a live name = %v, want ErrNameTaken", err)
+	}
+
+	// A refused rename must leave the session as it was.
+	live, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, info := range live {
+		if info.ID == other && info.Name != "coder" {
+			t.Fatalf("refused rename still changed the name to %q", info.Name)
+		}
+	}
+}
+
+// TestRename_AllowsOwnName: restoreName re-applies the persisted name on every
+// reconnect to refresh its TTL, so a self-match counted as a collision would
+// turn that no-op into an error exactly when the session is most fragile.
+func TestRename_AllowsOwnName(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id, err := registerID(session.Info{Name: "steady-heron"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	if _, err := session.Rename(id, "steady-heron"); err != nil {
+		t.Fatalf("Rename to own name: %v", err)
+	}
+	// Re-casing your own name is a rename, not a collision with yourself.
+	got, err := session.Rename(id, "Steady-Heron")
+	if err != nil {
+		t.Fatalf("Rename to a case variant of own name: %v", err)
+	}
+	if got != "Steady-Heron" {
+		t.Fatalf("Rename returned %q, want Steady-Heron", got)
+	}
+}
+
+// TestRename_EndedSessionDoesNotReserveItsName: Unregister marks EndedAt and
+// keeps the file for the FindEnded grace window, but an ended session is not an
+// addressee — holding its name for a day would drain the pool on a busy daemon.
+func TestRename_EndedSessionDoesNotReserveItsName(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	gone, err := registerID(session.Info{Name: "retired-fox"})
+	if err != nil {
+		t.Fatalf("Register gone: %v", err)
+	}
+	session.Unregister(gone)
+
+	live, err := registerID(session.Info{Name: "active-bee"})
+	if err != nil {
+		t.Fatalf("Register live: %v", err)
+	}
+	defer session.Unregister(live)
+
+	if _, err := session.Rename(live, "retired-fox"); err != nil {
+		t.Fatalf("Rename onto an ended session's name = %v, want success", err)
+	}
+}
+
+// TestRegister_AssignsAFreeUsableName. Register returning the completed record
+// is the point of the signature: newConnSession needs the assigned name for the
+// session view, and having the caller pre-generate one is what allowed the
+// unchecked draw in the first place.
+func TestRegister_AssignsAFreeUsableName(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	reg, err := session.Register(session.Info{})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(reg.ID)
+
+	if reg.ID == "" {
+		t.Error("Register returned an empty ID")
+	}
+	if reg.Name == "" {
+		t.Fatal("Register returned an empty Name; the caller has nothing to display")
+	}
+	if _, err := session.NormaliseName(reg.Name); err != nil {
+		t.Errorf("assigned name %q does not survive NormaliseName: %v", reg.Name, err)
+	}
+}
+
+// TestRegister_RefusesACallerSuppliedNameThatIsTaken. Only a generated name is
+// disambiguated with a suffix; a caller that named itself is told no, because
+// silently handing back a different name would leave it addressing peers under
+// an identity it does not actually have.
+func TestRegister_RefusesACallerSuppliedNameThatIsTaken(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	first, err := registerID(session.Info{Name: "twin"})
+	if err != nil {
+		t.Fatalf("Register first: %v", err)
+	}
+	defer session.Unregister(first)
+
+	if _, err := session.Register(session.Info{Name: "twin"}); !errors.Is(err, session.ErrNameTaken) {
+		t.Fatalf("Register with a taken name = %v, want ErrNameTaken", err)
+	}
+}
+
+// TestNormaliseName_RejectsTheReservedNextAddress. "next" is the mailbox's
+// next-arrival sentinel and leave_note resolves it before any session lookup,
+// so a session holding that name could never be addressed while shadowing the
+// broadcast address for everyone else.
+func TestNormaliseName_RejectsTheReservedNextAddress(t *testing.T) {
+	for _, name := range []string{"next", "Next", "NEXT"} {
+		if _, err := session.NormaliseName(name); err == nil {
+			t.Errorf("NormaliseName(%q) = nil, want the reserved-name refusal", name)
+		}
+	}
+	// Only the exact word is reserved.
+	if _, err := session.NormaliseName("next-gen"); err != nil {
+		t.Errorf("NormaliseName(\"next-gen\") = %v, want nil", err)
+	}
+}
+
+// TestRename_ConcurrentClaimsOfOneName pins that the check and the write share
+// one lock. Checking before taking the flock would let every goroutine see the
+// name free and all of them write it — which is the pre-existing bug, just
+// harder to hit. Mutation check: moving the nameTaken call outside
+// withSessionDirLock makes this fail.
+func TestRename_ConcurrentClaimsOfOneName(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	const contenders = 8
+
+	ids := make([]string, contenders)
+	for i := range ids {
+		id, err := registerID(session.Info{Name: fmt.Sprintf("starter-%d", i)})
+		if err != nil {
+			t.Fatalf("Register %d: %v", i, err)
+		}
+		ids[i] = id
+		defer session.Unregister(id)
+	}
+
+	var (
+		won   atomic.Int32
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+	)
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			<-start
+			if _, err := session.Rename(id, "contested"); err == nil {
+				won.Add(1)
+			}
+		}(id)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := won.Load(); got != 1 {
+		t.Fatalf("%d sessions claimed the name, want exactly 1", got)
+	}
+
+	live, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	holders := 0
+	for _, info := range live {
+		if info.Name == "contested" {
+			holders++
+		}
+	}
+	if holders != 1 {
+		t.Fatalf("%d live sessions answer to 'contested', want 1", holders)
 	}
 }

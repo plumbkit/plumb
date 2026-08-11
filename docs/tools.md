@@ -123,6 +123,13 @@ notice pointing at `daemon_info`.
 Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
 and `-` only; user-provided case is preserved; max 25 chars).
 
+The name must be free. A session name is the address the mailbox delivers to, so
+a name another **live** session already answers to is refused (compared
+case-insensitively), as is `next` — the next-arrival address. Renaming to the
+name you already hold is allowed, and an ended session does not reserve its
+name. Generated names are checked the same way at registration and re-drawn, so
+two live sessions never share one.
+
 ### `workspace_sessions`
 Same-workspace peer awareness: lists active sessions on this workspace and recent
 mutating operations. Useful before editing a file a concurrent agent may have

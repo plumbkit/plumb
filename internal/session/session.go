@@ -22,10 +22,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,22 +92,32 @@ type Info struct {
 	Synthetic bool `json:"synthetic,omitempty"`
 }
 
+// ErrNameTaken is returned by Register and Rename when another LIVE session
+// already answers to the requested name. Match it with errors.Is.
+var ErrNameTaken = errors.New("session name is already in use by a live session")
+
 // Register writes a session file for this process.
-// Missing fields (ID, PID, StartedAt) are filled automatically.
-// Returns the session ID; call Unregister(id) (via defer) to clean up on exit.
-func Register(info Info) (string, error) {
+//
+// Missing fields (ID, PID, StartedAt) are filled automatically, and an empty
+// Name is assigned one no other live session holds. Returns the completed
+// record; call Unregister(info.ID) (via defer) to clean up on exit.
+//
+// Name selection happens INSIDE the session-directory flock, so "is this name
+// free?" and the write that claims it cannot interleave with a concurrent
+// Register or Rename in this or another process. A caller-supplied Name that a
+// live session already holds is refused with ErrNameTaken rather than silently
+// changed — only a generated name gets disambiguated, because no caller asked
+// for that particular one.
+func Register(info Info) (Info, error) {
 	dir, err := Dir()
 	if err != nil {
-		return "", err
+		return Info{}, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("creating session dir: %w", err)
+		return Info{}, fmt.Errorf("creating session dir: %w", err)
 	}
 	if info.ID == "" {
 		info.ID = newID()
-	}
-	if info.Name == "" {
-		info.Name = GenerateName()
 	}
 	if info.PID == 0 {
 		info.PID = os.Getpid()
@@ -113,13 +125,92 @@ func Register(info Info) (string, error) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = time.Now()
 	}
+	requested := info.Name
 	path := filepath.Join(dir, info.ID+".json")
 	if err := withSessionDirLock(dir, func() error {
+		live, err := listLocked(dir)
+		if err != nil {
+			return err
+		}
+		switch {
+		case requested == "":
+			info.Name = freeName(live, info.ID)
+		case nameTaken(live, requested, info.ID):
+			return fmt.Errorf("%w: %q", ErrNameTaken, requested)
+		}
 		return writeSessionFileAtomic(path, info)
 	}); err != nil {
-		return "", fmt.Errorf("writing session file: %w", err)
+		if errors.Is(err, ErrNameTaken) {
+			return Info{}, err
+		}
+		return Info{}, fmt.Errorf("writing session file: %w", err)
 	}
-	return info.ID, nil
+	return info, nil
+}
+
+// nameDrawAttempts is how many random draws freeName makes before falling back
+// to a numeric suffix. The pool is ~6k names, so against any realistic number
+// of live sessions the first draw lands; the retries cost one slice scan each
+// and only run in the rare collision case.
+const nameDrawAttempts = 8
+
+// freeName returns a generated name that no live session other than selfID
+// holds.
+func freeName(live []Info, selfID string) string {
+	for range nameDrawAttempts {
+		if n := generateName(); !nameTaken(live, n, selfID) {
+			return n
+		}
+	}
+	// Pigeonhole: only a live session can occupy a suffix, so at most len(live)
+	// of them are taken and this loop always returns.
+	base := generateName()
+	for i := 2; ; i++ {
+		if n := withSuffix(base, i); !nameTaken(live, n, selfID) {
+			return n
+		}
+	}
+}
+
+// withSuffix appends "-n" to base, trimming base so the result fits
+// MaxNameLength and never ends in a hyphen — NormaliseName rejects both, and a
+// generated name has to survive being passed back through it.
+func withSuffix(base string, n int) string {
+	suffix := "-" + strconv.Itoa(n)
+	if room := MaxNameLength - len(suffix); len(base) > room {
+		base = strings.TrimRight(base[:room], "-")
+	}
+	return base + suffix
+}
+
+// nameTaken reports whether a live session other than selfID answers to name.
+//
+// The comparison is case-INSENSITIVE even though the mailbox matches addressees
+// with SQLite's case-sensitive '='. That is deliberate: being stricter than
+// delivery can only reject confusable names, never admit an ambiguous address.
+func nameTaken(live []Info, name, selfID string) bool {
+	for _, info := range live {
+		if info.ID != selfID && strings.EqualFold(info.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// NameTaken reports whether a live session other than selfID already answers to
+// name. It takes the session-directory flock, so it must NOT be called from
+// inside withSessionDirLock — check against a listLocked result there instead.
+//
+// Advisory only: the answer is stale the moment it returns. Register and Rename
+// re-check under the lock that performs the write, and that check is the
+// authoritative one. This exists for callers that want a clearer log line, or
+// to skip a write attempt they know will fail.
+func NameTaken(name, selfID string) (bool, error) {
+	live, err := List()
+	if err != nil {
+		return false, err
+	}
+	return nameTaken(live, name, selfID), nil
 }
 
 func withSessionDirLock(dir string, fn func() error) error {
@@ -161,6 +252,16 @@ func writeSessionFileAtomic(path string, info Info) error {
 
 // Rename validates and writes a new session name for id, returning the
 // normalised name that was stored.
+//
+// Refuses with ErrNameTaken when another LIVE session already answers to the
+// name. Session names are mailbox addresses — collab_rows.addressee holds the
+// name string — so two live sessions under one name make delivery ambiguous:
+// ClaimNotes' atomic claim hands the message to whichever asks first and the
+// intended recipient never sees it. Renaming to the name you already hold is
+// allowed, and an ended session does not reserve its name.
+//
+// The check runs under the same flock as the write, so it cannot race a
+// concurrent Rename or Register.
 func Rename(id, name string) (string, error) {
 	name, err := NormaliseName(name)
 	if err != nil {
@@ -172,6 +273,13 @@ func Rename(id, name string) (string, error) {
 	}
 	path := filepath.Join(dir, id+".json")
 	if err := withSessionDirLock(dir, func() error {
+		live, err := listLocked(dir)
+		if err != nil {
+			return err
+		}
+		if nameTaken(live, name, id) {
+			return fmt.Errorf("%w: %q", ErrNameTaken, name)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading session file: %w", err)
@@ -334,49 +442,65 @@ func List() ([]Info, error) {
 	}
 	var infos []Info
 	if err := withSessionDirLock(dir, func() error {
-		entries, err := os.ReadDir(dir)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("reading session dir: %w", err)
-		}
-
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			path := filepath.Join(dir, e.Name())
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			var info Info
-			if err := json.Unmarshal(data, &info); err != nil {
-				continue
-			}
-			if !info.EndedAt.IsZero() {
-				// Ended session — keep for grace period, then remove.
-				if time.Since(info.EndedAt) > endedSessionGrace {
-					_ = os.Remove(path)
-				}
-				continue
-			}
-			if !pidAlive(info.PID) {
-				// Daemon crashed without calling Unregister — mark ended now.
-				info.EndedAt = time.Now()
-				_ = writeSessionFileAtomic(path, info)
-				continue
-			}
-			// Populate LastSeenAt from the file's mtime (Touch uses os.Chtimes).
-			if fi, err := os.Stat(path); err == nil {
-				info.LastSeenAt = fi.ModTime()
-			}
-			infos = append(infos, info)
-		}
-		return nil
+		var lerr error
+		infos, lerr = listLocked(dir)
+		return lerr
 	}); err != nil {
 		return nil, err
+	}
+	return infos, nil
+}
+
+// listLocked is List's body with the session-directory flock already held by
+// the CALLER. It must never be called without it.
+//
+// The split exists because withSessionDirLock is not reentrant: it opens a
+// fresh fd and takes syscall.Flock(LOCK_EX) on each call, so a nested
+// acquisition from the same process blocks forever. Anything needing the live
+// session list while holding the lock — the uniqueness checks in Register and
+// Rename, which have to read and write under one lock to be race-free — comes
+// through here rather than through List.
+func listLocked(dir string) ([]Info, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading session dir: %w", err)
+	}
+
+	var infos []Info
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var info Info
+		if err := json.Unmarshal(data, &info); err != nil {
+			continue
+		}
+		if !info.EndedAt.IsZero() {
+			// Ended session — keep for grace period, then remove.
+			if time.Since(info.EndedAt) > endedSessionGrace {
+				_ = os.Remove(path)
+			}
+			continue
+		}
+		if !pidAlive(info.PID) {
+			// Daemon crashed without calling Unregister — mark ended now.
+			info.EndedAt = time.Now()
+			_ = writeSessionFileAtomic(path, info)
+			continue
+		}
+		// Populate LastSeenAt from the file's mtime (Touch uses os.Chtimes).
+		if fi, err := os.Stat(path); err == nil {
+			info.LastSeenAt = fi.ModTime()
+		}
+		infos = append(infos, info)
 	}
 
 	sort.Slice(infos, func(i, j int) bool {

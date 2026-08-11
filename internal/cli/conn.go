@@ -268,11 +268,17 @@ func (s *connSession) mutate(fn func(v *sessionView)) {
 func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, budgets *sharedBudgets) *connSession {
 	cfg := store.Current()
 	ttl := cfg.Cache.TTL.Duration
-	sessName := session.GenerateName()
-	sessID, _ := session.Register(session.Info{
-		Name:          sessName,
-		DaemonVersion: Version,
-	})
+	// Register assigns the name, under the session-directory flock, so it cannot
+	// land on one a live session already answers to — names are mailbox addresses
+	// and a duplicate silently misdelivers. On a registration failure the session
+	// still runs (unregistered, as before); it just needs a name of its own for
+	// the view, logs, and TUI.
+	reg, err := session.Register(session.Info{DaemonVersion: Version})
+	if err != nil {
+		slog.Warn("daemon: session registration failed; continuing unregistered", "err", err)
+		reg.Name = session.GenerateName()
+	}
+	sessName, sessID := reg.Name, reg.ID
 	ctx, cancel := context.WithCancel(parent)
 	s := &connSession{
 		ctx:          ctx,

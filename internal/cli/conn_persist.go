@@ -79,17 +79,15 @@ func (s *connSession) restoreName(id string) {
 // nameHeldByOtherLiveSession reports whether a live session other than selfID
 // already answers to name. Best-effort: an unreadable session directory reports
 // false, so a restore is never blocked by a transient listing failure.
+//
+// Advisory, and deliberately kept even though session.Rename now refuses a
+// taken name itself under the flock that performs the write — that check is the
+// authoritative one. This runs first so the caller can say WHICH name it
+// declined to restore and quietly keep the generated one, instead of turning a
+// routine overlap into a rename error.
 func nameHeldByOtherLiveSession(name, selfID string) bool {
-	infos, err := session.List()
-	if err != nil {
-		return false
-	}
-	for _, info := range infos {
-		if info.Name == name && info.ID != selfID {
-			return true
-		}
-	}
-	return false
+	taken, err := session.NameTaken(name, selfID)
+	return err == nil && taken
 }
 
 // persistName records the session's current name under its proxy session ID.
