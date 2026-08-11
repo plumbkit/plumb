@@ -53,7 +53,7 @@ func TestScan_SkipsCurrentRunButRollsBackOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Scan(ws, cutoff)
+	Scan(ws, cutoff, confinedTo(ws))
 
 	// Orphan rolled back: dir removed and file restored.
 	if _, err := os.Stat(orphan.dir); !os.IsNotExist(err) {

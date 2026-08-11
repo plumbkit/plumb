@@ -73,7 +73,7 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		s.startTopologyIndexer(v, folder)
 		v.policy = s.buildPathPolicy(v)
 		s.warmDepRoots(language)
-		recoverWorkspaceTxlog(folder, func(ws string) { txlog.Scan(ws, s.daemonStartedAt) })
+		recoverWorkspaceTxlog(folder, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = folder
@@ -109,7 +109,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
-		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt) })
+		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = root

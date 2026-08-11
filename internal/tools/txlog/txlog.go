@@ -19,6 +19,7 @@ package txlog
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -147,15 +148,39 @@ func (l *Log) Commit() {
 // Rollback restores each snapshotted file to its pre-transaction content and
 // removes the tx-log directory. Best-effort: failures are logged and rollback
 // continues with remaining files.
+//
+// This replays the IN-MEMORY manifest, never the copy on disk, and that is the
+// whole reason Scan is a separate function rather than a second caller of one
+// shared replay. The ops here were recorded by this process during this
+// transaction, and every path in them passed the write tools' boundary guard
+// before the write it is undoing, so they need no re-check. Reading the file
+// back would make this function's safety depend on the file's provenance — and
+// it is exactly that conflation which let a cloned repository's manifest be
+// replayed with no boundary check at all.
 func (l *Log) Rollback() {
 	if l.dir == "" {
 		return
 	}
-	rollbackDir(l.dir)
+	for _, op := range l.manifest.Ops {
+		restoreOp(l.dir, op, op.Perm)
+	}
 	if err := os.RemoveAll(l.dir); err != nil {
 		slog.Error("txlog: failed to remove log dir after rollback", "dir", l.dir, "err", err)
 	}
 }
+
+// PathGuard reports whether a path named in an on-disk manifest may be written
+// during replay. It is the caller's boundary policy, injected rather than
+// imported: txlog sits below internal/tools, so it cannot reach the PathPolicy
+// that knows a session's allowed roots.
+//
+// Scan REQUIRES one and fails closed without it. Note that a plain
+// workspace-containment test would be the WRONG check here: transaction_apply
+// legitimately writes to configured extra roots and --allow-dir grants, so crash
+// recovery must be able to restore those too. Only the session's own policy
+// knows the difference between "outside the workspace" and "outside every root
+// this session may write".
+type PathGuard func(path string) error
 
 // Scan finds orphaned .plumb/tx-log/* directories left by a daemon that crashed
 // mid-transaction and rolls each one back. A directory whose manifest StartedAt
@@ -170,8 +195,13 @@ func (l *Log) Rollback() {
 // write, or a corrupt previous-run orphan) is treated as a recoverable orphan —
 // a live transaction always has a valid manifest by the time Begin returns.
 //
+// The manifests Scan replays are UNTRUSTED. <workspace>/.plumb/tx-log/ is an
+// ordinary directory inside the workspace, so a cloned repository ships one and
+// the daemon replays it on attach, as the user, with no prompt. Every path is
+// therefore re-checked against guard; see PathGuard.
+//
 // Scan is a no-op when workspace is empty or no tx-log directory exists.
-func Scan(workspace string, liveCutoff time.Time) {
+func Scan(workspace string, liveCutoff time.Time, guard PathGuard) {
 	if workspace == "" {
 		return
 	}
@@ -207,7 +237,7 @@ func Scan(workspace string, liveCutoff time.Time) {
 			continue
 		}
 		slog.Warn("txlog: orphaned transaction log found — rolling back", "txid", e.Name(), "workspace", workspace)
-		rollbackDir(dir)
+		replayOrphan(dir, guard)
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("txlog: failed to remove orphaned log after rollback", "dir", dir, "err", err)
 		}
@@ -273,8 +303,21 @@ func manifestStartedAt(dir string) (time.Time, bool) {
 	return m.StartedAt, true
 }
 
-// rollbackDir reads the manifest from dir and restores each snapshotted file.
-func rollbackDir(dir string) {
+// replayPerm is the mode an untrusted replay creates a file with. os.WriteFile
+// applies perm ONLY when it creates the file, so a manifest's own Perm can
+// matter in exactly one case — the replay creating a file that does not already
+// exist — which is precisely the case worth attacking (perm 0o777 plus a shell
+// script). An existing file keeps its own mode regardless, so declining the
+// manifest's value costs a legitimate recovery nothing.
+const replayPerm os.FileMode = 0o600
+
+// replayOrphan restores the snapshotted files named by the manifest left in dir,
+// admitting only paths guard allows.
+//
+// A refused op is REPORTED, not silently skipped. A replay that quietly dropped
+// entries would leave a half-restored transaction indistinguishable from a clean
+// one, and would let a hostile manifest steer an operator reading the log.
+func replayOrphan(dir string, guard PathGuard) {
 	manifestPath := filepath.Join(dir, "manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -287,23 +330,61 @@ func rollbackDir(dir string) {
 		return
 	}
 	for _, op := range m.Ops {
-		if !op.Snapshotted {
-			slog.Warn("txlog: rollback: no snapshot for large file — cannot restore",
-				"path", op.Path)
+		if err := admitReplayPath(op.Path, guard); err != nil {
+			slog.Error("txlog: replay REFUSED — manifest names a path this session may not write",
+				"path", op.Path, "manifest", manifestPath, "err", err)
 			continue
 		}
-		snapPath := filepath.Join(dir, strconv.Itoa(op.N)+"-before")
-		content, err := os.ReadFile(snapPath)
-		if err != nil {
-			slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
-			continue
-		}
-		if err := os.WriteFile(op.Path, content, op.Perm); err != nil { //nolint:gosec // G703: op.Path is a workspace path validated by the transaction machinery before being stored in the manifest
-			slog.Error("txlog: rollback: cannot restore file", "path", op.Path, "err", err)
-			continue
-		}
-		slog.Info("txlog: rollback: restored", "path", op.Path)
+		restoreOp(dir, op, replayPerm)
 	}
+}
+
+// admitReplayPath decides whether one path out of an untrusted manifest may be
+// written. A nil guard FAILS CLOSED: a caller with no policy to consult must
+// refuse the replay rather than perform it unchecked.
+func admitReplayPath(path string, guard PathGuard) error {
+	if path == "" {
+		return errors.New("manifest op has no path")
+	}
+	if !filepath.IsAbs(path) {
+		// os.WriteFile would anchor a relative path to the daemon's working
+		// directory — a singleton process whose cwd belongs to whichever client
+		// happened to spawn it, i.e. an unrelated project.
+		return errors.New("manifest op path is relative")
+	}
+	if guard == nil {
+		return errors.New("no boundary guard supplied")
+	}
+	return guard(path)
+}
+
+// restoreOp restores one op's snapshot to its recorded path. perm is used only
+// when the target does not already exist — see replayPerm.
+func restoreOp(dir string, op opMeta, perm os.FileMode) {
+	if !op.Snapshotted {
+		slog.Warn("txlog: rollback: no snapshot for large file — cannot restore",
+			"path", op.Path)
+		return
+	}
+	snapPath := filepath.Join(dir, strconv.Itoa(op.N)+"-before")
+	content, err := os.ReadFile(snapPath)
+	if err != nil {
+		slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
+		return
+	}
+	// G703 is correct that op.Path is tainted: on the replayOrphan path it comes
+	// out of a file a cloned repository can author. It is admitted here only
+	// because the caller has just cleared it — Rollback replays ops this process
+	// recorded in memory, each boundary-checked before the write it undoes, and
+	// replayOrphan admits nothing admitReplayPath's guard rejected. Deliberately
+	// narrow: the previous suppression claimed the manifest itself was
+	// trustworthy, which was true of one caller and false of the other, and that
+	// is what made an attacker-authored manifest an arbitrary-write primitive.
+	if err := os.WriteFile(op.Path, content, perm); err != nil { //nolint:gosec // G703: path is either in-process-recorded (Rollback) or guard-admitted (replayOrphan); see admitReplayPath
+		slog.Error("txlog: rollback: cannot restore file", "path", op.Path, "err", err)
+		return
+	}
+	slog.Info("txlog: rollback: restored", "path", op.Path)
 }
 
 func (l *Log) writeManifest() error {

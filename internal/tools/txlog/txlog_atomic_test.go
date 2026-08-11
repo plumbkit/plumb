@@ -65,7 +65,7 @@ func TestWriteManifest_AtomicUnderConcurrentScan(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 300 {
-				Scan(ws, cutoff)
+				Scan(ws, cutoff, confinedTo(ws))
 			}
 		}()
 	}
