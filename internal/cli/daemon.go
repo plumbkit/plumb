@@ -317,8 +317,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer memPool.CloseAll()
 
 	// collabPool holds one collab.db handle per workspace that has used a
-	// cross-agent sharing feature ([collab] intents/mailbox). Opened lazily; the
-	// reaper prunes expired rows across every open store on its tick.
+	// cross-agent sharing feature ([collab] intents/mailbox), plus the single
+	// daemon-level store carrying cross-project messages, and the in-process
+	// notifier every connection shares for message wake-ups. All opened lazily on
+	// first send; the reaper prunes expired rows across every open store on its
+	// tick, the daemon-level one included.
 	collabPool := newCollabPool()
 	defer collabPool.closeAll()
 

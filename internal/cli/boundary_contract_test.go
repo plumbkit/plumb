@@ -75,6 +75,7 @@ var knownToolGuarding = map[string]string{
 	"NewAgentConfig":         "none", // writes structured config via the allowlist; no filesystem path input
 	"NewShareIntent":         "none", // writes an advisory intent to the per-workspace collab.db; no filesystem path input
 	"NewLeaveNote":           "none", // writes an advisory note to the per-workspace collab.db; no filesystem path input
+	"NewCheckMessages":       "none", // reads advisory messages from the collab stores; no filesystem path input
 	"NewShareFindings":       "none", // writes a generated memory under the workspace's own .plumb/memories/ with a server-generated name; no user-supplied filesystem path
 	"NewRunCommand":          "none", // runs a fixed-argv allow-list entry; workdir comes from the resolver, confinement is the OS sandbox, no user path arg
 	"NewExecuteShellCommand": "none", // runs sh -c; workdir comes from the resolver, confinement is the OS sandbox, no user path arg

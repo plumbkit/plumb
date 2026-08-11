@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -183,15 +182,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			s.collabStoreIfExists,
 			s.sessionName,
 		))
-	collabDeps := tools.CollabDeps{
-		Workspace:   s.workspace,
-		SessionName: s.sessionName,
-		SessionID:   s.sessID,
-		Policy:      s.collabPolicy,
-		Store:       s.collabStoreCreate,
-	}
+	collabDeps := s.collabDeps()
 	srv.Register(tools.NewShareIntent(collabDeps))
 	srv.Register(tools.NewLeaveNote(collabDeps))
+	srv.Register(tools.NewCheckMessages(collabDeps))
 	srv.Register(tools.NewShareFindings(tools.ShareFindingsDeps{
 		Workspace:           s.workspace,
 		SessionName:         s.sessionName,
@@ -215,9 +209,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
 		}).
-		WithMailbox(func() (bool, *collab.Store, string, int) {
-			c := s.collabConfig()
-			return c.Mailbox, s.collabStoreIfExists(), s.sessionName(), c.HintBudgetBytes
+		WithMailbox(func() (bool, tools.Inbox) {
+			return s.collabConfig().Mailbox, s.inbox()
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPLanguages(s.acquiredLanguageLabels).

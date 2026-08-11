@@ -233,7 +233,23 @@ var registryData = []Field{
 	},
 	{
 		Key: "collab.mailbox", Type: FieldBool, ReloadTier: ReloadNextSession,
-		Description: "Tier-2 opt-in: the leave_note tool and note delivery at session_start.",
+		Description: "Agent-to-agent messaging between sessions on THIS workspace: leave_note, check_messages, and delivery on tool results. Default on.",
+	},
+	{
+		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means they expire unread.",
+	},
+	{
+		Key: "collab.max_exchanges", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Messages allowed in one conversation before replies are refused — the backstop against two agents talking indefinitely.",
+	},
+	{
+		Key: "collab.chat_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Byte cap on a single delivered message body.",
+	},
+	{
+		Key: "collab.max_wait_seconds", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Ceiling on how long check_messages will block waiting for a message.",
 	},
 	{
 		Key: "collab.knowledge_handoff", Type: FieldBool, ReloadTier: ReloadNextSession,

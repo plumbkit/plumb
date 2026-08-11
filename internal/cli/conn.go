@@ -212,6 +212,7 @@ type connSession struct {
 	collabPool   *collabPool
 	hintCache    *memoryHintCache
 	peerWrites   *peerWriteCache
+	chatWatch    *chatWatch
 	writeLimiter *tools.RateLimiter
 
 	// hintSeen tracks the memory names already hinted on this connection, so a
@@ -280,6 +281,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		topologyPool: topoPool,
 		hintCache:    &memoryHintCache{},
 		peerWrites:   &peerWriteCache{},
+		chatWatch:    &chatWatch{},
 		store:        store,
 		statsStore:   statsStore,
 		sessionState: sessState,

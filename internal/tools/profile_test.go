@@ -90,6 +90,7 @@ func nonLeanToolSet() []describable {
 		NewExecuteShellCommand(nil),
 		NewShareIntent(CollabDeps{}),
 		NewLeaveNote(CollabDeps{}),
+		NewCheckMessages(CollabDeps{}),
 		NewShareFindings(ShareFindingsDeps{}),
 	}
 }

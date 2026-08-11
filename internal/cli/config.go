@@ -271,6 +271,10 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"hint_budget_bytes", strconv.Itoa(col.HintBudgetBytes), sourceFor("hint_budget_bytes", dcol.HintBudgetBytes, gcol.HintBudgetBytes, col.HintBudgetBytes)},
 		{"intents", strconv.FormatBool(col.Intents), sourceFor("intents", dcol.Intents, gcol.Intents, col.Intents)},
 		{"mailbox", strconv.FormatBool(col.Mailbox), sourceFor("mailbox", dcol.Mailbox, gcol.Mailbox, col.Mailbox)},
+		{"cross_project", strconv.FormatBool(col.CrossProject), sourceFor("cross_project", dcol.CrossProject, gcol.CrossProject, col.CrossProject)},
+		{"max_exchanges", strconv.Itoa(col.MaxExchanges), sourceFor("max_exchanges", dcol.MaxExchanges, gcol.MaxExchanges, col.MaxExchanges)},
+		{"chat_budget_bytes", strconv.Itoa(col.ChatBudgetBytes), sourceFor("chat_budget_bytes", dcol.ChatBudgetBytes, gcol.ChatBudgetBytes, col.ChatBudgetBytes)},
+		{"max_wait_seconds", strconv.Itoa(col.MaxWaitSeconds), sourceFor("max_wait_seconds", dcol.MaxWaitSeconds, gcol.MaxWaitSeconds, col.MaxWaitSeconds)},
 		{"knowledge_handoff", strconv.FormatBool(col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
 		{"intent_ttl_minutes", strconv.Itoa(col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
 	})
