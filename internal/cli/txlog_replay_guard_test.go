@@ -91,6 +91,47 @@ func TestTxlogReplayGuard_DanglingSymlinkCannotEscape(t *testing.T) {
 	}
 }
 
+// TestTxlogReplayGuard_SymlinkedAncestorCannotEscape covers the shape
+// refuseSymlink alone does NOT catch: it Lstats only the final component, so a
+// manifest naming <ws>/sub/victim.txt where `sub` is a symlink to an outside
+// directory passes that check untouched. What stops it is the PathPolicy, which
+// resolves the existing ancestor and lands outside every allowed root.
+//
+// Verified load-bearing rather than incidental: with a permissive guard this
+// exact payload does escape, so the refusal is the policy's doing. Both an
+// existing and a not-yet-created target are covered, because they take different
+// branches of the canonicalisation.
+func TestTxlogReplayGuard_SymlinkedAncestorCannotEscape(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		createTarget bool
+	}{
+		{"target exists", true},
+		{"target does not exist yet", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := evalTempDir(t)
+			outside := evalTempDir(t)
+			if err := os.Symlink(outside, filepath.Join(ws, "sub")); err != nil {
+				t.Skipf("symlinks unsupported on this filesystem: %v", err)
+			}
+			victim := filepath.Join(outside, "victim.txt")
+			if tc.createTarget {
+				if err := os.WriteFile(victim, []byte("original\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeReplayOrphan(t, ws, filepath.Join(ws, "sub", "victim.txt"), "pwned\n")
+
+			txlog.Scan(ws, time.Now(), txlogReplayGuard(workspacePolicy(ws)))
+
+			if b, err := os.ReadFile(victim); err == nil && string(b) == "pwned\n" {
+				t.Errorf("replay wrote through a symlinked ancestor to %s", victim)
+			}
+		})
+	}
+}
+
 // TestTxlogReplayGuard_SymlinkedSnapshotIsNotRead covers the other direction:
 // the snapshot file is read with os.ReadFile, which follows links too, and its
 // content is written to an admitted in-workspace path. A repository shipping
