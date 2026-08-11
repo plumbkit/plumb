@@ -29,6 +29,13 @@
   so a daemon crash-loop emits one per iteration, an extra frame on an
   already-pathological state.
 
+  **Upgrade caveat:** this lives in `plumb serve`, and a proxy is spawned per
+  client connection and lives as long as it. Upgrading plumb does not upgrade the
+  proxies of sessions already running — each client keeps the binary it started
+  with and gains this from its *next* session onward, so the first daemon rebuild
+  after an upgrade still leaves a new tool invisible to any client connected
+  across it.
+
   `proxyHarness.read` now skips notifications (`readAny` returns them), because
   JSON-RPC notifications are unordered with respect to responses: eight tests
   asserting on "the next frame" were asserting something the protocol does not
