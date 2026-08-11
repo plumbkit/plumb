@@ -10,12 +10,15 @@ import (
 // limitation; it cannot route around silence, and every one of these surfaces
 // previously returned a confident-looking empty answer instead.
 
+// The witness must be a language that is still uncovered. This test used .rb
+// until the Ruby extractor landed and correctly went red — the registry pin
+// working, not a fault. Whoever wires PHP should move it on again.
 func TestUncoveredOutlineNote_NamesTheGapForAnUnindexedLanguage(t *testing.T) {
-	note := uncoveredOutlineNote("file:///ws/app/models/user.rb")
+	note := uncoveredOutlineNote("file:///ws/app/Models/User.php")
 	if note == "" {
-		t.Fatal("a .rb file has no extractor; the empty outline must be explained, not left bare")
+		t.Fatal("a .php file has no extractor; the empty outline must be explained, not left bare")
 	}
-	for _, want := range []string{"ruby", "read_file", "search_in_files"} {
+	for _, want := range []string{"php", "read_file", "search_in_files"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note should name %q so the agent has somewhere to go; got:\n%s", want, note)
 		}
@@ -29,6 +32,7 @@ func TestUncoveredOutlineNote_SilentForIndexedAndUnknownTypes(t *testing.T) {
 	for _, uri := range []string{
 		"file:///ws/main.go",
 		"file:///ws/app.py",
+		"file:///ws/app/models/user.rb", // indexed since the Ruby extractor landed
 		"file:///ws/README.md",
 		"file:///ws/logo.png",
 		"file:///ws/yarn.lock",
@@ -40,12 +44,12 @@ func TestUncoveredOutlineNote_SilentForIndexedAndUnknownTypes(t *testing.T) {
 }
 
 func TestFormatFileOutline_ExplainsAnEmptyOutlineForAnUncoveredLanguage(t *testing.T) {
-	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/models/user.rb", source: "topology"})
+	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/Models/User.php", source: "topology"})
 	if !strings.Contains(out, "(no symbols)") {
 		t.Errorf("the empty-outline line should still be present:\n%s", out)
 	}
 	if !strings.Contains(out, "coverage gap") {
-		t.Errorf("an empty Ruby outline must be attributed to coverage, not read as an empty file:\n%s", out)
+		t.Errorf("an empty PHP outline must be attributed to coverage, not read as an empty file:\n%s", out)
 	}
 }
 
@@ -64,13 +68,13 @@ func TestUncoveredPrimaryLanguageNote(t *testing.T) {
 		lang string // the display label session_start detected
 		want string // "" ⇒ no note expected
 	}{
-		{"ruby is recognised but unindexed", "Ruby", "ruby"},
 		{"elixir is recognised but unindexed", "Elixir", "elixir"},
 		// langFileProfile maps this label to .c/.cpp/.cc/.h/.hpp; the first
 		// uncovered extension decides, which is what makes the label→registry
 		// resolution work without a second hand-written table.
 		{"c/c++ resolves through its extensions", "C/C++ (CMake)", "c"},
 		{"go is indexed", "Go", ""},
+		{"ruby is indexed since its extractor landed", "Ruby", ""},
 		{"swift is indexed", "Swift", ""},
 		{"typescript is indexed", "TypeScript", ""},
 		{"an unknown label yields nothing", "Brainfuck", ""},
