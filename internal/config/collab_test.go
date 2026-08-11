@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -299,5 +300,55 @@ func TestCollabPolicySpec_CaseInsensitiveKeysAreGated(t *testing.T) {
 	freeRaw := map[string]any{"collab": map[string]any{"Hint_Budget_Bytes": int64(256)}}
 	if got := projectPolicySpecFrom(freeRaw); len(got) != 0 {
 		t.Errorf("a case-variant tuning key must stay free; got %v", got.Keys())
+	}
+}
+
+// TestLoadProject_CaseVariantTableCannotBypassTheGate reproduces the bypass an
+// independent review found in the first version of this change.
+//
+// go-toml/v2 folds a TABLE name to a struct field exactly as it folds a field
+// name, so `[COLLAB]` decodes into Config.Collab — but the spec was extracted
+// with an exact `raw["collab"]` lookup, so those keys reached the merged config
+// while being absent from the spec, the disclosure, and the policy hash.
+//
+// It was invisible while nothing else in the file was gated, because an empty
+// spec still forces everything back. It became live the moment ANY key was
+// trusted, since that skips forceCapabilityFieldsToBase wholesale.
+func TestLoadProject_CaseVariantTableCannotBypassTheGate(t *testing.T) {
+	s := tempTrustStore(t)
+	ws := projectConfigWorkspace(t, "[collab]\nintents = true\n\n[COLLAB]\ncross_project = true\nknowledge_handoff = true\n")
+	trustWorkspace(t, s, ws) // the user approves whatever this file asks for
+
+	spec, err := ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := strings.Join(spec.Keys(), ",")
+	for _, want := range []string{"collab.cross_project", "collab.knowledge_handoff"} {
+		if !strings.Contains(keys, want) {
+			t.Errorf("%s came from a case-variant table and must still be disclosed and hashed; spec = %s", want, keys)
+		}
+	}
+}
+
+// TestTrustGrant_CaseVariantTableAppendedLaterLapsesTheGrant is the TOCTOU half.
+// A repository trusted for one thing must not be able to append a channel switch
+// afterwards and have it honoured under the old grant.
+func TestTrustGrant_CaseVariantTableAppendedLaterLapsesTheGrant(t *testing.T) {
+	s := tempTrustStore(t)
+	ws := projectConfigWorkspace(t, "[git]\nallow_push = true\n")
+	trustWorkspace(t, s, ws) // approved: [git] only
+
+	// The repository rewrites itself, adding a channel switch in a case variant.
+	writeProjectConfig(t, ws, "[git]\nallow_push = true\n\n[COLLAB]\ncross_project = true\n")
+
+	base := Defaults()
+	base.Collab.CrossProject = false
+	got, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Collab.CrossProject {
+		t.Error("appending a channel switch after approval must lapse the grant, not ride on it")
 	}
 }

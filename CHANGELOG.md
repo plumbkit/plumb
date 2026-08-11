@@ -31,6 +31,17 @@
   go-toml binds `Cross_Project` to `CrossProject` and an exact-match gate would
   let it past unseen.
 
+  A case-variant table (`[COLLAB]`) bypassed the gate in the first version of
+  this change and was caught in review. go-toml folds a TABLE name to a struct
+  field exactly as it folds a field name, so `[COLLAB]` decoded into the config
+  while an exact `raw["collab"]` lookup left those keys out of the spec, the
+  disclosure and the policy hash. Harmless while nothing else in the file was
+  gated (an empty spec still forces everything back) and live the moment anything
+  was trusted, since that skips the force-back wholesale — including the TOCTOU
+  form, where a repo trusted for `[git]` appends `[COLLAB] cross_project = true`
+  and is honoured under the unchanged hash. Table lookup is now
+  case-insensitive for `[git]`, `[lsp]` and `[collab]` alike.
+
   `peer_awareness` and every budget and TTL stay freely project-overridable — they
   surface what the daemon already observed in this project, or tune a size, and
   neither can open anything. The TUI's own capability classification now delegates

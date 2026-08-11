@@ -119,18 +119,32 @@ func (e PolicyEntry) Warning(base Config) string {
 // say is that plumb cannot vouch for it. Each warning is phrased as what the
 // repository GAINS, since that is what the user is being asked to approve.
 func collabFieldWarning(field string, v any) string {
+	// A known switch set to false (or to a non-bool, which LoadProject will reject
+	// anyway) grants nothing, so it needs no warning. An UNRECOGNISED key is the
+	// opposite case: plumb cannot say what any value of it does, so it must warn
+	// whatever the value is — which is why this check sits inside the known cases
+	// rather than in front of them.
 	on, _ := v.(bool)
-	if !on {
-		return "" // turning a channel off grants nothing
-	}
 	switch field {
 	case "cross_project":
+		if !on {
+			return ""
+		}
 		return "lets this repository's sessions receive messages from agents in OTHER projects on this machine"
 	case "mailbox":
+		if !on {
+			return ""
+		}
 		return "opens the agent-to-agent mailbox here — this repo's agents can send messages into other sessions"
 	case "intents":
+		if !on {
+			return ""
+		}
 		return "lets this repository's agents broadcast claims that other sessions are shown"
 	case "knowledge_handoff":
+		if !on {
+			return ""
+		}
 		return "lets this repository's agents write durable, cross-session-discoverable memories"
 	default:
 		return "a [collab] key plumb does not recognise as inert; it is gated because it may open a cross-agent channel"
@@ -269,12 +283,12 @@ func ProjectPolicySpecFor(workspace string) (ProjectPolicySpec, error) {
 // both appear, and both are hashed.
 func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 	var out ProjectPolicySpec
-	if git, ok := raw["git"].(map[string]any); ok {
+	for _, git := range rawTables(raw, "git") {
 		for k, v := range git {
 			out = append(out, PolicyEntry{Key: "git." + k, Value: v})
 		}
 	}
-	if lsp, ok := raw["lsp"].(map[string]any); ok {
+	for _, lsp := range rawTables(raw, "lsp") {
 		for lang, langRaw := range lsp {
 			table, ok := langRaw.(map[string]any)
 			if !ok {
@@ -288,7 +302,7 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			}
 		}
 	}
-	if collab, ok := raw["collab"].(map[string]any); ok {
+	for _, collab := range rawTables(raw, "collab") {
 		for k, v := range collab {
 			if isFreeCollabField(k) {
 				continue
@@ -297,6 +311,34 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+// rawTables returns every top-level table in the parsed project config whose
+// name matches want case-insensitively.
+//
+// It returns a SLICE, not one table, because a lookup by exact name is a gate
+// bypass. go-toml/v2 binds a table name to a struct field case-insensitively
+// exactly as it does a field name, so `[COLLAB]` decodes into Config.Collab —
+// but `raw["COLLAB"]` never matches an exact `raw["collab"]`, so those keys
+// reach the merged config while being absent from the spec, the `plumb trust`
+// disclosure, and the policy hash. A repository could then have a trusted
+// `[git]` grant, append `[COLLAB] cross_project = true`, and be honoured without
+// the hash changing — the precise TOCTOU the spec exists to close.
+//
+// TOML forbids defining the same table twice, but only for the same spelling:
+// `[collab]` and `[COLLAB]` are two distinct tables to the parser and both land
+// in the map, so every match must be walked rather than the first one taken.
+func rawTables(raw map[string]any, want string) []map[string]any {
+	var out []map[string]any
+	for k, v := range raw {
+		if !strings.EqualFold(k, want) {
+			continue
+		}
+		if table, ok := v.(map[string]any); ok {
+			out = append(out, table)
+		}
+	}
 	return out
 }
 
