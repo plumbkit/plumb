@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 // BoundaryGuard rejects paths outside the workspace pinned to this MCP
@@ -126,16 +128,27 @@ func IsWorkspaceBoundaryError(err error) bool {
 		return true
 	}
 	var unattachedErr UnattachedWorkspaceError
-	return errors.As(err, &unattachedErr)
+	if errors.As(err, &unattachedErr) {
+		return true
+	}
+	var traversalErr ParentTraversalError
+	return errors.As(err, &traversalErr)
 }
 
 // PathWithinWorkspace reports whether path stays inside workspace after best
 // effort canonicalisation. It follows symlinks for existing paths and for the
 // nearest existing ancestor, so a symlink inside the workspace cannot be used to
 // escape the boundary when creating a new file below it.
+//
+// An absolute path carrying an unresolved ".." is NOT within any workspace, no
+// matter where it appears to clean to: see ParentTraversalError for why the two
+// readings of such a path are not interchangeable.
 func PathWithinWorkspace(workspace, path string) bool {
 	if workspace == "" || path == "" {
 		return true
+	}
+	if hasParentTraversal(path) {
+		return false
 	}
 	return withinRoot(canonicalRoot(workspace), canonicalRoot(path))
 }
@@ -163,6 +176,69 @@ func withinRoot(root, path string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// ParentTraversalError is an absolute path argument carrying an unresolved
+// ".." component.
+//
+// Such a path is refused rather than cleaned, because its two readings are not
+// equivalent and plumb must not pick one silently. Lexical cleaning — what
+// filepath.Abs does, and therefore what the boundary check ruled on — cancels
+// "sub/.." as a pair. The kernel resolves left to right: it follows `sub`
+// first, and applies ".." to wherever that landed. When `sub` is a symlink the
+// two disagree, so the check and the syscall are about different files and the
+// check's verdict says nothing about the file that gets touched.
+//
+// Cleaning instead would keep every call working while silently retargeting the
+// operation to a different file than the caller named. Refusing states the
+// ambiguity and costs the caller one edit.
+type ParentTraversalError struct {
+	Path      string
+	Canonical string // the lexically cleaned form, offered as the fix
+}
+
+func (e ParentTraversalError) Error() string {
+	return fmt.Sprintf(
+		"path access denied: %s is not in canonical form. Pass %s instead — an unresolved "+
+			"\"..\" makes the boundary check and the filesystem disagree about which file "+
+			"the path names, so plumb refuses it rather than guessing. If you meant a path "+
+			"reached through a symlink, name the target directly.",
+		e.Path, e.Canonical,
+	)
+}
+
+// hasParentTraversal reports whether an absolute path contains a ".."
+// component. Only absolute paths are examined: a relative argument is anchored
+// with filepath.Join before it reaches any boundary check, and Join cleans, so
+// the anchored result is the single path both the check and the operation use —
+// there is no divergence to refuse. Rejecting relative ".." as well would turn
+// the ordinary "src/../README.md" into an error for no safety gain.
+func hasParentTraversal(path string) bool {
+	p := cleanToolPath(path)
+	if !filepath.IsAbs(p) {
+		return false
+	}
+	return slices.Contains(strings.Split(filepath.ToSlash(p), "/"), "..")
+}
+
+// requireCanonicalPath refuses an absolute path with an unresolved "..".
+// It is the single gate; PathPolicy.Check and PathWithinWorkspace both consult
+// it so a new PathPolicy consumer inherits the refusal rather than re-deriving
+// it.
+func requireCanonicalPath(path string) error {
+	if !hasParentTraversal(path) {
+		return nil
+	}
+	p := cleanToolPath(path)
+	return toolerror.New(
+		toolerror.KindWorkspaceBoundary,
+		ParentTraversalError{Path: p, Canonical: filepath.Clean(p)},
+		toolerror.Remediation{
+			Class: toolerror.ClassFixArguments,
+			Reason: "Re-issue the call with the canonical absolute path — one with no \"..\" " +
+				"segment — or with a workspace-relative path, which plumb anchors safely.",
+		},
+	)
 }
 
 func canonicalPathForBoundary(path string) (string, error) {
