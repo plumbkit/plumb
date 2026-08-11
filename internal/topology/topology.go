@@ -156,17 +156,29 @@ type Neighbourhood struct {
 }
 
 // Status is a snapshot of the topology index health.
+//
+// The three file counts are disjoint by construction: IndexedFiles were parsed,
+// SkippedFiles failed, and the remainder were never parsed at all — split into
+// UncoveredFiles (a language plumb recognises but has no extractor for) and
+// UnrecognisedFiles (binaries, lockfiles, anything the registry does not name).
+// Keeping the last group visible is the point: an agent reading an empty Map for
+// a Rails app needs to see "ruby (683), not covered" rather than infer absence.
 type Status struct {
 	IndexedFiles int
 	SkippedFiles int
-	EmptyFiles   int // successfully indexed files with zero nodes (comment-only, unsupported language, etc.)
-	TotalNodes   int
-	TotalEdges   int
-	DBSizeBytes  int64
-	LastSync     time.Time
-	IndexerState string
-	Languages    []string
-	LastError    string
+	EmptyFiles   int // parsed successfully but yielded zero nodes (comment-only, or a genuinely empty file)
+	// UncoveredFiles counts recognised-but-unextractable files per language —
+	// the coverage gap, and the roadmap for which extractor to write next.
+	UncoveredFiles map[string]int
+	// UnrecognisedFiles counts files the registry does not name at all.
+	UnrecognisedFiles int
+	TotalNodes        int
+	TotalEdges        int
+	DBSizeBytes       int64
+	LastSync          time.Time
+	IndexerState      string
+	Languages         []string
+	LastError         string
 }
 
 type opKind int

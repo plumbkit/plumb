@@ -102,6 +102,89 @@ func TestIndexer_PopulatesLanguageInStatus(t *testing.T) {
 	}
 }
 
+// TestIndexer_RecordsUncoveredLanguageAndStaysRetryable pins the whole
+// unsupported-language contract end to end, on a real file through the real
+// upsert path.
+//
+// Three properties have to hold together, and each fails differently:
+// the row must NAME the language (or the census has nothing to count and the
+// gap stays invisible), it must carry no content hash (or the file is claimed as
+// indexed and, worse, stops being re-checked in a way that could not self-heal),
+// and it must not be counted under IndexedFiles (the confident-wrong answer this
+// work exists to remove).
+func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "user.rb"), []byte("class User\n  def name; end\nend\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Only a Go extractor is wired, exactly as in production for Ruby today.
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	if err := idx.processUpsert(context.Background(), "user.rb"); err != nil {
+		t.Fatalf("processUpsert: %v", err)
+	}
+
+	var lang, hash, errMsg string
+	if err := db.QueryRow(
+		`SELECT language, content_hash, error_msg FROM topology_files WHERE path = 'user.rb'`,
+	).Scan(&lang, &hash, &errMsg); err != nil {
+		t.Fatalf("the file must still be recorded, so a later extractor can pick it up: %v", err)
+	}
+	if lang != "ruby" {
+		t.Errorf("language = %q, want \"ruby\" — without the name the coverage gap cannot be reported", lang)
+	}
+	if hash != "" {
+		t.Errorf("content_hash = %q, want empty — the empty hash is what makes this self-heal when Ruby is wired", hash)
+	}
+	if errMsg != "" {
+		t.Errorf("error_msg = %q, want empty — an uncovered language is a limitation, not a failure", errMsg)
+	}
+
+	s := Report(db, dir, idx)
+	if s.IndexedFiles != 0 {
+		t.Errorf("IndexedFiles = %d, want 0 — nothing was parsed", s.IndexedFiles)
+	}
+	if got := s.UncoveredFiles["ruby"]; got != 1 {
+		t.Errorf("UncoveredFiles[ruby] = %d, want 1", got)
+	}
+	if slices.Contains(s.Languages, "ruby") {
+		t.Error("ruby contributed no symbols; listing it as an indexed language is the answer that misleads")
+	}
+}
+
+// An unrecognised file is a third case, and must not be mistaken for a coverage
+// gap: reporting "lockfiles are not covered" would be noise that buries the
+// languages actually worth wiring.
+func TestIndexer_UnrecognisedFileIsNotACoverageGap(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "yarn.lock"), []byte("# lockfile\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	if err := idx.processUpsert(context.Background(), "yarn.lock"); err != nil {
+		t.Fatalf("processUpsert: %v", err)
+	}
+
+	s := Report(db, dir, idx)
+	if len(s.UncoveredFiles) != 0 {
+		t.Errorf("UncoveredFiles = %v, want empty — a lockfile is not a language plumb is failing to support", s.UncoveredFiles)
+	}
+	if s.UnrecognisedFiles != 1 {
+		t.Errorf("UnrecognisedFiles = %d, want 1", s.UnrecognisedFiles)
+	}
+}
+
 func TestIndexer_ProcessUpsert_UpdateOnChange(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))

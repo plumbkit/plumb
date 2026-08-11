@@ -100,21 +100,42 @@ func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
 // TestLanguageAndClientSourceCountsPinned pins the source-of-truth counts for
 // supported languages and `plumb setup` clients. The website restates these as
 // exact figures, but the displayed numbers are editorial: the language stat folds
-// the .tsx alias into TypeScript (registry 18 → shown 17). The client stat now
+// the .tsx alias into TypeScript (supported 18 → shown 17). The client stat now
 // shows all 14 setup targets (the two Antigravity entries are listed separately).
 // Encoding display rules in code would be brittle, so this test pins
 // the source counts instead — change a count and CI goes red here, pointing at
 // the exact display strings to revisit.
+//
+// The language pin counts SUPPORTED rows, not registry length: the registry also
+// carries EngineNone rows for languages plumb recognises but does not index, and
+// those must never inflate a count the website presents as capability. The
+// uncovered pin moves in the opposite direction — it drops by one each time the
+// coverage programme wires a language — so a PR that adds an extractor without
+// flipping its row, or flips a row without shipping an extractor, goes red here
+// as well as in TestBuildExtractorsCoversRegistry.
 func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	const (
-		wantLanguages = 18 // langsupport registry entries; site shows 17 (.tsx folds into TypeScript), README says "15+"
+		wantLanguages = 18 // indexed languages; site shows 17 (.tsx folds into TypeScript), README says "15+"
+		wantUncovered = 14 // langsupport rows recognised but not yet indexed — decreases as extractors land
 		wantClients   = 14 // plumb setup targets; site shows 14 ("Fourteen agents")
 	)
-	if got := len(langsupport.All()); got != wantLanguages {
-		t.Errorf("langsupport registry has %d entries, pinned at %d.\n"+
+	var supported int
+	for _, l := range langsupport.All() {
+		if l.Structural != langsupport.EngineNone {
+			supported++
+		}
+	}
+	if supported != wantLanguages {
+		t.Errorf("langsupport has %d indexed languages, pinned at %d.\n"+
 			"If intended, update the website's \"languages & formats\" stat "+
-			"(site/index.html — currently 17, the registry minus the .tsx alias) and README's "+
-			"\"15+\" tier table, then bump wantLanguages.", got, wantLanguages)
+			"(site/index.html — currently 17, the supported set minus the .tsx alias) and README's "+
+			"\"15+\" tier table, then bump wantLanguages.", supported, wantLanguages)
+	}
+	if got := len(langsupport.Uncovered()); got != wantUncovered {
+		t.Errorf("langsupport has %d uncovered languages, pinned at %d.\n"+
+			"Wiring a language should move a row from uncovered to indexed, so both "+
+			"counts change together; adding a newly-recognised language raises this one alone.",
+			got, wantUncovered)
 	}
 	if got := len(allSetupClients()); got != wantClients {
 		t.Errorf("plumb has %d setup clients, pinned at %d.\n"+
