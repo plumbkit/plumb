@@ -139,7 +139,11 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 		if folder := paths.URIToPath(rootFromRoots(ctx, req, s.log())); folder != "" && folder != "/" {
 			root, _, err := s.pool.Detect(folder)
 			if err != nil {
-				return folder
+				// Detect found no marker, so canonicalise the folder here instead:
+				// this value is compared against peers' session.Folder, which the
+				// pool resolved, and a raw spelling would silently hide every peer
+				// in an aliased project (issue #263).
+				return paths.Canonical(folder)
 			}
 			return root
 		}

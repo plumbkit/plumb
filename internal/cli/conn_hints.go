@@ -350,13 +350,14 @@ func hintRelPath(ws string, args json.RawMessage) string {
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(ws, abs)
 	}
-	rel, err := filepath.Rel(ws, abs)
-	// Reject only a genuine escape (".." or "../…"); an in-workspace dir literally
-	// named "..config" must still hint, so don't match on a bare ".." prefix.
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// Via WorkspaceRel, not filepath.Rel: ws is the canonical root while abs is
+	// whatever spelling the agent named, and a lexical compare of those two drops
+	// every hint in a project reachable two ways (issue #263).
+	rel, ok := paths.WorkspaceRel(ws, abs)
+	if !ok {
 		return ""
 	}
-	return filepath.ToSlash(rel)
+	return rel
 }
 
 func hintMaxHints(m config.MemoryConfig) int {

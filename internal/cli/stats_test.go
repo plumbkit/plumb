@@ -23,13 +23,7 @@ func TestRunStats_ShowsRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open DB: %v", err)
 	}
-	// Use os.TempDir() directly so the path is outside the plumb workspace tree;
-	// t.TempDir() lands under GOTMPDIR (.testcache/) which Detect() walks up through.
-	ws, err := os.MkdirTemp(os.TempDir(), "plumb-test-ws-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(ws) })
+	ws := freshTempDir(t)
 	if err := db.Record(stats.Call{
 		SessionID: "sess-1",
 		Workspace: ws,
@@ -113,13 +107,7 @@ func TestResolveCLIWorkspace_NestedDirectoryUsesProjectRoot(t *testing.T) {
 }
 
 func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
-	// Use os.TempDir() so the path is outside the plumb workspace tree;
-	// t.TempDir() lands under GOTMPDIR (.testcache/) which Detect() walks up through.
-	dir, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := freshTempDir(t)
 	got, err := resolveCLIWorkspace(dir, config.Defaults())
 	if err != nil {
 		t.Fatal(err)
@@ -135,11 +123,7 @@ func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
 // still returned (inspection use-case preserved); only attachable diverges.
 func TestResolveCLIWorkspaceDetailed_Attachability(t *testing.T) {
 	// A markerless, non-git dir: echoed back but NOT attachable by default.
-	markerless, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(markerless) })
+	markerless := freshTempDir(t)
 
 	root, attachable, err := resolveCLIWorkspaceDetailed(markerless, config.Defaults())
 	if err != nil {
@@ -162,11 +146,7 @@ func TestResolveCLIWorkspaceDetailed_Attachability(t *testing.T) {
 	}
 
 	// A .git/ directory is an unambiguous project boundary: attachable.
-	gitDir, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(gitDir) })
+	gitDir := freshTempDir(t)
 	if err := os.MkdirAll(filepath.Join(gitDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}

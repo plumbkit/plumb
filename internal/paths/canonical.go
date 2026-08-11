@@ -1,6 +1,9 @@
 package paths
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Canonical resolves p to its symlink-free spelling, so two references to one
 // directory compare equal regardless of how the caller reached it. It is the
@@ -59,6 +62,48 @@ func Canonical(p string) string {
 		return resolved
 	}
 	return canonicalMissing(p)
+}
+
+// WorkspaceRel expresses absPath relative to workspace, and reports whether it
+// lies inside. It is the one place plumb answers "where is this file, within
+// this project?" — the question every workspace-relative display, memory-glob
+// match and peer-area annotation asks.
+//
+// The two arguments routinely come from different places: workspace is the
+// canonical root the pool resolved, absPath is whatever spelling the agent or
+// client named. A plain filepath.Rel of those two reports a file sitting in the
+// project as an escape the moment the project is reachable two ways — the macOS
+// /tmp → /private/tmp firmlink, a checkout under a symlinked parent (issue #263).
+// Silently, since "outside the workspace" is a legitimate answer these callers
+// simply drop.
+//
+// So a lexical mismatch is not trusted on its own: when the raw spellings
+// disagree, both sides are canonicalised and compared again, because only the
+// filesystem can tell a real escape from a second spelling. The lexical pass runs
+// first and answers the overwhelmingly common case with no filesystem access at
+// all, which matters because this sits on the per-tool-call enrich path.
+//
+// absPath must be absolute; a caller holding a workspace-relative path already
+// has its answer. Only a genuine escape is rejected — exactly ".." or a "../"
+// prefix — so an in-workspace directory named "..config" still resolves. The
+// returned path is slash-separated.
+func WorkspaceRel(workspace, absPath string) (rel string, inside bool) {
+	if workspace == "" || absPath == "" {
+		return "", false
+	}
+	if rel, ok := relWithin(workspace, absPath); ok {
+		return rel, true
+	}
+	return relWithin(Canonical(workspace), Canonical(absPath))
+}
+
+// relWithin is WorkspaceRel's comparison against one pair of spellings.
+func relWithin(base, path string) (string, bool) {
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // canonicalMissing canonicalises an absolute path EvalSymlinks could not

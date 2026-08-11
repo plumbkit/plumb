@@ -526,6 +526,34 @@
   root. `sameWorkspace`'s doc comment now states that dependency, and says to fix a
   future spelling mismatch at the producer rather than hardening the comparison.
 
+  Canonicalising the root also **breaks** every consumer that compares it against
+  a path the AGENT supplies, and that half needed fixing in the same change. One
+  side is now always resolved while the other is whatever spelling the client
+  knows, so `filepath.Rel` reports a file sitting in the project as an escape —
+  which each of these callers treats as "drop it silently". The damage, verified
+  end-to-end: `hintRelPath` (`internal/cli/conn_hints.go`) returned `""`, so
+  **memory hint injection stopped firing for the whole project**, with no error and
+  no log; `relevant_memories` answered "path … is not inside workspace …" about a
+  path the boundary guard had admitted two lines earlier, because the guard
+  resolves both sides and the tool did not; `episodicRelPath`, `peerArea`
+  (`session_start`'s peer digest) and `workspace_sessions` lost the file, the area
+  and the topology annotation respectively.
+
+  A new `paths.WorkspaceRel` is now the one place "where is this file, within this
+  project?" is answered, and those five call sites use it. It compares the raw
+  spellings first and only canonicalises both sides when they disagree — so the
+  overwhelmingly common case costs no filesystem access, which matters because
+  `hintRelPath` sits on the per-tool-call enrich path, and the resolution is paid
+  only when a lexical mismatch has to be told apart from a real escape. It also
+  retires a latent over-rejection: three of those sites used a bare
+  `strings.HasPrefix(rel, "..")`, which excluded an in-workspace directory named
+  `..config`. Two smaller spelling leaks are closed alongside —
+  `resolveCLIWorkspaceDetailed` now synthesises a markerless root the same way the
+  daemon does instead of echoing the raw path (so `plumb stats` / `config show` /
+  `trust` / `run_task` key on the daemon's spelling), and `rootFromClient`
+  canonicalises its Detect-failure fallback, which `session_start` compares against
+  peers' `session.Folder` to list active peers.
+
   `paths.Canonical` hands the **uncleaned** absolute path to `EvalSymlinks`.
   `filepath.Clean` collapses `..` lexically, which diverges from the kernel's
   left-to-right resolution the moment a `..` follows a symlink (see PR #264) —
@@ -555,9 +583,12 @@
   sessions on one project via different spellings agree — issue #263 itself; an
   aliased re-pin is a no-op rather than a sticky-pin refusal; a markerless
   synthetic root is canonicalised too; an aliased URI routes to the primary server;
-  an unresolvable root still attaches). Every one was mutation-verified — each
-  canonicalisation site and each behaviour of `Canonical` reverted in turn, failing
-  exactly the tests that claim to cover it.
+  an aliased path still matches path-scoped memories; a nonexistent root still
+  pins), plus `WorkspaceRel`'s own tests (an aliased path resolves inside; a
+  genuine escape is still rejected; `..config` is not an escape). Every one was
+  mutation-verified — each canonicalisation site, each behaviour of `Canonical`,
+  and each half of `WorkspaceRel` reverted in turn, failing exactly the tests that
+  claim to cover it.
 
   Two `cli` test fixtures now hand out canonical directories, because the roots
   they stand in for are: `freshTempDir` and `setupTwoProjects`. On macOS
