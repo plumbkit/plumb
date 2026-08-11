@@ -123,9 +123,15 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 // inbox is this session's message inbox: its address, its resolved policy, and
 // the two stores it may read from. Built per call so a config hot-reload takes
 // effect on the next delivery.
+//
+// An unregistered session (session.Register failed, so sessID is empty) has no
+// address. Its name never entered the session directory, so no peer's
+// uniqueness check can see it and it may well duplicate a live session's name —
+// claiming that peer's messages, which are delivered exactly once and would
+// simply never arrive. Inbox.Claim treats an empty Self as "mailbox off".
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
-		Self:      s.sessionName(),
+		Self:      s.addressableName(),
 		Root:      s.workspace(),
 		Policy:    s.collabPolicy(),
 		Workspace: s.collabStoreIfExists,

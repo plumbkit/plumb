@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -212,10 +213,11 @@ func TestPersist_RenamedNameSurvivesReconnect(t *testing.T) {
 
 // TestPersist_NameNotRestoredOntoOverlappingSession: a proxy reconnect can
 // overlap its predecessor (the proxy reconnected, the previous connSession is
-// still registered). session.Rename enforces no uniqueness, so restoring the
-// name there would leave TWO live sessions answering to it — and leave_note
-// delivery matches on the name string. The reconnect must keep its generated
-// name instead, leaving the persisted one for a later, non-overlapping attempt.
+// still registered). Restoring the name there would leave TWO live sessions
+// answering to it — and leave_note delivery matches on the name string, so the
+// message would go to whichever asked first. session.Rename refuses with
+// ErrNameTaken; the reconnect must treat that as "try again later", keeping its
+// generated name and leaving the persisted one for a non-overlapping attempt.
 func TestPersist_NameNotRestoredOntoOverlappingSession(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
@@ -380,5 +382,82 @@ func TestPersist_NoProxyIDWritesNothing(t *testing.T) {
 	}
 	if len(recs) != 0 {
 		t.Fatalf("a connection with no proxy ID persisted %d rows, want 0", len(recs))
+	}
+}
+
+// TestPersist_StoredNameRejectedByValidationIsReplaced is the other half of the
+// restore contract. A stored name can become invalid under a NEWER daemon:
+// "next" was an ordinary session name until it became the mailbox's reserved
+// next-arrival address. Unlike a name that is merely busy, this one will NEVER
+// become restorable — so leaving the row in place makes every reconnect fail
+// identically and the session come back randomly renamed each time, which is
+// precisely the churn this persistence exists to prevent, and it is silent at
+// Debug. The restore must overwrite an unusable name so it converges.
+func TestPersist_StoredNameRejectedByValidationIsReplaced(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	// A row written by an older daemon, before "next" was reserved.
+	if err := ss.SaveName("proxyX", "next"); err != nil {
+		t.Fatalf("SaveName: %v", err)
+	}
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	name := first.sessionName()
+	if name == "next" {
+		t.Fatal("restored the reserved name onto a live session")
+	}
+	first.close()
+
+	stored, ok, err := ss.LoadName("proxyX")
+	if err != nil {
+		t.Fatalf("LoadName: %v", err)
+	}
+	if !ok || stored != name {
+		t.Fatalf("stored name = (%q, %v), want the unusable row replaced with %q", stored, ok, name)
+	}
+
+	// The point of replacing it: the NEXT reconnect is stable.
+	second := newPersistSession(t, store, ss, "proxyX")
+	if got := second.sessionName(); got != name {
+		t.Fatalf("second reconnect came back as %q, want the now-stable %q", got, name)
+	}
+}
+
+// TestUnregisteredSession_HasNoMailboxAddress. When session.Register fails the
+// connection still serves, and it still needs a display name for the TUI, logs
+// and daemon_info. But that fallback name was drawn WITHOUT a uniqueness check,
+// and the session has no file for any peer's check to find, so it can silently
+// duplicate a live session's name. Messages are claimed exactly once, so an
+// addressable shadow would swallow the real recipient's mail — the exact
+// failure the uniqueness work exists to close. No registration, no address.
+func TestUnregisteredSession_HasNoMailboxAddress(t *testing.T) {
+	// XDG_DATA_HOME pointing at a regular file makes Register's MkdirAll fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatalf("seeding the blocker file: %v", err)
+	}
+	t.Setenv("XDG_DATA_HOME", blocker)
+
+	s := newConnSession(context.Background(), detectTestPool(), nil,
+		config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	if s.sessID != "" {
+		t.Fatalf("registration unexpectedly succeeded (sessID %q); the test no longer exercises the fallback", s.sessID)
+	}
+	if s.sessionName() == "" {
+		t.Error("display name is empty; the TUI, logs and daemon_info still need one")
+	}
+	if got := s.addressableName(); got != "" {
+		t.Errorf("addressableName = %q, want empty for an unregistered session", got)
+	}
+	if got := s.inbox().Self; got != "" {
+		t.Errorf("inbox Self = %q, want empty so Inbox.Claim treats the mailbox as off", got)
 	}
 }

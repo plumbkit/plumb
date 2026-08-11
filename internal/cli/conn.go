@@ -270,12 +270,16 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 	ttl := cfg.Cache.TTL.Duration
 	// Register assigns the name, under the session-directory flock, so it cannot
 	// land on one a live session already answers to — names are mailbox addresses
-	// and a duplicate silently misdelivers. On a registration failure the session
-	// still runs (unregistered, as before); it just needs a name of its own for
-	// the view, logs, and TUI.
+	// and a duplicate silently misdelivers.
+	//
+	// On a registration failure the session still runs, unregistered, as before.
+	// The fallback name is a DISPLAY name only: it was drawn without a uniqueness
+	// check and the session has no file for anyone else's check to find, so it
+	// must not become an address. addressableName gates that on sessID, which
+	// stays empty here.
 	reg, err := session.Register(session.Info{DaemonVersion: Version})
 	if err != nil {
-		slog.Warn("daemon: session registration failed; continuing unregistered", "err", err)
+		slog.Warn("daemon: session registration failed; continuing unregistered and unaddressable", "err", err)
 		reg.Name = session.GenerateName()
 	}
 	sessName, sessID := reg.Name, reg.ID
@@ -446,9 +450,25 @@ func (s *connSession) lspDiagMode() string {
 	return s.sessionProxy.DiagMode("")
 }
 
-// sessionName returns the current human-readable session name.
+// sessionName returns the current human-readable session name. For DISPLAY —
+// the TUI, daemon_info, log context, the stats row. Use addressableName for
+// anything that routes messages.
 func (s *connSession) sessionName() string {
 	return s.view().sessName
+}
+
+// addressableName returns the session name only when it is a name peers can
+// safely route to — that is, when this session is registered in the session
+// directory, where every other session's uniqueness check can see it.
+//
+// An unregistered session (sessID empty because session.Register failed) still
+// carries a display name, but it was drawn without a uniqueness check and is
+// invisible to every future one, so it may silently shadow a live peer.
+func (s *connSession) addressableName() string {
+	if s.sessID == "" {
+		return ""
+	}
+	return s.sessionName()
 }
 
 // sessionPurpose returns the current session purpose tag ("" when unset).

@@ -227,18 +227,18 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessID, externalID)
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
-				// Same guard as restoreName: session.Rename enforces no
-				// uniqueness, and two resumes racing on one external ID inside
-				// the grace window would both inherit the name — leaving mailbox
-				// delivery, which matches on the name string, ambiguous.
-				if nameHeldByOtherLiveSession(prev.Name, s.sessID) {
-					s.log().Debug("daemon: inherited session name still held by a live session; keeping the generated name",
-						"inherited", prev.Name)
-					return ""
-				}
-				if name, err := s.renameSession(prev.Name); err == nil {
+				// session.Rename refuses a name a live session already holds, so
+				// two resumes racing on one external ID inside the grace window
+				// cannot both inherit it — mailbox delivery matches on the name
+				// string, and an ambiguous address silently misdelivers.
+				name, err := s.renameSession(prev.Name)
+				if err == nil {
 					return name
 				}
+				// Log it: a silently dropped inheritance looks to the caller like
+				// the session_id argument did nothing at all.
+				s.log().Debug("daemon: could not inherit the previous session name; keeping the generated one",
+					"inherited", prev.Name, "err", err)
 			}
 			return ""
 		}))
