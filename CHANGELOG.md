@@ -2,6 +2,61 @@
 
 ## 0.16.4 (unreleased)
 
+### Fixed
+
+- **`[collab]` mailbox review follow-ups: a scoped wake-up key, a bounded
+  notifier, an atomic exchange budget, and a race-tolerant migration.** Six
+  non-blocking findings from the independent review of the mailbox work, fixed
+  together.
+
+  **The `"next"` wake-up key was daemon-global.** Every workspace shared the
+  literal key `"next"`, so a `leave_note({to:"next"})` in *any* project bumped it
+  and every connection in the daemon — including ones pinned elsewhere — then
+  failed its "nothing new" check and ran a needless SQLite claim on its next tool
+  call. `collab.NotifyKey` now scopes the `next` key to the workspace. Only the
+  in-process key changed; the stored `addressee` is still `"next"`.
+
+  **The notifier's generation map grew without bound**, one entry per recipient
+  key ever bumped, and an entry is created by the mere act of addressing a name —
+  which a sender may invent. It is now capped with eviction, but the fix that
+  makes eviction *safe* is the interesting half: the per-key counter was replaced
+  with a single monotonic clock stamped into every entry. Under per-key counters
+  an evicted-then-recreated key restarts at 0, and `Notifier.Wait` compares with
+  `>` — so a parked `check_messages` would sleep through a send that was already
+  in the database, silently degrading turn-taking to the 30 s backstop. One clock
+  guarantees any value written after a caller's snapshot exceeds it, evicted or
+  not.
+
+  **The exchange budget was checked and then acted on in two steps**, so two
+  agents replying at the same instant both read one-below-the-limit and both
+  landed — the budget over-ran precisely when the exchange was running away. The
+  cap moved into `PutNote` as a guarded `INSERT … SELECT … WHERE (SELECT COUNT(*)
+  …) < ?`, so SQLite's write lock serialises the count against the insert, and a
+  rule kept in the store cannot be forgotten by a future caller. Related:
+  `ConversationCount` no longer counts expired rows, so the reaper running is no
+  longer what decides whether an exhausted thread gets a fresh allowance.
+
+  **The migration could fail on a concurrent open.** SQLite has no `ADD COLUMN IF
+  NOT EXISTS`, so the `pragma_table_info` check and the `ALTER TABLE` are two
+  steps another process can slip between; the loser failed its whole `Open` on
+  work that had in fact been done. The `ALTER` now re-inspects on error rather
+  than matching the driver's message text — column present means a peer added it,
+  column absent means the failure is genuine.
+
+  **Message delivery moved to the END of the enrich hook.** It is the only enrich
+  step that mutates state (claiming marks a row delivered for good), while
+  `runHookSafely` discards the entire enriched string if a later step panics — so
+  a panic in a read-only hint used to destroy a message that could never be
+  offered again. The named-return + `defer` keeps delivery firing on *every* tool
+  call, past the early returns that restrict the path hints. End to end the
+  guarantee is still at-most-once (a panic between the claim and the client
+  receiving the response is not recoverable without client acks), but the window
+  is now a panic inside delivery itself rather than anywhere in the hook.
+
+  Also: `check_messages` no longer tells a session "a message arrived but was
+  already delivered on another call" — wrong for a `cross_project = false`
+  session woken by traffic it may not read, and a small existence disclosure.
+
 ### Added
 
 - **The `[collab]` mailbox is now a real agent-to-agent conversation channel:
