@@ -209,6 +209,36 @@ func TestCanonicalRoot_AliasedURIRoutesToThePrimaryServer(t *testing.T) {
 	}
 }
 
+// TestCanonicalRoot_HintRelPathAcceptsAnAliasedPath is the regression guard for
+// the trap in canonicalising the root, found by adversarial review after the
+// first version of this change was already "done".
+//
+// Canonicalising the root fixes the consumers fed BY the pool. It does nothing
+// for the consumers that compare the root against a path the AGENT supplies —
+// and it makes those deterministically wrong, because one side is now always
+// resolved while the other is whatever spelling the client knows. hintRelPath is
+// the worst of them: filepath.Rel returns a "../…" escape, hintRelPath returns
+// "", and memory hint injection stops firing for the whole project. No error, no
+// log — the feature just goes quiet. Same shape in relevant_memories (which then
+// contradicts the boundary guard that just admitted the path), episodicRelPath,
+// peerArea and workspace_sessions.
+func TestCanonicalRoot_HintRelPathAcceptsAnAliasedPath(t *testing.T) {
+	realRoot, alias := aliasedWorkspace(t)
+	mustMkdir(t, filepath.Join(realRoot, "internal", "auth"))
+
+	args := []byte(`{"file_path":"` + filepath.Join(alias, "internal", "auth", "a.go") + `"}`)
+	if got := hintRelPath(realRoot, args); got != "internal/auth/a.go" {
+		t.Fatalf("hintRelPath = %q, want %q — a file named by the project's other "+
+			"spelling must still match path-scoped memories", got, "internal/auth/a.go")
+	}
+
+	// The widening must not admit a path that is genuinely elsewhere.
+	outside := []byte(`{"file_path":"` + filepath.Join(freshTempDir(t), "x.go") + `"}`)
+	if got := hintRelPath(realRoot, outside); got != "" {
+		t.Errorf("a path outside the workspace must not hint; got %q", got)
+	}
+}
+
 // TestCanonicalRoot_NonexistentRootStillPins is the fail-soft half of the
 // contract. Canonicalisation is best effort: a root that does not exist must
 // still pin, and pin to the spelling the caller named, because a session that

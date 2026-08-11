@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -429,8 +430,10 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 			abs = filepath.Join(workspace, abs)
 		}
 		// Show only the path relative to the workspace so long absolute paths
-		// don't clutter the output. Fall back to the full path on error.
-		if rel, err := filepath.Rel(workspace, file); err == nil && !strings.HasPrefix(rel, "..") {
+		// don't clutter the output. Fall back to the full path when it really is
+		// outside. Resolved on both sides (issue #263) and against abs, not file,
+		// so an already-relative entry is not re-relativised against nothing.
+		if rel, ok := paths.WorkspaceRel(workspace, abs); ok {
 			file = rel
 		}
 		fmt.Fprintf(sb, "  %-20s  %-18s  %s  (%s ago)", w.SessionName, w.Tool, file, age)

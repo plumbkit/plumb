@@ -538,11 +538,16 @@ func resolveCLIWorkspaceDetailed(start string, cfg config.Config) (root string, 
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
-	resolved, _, derr := newWorkspacePool(context.Background(), cfg).Detect(abs)
+	pool := newWorkspacePool(context.Background(), cfg)
+	resolved, _, derr := pool.Detect(abs)
 	if derr != nil {
 		// No marker found. The daemon would refuse to attach here unless
-		// auto_attach is on, where it synthesises a root from abs instead.
-		return abs, cfg.Workspace.AutoAttach, nil
+		// auto_attach is on, where it synthesises a root from abs instead — so
+		// synthesise it the same way rather than returning the raw path. Returning
+		// abs would leave the CLI (stats, config show, trust, run_task) keyed to a
+		// different spelling than the daemon's rows and roots store for exactly the
+		// aliased markerless project this branch describes (issue #263).
+		return pool.SynthesiseRoot(abs), cfg.Workspace.AutoAttach, nil
 	}
 	return resolved, true, nil
 }

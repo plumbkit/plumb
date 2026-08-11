@@ -206,11 +206,11 @@ func episodicRelPath(workspace, raw string) string {
 		if workspace == "" {
 			return filepath.ToSlash(filepath.Clean(raw))
 		}
-		rel, err := filepath.Rel(workspace, raw)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		rel, ok := paths.WorkspaceRel(workspace, raw)
+		if !ok || rel == "." {
 			return ""
 		}
-		return filepath.ToSlash(rel)
+		return rel
 	}
 	rel := filepath.Clean(raw)
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

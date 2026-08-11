@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,76 @@ func TestCanonical_MissingPathWithDotDotStillResolvesItsParent(t *testing.T) {
 	got := Canonical(in)
 	if want := filepath.Join(base, "real", "missing"); got != want {
 		t.Errorf("Canonical = %q, want %q", got, want)
+	}
+}
+
+// TestWorkspaceRel_AliasedPathResolvesInside is the point of the function. The
+// workspace root arrives canonical (the pool resolved it) while the path arrives
+// however the agent spelled it; a plain filepath.Rel of those two calls a file
+// sitting in the project an escape, and every caller treats an escape as "drop
+// it silently".
+func TestWorkspaceRel_AliasedPathResolvesInside(t *testing.T) {
+	base := canonicalTempDir(t)
+	realDir := filepath.Join(base, "real", "proj")
+	mustMkdirAll(t, filepath.Join(realDir, "internal", "auth"))
+	mustSymlink(t, filepath.Join(base, "real"), filepath.Join(base, "alias"))
+	aliased := filepath.Join(base, "alias", "proj", "internal", "auth", "a.go")
+
+	// Precondition: the naive comparison this function exists to replace fails.
+	if naive, err := filepath.Rel(realDir, aliased); err == nil && !strings.HasPrefix(naive, "..") {
+		t.Fatalf("fixture is not aliased: filepath.Rel already yields %q", naive)
+	}
+
+	rel, inside := WorkspaceRel(realDir, aliased)
+	if !inside {
+		t.Fatal("a path named by the workspace's other spelling was reported outside it")
+	}
+	if rel != "internal/auth/a.go" {
+		t.Errorf("rel = %q, want %q", rel, "internal/auth/a.go")
+	}
+}
+
+// TestWorkspaceRel_RejectsAGenuineEscape keeps the widened comparison honest: it
+// must still say no to a path that is really outside, or the canonicalisation
+// would have turned a silent drop into a silent admission.
+func TestWorkspaceRel_RejectsAGenuineEscape(t *testing.T) {
+	base := canonicalTempDir(t)
+	ws := filepath.Join(base, "proj")
+	mustMkdirAll(t, ws)
+	mustMkdirAll(t, filepath.Join(base, "elsewhere"))
+
+	for _, outside := range []string{
+		filepath.Join(base, "elsewhere", "a.go"),
+		filepath.Join(base, "proj-sibling", "a.go"), // shares a string prefix with ws
+		base,
+	} {
+		if rel, inside := WorkspaceRel(ws, outside); inside {
+			t.Errorf("WorkspaceRel(%q, %q) = %q, inside — want outside", ws, outside, rel)
+		}
+	}
+}
+
+// TestWorkspaceRel_DotDotPrefixedNameIsNotAnEscape pins the distinction three of
+// the call sites used to get wrong with a bare strings.HasPrefix(rel, ".."): a
+// directory legitimately named "..config" is inside the workspace.
+func TestWorkspaceRel_DotDotPrefixedNameIsNotAnEscape(t *testing.T) {
+	ws := canonicalTempDir(t)
+	mustMkdirAll(t, filepath.Join(ws, "..config"))
+
+	rel, inside := WorkspaceRel(ws, filepath.Join(ws, "..config", "a.go"))
+	if !inside || rel != "..config/a.go" {
+		t.Errorf("WorkspaceRel = (%q, %v), want (\"..config/a.go\", true)", rel, inside)
+	}
+}
+
+// TestWorkspaceRel_EmptyArgs: no workspace or no path means no answer, never a
+// bare filepath.Rel against "".
+func TestWorkspaceRel_EmptyArgs(t *testing.T) {
+	if _, inside := WorkspaceRel("", "/a/b"); inside {
+		t.Error("empty workspace must not report inside")
+	}
+	if _, inside := WorkspaceRel("/a", ""); inside {
+		t.Error("empty path must not report inside")
 	}
 }
 

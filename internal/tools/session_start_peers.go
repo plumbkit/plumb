@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -157,8 +158,8 @@ func (t *SessionStart) topoStore() *topology.Store {
 // directory, with a topology package annotation appended when the index has the
 // file (e.g. "internal/tools/ (package tools)").
 func peerArea(ctx context.Context, ws, absPath string, store *topology.Store) string {
-	rel, err := filepath.Rel(ws, absPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, ok := paths.WorkspaceRel(ws, absPath)
+	if !ok {
 		return ""
 	}
 	dir := filepath.ToSlash(filepath.Dir(rel))

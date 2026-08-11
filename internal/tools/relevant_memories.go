@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 type relevantMemoriesTool struct {
@@ -72,8 +73,11 @@ func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) 
 		if err := t.guard.check(a.Path); err != nil {
 			return "", fmt.Errorf("relevant_memories: %w", err)
 		}
-		r, err := filepath.Rel(ws, a.Path)
-		if err != nil || strings.HasPrefix(r, "..") {
+		// WorkspaceRel, not filepath.Rel: the guard above admitted this path by
+		// comparing RESOLVED paths, so a lexical compare here could answer "not
+		// inside" about a path plumb just agreed was inside (issue #263).
+		r, ok := paths.WorkspaceRel(ws, a.Path)
+		if !ok {
 			return fmt.Sprintf("path %s is not inside workspace %s", a.Path, ws), nil
 		}
 		rel = r
