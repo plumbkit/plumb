@@ -146,7 +146,7 @@ func initDB(db *sql.DB) error {
 // idempotent and safe to run on every open, including on a v1 file that a
 // crashed migration left half-way.
 func migrateChatColumns(db *sql.DB) error {
-	have, err := tableColumns(db, "collab_rows")
+	have, err := collabRowsColumns(db)
 	if err != nil {
 		return err
 	}
@@ -155,24 +155,36 @@ func migrateChatColumns(db *sql.DB) error {
 			continue
 		}
 		if _, err := db.Exec(c.ddl); err != nil {
+			// SQLite has no ADD COLUMN IF NOT EXISTS, so the inspection above and
+			// this ALTER are two steps another process opening the same collab.db can
+			// slip between — the loser gets "duplicate column name" and, without this,
+			// its whole Open fails on work that has in fact been done. Re-inspect
+			// rather than matching the driver's message text: if the column is present
+			// now, a peer added it and there is nothing left to do; if it is still
+			// absent, the failure is genuine and propagates.
+			if after, qErr := collabRowsColumns(db); qErr == nil && after[c.name] {
+				continue
+			}
 			return fmt.Errorf("collab: add column %s: %w", c.name, err)
 		}
 	}
 	return nil
 }
 
-// tableColumns returns the set of column names on a table.
-func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+// collabRowsColumns returns the set of column names currently on collab_rows.
+// It drives the migration, which must be decided by what the table actually has
+// rather than by the stamped schema version.
+func collabRowsColumns(db *sql.DB) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('collab_rows')`)
 	if err != nil {
-		return nil, fmt.Errorf("collab: inspect %s: %w", table, err)
+		return nil, fmt.Errorf("collab: inspect collab_rows: %w", err)
 	}
 	defer rows.Close()
 	out := make(map[string]bool)
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("collab: inspect %s: %w", table, err)
+			return nil, fmt.Errorf("collab: inspect collab_rows: %w", err)
 		}
 		out[name] = true
 	}
@@ -219,11 +231,42 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 	return tx.Commit()
 }
 
+// ErrConversationFull reports that a note was refused because its conversation
+// had already spent the exchange budget the caller asked to be held to. Callers
+// turn it into their own user-facing refusal; it is a policy outcome, not a
+// storage failure.
+var ErrConversationFull = errors.New("collab: conversation has reached its exchange limit")
+
+// insertNote writes the row through a SELECT rather than a VALUES list so the
+// exchange budget can be appended to the SAME statement as a WHERE clause.
+const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
+                          addressee, created_at, expires_at, conversation_id, origin_workspace,
+                          target_workspace)
+	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?`
+
+// budgetGuard suppresses the insert when the thread has already spent its
+// budget. It counts only UNEXPIRED rows, so the budget reads the same whether or
+// not the reaper has run — pruning deletes exactly the rows this excludes, and
+// counting them would let a prune silently hand an exhausted thread a fresh
+// allowance.
+const budgetGuard = `
+	 WHERE (SELECT COUNT(*) FROM collab_rows
+	        WHERE kind = ? AND conversation_id = ? AND expires_at > ?) < ?`
+
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
 // returns the conversation it belongs to — the caller's ConversationID when it
 // threads onto an existing exchange, otherwise a freshly minted one, which the
 // sender quotes to continue the thread. The body is stored verbatim (callers
 // redact first). TTL is clamped to minTTL.
+//
+// A positive in.MaxExchanges caps the conversation, and a note that would exceed
+// it is refused with ErrConversationFull. The cap is enforced HERE, in one
+// statement, because counting in the caller and then inserting is two steps: two
+// agents replying at the same instant both read one-below-the-limit and both
+// land, so the budget over-runs precisely when the exchange is running away.
+// SQLite's write lock serialises a single statement's count against its insert,
+// and a rule kept in the store cannot be forgotten by a future caller. A fresh
+// thread is never refused — its live count is zero.
 func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (string, error) {
 	if s == nil || s.db == nil {
 		return "", errors.New("collab: nil store")
@@ -249,15 +292,27 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 			return "", errors.New(`collab: "next" has no meaning across projects`)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs, addressee,
-		                          created_at, expires_at, conversation_id, origin_workspace,
-		                          target_workspace)
-		 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
+	stmt := insertNote
+	args := []any{
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace); err != nil {
+		in.TargetWorkspace,
+	}
+	capped := in.MaxExchanges > 0
+	if capped {
+		stmt += budgetGuard
+		args = append(args, string(KindNote), conv, now.UnixNano(), in.MaxExchanges)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
+	}
+	if capped {
+		// The guard is a WHERE clause, so a refusal is an insert that matched
+		// nothing rather than an error the driver reports.
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return "", ErrConversationFull
+		}
 	}
 	return conv, nil
 }
@@ -399,18 +454,25 @@ func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, p
 	return ws, true
 }
 
-// ConversationCount returns how many notes a conversation holds, delivered or
-// not. It backs the exchange budget that stops two agents replying to each other
-// indefinitely, which is why it counts delivered rows too — an exchange that has
-// been read still happened.
+// ConversationCount returns how many UNEXPIRED notes a conversation holds.
+// Delivered rows count — an exchange that has been read still happened — but
+// expired ones do not, matching both the transcript Conversation renders and the
+// budget PutNote enforces. Counting rows the reaper is about to delete would
+// make the answer depend on whether the reaper happened to have run.
+//
+// It reads the wall clock rather than taking a `now` like the surrounding reads
+// because it is purely observational — "how big is this thread" — since the one
+// decision it used to drive, the exchange budget, moved into PutNote's guarded
+// insert, which uses the clock its caller passes.
 func (s *Store) ConversationCount(ctx context.Context, conversationID string) (int, error) {
 	if s == nil || s.db == nil || conversationID == "" {
 		return 0, nil
 	}
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM collab_rows WHERE kind = ? AND conversation_id = ?`,
-		string(KindNote), conversationID).Scan(&n)
+		`SELECT COUNT(*) FROM collab_rows
+		 WHERE kind = ? AND conversation_id = ? AND expires_at > ?`,
+		string(KindNote), conversationID, time.Now().UnixNano()).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("collab: count conversation: %w", err)
 	}

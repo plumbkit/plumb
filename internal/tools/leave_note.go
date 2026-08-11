@@ -210,28 +210,10 @@ func sameWorkspace(a, b string) bool {
 }
 
 func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPolicy, args leaveNoteArgs) (string, error) {
-	// The exchange budget is the backstop against two agents answering each other
-	// forever. It is checked only when replying into an existing thread: opening a
-	// new conversation is always allowed, and the count includes already-delivered
-	// messages, because an exchange that has been read still happened.
-	if args.ConversationID != "" {
-		n, err := target.store.ConversationCount(ctx, args.ConversationID)
-		if err != nil {
-			return "", fmt.Errorf("leave_note: %w", err)
-		}
-		if limit := policy.maxExchanges(); n >= limit {
-			return fmt.Sprintf(
-				"This conversation has reached its %d-message limit ([collab] max_exchanges), so the "+
-					"reply was NOT sent.\n\nThat limit exists to stop two agents talking to each other "+
-					"indefinitely without a human in the loop. Summarise the exchange and what you "+
-					"still need for your human rather than opening a fresh thread to continue it.",
-				limit), nil
-		}
-	}
-
 	body, redacted := redactBody(args.Body)
 	ttl := resolveTTL(policy.IntentTTLMinutes, 0)
 	now := time.Now()
+	limit := policy.maxExchanges()
 	in := collab.NoteInput{
 		AuthorSession:   t.deps.SessionName(),
 		AuthorID:        t.deps.SessionID,
@@ -241,8 +223,23 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		ConversationID:  args.ConversationID,
 		OriginWorkspace: target.origin,
 		TargetWorkspace: target.peerWorkspace,
+		MaxExchanges:    limit,
 	}
+	// The exchange budget is the backstop against two agents answering each other
+	// forever, and the store applies it as part of the insert. Counting here first
+	// and then sending would let two simultaneous replies each pass a check the
+	// other then invalidates, so the runaway exchange the cap exists to stop is
+	// exactly the case that slips through it. Opening a new conversation is still
+	// always allowed — a fresh thread holds nothing.
 	conv, err := target.store.PutNote(ctx, in, now)
+	if errors.Is(err, collab.ErrConversationFull) {
+		return fmt.Sprintf(
+			"This conversation has reached its %d-message limit ([collab] max_exchanges), so the "+
+				"reply was NOT sent.\n\nThat limit exists to stop two agents talking to each other "+
+				"indefinitely without a human in the loop. Summarise the exchange and what you "+
+				"still need for your human rather than opening a fresh thread to continue it.",
+			limit), nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("leave_note: %w", err)
 	}
