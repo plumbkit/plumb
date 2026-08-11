@@ -216,6 +216,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"php":        func() topology.Extractor { return treesitter.NewPHP() },
 	"scss":       func() topology.Extractor { return treesitter.NewSCSS() },
 	"xml":        func() topology.Extractor { return treesitter.NewXML() },
+	"lua":        func() topology.Extractor { return treesitter.NewLua() },
 }
 
 // buildExtractors instantiates the structural extractors for every language the

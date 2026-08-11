@@ -83,6 +83,7 @@ var registry = []Language{
 	{Name: "php", Extensions: []string{".php"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "scss", Extensions: []string{".scss"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
@@ -101,7 +102,6 @@ var registry = []Language{
 	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "dart", Extensions: []string{".dart"}, Structural: EngineNone, LSPAdapter: ""},
 }
