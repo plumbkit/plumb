@@ -118,9 +118,7 @@ type reconnectingProxy struct {
 	// response has been seen.
 	daemonVersion string
 	// relistOnReconnect is armed by a replayed handshake for a client that already
-	// has its initialize result, and consumed once the reconnect settles. Not
-	// gated on a version change: the dev loop rebuilds the daemon with a new tool
-	// set at the SAME version, which is the case this exists to cover.
+	// has its initialize result, and consumed once the reconnect settles.
 	relistOnReconnect atomic.Bool
 	// notifiedMismatch is the daemon version this proxy last attached the
 	// version-mismatch clause to a reconnect note for. The mismatch is
@@ -523,11 +521,13 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 				// never swept.
 				p.failOutstandingBelow(gen)
 				p.daemonPID.Store(int64(readDaemonPID())) // track the PID we are now connected to
-				// Last, after the in-flight requests have been answered. The daemon
-				// behind this reconnect may be a different build with a different
-				// tool set, and the client cannot discover that itself: from its
-				// side the server never went away, so it never re-lists and a new
-				// tool stays invisible until the CLIENT restarts.
+				// Last, after the in-flight requests are answered. The daemon behind
+				// this reconnect may be a different build with a different tool set,
+				// which the client cannot discover itself: from its side the server
+				// never went away, so it never re-lists and a new tool stays
+				// invisible until the CLIENT restarts. Unguarded, unlike the
+				// reconnect note — a missed one costs an invisible tool, a redundant
+				// one costs a tools/list — so a crash-loop emits one per iteration.
 				if p.relistOnReconnect.Swap(false) {
 					p.notifyToolsListChanged()
 				}

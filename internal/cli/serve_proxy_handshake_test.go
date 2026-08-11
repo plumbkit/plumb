@@ -22,6 +22,7 @@ func replayHandshakeForTest(t *testing.T, alreadyAnswered bool) ([]string, bool)
 	clientOut := newFrameReader(outR)
 
 	daemonSide, proxySide := net.Pipe()
+	t.Cleanup(func() { _ = daemonSide.Close(); _ = proxySide.Close(); _ = outW.Close() })
 	p := newReconnectingProxy(proxyDeps{out: outW, handshakeWait: 5 * time.Second})
 	p.initializeFrame = []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
 	p.initializeID = idKey([]byte(`1`))
@@ -55,7 +56,9 @@ func replayHandshakeForTest(t *testing.T, alreadyAnswered bool) ([]string, bool)
 		select {
 		case f := <-frames:
 			got = append(got, f)
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(100 * time.Millisecond):
+			// The handshake has returned, so anything it was going to write is
+			// already queued; this is a short drain, not a timeout to wait out.
 			return got, p.relistOnReconnect.Load()
 		}
 	}
@@ -109,4 +112,35 @@ func TestReplayHandshake_FirstHandshakeForwardsResultAndDoesNotNotify(t *testing
 	if !sawResult {
 		t.Fatalf("a client that never received its initialize result must get the replayed one; frames = %v", got)
 	}
+}
+
+// TestProxy_ReconnectNotifiesClientToRelistTools is the end-to-end guard, and it
+// exists because the flag-level test above is not one.
+//
+// An independent review deleted the emission block in reconnect() and the entire
+// suite still passed: the other test asserts that the flag is ARMED, which is an
+// implementation detail, while the behaviour the change exists for — a frame
+// actually reaching the client — had no coverage at all. This drives a real
+// daemon crash, a real reconnect, and reads the real wire.
+func TestProxy_ReconnectNotifiesClientToRelistTools(t *testing.T) {
+	t.Parallel()
+
+	_, initialProxySide := newPipeDaemon(func(m *mockDaemon) { m.crashOnTool = true })
+	h := startProxy(t, initialProxySide, 0, 0)
+	_, replacement := newPipeDaemon(nil)
+	h.dialQueue <- replacement
+	h.start()
+	h.handshake()
+	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`) // kills the daemon
+
+	// readAny, not read: read() deliberately skips notifications, which is the
+	// very frame under test here.
+	deadline := time.Now().Add(10 * time.Second)
+	for range 5 {
+		if strings.Contains(h.readAny(time.Until(deadline)), `"method":"notifications/tools/list_changed"`) {
+			return
+		}
+	}
+	t.Fatal("no tools/list_changed reached the client after a reconnect — a tool added by " +
+		"the rebuilt daemon would stay invisible until the client itself restarted")
 }

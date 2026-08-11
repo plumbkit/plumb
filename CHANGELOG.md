@@ -2,6 +2,41 @@
 
 ## 0.16.5 (unreleased)
 
+### Fixed
+
+- **A tool added by a daemon rebuild is no longer invisible to already-connected
+  clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
+  reconnecting proxy, so from the client's side the server never goes away — it
+  never re-lists, and a tool the rebuilt daemon gained stays unusable until the
+  *client* restarts. That is backwards for a proxy whose entire purpose is that
+  the daemon can be rebuilt under a live agent session. Observed for real: `make
+  reinstall` added `check_messages`, and the session that had just built and
+  merged that tool could not call it.
+
+  The daemon already advertises `tools.listChanged=true` and fires the
+  notification itself when a connection's tool *profile* changes. It cannot fire
+  it for a restart, because the restart is what destroys the connection that would
+  have sent it; only the proxy survives the gap, so only the proxy can say so. It
+  now emits `notifications/tools/list_changed` after a reconnect, at the end of
+  the sequence rather than inside the handshake — a client waiting on its own
+  response should not have to read past an unrelated notification to find it.
+
+  Deliberately not gated on a version change: `serverInfo.version` is the
+  `VERSION` file, and plumb's own dev loop rebuilds the daemon with a new tool set
+  at the *same* version, which is exactly the case this exists to cover and
+  exactly the one a version check would miss. Unguarded, too — a missed
+  notification costs an invisible tool while a redundant one costs a `tools/list`,
+  so a daemon crash-loop emits one per iteration, an extra frame on an
+  already-pathological state.
+
+  `proxyHarness.read` now skips notifications (`readAny` returns them), because
+  JSON-RPC notifications are unordered with respect to responses: eight tests
+  asserting on "the next frame" were asserting something the protocol does not
+  promise. Guarded end-to-end by `TestProxy_ReconnectNotifiesClientToRelistTools`,
+  which drives a real daemon crash and reads the real wire — an earlier version of
+  this change was guarded only at the flag level, and a review showed the whole
+  feature could be deleted with the suite still green.
+
 ### Changed
 
 - **`[collab]`'s channel switches are gated on `plumb trust` rather than being

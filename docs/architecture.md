@@ -28,6 +28,13 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
+> After a transparent reconnect the proxy also emits
+> `notifications/tools/list_changed` to the client. The daemon fires that itself
+> when a connection's tool *profile* changes, but it cannot for a restart — the
+> restart destroys the connection that would have sent it — and only the proxy
+> survives the gap. Without it a tool a rebuilt daemon gained stays invisible
+> until the client itself restarts.
+
 | `internal/tools` | MCP tool implementations (58 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
