@@ -24,8 +24,12 @@
   an evicted-then-recreated key restarts at 0, and `Notifier.Wait` compares with
   `>` — so a parked `check_messages` would sleep through a send that was already
   in the database, silently degrading turn-taking to the 30 s backstop. One clock
-  guarantees any value written after a caller's snapshot exceeds it, evicted or
-  not.
+  guarantees any value written after a caller's snapshot exceeds it. Eviction also
+  records a floor that an absent key reads back as, so a dropped entry looks
+  *newer* than any pre-eviction snapshot rather than resetting to zero: the
+  invariant has to hold for the value observed, not merely the value written, or a
+  key evicted between a caller's snapshot and its `Wait` would read as older and
+  suppress the wake-up anyway.
 
   **The exchange budget was checked and then acted on in two steps**, so two
   agents replying at the same instant both read one-below-the-limit and both
@@ -43,15 +47,23 @@
   than matching the driver's message text — column present means a peer added it,
   column absent means the failure is genuine.
 
-  **Message delivery moved to the END of the enrich hook.** It is the only enrich
-  step that mutates state (claiming marks a row delivered for good), while
-  `runHookSafely` discards the entire enriched string if a later step panics — so
-  a panic in a read-only hint used to destroy a message that could never be
-  offered again. The named-return + `defer` keeps delivery firing on *every* tool
-  call, past the early returns that restrict the path hints. End to end the
-  guarantee is still at-most-once (a panic between the claim and the client
-  receiving the response is not recoverable without client acks), but the window
-  is now a panic inside delivery itself rather than anywhere in the hook.
+  **Message delivery moved to the END of the enrich hook, without a `defer`.** It
+  is the only enrich step that mutates state (claiming marks a row delivered for
+  good), while `runHookSafely` discards the entire enriched string if a later step
+  panics — so a panic in a read-only hint destroyed a message that could never be
+  offered again. Delivery now runs after the hints as an ordinary statement, which
+  a panic skips.
+
+  The `defer` this replaced is worth recording, because it looked right and was
+  not: a deferred call runs *during* panic unwinding, so deferring the delivery
+  claimed the message on exactly the path the ordering exists to protect. The
+  first attempt at this fix did that and was no better than delivering first.
+  Extracting the path hints into their own function is what lets delivery sit
+  after their early returns while still firing on every tool call.
+  `TestEnrichPanic_InAPathHintDoesNotConsumeAMessage` pins the property and fails
+  if the `defer` returns. End to end the guarantee is still at-most-once — a panic
+  between the claim and the client receiving the response is unrecoverable without
+  client acknowledgements — but a panicking hint no longer costs a message.
 
   Also: `check_messages` no longer tells a session "a message arrived but was
   already delivered on another call" — wrong for a `cross_project = false`

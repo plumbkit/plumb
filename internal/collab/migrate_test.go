@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -138,6 +139,18 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 // failure — and collab.db is not a rebuildable index, so a failed Open loses a
 // project its only copy of the mailbox.
 func TestMigrate_ConcurrentOpensOnV1(t *testing.T) {
+	// Several fresh v1 databases, each raced independently. One round only
+	// sometimes interleaves the pragma read with the ALTER, so a single round
+	// makes this a ~90% pin; repeating on fresh files drives the chance that no
+	// round ever races down to nothing, which is what makes it a regression test
+	// rather than a coin flip.
+	const rounds = 6
+	for round := range rounds {
+		t.Run(strconv.Itoa(round), migrateRaceRound)
+	}
+}
+
+func migrateRaceRound(t *testing.T) {
 	ws := openV1WithNote(t, "written before threading existed", "alice")
 
 	const openers = 24

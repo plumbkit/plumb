@@ -37,7 +37,16 @@ type Notifier struct {
 	// whether or not the key was dropped and recreated in between. A per-key
 	// counter would restart at 1 after eviction and could read as "older than the
 	// baseline", suppressing a delivery the caller was waiting for.
-	seq     uint64
+	seq uint64
+	// evicted is the highest stamp any dropped entry held. An absent key reads as
+	// this rather than as zero, which is what keeps the invariant true of the
+	// value OBSERVED and not merely of the value written: eviction would otherwise
+	// make a key's generation appear to move BACKWARDS, and Wait compares with >,
+	// so a parked check_messages could read a recreated-or-absent key as older
+	// than its own snapshot and sleep through a send already committed to the
+	// database. Reading the floor instead fails in the safe direction — an evicted
+	// key looks NEWER than any pre-eviction snapshot, costing one spurious query.
+	evicted uint64
 	gen     map[string]uint64
 	waiters map[string][]chan struct{}
 }
@@ -116,9 +125,21 @@ func (n *Notifier) evictLocked() {
 	cutoff := stamps[len(stamps)-maxTrackedKeys/2]
 	for k, v := range n.gen {
 		if v < cutoff && len(n.waiters[k]) == 0 {
+			if v > n.evicted {
+				n.evicted = v
+			}
 			delete(n.gen, k)
 		}
 	}
+}
+
+// stampLocked returns the generation to report for a key: its own stamp, or the
+// eviction floor when the entry is gone. Must hold n.mu.
+func (n *Notifier) stampLocked(key string) uint64 {
+	if v, ok := n.gen[key]; ok {
+		return v
+	}
+	return n.evicted
 }
 
 // Gen returns the current generation for a recipient key. A caller compares it
@@ -131,7 +152,7 @@ func (n *Notifier) Gen(key string) uint64 {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.gen[key]
+	return n.stampLocked(key)
 }
 
 // Gens returns the current generation for several keys at once, in the order
@@ -144,7 +165,7 @@ func (n *Notifier) Gens(keys []string) []uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for i, k := range keys {
-		out[i] = n.gen[k]
+		out[i] = n.stampLocked(k)
 	}
 	return out
 }
@@ -168,7 +189,7 @@ func (n *Notifier) Wait(ctx context.Context, keys []string, since []uint64) bool
 		if i < len(since) {
 			was = since[i]
 		}
-		if n.gen[k] > was {
+		if n.stampLocked(k) > was {
 			n.mu.Unlock()
 			return true
 		}

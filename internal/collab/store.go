@@ -309,8 +309,14 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	}
 	if capped {
 		// The guard is a WHERE clause, so a refusal is an insert that matched
-		// nothing rather than an error the driver reports.
-		if n, err := res.RowsAffected(); err == nil && n == 0 {
+		// nothing rather than an error the driver reports. A RowsAffected error is
+		// surfaced rather than ignored: treating "cannot tell" as "accepted" would
+		// report a note as sent that may never have been written.
+		n, err := res.RowsAffected()
+		if err != nil {
+			return "", fmt.Errorf("collab: insert note: rows affected: %w", err)
+		}
+		if n == 0 {
 			return "", ErrConversationFull
 		}
 	}
@@ -457,13 +463,13 @@ func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, p
 // ConversationCount returns how many UNEXPIRED notes a conversation holds.
 // Delivered rows count — an exchange that has been read still happened — but
 // expired ones do not, matching both the transcript Conversation renders and the
-// budget PutNote enforces. Counting rows the reaper is about to delete would
-// make the answer depend on whether the reaper happened to have run.
+// budget PutNote enforces.
 //
-// It reads the wall clock rather than taking a `now` like the surrounding reads
-// because it is purely observational — "how big is this thread" — since the one
-// decision it used to drive, the exchange budget, moved into PutNote's guarded
-// insert, which uses the clock its caller passes.
+// It is purely observational: the exchange budget is enforced inside PutNote's
+// guarded insert, not here, because counting and then inserting is two steps that
+// two simultaneous senders can interleave. It reads the wall clock rather than
+// taking a `now` because nothing depends on its answer being consistent with a
+// particular instant.
 func (s *Store) ConversationCount(ctx context.Context, conversationID string) (int, error) {
 	if s == nil || s.db == nil || conversationID == "" {
 		return 0, nil
