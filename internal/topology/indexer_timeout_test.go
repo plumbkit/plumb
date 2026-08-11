@@ -279,3 +279,65 @@ func TestSafeExtract_DeadContextStartsNoExtract(t *testing.T) {
 	default:
 	}
 }
+
+// TestEffectiveExtractTimeout_CeilingCannotBeRemoved pins the bound that stops a
+// pathological file wedging the single indexer worker.
+//
+// "Disabled" used to mean literally unbounded: no context deadline, so no parser
+// timeout, and a watchdog waiting on a ctx.Done() that never arrives. The
+// configured value may lower the bound — that is tuning — but 0 and
+// absurdly-large values both resolve to the ceiling, because an index that
+// silently stops is a worse outcome than a file that is skipped and retried.
+func TestEffectiveExtractTimeout_CeilingCannotBeRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured time.Duration
+		want       time.Duration
+	}{
+		{"the default is honoured", 10 * time.Second, 10 * time.Second},
+		{"a tighter value is honoured", 500 * time.Millisecond, 500 * time.Millisecond},
+		{"zero means the ceiling, not unbounded", 0, maxExtractTimeout},
+		{"negative means the ceiling", -1 * time.Second, maxExtractTimeout},
+		{"a value above the ceiling is clamped", time.Hour, maxExtractTimeout},
+		{"exactly the ceiling is honoured", maxExtractTimeout, maxExtractTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveExtractTimeout(tc.configured); got != tc.want {
+				t.Errorf("effectiveExtractTimeout(%v) = %v, want %v", tc.configured, got, tc.want)
+			}
+		})
+	}
+}
+
+// A parse must be bounded even when the operator disabled the timeout: with
+// extractTimeout 0 the context handed to the extractor still carries a deadline.
+func TestExtractFile_DeadlineAppliedEvenWhenTimeoutDisabled(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	var sawDeadline bool
+	probe := &deadlineProbeExtractor{onExtract: func(ctx context.Context) {
+		_, sawDeadline = ctx.Deadline()
+	}}
+	idx := newIndexer(dir, db, []Extractor{probe}, 512*1024, 0) // 0 == "disabled"
+	if _, _, err := idx.extractFile(context.Background(), probe, "a.go", []byte("package main\n")); err != nil {
+		t.Fatalf("extractFile: %v", err)
+	}
+	if !sawDeadline {
+		t.Error("the extractor received a context with no deadline; a disabled timeout must still be bounded by the ceiling")
+	}
+}
+
+// deadlineProbeExtractor reports the context it was handed.
+type deadlineProbeExtractor struct{ onExtract func(context.Context) }
+
+func (e *deadlineProbeExtractor) Language() string     { return "go" }
+func (e *deadlineProbeExtractor) Extensions() []string { return []string{".go"} }
+func (e *deadlineProbeExtractor) Extract(ctx context.Context, _ string, _ []byte) ([]Node, []Edge, error) {
+	e.onExtract(ctx)
+	return nil, nil, nil
+}

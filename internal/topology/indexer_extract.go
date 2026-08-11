@@ -151,21 +151,49 @@ func uncoveredLanguage(relPath string) string {
 	return l.Name
 }
 
+// maxExtractTimeout is the ceiling on any one file's parse, applied even when
+// the operator has configured no timeout at all.
+//
+// extract_timeout_seconds = 0 is documented as "disables the timeout", and it
+// did exactly that: no deadline on the context, so extractWith set no parser
+// timeout either, and safeExtract's watchdog waits on a ctx.Done() that never
+// fires. A single pathological file could therefore wedge the one indexer worker
+// permanently, with every later edit queued behind it — no error, no log, and no
+// recovery short of restarting the daemon.
+//
+// An unresponsive index is a worse failure than a missed file. A file that times
+// out is recorded as an error and retried on the next resync: visible and
+// self-correcting. A wedged worker silently stops indexing the entire workspace
+// and looks, from the outside, exactly like a workspace with nothing in it. So
+// the setting may still LOWER this bound — that is ordinary tuning — but it can
+// no longer remove it.
+//
+// Two minutes sits far above any legitimate single-file parse (the slowest
+// measured real file, an 861 KB Markdown document, takes ~370 ms) and far below
+// the point at which someone would fail to notice the index had stopped.
+const maxExtractTimeout = 2 * time.Minute
+
+// effectiveExtractTimeout resolves the configured timeout against the ceiling,
+// treating "disabled" and "longer than the ceiling" identically.
+func effectiveExtractTimeout(configured time.Duration) time.Duration {
+	if configured <= 0 || configured > maxExtractTimeout {
+		return maxExtractTimeout
+	}
+	return configured
+}
+
 // extractFile runs the extractor for a file that isStale has confirmed needs
 // re-indexing. A nil extractor (no language match) yields zero nodes, matching
-// the records persisted by the pre-reorder path. The parse runs under
-// extractTimeout so a pathological file cannot stall the single indexer worker;
-// on expiry the file is recorded as an error by the caller and the worker moves
+// the records persisted by the pre-reorder path. The parse ALWAYS runs under a
+// deadline so a pathological file cannot stall the single indexer worker; on
+// expiry the file is recorded as an error by the caller and the worker moves
 // on.
 func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
 	if ex == nil {
 		return nil, nil, nil
 	}
-	if idx.extractTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, idx.extractTimeout)
-		defer cancel()
-	}
+	ctx, cancel := context.WithTimeout(ctx, effectiveExtractTimeout(idx.extractTimeout))
+	defer cancel()
 	return safeExtract(ctx, ex, relPath, src)
 }
 
