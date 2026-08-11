@@ -51,6 +51,10 @@ func allExtractorCases() []extractorCase {
 			"{\n  \"name\": \"pkg\",\n  \"scripts\": { \"build\": \"vite build\" }\n}\n", "",
 		},
 		{
+			"css", func() topology.Extractor { return NewCSS() }, "a.css",
+			"@import \"base.css\";\n\n.btn {\n  color: red;\n}\n", "base.css",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
