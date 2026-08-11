@@ -256,13 +256,14 @@ const supStopGrace = 1 * time.Second
 // Coarse relative to idle_timeout (minutes), so it adds negligible overhead.
 const janitorInterval = 60 * time.Second
 
-// cachePruneInterval is how often the janitor prunes stale jdtls-data dirs, and
-// jdtlsCacheMaxAge is how old (by directory mtime) and unused a dir must be to
-// be removed. Eclipse workspace storage runs ~50 MB/project, so reclaiming dirs
+// cachePruneInterval is how often the janitor prunes stale per-root server state
+// dirs (serverStateDirs), and serverStateMaxAge is how old (by directory mtime)
+// and unused a dir must be to be removed. Eclipse workspace storage runs ~50 MB
+// per project and an IntelliJ system path is larger still, so reclaiming dirs
 // for projects untouched for a month keeps the cache bounded.
 const (
 	cachePruneInterval = 24 * time.Hour
-	jdtlsCacheMaxAge   = 30 * 24 * time.Hour
+	serverStateMaxAge  = 30 * 24 * time.Hour
 )
 
 // acquireLang returns (or starts) the shared workspace state for root, never

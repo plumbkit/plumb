@@ -20,7 +20,7 @@ go install golang.org/x/tools/gopls@latest    # Go
 npm install -g pyright                          # Python
 # Java: jdtls + a Java 21+ runtime
 # also: rust-analyzer, sourcekit-lsp, zls, typescript-language-server,
-#       kotlin-language-server, vscode-html-language-server
+#       kotlin-lsp, vscode-html-language-server
 ```
 
 Every supported language is enabled by default and activates the moment its

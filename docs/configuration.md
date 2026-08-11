@@ -724,7 +724,7 @@ these servers are installed):
 | `typescript` | `typescript-language-server --stdio` | `tsconfig.json`, `jsconfig.json` (weak: `package.json`) |
 | `java` | `jdtls` (plumb appends `-data <dir>`) | `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath` |
 | `zig` | `zls` | `build.zig`, `build.zig.zon` |
-| `kotlin` | `kotlin-language-server` | `settings.gradle.kts`, `build.gradle.kts` |
+| `kotlin` | `kotlin-lsp --stdio` (plumb appends `--system-path <dir>`) | `settings.gradle.kts`, `build.gradle.kts` |
 | `html` | `vscode-html-language-server --stdio` | weak: `index.html` |
 
 Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript

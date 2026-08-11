@@ -85,7 +85,7 @@ func TestOpenTracker_EnsureSendsDidOpenOnceWithTheLanguageID(t *testing.T) {
 }
 
 // TestOpenTracker_EnsureUsesItsOwnLanguageID proves the languageId is
-// per-tracker state, not a package constant: the three adapters sharing this
+// per-tracker state, not a package constant: the adapters sharing this
 // type each send their own.
 func TestOpenTracker_EnsureUsesItsOwnLanguageID(t *testing.T) {
 	for _, languageID := range []string{"swift", "zig", "html"} {
@@ -105,7 +105,7 @@ func TestOpenTracker_EnsureUsesItsOwnLanguageID(t *testing.T) {
 }
 
 // TestOpenTracker_EnsureLabelsAnUnreadableDocument pins "<server> open <uri>",
-// the label the three lazy-open adapters surface when the file is not there.
+// the label the lazy-open adapters surface when the file is not there.
 // conformance.RunLazyOpenErrorContract pins the same string from the adapter
 // side; this pins it where it is produced.
 func TestOpenTracker_EnsureLabelsAnUnreadableDocument(t *testing.T) {

@@ -122,10 +122,10 @@ func TestPool_OverBudgetVictim(t *testing.T) {
 	}
 }
 
-// TestPool_PruneJdtlsCache verifies cache maintenance: an unused jdtls-data dir
-// older than the age threshold is removed, a recent one is kept, and a dir
+// TestPool_PruneServerStateCaches verifies cache maintenance: an unused state
+// dir older than the age threshold is removed, a recent one is kept, and a dir
 // backing a pooled Java workspace is kept even when it is old.
-func TestPool_PruneJdtlsCache(t *testing.T) {
+func TestPool_PruneServerStateCaches(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	base := filepath.Join(config.CacheDir(), "jdtls-data")
 	mustMkdir(t, base)
@@ -143,13 +143,13 @@ func TestPool_PruneJdtlsCache(t *testing.T) {
 	p := hibernatePool("java", time.Hour, 0)
 	const root = "/some/java/project"
 	installEntryLang(p, root, "java", &stubClient{})
-	inUse := jdtlsDataDir(root)
+	inUse := serverStateDir("java", root)
 	mustMkdir(t, inUse)
 	if err := os.Chtimes(inUse, old, old); err != nil { // old, but live ⇒ must be kept
 		t.Fatal(err)
 	}
 
-	p.pruneJdtlsCache()
+	p.pruneServerStateCaches()
 
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Error("stale unused jdtls-data dir was not pruned")
@@ -159,6 +159,69 @@ func TestPool_PruneJdtlsCache(t *testing.T) {
 	}
 	if _, err := os.Stat(inUse); err != nil {
 		t.Error("in-use jdtls-data dir was wrongly pruned")
+	}
+}
+
+// TestPool_PruneServerStateCaches_CoversEveryLanguage pins that pruning follows
+// serverStateDirs rather than naming one language: a server added to that table
+// without pruning would accumulate a directory per project ever opened, behind a
+// distribution measured in gigabytes.
+func TestPool_PruneServerStateCaches_CoversEveryLanguage(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	old := time.Now().Add(-40 * 24 * time.Hour)
+
+	stale := map[string]string{}
+	for language, spec := range serverStateDirs {
+		dir := filepath.Join(config.CacheDir(), spec.subdir, "stalehash-"+language)
+		mustMkdir(t, dir)
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+		stale[language] = dir
+	}
+	if len(stale) < 2 {
+		t.Fatalf("serverStateDirs covers %d languages; this test is only meaningful for several", len(stale))
+	}
+
+	hibernatePool("java", time.Hour, 0).pruneServerStateCaches()
+
+	for language, dir := range stale {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("%s: stale state dir %s was not pruned", language, dir)
+		}
+	}
+}
+
+// TestArgsFor_AppendsPerRootStateDir pins that each language in serverStateDirs
+// gets its own flag and its own per-root directory, and that a language outside
+// the table is passed through untouched. The kotlin row is the reason this is a
+// table at all: --system-path is derived from the workspace root, so it cannot
+// live in [lsp.kotlin] args.
+func TestArgsFor_AppendsPerRootStateDir(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	for language, spec := range serverStateDirs {
+		t.Run(language, func(t *testing.T) {
+			base := []string{"--stdio"}
+			got := argsFor(language, "/projects/one", config.LSPConfig{Args: base})
+			if len(got) != len(base)+2 || got[len(got)-2] != spec.flag {
+				t.Fatalf("argsFor(%s) = %v, want the configured args plus %q <dir>", language, got, spec.flag)
+			}
+			if got[0] != "--stdio" {
+				t.Errorf("configured args were not preserved: %v", got)
+			}
+			other := argsFor(language, "/projects/two", config.LSPConfig{Args: base})
+			if got[len(got)-1] == other[len(other)-1] {
+				t.Errorf("two roots share the state dir %q — they would fight over one index", got[len(got)-1])
+			}
+			if _, err := os.Stat(got[len(got)-1]); err != nil {
+				t.Errorf("state dir was not created: %v", err)
+			}
+		})
+	}
+
+	if got := argsFor("go", "/projects/one", config.LSPConfig{Args: []string{"-rpc.trace"}}); len(got) != 1 {
+		t.Errorf("argsFor(go) = %v, want the configured args verbatim", got)
 	}
 }
 

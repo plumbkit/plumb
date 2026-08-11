@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/adapters/html"
+	"github.com/plumbkit/plumb/internal/lsp/adapters/kotlin"
 	"github.com/plumbkit/plumb/internal/lsp/adapters/swift"
 	"github.com/plumbkit/plumb/internal/lsp/adapters/zig"
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
@@ -25,8 +26,8 @@ import (
 // the regressions that compile, read as tidying, and only show up as different
 // traffic to a real language server.
 
-// lazyOpenAdapter is one of the three adapters that open a document lazily
-// (sourcekit-lsp, zls, vscode-html-language-server).
+// lazyOpenAdapter is one of the adapters that open a document lazily
+// (sourcekit-lsp, zls, vscode-html-language-server, kotlin-lsp).
 type lazyOpenAdapter struct {
 	name string
 	// languageID is the LSP languageId its tracker must tag every didOpen with:
@@ -41,11 +42,11 @@ type lazyOpenAdapter struct {
 	// and turn each expected didOpen into a silent zero.
 	doc protocol.TextDocumentIdentifier
 	// extraExported are the exported methods this adapter declares beyond the 23
-	// of lsp.Client. Only zig has any — its optional document-pull surface.
+	// of lsp.Client — the optional document-pull surface, on zig and kotlin.
 	extraExported []string
 }
 
-// lazyOpenAdapters builds the three adapters under test, each with its fixture
+// lazyOpenAdapters builds the adapters under test, each with its fixture
 // document already on disk.
 func lazyOpenAdapters(t *testing.T) []lazyOpenAdapter {
 	t.Helper()
@@ -53,10 +54,12 @@ func lazyOpenAdapters(t *testing.T) []lazyOpenAdapter {
 	swiftDoc := filepath.Join(root, "Greeter.swift")
 	zigDoc := filepath.Join(root, "main.zig")
 	htmlDoc := filepath.Join(root, "index.html")
+	kotlinDoc := filepath.Join(root, "Greeter.kt")
 	WriteFixture(t, map[string]string{
-		swiftDoc: "struct Greeter {}\n",
-		zigDoc:   "pub fn main() void {}\n",
-		htmlDoc:  "<p>hello</p>\n",
+		swiftDoc:  "struct Greeter {}\n",
+		zigDoc:    "pub fn main() void {}\n",
+		htmlDoc:   "<p>hello</p>\n",
+		kotlinDoc: "class Greeter\n",
 	})
 
 	adapters := []lazyOpenAdapter{
@@ -79,11 +82,18 @@ func lazyOpenAdapters(t *testing.T) []lazyOpenAdapter {
 			newAdapter: func(c jsonrpc.Caller) lsp.Client { return html.New(c) },
 			doc:        protocol.TextDocumentIdentifier{URI: paths.PathToURI(htmlDoc)},
 		},
+		{
+			name:          "kotlin",
+			languageID:    "kotlin",
+			newAdapter:    func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) },
+			doc:           protocol.TextDocumentIdentifier{URI: paths.PathToURI(kotlinDoc)},
+			extraExported: []string{"SupportsPullDiagnostics", "Diagnostic"},
+		},
 	}
 
-	// A fourth lazy-open adapter must be added here, with its ensure-open matrix
+	// A further lazy-open adapter must be added here, with its ensure-open matrix
 	// and languageId stated explicitly, rather than joining the family silently.
-	if want := 3; len(adapters) != want {
+	if want := 4; len(adapters) != want {
 		t.Fatalf("table covers %d lazy-open adapters, want %d — add the new adapter and state its matrix", len(adapters), want)
 	}
 	return adapters
@@ -108,14 +118,20 @@ type lazyOpenMethod struct {
 func lazyOpenMethods(t *testing.T) []lazyOpenMethod {
 	t.Helper()
 	var (
-		all  = map[string]int{"swift": 1, "zig": 1, "html": 1}
-		none = map[string]int{"swift": 0, "zig": 0, "html": 0}
+		all  = map[string]int{"swift": 1, "zig": 1, "html": 1, "kotlin": 1}
+		none = map[string]int{"swift": 0, "zig": 0, "html": 0, "kotlin": 0}
+		// positions: kotlin-lsp answers a position query from its own project
+		// index for a document plumb never opened — measured against the real
+		// binary, where definition, references and hover all resolved unopened
+		// while documentSymbol alone failed. documentSymbol therefore stays in
+		// `all` and these three do not.
+		positions = map[string]int{"swift": 1, "zig": 1, "html": 1, "kotlin": 0}
 		// prepares: the HTML server resolves a prepare against the document it
-		// already holds; the other two need it open.
-		prepares = map[string]int{"swift": 1, "zig": 1, "html": 0}
-		// swiftOnly: sourcekit-lsp is the only one of the three that needs the
-		// document open for a rename.
-		swiftOnly = map[string]int{"swift": 1, "zig": 0, "html": 0}
+		// already holds, and kotlin-lsp from its index; swift and zig need it open.
+		prepares = map[string]int{"swift": 1, "zig": 1, "html": 0, "kotlin": 0}
+		// swiftOnly: sourcekit-lsp is the only one that needs the document open
+		// for a rename.
+		swiftOnly = map[string]int{"swift": 1, "zig": 0, "html": 0, "kotlin": 0}
 	)
 	methods := []lazyOpenMethod{
 		{protocol.MethodDocumentSymbols, []any{}, func(ctx context.Context, a lsp.Client, d protocol.TextDocumentIdentifier) error {
@@ -125,15 +141,15 @@ func lazyOpenMethods(t *testing.T) []lazyOpenMethod {
 		{protocol.MethodDefinition, []any{}, func(ctx context.Context, a lsp.Client, d protocol.TextDocumentIdentifier) error {
 			_, err := a.Definition(ctx, protocol.DefinitionParams{TextDocument: d})
 			return err
-		}, all},
+		}, positions},
 		{protocol.MethodReferences, []any{}, func(ctx context.Context, a lsp.Client, d protocol.TextDocumentIdentifier) error {
 			_, err := a.References(ctx, protocol.ReferenceParams{TextDocument: d})
 			return err
-		}, all},
+		}, positions},
 		{protocol.MethodHover, map[string]any{}, func(ctx context.Context, a lsp.Client, d protocol.TextDocumentIdentifier) error {
 			_, err := a.Hover(ctx, protocol.HoverParams{TextDocument: d})
 			return err
-		}, all},
+		}, positions},
 		{protocol.MethodPrepareRename, map[string]any{}, func(ctx context.Context, a lsp.Client, d protocol.TextDocumentIdentifier) error {
 			_, err := a.PrepareRename(ctx, protocol.PrepareRenameParams{TextDocument: d})
 			return err
@@ -191,7 +207,8 @@ func lazyOpenMethods(t *testing.T) []lazyOpenMethod {
 // service for <uri> found" otherwise); zls answers a rename from its own index,
 // so zig deliberately does not override it; the HTML server answers rename and
 // both hierarchy prepares from the document it already holds, so html overrides
-// neither. Making the three adapters "consistent" therefore looks like tidying
+// neither; kotlin-lsp needs it for documentSymbol alone and answers definition,
+// references and hover unopened. Making the adapters "consistent" therefore looks like tidying
 // and is not: it changes what plumb puts on the wire to three real servers —
 // an extra file read and an extra didOpen ahead of those requests — under cover
 // of a refactor. This table is the record of what each server actually needs.
@@ -247,20 +264,24 @@ func assertDidOpenCount(t *testing.T, conn *jsonrpc.MockCaller, method, adapter 
 // adapter capabilities structurally — a surface that grows by accident is how a
 // capability gets switched on with no visible diff at any call site. base's
 // TestExportedSurface_IsExactlyLSPClient pins the same rule for the base itself;
-// this pins it for the three adapters that hold a tracker.
+// this pins it for the adapters that hold a tracker.
 func TestLazyOpenAdapters_LanguageIDAndExportedSurface(t *testing.T) {
 	for _, a := range lazyOpenAdapters(t) {
 		t.Run(a.name, func(t *testing.T) {
 			conn := jsonrpc.NewMockCaller()
-			conn.HandleOK(protocol.MethodHover, map[string]any{})
+			conn.HandleOK(protocol.MethodDocumentSymbols, []any{})
 			adapter := a.newAdapter(conn)
-			if _, err := adapter.Hover(context.Background(), protocol.HoverParams{TextDocument: a.doc}); err != nil {
-				t.Fatalf("Hover = %v, want nil error", err)
+			// documentSymbol, not hover: it is the one method every lazy-open
+			// adapter ensures on (the `all` row of the matrix), so it reaches the
+			// tracker on all of them. kotlin-lsp answers hover unopened.
+			if _, err := adapter.DocumentSymbols(context.Background(),
+				protocol.DocumentSymbolParams{TextDocument: a.doc}); err != nil {
+				t.Fatalf("DocumentSymbols = %v, want nil error", err)
 			}
 
 			opened := didOpenItems(t, conn)
 			if len(opened) != 1 {
-				t.Fatalf("Hover sent %d didOpen notification(s), want exactly 1", len(opened))
+				t.Fatalf("DocumentSymbols sent %d didOpen notification(s), want exactly 1", len(opened))
 			}
 			if got := opened[0].LanguageID; got != a.languageID {
 				t.Errorf("didOpen languageId = %q, want %q — the tracker was handed another adapter's language", got, a.languageID)

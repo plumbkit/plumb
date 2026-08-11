@@ -156,8 +156,25 @@ var defaults = Config{
 			Enabled:         true,
 		},
 		"kotlin": {
-			Command:     "kotlin-language-server",
-			Args:        []string{},
+			// JetBrains' Kotlin/kotlin-lsp. The `kotlin-lsp` name is the
+			// PATH-portable one (Homebrew puts it there); it is a shim that
+			// exec's `bin/intellij-server` with the same arguments, and prints a
+			// deprecation warning to stderr on every start. The real launcher
+			// lives at a version-pinned Caskroom path, so it cannot be a default
+			// — point `[lsp.kotlin] command` at it directly if you prefer.
+			//
+			// --stdio is not optional: the server defaults to a TCP socket on
+			// 127.0.0.1:9999 and ignores unknown flags SILENTLY, so getting this
+			// wrong presents as a hang rather than an error. The per-root
+			// --system-path cache dir cannot live here; it is appended by
+			// argsFor, like jdtls's -data.
+			//
+			// Root markers stay Kotlin-DSL-only. Widening them to pom.xml /
+			// build.gradle would contest every Java project's root for the sake
+			// of the rarer Kotlin-Maven one, and a .kt file already reaches this
+			// adapter by extension whatever language owns the root.
+			Command:     "kotlin-lsp",
+			Args:        []string{"--stdio"},
 			RootMarkers: []string{"settings.gradle.kts", "build.gradle.kts"},
 			Enabled:     true,
 		},

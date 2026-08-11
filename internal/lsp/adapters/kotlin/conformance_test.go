@@ -15,9 +15,13 @@ import (
 )
 
 // This deterministic Gradle-shaped scenario validates Plumb's Kotlin adapter
-// contract without pretending to validate kotlin-language-server itself. The
-// existing real-binary integration test remains the promotion gate.
-func TestConformance_GradleProjectPush(t *testing.T) {
+// contract without pretending to validate kotlin-lsp itself. The real-binary
+// integration test remains the promotion gate.
+//
+// The scenario is PULL, not push: kotlin-lsp advertises diagnosticProvider and
+// never sends publishDiagnostics (measured — see doc.go), so a push scenario
+// here would assert a round-trip the real server does not perform.
+func TestConformance_GradleProjectPull(t *testing.T) {
 	conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) }, kotlin.DefaultInitParams, kotlinScenario(t))
 }
 
@@ -41,8 +45,16 @@ func kotlinScenario(t *testing.T) lsptest.Scenario {
 	return lsptest.Scenario{
 		Name: "kotlin Gradle project", RootURI: paths.PathToURI(root),
 		DocumentURI: paths.PathToURI(source),
-		LanguageID:  "kotlin", Source: text, Mode: lsptest.Push,
-		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "kotlin", Message: "Unresolved reference: missing"},
+		LanguageID:  "kotlin", Source: text, Mode: lsptest.Pull,
+		// The options-object form, matching what the real server advertises:
+		// interFileDependencies true, workspaceDiagnostics false.
+		DiagnosticOptions: &protocol.DiagnosticOptions{InterFileDependencies: true},
+		// Shaped like a real reply: source "Kotlin" (capitalised by the server,
+		// unlike every other adapter's lower-case id) with a FIR diagnostic code.
+		Diagnostic: protocol.Diagnostic{
+			Severity: protocol.SevError, Source: "Kotlin", Code: "UNRESOLVED_REFERENCE",
+			Message: "Unresolved reference 'missing'.",
+		},
 		RegisterWatch: true,
 	}
 }

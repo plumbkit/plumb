@@ -3,6 +3,8 @@ package kotlin_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/lsp/adapters/kotlin"
@@ -22,7 +24,7 @@ var initResult = protocol.InitializeResult{
 		ReferencesProvider:     &protocol.BoolOrOptions{Enabled: true},
 		DocumentSymbolProvider: &protocol.BoolOrOptions{Enabled: true},
 	},
-	ServerInfo: &protocol.ServerInfo{Name: "kotlin-language-server", Version: "1.3.0"},
+	ServerInfo: &protocol.ServerInfo{Name: "kotlin-lsp", Version: "262.9593.0"},
 }
 
 // newAdapter sets up a MockCaller with sensible defaults and returns the adapter.
@@ -33,7 +35,20 @@ func newAdapter(t *testing.T) (*kotlin.Adapter, *jsonrpc.MockCaller) {
 	mock.Handle(protocol.MethodInitialized, func(_ json.RawMessage) (any, error) { return nil, nil })
 	mock.Handle(protocol.MethodShutdown, func(_ json.RawMessage) (any, error) { return nil, nil })
 	mock.Handle(protocol.MethodExit, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidClose, func(_ json.RawMessage) (any, error) { return nil, nil })
 	return kotlin.New(mock), mock
+}
+
+// writeTempKotlin writes content to a temp .kt file and returns its file:// URI,
+// so base.OpenTracker.Ensure can read the document from disk before a query.
+func writeTempKotlin(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "Greeter.kt")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp kotlin: %v", err)
+	}
+	return "file://" + path
 }
 
 func TestAdapter_Initialize(t *testing.T) {
@@ -47,7 +62,7 @@ func TestAdapter_Initialize(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	if result.ServerInfo == nil || result.ServerInfo.Name != "kotlin-language-server" {
+	if result.ServerInfo == nil || result.ServerInfo.Name != "kotlin-lsp" {
 		t.Fatalf("unexpected server info: %v", result.ServerInfo)
 	}
 	caps := ad.Capabilities()
@@ -163,8 +178,9 @@ func TestAdapter_DocumentSymbols(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempKotlin(t, "class Greeter\n")
 	syms, err := ad.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/Greeter.kt"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
 		t.Fatalf("DocumentSymbols: %v", err)
@@ -372,5 +388,138 @@ func TestAdapter_Capabilities_NilBeforeInitialize(t *testing.T) {
 	ad := kotlin.New(mock)
 	if ad.Capabilities() != nil {
 		t.Fatal("expected nil capabilities before Initialize")
+	}
+}
+
+// TestAdapter_EnsureOpenBeforeDocumentSymbols verifies the adapter sends
+// textDocument/didOpen before its first documentSymbol and caches it (one open
+// across repeated queries) — kotlin-lsp fails documentSymbol outright on an
+// unopened file with "no stub serializer for kotlin.PACKAGE_DIRECTIVE".
+func TestAdapter_EnsureOpenBeforeDocumentSymbols(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDocumentSymbols, []protocol.DocumentSymbol{{Name: "Greeter"}})
+	if _, err := ad.Initialize(ctx, kotlin.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempKotlin(t, "class Greeter\n")
+	q := protocol.DocumentSymbolParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
+	for range 2 {
+		if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+			t.Fatalf("DocumentSymbols: %v", err)
+		}
+	}
+	var firstOpen, firstSym, opens int
+	for i, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			opens++
+			if firstOpen == 0 {
+				firstOpen = i + 1
+			}
+		case protocol.MethodDocumentSymbols:
+			if firstSym == 0 {
+				firstSym = i + 1
+			}
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("expected exactly 1 didOpen (cached), got %d", opens)
+	}
+	if firstOpen == 0 || firstSym == 0 || firstOpen > firstSym {
+		t.Fatalf("didOpen (idx %d) must precede documentSymbol (idx %d)", firstOpen, firstSym)
+	}
+}
+
+// TestAdapter_RefreshOpenReopensAfterWatchedChange verifies a watched-file change
+// to an open document closes it so the next query reopens it with fresh content.
+func TestAdapter_RefreshOpenReopensAfterWatchedChange(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDocumentSymbols, []protocol.DocumentSymbol{{Name: "Greeter"}})
+	mock.Handle(protocol.MethodDidChangeWatchedFiles, func(_ json.RawMessage) (any, error) { return nil, nil })
+	if _, err := ad.Initialize(ctx, kotlin.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempKotlin(t, "class Greeter\n")
+	q := protocol.DocumentSymbolParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
+	if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: uri, Type: protocol.FileChanged}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	var opens, closes int
+	for _, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			opens++
+		case protocol.MethodDidClose:
+			closes++
+		}
+	}
+	if opens != 2 || closes != 1 {
+		t.Fatalf("expected 2 didOpen + 1 didClose after watched change, got %d open / %d close", opens, closes)
+	}
+}
+
+// TestAdapter_PullDiagnostics covers the surface that makes Kotlin the first
+// adapter to REQUIRE the pull path: the capability gate and the request itself.
+func TestAdapter_PullDiagnostics(t *testing.T) {
+	mock := jsonrpc.NewMockCaller()
+	mock.HandleOK(protocol.MethodInitialize, protocol.InitializeResult{
+		Capabilities: protocol.ServerCapabilities{
+			DiagnosticProvider: &protocol.BoolOrOptions{Enabled: true},
+		},
+	})
+	ad := kotlin.New(mock)
+	ctx := context.Background()
+
+	if ad.SupportsPullDiagnostics() {
+		t.Fatal("SupportsPullDiagnostics must be false before Initialize")
+	}
+	if _, err := ad.Initialize(ctx, kotlin.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	if !ad.SupportsPullDiagnostics() {
+		t.Fatal("SupportsPullDiagnostics = false after a server advertising diagnosticProvider")
+	}
+
+	mock.HandleOK(protocol.MethodDiagnostic, protocol.DocumentDiagnosticReport{
+		Kind: protocol.DiagnosticReportFull,
+		Items: []protocol.Diagnostic{{
+			Severity: protocol.SevError, Source: "Kotlin", Code: "RETURN_TYPE_MISMATCH",
+			Message: "Return type mismatch: expected 'Int', actual 'String'.",
+		}},
+	})
+	report, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/Broken.kt"},
+	})
+	if err != nil {
+		t.Fatalf("Diagnostic: %v", err)
+	}
+	if report == nil || len(report.Items) != 1 {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+	if got := report.Items[0].Code; got != "RETURN_TYPE_MISMATCH" {
+		t.Fatalf("diagnostic code = %v, want RETURN_TYPE_MISMATCH", got)
+	}
+}
+
+// TestAdapter_SupportsPullDiagnostics_FalseWithoutTheCapability pins the gate:
+// the pull path is chosen from what the server advertised, never from the fact
+// that the adapter happens to implement it.
+func TestAdapter_SupportsPullDiagnostics_FalseWithoutTheCapability(t *testing.T) {
+	ad, _ := newAdapter(t) // initResult advertises no diagnosticProvider
+	if _, err := ad.Initialize(context.Background(), kotlin.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	if ad.SupportsPullDiagnostics() {
+		t.Fatal("SupportsPullDiagnostics = true for a server that never advertised diagnosticProvider")
 	}
 }

@@ -4,7 +4,6 @@ package kotlin_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,40 +15,99 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
-// requireKotlinLS skips if kotlin-language-server is not on PATH and returns its
-// path. It is not installed on the validation machine, so this test skips there;
-// it runs and validates the adapter wherever the binary is present.
-func requireKotlinLS(t *testing.T) string {
+// These tests are the promotion gate for the Kotlin adapter: they run against a
+// real kotlin-lsp binary on a real, resolvable Gradle project. Both preconditions
+// SKIP rather than fail, because neither is under this repository's control —
+// but when they run, they are what the "validated" tier means.
+//
+// Diagnostics are asserted through the PULL model. kotlin-lsp advertises
+// diagnosticProvider and never sends publishDiagnostics — measured at 0
+// notifications in 75 s on a file with two genuine errors, with the client
+// capability advertised — so a push assertion here could never pass, however
+// healthy the server. See the package doc.
+
+// requireKotlinLSP skips unless kotlin-lsp is on PATH, and returns its path.
+func requireKotlinLSP(t *testing.T) string {
 	t.Helper()
-	p, err := exec.LookPath("kotlin-language-server")
+	p, err := exec.LookPath("kotlin-lsp")
 	if err != nil {
-		t.Skip("kotlin-language-server not found on PATH — install with: brew install kotlin-language-server")
+		t.Skip("kotlin-lsp not found on PATH — install with: brew install --cask kotlin-lsp " +
+			"(on macOS also run: xattr -dr com.apple.quarantine /opt/homebrew/Caskroom/kotlin-lsp, " +
+			"or Gatekeeper deletes the unsigned binary on first run)")
 	}
 	return p
 }
 
-// repoRoot walks parent dirs until go.mod is found.
-func repoRoot(t *testing.T) string {
+// gradleFixture builds a genuinely resolvable Gradle project in a temp dir and
+// returns its root.
+//
+// "Resolvable" is the whole point, and it is why this is generated rather than
+// checked in. kotlin-lsp derives its classpath from the build, so a directory of
+// .kt files with a build script that never resolves yields no symbols and no
+// diagnostics — the server looks broken when the fixture is. The previous
+// checked-in fixture was exactly that (a six-line build.gradle.kts, no settings
+// file, no wrapper, no dependencies) and is the likeliest reason the old Kotlin
+// adapter failed validation for months.
+//
+// Making it resolvable offline would mean vendoring the Kotlin compiler plugin
+// and stdlib — hundreds of megabytes — so the build is left to resolve from the
+// network, and the test SKIPS when Gradle is absent or the build does not
+// succeed. A skip is the honest outcome: without a resolved classpath the run
+// would prove nothing about the adapter either way.
+func gradleFixture(t *testing.T) string {
 	t.Helper()
-	dir, _ := os.Getwd()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find repo root")
-		}
-		dir = parent
+	if _, err := exec.LookPath("gradle"); err != nil {
+		t.Skip("gradle not found on PATH — needed to build a resolvable Kotlin project")
 	}
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("settings.gradle.kts", `rootProject.name = "plumbfixture"`+"\n")
+	// No jvmToolchain(N): pinning one fails unless that exact JDK is installed,
+	// so the fixture uses whichever JDK Gradle already runs on.
+	write("build.gradle.kts", `plugins { kotlin("jvm") version "2.1.0" }
+repositories { mavenCentral() }
+dependencies { implementation(kotlin("stdlib")) }
+`)
+	write("src/main/kotlin/Greeter.kt", `package fixture
+
+class Greeter(private val name: String) {
+    fun greet(): String = "Hello, $name!"
+}
+`)
+
+	// Resolve BEFORE the broken file exists: a failing build leaves the classpath
+	// unresolved, which is the very condition that makes a negative result
+	// meaningless.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	build := exec.CommandContext(ctx, "gradle", "build", "--console=plain", "-q")
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("gradle build did not succeed, so the classpath is unresolved and no "+
+			"diagnostics result would mean anything (needs network on first run): %v\n%s", err, out)
+	}
+	return root
 }
 
-// startKotlinLS spawns kotlin-language-server and returns a ready adapter.
-func startKotlinLS(t *testing.T, ws string) *kotlin.Adapter {
+// startKotlinLSP spawns kotlin-lsp and returns a ready adapter.
+func startKotlinLSP(t *testing.T, ws string) *kotlin.Adapter {
 	t.Helper()
-	bin := requireKotlinLS(t)
+	bin := requireKotlinLSP(t)
 
-	cmd := exec.Command(bin)
+	// --stdio is mandatory: the server defaults to a TCP socket and ignores
+	// unknown flags silently, so a wrong invocation hangs instead of failing.
+	// --system-path gives this run its own cache, mirroring what argsFor passes
+	// per workspace root, so a test never shares an index with the user's daemon.
+	cmd := exec.Command(bin, "--stdio", "--system-path", filepath.Join(t.TempDir(), "cache"))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal("stdin pipe:", err)
@@ -60,7 +118,7 @@ func startKotlinLS(t *testing.T, ws string) *kotlin.Adapter {
 	}
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		t.Fatal("start kotlin-language-server:", err)
+		t.Fatal("start kotlin-lsp:", err)
 	}
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
@@ -71,8 +129,6 @@ func startKotlinLS(t *testing.T, ws string) *kotlin.Adapter {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	ad := kotlin.New(conn)
-	// kotlin-language-server resolves a Gradle/Maven classpath on first attach,
-	// which can be slow; the generous deadline tolerates a cold start.
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	if _, err := ad.Initialize(ctx, kotlin.DefaultInitParams(protocol.FileURI(ws))); err != nil {
@@ -84,53 +140,21 @@ func startKotlinLS(t *testing.T, ws string) *kotlin.Adapter {
 	return ad
 }
 
-func copyKotlinFixture(t *testing.T) string {
-	t.Helper()
-	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "kotlin-fixture")
-	ws := t.TempDir()
-	srcDir := filepath.Join(ws, "src", "main", "kotlin")
-	if err := os.MkdirAll(srcDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	copies := map[string]string{
-		"build.gradle.kts": filepath.Join(ws, "build.gradle.kts"),
-		filepath.Join("src", "main", "kotlin", "Greeter.kt"): filepath.Join(srcDir, "Greeter.kt"),
-	}
-	for rel, dst := range copies {
-		src, err := os.ReadFile(filepath.Join(fixtureSrc, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return ws
-}
-
 func TestIntegration_DocumentSymbols(t *testing.T) {
-	fixture := copyKotlinFixture(t)
-	ad := startKotlinLS(t, fixture)
-	srcPath := filepath.Join(fixture, "src", "main", "kotlin", "Greeter.kt")
+	ws := gradleFixture(t)
+	ad := startKotlinLSP(t, ws)
+	srcPath := filepath.Join(ws, "src", "main", "kotlin", "Greeter.kt")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	src, err := os.ReadFile(srcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// No DidOpen here on purpose: the adapter's OpenTracker must supply it.
+	// Unopened, this server fails documentSymbol outright rather than returning
+	// nothing, so a missing ensure-open shows up here as an error.
 	uri := protocol.FileURI(srcPath)
-	if err := ad.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
-		TextDocument: protocol.TextDocumentItem{
-			URI: uri, LanguageID: "kotlin", Version: 1, Text: string(src),
-		},
-	}); err != nil {
-		t.Fatal("didOpen:", err)
-	}
-
 	var syms []protocol.DocumentSymbol
-	deadline := time.After(90 * time.Second)
+	var err error
+	deadline := time.After(150 * time.Second)
 	for {
 		syms, err = ad.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -168,54 +192,41 @@ func symbolNames(syms []protocol.DocumentSymbol) []string {
 	return out
 }
 
-// TestIntegration_DidChangeWatchedFiles proves capability negotiation + the
-// DidChangeWatchedFiles wire format are accepted by a real
-// kotlin-language-server, and that the external-write → notify → open →
-// diagnostics pipeline works end to end.
-func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
-	ws := copyKotlinFixture(t)
-	srcDir := filepath.Join(ws, "src", "main", "kotlin")
-	ad := startKotlinLS(t, ws)
-	brokenPath := filepath.Join(srcDir, "Broken.kt")
-	brokenURI := protocol.FileURI(brokenPath)
+// TestIntegration_PullDiagnostics is the promotion gate for diagnostics: it
+// proves the external-write → DidChangeWatchedFiles → DidOpen → diagnostics
+// pipeline reaches a real server and comes back with real errors, by whichever
+// model the server advertises. For kotlin-lsp that model is pull, so the
+// round-trip completes with textDocument/diagnostic rather than by waiting for a
+// publishDiagnostics notification that this server never sends.
+func TestIntegration_PullDiagnostics(t *testing.T) {
+	ws := gradleFixture(t)
+	ad := startKotlinLSP(t, ws)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	diagCh := make(chan int, 16)
-	ad.Subscribe(func(method string, raw json.RawMessage) {
-		if method != "textDocument/publishDiagnostics" {
-			return
-		}
-		var p protocol.PublishDiagnosticsParams
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return
-		}
-		if p.URI != brokenURI {
-			return
-		}
-		errors := 0
-		for _, d := range p.Diagnostics {
-			if d.Severity == protocol.SevError {
-				errors++
-			}
-		}
-		select {
-		case diagCh <- errors:
-		default:
-		}
-	})
+	if !ad.SupportsPullDiagnostics() {
+		t.Fatal("kotlin-lsp did not advertise diagnosticProvider — plumb would have no " +
+			"diagnostics path at all for Kotlin, since this server does not push")
+	}
 
-	// Write a syntactically broken Kotlin file (unterminated fun) into the module.
-	broken := []byte("package fixture\n\nfun broken(\n")
+	// Two unambiguous errors: an unresolved call and a return-type mismatch.
+	brokenPath := filepath.Join(ws, "src", "main", "kotlin", "Broken.kt")
+	brokenURI := protocol.FileURI(brokenPath)
+	broken := []byte(`package fixture
+
+class Broken {
+    fun bad(): String = undefinedFunction(42)
+
+    fun alsoBad(): Int = "not an int"
+}
+`)
 	if err := os.WriteFile(brokenPath, broken, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
-		Changes: []protocol.FileEvent{
-			{URI: brokenURI, Type: protocol.FileCreated},
-		},
+		Changes: []protocol.FileEvent{{URI: brokenURI, Type: protocol.FileCreated}},
 	}); err != nil {
 		t.Fatal("DidChangeWatchedFiles:", err)
 	}
@@ -227,17 +238,34 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 		t.Fatal("DidOpen:", err)
 	}
 
-	deadline := time.After(90 * time.Second)
+	// The workspace has to finish resolving before an empty report means
+	// anything: an unindexed project answers instantly with no items, which is
+	// indistinguishable from "no errors". Poll until errors appear or time out.
+	deadline := time.After(150 * time.Second)
 	for {
+		report, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: brokenURI},
+		})
+		if err == nil && report != nil && countErrors(report.Items) > 0 {
+			return // success: real diagnostics for a file plumb told it about
+		}
 		select {
-		case errs := <-diagCh:
-			if errs > 0 {
-				return // success: the server acted on our notification
-			}
 		case <-deadline:
-			t.Fatal("kotlin-language-server did not publish error diagnostics for Broken.kt within deadline — " +
-				"the didChangeWatchedFiles + didOpen pipeline is not reaching the server, " +
-				"or capability negotiation is broken")
+			t.Fatal("kotlin-lsp returned no error diagnostics for Broken.kt within deadline — " +
+				"the didChangeWatchedFiles + didOpen → textDocument/diagnostic pipeline is not " +
+				"reaching the server, capability negotiation is broken, or the Gradle classpath " +
+				"never resolved")
+		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+func countErrors(diags []protocol.Diagnostic) int {
+	n := 0
+	for _, d := range diags {
+		if d.Severity == protocol.SevError {
+			n++
+		}
+	}
+	return n
 }

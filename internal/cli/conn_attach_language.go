@@ -28,7 +28,7 @@ func adapterForLanguage(language string) string {
 	case "typescript", "javascript":
 		return "typescript-language-server"
 	case "kotlin":
-		return "kotlin-language-server"
+		return "kotlin-lsp"
 	case "html":
 		return "vscode-html-language-server"
 	default:
