@@ -2,6 +2,35 @@
 
 ## 0.16.4 (unreleased)
 
+### Security
+
+- **`[collab]`'s channel switches are now global-only: a cloned repository could
+  open a cross-agent channel for itself.** A project's `.plumb/config.toml` is an
+  untrusted surface — a cloned repo ships it — and `forceGlobalOnlyToBase` already
+  forces `agent_config_writes`, `[web]`, `[ui]`, `[semantics]` and the workspace
+  roots to the user's global value for exactly that reason. `[collab]` was not in
+  that list, so a repository could set `intents`, `mailbox`, `cross_project` or
+  `knowledge_handoff` in its own config.
+
+  Each of those four opens a cross-agent **channel**, and a channel a repository
+  can open is a channel it can use — a payload that has already steered one agent
+  through some other file in the repo can leave instructions for the next session.
+  `cross_project` is the plainest case, because it contradicted its own contract:
+  the field is deliberately the *recipient's* decision so that a sender cannot
+  push into a project that has not opted in, and that guarantee is worthless while
+  the recipient's own repository can flip it. The guarantee was documented in this
+  changelog one release earlier and was not true as written.
+
+  The four switches now always take the global value, in both directions. The rest
+  of `[collab]` — `peer_awareness` and every budget and TTL — stays
+  project-overridable, because tuning cannot open anything: "smaller hints here" is
+  a legitimate per-project preference, "open a cross-agent channel here" is not.
+  This narrows the "project-overridable in both directions" contract the section's
+  doc comments and `docs/configuration.md` previously stated, and both are
+  corrected.
+
+  Found by a peer agent reviewing the mailbox work through plumb's own mailbox.
+
 ### Fixed
 
 - **`[collab]` mailbox review follow-ups: a scoped wake-up key, a bounded

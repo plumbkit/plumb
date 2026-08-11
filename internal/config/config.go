@@ -425,8 +425,12 @@ type MemoryConfig struct {
 // strictly advisory and derived from writes the daemon itself performed or
 // watched (never from agent claims): topology-annotated recent writes, a bounded
 // peer-activity hint on path-bearing tool responses, and a session_start peer
-// digest. Project-overridable in both directions (the generated_summaries
-// precedent); no environment override.
+// digest. No environment override.
+//
+// Split by trust: the four CHANNEL switches (Intents, Mailbox, CrossProject,
+// KnowledgeHandoff) are GLOBAL-ONLY — a channel a project can open for itself is
+// not one the user consented to (see forceGlobalOnlyToBase). PeerAwareness and
+// the budgets stay project-overridable in both directions; tuning opens nothing.
 //
 // Concurrency: read-only after Load returns.
 type CollabConfig struct {
@@ -456,25 +460,25 @@ type CollabConfig struct {
 	Mailbox bool `toml:"mailbox"`
 	// CrossProject lets this session RECEIVE messages from sessions pinned to a
 	// different workspace. Opt-in, default false, and deliberately the recipient's
-	// decision rather than the sender's: a session reads the daemon-level
-	// cross-project store only when its own project sets this, so another project
-	// can never inject text into this one's context uninvited. Sending across is
-	// always permitted; an un-opted-in recipient simply never reads it and the
-	// message expires unread.
+	// decision rather than the sender's, so another project can never inject text
+	// into this one's context uninvited. Sending across is always permitted; an
+	// un-opted-in recipient simply never reads it and the message expires unread.
+	//
+	// GLOBAL-ONLY (forceGlobalOnlyToBase): "the recipient's decision" would mean
+	// nothing if the recipient's own repository — an untrusted surface a clone
+	// ships — could flip it.
 	CrossProject bool `toml:"cross_project"`
 	// MaxExchanges caps how many messages one conversation may hold before further
-	// replies are refused. Two agents that can each answer automatically will
-	// otherwise talk to each other indefinitely with no human in the loop; this is
-	// the backstop. Default 10. Note that plumb cannot observe a human turn, so
-	// this counts total messages in a thread, not consecutive agent replies.
+	// replies are refused — the backstop against two agents answering each other
+	// indefinitely with no human in the loop. plumb cannot observe a human turn, so
+	// it counts total messages in a thread, not consecutive replies. Default 10.
 	MaxExchanges int `toml:"max_exchanges"`
-	// ChatBudgetBytes caps a single delivered message body, enforced on a UTF-8
-	// boundary. Separate from HintBudgetBytes because a message is content the
-	// agent must act on, not a pointer to look up. Default 2048.
+	// ChatBudgetBytes caps a single delivered message body (UTF-8 boundary).
+	// Separate from HintBudgetBytes: a message is content to act on, not a pointer
+	// to look up. Default 2048.
 	ChatBudgetBytes int `toml:"chat_budget_bytes"`
-	// MaxWaitSeconds caps how long check_messages will block waiting for a
-	// message. Kept below the client's own MCP call timeout so a wait expires
-	// cleanly rather than surfacing as a tool timeout. Default 55.
+	// MaxWaitSeconds caps how long check_messages blocks waiting for a message,
+	// below the client's own MCP call timeout so a wait expires cleanly. Default 55.
 	MaxWaitSeconds int `toml:"max_wait_seconds"`
 	// IntentTTLMinutes is the expiry (in minutes) applied to a new intent or note.
 	// Rows past expiry are pruned on the daemon session-reaper tick and filtered
