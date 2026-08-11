@@ -366,18 +366,37 @@ Tracked, not hidden. Each is real today.
    `//nolint` comment asserting the opposite. The parsers named in gap 3 have
    had no equivalent pass.
 
-7. **The project-config trust boundary has not been exhaustively audited.** The
-   two holes that prompted the boundary were found by inspection, not by
-   enumerating every `Config` field. `[edits] strict` (which disables
-   read-before-edit), `[edits] rate_limit_per_minute`, `[commands]`,
-   `[[command]]`, `[collab]`, `[tools]`, `[session]` and `[memory]` are all
-   still merged from an untrusted project file. Some are preferences; at least
-   the first deserves the same treatment and has not had it.
+7. **The project-config trust boundary has now been audited field by field**,
+   and the enumeration is enforced rather than written down: every field of
+   `Config` carries a classification in
+   `internal/config/project_classification.go`, and a reflection test fails the
+   build when a new field has none. See
+   [`project-config-trust.md`](project-config-trust.md).
+
+   Closed since the previous revision: `[tools]` (a project could hide
+   `search_in_files`/`find_files` from the very session auditing it, bypassing
+   the rule that forces the full profile for a schema-discovery-only client),
+   `[workspace] allow_dependency_reads` (re-opened the toolchain caches against
+   an explicit global opt-out), `[collab]`'s four channel switches, and the
+   `[edits]` safety knobs plus `[memory] generated_summaries`, which are now
+   one-way — a project may harden, never soften.
+
+   **What remains open here** is the residual below, plus the standing fact that
+   `Inert` in that table describes today's wiring rather than a guarantee: a
+   refactor that makes an inert field reachable would need its classification
+   revisited, which is what the test exists to force.
 
 8. **Trust binding is uneven.** `[tasks.*]` and the capability config are bound
    to a content hash, so an edit after the grant stops being honoured. The
-   `[[command]]` allow-list and `[commands] allow_shell` are gated on the coarse
-   per-root boolean instead, so the same TOCTOU close does not extend to them.
+   `[[command]]` allow-list, `[commands] allow_shell`/`deny_network` and
+   `[xcode] auto_build_server` are gated on the coarse per-root boolean instead,
+   so the same TOCTOU close does not extend to them.
+
+   `[xcode]` is the sharpest of these: `auto_build_server` spawns `xcodebuild`
+   and `xcode-build-server`, and the coarse flag is set as a side effect of
+   approving something unrelated — so a user who once ran `plumb trust` to
+   approve a project's task command has, without being told, pre-authorised that
+   workspace's Xcode tooling for good.
 
 9. **Writing a file inside the workspace is an execution primitive.** A3's
    residual understates this: `.git/hooks/*` runs on the next commit,

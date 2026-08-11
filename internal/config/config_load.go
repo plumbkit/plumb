@@ -300,6 +300,7 @@ func LoadProject(base Config, workspace string) (Config, error) {
 	}
 	merged.LSP = dropUnknownLSPLanguages(base.LSP, merged.LSP)
 	forceGlobalOnlyToBase(base, &merged)
+	applyOneWayBools(base, &merged)
 	// Env is the highest-priority layer, so it is applied AFTER the untrusted
 	// project fields are forced back — otherwise forcing [git] to base would
 	// discard a PLUMB_GIT_* override the user set for this process.
@@ -370,4 +371,15 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// (the agent_config tool already treats them as un-writable); force them to base.
 	merged.Workspace.ExtraRoots = base.Workspace.ExtraRoots
 	merged.Workspace.ReadRoots = base.Workspace.ReadRoots
+	// allow_dependency_reads widens the READ boundary to the session language's
+	// toolchain roots (GOMODCACHE, the cargo registry, site-packages). It sits one
+	// field below the two above and was missed when they were forced: a user who
+	// set it false globally — a deliberate "do not read my module cache" — had that
+	// opt-out silently reversed by any cloned repository, because buildPathPolicy
+	// reads it from the per-connection merged config.
+	merged.Workspace.AllowDependencyReads = base.Workspace.AllowDependencyReads
+	// [tools] client_profiles narrows the advertised tool set per client, and a
+	// project has no legitimate claim on which tools a given CLIENT is offered —
+	// that is a property of the client, not of the repository it has open.
+	merged.Tools.ClientProfiles = base.Tools.ClientProfiles
 }
