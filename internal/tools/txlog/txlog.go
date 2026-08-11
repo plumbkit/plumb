@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -176,6 +177,11 @@ func Scan(workspace string, liveCutoff time.Time) {
 		return
 	}
 	logDir := filepath.Join(workspace, txLogSubDir)
+	if !logDirInsideWorkspace(workspace, logDir) {
+		slog.Error("txlog: refusing to scan — the tx-log directory resolves outside the workspace",
+			"dir", logDir, "workspace", workspace)
+		return
+	}
 	entries, err := os.ReadDir(logDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -199,6 +205,40 @@ func Scan(workspace string, liveCutoff time.Time) {
 			slog.Error("txlog: failed to remove orphaned log after rollback", "dir", dir, "err", err)
 		}
 	}
+}
+
+// logDirInsideWorkspace reports whether <workspace>/.plumb/tx-log really lives
+// inside the workspace once symlinks are resolved.
+//
+// Without this, Scan is a directory-DELETION primitive, and one that needs no
+// manifest at all. `.plumb/tx-log` — or `.plumb` itself — is an ordinary path
+// inside the workspace, and git stores a symlink natively, so a repository can
+// commit `.plumb/tx-log -> /Users/you/Documents`. os.ReadDir follows it, every
+// subdirectory of the target then looks like an orphaned transaction, and the
+// RemoveAll at the end of the loop deletes each one. Attaching to a cloned
+// repository was enough; nothing had to be replayed.
+//
+// Checked on the RESOLVED paths rather than by Lstat-ing the final component,
+// because an intermediate component is equally attacker-supplied: with
+// `.plumb -> /` the final `tx-log` component is not itself a link and an Lstat
+// check would pass it.
+//
+// A missing directory resolves to nothing and is reported as outside, which is
+// harmless: the ReadDir below would have returned IsNotExist anyway.
+func logDirInsideWorkspace(workspace, logDir string) bool {
+	root, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(logDir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // manifestStartedAt reads the StartedAt timestamp from a tx-log directory's
