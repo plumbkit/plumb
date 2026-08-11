@@ -46,7 +46,33 @@ func seedMessage(t *testing.T, s *connSession, ws, from, to, body string) {
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	s.collabPool.notifier().Bump(to)
+	s.collabPool.notifier().Bump(collab.NotifyKey(ws, to))
+}
+
+// TestMessageHint_NextNoteElsewhereDoesNotForceAQuery is the cost guarantee
+// across projects. One daemon hosts every workspace's connections, so while the
+// "next arrival" address shared a single notifier key, a note left for the next
+// arrival in ANY repository invalidated every connection's cached baseline and
+// made each of them claim against its own store to learn the note was not theirs.
+func TestMessageHint_NextNoteElsewhereDoesNotForceAQuery(t *testing.T) {
+	ws := t.TempDir()
+	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
+	notifier := s.collabPool.notifier()
+	keys := s.inbox().Keys()
+	now := time.Now()
+	s.chatWatch.due(keys, notifier.Gens(keys), now) // establish the baseline
+
+	// A peer in an unrelated project leaves a note for whoever attaches THERE next.
+	notifier.Bump(collab.NotifyKey(t.TempDir(), collab.AddresseeNext))
+
+	if s.chatWatch.due(keys, notifier.Gens(keys), now.Add(time.Second)) {
+		t.Error("a 'next' note in another workspace must not make this connection query its store")
+	}
+	// The same note left HERE must still wake us, or the scoping has gone too far.
+	notifier.Bump(collab.NotifyKey(ws, collab.AddresseeNext))
+	if !s.chatWatch.due(keys, notifier.Gens(keys), now.Add(2*time.Second)) {
+		t.Error("a 'next' note in this workspace must still trigger a query")
+	}
 }
 
 // TestMessageHint_DeliversOnAnyToolNotJustPathBearing is the behavioural point

@@ -117,9 +117,18 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(rows, policy), nil
 	}
-	// Woken but nothing to claim: another delivery path (a tool-result block, or
-	// session_start) got there first. That is the watermark doing its job.
-	return "No messages (a message arrived but was already delivered on another call).", nil
+	// Woken but nothing to claim. The legitimate cause is a race inside THIS
+	// session: another delivery path (a tool-result block, or session_start) got
+	// there first, which is the watermark doing its job. But a wake-up is not
+	// evidence that a message for us exists — a session name is a daemon-wide
+	// notifier key, so a send to a same-named peer in another project wakes us
+	// too, and one this project has not opted in to read is invisible here.
+	// Announcing an arrival would then be both false and a disclosure of
+	// something the agent may not read, so the reply states only what is
+	// certainly true and offers the race as a possibility.
+	return t.empty(policy) +
+		"  If a peer did write to you during the wait, another call in this session claimed it " +
+		"first — each message is delivered exactly once.\n", nil
 }
 
 func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {

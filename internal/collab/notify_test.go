@@ -2,6 +2,7 @@ package collab
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -107,6 +108,82 @@ func TestNotifier_ConcurrentWaitersAllWake(t *testing.T) {
 		if !ok {
 			t.Errorf("waiter %d did not wake", i)
 		}
+	}
+}
+
+// TestNotifyKey_NextIsScopedToWorkspace: "whoever attaches next" is a per-project
+// address, so the key it is watched under must be too. One shared key made a note
+// left in any workspace wake every connection in the daemon, each then paying a
+// SQLite claim to find out the note was never for it.
+func TestNotifyKey_NextIsScopedToWorkspace(t *testing.T) {
+	n := NewNotifier()
+	mine := NotifyKey("/proj/mine", AddresseeNext)
+	theirs := NotifyKey("/proj/theirs", AddresseeNext)
+	keys := []string{mine, theirs}
+
+	before := n.Gens(keys)
+	n.Bump(theirs)
+	after := n.Gens(keys)
+
+	if after[1] == before[1] {
+		t.Error("the addressed workspace's 'next' generation must advance")
+	}
+	if after[0] != before[0] {
+		t.Error("a 'next' note in another workspace must not wake sessions pinned elsewhere")
+	}
+	if got := NotifyKey("/proj/mine", "bob"); got != "bob" {
+		t.Errorf("a session name is a daemon-wide address and must be its own key; got %q", got)
+	}
+	if got := NotifyKey("", AddresseeNext); got != AddresseeNext {
+		t.Errorf("with no workspace there is nothing to scope to; got %q", got)
+	}
+}
+
+// TestNotifier_GenMapIsBounded: an entry is created by the mere act of sending to
+// a name, and the daemon runs for weeks, so the map must not grow for as long as
+// the process lives.
+func TestNotifier_GenMapIsBounded(t *testing.T) {
+	n := NewNotifier()
+	for i := range maxTrackedKeys * 2 {
+		n.Bump("peer-" + strconv.Itoa(i))
+	}
+	n.mu.Lock()
+	size := len(n.gen)
+	n.mu.Unlock()
+	if size > maxTrackedKeys {
+		t.Errorf("tracked %d keys after %d distinct recipients; the map must stay bounded",
+			size, maxTrackedKeys*2)
+	}
+}
+
+// TestNotifier_EvictionCannotSuppressDelivery is the invariant that makes
+// eviction safe at all. A session snapshots a generation, its entry is evicted
+// while it works, and the peer then sends: the new stamp must still read as newer
+// than the snapshot. A per-key counter would restart at 1 and read as OLDER,
+// leaving check_messages parked for its whole wait while the answer sat in the
+// database.
+func TestNotifier_EvictionCannotSuppressDelivery(t *testing.T) {
+	n := NewNotifier()
+	keys := []string{"alice"}
+	n.Bump("alice")
+	since := n.Gens(keys)
+
+	// Push alice out of the map: she is the oldest entry and has no waiter.
+	for i := range maxTrackedKeys * 2 {
+		n.Bump("filler-" + strconv.Itoa(i))
+	}
+	n.mu.Lock()
+	_, stillTracked := n.gen["alice"]
+	n.mu.Unlock()
+	if stillTracked {
+		t.Fatal("precondition: the eviction under test did not drop the snapshotted key")
+	}
+
+	n.Bump("alice")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if !n.Wait(ctx, keys, since) {
+		t.Error("a send after an eviction must still read as newer than the pre-eviction snapshot")
 	}
 }
 

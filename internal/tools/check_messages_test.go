@@ -186,6 +186,50 @@ func TestCheckMessages_WaitWakesOnDelivery(t *testing.T) {
 	}
 }
 
+// TestInboxKeys_NextIsScopedToWorkspace: the "next arrival" wake-up key must
+// differ per workspace. Watching the bare "next" literal made every connection in
+// the daemon — including sessions pinned to unrelated projects — fail its
+// "nothing new" check and run a needless claim whenever anyone, anywhere, left a
+// note for the next arrival.
+func TestInboxKeys_NextIsScopedToWorkspace(t *testing.T) {
+	mine := Inbox{Self: "alice", Root: "/proj/mine"}.Keys()
+	theirs := Inbox{Self: "alice", Root: "/proj/theirs"}.Keys()
+
+	if mine[0] != "alice" {
+		t.Errorf("a session is still addressed by name across projects; got %q", mine[0])
+	}
+	if mine[1] == collab.AddresseeNext {
+		t.Error("the bare 'next' key is daemon-global — every project would share one wake-up")
+	}
+	if mine[1] == theirs[1] {
+		t.Errorf("two workspaces must not share the 'next' wake-up key; both are %q", mine[1])
+	}
+}
+
+// TestCheckMessages_WokenWithNothingReadableDisclosesNothing: a wake-up is not
+// evidence that a message for THIS session exists — a name is a daemon-wide
+// notifier key, so a send to a same-named peer in a project this one cannot read
+// wakes it too. Claiming "a message arrived" would then be both false and a
+// disclosure of something the agent is not allowed to see.
+func TestCheckMessages_WokenWithNothingReadableDisclosesNothing(t *testing.T) {
+	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 5}, "alice")
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		deps.Notifier.Bump("alice") // woken, but nothing this session may read
+	}()
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "a message arrived") {
+		t.Errorf("must not assert that a message exists for a session that could not read one; got %q", out)
+	}
+	if !strings.Contains(out, "No messages") {
+		t.Errorf("expected an empty result; got %q", out)
+	}
+}
+
 // TestLeaveNote_OfflinePeerIsPlacedByConversation pins the routing fix. Routing
 // used to ask only "is a session with that name live right now"; a peer that
 // exited between turns of a cross-project conversation made the next reply fall
