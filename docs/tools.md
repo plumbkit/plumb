@@ -201,11 +201,14 @@ workspace next). The send half of the mailbox.
 
 Every message belongs to a **conversation**. Omit `conversation_id` to start one
 (the reply reports the new id); quote the id you were given to answer in thread.
-A thread is capped at `[collab] max_exchanges` messages — once spent, further
-replies are refused with an instruction to summarise for the human rather than
-open a fresh thread. plumb cannot observe a human turn, so this counts *total*
-messages in a thread, not consecutive agent replies; it bounds runaway cost, it
-does not distinguish a productive long thread from a loop.
+A **thread** is capped at `[collab] max_exchanges` messages — once spent,
+further replies are refused with an instruction to summarise for the human.
+
+Be clear about what that cap is worth. plumb cannot observe a human turn, so it
+counts *total* messages in a thread, not consecutive agent replies; and starting
+a new `conversation_id` starts a fresh budget, which nothing prevents. It is a
+speed bump that makes continuing a deliberate act, not an enforced ceiling on
+how long two agents may talk.
 
 Each message is delivered **exactly once**, to whichever path reads it first:
 the block appended to an ordinary tool result, `check_messages`, or the

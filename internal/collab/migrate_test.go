@@ -70,7 +70,7 @@ func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	got, err := s.ClaimNotes(ctx, "alice", now, 0)
+	got, err := s.ClaimNotes(ctx, "alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
 	if got[0].ConversationID != "" {
 		t.Errorf("a legacy row has no conversation; got %q", got[0].ConversationID)
 	}
-	again, err := s.ClaimNotes(ctx, "alice", now, 0)
+	again, err := s.ClaimNotes(ctx, "alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,7 @@ var chatColumns = []struct{ name, ddl string }{
 	{"delivered_at", `ALTER TABLE collab_rows ADD COLUMN delivered_at INTEGER NOT NULL DEFAULT 0`},
 	{"delivered_to", `ALTER TABLE collab_rows ADD COLUMN delivered_to TEXT NOT NULL DEFAULT ''`},
 	{"origin_workspace", `ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`},
+	{"target_workspace", `ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`},
 }
 
 // chatIndexes accelerate the two hot chat queries: "what is unread for me" and
@@ -236,12 +237,26 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		conv = newConversationID()
 	}
 	expires := now.Add(clampTTL(in.TTL))
+	if s.IsGlobal() {
+		// The daemon-level store is shared by every project on the machine, so a
+		// row there must name the workspace allowed to claim it. Refusing here
+		// rather than defaulting keeps the addressing invariant a property of the
+		// store instead of a convention its callers are trusted to follow.
+		if in.TargetWorkspace == "" {
+			return "", errors.New("collab: a cross-project note requires a target workspace")
+		}
+		if addr == AddresseeNext {
+			return "", errors.New(`collab: "next" has no meaning across projects`)
+		}
+	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs, addressee,
-		                          created_at, expires_at, conversation_id, origin_workspace)
-		 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
+		                          created_at, expires_at, conversation_id, origin_workspace,
+		                          target_workspace)
+		 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
-		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace); err != nil {
+		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
+		in.TargetWorkspace); err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
 	}
 	return conv, nil
@@ -283,7 +298,7 @@ func (s *Store) LiveIntents(ctx context.Context, now time.Time) ([]Row, error) {
 // (workspace_sessions), which reports what is waiting rather than handing it
 // over. It never returns "next" notes — those are claimed only by ClaimNotes,
 // so listing them would advertise a message the caller may lose the race for.
-func (s *Store) PendingNotes(ctx context.Context, sessionName string, now time.Time) ([]Row, error) {
+func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string, now time.Time) ([]Row, error) {
 	if s == nil || s.db == nil || sessionName == "" {
 		return nil, nil
 	}
@@ -291,8 +306,9 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName string, now time.T
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
 		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
+		   AND (target_workspace = '' OR target_workspace = ?)
 		 ORDER BY created_at DESC`,
-		string(KindNote), sessionName, now.UnixNano())
+		string(KindNote), sessionName, now.UnixNano(), workspace)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}
@@ -302,69 +318,85 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName string, now time.T
 
 // ClaimNotes hands the caller every unexpired note addressed to sessionName or
 // to "next" that nobody has claimed yet, OLDEST FIRST so a conversation reads in
-// order, and marks each one delivered to sessionName in the same transaction.
+// order, and marks each one delivered to sessionName in the same statement.
 //
 // Claiming replaced the original delete-on-delivery: a delivered row stays until
 // its TTL, which is what gives a conversation a readable transcript and a
 // countable number of exchanges. The read watermark — not the row's existence —
-// is what stops a message being handed over twice, so a note is delivered
-// exactly once even when two sessions race for the same "next" note: the UPDATE
-// re-checks delivered_at = 0 inside the transaction, and the loser sees zero
-// rows affected.
+// is what stops a message being handed over twice. Because the claim is a single
+// atomic UPDATE matching only `delivered_at = 0`, two sessions racing for the
+// same "next" note cannot both win: the second one's UPDATE matches no rows.
+//
+// workspace is the caller's pinned workspace root, and is what makes a session
+// NAME safe to address by. A row carrying a target_workspace is claimable only
+// by a session pinned there; same-project rows carry none and are scoped by the
+// database they live in. Without this a session could claim another project's
+// cross-project mail just by adopting the right name — names come from a small
+// pool with no uniqueness check, and rename_session lets a session pick one.
 //
 // limit caps how many are claimed (non-positive means no cap). The cap is
-// applied by the QUERY, not by the caller trimming the result: a claimed row is
-// marked delivered and will never be offered again, so anything the caller then
-// dropped would be silently lost. Over-limit messages stay unclaimed and arrive
-// on the next read.
-func (s *Store) ClaimNotes(ctx context.Context, sessionName string, now time.Time, limit int) ([]Row, error) {
+// applied by the STATEMENT, not by the caller trimming the result: a claimed row
+// is marked delivered and will never be offered again, so anything the caller
+// then dropped would be silently lost. Over-limit messages stay unclaimed.
+//
+// It is deliberately ONE `UPDATE … RETURNING`, not a transaction that reads and
+// then writes. In WAL mode a DEFERRED transaction takes a read snapshot on its
+// first SELECT and cannot upgrade it to a write if another connection has
+// committed meanwhile: SQLite fails it with SQLITE_BUSY_SNAPSHOT, which
+// busy_timeout deliberately does NOT retry. Delivery is exactly the path where
+// several sessions wake at once (one send bumps every watcher), so that shape
+// failed on essentially every concurrent burst. A single UPDATE takes the write
+// lock up front, so contention is handled by busy_timeout as normal.
+func (s *Store) ClaimNotes(ctx context.Context, sessionName, workspace string, now time.Time, limit int) ([]Row, error) {
 	if s == nil || s.db == nil || sessionName == "" {
 		return nil, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("collab: begin: %w", err)
+	// A cross-project row is claimable only by a session pinned to its target;
+	// a same-project row carries no target and is scoped by this database.
+	scope := `AND (target_workspace = '' OR target_workspace = ?)`
+	select_ := `SELECT id FROM collab_rows
+			 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
+			   AND (addressee = ? OR addressee = ?) ` + scope + `
+			 ORDER BY created_at ASC`
+	args := []any{
+		now.UnixNano(), sessionName, // SET delivered_at, delivered_to
+		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace,
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	query := `SELECT ` + rowColumns + `
-		 FROM collab_rows
-		 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-		   AND (addressee = ? OR addressee = ?)
-		 ORDER BY created_at ASC`
-	args := []any{string(KindNote), now.UnixNano(), sessionName, AddresseeNext}
 	if limit > 0 {
-		query += ` LIMIT ?`
+		select_ += ` LIMIT ?`
 		args = append(args, limit)
 	}
-	q, err := tx.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
+		 WHERE id IN (`+select_+`)
+		 RETURNING `+rowColumns, args...)
 	if err != nil {
-		return nil, fmt.Errorf("collab: query deliver: %w", err)
+		return nil, fmt.Errorf("collab: claim notes: %w", err)
 	}
-	found, err := scanRows(q)
-	q.Close()
-	if err != nil {
-		return nil, err
+	defer rows.Close()
+	return scanRows(rows)
+}
+
+// ConversationPeerWorkspace returns the workspace a named peer was writing from
+// within a conversation, so a reply can still be routed correctly after that
+// peer's session has gone away. Without it, routing would fall back to "is a
+// session with that name live right now", which silently misdelivers a
+// cross-project reply into the sender's own mailbox the moment the peer
+// disconnects between turns.
+func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, peerName string) (string, bool) {
+	if s == nil || s.db == nil || conversationID == "" || peerName == "" {
+		return "", false
 	}
-	var out []Row
-	for _, r := range found {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
-			 WHERE id = ? AND delivered_at = 0`,
-			now.UnixNano(), sessionName, r.ID)
-		if err != nil {
-			return nil, fmt.Errorf("collab: claim note: %w", err)
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			continue // a concurrent reader claimed it first
-		}
-		r.DeliveredAt, r.DeliveredTo = now, sessionName
-		out = append(out, r)
+	var ws string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT origin_workspace FROM collab_rows
+		 WHERE kind = ? AND conversation_id = ? AND author_session = ? AND origin_workspace != ''
+		 ORDER BY created_at DESC LIMIT 1`,
+		string(KindNote), conversationID, peerName).Scan(&ws)
+	if err != nil || ws == "" {
+		return "", false
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("collab: commit deliver: %w", err)
-	}
-	return out, nil
+	return ws, true
 }
 
 // ConversationCount returns how many notes a conversation holds, delivered or
@@ -439,7 +471,8 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // expects. Kept in one place so adding a column cannot desynchronise a query
 // from the scanner.
 const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
-	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace`
+	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
+	 target_workspace`
 
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	var out []Row
@@ -452,7 +485,8 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		)
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
 			&globs, &r.Addressee, &createdNs, &expNs,
-			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace); err != nil {
+			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace,
+			&r.TargetWorkspace); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)
 		}
 		r.Kind = Kind(kind)

@@ -76,6 +76,26 @@
   into the field registry, `plumb config show` and the TUI Settings "Collab"
   group like the rest of `[collab]`. One new MCP tool (57 → 58).
 
+  **Hardened after independent review**, which found three defects worth naming.
+  (1) The claim was a DEFERRED transaction that SELECTed then UPDATEd; in WAL
+  mode SQLite cannot upgrade a stale read snapshot, so it failed with
+  `SQLITE_BUSY_SNAPSHOT` — which `busy_timeout` deliberately does *not* retry —
+  and delivery is exactly where sessions wake together, so it failed on
+  essentially every concurrent burst while the error was silently swallowed. It
+  is now a single `UPDATE … RETURNING`, which takes the write lock up front, and
+  the swallowed error is logged. (2) Cross-project routing asked only "is a
+  session with that name live right now", so a peer that exited between turns
+  made the next reply fall back to the *sender's own* mailbox — invisible to the
+  recipient, reported as sent, budget silently reset. A reply is now placed by
+  the conversation's own record of where the peer was writing from, and a name
+  nothing can place is filed locally *and said so explicitly*. (3) The
+  daemon-level store addressed rows by session name alone, and names come from a
+  small pool with no uniqueness check while `rename_session` lets a session adopt
+  any of them — so a session in one project could claim another's cross-project
+  mail by being called the right thing. Rows now carry a `target_workspace` that
+  the claim must match, and the store refuses a cross-project row that names no
+  target or is addressed to `next`.
+
   Guarded by store tests (v1→v2 migration preserving a legacy note and delivering
   it exactly once, migration idempotency, claim-once across readers, oldest-first
   ordering, conversation threading and counting), notifier tests (per-recipient

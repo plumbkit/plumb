@@ -41,8 +41,11 @@ func (*CheckMessages) Description() string {
 		"this tool, the block appended to an ordinary tool result, or session_start. " +
 		"Re-calling will not redeliver it, so act on a message when you read it.\n\n" +
 		"Every message carries a conversation_id; quote it in leave_note to reply in " +
-		"thread. A thread is capped at [collab] max_exchanges so two agents cannot " +
-		"talk indefinitely without a human.\n\n" +
+		"thread. A THREAD is capped at [collab] max_exchanges. Note what that does and " +
+		"does not do: it bounds one conversation, and opening a new one starts a fresh " +
+		"budget. It is a speed bump that forces a deliberate act, not an enforced limit " +
+		"on how long two agents may talk \u2014 when a thread is spent, surface it to your " +
+		"human rather than routing around the cap.\n\n" +
 		"Requires [collab] mailbox = true. Messages from a session in another " +
 		"workspace are shown only when this project sets [collab] cross_project = " +
 		"true, and are labelled with the sending project.\n\n" +
@@ -86,6 +89,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 	inbox := Inbox{
 		Self:      self,
+		Root:      t.deps.Workspace(),
 		Policy:    policy,
 		Workspace: t.deps.StoreIfExists,
 		Global:    t.deps.GlobalStoreIfExists,

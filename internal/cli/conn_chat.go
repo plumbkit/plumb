@@ -74,6 +74,16 @@ func (w *chatWatch) due(keys []string, gens []uint64, now time.Time) bool {
 	return true
 }
 
+// invalidate drops the cached baseline so the next call consults the store
+// again. Used when a claim filled the per-call cap: more messages are still
+// waiting, and leaving them behind the "nothing new" cache would park them
+// until the periodic backstop rather than delivering them on the next call.
+func (w *chatWatch) invalidate() {
+	w.mu.Lock()
+	w.lastFull = time.Time{}
+	w.mu.Unlock()
+}
+
 // reset clears the cached generations, so the next call re-checks the store.
 // Called on a workspace re-pin: the new project has a different collab.db, and
 // the previous project's counters say nothing about it.
@@ -109,6 +119,10 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	rows := inbox.Claim(ctx)
 	if len(rows) == 0 {
 		return ""
+	}
+	if tools.AtCap(rows) {
+		w := s.chatWatch
+		w.invalidate() // the remainder must arrive on the next call, not in 30s
 	}
 	return strings.TrimRight(tools.RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now()), "\n")
 }

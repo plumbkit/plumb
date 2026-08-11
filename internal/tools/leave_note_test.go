@@ -35,7 +35,7 @@ func TestLeaveNote_DefaultsToNext(t *testing.T) {
 	if !strings.Contains(out, "next session") {
 		t.Errorf("expected next-arrival wording; got %q", out)
 	}
-	got, err := store.ClaimNotes(context.Background(), "whoever", time.Now(), 0)
+	got, err := store.ClaimNotes(context.Background(), "whoever", "", time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestLeaveNote_AddressedAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err := store.PendingNotes(context.Background(), "alice", time.Now())
+	pending, err := store.PendingNotes(context.Background(), "alice", "", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

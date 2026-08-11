@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -39,6 +40,11 @@ const maxDeliveredPerCall = 3
 type Inbox struct {
 	// Self is this session's display name — the address messages are sent to.
 	Self string
+	// Root is this session's pinned workspace. A cross-project message names the
+	// workspace allowed to claim it, and this is what that is checked against —
+	// a session name alone is not a safe address, since names collide and
+	// rename_session lets a session choose one.
+	Root string
 	// Policy is the resolved [collab] snapshot for THIS session (the recipient).
 	Policy CollabPolicy
 	// Workspace returns the session's own collab.db if it already exists, never
@@ -101,14 +107,23 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 		if remaining <= 0 {
 			break
 		}
-		rows, err := s.ClaimNotes(ctx, i.Self, now, remaining)
+		rows, err := s.ClaimNotes(ctx, i.Self, i.Root, now, remaining)
 		if err != nil {
+			// Delivery is advisory and must never fail the tool call that carried
+			// it, but a swallowed error here means an agent silently did not get a
+			// message — the one failure mode nobody would ever notice. Log it.
+			slog.Debug("collab: claim messages failed", "session", i.Self, "err", err)
 			continue
 		}
 		out = append(out, rows...)
 	}
 	return out
 }
+
+// AtCap reports whether a claim filled the per-call ceiling, meaning more
+// messages are probably still waiting. Callers that cache a "nothing new"
+// baseline use it to avoid parking the remainder behind that cache.
+func AtCap(rows []collab.Row) bool { return len(rows) >= maxDeliveredPerCall }
 
 // RenderMessages formats claimed messages as a block an agent can act on. It
 // names the sender, ages the message, labels a cross-project one with its origin

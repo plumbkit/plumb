@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -118,7 +119,7 @@ func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
 	mustNote("alice", "hello alice")
 
 	// alice reads first: she gets her own note plus the next-arrival one.
-	got, err := s.ClaimNotes(ctx, "alice", now, 0)
+	got, err := s.ClaimNotes(ctx, "alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
 	}
 
 	// bob reads later: the next note was already claimed, and alice's is not his.
-	got2, err := s.ClaimNotes(ctx, "bob", now, 0)
+	got2, err := s.ClaimNotes(ctx, "bob", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
 
 	// alice reading again gets nothing: the watermark, not deletion, is what stops
 	// a re-delivery.
-	again, err := s.ClaimNotes(ctx, "alice", now, 0)
+	again, err := s.ClaimNotes(ctx, "alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
 	}
 
 	// Nothing is pending for her either, but the rows survive for the transcript.
-	pending, err := s.PendingNotes(ctx, "alice", now)
+	pending, err := s.PendingNotes(ctx, "alice", "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +171,7 @@ func TestClaimNotes_OrdersOldestFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.ClaimNotes(ctx, "alice", now.Add(time.Minute), 0)
+	got, err := s.ClaimNotes(ctx, "alice", "", now.Add(time.Minute), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +226,7 @@ func TestClaimNotes_LimitLeavesRemainderUnclaimed(t *testing.T) {
 	}
 	read := now.Add(time.Minute)
 
-	first, err := s.ClaimNotes(ctx, "alice", read, 2)
+	first, err := s.ClaimNotes(ctx, "alice", "", read, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,12 +235,158 @@ func TestClaimNotes_LimitLeavesRemainderUnclaimed(t *testing.T) {
 	}
 
 	// The other three must still be waiting, not silently consumed.
-	rest, err := s.ClaimNotes(ctx, "alice", read, 0)
+	rest, err := s.ClaimNotes(ctx, "alice", "", read, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rest) != 3 {
 		t.Fatalf("remainder = %v, want the 3 messages the cap did not reach", bodies(rest))
+	}
+}
+
+// TestClaimNotes_ConcurrentClaimersDoNotError is the regression pin for the bug
+// an independent review found. The claim used to be a DEFERRED transaction that
+// SELECTed and then UPDATEd; in WAL mode SQLite cannot upgrade a stale read
+// snapshot to a write, so it failed with SQLITE_BUSY_SNAPSHOT — which
+// busy_timeout does NOT retry. Delivery is precisely where sessions wake
+// together (one send bumps every watcher), and the error was silently swallowed,
+// so an agent simply never got its message. Before the fix this failed on
+// essentially every burst.
+func TestClaimNotes_ConcurrentClaimersDoNotError(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Now()
+
+	var mu sync.Mutex
+	var failures []error
+	claimed := 0
+
+	const rounds, perRound, claimers = 25, 5, 3
+	for range rounds {
+		for range perRound {
+			if _, err := s.PutNote(ctx, NoteInput{AuthorID: "a", Body: "m", Addressee: "alice", TTL: time.Hour}, base); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range claimers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				rows, err := s.ClaimNotes(ctx, "alice", "", base.Add(time.Minute), 2)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					failures = append(failures, err)
+					return
+				}
+				claimed += len(rows)
+			}()
+		}
+		close(start)
+		wg.Wait()
+	}
+	if len(failures) > 0 {
+		t.Fatalf("%d concurrent claims errored (first: %v) — delivery must tolerate simultaneous readers",
+			len(failures), failures[0])
+	}
+	// Drain whatever the capped claims left, then assert nothing was lost or
+	// double-delivered across the whole run.
+	rest, err := s.ClaimNotes(ctx, "alice", "", base.Add(time.Minute), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total := claimed + len(rest); total != rounds*perRound {
+		t.Errorf("delivered %d messages, want exactly %d — none lost, none twice", total, rounds*perRound)
+	}
+}
+
+// TestClaimNotes_TargetWorkspaceScopesCrossProjectMail pins the fix for the
+// interception hole: the daemon-level store is shared by every project, and a
+// session NAME is not a safe address (names come from a small pool with no
+// uniqueness check, and rename_session lets a session pick any). A row must be
+// claimable only by a session pinned to the workspace it names.
+func TestClaimNotes_TargetWorkspaceScopesCrossProjectMail(t *testing.T) {
+	g, err := OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	ctx := context.Background()
+	now := time.Now()
+
+	if _, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "carol", AuthorID: "c", Body: "secret", Addressee: "alice",
+		TTL: time.Hour, OriginWorkspace: "/proj/c", TargetWorkspace: "/proj/a",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// An impostor in another project, using the same session name.
+	got, err := g.ClaimNotes(ctx, "alice", "/proj/evil", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a session in another workspace claimed %d cross-project message(s) by name alone", len(got))
+	}
+
+	// The real recipient still gets it.
+	got, err = g.ClaimNotes(ctx, "alice", "/proj/a", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the intended recipient claimed %d, want 1", len(got))
+	}
+}
+
+// TestPutNote_GlobalStoreRefusesUnaddressableRows: the daemon-level store keeps
+// its own invariants rather than trusting callers — a row with no target could
+// be claimed by anyone, and "next" has no meaning across projects.
+func TestPutNote_GlobalStoreRefusesUnaddressableRows(t *testing.T) {
+	g, err := OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	ctx, now := context.Background(), time.Now()
+
+	if _, err := g.PutNote(ctx, NoteInput{AuthorID: "c", Body: "x", Addressee: "alice", TTL: time.Hour}, now); err == nil {
+		t.Error("a cross-project note with no target workspace must be refused")
+	}
+	if _, err := g.PutNote(ctx, NoteInput{
+		AuthorID: "c", Body: "x", Addressee: AddresseeNext, TTL: time.Hour, TargetWorkspace: "/proj/a",
+	}, now); err == nil {
+		t.Error(`"next" must be refused by the cross-project store`)
+	}
+}
+
+// TestConversationPeerWorkspace_PlacesAnOfflinePeer backs the routing fix: a
+// reply must still reach a peer that disconnected between turns, instead of
+// silently landing in the sender's own mailbox.
+func TestConversationPeerWorkspace_PlacesAnOfflinePeer(t *testing.T) {
+	g, err := OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	ctx, now := context.Background(), time.Now()
+
+	conv, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws, ok := g.ConversationPeerWorkspace(ctx, conv, "bob"); !ok || ws != "/proj/b" {
+		t.Errorf("conversation should place bob at /proj/b; got %q ok=%v", ws, ok)
+	}
+	if _, ok := g.ConversationPeerWorkspace(ctx, conv, "nobody"); ok {
+		t.Error("an unknown peer must not be placed")
 	}
 }
 
@@ -258,7 +405,7 @@ func TestPendingNotes_AddresseeMatchOnly(t *testing.T) {
 	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n1", Addressee: "alice", TTL: time.Hour}, now)
 	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n2", Addressee: AddresseeNext, TTL: time.Hour}, now)
 
-	pending, err := s.PendingNotes(ctx, "alice", now)
+	pending, err := s.PendingNotes(ctx, "alice", "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +424,7 @@ func TestPutNote_DefaultsToNext(t *testing.T) {
 	if _, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "hi", Addressee: "", TTL: time.Hour}, now); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.ClaimNotes(ctx, "whoever", now, 0)
+	got, err := s.ClaimNotes(ctx, "whoever", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +472,7 @@ func TestClearSessionIntents_LeavesNotes(t *testing.T) {
 	if len(intents) != 0 {
 		t.Fatalf("session's intent should be cleared on close; got %d", len(intents))
 	}
-	notes, _ := s.PendingNotes(ctx, "peer", now)
+	notes, _ := s.PendingNotes(ctx, "peer", "", now)
 	if len(notes) != 1 {
 		t.Fatalf("notes must survive their author; got %d", len(notes))
 	}

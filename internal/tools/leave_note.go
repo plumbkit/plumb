@@ -113,7 +113,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	target, err := t.resolveTarget(args.To, ws)
+	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
 	if err != nil {
 		return "", err
 	}
@@ -130,24 +130,59 @@ type noteTarget struct {
 	crossProject  bool
 	peerWorkspace string
 	origin        string // the sender's workspace; stamped only when crossProject
+	// peerUnknown records that no live session answers to this name and no
+	// conversation history placed it, so the message was filed in this
+	// workspace's own mailbox on the assumption the peer will attach here.
+	peerUnknown bool
 }
 
-// resolveTarget decides which store a message belongs in. "next" is always
-// same-project: "whoever attaches next" has no meaning across projects, so it is
-// never routed to the daemon-level store.
-func (t *LeaveNote) resolveTarget(to, ws string) (noteTarget, error) {
-	if to != collab.AddresseeNext && t.deps.PeerWorkspace != nil {
-		if peerWS, found := t.deps.PeerWorkspace(to); found && !sameWorkspace(peerWS, ws) {
-			if t.deps.GlobalStore == nil {
-				return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
+// resolveTarget decides which store a message belongs in.
+//
+// Routing cannot rest on "is a session with that name live right now": a peer
+// that exits between turns of a cross-project conversation would make the next
+// reply fall back to the sender's OWN mailbox, where the peer will never see it
+// while the sender is told it was sent. So an existing conversation is consulted
+// first — it records the workspace the peer was writing from — and only a
+// genuinely unplaceable name falls back to the local store, which the caller is
+// then told about explicitly.
+//
+// "next" is always same-project: "whoever attaches next" has no meaning across
+// projects, so it is never routed to the daemon-level store.
+func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (noteTarget, error) {
+	if to == collab.AddresseeNext {
+		return t.localTarget()
+	}
+	peerWS, found := "", false
+	if t.deps.PeerWorkspace != nil {
+		peerWS, found = t.deps.PeerWorkspace(to)
+	}
+	if !found && convID != "" {
+		// The peer is not connected, but this thread may remember where it lives.
+		if g := t.globalIfExists(); g != nil {
+			if w, ok := g.ConversationPeerWorkspace(ctx, convID, to); ok {
+				peerWS, found = w, true
 			}
-			store := t.deps.GlobalStore()
-			if store == nil {
-				return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
-			}
-			return noteTarget{store: store, crossProject: true, peerWorkspace: peerWS, origin: ws}, nil
 		}
 	}
+	if found && peerWS != "" && !sameWorkspace(peerWS, ws) {
+		if t.deps.GlobalStore == nil {
+			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
+		}
+		store := t.deps.GlobalStore()
+		if store == nil {
+			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
+		}
+		return noteTarget{store: store, crossProject: true, peerWorkspace: peerWS, origin: ws}, nil
+	}
+	local, err := t.localTarget()
+	if err != nil {
+		return local, err
+	}
+	local.peerUnknown = !found
+	return local, nil
+}
+
+func (t *LeaveNote) localTarget() (noteTarget, error) {
 	store := t.deps.Store()
 	if store == nil {
 		return noteTarget{}, errors.New("leave_note: cross-agent store unavailable for this workspace")
@@ -155,11 +190,21 @@ func (t *LeaveNote) resolveTarget(to, ws string) (noteTarget, error) {
 	return noteTarget{store: store}, nil
 }
 
+// globalIfExists returns the daemon-level store only when it already exists, so
+// a routing lookup never brings it into being.
+func (t *LeaveNote) globalIfExists() *collab.Store {
+	if t.deps.GlobalStoreIfExists == nil {
+		return nil
+	}
+	return t.deps.GlobalStoreIfExists()
+}
+
 // sameWorkspace compares two workspace roots the way the session registry
-// records them.
+// records them. An empty root on either side is not treated as a match — an
+// unknown workspace must not silently pass for "the same project".
 func sameWorkspace(a, b string) bool {
 	if a == "" || b == "" {
-		return true // unknown peer workspace: treat as local rather than guess a boundary
+		return false
 	}
 	return filepath.Clean(a) == filepath.Clean(b)
 }
@@ -195,6 +240,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		TTL:             ttl,
 		ConversationID:  args.ConversationID,
 		OriginWorkspace: target.origin,
+		TargetWorkspace: target.peerWorkspace,
 	}
 	conv, err := target.store.PutNote(ctx, in, now)
 	if err != nil {
@@ -221,8 +267,14 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 		sb.WriteString("  note:         a likely secret in the body was redacted before storage.\n")
 	}
 	if target.crossProject {
-		fmt.Fprintf(&sb, "  cross-project: the recipient is pinned to %s. It is delivered only if THAT "+
+		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s. It is delivered only if THAT "+
 			"project sets [collab] cross_project = true; otherwise it expires unread.\n", target.peerWorkspace)
+	}
+	if target.peerUnknown {
+		fmt.Fprintf(&sb, "  unplaced:       no session named %q is connected, and no conversation places it. "+
+			"The message was filed in THIS workspace's mailbox, so only a session called %q "+
+			"attaching HERE will read it. If you meant an agent in another project, wait for "+
+			"it to attach and send again.\n", to, to)
 	}
 	sb.WriteString("  To wait for a reply, call check_messages with a wait_seconds value.\n")
 	return sb.String()

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +16,15 @@ import (
 // can prove the recipient's cross_project flag is what gates the second.
 func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *collab.Store, *collab.Store) {
 	t.Helper()
-	ws, xws := t.TempDir(), t.TempDir()
+	ws := t.TempDir()
 	local, err := collab.Open(ws)
 	if err != nil {
 		t.Fatalf("open workspace store: %v", err)
 	}
-	global, err := collab.Open(xws)
+	// A REAL daemon-level store (empty workspace ⇒ IsGlobal), not a second
+	// workspace store — otherwise the target-workspace addressing rules that
+	// protect cross-project mail would never be exercised.
+	global, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "collab-xproject.db"))
 	if err != nil {
 		t.Fatalf("open cross-project store: %v", err)
 	}
@@ -28,6 +32,7 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 
 	deps := CollabDeps{
 		Workspace:           func() string { return ws },
+		PeerWorkspace:       func(string) (string, bool) { return "", false },
 		SessionName:         func() string { return self },
 		SessionID:           "sess-" + self,
 		Policy:              func() CollabPolicy { return policy },
@@ -40,11 +45,14 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 	return deps, local, global
 }
 
-func put(t *testing.T, s *collab.Store, from, to, body, conv, origin string) string {
+// wsRootOf reports the workspace a chatTestDeps session is pinned to.
+func wsRootOf(d CollabDeps) string { return d.Workspace() }
+
+func put(t *testing.T, s *collab.Store, from, to, body, conv, origin, target string) string {
 	t.Helper()
 	id, err := s.PutNote(context.Background(), collab.NoteInput{
 		AuthorSession: from, AuthorID: "id-" + from, Body: body, Addressee: to,
-		TTL: time.Hour, ConversationID: conv, OriginWorkspace: origin,
+		TTL: time.Hour, ConversationID: conv, OriginWorkspace: origin, TargetWorkspace: target,
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("PutNote: %v", err)
@@ -67,7 +75,7 @@ func TestCheckMessages_DisabledRefusesCleanly(t *testing.T) {
 // over with the id needed to reply, and a second read does not repeat it.
 func TestCheckMessages_DeliversOnceWithConversationID(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
-	conv := put(t, local, "bob", "alice", "can you take the parser?", "", "")
+	conv := put(t, local, "bob", "alice", "can you take the parser?", "", "", "")
 
 	tool := NewCheckMessages(deps)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -99,7 +107,7 @@ func TestCheckMessages_DeliversOnceWithConversationID(t *testing.T) {
 func TestCheckMessages_CrossProjectGatedByRecipient(t *testing.T) {
 	off := CollabPolicy{Mailbox: true, CrossProject: false}
 	deps, _, global := chatTestDeps(t, off, "alice")
-	put(t, global, "carol", "alice", "ping from another repo", "", "/other/project")
+	put(t, global, "carol", "alice", "ping from another repo", "", "/other/project", wsRootOf(deps))
 
 	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
@@ -161,7 +169,7 @@ func TestCheckMessages_WaitWakesOnDelivery(t *testing.T) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		put(t, local, "bob", "alice", "here is the answer", "", "")
+		put(t, local, "bob", "alice", "here is the answer", "", "", "")
 		deps.Notifier.Bump("alice")
 	}()
 
@@ -178,6 +186,65 @@ func TestCheckMessages_WaitWakesOnDelivery(t *testing.T) {
 	}
 }
 
+// TestLeaveNote_OfflinePeerIsPlacedByConversation pins the routing fix. Routing
+// used to ask only "is a session with that name live right now"; a peer that
+// exited between turns of a cross-project conversation made the next reply fall
+// back to the SENDER's own mailbox — invisible to the recipient, reported as
+// sent, and with the exchange budget silently reset. The conversation itself
+// records where the peer was writing from, so it can still be placed.
+func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
+	deps, local, global := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	myWS := wsRootOf(deps)
+
+	// bob wrote to alice from another project, then disconnected.
+	conv := put(t, global, "bob", "alice", "question from my repo", "", "/proj/bob", myWS)
+	deps.PeerWorkspace = func(string) (string, bool) { return "", false } // bob is gone
+
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"bob","body":"my answer","conversation_id":`+jsonStr(conv)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "cross-project") {
+		t.Errorf("the reply should still be routed cross-project; got %q", out)
+	}
+
+	// It must be in the cross-project store addressed back to bob's workspace —
+	// NOT in alice's own mailbox where bob could never see it.
+	back, err := global.ClaimNotes(context.Background(), "bob", "/proj/bob", time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back) != 1 || back[0].Body != "my answer" {
+		t.Fatalf("bob should be able to claim the reply in his workspace; got %v", back)
+	}
+	stray, err := local.ClaimNotes(context.Background(), "bob", myWS, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stray) != 0 {
+		t.Errorf("the reply must not be filed in the sender's own mailbox; found %d", len(stray))
+	}
+}
+
+// TestLeaveNote_UnplaceablePeerSaysSo: when nothing can place the name, the
+// message is still filed locally — addressing a peer that has not attached yet
+// is legitimate — but the sender is told, so "sent" is never mistaken for
+// "delivered to the agent I meant".
+func TestLeaveNote_UnplaceablePeerSaysSo(t *testing.T) {
+	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	deps.PeerWorkspace = func(string) (string, bool) { return "", false }
+
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"ghost","body":"hello?"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "unplaced") || !strings.Contains(out, "THIS workspace") {
+		t.Errorf("an unplaceable recipient must be flagged to the sender; got %q", out)
+	}
+}
+
 // TestLeaveNote_ExchangeBudgetRefusesReply: the backstop against two agents
 // answering each other indefinitely. Opening a thread is always allowed; it is
 // the reply into a spent thread that is refused, with an instruction to involve
@@ -185,9 +252,9 @@ func TestCheckMessages_WaitWakesOnDelivery(t *testing.T) {
 func TestLeaveNote_ExchangeBudgetRefusesReply(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxExchanges: 3}, "alice")
 
-	conv := put(t, local, "bob", "alice", "1", "", "")
-	put(t, local, "alice", "bob", "2", conv, "")
-	put(t, local, "bob", "alice", "3", conv, "")
+	conv := put(t, local, "bob", "alice", "1", "", "", "")
+	put(t, local, "alice", "bob", "2", conv, "", "")
+	put(t, local, "bob", "alice", "3", conv, "", "")
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"to":"bob","body":"4","conversation_id":`+jsonStr(conv)+`}`))
