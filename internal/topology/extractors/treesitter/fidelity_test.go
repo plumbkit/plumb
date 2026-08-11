@@ -40,6 +40,7 @@ func fidelityCases() []fidelityCase {
 		// upstream defect. Those are covered in scss_test.go instead.
 		{"scss", grammars.ScssLanguage, func() topology.Extractor { return NewSCSS() }, string(scssSrc), "focus-ring"},
 		{"xml", grammars.XmlLanguage, func() topology.Extractor { return NewXML() }, string(xmlSrc), "Invoice"},
+		{"lua", grammars.LuaLanguage, func() topology.Extractor { return NewLua() }, string(luaSrc), "trailing_helper"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 

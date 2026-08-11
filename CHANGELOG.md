@@ -109,6 +109,33 @@
   One grammar quirk is worth noting: the XML grammar returns a **nil root** for
   empty input, which no other grammar in the package does, so the guard lives in
   the extractor — without it an empty `.xml` file panics the indexer.
+- **Lua is now indexed by the topology Map** — functions and methods in every
+  spelling the language allows, `require` as imports, and busted/luaunit test
+  cases.
+
+  Lua declares a function five ways, and an extractor that handles only the
+  first misses most of a real module: `function greet()`, `local function
+  helper()`, `function M.helper()`, `function Account:deposit()` and
+  `local f = function()`. Two further shapes matter as much in practice — a
+  module written as `return { go = function() … end }` (the table is never bound
+  to a name, so nothing else in the walk reaches it) and functions nested in a
+  table of tables. Handling those last two lifted function recall on a real
+  corpus from 87.7% to **90.5%**.
+
+  The dot and colon forms carry their table into the qualified name — `M.helper`,
+  `Account:deposit` — keeping the punctuation Lua itself uses, because the colon
+  is what tells a reader the function takes an implicit self. That distinction is
+  also why the colon form is a method and the dot form is not.
+
+  Ordinary locals are deliberately not emitted: a Lua file is mostly locals, they
+  carry no structure, and emitting them buries the functions. A function *bound*
+  to a local name is still a callable and is kept. `require` is recorded at any
+  depth, since Lua code requires lazily inside function bodies all the time.
+
+  Measured over 1,501 real `.lua` files (Kong, telescope.nvim, kickstart.nvim and
+  local Neovim configs): 18,586 nodes, 10,385 edges, **zero invalid byte spans**,
+  90.5% function recall. The gotreesitter Lua grammar is in excellent shape —
+  every construct probed parsed without a single defect.
 
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside

@@ -67,6 +67,10 @@ func allExtractorCases() []extractorCase {
 			"<xs:schema>\n  <xs:include schemaLocation=\"types.xsd\"/>\n  <xs:element name=\"Order\"/>\n</xs:schema>\n", "types.xsd",
 		},
 		{
+			"lua", func() topology.Extractor { return NewLua() }, "a.lua",
+			"local json = require(\"json\")\n\nlocal function helper(v)\n  return v\nend\n\nfunction add(a)\n  return helper(a)\nend\n", "json",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
