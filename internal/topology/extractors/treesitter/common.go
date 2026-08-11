@@ -6,12 +6,65 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tsg "github.com/odvcencio/gotreesitter"
 
 	"github.com/plumbkit/plumb/internal/topology"
 )
+
+// parserPools keeps one sync.Pool of parsers per grammar, so indexing a
+// thousand files does not build a thousand parsers.
+//
+// tsg.NewParser scans lang.SymbolNames (389 entries for TypeScript, 593 for
+// Swift), may size a forceRawSpanTable against it, and starts every parser with
+// cold arena-sizing hints that a fresh one throws away — all per file. Measured
+// over a real corpus: 2–16x faster wall-clock and 15–57x less allocation, with
+// trees byte-identical to the fresh-parser output across 476 files. The win is a
+// fixed per-parse cost being amortised, so it scales INVERSELY with file size
+// (16x on 2 KB files, 1.6x on 20 KB ones) — which is exactly the small-file
+// resync path a user waits on.
+//
+// Deliberately NOT tsg.NewParserPool: that pool resets timeout and cancellation
+// from CONSTRUCTION-time config on every checkout and offers no per-call
+// override, which would forfeit the per-call SetTimeoutMicros(remaining) below
+// and make mid-parse cancellation impossible. It also benchmarked equal or
+// slower on every language measured.
+//
+// Keyed by *tsg.Language rather than by extractor: the pool must not be built in
+// a constructor, because TestExtractorConstructionDecodesNoGrammar pins that
+// constructing an extractor decodes no grammar, and a parser needs the decoded
+// language. Grammars are process-cached and pinned for the daemon's life by
+// lazyGrammar, so the pointer is a stable key. sync.Pool is cleared each GC
+// cycle, so a pool outliving the Store that first used it retains nothing.
+var parserPools sync.Map // map[*tsg.Language]*sync.Pool
+
+func parserPoolFor(lang *tsg.Language) *sync.Pool {
+	if p, ok := parserPools.Load(lang); ok {
+		return p.(*sync.Pool)
+	}
+	p, _ := parserPools.LoadOrStore(lang, &sync.Pool{
+		New: func() any { return tsg.NewParser(lang) },
+	})
+	return p.(*sync.Pool)
+}
+
+// releaseParser clears the per-call state before the parser goes back, then
+// returns it.
+//
+// Both fields MUST be cleared here. A pooled parser carries whatever the last
+// caller set, so a stale timeout would silently impose the previous file's
+// remaining deadline on a parse that was given none, and a stale flag pointer
+// would keep a dead stack variable alive and could abort the next parse before
+// it starts. Upstream's own pool clears exactly these two on checkout; a plain
+// sync.Pool does not, so this is the seam that has to.
+func releaseParser(pool *sync.Pool, parser *tsg.Parser) {
+	parser.SetTimeoutMicros(0)
+	parser.SetCancellationFlag(nil)
+	pool.Put(parser)
+}
 
 // extractWith is the parse envelope every extractor in this package shares:
 // parse src, treat an unparseable file as "nothing to index" rather than an
@@ -38,7 +91,8 @@ import (
 // it enforce. The two checks are not redundant: ctx.Err() is the only one that
 // sees a cancelled context (which usually carries no deadline at all), and the
 // budget check is the only one that sees a deadline that has passed but whose
-// context has not been marked yet.
+// context has not been marked yet. Neither covers a context cancelled AFTER the
+// parse begins; the cancellation flag below is what handles that.
 //
 // walk returns the nodes and edges it collected; a nil edge slice is fine for a
 // language that emits none.
@@ -51,16 +105,49 @@ func extractWith(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	parser := tsg.NewParser(lang)
+	pool := parserPoolFor(lang)
+	parser := pool.Get().(*tsg.Parser)
+
+	// Set the timeout unconditionally, including to 0 ("no timeout"): a pooled
+	// parser would otherwise inherit the previous file's remaining deadline.
+	var timeoutMicros uint64
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			releaseParser(pool, parser)
 			return nil, nil, context.DeadlineExceeded
 		}
 		//nolint:gosec // G115: remaining is > 0 per the check above, so the conversion cannot wrap.
-		parser.SetTimeoutMicros(uint64(remaining.Microseconds()))
+		timeoutMicros = uint64(remaining.Microseconds())
 	}
+	parser.SetTimeoutMicros(timeoutMicros)
+
+	// Cancellation covers what the deadline cannot: a context cancelled with no
+	// deadline at all, which until now started a parse and ran it to completion.
+	// The flag aborts one already in flight within 1-2 ms. A context with no Done
+	// channel can never be cancelled, so it gets neither the flag nor the
+	// watcher goroutine.
+	if done := ctx.Done(); done != nil {
+		var cancelled uint32
+		parser.SetCancellationFlag(&cancelled)
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			select {
+			case <-done:
+				atomic.StoreUint32(&cancelled, 1)
+			case <-stop:
+			}
+		}()
+	}
+
 	tree, err := parser.Parse(src)
+	// Returned here rather than by defer, and only once Parse has returned in
+	// THIS goroutine. safeExtract runs Extract in a goroutine it abandons on
+	// ctx.Done(), leaving the orphan still parsing; deferring the Put ahead of
+	// the parse would hand a live parser to the next file. A panic skips this
+	// deliberately — a parser in unknown state must not be recycled.
+	releaseParser(pool, parser)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}

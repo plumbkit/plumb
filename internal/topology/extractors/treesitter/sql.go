@@ -15,9 +15,10 @@ import (
 // statements (INSERT/SELECT/UPDATE/DELETE) are operations, not declarations, so
 // they are not indexed.
 //
-// Concurrency: stateless after construction and safe for concurrent use; a
-// fresh parser is created per Extract call because gotreesitter parsers are not
-// safe for concurrent reuse.
+// Concurrency: stateless after construction and safe for concurrent use; each
+// Extract call borrows a parser from the shared per-grammar pool and returns it
+// before returning, because gotreesitter parsers are not safe for concurrent
+// reuse.
 type SQLExtractor struct {
 	lang lazyGrammar
 }

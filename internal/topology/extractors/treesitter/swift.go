@@ -19,9 +19,10 @@ import (
 // gotreesitter v0.47.x fixed the underlying GLR bug — the pinned grammar now
 // parses IUO types natively (guarded by TestSwift_IUO_GotreesitterParsesCleanly).
 //
-// Concurrency: stateless after construction and safe for concurrent use; a
-// fresh parser is created per Extract call because gotreesitter parsers are not
-// safe for concurrent reuse.
+// Concurrency: stateless after construction and safe for concurrent use; each
+// Extract call borrows a parser from the shared per-grammar pool and returns it
+// before returning, because gotreesitter parsers are not safe for concurrent
+// reuse.
 type SwiftExtractor struct {
 	lang lazyGrammar
 }
