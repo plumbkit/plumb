@@ -76,6 +76,15 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 			p.hsMu.Unlock()
 			if !answered {
 				p.writeClient(frame)
+			} else {
+				// A reconnect: the client already has its initialize result, and
+				// re-sending it would be a duplicate response to a settled id. It
+				// does need to re-list tools, but that notification is emitted at
+				// the END of the reconnect (see reconnect()), not here — inserting
+				// a frame mid-handshake puts it ahead of the synthesised errors
+				// for in-flight requests, and a client waiting on its own response
+				// should not have to read past an unrelated notification first.
+				p.relistOnReconnect.Store(true)
 			}
 			return nil
 		}
@@ -87,4 +96,16 @@ func (p *reconnectingProxy) handshakeComplete() bool {
 	p.hsMu.Lock()
 	defer p.hsMu.Unlock()
 	return p.initializeFrame != nil
+}
+
+// notifyToolsListChanged tells the client to re-list tools, as a server-initiated
+// MCP notification with no id (it expects no response).
+//
+// The daemon advertises tools.listChanged=true during initialize and fires this
+// itself when a connection's tool PROFILE changes. The proxy has to fire it too,
+// for the case the daemon cannot see: a restart swaps the daemon out entirely, so
+// the connection that would have noticed no longer exists, while the client's
+// view of the server — this proxy — persists across the gap.
+func (p *reconnectingProxy) notifyToolsListChanged() {
+	p.writeClient([]byte(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`))
 }

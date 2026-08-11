@@ -236,7 +236,28 @@ func (h *proxyHarness) write(frame string) {
 	}
 }
 
+// read returns the next client frame that is a RESPONSE, skipping
+// server-initiated notifications.
+//
+// JSON-RPC notifications are unordered with respect to responses — a client
+// waiting on its own result must tolerate one arriving first — so a test that
+// asserts on "the next frame" is asserting something the protocol does not
+// promise. The proxy emits notifications/tools/list_changed after a reconnect,
+// which is exactly such a frame; skipping it here keeps these tests testing what
+// they mean to test. readAny is for tests that care about a notification itself.
 func (h *proxyHarness) read(d time.Duration) string {
+	h.t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		f := h.readAny(time.Until(deadline))
+		if !strings.Contains(f, `"method":"notifications/`) {
+			return f
+		}
+	}
+}
+
+// readAny returns the next client frame of any kind, notifications included.
+func (h *proxyHarness) readAny(d time.Duration) string {
 	h.t.Helper()
 	select {
 	case f, ok := <-h.frames:
