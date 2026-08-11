@@ -28,13 +28,6 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-> After a transparent reconnect the proxy also emits
-> `notifications/tools/list_changed` to the client. The daemon fires that itself
-> when a connection's tool *profile* changes, but it cannot for a restart — the
-> restart destroys the connection that would have sent it — and only the proxy
-> survives the gap. Without it a tool a rebuilt daemon gained stays invisible
-> until the client itself restarts.
-
 | `internal/tools` | MCP tool implementations (58 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
@@ -189,6 +182,25 @@ Key design properties:
 ### Resilient proxy
 
 `plumb serve` is a frame-aware reconnecting proxy (`internal/cli/serve_proxy*.go`) that survives a daemon crash or hang without the client noticing. On a daemon failure it keeps the client's stdio open, dial-or-spawns a fresh daemon, and **replays the captured MCP handshake** (the client only sends `initialize` once). In-flight requests get a synthesised retryable error (`code -32000`) instead of hanging; non-idempotent writes are never auto-replayed. A *hung* daemon is caught by an idle `ping` heartbeat, then `SIGTERM`→`SIGKILL`'d and respawned. Reconnects are bounded. The replayed handshake also carries a stable per-proxy session ID (in the `initialize` params' `_meta`) so the fresh daemon recognises the reconnected connection as a continuation and rehydrates its persisted per-connection state (see `[session]` `persist_state`) — making the restart transparent rather than merely non-fatal. Knobs: `PLUMB_PROXY_RECONNECT` (default on; off ⇒ legacy `io.Copy` proxy), `PLUMB_PROXY_HEARTBEAT` (`0` disables hang detection), `plumb serve --no-reconnect`.
+
+After a reconnect the proxy also emits `notifications/tools/list_changed` to the
+client. The daemon fires that itself when a connection's tool *profile* changes,
+but it cannot for a restart — the restart is what destroys the connection that
+would have sent it — and only the proxy survives the gap. Without it, a tool a
+rebuilt daemon **gained** stays invisible: the client fetched its tool list once
+at connect, and from its side the server never went away, so it never re-lists.
+The notification is unconditional rather than gated on a version change, because
+`serverInfo.version` is the `VERSION` file and the dev loop (`make reinstall`)
+rebuilds the daemon with a new tool set at the *same* version — the case this
+exists for, and the one a version check would miss.
+
+**Upgrade caveat.** This behaviour lives in `plumb serve`, and a proxy process is
+spawned per client connection and lives as long as that connection. Upgrading
+plumb therefore does **not** upgrade the proxies of sessions already running:
+each client keeps the binary it started with, and gains this from its *next*
+session onward. So the first daemon rebuild after an upgrade still leaves a new
+tool invisible to any client connected across it. `plumb daemon_info` reports the
+proxy's own version alongside the daemon's when the two differ.
 
 ### Per-connection write deadline
 
