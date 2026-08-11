@@ -105,9 +105,13 @@ func scopeRowState(policy config.ProjectPolicyStatus, policyErr error, path []st
 // isCapabilityKey reports whether a dotted settings key belongs to a section
 // LoadProject gates on trust, used only to decide the safe presentation when the
 // trust status itself is unreadable.
-func isCapabilityKey(key string) bool {
-	return strings.HasPrefix(key, "git.") || strings.HasPrefix(key, "lsp.")
-}
+//
+// It delegates rather than enumerating, because the two lists getting out of step
+// is a silent display bug: a gated key this did not recognise would present as a
+// live override while LoadProject had in fact forced it back. Note the answer is
+// per-KEY within [collab], not per-section — the channel switches are gated, the
+// budgets beside them are not.
+func isCapabilityKey(key string) bool { return config.IsGatedProjectKey(key) }
 
 // itemTOMLPath returns the TOML key path for a row, handling the dynamic
 // per-language [lsp.<lang>] rows (whose path depends on lspLang) and delegating

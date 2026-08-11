@@ -53,18 +53,22 @@ func TestCollab_Defaults(t *testing.T) {
 	}
 }
 
-// TestLoadProject_CollabChannelSwitchesAreGlobalOnly is the trust-boundary pin.
+// TestLoadProject_CollabChannelSwitchesNeedTrust is the untrusted half of the
+// boundary.
 //
-// A project's .plumb/config.toml is an UNTRUSTED surface — a cloned repository
-// ships it — so it must not be able to open an inter-agent channel. cross_project
-// is the sharp case: it is deliberately the RECIPIENT's decision, so that a
-// sender can never push into a project that has not opted in. That guarantee is
-// worthless if the recipient's own repository can flip it, which is exactly what
-// a hostile clone would do.
+// A project's .plumb/config.toml is an untrusted surface — a cloned repository
+// ships it — and each of these four switches opens a cross-agent CHANNEL. A
+// channel a repository can open is a channel it can use: a payload that has
+// already steered one agent through some other file in the repo can leave
+// instructions for the next session. cross_project is the plainest case, because
+// its own contract is that receiving is the RECIPIENT's decision, which holds
+// only while the recipient's project file cannot set it unasked.
 //
-// These four flags therefore always take the global value, in BOTH directions:
-// a project can neither enable nor disable them.
-func TestLoadProject_CollabChannelSwitchesAreGlobalOnly(t *testing.T) {
+// So an UNAPPROVED request is refused in both directions: a project can neither
+// enable a channel the user left off nor disable one they left on. The trusted
+// half is TestLoadProject_TrustedCollabChannelSwitchesAreHonoured.
+func TestLoadProject_CollabChannelSwitchesNeedTrust(t *testing.T) {
+	tempTrustStore(t) // an empty store: nothing is trusted
 	const allOn = "[collab]\nintents = true\nmailbox = true\ncross_project = true\nknowledge_handoff = true\n"
 	const allOff = "[collab]\nintents = false\nmailbox = false\ncross_project = false\nknowledge_handoff = false\n"
 
@@ -200,5 +204,100 @@ func TestValidateCollab_NegativeBudgetRejected(t *testing.T) {
 	ws := writeCollabProject(t, "[collab]\nhint_budget_bytes = -1\n")
 	if _, err := LoadProject(Defaults(), ws); err == nil {
 		t.Fatal("expected validation error for negative collab.hint_budget_bytes")
+	}
+}
+
+// TestLoadProject_TrustedCollabChannelSwitchesAreHonoured is the capability half
+// of the boundary: a user who has approved this project's exact request gets it.
+//
+// This is what makes per-workspace chat settings legitimate. "Per workspace" and
+// "the repository decides" are different things — the repo may ASK, and the
+// answer is the user's, recorded out of band in plumb's data dir where a clone
+// cannot forge it, and bound to the exact content approved.
+func TestLoadProject_TrustedCollabChannelSwitchesAreHonoured(t *testing.T) {
+	s := tempTrustStore(t)
+	ws := projectConfigWorkspace(t, "[collab]\nmailbox = true\ncross_project = true\n"+
+		"intents = true\nknowledge_handoff = true\n")
+	trustWorkspace(t, s, ws)
+
+	base := Defaults()
+	base.Collab.Mailbox = false
+	base.Collab.CrossProject = false
+	base.Collab.Intents = false
+	base.Collab.KnowledgeHandoff = false
+
+	got, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if !got.Collab.CrossProject {
+		t.Error("an approved project asking for cross_project must get it — that is the whole point of trust")
+	}
+	if !got.Collab.Mailbox || !got.Collab.Intents || !got.Collab.KnowledgeHandoff {
+		t.Errorf("approved switches not honoured: mailbox=%v intents=%v knowledge_handoff=%v",
+			got.Collab.Mailbox, got.Collab.Intents, got.Collab.KnowledgeHandoff)
+	}
+}
+
+// TestCollabPolicySpec_GatesSwitchesAndFreesTuning pins WHICH keys reach the
+// trust gate. Getting this wrong in either direction is a real defect: a gated
+// key missing from the spec is honoured with no approval and no disclosure, and
+// a free key in the spec makes a project demand `plumb trust` to set a byte
+// budget.
+func TestCollabPolicySpec_GatesSwitchesAndFreesTuning(t *testing.T) {
+	raw := map[string]any{"collab": map[string]any{
+		"mailbox": true, "cross_project": true, "intents": true, "knowledge_handoff": true,
+		"peer_awareness": false, "hint_budget_bytes": int64(256), "intent_ttl_minutes": int64(30),
+		"max_exchanges": int64(3), "chat_budget_bytes": int64(512), "max_wait_seconds": int64(10),
+	}}
+	got := map[string]bool{}
+	for _, k := range projectPolicySpecFrom(raw).Keys() {
+		got[k] = true
+	}
+	for _, k := range []string{"collab.mailbox", "collab.cross_project", "collab.intents", "collab.knowledge_handoff"} {
+		if !got[k] {
+			t.Errorf("%s must be gated on trust — it opens a cross-agent channel", k)
+		}
+	}
+	for _, k := range []string{
+		"collab.peer_awareness", "collab.hint_budget_bytes", "collab.intent_ttl_minutes",
+		"collab.max_exchanges", "collab.chat_budget_bytes", "collab.max_wait_seconds",
+	} {
+		if got[k] {
+			t.Errorf("%s must NOT need trust — it opens nothing, and demanding approval to tune a size is friction for no safety", k)
+		}
+	}
+}
+
+// TestCollabPolicySpec_UnknownKeyIsGated is the reason the free list is an
+// ALLOW-list. The channel switches were project-settable in the first place
+// because [collab] was added and nobody re-derived which of its keys grant
+// capability. A key plumb does not recognise must therefore fail CLOSED, so the
+// next field added forces that question instead of defaulting to free.
+func TestCollabPolicySpec_UnknownKeyIsGated(t *testing.T) {
+	raw := map[string]any{"collab": map[string]any{"some_future_switch": true}}
+	spec := projectPolicySpecFrom(raw)
+	if len(spec) != 1 || spec[0].Key != "collab.some_future_switch" {
+		t.Fatalf("an unrecognised [collab] key must be gated; spec = %v", spec.Keys())
+	}
+	if spec[0].Warning(Defaults()) == "" {
+		t.Error("a gated unknown key must still warn, so `plumb trust` cannot approve it silently")
+	}
+}
+
+// TestCollabPolicySpec_CaseInsensitiveKeysAreGated closes the hole that made the
+// [lsp] free list an allow-list: go-toml/v2 binds a TOML key to a struct field
+// case-insensitively, so `Cross_Project = true` reaches CrossProject. An
+// exact-match gate would let it through unseen — absent from the spec, the
+// disclosure, and the trust hash.
+func TestCollabPolicySpec_CaseInsensitiveKeysAreGated(t *testing.T) {
+	raw := map[string]any{"collab": map[string]any{"Cross_Project": true, "MAILBOX": true}}
+	if got := len(projectPolicySpecFrom(raw)); got != 2 {
+		t.Errorf("case-variant channel switches must still be gated; got %d entries", got)
+	}
+	// ...and a case-variant FREE key must still be recognised as free.
+	freeRaw := map[string]any{"collab": map[string]any{"Hint_Budget_Bytes": int64(256)}}
+	if got := projectPolicySpecFrom(freeRaw); len(got) != 0 {
+		t.Errorf("a case-variant tuning key must stay free; got %v", got.Keys())
 	}
 }

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.16.5 (unreleased)
+
+### Changed
+
+- **`[collab]`'s channel switches are gated on `plumb trust` rather than being
+  global-only, so per-workspace chat settings are possible again — with the user,
+  not the repository, holding the switch.** 0.16.4 closed a real hole by forcing
+  `intents`, `mailbox`, `cross_project` and `knowledge_handoff` to the global
+  value; that was the safe default but the wrong ceiling, and it removed a
+  capability people legitimately want. Projects differ, and a user who wants
+  cross-project chat on for one repository and off everywhere else should be able
+  to have it.
+
+  The fix separates two things 0.16.4 conflated. *Per workspace* and *the
+  repository decides* are not the same: a project may now ASK for these switches,
+  and the request is honoured only once the user has approved that exact config
+  for that workspace with `plumb trust` — the model already used for `[git]` and
+  the exec-deciding `[lsp.<lang>]` fields. The grant lives in plumb's data dir, so
+  a clone cannot mark itself trusted, and is bound to the config's content, so
+  editing it afterwards lapses the grant. `plumb trust` discloses each requested
+  key with a warning naming what it opens.
+
+  The free list is an **allow-list**, deliberately. The channel switches were
+  project-settable in the first place because `[collab]` was added to the config
+  and nobody re-derived which of its keys grant capability; enumerating the GATED
+  set would leave the next field added silently free until someone remembered to
+  classify it. Enumerating what is inert makes the default "gated", so a new key
+  fails closed and a human has to decide. Matching is case-insensitive, because
+  go-toml binds `Cross_Project` to `CrossProject` and an exact-match gate would
+  let it past unseen.
+
+  `peer_awareness` and every budget and TTL stay freely project-overridable — they
+  surface what the daemon already observed in this project, or tune a size, and
+  neither can open anything. The TUI's own capability classification now delegates
+  to the loader's instead of keeping a parallel list, since the two drifting apart
+  is a silent display bug: a gated row would present as a live override while
+  `LoadProject` had in fact forced it back.
+
 ## 0.16.4 (2026-08-11)
 
 ### Security

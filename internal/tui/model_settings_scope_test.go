@@ -513,3 +513,30 @@ func TestBuildScopeItems_UsesInjectedPolicyStatus(t *testing.T) {
 	}
 	t.Error("git allow_push row missing")
 }
+
+// TestIsCapabilityKey_CollabIsPerKeyNotPerSection pins the distinction the
+// [collab] rows depend on. The four channel switches are gated on trust, so when
+// the trust status cannot be read they must present as set-and-ignored — the
+// direction that under-claims rather than telling the user a value is live when
+// LoadProject has forced it back. The budgets in the same section open nothing
+// and must keep presenting as live overrides, or a user tuning a byte budget
+// would be told, wrongly, that their edit is being ignored.
+func TestIsCapabilityKey_CollabIsPerKeyNotPerSection(t *testing.T) {
+	for _, k := range []string{
+		"collab.mailbox", "collab.cross_project", "collab.intents",
+		"collab.knowledge_handoff", "git.allow_push", "lsp.go.command",
+	} {
+		if !isCapabilityKey(k) {
+			t.Errorf("%s is gated on trust and must present as ignored when trust is unreadable", k)
+		}
+	}
+	for _, k := range []string{
+		"collab.peer_awareness", "collab.hint_budget_bytes",
+		"collab.max_exchanges", "collab.chat_budget_bytes", "collab.max_wait_seconds",
+		"collab.intent_ttl_minutes", "memory.max_hints",
+	} {
+		if isCapabilityKey(k) {
+			t.Errorf("%s opens nothing and must present as a live override", k)
+		}
+	}
+}
