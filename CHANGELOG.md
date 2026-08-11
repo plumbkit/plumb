@@ -136,6 +136,47 @@
   local Neovim configs): 18,586 nodes, 10,385 edges, **zero invalid byte spans**,
   90.5% function recall. The gotreesitter Lua grammar is in excellent shape —
   every construct probed parsed without a single defect.
+- **C++ is now indexed by the topology Map** — classes, structs, unions and
+  enums with their members, free functions and out-of-line member definitions,
+  function and class templates, `using`/`typedef`/`concept` aliases, file-scope
+  variables and constants, `#define` and `#include`, and gtest/Boost test bodies.
+  Containment and call edges throughout.
+
+  **Namespaces are deliberately not emitted as nodes.** A namespace is re-opened
+  in every file that contributes to it, so indexing it would scatter `detail` and
+  `std` nodes across a whole codebase. The name survives where it is useful — as
+  the `::` prefix on the qualified name (`geom::Point::norm`) — which is the same
+  stance Java and Kotlin take for `package`.
+
+  The C extractor's `cWalk` turned out to be a **thinner** reuse seam than
+  expected, and each mismatch would have been a silent drop rather than a
+  failure: `findDeclarator` recurses only through pointer declarators, so
+  `Foo &Foo::operator=()` is dropped before it can be named; `declaratorName`
+  stops at a bare identifier, so `Foo::bar`, `Foo::~Foo` and `Tr<T>::make` all
+  resolve to nothing — which is most of a `.cpp` file. `cppWalk` therefore owns
+  its own declarator handling and every recursing case, delegating only leaf C
+  handlers.
+
+  Measured over **2,068 real files (48.7 MB)** from Homebrew headers, fmt,
+  nlohmann/json, googletest, abseil and protobuf: 57,222 nodes, 14,793 edges,
+  **zero invalid byte spans**. Recall splits sharply by parse health, and that
+  split is the honest number: on files that parse cleanly it is **96.4%** for
+  free functions and **99.6%** for out-of-line members, against 52.2% and 43.1%
+  on files carrying a parse defect.
+
+  Walking into ERROR recovery nodes is worth 2.9× the nodes (19,866 → 57,222)
+  and leaves clean-file recall unchanged, confirming it only touches broken
+  parses. Going further — reconstructing symbols from bare declarator fragments
+  inside an ERROR — was measured at **33.1% precision** with truncated spans and
+  rejected.
+
+  Four upstream grammar defects are pinned by tests so a fix upstream shows up
+  as a change: a call statement whose first argument looks like a type
+  (`g(A::B, c)`) fails to parse and is the root cause of the 59% defect rate; a
+  parser iteration limit trips on 1.1% of files; Catch2's `TEST_CASE` does not
+  parse at all; and macro-bracketed namespaces (`ABSL_NAMESPACE_BEGIN`)
+  mis-parse **silently, with no ERROR node at all**, which is the entire cause of
+  the lower class-recall figure and is not something an extractor can detect.
 
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside

@@ -41,6 +41,11 @@ func fidelityCases() []fidelityCase {
 		{"scss", grammars.ScssLanguage, func() topology.Extractor { return NewSCSS() }, string(scssSrc), "focus-ring"},
 		{"xml", grammars.XmlLanguage, func() topology.Extractor { return NewXML() }, string(xmlSrc), "Invoice"},
 		{"lua", grammars.LuaLanguage, func() topology.Extractor { return NewLua() }, string(luaSrc), "trailing_helper"},
+		// cppSrc is deliberately Catch2-free: TEST_CASE("n", "[tag]") does not
+		// parse in the pinned grammar, and this guard must measure a cascade we
+		// introduced rather than re-measure a known upstream defect (which
+		// cpp_test.go pins separately).
+		{"cpp", grammars.CppLanguage, func() topology.Extractor { return NewCpp() }, string(cppSrc), "scaled_norm"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 
