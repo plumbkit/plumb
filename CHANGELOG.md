@@ -578,9 +578,26 @@
   trusted and untrusted paths are separate functions rather than one shared
   routine whose safety depended on who wrote the file.
 
+  **The boundary guard alone was not sufficient, and an independent review caught
+  it.** A `PathPolicy` canonicalises a not-yet-existing path against its nearest
+  existing ancestor, so a *dangling* symlink at `<workspace>/payload` resolves to
+  `<workspace>/payload` and is admitted — which is correct for `safeWrite`, whose
+  temp-file-and-rename replaces a link rather than following it. `os.WriteFile`
+  has the opposite semantics: it opens `O_CREATE` and follows the link, creating
+  the target wherever it points. A repository committing `payload -> ~/.zshenv`
+  (a target that need not exist) therefore still escaped through an op the guard
+  had admitted. The replay now refuses a symlink outright at both ends — the
+  manifest's path and the snapshot file, the latter because `os.ReadFile` follows
+  links too and would otherwise copy `~/.ssh/id_ed25519` into the workspace via a
+  committed `0-before` link.
+
   Found by the first fuzz target in the tree, over the parser §9 named and nobody
-  had covered. Guarded by `FuzzScanReplay` with its four recorded escape payloads
-  as a retained corpus, plus `TestScan_RefusesPathOutsideTheSessionPolicy`,
+  had covered. The symlink half is guarded by `TestTxlogReplayGuard_*` in
+  `internal/cli`, which drive the **real** `PathPolicy` rather than a stand-in —
+  the txlog package cannot import it (import cycle), and that gap is exactly why
+  its own tests could not have caught the escape. Also guarded by `FuzzScanReplay`
+  with its four recorded escape payloads as a retained corpus, plus
+  `TestScan_RefusesPathOutsideTheSessionPolicy`,
   `TestScan_NilGuardFailsClosed`, `TestScan_RefusesRelativePath`,
   `TestScan_DoesNotHonourManifestModeBits`,
   `TestScan_RestoresGuardAdmittedPathOutsideWorkspace` (which pins that a plain
