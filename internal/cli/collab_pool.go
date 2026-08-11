@@ -22,10 +22,72 @@ import (
 type collabPool struct {
 	mu     sync.Mutex
 	stores map[string]*collab.Store
+	// global is the daemon-level cross-project store, shared by every workspace
+	// rather than keyed by one. Opened by the same two-mode contract as the
+	// per-workspace stores.
+	global *collab.Store
+	// notify is the daemon-wide in-process wake-up signal for message delivery.
+	// It lives on the pool because it must be shared by every connection,
+	// including connections pinned to different workspaces.
+	notify *collab.Notifier
 }
 
 func newCollabPool() *collabPool {
-	return &collabPool{stores: make(map[string]*collab.Store)}
+	return &collabPool{stores: make(map[string]*collab.Store), notify: collab.NewNotifier()}
+}
+
+// notifier returns the daemon-wide message notifier. Never nil for a pool built
+// by newCollabPool; nil-safe for a zero-value pool in tests.
+func (p *collabPool) notifier() *collab.Notifier {
+	if p == nil {
+		return nil
+	}
+	return p.notify
+}
+
+// acquireGlobal returns the daemon-level cross-project store, CREATING it on
+// first use. Only the send path calls this, and only once a message is known to
+// cross a project boundary, so a daemon whose sessions never talk across
+// projects never materialises the file.
+func (p *collabPool) acquireGlobal() *collab.Store {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.openGlobalLocked()
+}
+
+// getGlobal returns the daemon-level store ONLY when it already exists on disk,
+// so delivery and prune paths never create it.
+func (p *collabPool) getGlobal() *collab.Store {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.global != nil {
+		return p.global
+	}
+	if !collab.GlobalExists() {
+		return nil
+	}
+	return p.openGlobalLocked()
+}
+
+// openGlobalLocked returns the cached global store or opens a new one. Must hold
+// p.mu.
+func (p *collabPool) openGlobalLocked() *collab.Store {
+	if p.global != nil {
+		return p.global
+	}
+	s, err := collab.OpenGlobal()
+	if err != nil {
+		slog.Warn("collab: open cross-project store", "err", err)
+		return nil
+	}
+	p.global = s
+	return s
 }
 
 // acquire returns the workspace's collab store, opening (and CREATING collab.db
@@ -79,9 +141,12 @@ func (p *collabPool) openLocked(workspace string) *collab.Store {
 func (p *collabPool) openStores() []*collab.Store {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make([]*collab.Store, 0, len(p.stores))
+	out := make([]*collab.Store, 0, len(p.stores)+1)
 	for _, s := range p.stores {
 		out = append(out, s)
+	}
+	if p.global != nil {
+		out = append(out, p.global)
 	}
 	return out
 }
@@ -94,4 +159,8 @@ func (p *collabPool) closeAll() {
 		_ = s.Close()
 	}
 	p.stores = make(map[string]*collab.Store)
+	if p.global != nil {
+		_ = p.global.Close()
+		p.global = nil
+	}
 }

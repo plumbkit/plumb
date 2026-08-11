@@ -100,53 +100,163 @@ func TestLiveIntents_FiltersExpired(t *testing.T) {
 	}
 }
 
-func TestDeliverNotes_ConsumesNextButKeepsAddressed(t *testing.T) {
+// TestClaimNotes_DeliversEachMessageExactlyOnce pins the read watermark, which
+// replaced delete-on-delivery: a claimed message is not handed over a second
+// time — to the same session or to any other — but it stays in the table so the
+// conversation keeps a transcript and a countable number of exchanges.
+func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
 
 	mustNote := func(to, body string) {
-		if err := s.PutNote(ctx, NoteInput{AuthorSession: "author", AuthorID: "au", Body: body, Addressee: to, TTL: time.Hour}, now); err != nil {
+		if _, err := s.PutNote(ctx, NoteInput{AuthorSession: "author", AuthorID: "au", Body: body, Addressee: to, TTL: time.Hour}, now); err != nil {
 			t.Fatalf("PutNote: %v", err)
 		}
 	}
 	mustNote(AddresseeNext, "for whoever attaches next")
 	mustNote("alice", "hello alice")
 
-	// alice attaches first: she gets her note + the next note; the next note is consumed.
-	got, err := s.DeliverNotes(ctx, "alice", now)
+	// alice reads first: she gets her own note plus the next-arrival one.
+	got, err := s.ClaimNotes(ctx, "alice", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("alice delivery = %d notes, want 2 (addressed + next)", len(got))
+		t.Fatalf("alice claim = %d messages, want 2 (addressed + next)", len(got))
 	}
 
-	// bob attaches later: the next note is gone; alice's addressed note is not his.
-	got2, err := s.DeliverNotes(ctx, "bob", now)
+	// bob reads later: the next note was already claimed, and alice's is not his.
+	got2, err := s.ClaimNotes(ctx, "bob", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got2) != 0 {
-		t.Fatalf("bob delivery = %d notes, want 0 (next consumed, addressed note not his)", len(got2))
+		t.Fatalf("bob claim = %d messages, want 0 (next already claimed, addressed note not his)", len(got2))
 	}
 
-	// alice's addressed note persists (delivered again until TTL), non-consumed.
+	// alice reading again gets nothing: the watermark, not deletion, is what stops
+	// a re-delivery.
+	again, err := s.ClaimNotes(ctx, "alice", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("second claim returned %d messages, want 0 — a delivered message must not repeat", len(again))
+	}
+
+	// Nothing is pending for her either, but the rows survive for the transcript.
 	pending, err := s.PendingNotes(ctx, "alice", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Body != "hello alice" {
-		t.Fatalf("alice pending = %v, want her addressed note still present", pending)
+	if len(pending) != 0 {
+		t.Fatalf("alice pending = %d, want 0 once claimed", len(pending))
 	}
+	if n, err := s.ConversationCount(ctx, got[1].ConversationID); err != nil || n != 1 {
+		t.Fatalf("delivered message should remain countable: n=%d err=%v", n, err)
+	}
+}
+
+// TestClaimNotes_OrdersOldestFirst: a conversation must read in the order it was
+// written, not newest-first like the intent listing.
+func TestClaimNotes_OrdersOldestFirst(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	for i, body := range []string{"first", "second", "third"} {
+		if _, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: body, Addressee: "alice", TTL: time.Hour},
+			now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ClaimNotes(ctx, "alice", now.Add(time.Minute), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Body != "first" || got[2].Body != "third" {
+		t.Fatalf("claim order = %v, want first→third", bodies(got))
+	}
+}
+
+// TestPutNote_ThreadsAndMintsConversations: omitting a conversation id starts a
+// thread; passing one continues it, which is what the exchange budget counts.
+func TestPutNote_ThreadsAndMintsConversations(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	first, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "q", Addressee: "alice", TTL: time.Hour}, now)
+	if err != nil || first == "" {
+		t.Fatalf("PutNote should mint a conversation id: %q %v", first, err)
+	}
+	second, err := s.PutNote(ctx, NoteInput{AuthorID: "au2", Body: "a", Addressee: "bob", TTL: time.Hour, ConversationID: first}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("reply conversation = %q, want the original %q", second, first)
+	}
+	other, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "unrelated", Addressee: "alice", TTL: time.Hour}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == first {
+		t.Fatal("a fresh message must not reuse an existing conversation id")
+	}
+	if n, err := s.ConversationCount(ctx, first); err != nil || n != 2 {
+		t.Fatalf("conversation count = %d (err %v), want 2", n, err)
+	}
+}
+
+// TestClaimNotes_LimitLeavesRemainderUnclaimed is the anti-message-loss pin.
+// Claiming marks a row delivered for good, so the per-call cap MUST be applied
+// by the query — if it were applied by trimming the returned slice, the trimmed
+// messages would be marked delivered and never shown to anyone.
+func TestClaimNotes_LimitLeavesRemainderUnclaimed(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	for i, body := range []string{"one", "two", "three", "four", "five"} {
+		if _, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: body, Addressee: "alice", TTL: time.Hour},
+			now.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := now.Add(time.Minute)
+
+	first, err := s.ClaimNotes(ctx, "alice", read, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].Body != "one" || first[1].Body != "two" {
+		t.Fatalf("first claim = %v, want the two oldest", bodies(first))
+	}
+
+	// The other three must still be waiting, not silently consumed.
+	rest, err := s.ClaimNotes(ctx, "alice", read, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 3 {
+		t.Fatalf("remainder = %v, want the 3 messages the cap did not reach", bodies(rest))
+	}
+}
+
+func bodies(rows []Row) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.Body
+	}
+	return out
 }
 
 func TestPendingNotes_AddresseeMatchOnly(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
-	_ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n1", Addressee: "alice", TTL: time.Hour}, now)
-	_ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n2", Addressee: AddresseeNext, TTL: time.Hour}, now)
+	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n1", Addressee: "alice", TTL: time.Hour}, now)
+	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "n2", Addressee: AddresseeNext, TTL: time.Hour}, now)
 
 	pending, err := s.PendingNotes(ctx, "alice", now)
 	if err != nil {
@@ -164,10 +274,10 @@ func TestPutNote_DefaultsToNext(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
-	if err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "hi", Addressee: "", TTL: time.Hour}, now); err != nil {
+	if _, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: "hi", Addressee: "", TTL: time.Hour}, now); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.DeliverNotes(ctx, "whoever", now)
+	got, err := s.ClaimNotes(ctx, "whoever", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +291,7 @@ func TestPrune_RemovesExpired(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	_ = s.PutIntent(ctx, IntentInput{AuthorID: "A", Body: "x", TTL: 5 * time.Minute}, now)
-	_ = s.PutNote(ctx, NoteInput{AuthorID: "A", Body: "y", Addressee: "bob", TTL: 5 * time.Minute}, now)
+	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "A", Body: "y", Addressee: "bob", TTL: 5 * time.Minute}, now)
 
 	n, err := s.Prune(ctx, now.Add(10*time.Minute))
 	if err != nil {
@@ -206,7 +316,7 @@ func TestClearSessionIntents_LeavesNotes(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	_ = s.PutIntent(ctx, IntentInput{AuthorID: "sess1", Body: "refactoring", TTL: time.Hour}, now)
-	_ = s.PutNote(ctx, NoteInput{AuthorID: "sess1", Body: "note survives", Addressee: "peer", TTL: time.Hour}, now)
+	_, _ = s.PutNote(ctx, NoteInput{AuthorID: "sess1", Body: "note survives", Addressee: "peer", TTL: time.Hour}, now)
 
 	if err := s.ClearSessionIntents(ctx, "sess1"); err != nil {
 		t.Fatal(err)

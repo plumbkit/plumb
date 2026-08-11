@@ -58,6 +58,23 @@ type Row struct {
 	Addressee     string   // note only — a session name or AddresseeNext; "" for an intent
 	CreatedAt     time.Time
 	ExpiresAt     time.Time
+
+	// ConversationID groups a note with its replies into one thread. Minted by
+	// the store on a fresh message and echoed back by the recipient to reply.
+	// Empty for an intent, and for a legacy row written before schema v2.
+	ConversationID string
+	// DeliveredAt is the read watermark: zero until the note is claimed by a
+	// reader, then the claim time. A delivered note is not re-delivered; it stays
+	// in place until its TTL so the conversation transcript (and its exchange
+	// count) survives.
+	DeliveredAt time.Time
+	// DeliveredTo is the display name of the session that claimed the note. For
+	// an AddresseeNext note this records who won the race.
+	DeliveredTo string
+	// OriginWorkspace is the sender's workspace root, stamped only on a
+	// cross-project note so the recipient can see which project it came from.
+	// Empty for a same-project note.
+	OriginWorkspace string
 }
 
 // IntentInput is the payload for PutIntent. TTL is clamped to a sane minimum by
@@ -78,4 +95,13 @@ type NoteInput struct {
 	Body          string
 	Addressee     string
 	TTL           time.Duration
+
+	// ConversationID threads this note onto an existing conversation. Empty mints
+	// a fresh one, which PutNote returns so the caller can tell the sender what to
+	// quote in order to continue the thread.
+	ConversationID string
+	// OriginWorkspace is the sender's workspace root. Set only when the note
+	// crosses a project boundary (it lands in the daemon-level store); left empty
+	// for a same-project note in the workspace's own collab.db.
+	OriginWorkspace string
 }

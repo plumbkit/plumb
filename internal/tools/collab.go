@@ -22,13 +22,62 @@ const defaultIntentTTLMinutes = 120
 // CollabPolicy is the resolved [collab] snapshot the collab write tools consult
 // (never a per-call config read — the connection snapshots it on attach/reload).
 type CollabPolicy struct {
-	// Intents gates share_intent; Mailbox gates leave_note.
+	// Intents gates share_intent; Mailbox gates leave_note and check_messages.
 	Intents bool
 	Mailbox bool
 	// KnowledgeHandoff gates share_findings.
 	KnowledgeHandoff bool
 	// IntentTTLMinutes is the shared TTL for intents and notes.
 	IntentTTLMinutes int
+	// CrossProject allows messages to and from sessions pinned to a DIFFERENT
+	// workspace. It is read as the RECIPIENT's gate: a session only reads the
+	// daemon-level cross-project store when its own project sets this, so one
+	// project can never push text into another's context uninvited.
+	CrossProject bool
+	// MaxExchanges caps how many notes one conversation may hold before further
+	// replies are refused — the backstop against two agents answering each other
+	// indefinitely with no human in the loop.
+	MaxExchanges int
+	// ChatBudgetBytes caps a single delivered message body. Separate from the
+	// hint budget: a message is content the agent must act on, not a pointer.
+	ChatBudgetBytes int
+	// MaxWaitSeconds caps check_messages' blocking wait, keeping it under the
+	// client's own MCP call timeout.
+	MaxWaitSeconds int
+}
+
+// Defaults mirroring the compiled [collab] values, applied when a resolved
+// policy carries a non-positive number so a misconfiguration degrades to sane
+// behaviour rather than to zero (which would mean "refuse everything" or "never
+// wait").
+const (
+	defaultMaxExchanges   = 10
+	defaultChatBudgetByte = 2048
+	defaultMaxWaitSeconds = 55
+)
+
+func (p CollabPolicy) maxExchanges() int {
+	if p.MaxExchanges > 0 {
+		return p.MaxExchanges
+	}
+	return defaultMaxExchanges
+}
+
+// ChatBudget is the per-message byte cap, falling back to the compiled default
+// when unset. Exported because the connection-side delivery path renders
+// messages too.
+func (p CollabPolicy) ChatBudget() int {
+	if p.ChatBudgetBytes > 0 {
+		return p.ChatBudgetBytes
+	}
+	return defaultChatBudgetByte
+}
+
+func (p CollabPolicy) maxWaitSeconds() int {
+	if p.MaxWaitSeconds > 0 {
+		return p.MaxWaitSeconds
+	}
+	return defaultMaxWaitSeconds
 }
 
 // CollabDeps bundles the dependencies for share_intent and leave_note so the
@@ -47,6 +96,26 @@ type CollabDeps struct {
 	// The collab write tools are the ONLY paths that create collab.db, so a
 	// workspace whose intents+mailbox flags stay off never gets one.
 	Store func() *collab.Store
+	// StoreIfExists returns the workspace's collab.db ONLY when it already exists,
+	// never creating it — the accessor every read and delivery path must use so a
+	// workspace that has not used the feature stays clean. May be nil.
+	StoreIfExists func() *collab.Store
+	// GlobalStore opens (creating on first use) the daemon-level cross-project
+	// store. Only the send path calls it, and only once a message is known to
+	// cross a project boundary, so a daemon whose sessions never talk across
+	// projects never materialises the file. May be nil.
+	GlobalStore func() *collab.Store
+	// GlobalStoreIfExists returns the daemon-level store ONLY when it already
+	// exists, so delivery never creates it. May be nil.
+	GlobalStoreIfExists func() *collab.Store
+	// Notifier is the daemon-wide wake-up signal: bumped on send, watched by the
+	// piggyback fast path and by check_messages' blocking wait. May be nil.
+	Notifier *collab.Notifier
+	// PeerWorkspace reports the workspace a named peer session is pinned to, and
+	// whether such a session is currently known. It decides whether a message is
+	// same-project (the workspace store) or cross-project (the daemon-level one).
+	// May be nil, in which case every message is treated as same-project.
+	PeerWorkspace func(name string) (workspace string, found bool)
 }
 
 // resolveTTL turns a minutes count into a duration, applying the policy default

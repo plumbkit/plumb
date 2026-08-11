@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -54,6 +55,80 @@ func (s *connSession) collabPolicy() tools.CollabPolicy {
 		Mailbox:          c.Mailbox,
 		KnowledgeHandoff: c.KnowledgeHandoff,
 		IntentTTLMinutes: c.IntentTTLMinutes,
+		CrossProject:     c.CrossProject,
+		MaxExchanges:     c.MaxExchanges,
+		ChatBudgetBytes:  c.ChatBudgetBytes,
+		MaxWaitSeconds:   c.MaxWaitSeconds,
+	}
+}
+
+// collabGlobalCreate returns the daemon-level cross-project store, CREATING it
+// on first use. Only the send path calls it, and only for a message already
+// known to cross a project boundary.
+func (s *connSession) collabGlobalCreate() *collab.Store {
+	if s.collabPool == nil {
+		return nil
+	}
+	return s.collabPool.acquireGlobal()
+}
+
+// collabGlobalIfExists returns the daemon-level cross-project store only when it
+// already exists, so delivery never creates it.
+func (s *connSession) collabGlobalIfExists() *collab.Store {
+	if s.collabPool == nil {
+		return nil
+	}
+	return s.collabPool.getGlobal()
+}
+
+// peerWorkspace reports which workspace a named peer session is pinned to. It
+// decides whether a message stays in this workspace's collab.db or crosses into
+// the daemon-level store. A name that matches no live session is reported as not
+// found, and the caller then treats the message as same-project — addressing a
+// peer that has not connected yet is a legitimate thing to do.
+func (s *connSession) peerWorkspace(name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	all, err := session.List()
+	if err != nil {
+		return "", false
+	}
+	for _, p := range all {
+		if p.Name == name {
+			return p.Folder, true
+		}
+	}
+	return "", false
+}
+
+// collabDeps bundles everything the mailbox tools need. Note the deliberate
+// asymmetry between the create and if-exists accessors: only a send may bring a
+// database into existence, so every read path is wired to the if-exists variant.
+func (s *connSession) collabDeps() tools.CollabDeps {
+	return tools.CollabDeps{
+		Workspace:           s.workspace,
+		SessionName:         s.sessionName,
+		SessionID:           s.sessID,
+		Policy:              s.collabPolicy,
+		Store:               s.collabStoreCreate,
+		StoreIfExists:       s.collabStoreIfExists,
+		GlobalStore:         s.collabGlobalCreate,
+		GlobalStoreIfExists: s.collabGlobalIfExists,
+		Notifier:            s.collabPool.notifier(),
+		PeerWorkspace:       s.peerWorkspace,
+	}
+}
+
+// inbox is this session's message inbox: its address, its resolved policy, and
+// the two stores it may read from. Built per call so a config hot-reload takes
+// effect on the next delivery.
+func (s *connSession) inbox() tools.Inbox {
+	return tools.Inbox{
+		Self:      s.sessionName(),
+		Policy:    s.collabPolicy(),
+		Workspace: s.collabStoreIfExists,
+		Global:    s.collabGlobalIfExists,
 	}
 }
 

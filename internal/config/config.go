@@ -445,10 +445,37 @@ type CollabConfig struct {
 	// it introduces agent-authored claims (unlike PeerAwareness's observed facts).
 	// Project-overridable in both directions like the rest of [collab].
 	Intents bool `toml:"intents"`
-	// Mailbox gates the phase-2 minimal mailbox: the leave_note tool, note delivery
-	// at session_start, and pending-note listing in workspace_sessions. Opt-in,
-	// default false. Notes are agent-authored and advisory only.
+	// Mailbox gates the agent-to-agent mailbox: the leave_note and check_messages
+	// tools, message delivery at session_start and on ordinary tool results, and
+	// pending-message listing in workspace_sessions. Default true, and scoped to
+	// the workspace: it lets sessions working on the SAME project talk to each
+	// other, which is the case where the messages are about shared work and the
+	// bodies never leave the project. Reaching a session in a different project is
+	// a separate, off-by-default decision (see CrossProject). Messages are
+	// agent-authored and advisory only — one never blocks a write.
 	Mailbox bool `toml:"mailbox"`
+	// CrossProject lets this session RECEIVE messages from sessions pinned to a
+	// different workspace. Opt-in, default false, and deliberately the recipient's
+	// decision rather than the sender's: a session reads the daemon-level
+	// cross-project store only when its own project sets this, so another project
+	// can never inject text into this one's context uninvited. Sending across is
+	// always permitted; an un-opted-in recipient simply never reads it and the
+	// message expires unread.
+	CrossProject bool `toml:"cross_project"`
+	// MaxExchanges caps how many messages one conversation may hold before further
+	// replies are refused. Two agents that can each answer automatically will
+	// otherwise talk to each other indefinitely with no human in the loop; this is
+	// the backstop. Default 10. Note that plumb cannot observe a human turn, so
+	// this counts total messages in a thread, not consecutive agent replies.
+	MaxExchanges int `toml:"max_exchanges"`
+	// ChatBudgetBytes caps a single delivered message body, enforced on a UTF-8
+	// boundary. Separate from HintBudgetBytes because a message is content the
+	// agent must act on, not a pointer to look up. Default 2048.
+	ChatBudgetBytes int `toml:"chat_budget_bytes"`
+	// MaxWaitSeconds caps how long check_messages will block waiting for a
+	// message. Kept below the client's own MCP call timeout so a wait expires
+	// cleanly rather than surfacing as a tool timeout. Default 55.
+	MaxWaitSeconds int `toml:"max_wait_seconds"`
 	// IntentTTLMinutes is the expiry (in minutes) applied to a new intent or note.
 	// Rows past expiry are pruned on the daemon session-reaper tick and filtered
 	// from every read regardless. Default 120. A non-positive value falls back to

@@ -361,15 +361,17 @@ precedent); no env override; hot-reloaded; strictly per-workspace.
 
 Three tiers, each behind its own flag. **Tier 1 (`peer_awareness`, default on)** is
 passive and derived from writes the daemon itself performed or watched — verifiable
-**observations**, never agent claims. **Tier 2 (`intents` + `mailbox`, default
-off)** adds agent-authored **claims**: `share_intent` and `leave_note` (see
+**observations**, never agent claims. **Tier 2 (`intents`, default off; `mailbox`,
+default on)** adds agent-authored **claims**: `share_intent`, and the `leave_note`
+/ `check_messages` mailbox (see
 [Cross-agent sharing](tools.md#cross-agent-sharing-collab) in the tool reference).
 Claims are always rendered distinctly from observations, secret-scrubbed
 (`internal/redact`) before storage, byte-budgeted when injected, and stored in
 `<workspace>/.plumb/collab.db` (WAL, auto-gitignored like `topology.db`), created
-lazily on first use and pruned on the daemon session-reaper tick (reads filter
-expired rows regardless). A workspace whose `intents` and `mailbox` both stay off
-never gets a `collab.db`. **Tier 3 (`knowledge_handoff`, default off)** adds
+lazily on first **send** and pruned on the daemon session-reaper tick (reads filter
+expired rows regardless). No read path ever creates the file, so a workspace whose
+agents never send anything never gets a `collab.db`. **Tier 3
+(`knowledge_handoff`, default off)** adds
 `share_findings`: an on-demand flush of an agent's findings through the
 generated-memory pipeline (redacted, provenance-stamped, FTS-indexed, retained
 under `[memory] generated_memory_keep`), instantly discoverable by peers via the
@@ -392,9 +394,13 @@ When `peer_awareness` is on it adds three signals:
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `peer_awareness` | bool | `true` | Turn the three tier-1 signals on. Set `false` (globally or per project, either direction) to fall back to bare, unannotated output. |
-| `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, the git tool's repo-intent warning, and a delivered note body share it. |
+| `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and the git tool's repo-intent warning share it. Delivered message bodies use `chat_budget_bytes` instead. |
 | `intents` | bool | `false` | Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
-| `mailbox` | bool | `false` | Tier 2, opt-in: the `leave_note` tool, note delivery at `session_start`, and pending-note listing in `workspace_sessions`. |
+| `mailbox` | bool | `true` | Agent-to-agent messaging between sessions **on this workspace**: `leave_note`, `check_messages`, message delivery on tool results and at `session_start`, and unread listing in `workspace_sessions`. On by default — same-project agents are working on shared code and the bodies never leave the project. |
+| `cross_project` | bool | `false` | Opt-in: also **receive** messages from sessions pinned to a *different* workspace. Deliberately the recipient's decision, not the sender's — a session reads the daemon-level cross-project store only when its own project sets this, so another project can never inject text into this one's context uninvited. Sending across is always permitted; an un-opted-in recipient simply never reads it and the message expires unread. |
+| `max_exchanges` | int | `10` | Messages allowed in one conversation before further replies are refused — the backstop against two agents answering each other indefinitely with no human in the loop. plumb cannot observe a human turn, so this counts total messages in a thread, not consecutive agent replies. `0` uses the default. |
+| `chat_budget_bytes` | int | `2048` | Byte cap (UTF-8 boundary) on a single delivered message body. Separate from `hint_budget_bytes` because a message is content the agent must act on, not a pointer to look up. `0` uses the default. |
+| `max_wait_seconds` | int | `55` | Ceiling on how long `check_messages` will block waiting for a message. Kept below the client's own MCP call timeout so a wait expires cleanly rather than surfacing as a tool timeout. `0` uses the default. |
 | `knowledge_handoff` | bool | `false` | Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
 | `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
 
@@ -527,7 +533,7 @@ excluded so an authoritative empty answer is never supplanted.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (36 tools today). Project-overridable.
+the non-lean remainder (37 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability

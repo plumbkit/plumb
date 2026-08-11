@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/session"
 )
 
@@ -101,7 +100,7 @@ type SessionStart struct {
 	purposeFn     func(purpose string)                                                              // may be nil; persists a validated session purpose tag
 	selfSessID    string                                                                            // this session's ID, excluded from the peer digest
 	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
-	mailboxFn     func() (on bool, store *collab.Store, self string, budgetBytes int)               // may be nil; the phase-2 mailbox delivery snapshot
+	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
 }
 
@@ -126,12 +125,15 @@ func (t *SessionStart) WithCollab(fn func() (bool, int)) *SessionStart {
 	return t
 }
 
-// WithMailbox wires the phase-2 mailbox delivery snapshot: whether [collab]
-// mailbox is on, an open-if-exists collab.db accessor, this session's name (the
-// note addressee), and the [collab] hint_budget_bytes bound. When on and notes
-// await, session_start delivers them (consuming "next" notes) as a "## Messages"
-// block. Nil-safe: unwired ⇒ no delivery. Returns the receiver for chaining.
-func (t *SessionStart) WithMailbox(fn func() (on bool, store *collab.Store, self string, budgetBytes int)) *SessionStart {
+// WithMailbox wires the mailbox delivery snapshot: whether [collab] mailbox is
+// on, and the Inbox to claim from — this session's name (the address), the
+// resolved policy, and open-if-exists accessors for the workspace and
+// cross-project stores. When on and messages await, session_start claims them
+// and renders a "## Messages" block. Claiming marks them delivered, so the same
+// message is never handed over twice across session_start, check_messages, and
+// the tool-result block. Nil-safe: unwired ⇒ no delivery. Returns the receiver
+// for chaining.
+func (t *SessionStart) WithMailbox(fn func() (on bool, inbox Inbox)) *SessionStart {
 	t.mailboxFn = fn
 	return t
 }

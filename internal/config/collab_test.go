@@ -30,8 +30,20 @@ func TestCollab_Defaults(t *testing.T) {
 	if d.Collab.Intents {
 		t.Error("collab.intents should default to false (opt-in)")
 	}
-	if d.Collab.Mailbox {
-		t.Error("collab.mailbox should default to false (opt-in)")
+	if !d.Collab.Mailbox {
+		t.Error("collab.mailbox should default to TRUE — same-project agent messaging is on by default")
+	}
+	if d.Collab.CrossProject {
+		t.Error("collab.cross_project should default to false — reaching another project is opt-in")
+	}
+	if d.Collab.MaxExchanges != 10 {
+		t.Errorf("collab.max_exchanges default = %d, want 10", d.Collab.MaxExchanges)
+	}
+	if d.Collab.ChatBudgetBytes != 2048 {
+		t.Errorf("collab.chat_budget_bytes default = %d, want 2048", d.Collab.ChatBudgetBytes)
+	}
+	if d.Collab.MaxWaitSeconds != 55 {
+		t.Errorf("collab.max_wait_seconds default = %d, want 55", d.Collab.MaxWaitSeconds)
 	}
 	if d.Collab.IntentTTLMinutes != 120 {
 		t.Errorf("collab.intent_ttl_minutes default = %d, want 120", d.Collab.IntentTTLMinutes)

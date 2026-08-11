@@ -136,6 +136,15 @@ func validateCollab(c CollabConfig) error {
 	if c.IntentTTLMinutes < 0 {
 		return errors.New("collab.intent_ttl_minutes must be non-negative (0 uses the default)")
 	}
+	if c.MaxExchanges < 0 {
+		return errors.New("collab.max_exchanges must be non-negative (0 uses the default)")
+	}
+	if c.ChatBudgetBytes < 0 {
+		return errors.New("collab.chat_budget_bytes must be non-negative (0 uses the default)")
+	}
+	if c.MaxWaitSeconds < 0 {
+		return errors.New("collab.max_wait_seconds must be non-negative (0 uses the default)")
+	}
 	return nil
 }
 

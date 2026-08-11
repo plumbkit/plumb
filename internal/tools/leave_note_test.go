@@ -35,7 +35,7 @@ func TestLeaveNote_DefaultsToNext(t *testing.T) {
 	if !strings.Contains(out, "next session") {
 		t.Errorf("expected next-arrival wording; got %q", out)
 	}
-	got, err := store.DeliverNotes(context.Background(), "whoever", time.Now())
+	got, err := store.ClaimNotes(context.Background(), "whoever", time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

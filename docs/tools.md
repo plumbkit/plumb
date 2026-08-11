@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **57** structured tools to AI assistants. Every write tool is
+Plumb exposes **58** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -153,24 +153,32 @@ response.
 
 When `[collab] intents` is on, the output also lists each active session's live
 intent (an unverified claim, distinct from the observed `recent_writes`); when
-`[collab] mailbox` is on it lists the notes addressed to the caller (pending, not
-consumed here — `session_start` delivers them). Neither ever creates `collab.db`.
+`[collab] mailbox` is on it lists the messages addressed to the caller that are
+still unread (listed, not claimed here — reading them is `check_messages`' job).
+Neither ever creates `collab.db`.
 
 ---
 
 ## Cross-agent sharing (`[collab]`)
 
-Three opt-in, advisory tools for concurrent agents on one workspace. Each is gated
-by its own `[collab]` flag (default off) and refuses with a clear enable hint
-when the flag is off. Everything is **advisory** — nothing here ever blocks a
-write — **secret-scrubbed** (`internal/redact`) before storage, **byte-budgeted**
-when injected, and **strictly per-workspace**. What an agent *says* is a **claim**,
-rendered distinctly from what the daemon *observed* (phase-1 peer awareness).
-`share_intent` and `leave_note` rows live in `<workspace>/.plumb/collab.db` (WAL,
-auto-gitignored like `topology.db`), created lazily on first use, expiring per
-`[collab] intent_ttl_minutes` and pruned on the daemon session-reaper tick;
-`share_findings` instead writes a durable generated memory. Delivery is by polling
-and hint injection only — plumb cannot push to another agent.
+Four advisory tools for concurrent agents. Each is gated by its own `[collab]`
+flag and refuses with a clear enable hint when the flag is off. Everything is
+**advisory** — nothing here ever blocks a write — **secret-scrubbed**
+(`internal/redact`) before storage and **byte-budgeted** when injected. What an
+agent *says* is a **claim**, rendered distinctly from what the daemon *observed*
+(phase-1 peer awareness). `share_intent` and same-project messages live in
+`<workspace>/.plumb/collab.db` (WAL, auto-gitignored like `topology.db`), created
+lazily on first use, expiring per `[collab] intent_ttl_minutes` and pruned on the
+daemon session-reaper tick; `share_findings` instead writes a durable generated
+memory.
+
+**Delivery is by polling only — plumb cannot push to another agent.** That single
+constraint shapes the mailbox. Messages are appended to the result of *any*
+successful tool call, so an agent that is working receives them without asking;
+`check_messages` blocks server-side so an agent that is *waiting* can hand its
+turn over instead of spin-polling. An agent idling on its human makes no tool
+calls at all and will not see a message until it does something — silence is not
+a refusal.
 
 ### `share_intent`
 Broadcast what you are working on so peers can steer around it (e.g. "refactoring
@@ -188,14 +196,48 @@ strings, optional — workspace-relative globs for the area you are working on);
 intent_ttl_minutes`).
 
 ### `leave_note`
-Leave a short message for a named peer session, or for `next` (whoever attaches to
-this workspace next). A minimal mailbox — notes only, no tasks, threads, or
-replies. An addressed note is delivered at that peer's `session_start` and listed
-in its `workspace_sessions` until it expires; a `next` note is delivered once, to
-the first session that attaches, then consumed. Requires `[collab] mailbox = true`.
+Send a message to a named peer session, or to `next` (whoever attaches to this
+workspace next). The send half of the mailbox.
+
+Every message belongs to a **conversation**. Omit `conversation_id` to start one
+(the reply reports the new id); quote the id you were given to answer in thread.
+A thread is capped at `[collab] max_exchanges` messages — once spent, further
+replies are refused with an instruction to summarise for the human rather than
+open a fresh thread. plumb cannot observe a human turn, so this counts *total*
+messages in a thread, not consecutive agent replies; it bounds runaway cost, it
+does not distinguish a productive long thread from a loop.
+
+Each message is delivered **exactly once**, to whichever path reads it first:
+the block appended to an ordinary tool result, `check_messages`, or the
+recipient's next `session_start`. A delivered message stays in the store until
+its TTL, which is what gives a conversation its transcript and its exchange
+count.
+
+Addressing a session pinned to a **different workspace** is allowed, but such a
+message is delivered only if *that* project sets `[collab] cross_project = true`;
+otherwise it expires unread. Cross-project messages are stored in a daemon-level
+database, never in the recipient's directory — no session ever writes into
+another project's workspace — and are labelled with the sending project when
+read. `next` is always same-project: "whoever attaches next" has no meaning
+across projects. Requires `[collab] mailbox = true`.
 
 **Inputs:** `body` (string, required — the message); `to` (string, optional — a
-peer session name, or `next` (default) for whoever attaches next).
+peer session name, or `next` (default)); `conversation_id` (string, optional —
+reply into an existing thread).
+
+### `check_messages`
+Read messages other agents have sent you, optionally waiting for one. The receive
+half of the mailbox, and what makes an actual back-and-forth possible.
+
+With `wait_seconds` omitted or `0` it returns immediately with whatever is
+waiting. With a positive value it **blocks** until a message arrives or the wait
+expires, capped by `[collab] max_wait_seconds` (default 55 s, kept below the
+client's own MCP call timeout). That is how a session hands its turn to a peer
+after asking something, at a cost of one tool call per turn rather than one per
+poll. Requires `[collab] mailbox = true`.
+
+**Inputs:** `wait_seconds` (integer, optional — block up to this long; `0`
+default).
 
 ### `share_findings`
 Hand off what you have just learned as a durable, searchable memory *now*, instead

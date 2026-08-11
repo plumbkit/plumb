@@ -53,7 +53,7 @@ var (
 
 	selftestSession = []string{"rename_session", "workspace_sessions"}
 
-	selftestCollab = []string{"share_intent", "leave_note", "share_findings"}
+	selftestCollab = []string{"share_intent", "leave_note", "check_messages", "share_findings"}
 
 	selftestTasksConfig = []string{"run_task", "run_command", "execute_shell_command", "agent_config"}
 
@@ -243,9 +243,11 @@ func selftestTierB() []string {
 		"- **Session:** " + toolList(selftestSession) + ": read the current name via `daemon_info`,",
 		"  `rename_session` to a temp name, then rename it back.",
 		"- **Cross-agent sharing (advisory):** " + toolList(selftestCollab) + ": call `share_intent`",
-		"  with a short `body`, `leave_note` with a `body` and `to: \"next\"`, and `share_findings`",
-		"  with a short `summary`. If the matching `[collab]` flag (`intents`/`mailbox`/",
-		"  `knowledge_handoff`) is off (the default), each refuses with a clear enable hint — that",
+		"  with a short `body`, `leave_note` with a `body` and `to: \"next\"`, `check_messages`",
+		"  with no arguments (it should report the note you just left, exactly once), and",
+		"  `share_findings` with a short `summary`. If the matching `[collab]` flag",
+		"  (`intents`/`knowledge_handoff`) is off (the default), it refuses with a clear enable hint —",
+		"  that",
 		"  is a PASS. When on, confirm the intent/note in `workspace_sessions` and the finding via",
 		"  `search_memories`.",
 	}

@@ -152,6 +152,9 @@ var numberMetaTable = map[settingKey]struct {
 	skMemoryGeneratedKeep:        {10, "generated keep"},
 	skCollabHintBudgetBytes:      {128, "collab hint budget (B)"},
 	skCollabIntentTTLMin:         {30, "collab intent ttl (min)"},
+	skCollabMaxExchanges:         {1, "collab max exchanges"},
+	skCollabChatBudgetBytes:      {256, "collab chat budget (B)"},
+	skCollabMaxWaitSec:           {5, "collab max wait (s)"},
 }
 
 // numberMeta returns the adjust step and status label for a numeric setting.
@@ -218,10 +221,25 @@ func intFieldMore(c *config.Config, key settingKey) *int {
 		return &c.Memory.IdleSummaryMinutes
 	case skMemoryGeneratedKeep:
 		return &c.Memory.GeneratedMemoryKeep
+	default:
+		return intFieldCollab(c, key)
+	}
+}
+
+// intFieldCollab returns a pointer to the int config field a [collab] number
+// row edits. Split out from intFieldMore to stay within the gocyclo-15 contract.
+func intFieldCollab(c *config.Config, key settingKey) *int {
+	switch key {
 	case skCollabHintBudgetBytes:
 		return &c.Collab.HintBudgetBytes
 	case skCollabIntentTTLMin:
 		return &c.Collab.IntentTTLMinutes
+	case skCollabMaxExchanges:
+		return &c.Collab.MaxExchanges
+	case skCollabChatBudgetBytes:
+		return &c.Collab.ChatBudgetBytes
+	case skCollabMaxWaitSec:
+		return &c.Collab.MaxWaitSeconds
 	default:
 		return nil
 	}
@@ -350,6 +368,8 @@ func boolFieldCollab(c *config.Config, key settingKey) *bool {
 		return &c.Collab.Intents
 	case skCollabMailbox:
 		return &c.Collab.Mailbox
+	case skCollabCrossProject:
+		return &c.Collab.CrossProject
 	case skCollabKnowledgeHandoff:
 		return &c.Collab.KnowledgeHandoff
 	default:
@@ -513,6 +533,8 @@ func toggleLabelMore(key settingKey) string {
 		return "intents"
 	case skCollabMailbox:
 		return "mailbox"
+	case skCollabCrossProject:
+		return "cross-project"
 	case skCollabKnowledgeHandoff:
 		return "knowledge handoff"
 	case skXcodeAutoBuildServer:

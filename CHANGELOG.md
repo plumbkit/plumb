@@ -4,6 +4,91 @@
 
 ### Added
 
+- **The `[collab]` mailbox is now a real agent-to-agent conversation channel:
+  ambient delivery on every tool result, a blocking `check_messages`, threaded
+  replies, cross-project messaging, and a per-conversation exchange budget.**
+  `leave_note` shipped as a one-way sticky note — a row an agent could only find
+  by calling `session_start` or `workspace_sessions` and thinking to look. There
+  was no unread state (an addressed note nagged on *every* `session_start` until
+  its TTL), no threading, no way to reply, and no signal at all between polls.
+  Two agents could leave each other notes; they could not talk.
+
+  **Delivery is by polling only — plumb cannot push over MCP — and that single
+  constraint shapes the design.** Messages are now appended to the result of
+  *any* successful tool call, not just the five path-bearing ones the memory and
+  peer hints use: a message is about the agent, not about the file it happens to
+  be touching, so an agent working only through `git` or `run_task` must still
+  receive it. That covers an agent which is *working*. For an agent which is
+  *waiting*, the new **`check_messages`** tool blocks server-side until a message
+  arrives or `[collab] max_wait_seconds` (default 55, kept under the client's own
+  call timeout) expires, so a turn costs one tool call instead of one per poll.
+  Neither helps an agent idling on its human — it makes no tool calls at all — so
+  every empty result says so explicitly: silence is not a refusal.
+
+  **Cost was the design problem for the piggyback**, since the enrich hook runs
+  synchronously on the response path of every call. A new daemon-wide in-process
+  notifier (`internal/collab/notify.go`) keeps a generation counter per
+  recipient, bumped on send; a connection compares its cached counters and
+  touches SQLite only when one has moved. The steady state — no mail — is a map
+  lookup under one mutex and nothing else. The counters are a fast path, not the
+  truth: they reset on daemon restart, so a 30 s backstop still consults the
+  store, and a missed bump costs latency, never a message.
+
+  **Read state replaced delete-on-delivery.** Schema v2 adds `conversation_id`,
+  `delivered_at`, `delivered_to` and `origin_workspace` by `ALTER TABLE` —
+  `collab.db` is not a rebuildable index, its rows are the only copy, so the
+  migration is additive, driven by which columns actually exist rather than by
+  the stamped version, and idempotent. A legacy v1 note survives and behaves like
+  an unread message: delivered once, then quiet. A claimed message stays until
+  its TTL, which is what gives a conversation a transcript and a countable number
+  of exchanges. `session_start`, `check_messages` and the tool-result block all
+  go through one `Inbox.Claim`, which is what makes "delivered exactly once" true
+  across all three rather than per path.
+
+  **Cross-project messaging is gated at DELIVERY, by the recipient.** A message
+  to a session pinned elsewhere lands in a new daemon-level store beside
+  `stats.db`, stamped with the sender's workspace. The obvious alternative —
+  having the sender write into the recipient's `<their-ws>/.plumb/collab.db` —
+  was rejected: it would have a session write outside its pinned workspace,
+  exactly the class of bug the workspace-pin hardening closed. No session ever
+  writes into another project's directory. A recipient whose `[collab]
+  cross_project` is off simply never reads that store and the rows expire unread,
+  so the sender needs no knowledge of the recipient's configuration to be safely
+  ignored, and one project cannot inject text into another's context by writing a
+  file it controls. `next` stays same-project — "whoever attaches next" has no
+  meaning across projects.
+
+  **Two agents that can both reply automatically will otherwise talk forever**, so
+  a conversation is capped at `[collab] max_exchanges` (default 10); a reply into
+  a spent thread is refused with an instruction to summarise for the human rather
+  than open a fresh thread. Honest limitation, documented: plumb cannot observe a
+  human turn, so this counts total messages in a thread, not consecutive agent
+  replies — it bounds runaway cost, it does not distinguish a productive long
+  thread from a loop.
+
+  **`[collab] mailbox` now defaults to `true`** (it shipped opt-in). Same-project
+  agents are working on shared code and the message bodies never leave the
+  project, so the case for opt-in was weak; reaching *another* project is the
+  decision that stays off by default. New config: `cross_project` (false),
+  `max_exchanges` (10), `chat_budget_bytes` (2048 — separate from
+  `hint_budget_bytes`, since a message is content to act on rather than a pointer
+  to look up) and `max_wait_seconds` (55), all layered, hot-reloaded, and wired
+  into the field registry, `plumb config show` and the TUI Settings "Collab"
+  group like the rest of `[collab]`. One new MCP tool (57 → 58).
+
+  Guarded by store tests (v1→v2 migration preserving a legacy note and delivering
+  it exactly once, migration idempotency, claim-once across readers, oldest-first
+  ordering, conversation threading and counting), notifier tests (per-recipient
+  generations, wake-on-bump, timeout, the snapshot/park race, concurrent
+  waiters), tool tests (flag gating both directions, delivery quoting the
+  conversation id, cross-project delivered only with the recipient's flag on and
+  labelled with its origin, wait capped by policy, wait woken by a concurrent
+  send, budget refusal not storing the message and not leaking across threads),
+  and connection tests (delivery on a non-path-bearing tool, no double-delivery on
+  the mailbox tools, no `collab.db` created by any read path, and — the cost
+  guarantee — that an unchanged generation performs no query while the periodic
+  backstop still fires).
+
 - **`plumb trust` now covers a project's `[lsp.<lang>]` and `[git]` settings, so
   per-project configuration is possible again without re-opening the hole.**
   Forcing those sections global-only was the right default and the wrong

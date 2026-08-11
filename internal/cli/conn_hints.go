@@ -59,14 +59,28 @@ func memoriesDirSig(ws string) int64 {
 	return st.ModTime().UnixNano()
 }
 
-// enrichToolOutput appends a "[Hint: relevant memory …]" block when the tool's
-// target path matches a memory's paths glob — and, for mutation tools, when a
-// memory's provenance references a symbol the topology index records in the
-// edited file. Names only — never memory bodies. Each memory is hinted at most
-// once per session (cleared on re-pin): after the first pointer, repeats on
-// every read of the same path are noise. Cheap and non-blocking, as required
-// of an EnrichToolOutput hook.
+// mailboxSilentTools are the tools that must never carry a piggybacked message
+// block. The mailbox tools themselves would double-deliver (they already claim
+// and render), and session_start renders its own "## Messages" section.
+var mailboxSilentTools = map[string]bool{
+	"check_messages": true, "leave_note": true, "session_start": true,
+}
+
+// enrichToolOutput appends plumb's advisory blocks to a successful tool result.
+//
+// Two tiers, deliberately gated differently. Messages addressed to this session
+// are appended to EVERY tool's output: a message is about the agent, not about
+// the file it happens to be touching, so an agent working only through git or
+// run_task must still receive it. The path-derived hints stay restricted to the
+// small set of path-bearing tools, where a target file exists to match against.
+//
+// Cheap and non-blocking, as required of an EnrichToolOutput hook: the message
+// check short-circuits on an in-process generation counter and touches the
+// database only when a peer has actually written something (see conn_chat.go).
 func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
+	if !mailboxSilentTools[name] {
+		text += s.messageHint(ctx)
+	}
 	if !hintAllowedTools[name] {
 		return text
 	}
@@ -74,11 +88,11 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	if ws == "" {
 		return text
 	}
-	// Three independent signals, each self-gated on its own config: the relevant-
-	// memory hint ([memory] inject_hints), the phase-1 peer-activity hint ([collab]
-	// peer_awareness, an observed fact), and the phase-2 peer-intent hint ([collab]
-	// intents, an unverified claim). All are advisory, byte-budgeted, and appended
-	// after the tool's own output.
+	// Three independent path-derived signals, each self-gated on its own config:
+	// the relevant-memory hint ([memory] inject_hints), the phase-1 peer-activity
+	// hint ([collab] peer_awareness, an observed fact), and the phase-2 peer-intent
+	// hint ([collab] intents, an unverified claim). All are advisory,
+	// byte-budgeted, and appended after the tool's own output.
 	text += s.memoryHint(ctx, name, args, ws)
 	text += s.peerHint(args, ws)
 	text += s.intentHint(args, ws)
@@ -228,11 +242,16 @@ func (s *connSession) unseenHints(names []string, limit int) []string {
 }
 
 // clearHintSeen resets the once-per-session hint suppression; called on
-// re-pin so memories of the new project hint normally.
+// re-pin so memories of the new project hint normally. The message-generation
+// cache is reset alongside it: the new project has a different collab.db, and
+// the previous project's counters say nothing about what is waiting there.
 func (s *connSession) clearHintSeen() {
 	s.hintSeenMu.Lock()
 	s.hintSeen = nil
 	s.hintSeenMu.Unlock()
+	if s.chatWatch != nil {
+		s.chatWatch.reset()
+	}
 }
 
 // editedFileSymbols returns the symbol names the topology index records in

@@ -112,6 +112,10 @@ const (
 	skCollabHintBudgetBytes
 	skCollabIntents
 	skCollabMailbox
+	skCollabCrossProject
+	skCollabMaxExchanges
+	skCollabChatBudgetBytes
+	skCollabMaxWaitSec
 	skCollabKnowledgeHandoff
 	skCollabIntentTTLMin
 	// [rastro] rows
@@ -309,6 +313,10 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Collab", label: "Hint budget (B)", kind: settingNumber, key: skCollabHintBudgetBytes, value: itoa(cfg.Collab.HintBudgetBytes)},
 		{group: "Collab", label: "Intents", kind: settingToggle, key: skCollabIntents, value: onOff(cfg.Collab.Intents)},
 		{group: "Collab", label: "Mailbox", kind: settingToggle, key: skCollabMailbox, value: onOff(cfg.Collab.Mailbox)},
+		{group: "Collab", label: "Cross-project", kind: settingToggle, key: skCollabCrossProject, value: onOff(cfg.Collab.CrossProject)},
+		{group: "Collab", label: "Max exchanges", kind: settingNumber, key: skCollabMaxExchanges, value: itoa(cfg.Collab.MaxExchanges)},
+		{group: "Collab", label: "Chat budget (B)", kind: settingNumber, key: skCollabChatBudgetBytes, value: itoa(cfg.Collab.ChatBudgetBytes)},
+		{group: "Collab", label: "Max wait (s)", kind: settingNumber, key: skCollabMaxWaitSec, value: itoa(cfg.Collab.MaxWaitSeconds)},
 		{group: "Collab", label: "Knowledge handoff", kind: settingToggle, key: skCollabKnowledgeHandoff, value: onOff(cfg.Collab.KnowledgeHandoff)},
 		{group: "Collab", label: "Intent TTL (min)", kind: settingNumber, key: skCollabIntentTTLMin, value: itoa(cfg.Collab.IntentTTLMinutes)},
 
