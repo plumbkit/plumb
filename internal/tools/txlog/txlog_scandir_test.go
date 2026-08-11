@@ -54,7 +54,7 @@ func TestScan_RefusesSymlinkedTxLogDir(t *testing.T) {
 	}
 	ws := plantSymlinkedTxLog(t, victim)
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	for _, name := range []string{"Documents", "Desktop", ".ssh"} {
 		if _, err := os.Stat(filepath.Join(victim, name)); os.IsNotExist(err) {
@@ -82,7 +82,7 @@ func TestScan_RefusesRelativeSymlinkedTxLogDir(t *testing.T) {
 		t.Skipf("symlinks unsupported on this filesystem: %v", err)
 	}
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	if _, err := os.Stat(sibling); os.IsNotExist(err) {
 		t.Error("Scan deleted a sibling project reached by a relative symlink")
@@ -102,7 +102,7 @@ func TestScan_RefusesSymlinkedPlumbDir(t *testing.T) {
 		t.Skipf("symlinks unsupported on this filesystem: %v", err)
 	}
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	if _, err := os.Stat(filepath.Join(victim, "tx-log", "doomed")); os.IsNotExist(err) {
 		t.Error("Scan deleted through a symlinked .plumb directory")
@@ -124,7 +124,7 @@ func TestScan_StillRecoversAGenuineOrphan(t *testing.T) {
 	}
 	writeOrphanManifest(t, txDir, ws, target)
 
-	Scan(ws, time.Now().Add(time.Hour))
+	Scan(ws, time.Now().Add(time.Hour), confinedTo(ws))
 
 	if got, _ := os.ReadFile(target); string(got) != "before" {
 		t.Errorf("a real orphan must still be recovered, got %q", got)
