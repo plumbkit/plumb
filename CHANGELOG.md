@@ -9,6 +9,56 @@
 
 ### Added
 
+- **Ruby is now indexed by the topology Map** — the first language wired under the
+  coverage programme, and the largest single gap: Ruby outnumbers Python, Swift
+  and Rust in the sample workspace that motivated this, with no Map at all. The
+  extractor emits modules and classes as types (keeping `< Superclass` in the
+  signature), instance and singleton methods, top-level defs as functions,
+  constant assignments, `attr_reader`/`attr_writer`/`attr_accessor` as members
+  (one node per symbol, so `attr_accessor :a, :b` yields two), and
+  `require`/`require_relative` as imports — with certain (1.0) containment edges
+  and heuristic intra-file call edges, matching the fidelity of the existing
+  extractors. Ruby 3.0 endless methods (`def total = 1`) are named by themselves;
+  they carry neither a parameter list nor a body block, so a def's name is read
+  from the grammar's `name` field rather than by scanning to the first of those.
+
+  Three things about Ruby needed deciding rather than transcribing. **Qualified
+  names follow Ruby's own notation** — `Billing::Invoice#total` for an instance
+  method, `Billing::Invoice.build` for a singleton one — because that is what a
+  Ruby backtrace prints and therefore what a search for it will contain.
+  **Declarations that are syntactically just method calls are still
+  declarations**: `require`, `attr_accessor` and RSpec's `describe`/`it` have no
+  declaration node in the grammar, and omitting them would leave a Rails or RSpec
+  file looking nearly empty. **`attr_*` members carry the cross-language
+  mutability convention**: `KindField` is reserved for a key of a data-format
+  file, so a member of a Ruby class is a `KindConstant` when immutable and a
+  `KindVariable` otherwise — `attr_reader` publishes a reader and no writer, so
+  what it exposes cannot be reassigned through the object's own interface, while
+  `attr_writer` and `attr_accessor` both publish one. **Locals had to be
+  suppressed explicitly**: Ruby
+  gives `total = 5` inside a method and `CONST = 42` at class level the same
+  `assignment` node, so a naive walk emits every local variable in the codebase
+  as a symbol — the exact defect the pure-Go Swift walk shipped with, where it
+  leaked 134 locals and took a parity sweep to find. Both test conventions are
+  recognised, by different routes: minitest's `test_*` methods are defs, RSpec's
+  examples are blocks whose description is a string argument.
+
+  Note the priority order this programme uses is demand, NOT the
+  definition-pattern count from gotreesitter's tags-query inference: Ruby scores
+  **zero** there purely because the inference table lacks its node names
+  (`method`, `class`, `module`), while the grammar itself parses at full quality.
+  Ranking effort by that column would be a serious mistake.
+
+  Wiring a language is now the row flip the registry was reshaped for: `ruby`
+  moves from `EngineNone` to `EngineTreeSitter` and gains a constructor, and
+  every file previously recorded as uncovered goes stale automatically (its
+  stored content hash is empty) and is re-indexed on the next resync — no schema
+  change, no reindex flag. The two count pins moved together (18 → 19 indexed,
+  14 → 13 uncovered), which is what makes a half-wired language impossible to
+  land quietly. Also fixes long-standing drift in `allExtractors()`
+  (`memory_integration_test.go`), a hand-written mirror of `buildExtractors` that
+  had been missing TypeScript and TSX for as long as they have existed.
+
 - **An unsupported language is now a stated limitation instead of a silent empty
   answer, and the obsolete per-grammar parse cap is gone.** Asking for the Map of
   a Rails app returned nothing, confidently: an extension with no extractor was

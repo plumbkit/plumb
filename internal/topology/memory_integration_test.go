@@ -18,10 +18,16 @@ import (
 
 // allExtractors mirrors cli.buildExtractors: every supported structural
 // extractor, constructed up front (as on every workspace attach).
+//
+// It is a hand-written mirror because internal/topology cannot import
+// internal/cli, so it drifts silently — TypeScript and TSX were missing from it
+// for as long as they have existed. Anything added here must also be added to
+// cli.extractorCtors, which TestBuildExtractorsCoversRegistry does pin.
 func allExtractors() []topology.Extractor {
 	return []topology.Extractor{
 		goext.New(),
-		ts.NewPython(), ts.NewJavaScript(), ts.NewRust(), ts.NewZig(), ts.NewKotlin(),
+		ts.NewPython(), ts.NewJavaScript(), ts.NewTypeScript(), ts.NewTSX(),
+		ts.NewRuby(), ts.NewRust(), ts.NewZig(), ts.NewKotlin(),
 		ts.NewSwift(), ts.NewJava(), ts.NewBash(), ts.NewHCL(), ts.NewSQL(),
 		ts.NewDockerfile(), ts.NewTOML(), ts.NewYAML(), ts.NewMarkdown(), ts.NewHTML(),
 	}

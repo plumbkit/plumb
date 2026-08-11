@@ -26,6 +26,7 @@ type fidelityCase struct {
 func fidelityCases() []fidelityCase {
 	return []fidelityCase{
 		{"python", grammars.PythonLanguage, func() topology.Extractor { return NewPython() }, string(pySrc), "helper_func"},
+		{"ruby", grammars.RubyLanguage, func() topology.Extractor { return NewRuby() }, string(rbSrc), "trailing_helper"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 

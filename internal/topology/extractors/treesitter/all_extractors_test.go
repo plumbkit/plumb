@@ -34,6 +34,10 @@ type extractorCase struct {
 func allExtractorCases() []extractorCase {
 	return []extractorCase{
 		{
+			"ruby", func() topology.Extractor { return NewRuby() }, "a.rb",
+			"require 'json'\n\nclass Invoice\n  def total\n    helper\n  end\n\n  def helper\n    1\n  end\nend\n", "json",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
