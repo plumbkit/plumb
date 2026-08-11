@@ -213,26 +213,41 @@ func listToolNames(t *testing.T, c *mcpClient) map[string]bool {
 // TestSmoke_LeanManifestKeepsBootstrap drives the live daemon with a client
 // that resolves to the LEAN profile — via a [tools.client_profiles] override
 // keyed to the harness's clientInfo name ("smoke-test", see
-// mcpClient.initialize) written into the workspace's .plumb/config.toml before
-// initialize — and asserts over the wire that the advertised manifest is
-// exactly LeanTools ∪ BootstrapTools (== LeanTools today, bootstrap ⊆ lean)
+// mcpClient.initialize) — and asserts over the wire that the advertised manifest
+// is exactly LeanTools ∪ BootstrapTools (== LeanTools today, bootstrap ⊆ lean)
 // with all four bootstrap tools present. TestSmoke_ToolListParity covers the
 // complementary full/unknown path against the same live tools/list.
 //
-// The project config lands asynchronously (OnInit applies it in a goroutine
-// after the initialize response), so the test polls tools/list until the lean
-// profile takes effect before making the exact-set assertions.
+// The override is written to the GLOBAL config, not the workspace's. It used to
+// go in .plumb/config.toml, which no longer works and should not: a project
+// config narrowing the advertised tool set is an evidence-suppression vector —
+// for a client that discovers tools only from tools/list, a repository could hide
+// search_in_files and find_files from the very session auditing it. Only
+// WIDENING survives from a project file now (see docs/project-config-trust.md).
+// What this test is actually about is the shape of the lean manifest, not the
+// layer the profile came from, so it asserts the same thing through the layer a
+// user controls.
+//
+// The profile still resolves asynchronously relative to initialize, so the test
+// polls tools/list until it takes effect before the exact-set assertions.
 func TestSmoke_LeanManifestKeepsBootstrap(t *testing.T) {
 	plumbBin := buildPlumb(t)
 	fixture := makeBareFixture(t)
+	tmpHome := mkTmpHome(t)
+	// isolatedEnv points XDG_CONFIG_HOME at <tmpHome>/.config, so this is the
+	// global config the daemon under test will read.
+	globalDir := filepath.Join(tmpHome, ".config", "plumb")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal("create global config dir:", err)
+	}
 	cfg := "[tools.client_profiles]\n\"smoke-test\" = \"lean\"\n"
-	if err := os.WriteFile(filepath.Join(fixture, ".plumb", "config.toml"), []byte(cfg), 0o644); err != nil {
-		t.Fatal("write project config:", err)
+	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal("write global config:", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), tierDTimeout)
 	defer cancel()
 
-	c := newMCPClient(t, ctx, plumbBin, mkTmpHome(t), fixture)
+	c := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	c.initialize(t, fixture)
 	c.call(t, "session_start", map[string]any{"workspace": fixture}, toolTimeout)
 
