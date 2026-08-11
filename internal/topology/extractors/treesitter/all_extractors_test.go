@@ -75,6 +75,10 @@ func allExtractorCases() []extractorCase {
 			"#include <vector>\n\nstruct P { int x; };\n\nstatic int helper(int v) { return v; }\n\nint add(int a) { return helper(a); }\n", "vector",
 		},
 		{
+			"objc", func() topology.Extractor { return NewObjC() }, "a.m",
+			"#import <Foundation/Foundation.h>\n\n@interface Widget : NSObject\n- (void)run;\n@end\n\n@implementation Widget\n- (void)run {\n}\n@end\n", "Foundation/Foundation.h",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},

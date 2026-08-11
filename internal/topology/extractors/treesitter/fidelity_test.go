@@ -46,6 +46,11 @@ func fidelityCases() []fidelityCase {
 		// introduced rather than re-measure a known upstream defect (which
 		// cpp_test.go pins separately).
 		{"cpp", grammars.CppLanguage, func() topology.Extractor { return NewCpp() }, string(cppSrc), "scaled_norm"},
+		// objcSrc deliberately avoids NS_ASSUME_NONNULL_BEGIN and NS_ENUM
+		// bodies: both are live grammar defects, and this guard must measure a
+		// cascade we introduced rather than re-measure a pinned upstream bug
+		// (objc_test.go pins those separately).
+		{"objc", grammars.ObjcLanguage, func() topology.Extractor { return NewObjC() }, string(objcSrc), "debugSummary"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 
