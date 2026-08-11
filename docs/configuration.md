@@ -284,13 +284,13 @@ reports the resolved path, or warns with a fix hint when there is none.
 | `resync_on_attach` | bool | `false` | Force a full resync each time the workspace attaches. |
 | `exclude_patterns` | []string | `[]` | Path glob patterns to skip during indexing. |
 | `max_file_size_bytes` | int64 | `524288` (512 KiB) | Largest file considered for extraction. `0` uses the default. |
-| `extract_timeout_seconds` | int | `10` | Longest one file's parse may take before it is abandoned, recorded as a file error, and the indexer moves on. Size caps bound how much source a grammar sees, not how long it spends: a pathological error-recovery path can burn tens of seconds on a small file, and the indexer runs one worker, so that would stall the whole index. `0` disables the timeout. |
+| `extract_timeout_seconds` | int | `10` | Longest one file's parse may take before it is abandoned, recorded as a file error, and the indexer moves on. Bounded by a built-in 2-minute ceiling: this setting can LOWER the bound but not remove it, because an unbounded parse can wedge the single indexer worker permanently. `0` means "use the ceiling", not "unbounded". Size caps bound how much source a grammar sees, not how long it spends: a pathological error-recovery path can burn tens of seconds on a small file, and the indexer runs one worker, so that would stall the whole index. |
 | `resync_batch` | int | `100` | Files the full resync extracts before pausing, to throttle CPU. `0` disables pacing. |
 | `resync_pause_ms` | int | `25` | Pause (milliseconds) after each `resync_batch` files. `0` disables pacing. |
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
 | `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
-Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, while `extract_timeout_seconds = 0` means *disabled*.
+Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, and `extract_timeout_seconds = 0` means *use the built-in 2-minute ceiling* -- it no longer disables bounding entirely, since an unbounded parse can wedge the indexer.
 
 `topology.db` (+ `-wal`/`-shm`) is auto-added to `<workspace>/.plumb/.gitignore`,
 and `.plumb/` itself is excluded from watching. Per-project `[topology]` config
@@ -1061,7 +1061,7 @@ enabled                 = true              # on by default; set false to opt ou
 resync_on_attach        = false
 exclude_patterns        = []
 max_file_size_bytes     = 524288            # 512 KiB
-extract_timeout_seconds = 10                # abandon one file's parse after this long (0 disables)
+extract_timeout_seconds = 10                # abandon one file's parse after this long (0 = the 2 min ceiling)
 resync_batch            = 100               # files per pause during a full resync (0 disables)
 resync_pause_ms         = 25                # pause after each batch, ms (0 disables)
 resync_interval_minutes = 60                # periodic full resync FALLBACK (suppressed while watch is on); 0 disables
