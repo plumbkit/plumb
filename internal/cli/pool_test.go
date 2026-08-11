@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // blockingShutdownClient embeds stubClient (routing_proxy_test.go) and makes
@@ -85,6 +86,15 @@ func detectTestPool() *workspacePool {
 // plumb source tree, and Detect finds plumb's own go.mod as an ancestor
 // marker. Going via os.MkdirTemp("", …) bypasses GOTMPDIR and lands under
 // /var/folders (macOS) / /tmp (Linux) where no Go module exists above.
+//
+// The result is canonicalised, because a workspace root is (issue #263). On
+// macOS os.MkdirTemp lands under /var/folders, and /var is a symlink to
+// /private/var — so an uncanonicalised fixture hands the test one spelling while
+// the pin holds the other, and every assertion comparing them fails for a reason
+// that has nothing to do with what is under test. Canonicalising here keeps the
+// fixture honest about what plumb actually stores; it is not a way to make the
+// assertions agree, which is why the deliberate two-spellings tests build their
+// alias explicitly rather than relying on the platform's.
 func freshTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "plumb-detect-*")
@@ -92,7 +102,7 @@ func freshTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
+	return paths.Canonical(dir)
 }
 
 func TestDetect_LanguageMarkerOnly(t *testing.T) {

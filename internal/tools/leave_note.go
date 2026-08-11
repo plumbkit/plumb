@@ -202,6 +202,15 @@ func (t *LeaveNote) globalIfExists() *collab.Store {
 // sameWorkspace compares two workspace roots the way the session registry
 // records them. An empty root on either side is not treated as a match — an
 // unknown workspace must not silently pass for "the same project".
+//
+// A lexical clean is sufficient here ONLY because both roots arrive
+// canonicalised: internal/cli resolves symlinks once when it acquires the
+// workspace, so the pin and every session.Folder derived from it share one
+// spelling (issue #263). Do not add EvalSymlinks here to "harden" it — that puts
+// a syscall on the send path to re-derive something already guaranteed upstream.
+// If two spellings of one project ever reach this function again, the acquisition
+// site regressed; fix it there, because a false "different project" here routes
+// the note to the cross-project store, where the default config drops it unread.
 func sameWorkspace(a, b string) bool {
 	if a == "" || b == "" {
 		return false

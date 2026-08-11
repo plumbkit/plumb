@@ -471,6 +471,102 @@
   presents as capability, and a second pin tracks the uncovered count downward as
   the coverage programme lands.
 
+### Fixed
+
+- **Two agents on ONE project reached by different path spellings no longer
+  disagree about where they are — workspace roots are canonicalised at
+  acquisition** (issue #263). The root was stored exactly as reported, with no
+  symlink resolution, so the everyday macOS `/tmp` → `/private/tmp` firmlink, a
+  checkout under a symlinked parent, or a `$TMPDIR` scratch project produced two
+  spellings of one directory that every downstream consumer compared textually.
+
+  The damage was not cosmetic. `sameWorkspace` (`internal/tools/leave_note.go`)
+  compares with `filepath.Clean` alone, so `LeaveNote.resolveTarget` took the
+  **cross-project** branch for a peer sitting in the same folder; the note went to
+  the daemon-level store with `target_workspace` set; `Inbox.stores()` reads that
+  store only when the recipient's `[collab] cross_project` is true, which is off by
+  default — so the message expired unread while the sender was told the recipient
+  "is pinned to /private/tmp/myproj", a message that actively points away from the
+  cause. A same-project message, silently dropped, with a misleading explanation,
+  under the default configuration. The sticky-pin guard (issue #182) was hit the
+  same way: a redundant `session_start` naming the project by its other spelling
+  looked like a move to a *different* root, and was refused as a peer trying to
+  steal the pin — telling the caller to retry with `force: true` to "switch
+  projects" it was never leaving.
+
+  Fixed once, at the **producer**: `workspacePool.Detect` and
+  `workspacePool.SynthesiseRoot` (`internal/cli/pool_detect.go`) now return their
+  root through a new `paths.Canonical`. The pool is where plumb answers "which
+  project is this?", so it is where that answer gets one spelling — the session
+  pin, `session.Folder`, the boundary policy, the `collab.db` handle, the persisted
+  pin, the topology and quality roots, and the `(root, language)` key the
+  language-server pool is indexed by all derive from it, and now agree by
+  construction instead of each remembering to resolve. Only the RESULT is
+  canonicalised, never `Detect`'s starting point: the marker walk must keep
+  following the caller's own spelling, or a project reached through a symlinked
+  parent would search a different ancestor chain and miss the `.plumb/` marker
+  sitting beside the link.
+
+  Canonicalising only the three sites that write `acquiredRoot` — the obvious
+  reading of "fix it at acquisition" — was tried first and is **wrong**, which is
+  worth recording because it looks right. `routingProxy.route` compares the root it
+  detects for a file against the registered `primaryRoot` and, on a miss, acquires
+  a separate language server for that root with `pin=false` — an entry the refcount
+  path never reclaims, so it lives until the daemon exits. Canonicalising the pin
+  while leaving `Detect` raw makes those two disagree for every absolute path a
+  client names in its own spelling, trading a silently-dropped message for a
+  permanently duplicated gopls. Guarded by
+  `TestCanonicalRoot_AliasedURIRoutesToThePrimaryServer`.
+
+  `sameWorkspace` and `collab.NotifyKey` deliberately keep their `filepath.Clean`
+  comparison: with canonical inputs it is sufficient, and putting `EvalSymlinks` in
+  `NotifyKey` would place a filesystem syscall on the delivery hot path the
+  in-process notifier exists to avoid — while fixing only the latency symptom and
+  leaving the silent drop, since the pools and `sameWorkspace` derive from the same
+  root. `sameWorkspace`'s doc comment now states that dependency, and says to fix a
+  future spelling mismatch at the producer rather than hardening the comparison.
+
+  `paths.Canonical` hands the **uncleaned** absolute path to `EvalSymlinks`.
+  `filepath.Clean` collapses `..` lexically, which diverges from the kernel's
+  left-to-right resolution the moment a `..` follows a symlink (see PR #264) —
+  cleaning first would let two paths naming *different* directories canonicalise to
+  one string, turning a same-place test into a false positive. A **relative** path
+  is cleaned and returned with no filesystem access at all: resolving it would
+  anchor it to the daemon's working directory, the silent cross-repository write of
+  issue #181. A path that does not exist yet resolves its nearest existing ancestor
+  and re-joins the tail, so an about-to-be-created root under an aliased parent is
+  already canonical. Resolution failure degrades to `filepath.Clean` rather than
+  refusing — a workspace that cannot be canonicalised is still a usable workspace.
+  Canonical is an identity function, not an authorisation check; the boundary policy
+  still decides what is *safe*, and it already resolved both sides.
+
+  Two one-time effects on upgrade, both self-healing and neither a correctness
+  loss. A persisted pin written under the old spelling is re-canonicalised and
+  re-persisted on its first restore, but the strict-mode **read** records keyed to
+  the old spelling will not rehydrate with it, so the first read of a file in such a
+  session is asked for again. And stats rows attributed to the old spelling stay in
+  their own bucket rather than merging into the canonical one.
+
+  Guards: `internal/paths/canonical_test.go` (two spellings agree; a missing path
+  resolves against its existing ancestor; `..` resolved in kernel order, not
+  lexically; a relative path never becomes absolute; idempotence) and
+  `internal/cli/conn_canonicalroot_test.go` (`Detect` agrees across spellings; an
+  aliased attach pins the resolved root and registers it as `session.Folder`; two
+  sessions on one project via different spellings agree — issue #263 itself; an
+  aliased re-pin is a no-op rather than a sticky-pin refusal; a markerless
+  synthetic root is canonicalised too; an aliased URI routes to the primary server;
+  an unresolvable root still attaches). Every one was mutation-verified — each
+  canonicalisation site and each behaviour of `Canonical` reverted in turn, failing
+  exactly the tests that claim to cover it.
+
+  Two `cli` test fixtures now hand out canonical directories, because the roots
+  they stand in for are: `freshTempDir` and `setupTwoProjects`. On macOS
+  `os.MkdirTemp`/`t.TempDir` land under `/var`, itself a symlink to `/private/var`,
+  so an un-canonicalised fixture made 54 unrelated pin assertions and every routing
+  test fail for a reason that had nothing to do with what they test — the same
+  mismatch as the bug, one layer down.
+
+
 ## 0.16.5 (2026-08-12)
 
 ### Security

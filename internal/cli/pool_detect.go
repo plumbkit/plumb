@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // markerPresent reports whether root marker exists directly in dir. A marker
@@ -49,7 +50,30 @@ const LanguageNone = "none"
 //
 // If no marker is found, walk up to the parent. If we walk past the filesystem
 // root, return an error.
+//
+// The root is returned CANONICALISED — symlinks resolved (issue #263). The pool
+// is where plumb answers "which project is this?", so it is where that answer
+// gets one spelling: the session pin, the session registry, the boundary policy,
+// the collab store, and the (root, language) key the language-server pool is
+// indexed by all derive from it. Without this they disagreed whenever one project
+// was reachable two ways — the macOS /tmp → /private/tmp firmlink, a symlinked
+// checkout — which routed same-project mail cross-project (where the default
+// config drops it unread) and let one project hold two language servers.
+//
+// Only the RESULT is canonicalised, never the starting point: the marker walk
+// must keep following the caller's own spelling, or a project reached through a
+// symlinked parent would search a different ancestor chain and miss the .plumb/
+// marker sitting beside the link.
 func (p *workspacePool) Detect(start string) (root, language string, err error) {
+	root, language, err = p.detect(start)
+	if err != nil {
+		return "", "", err
+	}
+	return paths.Canonical(root), language, nil
+}
+
+// detect is Detect's marker walk, before canonicalisation.
+func (p *workspacePool) detect(start string) (root, language string, err error) {
 	homeInfo := homeFileInfo()
 	d := filepath.Clean(start)
 	first := true
@@ -386,6 +410,10 @@ func sameDirAs(dir string, info os.FileInfo) bool {
 //
 // SynthesiseRoot must only be called on the Detect error path in
 // OnBeforeTool — never inside route() or LSP-routing paths.
+//
+// Like Detect, the result is canonicalised (issue #263): a markerless root is
+// still a root, and issue #182's contract is explicit that an explicit pin must
+// not behave differently for want of a marker.
 func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// Clean the seed before anything else. A synthesised root is stored as the
 	// session's workspace, and several tools boundary-check that string directly
@@ -404,11 +432,12 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	d := filepath.Clean(seedDir)
 	for {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d
+			return paths.Canonical(d)
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return filepath.Clean(seedDir) // reached filesystem root — use the seed itself
+			// reached filesystem root — use the seed itself
+			return paths.Canonical(filepath.Clean(seedDir))
 		}
 		d = parent
 	}

@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -93,7 +94,7 @@ func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
 }
 
 func TestResolveCLIWorkspace_NestedDirectoryUsesProjectRoot(t *testing.T) {
-	root := t.TempDir()
+	root := paths.Canonical(t.TempDir()) // Detect resolves symlinks (issue #263)
 	if err := os.MkdirAll(filepath.Join(root, ".plumb"), 0o755); err != nil {
 		t.Fatal(err)
 	}
