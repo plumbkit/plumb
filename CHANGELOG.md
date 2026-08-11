@@ -4,6 +4,30 @@
 
 ### Fixed
 
+- **A Kotlin Gradle project no longer attaches as Java.** `build.gradle.kts` is a
+  strong root marker for *both* `java` and `kotlin`, and both ship enabled, so
+  workspace detection resolved it by language order alone — alphabetical, which
+  means `java` won every Gradle project written in the Kotlin DSL. The cost was
+  not cosmetic: a pure-Kotlin project started a jdtls JVM (15–40 s cold start,
+  0.8–1.5 GB RSS) that served none of its sources, and every URI-less query
+  (`workspace_symbols`, the call/type hierarchies), which falls back to the
+  connection's primary, was answered by a server that could not see a single
+  Kotlin file. Per-file routing was unaffected — a `.kt` file still reached the
+  Kotlin adapter by extension — which is why this survived so long.
+
+  A contested directory is now decided by what the project actually contains:
+  the tied language owning the most source files beneath it, falling back to the
+  existing order when the evidence cannot separate them. The scan runs *only* on
+  a tie, so the ordinary single-claim case pays nothing, and it descends deeper
+  than the last-resort sniff because the JVM convention buries sources three
+  levels down (`src/main/kotlin/App.kt`) — at the shallower bound every contested
+  Gradle root would look empty.
+
+  The contested markers are discounted from their own tie-break. `build.gradle.kts`
+  *is* a Kotlin file by extension, so counting it handed every Gradle project to
+  Kotlin — including a Java one merely using the Kotlin DSL. Those files are
+  precisely the ones carrying no signal: their presence is why the tie exists.
+
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
   clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
   reconnecting proxy, so from the client's side the server never goes away — it
