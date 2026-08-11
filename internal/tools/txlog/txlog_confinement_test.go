@@ -188,11 +188,12 @@ func TestScan_DoesNotHonourManifestModeBits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected the in-workspace op to be restored: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != replayPerm {
-		t.Errorf("replay honoured the manifest's mode bits: got %#o, want %#o", perm, replayPerm)
-	}
-	if info.Mode().Perm()&0o111 != 0 {
-		t.Error("replay created an executable file from an untrusted manifest")
+	// Asserted against a LITERAL, not against replayPerm. Comparing the result to
+	// the constant under test would pass for any value that constant took,
+	// including one an edit later loosened to 0o755 — it would pin "uses the
+	// constant", which is not the property that matters.
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("replay honoured the manifest's mode bits: got %#o, want %#o", perm, 0o600)
 	}
 }
 

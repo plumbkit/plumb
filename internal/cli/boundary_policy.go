@@ -28,14 +28,14 @@ func (s *connSession) writeBoundaryGuard(path string) error {
 // manifest — a file a cloned repository can ship.
 //
 // It takes the policy VALUE rather than reading it back through s.view(), and
-// that is load-bearing. Every caller runs inside s.mutate, where the published
-// snapshot is still the PRE-mutation one; on a first attach its policy is nil,
-// so consulting it would fail closed on exactly the legitimate crash recovery
-// this is meant to permit. s.checkBoundary is unusable here for a second,
-// independent reason: its refusal path calls markBoundaryViolation, which
-// re-enters mutate and would deadlock.
+// that is load-bearing. Every caller runs inside s.mutate, which publishes the
+// new snapshot only on return, so s.view() there still yields the PRE-mutation
+// one — and on a first attach its policy is nil. Consulting it would fail closed
+// on exactly the legitimate crash recovery this exists to permit.
 //
-// A nil policy yields a nil guard, which txlog.Scan treats as fail-closed.
+// A nil policy yields a nil guard, which txlog.Scan treats as fail-closed. That
+// case is unreachable in production: buildPathPolicy returns nil only when no
+// root is pinned, and Scan is a no-op for an empty workspace anyway.
 func txlogReplayGuard(pol *tools.PathPolicy) txlog.PathGuard {
 	if pol == nil {
 		return nil

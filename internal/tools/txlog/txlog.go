@@ -335,8 +335,60 @@ func replayOrphan(dir string, guard PathGuard) {
 				"path", op.Path, "manifest", manifestPath, "err", err)
 			continue
 		}
+		// The boundary guard is necessary but NOT sufficient, because the write
+		// primitive here follows symlinks and the guard was built for one that does
+		// not. A path policy canonicalises through the nearest EXISTING ancestor, so
+		// a DANGLING link at <workspace>/payload resolves to <workspace>/payload and
+		// is admitted — correctly, for a caller that replaces the link. os.WriteFile
+		// instead opens O_CREATE and follows it, creating the target wherever it
+		// points. A cloned repository committing `payload -> ~/.zshenv` (a path that
+		// need not exist) therefore had an admitted in-workspace op write outside
+		// every allowed root. Refuse a symlink outright on this path: a crashed
+		// transaction that wrote through one loses that single restore, which is
+		// logged, and is a far better trade than following an attacker's link.
+		if err := refuseSymlink(op.Path); err != nil {
+			slog.Error("txlog: replay REFUSED — manifest path is a symlink",
+				"path", op.Path, "manifest", manifestPath, "err", err)
+			continue
+		}
+		// The snapshot is read with os.ReadFile, which follows symlinks too, and its
+		// content is then written to the admitted path. A repository shipping
+		// `0-before -> ~/.ssh/id_ed25519` would otherwise copy that file into the
+		// workspace, where the agent reads it or a later commit carries it away.
+		if err := refuseSymlink(snapshotPath(dir, op.N)); err != nil {
+			slog.Error("txlog: replay REFUSED — snapshot file is a symlink",
+				"snap", snapshotPath(dir, op.N), "manifest", manifestPath, "err", err)
+			continue
+		}
 		restoreOp(dir, op, replayPerm)
 	}
+}
+
+// refuseSymlink reports an error when path exists and is a symbolic link.
+// A missing path is fine — the replay may legitimately recreate a file the
+// transaction had deleted.
+//
+// Residual, stated rather than papered over: this is a check-then-write, so a
+// process racing the daemon could replace the path with a link between the two.
+// Closing that would need O_NOFOLLOW, which is not portable across the platforms
+// plumb builds for. The gap it does close is the one that matters here — a
+// hostile repository is a set of files on disk, not a running process.
+func refuseSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil //nolint:nilerr // a path that does not exist cannot be a link
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("path is a symlink")
+	}
+	return nil
+}
+
+// snapshotPath is where Record stored the pre-write content of op n. op.N is an
+// int, so strconv.Itoa can only produce digits and a leading minus — never a
+// separator — and the join therefore cannot leave dir.
+func snapshotPath(dir string, n int) string {
+	return filepath.Join(dir, strconv.Itoa(n)+"-before")
 }
 
 // admitReplayPath decides whether one path out of an untrusted manifest may be
@@ -366,7 +418,7 @@ func restoreOp(dir string, op opMeta, perm os.FileMode) {
 			"path", op.Path)
 		return
 	}
-	snapPath := filepath.Join(dir, strconv.Itoa(op.N)+"-before")
+	snapPath := snapshotPath(dir, op.N)
 	content, err := os.ReadFile(snapPath)
 	if err != nil {
 		slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
