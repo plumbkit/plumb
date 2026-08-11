@@ -2,6 +2,7 @@ package collab
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,6 +208,129 @@ func TestPutNote_ThreadsAndMintsConversations(t *testing.T) {
 	}
 	if n, err := s.ConversationCount(ctx, first); err != nil || n != 2 {
 		t.Fatalf("conversation count = %d (err %v), want 2", n, err)
+	}
+}
+
+// TestPutNote_ExchangeBudgetHoldsUnderConcurrency is the regression pin for the
+// check-then-insert race an independent review found. The budget used to be a
+// caller-side ConversationCount followed by a separate PutNote; two agents
+// replying into one thread at the same instant both read one-below-the-limit and
+// both landed, so the cap over-ran exactly when the exchange was running away.
+// Only an atomic check-and-insert holds it.
+func TestPutNote_ExchangeBudgetHoldsUnderConcurrency(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	const limit, repliers = 5, 16
+
+	reply := func(conv string) (string, error) {
+		return s.PutNote(ctx, NoteInput{
+			AuthorID: "au", Body: "m", Addressee: "alice", TTL: time.Hour,
+			ConversationID: conv, MaxExchanges: limit,
+		}, now)
+	}
+	conv, err := reply("")
+	if err != nil {
+		t.Fatalf("opening a thread must never be refused: %v", err)
+	}
+
+	var (
+		mu                sync.Mutex
+		accepted, refused int
+		unexpected        []error
+	)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range repliers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := reply(conv)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				accepted++
+			case errors.Is(err, ErrConversationFull):
+				refused++
+			default:
+				unexpected = append(unexpected, err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if len(unexpected) > 0 {
+		t.Fatalf("%d concurrent replies failed for a reason other than the budget (first: %v)",
+			len(unexpected), unexpected[0])
+	}
+	n, err := s.ConversationCount(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != limit {
+		t.Errorf("conversation holds %d messages, want exactly the %d-message cap — a budget "+
+			"that over-runs under concurrency is no budget at all", n, limit)
+	}
+	if accepted != limit-1 || refused != repliers-(limit-1) {
+		t.Errorf("accepted %d / refused %d, want %d / %d — every over-budget reply must be "+
+			"refused with ErrConversationFull, not silently stored",
+			accepted, refused, limit-1, repliers-(limit-1))
+	}
+}
+
+// TestPutNote_BudgetIgnoresExpiredMessages: the budget counts live rows only, so
+// it does not matter whether the reaper has run. Counting expired-but-unpruned
+// rows would make a thread's remaining allowance depend on reaper timing —
+// refused now, allowed a tick later once the same rows are deleted.
+func TestPutNote_BudgetIgnoresExpiredMessages(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	const limit = 2
+
+	// A thread spent long ago: minTTL-lived rows written two hours back, so they
+	// are expired but still present until the next prune.
+	stale := now.Add(-2 * time.Hour)
+	conv, err := s.PutNote(ctx, NoteInput{
+		AuthorID: "au", Body: "old q", Addressee: "alice", TTL: time.Minute, MaxExchanges: limit,
+	}, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PutNote(ctx, NoteInput{
+		AuthorID: "au", Body: "old a", Addressee: "bob", TTL: time.Minute,
+		ConversationID: conv, MaxExchanges: limit,
+	}, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.PutNote(ctx, NoteInput{
+		AuthorID: "au", Body: "new", Addressee: "alice", TTL: time.Hour,
+		ConversationID: conv, MaxExchanges: limit,
+	}, now); err != nil {
+		t.Fatalf("expired messages must not spend a budget the next prune would refund: %v", err)
+	}
+	n, err := s.ConversationCount(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("count = %d, want 1 — only the unexpired message is still part of the thread", n)
+	}
+	// Pruning away the expired rows must be invisible to both the count and the
+	// budget: that equivalence is the whole point.
+	if _, err := s.Prune(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.ConversationCount(ctx, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != n {
+		t.Errorf("count went %d → %d across a prune; the budget must not depend on the reaper", n, after)
 	}
 }
 

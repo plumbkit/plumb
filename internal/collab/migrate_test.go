@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cols, err := tableColumns(db, "collab_rows")
+	cols, err := collabRowsColumns(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,5 +126,71 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 	}
 	if version != schemaVersion {
 		t.Errorf("user_version = %d, want %d", version, schemaVersion)
+	}
+}
+
+// TestMigrate_ConcurrentOpensOnV1 pins the cross-process migration race. SQLite
+// has no ADD COLUMN IF NOT EXISTS, so the pragma_table_info check and the ALTER
+// are two steps: when a second daemon (or a second connection pool, as here)
+// opens the same v1 collab.db at the same moment, both see the column missing,
+// both ALTER, and the loser used to fail its whole Open with "duplicate column
+// name". A migration that another process already completed is success, not
+// failure — and collab.db is not a rebuildable index, so a failed Open loses a
+// project its only copy of the mailbox.
+func TestMigrate_ConcurrentOpensOnV1(t *testing.T) {
+	ws := openV1WithNote(t, "written before threading existed", "alice")
+
+	const openers = 24
+	var (
+		mu       sync.Mutex
+		failures []error
+		wg       sync.WaitGroup
+	)
+	start := make(chan struct{})
+	for range openers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			s, err := Open(ws)
+			if err != nil {
+				mu.Lock()
+				failures = append(failures, err)
+				mu.Unlock()
+				return
+			}
+			_ = s.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if len(failures) > 0 {
+		t.Fatalf("%d of %d concurrent opens failed (first: %v) — a migration a peer already "+
+			"applied must not fail the opener that lost the race", len(failures), openers, failures[0])
+	}
+
+	// The migration must still be complete and additive: every chat column present
+	// and the legacy row untouched.
+	s, err := Open(ws)
+	if err != nil {
+		t.Fatalf("open after the concurrent burst: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	cols, err := collabRowsColumns(s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chatColumns {
+		if !cols[c.name] {
+			t.Errorf("column %s missing after concurrent migration", c.name)
+		}
+	}
+	got, err := s.ClaimNotes(context.Background(), "alice", "", time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Body != "written before threading existed" {
+		t.Fatalf("legacy note lost to the concurrent migration: %v", got)
 	}
 }
