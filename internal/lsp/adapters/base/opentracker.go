@@ -22,7 +22,7 @@ import (
 //
 // An embedded *OpenTracker would promote Ensure and Refresh into the embedding
 // adapter's exported surface, and plumb resolves optional adapter capabilities
-// structurally (see the package doc). The three lazy-open adapters therefore
+// structurally (see the package doc). The lazy-open adapters therefore
 // declare it as a named field and call through it, which also keeps each
 // ensure-open site visible in the concrete adapter — the set of methods that
 // need one differs per server and is deliberately asymmetric.

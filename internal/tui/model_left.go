@@ -158,7 +158,7 @@ var adapterToLang = map[string]string{
 	"sourcekit-lsp":               "swift",
 	"zls":                         "zig",
 	"typescript-language-server":  "typescript",
-	"kotlin-language-server":      "kotlin",
+	"kotlin-lsp":                  "kotlin",
 	"vscode-html-language-server": "html",
 }
 

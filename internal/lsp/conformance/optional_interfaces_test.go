@@ -83,7 +83,14 @@ func TestAdapters_OptionalInterfaceSurface(t *testing.T) {
 		{name: "jdtls", newAdapter: func(c jsonrpc.Caller) lsp.Client { return jdtls.New(c) }},
 		{name: "rust", newAdapter: func(c jsonrpc.Caller) lsp.Client { return rust.New(c) }},
 		{name: "swift", newAdapter: func(c jsonrpc.Caller) lsp.Client { return swift.New(c) }},
-		{name: "kotlin", newAdapter: func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) }},
+		{
+			// The only adapter whose server does NOT push at all, so the pull
+			// surface is the sole diagnostics path for Kotlin rather than a
+			// fallback (measured — see the kotlin package doc).
+			name:         "kotlin",
+			newAdapter:   func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) },
+			documentPull: true,
+		},
 		{name: "html", newAdapter: func(c jsonrpc.Caller) lsp.Client { return html.New(c) }},
 	}
 

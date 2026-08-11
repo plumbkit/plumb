@@ -107,32 +107,54 @@ func adapterInitParams(language, rootURI string) protocol.InitializeParams {
 	}
 }
 
-// argsFor returns the supervisor args for the given language and workspace root.
-// For most languages this is lspCfg.Args verbatim. Java is special: jdtls
-// requires a -data <dir> argument pointing to an Eclipse workspace storage
-// directory. Using a per-root directory prevents classpath conflicts when
-// multiple Java projects are open simultaneously.
+// stateDirSpec describes a language whose server keeps heavyweight per-project
+// state (an index, a resolved classpath) in a directory named on the command
+// line. The directory must be per-root: two projects sharing one would fight
+// over the same index. It cannot live in [lsp.<lang>] args, because it is
+// derived from the workspace root, which config cannot see.
+type stateDirSpec struct {
+	flag   string // CLI flag introducing the directory
+	subdir string // cache subdirectory holding the per-root dirs
+}
+
+// serverStateDirs is the whole set of such languages. jdtls wants an Eclipse
+// workspace; kotlin-lsp wants an IntelliJ system path (caches and indexes for a
+// 1.3 GB server distribution). Adding a language here is all that is needed —
+// argsFor passes the flag and the janitor prunes the directory.
+var serverStateDirs = map[string]stateDirSpec{
+	"java":   {flag: "-data", subdir: "jdtls-data"},
+	"kotlin": {flag: "--system-path", subdir: "kotlin-lsp-data"},
+}
+
+// argsFor returns the supervisor args for the given language and workspace root:
+// lspCfg.Args verbatim, plus a per-root state directory for the languages in
+// serverStateDirs.
 func argsFor(language, root string, lspCfg config.LSPConfig) []string {
-	if language != "java" {
+	spec, ok := serverStateDirs[language]
+	if !ok {
 		return lspCfg.Args
 	}
-	dataDir := jdtlsDataDir(root)
+	dataDir := serverStateDir(language, root)
 	_ = os.MkdirAll(dataDir, 0o700)
-	// Stamp the data dir's mtime on each cold start so pruneJdtlsCache can treat
-	// it as a reliable "last opened" signal — jdtls's own writes land in nested
-	// files and don't update the top-level dir mtime, and MkdirAll on an existing
-	// dir doesn't either.
+	// Stamp the data dir's mtime on each cold start so pruning can treat it as a
+	// reliable "last opened" signal — a server's own writes land in nested files
+	// and don't update the top-level dir mtime, and MkdirAll on an existing dir
+	// doesn't either.
 	now := time.Now()
 	_ = os.Chtimes(dataDir, now, now)
 	out := make([]string, len(lspCfg.Args), len(lspCfg.Args)+2)
 	copy(out, lspCfg.Args)
-	return append(out, "-data", dataDir)
+	return append(out, spec.flag, dataDir)
 }
 
-// jdtlsDataDir returns a per-workspace Eclipse workspace data directory for
-// jdtls. The directory name is derived from a hash of the workspace root so
-// each project gets isolated Eclipse state.
-func jdtlsDataDir(root string) string {
+// serverStateDir returns the per-workspace state directory for a language in
+// serverStateDirs, or "" for any other. The directory name is a hash of the
+// workspace root, so each project gets isolated state.
+func serverStateDir(language, root string) string {
+	spec, ok := serverStateDirs[language]
+	if !ok {
+		return ""
+	}
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(config.CacheDir(), "jdtls-data", hex.EncodeToString(sum[:8]))
+	return filepath.Join(config.CacheDir(), spec.subdir, hex.EncodeToString(sum[:8]))
 }

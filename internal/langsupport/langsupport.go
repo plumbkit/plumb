@@ -75,7 +75,7 @@ var registry = []Language{
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineTreeSitter, LSPAdapter: "jdtls"},
 	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: "rust-analyzer"},
 	{Name: "zig", Extensions: []string{".zig"}, Structural: EngineTreeSitter, LSPAdapter: "zls", PreferStructuralOutline: true},
-	{Name: "kotlin", Extensions: []string{".kt", ".kts"}, Structural: EngineTreeSitter, LSPAdapter: "kotlin-language-server"},
+	{Name: "kotlin", Extensions: []string{".kt", ".kts"}, Structural: EngineTreeSitter, LSPAdapter: "kotlin-lsp"},
 	{Name: "swift", Extensions: []string{".swift"}, Structural: EngineTreeSitter, LSPAdapter: "sourcekit-lsp"},
 	{Name: "bash", Extensions: []string{".sh", ".bash"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "hcl", Extensions: []string{".tf", ".tfvars", ".hcl"}, Structural: EngineTreeSitter, LSPAdapter: ""},

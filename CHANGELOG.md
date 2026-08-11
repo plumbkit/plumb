@@ -2,6 +2,59 @@
 
 ## 0.16.5 (unreleased)
 
+### Changed
+
+- **Kotlin's language server is now JetBrains' `kotlin-lsp`, and the adapter is
+  promoted to validated.** `fwcd/kotlin-language-server` never passed validation:
+  it was retested twice, deferred out of the 0.11 milestone, and left
+  experimental. Swapping the backend to JetBrains' Kotlin/kotlin-lsp (Apache 2.0,
+  built on the IntelliJ platform) closes it — **262.9593.0, tested 2026-08-11 on
+  macOS/arm64**, with both gated integration tests green against the real binary
+  on a resolvable Gradle project (Gradle 8.13, Kotlin 2.1.0).
+
+  **The promotion rule is amended, deliberately.** It required the diagnostics
+  round-trip to run green via `DidChangeWatchedFiles`+`DidOpen` →
+  `publishDiagnostics`. That wording was accurate while every server plumb spoke
+  to pushed; kotlin-lsp is the first that does **not push at all** — zero
+  notifications in 75 s on a file with two real errors, with the client
+  capability advertised, while `textDocument/diagnostic` answered in 0.8 s with
+  full IntelliJ-quality results. The rule now reads: green against a real binary
+  **by whichever model the server advertises**, push or pull. Mock-transport
+  tests still promote nothing. Kotlin ships as **Validated (pull)**.
+
+  Two things had to be measured rather than assumed, and both changed the code:
+  the server accepts plumb's **full-document sync** despite advertising
+  `textDocumentSync: 2` (verified by pushing whole-document changes and watching
+  diagnostics track text that existed only on the wire), so no incremental-sync
+  work was needed; and it needs a lazy `didOpen` for **`documentSymbol` alone**,
+  which fails unopened with an internal "no stub serializer" error while
+  definition, references, hover, the hierarchy prepares and the pull diagnostics
+  all resolve for a document plumb never opened.
+
+  The old `testdata/kotlin-fixture/` is deleted. It was six lines of
+  `build.gradle.kts` with no settings file, no wrapper and no resolvable
+  dependencies — a server that derives its classpath from Gradle can resolve
+  nothing there, which is the likeliest reason the old adapter "failed" for
+  months. The integration test now builds a project that genuinely resolves and
+  **skips** when Gradle or the binary is absent, because without a resolved
+  classpath a negative result proves nothing either way.
+
+  Operational notes, all in `docs/adding-an-lsp.md`: the install is **1.3 GB**;
+  `--stdio` is mandatory (the server defaults to a TCP socket and **ignores
+  unknown flags silently**, so a wrong invocation hangs rather than failing); and
+  on macOS the unsigned binary carries `com.apple.quarantine`, so **Gatekeeper
+  deletes it on first run** and reports "No such file or directory" for a file
+  that was just there — `xattr -dr com.apple.quarantine` after installing.
+  **Kotlin Multiplatform is not supported by this server**; jdtls remains the
+  Java adapter.
+
+- **Per-root language-server state directories are a table, not a special case.**
+  `argsFor` hardcoded `language != "java"` and appended jdtls's `-data`; it now
+  consults a `serverStateDirs` map, so kotlin-lsp gets its `--system-path` cache
+  the same way. The janitor follows the same table — previously it pruned only
+  `jdtls-data`, so a second language's caches would have accumulated one
+  directory per project ever opened, behind a 1.3 GB server.
+
 ### Fixed
 
 - **A Kotlin Gradle project no longer attaches as Java.** `build.gradle.kts` is a

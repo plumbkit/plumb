@@ -81,7 +81,7 @@ func (p *workspacePool) janitor(ctx context.Context) {
 	defer idleTicker.Stop()
 	pruneTicker := time.NewTicker(cachePruneInterval)
 	defer pruneTicker.Stop()
-	p.pruneJdtlsCache() // reclaim last run's stale dirs at startup
+	p.pruneServerStateCaches() // reclaim last run's stale dirs at startup
 	for {
 		select {
 		case <-ctx.Done():
@@ -89,24 +89,35 @@ func (p *workspacePool) janitor(ctx context.Context) {
 		case <-idleTicker.C:
 			p.hibernateIdle()
 		case <-pruneTicker.C:
-			p.pruneJdtlsCache()
+			p.pruneServerStateCaches()
 		}
 	}
 }
 
-// pruneJdtlsCache removes jdtls Eclipse-workspace data directories that are not
-// backing a currently-pooled Java workspace and whose directory mtime is older
-// than jdtlsCacheMaxAge. A live entry's dir is always kept (even when the entry
-// is hibernated — waking reuses it). Best-effort: a missing base dir or a failed
+// pruneServerStateCaches prunes the per-root state directory of every language
+// in serverStateDirs. These stores are large — an Eclipse workspace runs ~50 MB
+// per project, and an IntelliJ system path backs a 1.3 GB server — so a language
+// added to serverStateDirs without pruning would accumulate one directory per
+// project ever opened, forever.
+func (p *workspacePool) pruneServerStateCaches() {
+	for language, spec := range serverStateDirs {
+		p.pruneStateDir(language, spec)
+	}
+}
+
+// pruneStateDir removes one language's state directories that are not backing a
+// currently-pooled workspace and whose directory mtime is older than
+// serverStateMaxAge. A live entry's dir is always kept (even when the entry is
+// hibernated — waking reuses it). Best-effort: a missing base dir or a failed
 // removal is logged, never fatal.
-func (p *workspacePool) pruneJdtlsCache() {
-	base := filepath.Join(config.CacheDir(), "jdtls-data")
+func (p *workspacePool) pruneStateDir(language string, spec stateDirSpec) {
+	base := filepath.Join(config.CacheDir(), spec.subdir)
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return // no jdtls-data dir yet
+		return // nothing cached for this language yet
 	}
-	inUse := p.inUseJdtlsDirs()
-	cutoff := time.Now().Add(-jdtlsCacheMaxAge)
+	inUse := p.inUseStateDirs(language)
+	cutoff := time.Now().Add(-serverStateMaxAge)
 	for _, ent := range entries {
 		if !ent.IsDir() || inUse[ent.Name()] {
 			continue
@@ -117,22 +128,23 @@ func (p *workspacePool) pruneJdtlsCache() {
 		}
 		full := filepath.Join(base, ent.Name())
 		if err := os.RemoveAll(full); err != nil {
-			slog.Warn("pool: jdtls-data prune failed", "dir", full, "err", err)
+			slog.Warn("pool: server state prune failed", "language", language, "dir", full, "err", err)
 			continue
 		}
-		slog.Info("pool: pruned stale jdtls-data", "dir", full, "age_days", int(time.Since(info.ModTime()).Hours()/24))
+		slog.Info("pool: pruned stale server state", "language", language, "dir", full,
+			"age_days", int(time.Since(info.ModTime()).Hours()/24))
 	}
 }
 
-// inUseJdtlsDirs returns the set of jdtls-data directory names backing a pooled
-// Java workspace, so pruning never deletes an in-use store.
-func (p *workspacePool) inUseJdtlsDirs() map[string]bool {
+// inUseStateDirs returns the set of state-directory names backing a pooled
+// workspace of the given language, so pruning never deletes an in-use store.
+func (p *workspacePool) inUseStateDirs(language string) map[string]bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make(map[string]bool)
 	for k := range p.entries {
-		if k.language == "java" {
-			out[filepath.Base(jdtlsDataDir(k.root))] = true
+		if k.language == language {
+			out[filepath.Base(serverStateDir(language, k.root))] = true
 		}
 	}
 	return out
