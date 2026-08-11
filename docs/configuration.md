@@ -356,8 +356,17 @@ summary cannot overrun.
 Multiple agents (Claude Code, Codex, Gemini CLI, …) share one plumb daemon per
 machine, and the daemon is the only process that observes every agent's activity
 on a workspace. This layer surfaces that **advisorily** — nothing here ever
-blocks a write. Project-overridable in both directions (the `generated_summaries`
-precedent); no env override; hot-reloaded; strictly per-workspace.
+blocks a write. No env override; hot-reloaded; strictly per-workspace.
+
+**Trust split.** The four channel switches — `intents`, `mailbox`,
+`cross_project`, `knowledge_handoff` — are **global-only** and cannot be set by a
+project's `.plumb/config.toml`. That file is an untrusted surface (a cloned
+repository ships it), and each switch opens a cross-agent channel: a channel a
+repo can open for itself is one it can use. `cross_project` is the plainest case
+— its contract is that receiving is the *recipient's* decision, which holds only
+while the recipient's own repo cannot flip it. Everything else in `[collab]`
+(`peer_awareness` and every budget and TTL) stays project-overridable in both
+directions, because tuning cannot open anything.
 
 Three tiers, each behind its own flag. **Tier 1 (`peer_awareness`, default on)** is
 passive and derived from writes the daemon itself performed or watched — verifiable
@@ -397,7 +406,7 @@ When `peer_awareness` is on it adds three signals:
 | `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and the git tool's repo-intent warning share it. Delivered message bodies use `chat_budget_bytes` instead. |
 | `intents` | bool | `false` | Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
 | `mailbox` | bool | `true` | Agent-to-agent messaging between sessions **on this workspace**: `leave_note`, `check_messages`, message delivery on tool results and at `session_start`, and unread listing in `workspace_sessions`. On by default — same-project agents are working on shared code and the bodies never leave the project. |
-| `cross_project` | bool | `false` | Opt-in: also **receive** messages from sessions pinned to a *different* workspace. Deliberately the recipient's decision, not the sender's — a session reads the daemon-level cross-project store only when its own project sets this, so another project can never inject text into this one's context uninvited. Sending across is always permitted; an un-opted-in recipient simply never reads it and the message expires unread. |
+| `cross_project` | bool | `false` | **Global-only &mdash; not settable by a project.** Opt-in: also **receive** messages from sessions pinned to a *different* workspace. Deliberately the recipient's decision, not the sender's — a session reads the daemon-level cross-project store only when its own project sets this, so another project can never inject text into this one's context uninvited. Sending across is always permitted; an un-opted-in recipient simply never reads it and the message expires unread. |
 | `max_exchanges` | int | `10` | Messages allowed in one **conversation** before further replies are refused. A speed bump against two agents answering each other indefinitely, not an enforced ceiling: plumb cannot observe a human turn, so it counts total messages in a thread rather than consecutive agent replies, and opening a new thread starts a fresh budget. `0` uses the default. |
 | `chat_budget_bytes` | int | `2048` | Byte cap (UTF-8 boundary) on a single delivered message body. Separate from `hint_budget_bytes` because a message is content the agent must act on, not a pointer to look up. `0` uses the default. |
 | `max_wait_seconds` | int | `55` | Ceiling on how long `check_messages` will block waiting for a message. Kept below the client's own MCP call timeout so a wait expires cleanly rather than surfacing as a tool timeout. `0` uses the default. |

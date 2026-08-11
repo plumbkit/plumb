@@ -53,91 +53,94 @@ func TestCollab_Defaults(t *testing.T) {
 	}
 }
 
-// TestLoadProject_CollabPhase2OverridesBothDirections asserts the phase-2 opt-in
-// flags follow the same both-directions override rule: a project may ENABLE
-// intents/mailbox under a global default-off, and DISABLE them under a global
-// opt-in.
-func TestLoadProject_CollabPhase2OverridesBothDirections(t *testing.T) {
-	t.Run("project enables under global off", func(t *testing.T) {
-		base := Defaults() // intents=false, mailbox=false
-		ws := writeCollabProject(t, "[collab]\nintents = true\nmailbox = true\n")
-		got, err := LoadProject(base, ws)
+// TestLoadProject_CollabChannelSwitchesAreGlobalOnly is the trust-boundary pin.
+//
+// A project's .plumb/config.toml is an UNTRUSTED surface — a cloned repository
+// ships it — so it must not be able to open an inter-agent channel. cross_project
+// is the sharp case: it is deliberately the RECIPIENT's decision, so that a
+// sender can never push into a project that has not opted in. That guarantee is
+// worthless if the recipient's own repository can flip it, which is exactly what
+// a hostile clone would do.
+//
+// These four flags therefore always take the global value, in BOTH directions:
+// a project can neither enable nor disable them.
+func TestLoadProject_CollabChannelSwitchesAreGlobalOnly(t *testing.T) {
+	const allOn = "[collab]\nintents = true\nmailbox = true\ncross_project = true\nknowledge_handoff = true\n"
+	const allOff = "[collab]\nintents = false\nmailbox = false\ncross_project = false\nknowledge_handoff = false\n"
+
+	t.Run("a project cannot enable a channel the user left off", func(t *testing.T) {
+		base := Defaults()
+		base.Collab.Intents = false
+		base.Collab.Mailbox = false
+		base.Collab.CrossProject = false
+		base.Collab.KnowledgeHandoff = false
+
+		got, err := LoadProject(base, writeCollabProject(t, allOn))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.Collab.Intents || !got.Collab.Mailbox {
-			t.Errorf("project opt-in must win: intents=%v mailbox=%v", got.Collab.Intents, got.Collab.Mailbox)
+		if got.Collab.CrossProject {
+			t.Error("a cloned repo enabling cross_project would defeat the guarantee that " +
+				"another project cannot inject text into this one uninvited")
+		}
+		if got.Collab.Mailbox || got.Collab.Intents || got.Collab.KnowledgeHandoff {
+			t.Errorf("a project must not open a channel the user switched off: "+
+				"mailbox=%v intents=%v knowledge_handoff=%v",
+				got.Collab.Mailbox, got.Collab.Intents, got.Collab.KnowledgeHandoff)
 		}
 	})
 
-	t.Run("project disables under global on", func(t *testing.T) {
+	t.Run("a project cannot disable a channel either", func(t *testing.T) {
+		// Forcing to the global value is symmetric on purpose. A project silently
+		// closing a channel would make peer coordination fail in ways neither agent
+		// could explain, and the switch is the user's to hold in both directions.
 		base := Defaults()
 		base.Collab.Intents = true
 		base.Collab.Mailbox = true
-		ws := writeCollabProject(t, "[collab]\nintents = false\nmailbox = false\n")
-		got, err := LoadProject(base, ws)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Collab.Intents || got.Collab.Mailbox {
-			t.Errorf("project opt-out must win: intents=%v mailbox=%v", got.Collab.Intents, got.Collab.Mailbox)
-		}
-	})
+		base.Collab.CrossProject = true
+		base.Collab.KnowledgeHandoff = true
 
-	t.Run("project overrides ttl", func(t *testing.T) {
-		ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 30\n")
-		got, err := LoadProject(Defaults(), ws)
+		got, err := LoadProject(base, writeCollabProject(t, allOff))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Collab.IntentTTLMinutes != 30 {
-			t.Errorf("intent_ttl_minutes = %d, want 30", got.Collab.IntentTTLMinutes)
+		if !got.Collab.Intents || !got.Collab.Mailbox || !got.Collab.CrossProject || !got.Collab.KnowledgeHandoff {
+			t.Error("the channel switches must take the global value in both directions")
 		}
 	})
 }
 
-// TestLoadProject_CollabPhase3OverridesBothDirections asserts knowledge_handoff
-// follows the same both-directions override rule as the other opt-in flags: a
-// project may ENABLE it under a global default-off, and DISABLE it under a
-// global opt-in.
-func TestLoadProject_CollabPhase3OverridesBothDirections(t *testing.T) {
-	t.Run("project enables under global off", func(t *testing.T) {
-		base := Defaults() // knowledge_handoff = false
-		ws := writeCollabProject(t, "[collab]\nknowledge_handoff = true\n")
-		got, err := LoadProject(base, ws)
-		if err != nil {
-			t.Fatal(err)
+// TestLoadProject_CollabTuningStaysProjectOverridable is the other half of the
+// contract, and the reason the fix above is scoped to the switches alone: tuning
+// cannot OPEN anything. A project saying "smaller hints here" is a legitimate
+// per-project preference; one saying "open a cross-agent channel here" is not.
+func TestLoadProject_CollabTuningStaysProjectOverridable(t *testing.T) {
+	base := Defaults()
+	ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 30\nhint_budget_bytes = 256\n"+
+		"max_exchanges = 3\nchat_budget_bytes = 512\nmax_wait_seconds = 10\npeer_awareness = false\n")
+	got, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"intent_ttl_minutes", got.Collab.IntentTTLMinutes, 30},
+		{"hint_budget_bytes", got.Collab.HintBudgetBytes, 256},
+		{"max_exchanges", got.Collab.MaxExchanges, 3},
+		{"chat_budget_bytes", got.Collab.ChatBudgetBytes, 512},
+		{"max_wait_seconds", got.Collab.MaxWaitSeconds, 10},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d — tuning must stay project-overridable", c.name, c.got, c.want)
 		}
-		if !got.Collab.KnowledgeHandoff {
-			t.Error("project knowledge_handoff=true must override global false")
-		}
-	})
-
-	t.Run("project disables under global on", func(t *testing.T) {
-		base := Defaults()
-		base.Collab.KnowledgeHandoff = true
-		ws := writeCollabProject(t, "[collab]\nknowledge_handoff = false\n")
-		got, err := LoadProject(base, ws)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Collab.KnowledgeHandoff {
-			t.Error("project knowledge_handoff=false must override global true")
-		}
-	})
-
-	t.Run("absent key keeps global", func(t *testing.T) {
-		base := Defaults()
-		base.Collab.KnowledgeHandoff = true
-		ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 15\n")
-		got, err := LoadProject(base, ws)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !got.Collab.KnowledgeHandoff {
-			t.Error("absent knowledge_handoff must keep the global value (true)")
-		}
-	})
+	}
+	if got.Collab.PeerAwareness {
+		t.Error("peer_awareness must stay project-overridable: it surfaces what the daemon " +
+			"already observed in this project and opens no channel")
+	}
 }
 
 func TestValidateCollab_NegativeTTLRejected(t *testing.T) {
