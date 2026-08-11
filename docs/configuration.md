@@ -378,7 +378,14 @@ warning on the ones that open a channel.
 
 Everything else in `[collab]` — `peer_awareness` and every budget and TTL — stays
 freely project-overridable in both directions, because tuning cannot open
-anything. A `[collab]` key plumb does not recognise is gated by default, so a
+anything.
+
+One consequence worth knowing: a trust grant binds to the workspace's *whole*
+capability request, so changing any gated key — including flipping one of these
+toggles in the TUI — lapses the grant for **all** of them, and the workspace
+falls back to your global values until you run `plumb trust` again. That is what
+makes the grant TOCTOU-proof, but it means a casual toggle can silently revert an
+unrelated `[git]` or `[lsp.<lang>]` grant in the same file. A `[collab]` key plumb does not recognise is gated by default, so a
 field added later fails closed rather than being silently free.
 
 Three tiers, each behind its own flag. **Tier 1 (`peer_awareness`, default on)** is
@@ -417,13 +424,13 @@ When `peer_awareness` is on it adds three signals:
 |---|---|---|---|
 | `peer_awareness` | bool | `true` | Turn the three tier-1 signals on. Set `false` (globally or per project, either direction) to fall back to bare, unannotated output. |
 | `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and the git tool's repo-intent warning share it. Delivered message bodies use `chat_budget_bytes` instead. |
-| `intents` | bool | `false` | Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
-| `mailbox` | bool | `true` | Agent-to-agent messaging between sessions **on this workspace**: `leave_note`, `check_messages`, message delivery on tool results and at `session_start`, and unread listing in `workspace_sessions`. On by default — same-project agents are working on shared code and the bodies never leave the project. |
+| `intents` | bool | `false` | **Gated on `plumb trust`.** Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
+| `mailbox` | bool | `true` | **Gated on `plumb trust`.** Agent-to-agent messaging between sessions **on this workspace**: `leave_note`, `check_messages`, message delivery on tool results and at `session_start`, and unread listing in `workspace_sessions`. On by default — same-project agents are working on shared code and the bodies never leave the project. |
 | `cross_project` | bool | `false` | **Gated on `plumb trust`.** Opt-in: also **receive** messages from sessions pinned to a *different* workspace. Deliberately the recipient's decision, not the sender's — a session reads the daemon-level cross-project store only when its own project sets this, so another project can never inject text into this one's context uninvited. Sending across is always permitted; an un-opted-in recipient simply never reads it and the message expires unread. |
 | `max_exchanges` | int | `10` | Messages allowed in one **conversation** before further replies are refused. A speed bump against two agents answering each other indefinitely, not an enforced ceiling: plumb cannot observe a human turn, so it counts total messages in a thread rather than consecutive agent replies, and opening a new thread starts a fresh budget. `0` uses the default. |
 | `chat_budget_bytes` | int | `2048` | Byte cap (UTF-8 boundary) on a single delivered message body. Separate from `hint_budget_bytes` because a message is content the agent must act on, not a pointer to look up. `0` uses the default. |
 | `max_wait_seconds` | int | `55` | Ceiling on how long `check_messages` will block waiting for a message. Kept below the client's own MCP call timeout so a wait expires cleanly rather than surfacing as a tool timeout. `0` uses the default. |
-| `knowledge_handoff` | bool | `false` | Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
+| `knowledge_handoff` | bool | `false` | **Gated on `plumb trust`.** Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
 | `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
 
 A session holds at most **one live intent** — a new `share_intent` replaces it,

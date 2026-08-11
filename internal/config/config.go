@@ -428,9 +428,10 @@ type MemoryConfig struct {
 // digest. No environment override.
 //
 // Split by trust: the four CHANNEL switches (Intents, Mailbox, CrossProject,
-// KnowledgeHandoff) are GLOBAL-ONLY — a channel a project can open for itself is
-// not one the user consented to (see forceGlobalOnlyToBase). PeerAwareness and
-// the budgets stay project-overridable in both directions; tuning opens nothing.
+// KnowledgeHandoff) are gated on `plumb trust` — a project may ask, but a channel
+// it can open for itself is not one the user consented to (see
+// forceCapabilityFieldsToBase). PeerAwareness and the budgets stay freely
+// project-overridable in both directions; tuning opens nothing.
 //
 // Concurrency: read-only after Load returns.
 type CollabConfig struct {
@@ -447,16 +448,15 @@ type CollabConfig struct {
 	// Intents gates the phase-2 tier: the share_intent tool, its listing in
 	// workspace_sessions, and the intent-aware write hint. Opt-in, default false —
 	// it introduces agent-authored claims (unlike PeerAwareness's observed facts).
-	// Project-overridable in both directions like the rest of [collab].
+	// Gated on `plumb trust`: a project may request it, the user grants it.
 	Intents bool `toml:"intents"`
 	// Mailbox gates the agent-to-agent mailbox: the leave_note and check_messages
 	// tools, message delivery at session_start and on ordinary tool results, and
 	// pending-message listing in workspace_sessions. Default true, and scoped to
-	// the workspace: it lets sessions working on the SAME project talk to each
-	// other, which is the case where the messages are about shared work and the
-	// bodies never leave the project. Reaching a session in a different project is
-	// a separate, off-by-default decision (see CrossProject). Messages are
-	// agent-authored and advisory only — one never blocks a write.
+	// the workspace: sessions on the SAME project talk to each other, so the
+	// messages are about shared work and the bodies never leave the project.
+	// Reaching another project is a separate, off-by-default decision (see
+	// CrossProject). Messages are agent-authored and advisory — never blocking.
 	Mailbox bool `toml:"mailbox"`
 	// CrossProject lets this session RECEIVE messages from sessions pinned to a
 	// different workspace. Opt-in, default false, and deliberately the recipient's
@@ -464,9 +464,9 @@ type CollabConfig struct {
 	// into this one's context uninvited. Sending across is always permitted; an
 	// un-opted-in recipient simply never reads it and the message expires unread.
 	//
-	// GLOBAL-ONLY (forceGlobalOnlyToBase): "the recipient's decision" would mean
-	// nothing if the recipient's own repository — an untrusted surface a clone
-	// ships — could flip it.
+	// Gated on `plumb trust`: "the recipient's decision" would mean nothing if the
+	// recipient's own repository — an untrusted surface a clone ships — could flip
+	// it unasked. A project may request it; the user grants it per workspace.
 	CrossProject bool `toml:"cross_project"`
 	// MaxExchanges caps how many messages one conversation may hold before further
 	// replies are refused — the backstop against two agents answering each other
@@ -490,8 +490,8 @@ type CollabConfig struct {
 	// (redact → provenance → markdown under .plumb/memories/ → FTS index →
 	// generated_memory_keep retention) rather than only when a session goes idle.
 	// Opt-in, default false — the finding is agent-authored generated content,
-	// lower-confidence than a user-written memory. Project-overridable in both
-	// directions like the rest of [collab].
+	// lower-confidence than a user-written memory. Gated on `plumb trust`: a
+	// project may request it, the user grants it.
 	KnowledgeHandoff bool `toml:"knowledge_handoff"`
 }
 
