@@ -212,6 +212,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"ruby":       func() topology.Extractor { return treesitter.NewRuby() },
 	"c":          func() topology.Extractor { return treesitter.NewC() },
 	"json":       func() topology.Extractor { return treesitter.NewJSON() },
+	"css":        func() topology.Extractor { return treesitter.NewCSS() },
 }
 
 // buildExtractors instantiates the structural extractors for every language the

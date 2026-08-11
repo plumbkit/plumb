@@ -9,6 +9,29 @@
 
 ### Added
 
+- **CSS is now indexed by the topology Map** — rule sets named by their selector,
+  `@media`/`@supports` blocks as sections containing the rules nested inside
+  them, `@keyframes` by name, custom properties as constants, and `@import` as
+  imports, with certain (1.0) containment edges.
+
+  **Ordinary declarations are deliberately not emitted.** A stylesheet has one or
+  two orders of magnitude more declarations than selectors, and they repeat the
+  same handful of property names — emitting them buries the selectors that carry
+  the structure. That is the per-node explosion `HTMLExtractor`'s doc comment
+  records (a node per tag *and* attribute gave ~1220 nodes for one page against
+  ~54 useful landmarks), and this extractor exists on the other side of that
+  lesson. Custom properties are the single exception and earn it: `--brand` is a
+  design token with a name people search for, there are few of them, and they are
+  usually declared once in `:root`.
+
+  Two smaller calls. A **grouped selector** (`.btn, .btn-primary { … }`) is one
+  rule with one body, so it is one node rather than one per selector — splitting
+  it would emit several nodes sharing an identical span, which reads as duplicate
+  symbols to every consumer, and FTS tokenisation still matches a search for
+  either half. A rule nested in a query carries that query in its qualified name
+  (`@media (min-width: 600px) > .btn`), so a conditional rule is never mistaken
+  for an unconditional one.
+
 - **JSON and JSONC are now indexed by the topology Map.** Every object key becomes
   a field named by its dotted path from the document root, so a search for
   `scripts.build` finds it without the caller knowing its depth, and nesting

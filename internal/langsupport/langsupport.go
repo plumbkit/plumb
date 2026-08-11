@@ -79,6 +79,7 @@ var registry = []Language{
 	{Name: "ruby", Extensions: []string{".rb", ".rake", ".gemspec", "gemfile", "rakefile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "c", Extensions: []string{".c", ".h"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "json", Extensions: []string{".json", ".jsonc"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "css", Extensions: []string{".css"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
@@ -102,7 +103,6 @@ var registry = []Language{
 	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "dart", Extensions: []string{".dart"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "css", Extensions: []string{".css"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "scss", Extensions: []string{".scss"}, Structural: EngineNone, LSPAdapter: ""},
 }
 
