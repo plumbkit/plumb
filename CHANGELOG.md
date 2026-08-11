@@ -2,6 +2,35 @@
 
 ## 0.16.5 (unreleased)
 
+### Security
+
+- **A cloned repository could delete directories anywhere you can write, just by
+  being attached.** `txlog.Scan` walks `<workspace>/.plumb/tx-log` on every
+  attach and re-pin, treats each subdirectory as a possible orphaned transaction,
+  and `os.RemoveAll`s the ones it recovers. Both `.plumb` and `tx-log` are
+  ordinary paths inside the workspace, and git stores a symlink natively — so a
+  repository could commit `.plumb/tx-log -> /Users/you/Documents` and have every
+  subdirectory of the target removed. `.plumb/tx-log -> ../..` does the same to
+  the workspace's own parent, needing no absolute path and so working on any
+  machine.
+
+  **No manifest was involved.** This is upstream of the replay entirely: the
+  deletion happens while enumerating candidates, before anything is parsed or
+  written, so none of the replay's guards were in the path.
+
+  `Scan` now resolves the tx-log directory and refuses to walk it unless it
+  really lives inside the workspace. The check is on the RESOLVED paths rather
+  than an `Lstat` of the final component, because an intermediate component is
+  equally attacker-supplied: with `.plumb -> /`, `tx-log` is not itself a link.
+
+  Found by an independent adversarial review of PR #248, which was fixing the
+  *write* half of the same function. Guarded by `TestScan_RefusesSymlinkedTxLogDir`,
+  `TestScan_RefusesRelativeSymlinkedTxLogDir` and
+  `TestScan_RefusesSymlinkedPlumbDir`, each of which fails against the previous
+  code, plus `TestScan_StillRecoversAGenuineOrphan` as a positive control — a
+  refusal-shaped fix otherwise passes its own tests just as well when it breaks
+  recovery altogether.
+
 ### Fixed
 
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
