@@ -10,6 +10,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/fsguard"
+	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -35,7 +36,40 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	if inheritedName != "" {
 		fmt.Fprintf(sb, "Session:  %s (resumed)\n", inheritedName)
 	}
+	if note := uncoveredPrimaryLanguageNote(lang); note != "" {
+		sb.WriteString(note)
+	}
 	sb.WriteString("\n")
+}
+
+// uncoveredPrimaryLanguageNote warns when the workspace's detected primary
+// language is one the topology Map cannot index, and returns "" otherwise.
+//
+// The identity block above is the most misleading place in plumb for an
+// uncovered language: it prints "Language: Ruby" and "Scale: ~900 files (683
+// Ruby)" from a plain filesystem walk, which reads as confirmation that plumb
+// understands the project. Every Map-backed tool then returns nothing, and the
+// agent has no reason to attribute that to coverage rather than to the code. The
+// warning belongs here, before the first query, because this is the one section
+// an agent always reads.
+//
+// The detected label is a display name ("Ruby", "C/C++ (CMake)"), not a registry
+// key, so it is resolved through langFileProfile's extensions — the same mapping
+// that produced the Scale line — rather than by lower-casing the label.
+func uncoveredPrimaryLanguageNote(lang string) string {
+	exts, _ := langFileProfile(lang)
+	for _, ext := range exts {
+		l, ok := langsupport.ByPath("file" + ext)
+		if !ok || l.Structural != langsupport.EngineNone {
+			continue
+		}
+		return fmt.Sprintf("\nNOTE: the topology Map does not cover %s yet — topology_search, "+
+			"workspace_search and file_outline will return little or nothing for this "+
+			"workspace's %s sources. That is a coverage gap, not an empty codebase. "+
+			"Use search_in_files (exact) and read_file instead, and see topology_status "+
+			"for the full census.\n", l.Name, l.Name)
+	}
+	return ""
 }
 
 // writeSessionRecommendedStart picks the one next step that fits the session's

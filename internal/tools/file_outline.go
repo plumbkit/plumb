@@ -173,6 +173,26 @@ func preferStructuralOutline(uri string) bool {
 	return ok && lang.PreferStructuralOutline
 }
 
+// uncoveredOutlineNote explains an empty outline when the cause is that plumb
+// has no extractor for the file's language, and returns "" for every other
+// empty outline (a genuinely symbol-free file, an unrecognised type).
+//
+// This is the sharpest instance of the silent-empty answer: "(no symbols)" for a
+// 400-line Rails model is indistinguishable from the same output for an empty
+// file, so an agent has no way to tell a limitation from a fact and will trust
+// the emptiness. Naming the language and pointing at the tools that DO work on
+// it turns a dead end into a route.
+func uncoveredOutlineNote(uri string) string {
+	lang, ok := langsupport.ByPath(paths.URIToPath(uri))
+	if !ok || lang.Structural != langsupport.EngineNone {
+		return ""
+	}
+	return fmt.Sprintf("plumb has no structural extractor for %s, so the Map holds no symbols for this "+
+		"file — this is a coverage gap, NOT an empty file.\n"+
+		"Use read_file, or search_in_files for an exact scan; a language server, if one is "+
+		"attached for %s, still answers hover and definition queries.\n", lang.Name, lang.Name)
+}
+
 // entries resolves the file's symbols, preferring the language server and
 // falling back to the topology index when it errors or times out. For markup
 // languages flagged PreferStructuralOutline, the Map is consulted FIRST (the
@@ -322,6 +342,9 @@ func formatFileOutline(res *outlineResult) string {
 	sb.WriteString("Signatures shown; bodies collapsed. Line ranges are 1-based.\n\n")
 	if len(res.entries) == 0 {
 		sb.WriteString("(no symbols)\n")
+		if note := uncoveredOutlineNote(res.uri); note != "" {
+			sb.WriteString("\n" + note)
+		}
 		return sb.String()
 	}
 	for _, e := range res.entries {

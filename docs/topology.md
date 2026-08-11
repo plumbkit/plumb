@@ -90,6 +90,30 @@ flowchart LR
 See [Architecture → dual-engine](architecture.md#plumb-topology-vs-lsp-the-dual-engine-architecture)
 for how the two fit into plumb's layered design.
 
+### Languages the Map does not cover
+
+The Map covers the languages listed above. For a language plumb recognises but
+has no extractor for — Ruby, C, C++, Objective-C, JSON, XML, C#, PHP, Elixir,
+Lua, Scala, Dart, CSS and SCSS — the files are still recorded, but they
+contribute no symbols.
+
+That gap is reported rather than left to be inferred, because an empty Map result
+is otherwise indistinguishable from a codebase that genuinely has nothing in it:
+
+- `topology_status` lists it as `not covered: ruby (683), xml (330)`, busiest
+  first, and no longer counts those files under `indexed files`.
+- `file_outline` on such a file says so instead of printing a bare `(no symbols)`.
+- `session_start` warns when the workspace's *primary* language is one of them.
+
+`search_in_files` and `read_file` work on every language regardless, and an
+attached language server still answers hover and definition queries.
+
+Wiring a language is a flip from `EngineNone` to `EngineTreeSitter` in
+`internal/langsupport` plus an extractor constructor — the registry doubles as
+the coverage roadmap. Because an uncovered file is stored with an empty content
+hash, adding an extractor makes every such file stale automatically and the next
+resync picks it up; no reindex flag or schema change is needed.
+
 ## How it works (architecture)
 
 You can skip this section and still use topology happily. For the curious, the
@@ -177,7 +201,7 @@ All `[topology]` fields (see the
 | `enabled` | `true` | Turn the index on or off (on by default). |
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
 | `exclude_patterns` | `[]` | Path globs to skip during indexing. |
-| `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). GLR-heavy markup grammars (Markdown, HTML, YAML) carry a tighter built-in 256 KiB inner cap — a file above it is indexed with zero symbols rather than parsed, since a full parse of a large markup file is expensive and low-value. |
+| `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). |
 | `extract_timeout_seconds` | `10` | Longest one file's parse may run before it is abandoned and recorded as a file error. The size caps above bound how much source a grammar sees, not how long it spends: error recovery can go superlinear on a small file, and the indexer runs a single worker, so an unbounded parse would stall every file behind it. `0` disables. A file that times out is recorded with its mtime (not a content hash), so every full resync re-attempts it and re-pays the full timeout — a pathological file costs one timeout per resync cycle. |
 | `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |
 | `resync_pause_ms` | `25` | Pause after each `resync_batch` files, in milliseconds. `0` disables pacing. |

@@ -53,15 +53,6 @@ type Language struct {
 	// page vs the Map's ~54 clean landmarks). The LSP stays the source for
 	// hover/diagnostics; only the outline prefers the Map.
 	PreferStructuralOutline bool
-	// MaxParseBytes is a per-grammar source-size ceiling for structural
-	// extraction, tighter than the global [topology].max_file_size_bytes. Set
-	// only for GLR-heavy markup grammars (Markdown ~200 nodes/byte, HTML per
-	// tag/attribute, YAML) where one few-hundred-KB file drives a pathological
-	// parse for little outline value; a file above the cap is indexed with zero
-	// symbols rather than parsed. 0 means no per-grammar cap (the global limit is
-	// the only bound). This is a grammar property, not a user preference, so it is
-	// not config-exposed.
-	MaxParseBytes int64
 }
 
 // registry is the immutable capability table — the single place that encodes
@@ -82,9 +73,52 @@ var registry = []Language{
 	{Name: "sql", Extensions: []string{".sql"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "dockerfile", Extensions: []string{"dockerfile", "containerfile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "toml", Extensions: []string{".toml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
-	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: "", MaxParseBytes: 256 << 10},
-	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: "", PreferStructuralOutline: true, MaxParseBytes: 256 << 10},
-	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true, MaxParseBytes: 256 << 10},
+	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: "", PreferStructuralOutline: true},
+	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true},
+
+	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
+	//
+	// These rows carry no capability — they exist so that "plumb does not cover
+	// this language" is a fact the codebase can state rather than an absence an
+	// agent has to infer from an empty Map. Without them ByPath reports ok=false
+	// for a .rb file, which is indistinguishable from a binary blob, and the
+	// indexer records the file with zero symbols and no explanation.
+	//
+	// Every consumer that gates on capability already tests Structural !=
+	// EngineNone, so adding a row here grants nothing. Wiring a language means
+	// flipping its row to EngineTreeSitter and adding its constructor to
+	// cli.extractorCtors — the two edits TestBuildExtractorsCoversRegistry pins
+	// together. The list is therefore the coverage roadmap, in priority order.
+	{Name: "ruby", Extensions: []string{".rb", ".rake", ".gemspec", "gemfile", "rakefile"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "c", Extensions: []string{".c", ".h"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "cpp", Extensions: []string{".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "json", Extensions: []string{".json", ".jsonc"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "php", Extensions: []string{".php"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "dart", Extensions: []string{".dart"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "css", Extensions: []string{".css"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "scss", Extensions: []string{".scss"}, Structural: EngineNone, LSPAdapter: ""},
+}
+
+// Uncovered returns the registry entries for languages plumb recognises but
+// does not index (Structural == EngineNone). It is the source for the
+// "not covered" report surfaced by topology_status, file_outline and
+// session_start, so an agent can route around the gap instead of reading an
+// empty Map as an authoritative answer. The returned slice must not be mutated.
+func Uncovered() []Language {
+	out := make([]Language, 0, len(registry))
+	for _, l := range registry {
+		if l.Structural == EngineNone {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // All returns the registry entries. The returned slice must not be mutated.

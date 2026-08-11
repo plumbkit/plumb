@@ -113,13 +113,21 @@ func (idx *Indexer) isStale(relPath string, info os.FileInfo, hash string) (stal
 // readAndHash resolves the extractor for relPath, reads the file, and hashes its
 // content. The parse is deliberately not run here so processUpsert can discard an
 // unchanged file (the common case on a full resync) without paying the parse. When
-// no extractor matches it returns a nil extractor, empty language and empty hash —
-// preserving the prior behaviour where such a file is recorded with zero symbols so
-// the staleness check never re-attempts it.
+// no extractor matches it returns a nil extractor and an empty hash — preserving
+// the behaviour where such a file is recorded with zero symbols so the staleness
+// check never re-attempts it.
+//
+// It still names the language when the registry recognises the extension but has
+// no extractor for it (Structural == EngineNone), so the row records WHY it holds
+// no symbols. The empty hash is what makes this self-healing: wiring an extractor
+// later makes the computed hash differ from the stored "", the file goes stale,
+// and it is re-indexed with no schema change. The pairing — a language with no
+// hash — is exactly what the uncovered census counts, which is why it is cheap to
+// report and impossible to confuse with a parsed file.
 func (idx *Indexer) readAndHash(absPath, relPath string) (src []byte, ex Extractor, lang, hash string, err error) {
 	ex = findExtractor(relPath, idx.extractors)
 	if ex == nil {
-		return nil, nil, "", "", nil
+		return nil, nil, uncoveredLanguage(relPath), "", nil
 	}
 	src, err = os.ReadFile(absPath) //nolint:gosec // G304: path derived from workspace root + relative path validated by caller
 	if err != nil {
@@ -129,17 +137,28 @@ func (idx *Indexer) readAndHash(absPath, relPath string) (src []byte, ex Extract
 	return src, ex, ex.Language(), hex.EncodeToString(h[:]), nil
 }
 
+// uncoveredLanguage names the language of a file the registry recognises but
+// cannot index, and returns "" for anything it does not recognise at all
+// (binaries, lockfiles, images). Guarding on EngineNone rather than on "the
+// registry knows this extension" keeps the two apart: a supported language that
+// reaches here would be a wiring bug, not a coverage gap, and must not be
+// reported as one.
+func uncoveredLanguage(relPath string) string {
+	l, ok := langsupport.ByPath(relPath)
+	if !ok || l.Structural != langsupport.EngineNone {
+		return ""
+	}
+	return l.Name
+}
+
 // extractFile runs the extractor for a file that isStale has confirmed needs
-// re-indexing. A nil extractor (no language match) or an oversized GLR grammar
-// yields zero nodes, matching the records persisted by the pre-reorder path.
-// The parse runs under extractTimeout so a pathological file cannot stall the
-// single indexer worker; on expiry the file is recorded as an error by the
-// caller and the worker moves on.
+// re-indexing. A nil extractor (no language match) yields zero nodes, matching
+// the records persisted by the pre-reorder path. The parse runs under
+// extractTimeout so a pathological file cannot stall the single indexer worker;
+// on expiry the file is recorded as an error by the caller and the worker moves
+// on.
 func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
 	if ex == nil {
-		return nil, nil, nil
-	}
-	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
 		return nil, nil, nil
 	}
 	if idx.extractTimeout > 0 {
@@ -148,21 +167,6 @@ func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath strin
 		defer cancel()
 	}
 	return safeExtract(ctx, ex, relPath, src)
-}
-
-// skipOversizedGrammar reports whether a file should be recorded without parsing
-// because its grammar carries a per-grammar source-size cap (langsupport
-// MaxParseBytes) that this file exceeds. GLR-heavy markup grammars (Markdown,
-// HTML, YAML) can drive a pathological parse on a few-hundred-KB file for little
-// outline value; the global max_file_size_bytes stays the outer bound.
-func skipOversizedGrammar(relPath, lang string, srcLen int) bool {
-	l, ok := langsupport.ByName(lang)
-	if !ok || l.MaxParseBytes <= 0 || int64(srcLen) <= l.MaxParseBytes {
-		return false
-	}
-	slog.Debug("topology: skipping oversized GLR grammar parse",
-		"path", relPath, "lang", lang, "bytes", srcLen, "cap", l.MaxParseBytes)
-	return true
 }
 
 // safeExtract wraps Extract in a recover so malformed files cannot panic the
