@@ -126,6 +126,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
 		Self:      s.sessionName(),
+		Root:      s.workspace(),
 		Policy:    s.collabPolicy(),
 		Workspace: s.collabStoreIfExists,
 		Global:    s.collabGlobalIfExists,

@@ -96,7 +96,8 @@ func (n *Notifier) Gens(keys []string) []uint64 {
 // since shorter than keys is treated as zero for the missing entries.
 func (n *Notifier) Wait(ctx context.Context, keys []string, since []uint64) bool {
 	if n == nil || len(keys) == 0 {
-		<-ctx.Done()
+		// Nothing can ever signal this call, so parking on ctx would be a
+		// disguised hang. Report 'nothing arrived' immediately instead.
 		return false
 	}
 	ch := make(chan struct{}, 1)

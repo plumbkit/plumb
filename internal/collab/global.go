@@ -55,10 +55,18 @@ func GlobalExists() bool {
 // send path should call it unconditionally; delivery and prune paths guard with
 // GlobalExists first.
 func OpenGlobal() (*Store, error) {
-	path := GlobalDBPath()
 	if paths.DataDir() == "" {
 		return nil, errors.New("collab: no data directory for the cross-project store")
 	}
+	return OpenGlobalAt(GlobalDBPath())
+}
+
+// OpenGlobalAt opens a cross-project store at an explicit path. Production uses
+// OpenGlobal; this exists so tests can exercise the REAL daemon-level store
+// semantics — an empty workspace, so IsGlobal reports true and the
+// target-workspace addressing rules actually apply — without writing to the
+// user's data directory.
+func OpenGlobalAt(path string) (*Store, error) {
 	db, err := sqlitex.Open(path, sqlitex.Options{})
 	if err != nil {
 		return nil, err

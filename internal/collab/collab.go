@@ -75,6 +75,16 @@ type Row struct {
 	// cross-project note so the recipient can see which project it came from.
 	// Empty for a same-project note.
 	OriginWorkspace string
+	// TargetWorkspace is the workspace the recipient must be pinned to for this
+	// note to be claimable. Set on every cross-project note; empty on a
+	// same-project one, where the containing collab.db is itself the scope.
+	//
+	// It exists because a session NAME is not a safe address on its own: names
+	// are drawn from a small pool with no uniqueness check, and rename_session
+	// lets a session adopt any name it likes. Without this column a session in
+	// one project could claim another project's cross-project mail simply by
+	// being called the right thing.
+	TargetWorkspace string
 }
 
 // IntentInput is the payload for PutIntent. TTL is clamped to a sane minimum by
@@ -104,4 +114,7 @@ type NoteInput struct {
 	// crosses a project boundary (it lands in the daemon-level store); left empty
 	// for a same-project note in the workspace's own collab.db.
 	OriginWorkspace string
+	// TargetWorkspace is the workspace the recipient must be pinned to. Required
+	// for a cross-project note; empty for a same-project one.
+	TargetWorkspace string
 }

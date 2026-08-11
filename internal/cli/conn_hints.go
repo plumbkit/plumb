@@ -64,6 +64,9 @@ func memoriesDirSig(ws string) int64 {
 // and render), and session_start renders its own "## Messages" section.
 var mailboxSilentTools = map[string]bool{
 	"check_messages": true, "leave_note": true, "session_start": true,
+	// workspace_sessions lists unread messages itself; appending the claimed
+	// bodies underneath would show the same message twice in one response.
+	"workspace_sessions": true,
 }
 
 // enrichToolOutput appends plumb's advisory blocks to a successful tool result.

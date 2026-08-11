@@ -129,6 +129,13 @@ func validateMemory(m MemoryConfig) error {
 	return nil
 }
 
+// maxCollabWaitSeconds bounds [collab] max_wait_seconds. A blocking
+// check_messages holds a request goroutine for its whole duration and keeps the
+// session's last-seen timestamp fresh, so an unbounded value would both outlive
+// the client's own MCP call timeout and make the session immortal to the idle
+// reaper. Five minutes is far beyond any real client timeout.
+const maxCollabWaitSeconds = 300
+
 func validateCollab(c CollabConfig) error {
 	if c.HintBudgetBytes < 0 {
 		return errors.New("collab.hint_budget_bytes must be non-negative")
@@ -144,6 +151,12 @@ func validateCollab(c CollabConfig) error {
 	}
 	if c.MaxWaitSeconds < 0 {
 		return errors.New("collab.max_wait_seconds must be non-negative (0 uses the default)")
+	}
+	// An unbounded value would park a request goroutine for as long as it says,
+	// well past any client's own call timeout, and keep the session looking
+	// active so the idle reaper never evicts it.
+	if c.MaxWaitSeconds > maxCollabWaitSeconds {
+		return fmt.Errorf("collab.max_wait_seconds must be at most %d (a longer wait outlives the client's own call timeout)", maxCollabWaitSeconds)
 	}
 	return nil
 }
