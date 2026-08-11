@@ -370,26 +370,4 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// (the agent_config tool already treats them as un-writable); force them to base.
 	merged.Workspace.ExtraRoots = base.Workspace.ExtraRoots
 	merged.Workspace.ReadRoots = base.Workspace.ReadRoots
-	// [collab]'s four switches each open a cross-agent CHANNEL: share_intent's
-	// agent-authored claims, the mailbox delivering a message to a peer or to
-	// whoever attaches next, cross-project delivery, and share_findings writing
-	// agent-authored content into the durable, cross-session-discoverable memory
-	// store. A channel a cloned repository can open is a channel it can use — a
-	// payload that has already steered one agent through some other file in the
-	// repo can leave instructions for the next session.
-	//
-	// cross_project is the plainest case: its own contract is that receiving is the
-	// RECIPIENT's decision rather than the sender's, and that only holds while the
-	// recipient's project file cannot set it. A hostile clone flipping it defeats
-	// precisely the guarantee the field exists to make.
-	//
-	// Only the switches are forced. The BUDGETS and TTLs below them stay
-	// project-overridable, because tuning how large a hint may be or how long a note
-	// lives cannot open anything — a project saying "smaller hints here" is a
-	// legitimate per-project preference, and one saying "open a cross-agent channel
-	// here" is not.
-	merged.Collab.CrossProject = base.Collab.CrossProject
-	merged.Collab.Mailbox = base.Collab.Mailbox
-	merged.Collab.Intents = base.Collab.Intents
-	merged.Collab.KnowledgeHandoff = base.Collab.KnowledgeHandoff
 }

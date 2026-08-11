@@ -104,7 +104,37 @@ func (e PolicyEntry) Warning(base Config) string {
 	case "git.protected_branches":
 		return droppedBranchWarning(base.Git.ProtectedBranches, e.Value)
 	}
+	if field, ok := strings.CutPrefix(key, "collab."); ok {
+		return collabFieldWarning(field, e.Value)
+	}
 	return ""
+}
+
+// collabFieldWarning explains why a gated [collab] key grants capability. Split
+// out from Warning to stay within the gocyclo-15 contract, mirroring
+// lspFieldWarning.
+//
+// A field this does not recognise still warns: it reached the spec because it is
+// NOT one of the inert keys (see policyCollabFreeFields), so the honest thing to
+// say is that plumb cannot vouch for it. Each warning is phrased as what the
+// repository GAINS, since that is what the user is being asked to approve.
+func collabFieldWarning(field string, v any) string {
+	on, _ := v.(bool)
+	if !on {
+		return "" // turning a channel off grants nothing
+	}
+	switch field {
+	case "cross_project":
+		return "lets this repository's sessions receive messages from agents in OTHER projects on this machine"
+	case "mailbox":
+		return "opens the agent-to-agent mailbox here — this repo's agents can send messages into other sessions"
+	case "intents":
+		return "lets this repository's agents broadcast claims that other sessions are shown"
+	case "knowledge_handoff":
+		return "lets this repository's agents write durable, cross-session-discoverable memories"
+	default:
+		return "a [collab] key plumb does not recognise as inert; it is gated because it may open a cross-agent channel"
+	}
 }
 
 // lspFieldWarning explains why a gated [lsp.<lang>] field grants capability. A
@@ -258,9 +288,59 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			}
 		}
 	}
+	if collab, ok := raw["collab"].(map[string]any); ok {
+		for k, v := range collab {
+			if isFreeCollabField(k) {
+				continue
+			}
+			out = append(out, PolicyEntry{Key: "collab." + k, Value: v})
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
+
+// policyCollabFreeFields are the [collab] keys that are NOT gated on trust,
+// because none of them can open a channel: peer_awareness surfaces only what the
+// daemon already observed in THIS project, and the rest are sizes and expiries.
+//
+// Like policyLSPFreeFields this is an ALLOW-list, and for the same reason. The
+// gated set is the interesting one, but enumerating IT would mean a [collab] key
+// added later is silently free until someone remembers to classify it — which is
+// exactly how the channel switches came to be project-settable in the first
+// place. Enumerating what is safe makes the default "gated", so a new field
+// fails closed and a human has to decide.
+var policyCollabFreeFields = map[string]bool{
+	"peer_awareness": true, "hint_budget_bytes": true, "intent_ttl_minutes": true,
+	"max_exchanges": true, "chat_budget_bytes": true, "max_wait_seconds": true,
+}
+
+// IsGatedProjectKey reports whether a dotted TOML key is one LoadProject gates
+// on trust. It exists so a display surface cannot drift from the loader: the TUI
+// needs the same answer to decide how to present a row whose trust status could
+// not be read, and duplicating the classification there is how the two get out of
+// step.
+func IsGatedProjectKey(dotted string) bool {
+	key := strings.ToLower(dotted)
+	switch {
+	case strings.HasPrefix(key, "git."):
+		return true
+	case strings.HasPrefix(key, "lsp."):
+		if _, field, ok := lspPolicyKey(key); ok {
+			return !isFreeLSPField(field)
+		}
+		return true
+	case strings.HasPrefix(key, "collab."):
+		return !isFreeCollabField(strings.TrimPrefix(key, "collab."))
+	}
+	return false
+}
+
+// isFreeCollabField reports whether a [collab] key is inert. Matched
+// case-INSENSITIVELY, because go-toml/v2 binds a TOML key to a struct field that
+// way: `Cross_Project = true` reaches CrossProject, and an exact-match check
+// would let it past the gate unseen.
+func isFreeCollabField(key string) bool { return policyCollabFreeFields[strings.ToLower(key)] }
 
 // ProjectPolicyStatus is what a workspace's project config asks for in the
 // capability-granting sections, and whether that exact request is trusted. It
@@ -351,6 +431,26 @@ func forceCapabilityFieldsToBase(base Config, merged *Config) {
 	// arbitrary pushes to the user's remotes, using the user's credentials, the
 	// moment a session attaches. Forced back whole, never field by field.
 	merged.Git = base.Git
+	// [collab]'s four switches each open a cross-agent CHANNEL: share_intent's
+	// agent-authored claims, the mailbox delivering a message to a peer or to
+	// whoever attaches next, cross-project delivery, and share_findings writing
+	// agent-authored content into the durable, cross-session-discoverable memory
+	// store. A channel a cloned repository can open is a channel it can use — a
+	// payload that has already steered one agent through some other file in the
+	// repo can leave instructions for the next session.
+	//
+	// cross_project is the plainest case: its own contract is that receiving is the
+	// RECIPIENT's decision rather than the sender's, which holds only while the
+	// recipient's project file cannot set it unasked. Trust is what makes a
+	// per-project value legitimate here — the user, not the repository, decides.
+	//
+	// Only the switches are gated. peer_awareness and the budgets stay freely
+	// project-overridable: they surface what the daemon already observed in this
+	// project, or tune a size, and neither can open anything.
+	merged.Collab.Intents = base.Collab.Intents
+	merged.Collab.Mailbox = base.Collab.Mailbox
+	merged.Collab.CrossProject = base.Collab.CrossProject
+	merged.Collab.KnowledgeHandoff = base.Collab.KnowledgeHandoff
 	// [lsp.<lang>] command/args/env are the argv and environment of a process the
 	// daemon spawns (pool → lsp.NewSupervisor → exec.CommandContext), so honouring
 	// them from an untrusted project config is arbitrary code execution: cloning a
