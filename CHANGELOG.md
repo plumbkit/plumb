@@ -9,6 +9,58 @@
 
 ### Added
 
+- **C is now indexed by the topology Map** — function definitions and prototypes,
+  structs, unions, enums and typedefs as types, their members as constants or
+  variables by mutability (`KindField` is for a key of a data-format file, not a
+  member of a code type — the convention Java and Rust already follow, now pinned
+  for C by a row in `TestExtractors_MemberConventions`),
+  enumerators and `#define` values as constants, and `#include` as imports, with
+  certain (1.0) containment edges and heuristic intra-file call edges.
+
+  Two C-specific problems had to be solved rather than transcribed. **Prototypes
+  cannot simply be emitted or simply be skipped**: a header is nothing *but*
+  prototypes, so skipping them indexes every `.h` file as empty — most of a C
+  API's surface — while emitting them naively reports two symbols for the routine
+  `.c` pattern of declaring and then defining the same function. Prototypes are
+  therefore held back until the walk ends and dropped only where a definition
+  supersedes them, which cannot be decided earlier because the definition may
+  come later in the file. **Declared names hide behind type syntax**: C wraps the
+  identifier in one node per piece, so `char *argv[]` arrives as
+  array(pointer(identifier)); matching the outermost node alone would miss most
+  real declarations, so the declarator is unwrapped recursively.
+
+  **It also carries a workaround for a measured upstream defect.** On
+  gotreesitter v0.48.1 an enum with **exactly three** enumerators and no trailing
+  comma parses with a zero-width MISSING token and **silently loses its third
+  enumerator** — `enum Colour { RED, GREEN, BLUE }` extracted RED and GREEN and
+  dropped BLUE. One, two, four and five enumerators are all clean, as is the same
+  enum with a trailing comma, so this is a specific GLR defect rather than a size
+  limit. Three-member enums are ordinary C and a silently missing declaration is
+  the failure that makes a Map worse than no Map, so the extractor recovers the
+  names from source text, spanning each recovered enumerator exactly as the
+  parsed ones are spanned. The workaround mirrors `recoverIUOBangs`, which was
+  carried for Swift until upstream fixed the parse and then deleted;
+  `TestC_EnumRecovery_TripwireForUpstreamFix` fails once gotreesitter parses this
+  cleanly, which is the signal to delete it. Note the MISSING node is **not** an
+  ERROR node, so a check for errors alone would not have seen this at all — the
+  same blind spot that once hid three Swift failures.
+
+  **The recovery is bounded so it cannot invent a symbol.** An INVENTED
+  declaration is the same failure as a missing one with the sign flipped, and at
+  confidence 1.0 it is worse; a corpus sweep counting parse errors and span
+  validity sees neither. The enum body is therefore scanned rather than split on
+  raw commas — comments, character and string literals and bracketed regions are
+  skipped, and a name is emitted only where an enumerator can legally begin. The
+  unbounded version turned ordinary C into symbols: `enum E { A, /* red, green */
+  B, C }` produced a constant named `green` spanning `"green */ B"`, and
+  `A = MAX(x, y)` produced one named `y`, each with a certain containment edge
+  claiming membership of the enum. A recovered enumerator also reports its own
+  line range instead of the whole enum's, since reporting L1-5 beside siblings on
+  L2-2 is exactly the tell the workaround promises not to leave.
+
+  Validated on 396 real `.c`/`.h` files: 0 errors, 16,530 nodes and 5,441 edges,
+  every node carrying a valid in-range byte span.
+
 - **Ruby is now indexed by the topology Map** — the first language wired under the
   coverage programme, and the largest single gap: Ruby outnumbers Python, Swift
   and Rust in the sample workspace that motivated this, with no Map at all. The
