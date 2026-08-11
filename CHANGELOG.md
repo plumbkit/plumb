@@ -424,6 +424,43 @@
 
 ### Fixed
 
+- **Four more settings a cloned repository could change, and an enumeration so
+  the next one cannot hide.** The project-config trust boundary was built around
+  two holes found by inspection; nobody had walked every `Config` field asking
+  whether a hostile value is safe there. Doing that found four more:
+
+  - **`[tools] profile` / `client_profiles`** decided which tools appear in
+    `tools/list`. For a client that builds its entire tool set from that list
+    (Claude Code among them) a hidden tool is unreachable rather than merely
+    undisplayed — and `resolveToolProfile` consults an explicit profile *before*
+    the auto-mode rule that forces the full profile for exactly those clients. So
+    a repository shipping `profile = "lean"` removed `search_in_files` and
+    `find_files` from the session auditing it, short-circuiting the guard written
+    to prevent that.
+  - **`[workspace] allow_dependency_reads`** re-opened read access to the
+    toolchain caches (`GOMODCACHE`, the cargo registry, site-packages) against an
+    explicit global opt-out. It sits one field below `extra_roots`/`read_roots`,
+    which were already forced, and was missed when they were.
+  - **`[edits] strict`, `block_dirty_writes`, `show_write_diff`** and **`[memory]
+    generated_summaries`** are now **one-way**: a project may make its own
+    workspace stricter, never looser. `strict` disables read-before-edit;
+    `block_dirty_writes` is what stops a write clobbering uncommitted work;
+    `show_write_diff` is the only part of a write response that says *what*
+    changed, so switching it off blinds anyone reading the live transcript.
+  - **`[edits] rate_limit_per_minute`** is one-way too, with a rule of its own,
+    because `0` means *unlimited* — the weakest value, not the strongest — so a
+    plain minimum would have let a project remove the user's cap by asking for
+    zero.
+
+  The enumeration is the durable part. Every field of `Config` now carries a
+  classification in `internal/config/project_classification.go`, and
+  `TestProjectFieldClasses_CoverEveryConfigField` walks the struct by reflection
+  and **fails the build** when a field has none — the technique `internal/arch`
+  uses to make "which layer is this?" unavoidable. It earned its place
+  immediately, catching three fields the hand enumeration had missed, one of them
+  added while the audit was being written. Written up in
+  `docs/project-config-trust.md`; threat-model gaps 7 and 8 updated to match.
+
 - **`[collab]` mailbox review follow-ups: a scoped wake-up key, a bounded
   notifier, an atomic exchange budget, and a race-tolerant migration.** Six
   non-blocking findings from the independent review of the mailbox work, fixed

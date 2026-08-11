@@ -260,8 +260,15 @@ func TestDefaults_BlockDirtyWritesEnabled(t *testing.T) {
 	}
 }
 
-// TestLoadProject_BlockDirtyWrites covers both layers: a project config can
-// disable the dirty-guard, and PLUMB_BLOCK_DIRTY_WRITES overrides the project.
+// TestLoadProject_BlockDirtyWrites covers both layers: a project config may NOT
+// disable the dirty-guard (it is one-way — a project can harden, never soften),
+// and PLUMB_BLOCK_DIRTY_WRITES still overrides as the highest-priority layer.
+//
+// This test previously asserted the opposite. The dirty guard is what stops a
+// write clobbering uncommitted work the user has not reviewed, and
+// <workspace>/.plumb/config.toml is a file a cloned repository ships — so
+// "a project may switch it off" means "any repository you clone may switch it
+// off". The environment override is unaffected: it is the user's own process.
 func TestLoadProject_BlockDirtyWrites(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")
@@ -273,8 +280,8 @@ func TestLoadProject_BlockDirtyWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Edits.BlockDirtyWrites {
-		t.Error("project config should have disabled block_dirty_writes")
+	if !got.Edits.BlockDirtyWrites {
+		t.Error("an untrusted project config must not be able to disable the dirty guard")
 	}
 
 	t.Setenv("PLUMB_BLOCK_DIRTY_WRITES", "1")
