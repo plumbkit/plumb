@@ -42,6 +42,10 @@ func allExtractorCases() []extractorCase {
 			"require 'json'\n\nclass Invoice\n  RATE = 1\n  attr_accessor :total\n\n  def sum\n    helper\n  end\n\n  def helper\n    1\n  end\nend\n\nRSpec.describe Invoice do\n  it \"sums\" do\n    expect(1).to eq(1)\n  end\nend\n", "json",
 		},
 		{
+			"c", func() topology.Extractor { return NewC() }, "a.c",
+			"#include <stdio.h>\n\nstruct P { int x; };\n\nstatic int helper(int v) { return v; }\n\nint add(int a) { return helper(a); }\n", "stdio.h",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
