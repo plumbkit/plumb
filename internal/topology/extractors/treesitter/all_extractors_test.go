@@ -71,6 +71,10 @@ func allExtractorCases() []extractorCase {
 			"local json = require(\"json\")\n\nlocal function helper(v)\n  return v\nend\n\nfunction add(a)\n  return helper(a)\nend\n", "json",
 		},
 		{
+			"cpp", func() topology.Extractor { return NewCpp() }, "a.cpp",
+			"#include <vector>\n\nstruct P { int x; };\n\nstatic int helper(int v) { return v; }\n\nint add(int a) { return helper(a); }\n", "vector",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},

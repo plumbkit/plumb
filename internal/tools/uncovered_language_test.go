@@ -71,8 +71,11 @@ func TestUncoveredPrimaryLanguageNote(t *testing.T) {
 		{"elixir is recognised but unindexed", "Elixir", "elixir"},
 		// langFileProfile maps this label to .c/.cpp/.cc/.h/.hpp; the first
 		// uncovered extension decides, which is what makes the label→registry
-		// resolution work without a second hand-written table.
-		{"c/c++ resolves through its extensions", "C/C++ (CMake)", "c"},
+		// resolution work without a second hand-written table. Every one of
+		// those extensions is now indexed — .c since the C extractor landed and
+		// .cpp/.cc/.hpp since the C++ one — so the label resolves to no
+		// uncovered language at all and must produce no note.
+		{"c/c++ is indexed since the C++ extractor landed", "C/C++ (CMake)", ""},
 		{"go is indexed", "Go", ""},
 		{"ruby is indexed since its extractor landed", "Ruby", ""},
 		{"swift is indexed", "Swift", ""},
