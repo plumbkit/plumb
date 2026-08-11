@@ -59,6 +59,10 @@ func allExtractorCases() []extractorCase {
 			"<?php\nnamespace App;\n\nuse App\\Model\\User;\n\nclass Svc {\n    public function go(): int { return $this->helper(); }\n    private function helper(): int { return 1; }\n}\n", "App\\Model\\User",
 		},
 		{
+			"scss", func() topology.Extractor { return NewSCSS() }, "a.scss",
+			"@use \"sass:math\";\n\n@mixin pad($n) {\n  padding: $n;\n}\n\n.btn {\n  @include pad(4px);\n}\n", "sass:math",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},

@@ -34,6 +34,11 @@ func fidelityCases() []fidelityCase {
 		// the scanner into swallowing the file tail, and this guard must measure a
 		// cascade we introduced rather than re-measure that upstream defect.
 		{"php", grammars.PhpLanguage, func() topology.Extractor { return NewPHP() }, string(phpSrc), "trailing_helper"},
+		// scssSrc deliberately avoids the constructs tree-sitter-scss mis-parses
+		// (`!default`, `@use … as`, one-line maps, `@include ns.mixin`); this
+		// guard must measure a cascade we introduced, not re-measure a pinned
+		// upstream defect. Those are covered in scss_test.go instead.
+		{"scss", grammars.ScssLanguage, func() topology.Extractor { return NewSCSS() }, string(scssSrc), "focus-ring"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 

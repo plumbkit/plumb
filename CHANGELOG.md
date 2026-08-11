@@ -56,6 +56,33 @@
   It is kept — it costs nothing and does recover declarations from a merely
   truncated file, which a half-written buffer mid-edit genuinely is — but it does
   not earn its place here the way it did on SCSS and Objective-C.
+- **SCSS is now indexed by the topology Map** — `@mixin` and `@function`
+  definitions with their parameter lists, rule sets and `%placeholder`
+  definitions, `@use`/`@forward`/`@import` as imports, top-level `$variables` as
+  design tokens, and `@include` as a call edge onto the mixin it invokes.
+
+  Nesting is what separates this from the CSS extractor rather than reusing it
+  wholesale: in CSS a rule set is a leaf, so `cssWalk` never descends into one,
+  while in SCSS the nested rule is the idiom and treating it as a leaf would lose
+  most of a file. Mixins are the other half — they give SCSS a named,
+  parameterised, *called* unit that CSS has no equivalent of, so SCSS earns
+  function nodes and call edges where CSS has neither. A `$variable` declared
+  inside a mixin or rule body is scoped to it and is dropped as a local; only
+  file-scope tokens are emitted.
+
+  **The pinned tree-sitter-scss grammar mis-parses several everyday constructs**,
+  and this is the honest shape of the coverage. `!default`, `@use … as`,
+  `@use … with`, `@forward … show`, one-line map literals, `@include ns.mixin`,
+  `@extend %placeholder`, `@at-root` and nested properties each produce ERROR
+  nodes, and a CSS unicode escape (`\f2b9`) as a value derails the parse from
+  that point on. The extractor therefore walks *into* recovery nodes: the mixins
+  and rules inside one are still parsed correctly as their own typed nodes, so
+  descending collects them without inventing anything. That single decision took
+  `@function` recall from 44% to 75% on a real corpus. Measured over 246 real
+  files from Bootstrap and Bulma: `$variable` 99.6%, `@mixin` 95.8%, `@function`
+  75.0%, with zero invalid byte spans. Three vendored FontAwesome icon-variable
+  files are excluded from those figures and reported separately — the unicode
+  escape defeats them almost entirely (~2,500 declarations, 1 recovered).
 
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside
