@@ -57,12 +57,22 @@
   never learns it existed. `target_workspace` closed the cross-project version of
   this; same-workspace addressing still trusted the name.
 
-  Both assignment paths now check. `session.Register` re-draws until the name is
-  free, falling back to a numeric suffix if the draw stays unlucky, and
-  `session.Rename` refuses a name a live session holds with `ErrNameTaken`.
-  Crucially the check runs *inside* the session-directory flock that performs the
-  write, so it cannot race a concurrent rename — checking first and writing after
-  would let every contender see the name free and all of them take it.
+  Every path that can put a name into the registry now checks. `session.Register`
+  validates a caller-supplied name and re-draws a generated one until it is free,
+  falling back to a numeric suffix if the draw stays unlucky; `session.Rename`
+  refuses a name a live session holds with `ErrNameTaken`; and `session.Patch`,
+  the third writer of a session file, no longer writes the name field at all — a
+  write primitive that can set an address is a door around the guard rather than
+  a second guard. Crucially the check runs *inside* the session-directory flock
+  that performs the write, so it cannot race a concurrent rename — checking first
+  and writing after would let every contender see the name free and all of them
+  take it.
+
+  A session whose registration fails still serves, and still shows a name in the
+  TUI and logs, but is no longer *addressable*: that fallback name is drawn
+  without a check and the session has no file for any peer's check to find, so
+  treating it as a mailbox address would let it silently swallow a live peer's
+  messages.
 
   Renaming to the name you already hold still works (`restoreName` re-applies the
   persisted name on every reconnect), an ended session does not reserve its name,
@@ -76,6 +86,14 @@
   `session.Register` now returns the completed `session.Info` rather than just
   the ID, so its caller can read back the name it was assigned instead of
   generating one itself — that pre-generated name was what bypassed the check.
+
+  Reserving `next` made one previously-legal stored name invalid, so name
+  restoration now separates its two failure modes. A name a live peer currently
+  holds is worth retrying, and the persisted row is kept for the next reconnect.
+  A name this daemon rejects outright never will be — left in place it would fail
+  identically on every reconnect and the session would come back randomly renamed
+  each time, which is the churn the persistence exists to prevent — so the row is
+  replaced with the name actually in use and converges after one reconnect.
 
 ### Changed
 

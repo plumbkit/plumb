@@ -10,20 +10,17 @@ import (
 	"time"
 )
 
-// stubDraw pins GenerateName's output for the duration of a test. Draws are
-// consumed in order and the last one repeats, so a single argument means "the
-// draw is permanently unlucky". Without this the collision and suffix paths are
-// unreachable: a real draw picks from a few thousand names.
+// stubDraw pins the name draw for the duration of a test. Draws are consumed in
+// order and the last one repeats, so a single argument means "the draw is
+// permanently unlucky".
 func stubDraw(t *testing.T, names ...string) {
 	t.Helper()
-	orig := generateName
 	i := 0
-	generateName = func() string {
+	SetGenerateNameForTest(t, func() string {
 		n := names[min(i, len(names)-1)]
 		i++
 		return n
-	}
-	t.Cleanup(func() { generateName = orig })
+	})
 }
 
 // TestFreeName_RedrawsPastACollision is the common case: one unlucky draw, then
@@ -106,6 +103,33 @@ func TestWithSuffix_NeverLeavesATrailingHyphen(t *testing.T) {
 	}
 	if _, err := NormaliseName(got); err != nil {
 		t.Fatalf("withSuffix = %q, rejected by NormaliseName: %v", got, err)
+	}
+}
+
+// TestWithSuffix_DegenerateBasesStayLegal. A base that trims away to nothing
+// would yield a leading-hyphen name. Unreachable from generateName's
+// adjective-noun output, but withSuffix must not depend on its caller to stay
+// correct — the sibling trailing-hyphen hazard is pinned above, and leaving the
+// empty-base twin untested is how a helper becomes a trap when it is reused.
+func TestWithSuffix_DegenerateBasesStayLegal(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		n    int
+	}{
+		{"all hyphens, longer than the cap", strings.Repeat("-", MaxNameLength+3), 2},
+		{"all hyphens, short", "---", 2},
+		{"empty", "", 2},
+		{"single hyphen", "-", 99},
+		{"suffix alone exceeds the cap", "abc", 1234567890123456789},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := withSuffix(c.base, c.n)
+			if _, err := NormaliseName(got); err != nil {
+				t.Errorf("withSuffix(%q, %d) = %q, rejected by NormaliseName: %v", c.base, c.n, got, err)
+			}
+		})
 	}
 }
 

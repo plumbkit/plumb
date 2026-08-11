@@ -128,7 +128,8 @@ a name another **live** session already answers to is refused (compared
 case-insensitively), as is `next` — the next-arrival address. Renaming to the
 name you already hold is allowed, and an ended session does not reserve its
 name. Generated names are checked the same way at registration and re-drawn, so
-two live sessions never share one.
+no two registered sessions share one. (A session whose registration failed keeps
+a display name but has no mailbox address at all, so it cannot shadow one.)
 
 ### `workspace_sessions`
 Same-workspace peer awareness: lists active sessions on this workspace and recent

@@ -18,6 +18,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/session"
@@ -47,6 +48,13 @@ func (s *connSession) onProxySession(id string) {
 // NEXT reconnect can restore it. Applying the name goes through renameSession,
 // keeping the session file, view, and stats store consistent (and re-saving
 // the name, which refreshes its TTL).
+//
+// session.Rename is the authoritative uniqueness and validation check — it runs
+// inside the flock that performs the write — so this asks it rather than
+// pre-checking, which would cost a second full scan of the session directory to
+// reach a less reliable answer. The two failure modes are handled differently:
+// a name merely held by a live peer is worth retrying next reconnect, an
+// invalid one never will be.
 func (s *connSession) restoreName(id string) {
 	v := s.view()
 	if !s.namePersistEnabled(v) {
@@ -61,33 +69,29 @@ func (s *connSession) restoreName(id string) {
 		s.persistName(v.sessName)
 		return
 	}
-	// A proxy reconnect can overlap its predecessor (the proxy reconnected but the
-	// previous connSession is still registered), and session.Rename enforces no
-	// uniqueness. Two live sessions under one name would make leave_note delivery
-	// — which matches on the name string — ambiguous, so keep the generated name
-	// this time and leave the stored one for the next reconnect.
-	if nameHeldByOtherLiveSession(name, s.sessID) {
+	_, err = s.renameSession(name)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, session.ErrNameTaken) {
+		// A proxy reconnect can overlap its predecessor: the proxy reconnected but
+		// the previous connSession is still registered and still answers to this
+		// name. Keep the generated name this time and leave the stored mapping
+		// alone, so the next reconnect — by which time the predecessor has gone —
+		// gets the name back.
 		s.log().Debug("daemon: persisted session name still held by a live session; keeping the generated name",
 			"persisted", name, "using", v.sessName)
 		return
 	}
-	if _, err := s.renameSession(name); err != nil {
-		s.log().Debug("daemon: restore session name failed", "name", name, "err", err)
-	}
-}
-
-// nameHeldByOtherLiveSession reports whether a live session other than selfID
-// already answers to name. Best-effort: an unreadable session directory reports
-// false, so a restore is never blocked by a transient listing failure.
-//
-// Advisory, and deliberately kept even though session.Rename now refuses a
-// taken name itself under the flock that performs the write — that check is the
-// authoritative one. This runs first so the caller can say WHICH name it
-// declined to restore and quietly keep the generated one, instead of turning a
-// routine overlap into a rename error.
-func nameHeldByOtherLiveSession(name, selfID string) bool {
-	taken, err := session.NameTaken(name, selfID)
-	return err == nil && taken
+	// Not merely busy: this daemon rejects the stored name outright (it predates a
+	// validation rule, e.g. a session named "next" before that became the reserved
+	// mailbox address). Left in place the row would fail identically on EVERY
+	// reconnect and the session would come back randomly renamed each time — the
+	// churn this persistence exists to prevent, and silent at Debug. Replace it
+	// with the name the session actually has so it converges after one reconnect.
+	s.log().Debug("daemon: persisted session name is no longer valid; replacing it",
+		"persisted", name, "using", v.sessName, "err", err)
+	s.persistName(v.sessName)
 }
 
 // persistName records the session's current name under its proxy session ID.

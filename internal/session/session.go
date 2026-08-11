@@ -125,7 +125,19 @@ func Register(info Info) (Info, error) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = time.Now()
 	}
+	// Validate before the lock. A caller-supplied name has to clear the same
+	// rules Rename enforces, or Register becomes the one door into the registry
+	// that bypasses them — it would happily store the reserved "next", or a name
+	// carrying a newline or colon, which internal/tools/git.go relies on being
+	// impossible to keep the Plumb-Session commit trailer single-line.
 	requested := info.Name
+	if requested != "" {
+		norm, err := NormaliseName(requested)
+		if err != nil {
+			return Info{}, err
+		}
+		requested, info.Name = norm, norm
+	}
 	path := filepath.Join(dir, info.ID+".json")
 	if err := withSessionDirLock(dir, func() error {
 		live, err := listLocked(dir)
@@ -175,10 +187,24 @@ func freeName(live []Info, selfID string) string {
 // withSuffix appends "-n" to base, trimming base so the result fits
 // MaxNameLength and never ends in a hyphen — NormaliseName rejects both, and a
 // generated name has to survive being passed back through it.
+//
+// The hyphen trim is unconditional, not just after truncation: a base that is
+// entirely hyphens is short enough to skip the trim yet still produces "----2".
+// A base that trims away to nothing falls back to a letter, since a bare
+// "-2" leads with a hyphen. Neither is reachable from generateName's
+// adjective-noun output, but withSuffix must not depend on its caller for the
+// legality of what it returns.
+//
+// It does NOT sanitise an arbitrary string — an interior "--" survives and
+// NormaliseName would reject it. The contract is that a legal (or empty) base
+// yields a legal name.
 func withSuffix(base string, n int) string {
 	suffix := "-" + strconv.Itoa(n)
 	if room := MaxNameLength - len(suffix); len(base) > room {
-		base = strings.TrimRight(base[:room], "-")
+		base = base[:max(room, 0)]
+	}
+	if base = strings.Trim(base, "-"); base == "" {
+		base = "s"
 	}
 	return base + suffix
 }
@@ -195,22 +221,6 @@ func nameTaken(live []Info, name, selfID string) bool {
 		}
 	}
 	return false
-}
-
-// NameTaken reports whether a live session other than selfID already answers to
-// name. It takes the session-directory flock, so it must NOT be called from
-// inside withSessionDirLock — check against a listLocked result there instead.
-//
-// Advisory only: the answer is stale the moment it returns. Register and Rename
-// re-check under the lock that performs the write, and that check is the
-// authoritative one. This exists for callers that want a clearer log line, or
-// to skip a write attempt they know will fail.
-func NameTaken(name, selfID string) (bool, error) {
-	live, err := List()
-	if err != nil {
-		return false, err
-	}
-	return nameTaken(live, name, selfID), nil
 }
 
 func withSessionDirLock(dir string, fn func() error) error {
@@ -273,13 +283,10 @@ func Rename(id, name string) (string, error) {
 	}
 	path := filepath.Join(dir, id+".json")
 	if err := withSessionDirLock(dir, func() error {
-		live, err := listLocked(dir)
-		if err != nil {
-			return err
-		}
-		if nameTaken(live, name, id) {
-			return fmt.Errorf("%w: %q", ErrNameTaken, name)
-		}
+		// Read this session's file BEFORE listLocked. listLocked prunes ended
+		// files past the grace window, so scanning first can delete the very file
+		// this rename is about to read and turn the call into a self-inflicted
+		// ENOENT reported as "reading session file".
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading session file: %w", err)
@@ -287,6 +294,13 @@ func Rename(id, name string) (string, error) {
 		var info Info
 		if err := json.Unmarshal(data, &info); err != nil {
 			return fmt.Errorf("decoding session file: %w", err)
+		}
+		live, err := listLocked(dir)
+		if err != nil {
+			return err
+		}
+		if nameTaken(live, name, id) {
+			return fmt.Errorf("%w: %q", ErrNameTaken, name)
 		}
 		info.Name = name
 		if err := writeSessionFileAtomic(path, info); err != nil {
@@ -301,6 +315,12 @@ func Rename(id, name string) (string, error) {
 
 // Patch reads the session file for id, calls fn with a pointer to the parsed
 // Info, then writes the modified Info back. No-ops silently on any error.
+//
+// Name is not patchable. Rename owns it, because it is the only path that
+// enforces validation and live-session uniqueness — and a name is a mailbox
+// address, so a write primitive that could set it freely would be a door around
+// the guard rather than a second guard. A callback that changes Name has that
+// one field discarded; every other mutation still applies.
 func Patch(id string, fn func(*Info)) {
 	dir, err := Dir()
 	if err != nil {
@@ -316,7 +336,9 @@ func Patch(id string, fn func(*Info)) {
 		if err := json.Unmarshal(data, &info); err != nil {
 			return err
 		}
+		name := info.Name
 		fn(&info)
+		info.Name = name
 		return writeSessionFileAtomic(path, info)
 	})
 }

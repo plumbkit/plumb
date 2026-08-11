@@ -3,7 +3,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/session"
@@ -59,8 +62,8 @@ func TestRenameSession_PropagatesValidationError(t *testing.T) {
 
 // TestSessionNamePattern_AgreesWithNormalise guards against the advertised JSON
 // Schema pattern drifting from the authoritative validator. Inputs are already
-// trimmed and within the length cap, so the only rules left are charset and
-// hyphen placement — exactly what the pattern must mirror.
+// trimmed and within the length cap, so charset and hyphen placement are the
+// only rules the pattern has to mirror — with one deliberate exception, below.
 func TestSessionNamePattern_AgreesWithNormalise(t *testing.T) {
 	re := regexp.MustCompile(sessionNamePattern)
 	names := []string{
@@ -74,6 +77,48 @@ func TestSessionNamePattern_AgreesWithNormalise(t *testing.T) {
 		if patternOK != normaliseOK {
 			t.Errorf("disagreement for %q: pattern=%v normalise=%v", n, patternOK, normaliseOK)
 		}
+	}
+}
+
+// TestSessionNamePattern_DoesNotEncodeTheReservedName documents the one place
+// the schema pattern is deliberately WEAKER than NormaliseName: "next" is a
+// well-formed name that the validator reserves for the mailbox's next-arrival
+// address. The pattern is advertised as advisory (see sessionNamePattern), and
+// a client-side regex is the wrong place to encode a server-side namespace
+// rule — so the schema admits it and the server refuses it with a reason.
+//
+// Kept as its own test rather than an exception inside the agreement table: the
+// table's contract is "these must agree", and burying a case that must NOT
+// agree inside it is how that contract rots.
+func TestSessionNamePattern_DoesNotEncodeTheReservedName(t *testing.T) {
+	if !regexp.MustCompile(sessionNamePattern).MatchString("next") {
+		t.Error("pattern rejects \"next\"; it is advisory and should admit it")
+	}
+	if _, err := session.NormaliseName("next"); err == nil {
+		t.Error("NormaliseName accepted \"next\"; it is the reserved mailbox address")
+	}
+}
+
+// TestRenameSession_NameTakenReachesTheAgentWithAReason pins the ErrNameTaken
+// branch. The wrap must preserve errors.Is for callers, and must add WHY — an
+// agent told only "taken" retries the same name.
+func TestRenameSession_NameTakenReachesTheAgentWithAReason(t *testing.T) {
+	tool := NewRenameSession(func(string) (string, error) {
+		return "", fmt.Errorf("%w: %q", session.ErrNameTaken, "reviewer")
+	})
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"reviewer"}`))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, session.ErrNameTaken) {
+		t.Errorf("errors.Is(err, ErrNameTaken) = false; the wrap dropped the sentinel: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reviewer") {
+		t.Errorf("error does not name the conflicting name: %v", err)
+	}
+	if !strings.Contains(err.Error(), "pick another") {
+		t.Errorf("error does not tell the agent what to do: %v", err)
 	}
 }
 
