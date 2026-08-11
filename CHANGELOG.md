@@ -9,6 +9,37 @@
 
 ### Added
 
+- **JSON and JSONC are now indexed by the topology Map.** Every object key becomes
+  a field named by its dotted path from the document root, so a search for
+  `scripts.build` finds it without the caller knowing its depth, and nesting
+  becomes containment — the same convention TOML and YAML already use, so config
+  formats behave alike.
+
+  Two decisions worth stating. **Arrays are transparent**: an array never becomes
+  a node of its own and its elements attach to whatever key held the array,
+  because JSON has no syntax for naming an individual element and an
+  unnameable intermediate level would only bury the keys underneath it. **The
+  array walk is capped**: a document holding one large array of near-identical
+  records (a page of API results, an event log) would otherwise emit one field
+  per key per element — tens of thousands of near-duplicate nodes carrying no
+  more search value than the first handful, since the schema repeats. The cap
+  bounds the walk while leaving a small config array (a `files` list,
+  docker-compose-style ports) fully indexed, and the array's own key always
+  survives. Guarded by `TestJSON_ArraysAreTransparent` and
+  `TestJSON_LargeArrayIsCapped`.
+
+  The cap is per-array, so it bounds that one shape and no other. An object of
+  records (the `package-lock.json` shape) and a document of many short arrays
+  are not bounded by it, and are not meant to be: at the 512 KiB indexer limit
+  the first measures ~22,600 nodes and the second tens of thousands, in the same
+  band as already-shipped TOML and YAML on equivalent input with no cap at all.
+  A large config file simply holds a large number of keys; `[topology]
+  max_file_size_bytes` (512 KiB by default) is the general backstop for every
+  format. (Counts for the many-short-arrays and YAML shapes are given as
+  magnitudes because they turned out to depend heavily on key density — an
+  independent re-measurement could not reproduce the precise figures an earlier
+  draft quoted, while the capped and package-lock figures reproduced exactly.)
+
 - **C is now indexed by the topology Map** — function definitions and prototypes,
   structs, unions, enums and typedefs as types, their members as constants or
   variables by mutability (`KindField` is for a key of a data-format file, not a
