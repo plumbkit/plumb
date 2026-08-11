@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"started_at\":\"2000-01-01T00:00:00Z\",\"ops\":[{\"n\":0,\"path\":\"{{ROOT}}/outside/victim.txt\",\"perm\":493,\"snapshotted\":true}]}")
+[]byte("pwned\n")
+uint8(1)

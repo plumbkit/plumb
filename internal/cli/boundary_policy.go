@@ -5,6 +5,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 // readBoundaryGuard and writeBoundaryGuard are the per-connection BoundaryGuard
@@ -20,6 +21,29 @@ func (s *connSession) readBoundaryGuard(path string) error {
 
 func (s *connSession) writeBoundaryGuard(path string) error {
 	return s.checkBoundary(path, tools.AccessReadWrite)
+}
+
+// txlogReplayGuard adapts a freshly built PathPolicy into the guard txlog.Scan
+// requires before it will restore a path named in an orphaned transaction
+// manifest — a file a cloned repository can ship.
+//
+// It takes the policy VALUE rather than reading it back through s.view(), and
+// that is load-bearing. Every caller runs inside s.mutate, where the published
+// snapshot is still the PRE-mutation one; on a first attach its policy is nil,
+// so consulting it would fail closed on exactly the legitimate crash recovery
+// this is meant to permit. s.checkBoundary is unusable here for a second,
+// independent reason: its refusal path calls markBoundaryViolation, which
+// re-enters mutate and would deadlock.
+//
+// A nil policy yields a nil guard, which txlog.Scan treats as fail-closed.
+func txlogReplayGuard(pol *tools.PathPolicy) txlog.PathGuard {
+	if pol == nil {
+		return nil
+	}
+	return func(path string) error {
+		_, err := pol.Check(path, tools.AccessReadWrite)
+		return err
+	}
 }
 
 // checkBoundary consults the live PathPolicy from the session snapshot.

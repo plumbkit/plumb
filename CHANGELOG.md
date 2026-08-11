@@ -550,6 +550,43 @@
 
 ### Fixed
 
+- **A cloned repository could write a file anywhere you can write, with mode
+  bits of its choosing, the moment a session attached.** `transaction_apply`
+  keeps a write-ahead log under `<workspace>/.plumb/tx-log/`, and `txlog.Scan`
+  rolls back any orphan it finds there on every attach and re-pin
+  (`conn_attach.go`, `conn_repin.go`). That directory is an ordinary directory
+  inside the workspace, so a repository ships one just by committing it — and the
+  replay took `path` and `perm` straight from the manifest. A manifest naming an
+  absolute path, a `../` traversal, or a duplicate `path` key had its snapshot
+  content written there verbatim, as you, unsandboxed, with no prompt; `perm:
+  511` plus a `#!/bin/sh` payload created a world-executable script, because
+  `os.WriteFile` applies the manifest's mode whenever the replay creates the
+  file. The `os.WriteFile` call carried `//nolint:gosec // G703: op.Path is a
+  workspace path validated by the transaction machinery before being stored in
+  the manifest` — true of the in-transaction rollback the author had in mind,
+  false of the sibling orphan-recovery path, and load-bearing.
+
+  `Scan` now requires a `PathGuard` and fails closed without one; each caller
+  passes the connection's own `PathPolicy`, so a genuine crashed transaction that
+  wrote to a configured extra root or an `--allow-dir` grant is still recovered,
+  while anything outside every root the session may write is refused. A refused
+  op is logged, never silently dropped. An untrusted replay also no longer
+  honours the manifest's mode bits (it creates with `0600`; an existing file
+  keeps its own mode regardless) and refuses a relative path, which `os.WriteFile`
+  would otherwise anchor to the daemon's working directory. `Log.Rollback` now
+  replays its **in-memory** manifest rather than re-reading the file, so the
+  trusted and untrusted paths are separate functions rather than one shared
+  routine whose safety depended on who wrote the file.
+
+  Found by the first fuzz target in the tree, over the parser §9 named and nobody
+  had covered. Guarded by `FuzzScanReplay` with its four recorded escape payloads
+  as a retained corpus, plus `TestScan_RefusesPathOutsideTheSessionPolicy`,
+  `TestScan_NilGuardFailsClosed`, `TestScan_RefusesRelativePath`,
+  `TestScan_DoesNotHonourManifestModeBits`,
+  `TestScan_RestoresGuardAdmittedPathOutsideWorkspace` (which pins that a plain
+  workspace-containment check would be the wrong fix) and
+  `TestRollback_UsesInMemoryManifestNotDisk`.
+
 - **A fold-variant `[lsp.<lang>]` key escaped the trust gate entirely.**
   `go-toml/v2` matches a TOML key to a struct tag **case-insensitively**, so
   `Command`, `COMMAND` and `Root_Markers` all decode into `LSPConfig` — but the
