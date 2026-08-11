@@ -387,14 +387,20 @@ func sameDirAs(dir string, info os.FileInfo) bool {
 // SynthesiseRoot must only be called on the Detect error path in
 // OnBeforeTool — never inside route() or LSP-routing paths.
 func (p *workspacePool) SynthesiseRoot(seedDir string) string {
-	d := seedDir
+	// Clean the seed before anything else. A synthesised root is stored as the
+	// session's workspace, and several tools boundary-check that string directly
+	// rather than a path derived from it, so a root carrying an unresolved ".."
+	// is refused by the policy for the life of the session — with a message
+	// telling the caller to pass a different path, which it cannot, because it
+	// never named one. Detect cleans its own input; only this fallback did not.
+	d := filepath.Clean(seedDir)
 	for {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
 			return d
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return seedDir // reached filesystem root — use the seed itself
+			return filepath.Clean(seedDir) // reached filesystem root — use the seed itself
 		}
 		d = parent
 	}

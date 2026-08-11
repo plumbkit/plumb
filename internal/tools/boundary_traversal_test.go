@@ -200,6 +200,23 @@ func TestReadFile_RootSymlinkCannotAddressTheFilesystem(t *testing.T) {
 	}
 }
 
+// TestFileStatus_ParentTraversalIsRefused covers the one tool that cleaned the
+// path BEFORE guarding it, so the refusal could never fire there. Not
+// exploitable — the check and the os.Stat used the same cleaned string — but it
+// answered about a file the caller had not named, reporting exists=false with no
+// error, which is exactly the silent retargeting this refusal exists to prevent.
+func TestFileStatus_ParentTraversalIsRefused(t *testing.T) {
+	ws, _, payload, pol := traversalScene(t)
+	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	fs := NewFileStatus(nil).WithWorkspace(func() string { return ws }).WithBoundary(guard)
+	raw, _ := json.Marshal(map[string]any{"paths": []string{payload}})
+
+	out, err := fs.Execute(context.Background(), raw)
+	if err == nil && !strings.Contains(out, "not in canonical form") {
+		t.Errorf("file_status answered about a path it should have refused:\n%s", out)
+	}
+}
+
 // --- controls: the refusals above must be specific, not a blanket outage ---
 
 // TestRelativeTraversalStillResolves pins the asymmetry the fix depends on. A
