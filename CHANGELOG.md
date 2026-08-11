@@ -350,6 +350,62 @@
   skill's own row (promoted to the strongest outcome of its parts) rather than
   as rows of their own, so the sync table does not grow with files the user
   never asked about by name.
+- **A Kotlin Gradle project no longer attaches as Java.** `build.gradle.kts` is a
+  strong root marker for *both* `java` and `kotlin`, and both ship enabled, so
+  workspace detection resolved it by language order alone — alphabetical, which
+  means `java` won every Gradle project written in the Kotlin DSL. The cost was
+  not cosmetic: a pure-Kotlin project started a jdtls JVM (15–40 s cold start,
+  0.8–1.5 GB RSS) that served none of its sources, and every URI-less query
+  (`workspace_symbols`, the call/type hierarchies), which falls back to the
+  connection's primary, was answered by a server that could not see a single
+  Kotlin file. Per-file routing was unaffected — a `.kt` file still reached the
+  Kotlin adapter by extension — which is why this survived so long.
+
+  A contested directory is now decided by what the project actually contains:
+  the tied language owning the most source files beneath it, falling back to the
+  existing order when the evidence cannot separate them. The scan runs *only* on
+  a tie, so the ordinary single-claim case pays nothing, and it descends deeper
+  than the last-resort sniff because the JVM convention buries sources well down
+  the tree — at the shallower bound every contested Gradle root would look empty.
+
+  The contested markers are excluded from their own tie-break, wherever they
+  sit. `build.gradle.kts` *is* a Kotlin file by extension, so counting it handed
+  every Gradle project to Kotlin — including a Java one merely using the Kotlin
+  DSL. Those files are precisely the ones carrying no signal: their presence is
+  why the tie exists. Excluding only the ones in the root directory was not
+  enough, because the standard Gradle **multi-project** ships one build script
+  per module: a Java repo with `app/`, `core/` and `web/` reads as three Kotlin
+  files before a line of anyone's code is counted, and modules outvote sources
+  as the project grows — this bug's own mirror image, handing a Java project to
+  `kotlin-lsp`.
+
+  A scan that ran out of budget is not treated as evidence. The walk stops at a
+  file cap, and it visits siblings in reverse-alphabetical order — which has
+  nothing to do with where a project keeps its code — so a truncated count
+  describes whichever prefix it happened to reach. A repo of 200 Java files and
+  3 Kotlin ones, with a large asset directory sorting between them, counted the
+  3, ran out, and confidently answered Kotlin. The tie-break now falls back to
+  the deterministic order whenever the scan could not finish, which is what
+  plumb answered before it existed. The last-resort sniff deliberately does the
+  opposite and still answers from a partial count: its alternative is no
+  language server at all, where a coarse guess is the better of two bad answers.
+
+  The scan also reaches a module's sources. `<module>/src/main/kotlin/com/example/App.kt`
+  is six directories down, and at the depth that covers a single-project layout
+  every module's sources sat one level out of reach, so a multi-project root
+  could see nothing but build scripts — which is what made the miscount decisive
+  rather than merely noisy.
+
+  The scan this adds walks *beneath* a candidate directory, which is the shape
+  that historically walks out of one, so it now refuses symlinks outright —
+  neither descended nor counted, in either the tie-break or the pre-existing
+  last-resort sniff that shares the walk. A symlinked directory was already not
+  descended, incidentally, because `DirEntry.IsDir` is false for a link; a
+  symlinked *file* was still counted by its name, letting a `A.kt` link inflate
+  the count from a target that could live anywhere. Refusing the entry rather
+  than resolving and re-checking it follows the same rule as #264: a resolved
+  path and the path the walk would read are two names for two possibly different
+  files.
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second
