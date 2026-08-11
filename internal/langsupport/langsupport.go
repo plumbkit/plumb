@@ -78,6 +78,7 @@ var registry = []Language{
 	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true},
 	{Name: "ruby", Extensions: []string{".rb", ".rake", ".gemspec", "gemfile", "rakefile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "c", Extensions: []string{".c", ".h"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "json", Extensions: []string{".json", ".jsonc"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
@@ -94,7 +95,6 @@ var registry = []Language{
 	// together. The list is therefore the coverage roadmap, in priority order.
 	{Name: "cpp", Extensions: []string{".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "json", Extensions: []string{".json", ".jsonc"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "php", Extensions: []string{".php"}, Structural: EngineNone, LSPAdapter: ""},

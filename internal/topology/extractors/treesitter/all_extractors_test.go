@@ -46,6 +46,11 @@ func allExtractorCases() []extractorCase {
 			"#include <stdio.h>\n\nstruct P { int x; };\n\nstatic int helper(int v) { return v; }\n\nint add(int a) { return helper(a); }\n", "stdio.h",
 		},
 		{
+			// JSON has no import concept, so wantImport is deliberately empty.
+			"json", func() topology.Extractor { return NewJSON() }, "a.json",
+			"{\n  \"name\": \"pkg\",\n  \"scripts\": { \"build\": \"vite build\" }\n}\n", "",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},

@@ -28,6 +28,7 @@ func fidelityCases() []fidelityCase {
 		{"python", grammars.PythonLanguage, func() topology.Extractor { return NewPython() }, string(pySrc), "helper_func"},
 		{"ruby", grammars.RubyLanguage, func() topology.Extractor { return NewRuby() }, string(rbSrc), "trailing_helper"},
 		{"c", grammars.CLanguage, func() topology.Extractor { return NewC() }, string(cSrc), "trailing_helper"},
+		{"json", grammars.JsonLanguage, func() topology.Extractor { return NewJSON() }, string(jsonSrc), "email"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 
