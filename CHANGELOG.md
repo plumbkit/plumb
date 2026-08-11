@@ -46,6 +46,34 @@
   code, plus `TestScan_StillRecoversAGenuineOrphan` as a positive control — a
   refusal-shaped fix otherwise passes its own tests just as well when it breaks
   recovery altogether.
+
+- **A cloned repository could write a file anywhere you can write, with mode bits
+  of its choosing, the moment a session attached.** `transaction_apply` keeps a
+  write-ahead log under `<workspace>/.plumb/tx-log/`, and `txlog.Scan` rolls back
+  any orphan it finds there on every attach and re-pin. That directory is an
+  ordinary directory inside the workspace, so a repository ships one just by
+  committing it — and the replay took `path` and `perm` straight from the
+  manifest. A manifest naming an absolute path outside the workspace had its
+  snapshot content written there verbatim, as you, unsandboxed, with no prompt;
+  `perm: 511` plus a `#!/bin/sh` payload created a world-executable script,
+  because `os.WriteFile` applies the manifest's mode whenever the replay creates
+  the file.
+
+  The `os.WriteFile` call carried `//nolint:gosec // G703: op.Path is a workspace
+  path validated by the transaction machinery` — true of `Rollback`, which
+  replays ops this process recorded in memory, and false of the orphan path,
+  which replays a file anyone can author. One suppression covered both callers.
+
+  Orphan replay is now confined to the session's own `PathPolicy`, injected as a
+  `PathGuard` (`txlog` sits below `internal/tools`, so it cannot import the
+  policy). A plain workspace-containment test would have been wrong: a
+  transaction legitimately writes to configured extra roots and `--allow-dir`
+  grants, and only the session's policy knows the difference between "outside the
+  workspace" and "outside every root this session may write". A refused op is
+  reported, not silently skipped, and the manifest's mode bits are declined in
+  favour of 0600. `Rollback` keeps replaying its in-memory manifest and is
+  unaffected.
+
 ### Fixed
 
 - **The workspace boundary no longer admits a path whose `..` is cancelled
@@ -83,6 +111,62 @@
   guarding it, making it the one tool where the refusal could not fire; it
   answered about a file the caller had not named, as `exists: false` with no
   error, which is the silent retargeting this change exists to prevent.
+
+- **A cloned repository could write a file anywhere you can write, with mode bits
+  of its choosing, the moment a session attached.** `transaction_apply` keeps a
+  write-ahead log under `<workspace>/.plumb/tx-log/`, and `txlog.Scan` rolls back
+  any orphan it finds there on every attach and re-pin. That directory is an
+  ordinary directory inside the workspace, so a repository ships one just by
+  committing it — and the replay took `path` and `perm` straight from the
+  manifest. A manifest naming an absolute path outside the workspace had its
+  snapshot content written there verbatim, as you, unsandboxed, with no prompt;
+  `perm: 511` plus a `#!/bin/sh` payload created a world-executable script,
+  because `os.WriteFile` applies the manifest's mode whenever the replay creates
+  the file.
+
+  The `os.WriteFile` call carried `//nolint:gosec // G703: op.Path is a workspace
+  path validated by the transaction machinery` — true of `Rollback`, which
+  replays ops this process recorded in memory, and false of the orphan path,
+  which replays a file anyone can author. One suppression covered both callers.
+
+  Orphan replay is now confined to the session's own `PathPolicy`, injected as a
+  `PathGuard` (`txlog` sits below `internal/tools`, so it cannot import the
+  policy). A plain workspace-containment test would have been wrong: a
+  transaction legitimately writes to configured extra roots and `--allow-dir`
+  grants, and only the session's policy knows the difference between "outside the
+  workspace" and "outside every root this session may write". A refused op is
+  reported, not silently skipped, and the manifest's mode bits are declined in
+  favour of 0600. `Rollback` keeps replaying its in-memory manifest and is
+  unaffected.
+
+- **The replay no longer trusts a manifest path whose `..` the kernel resolves
+  differently, and no longer refuses a legitimate symlink.** Two defects an
+  adversarial review found in the confinement above.
+
+  A boundary policy canonicalises with `filepath.Abs`, which cancels `sub/..`
+  lexically before resolving anything, while the kernel follows `sub` first and
+  applies `..` to wherever that landed. With `sub` a committed symlink the guard
+  admitted an in-workspace path while the write escaped, and the symlink check
+  did not catch it because it inspects only the final component. A manifest path
+  must now be in canonical form — it is machine-written, so that costs a
+  legitimate recovery nothing.
+
+  The first fix also refused every symlink, on the stated grounds that the write
+  primitive "replaces a link rather than following it". `safeWrite` does the
+  opposite — "resolve to the real target so we write through the link" — and
+  replaces only a dangling one. On that false premise the blanket refusal looked
+  free; in fact it dropped crash recovery for any legitimately symlinked source
+  file, which is ordinary in a monorepo. The replay now resolves the path,
+  re-checks the resolved file against the guard, and writes to that same resolved
+  path, so the string checked and the string written are one. A dangling link is
+  still refused: there is no resolved name to re-check, and `os.WriteFile` would
+  follow it.
+
+  Two smaller ones alongside: nothing pinned that the guard demands **write**
+  access, so a read-only root would have been restorable; and the symlink check
+  returned "not a link" for every `Lstat` failure, not just a missing file, so a
+  permission denial read as a clean bill of health for a path it had not
+  inspected.
 
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
   clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
@@ -534,7 +618,6 @@
   settings editor marks the row.
 
 ### Changed
-
 
 - **The TUI settings editor offers the `[git]` tier rows and the exec-deciding
   `[lsp.<lang>]` rows at a workspace scope again.** They were withdrawn when a
@@ -1589,7 +1672,6 @@
   (`0.16.3-rc.1` never reads as older than `0.16.3`) rather than being
   ordered against it. Comment-only — the comparison itself is unchanged,
   and is dormant today since the project reserves rc tags for v1.x.
-
 
 ## 0.16.2 (2026-08-06)
 

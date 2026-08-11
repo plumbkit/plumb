@@ -42,7 +42,7 @@ func TestScan_RefusesTxLogPointingAtTheWorkspaceRoot(t *testing.T) {
 	// Under a containment check this is rel == "." and was ALLOWED.
 	ws := plantVictimTree(t, "..")
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	for _, survivor := range []string{".git", "src", ".plumb/memories"} {
 		if _, err := os.Stat(filepath.Join(ws, survivor)); os.IsNotExist(err) {
@@ -55,7 +55,7 @@ func TestScan_RefusesTxLogPointingAtTheGitDir(t *testing.T) {
 	// The maximal payload: every subdirectory of .git is an "orphan".
 	ws := plantVictimTree(t, "../.git")
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	for _, survivor := range []string{".git/objects", ".git/refs"} {
 		if _, err := os.Stat(filepath.Join(ws, survivor)); os.IsNotExist(err) {
@@ -68,7 +68,7 @@ func TestScan_RefusesTxLogPointingAtTheGitDir(t *testing.T) {
 func TestScan_RefusesTxLogPointingAtThePlumbDir(t *testing.T) {
 	ws := plantVictimTree(t, ".")
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	if _, err := os.Stat(filepath.Join(ws, ".plumb", "memories")); os.IsNotExist(err) {
 		t.Error("Scan deleted .plumb/memories via `.plumb/tx-log -> .`")
@@ -101,7 +101,7 @@ func TestScan_MissingTxLogDirIsSilent(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	if strings.Contains(buf.String(), "refusing to scan") {
 		t.Errorf("a workspace that has never run a transaction logged an attack refusal:\n%s", buf.String())
@@ -118,7 +118,7 @@ func TestScan_RealAttackStillLogs(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
 
-	Scan(ws, time.Now())
+	Scan(ws, time.Now(), confinedTo(ws))
 
 	if !strings.Contains(buf.String(), "refusing to scan") {
 		t.Errorf("a hostile tx-log symlink was refused without saying so:\n%s", buf.String())
@@ -140,7 +140,7 @@ func TestScan_StillRecoversThroughASymlinkedWorkspaceRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Scan(link, time.Now())
+	Scan(link, time.Now(), confinedTo(link))
 
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Error("a genuine orphan under a symlinked workspace root was not recovered — " +
