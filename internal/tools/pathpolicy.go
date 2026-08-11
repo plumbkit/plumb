@@ -71,6 +71,11 @@ func (p *PathPolicy) match(path string) (AllowedRoot, bool) {
 	if p == nil || path == "" {
 		return AllowedRoot{}, false
 	}
+	if hasParentTraversal(path) {
+		// Fail closed for the non-error-returning callers (OutsideWorkspaceLabel):
+		// an ambiguous path matches no root.
+		return AllowedRoot{}, false
+	}
 	cand := canonicalRoot(path)
 	var best AllowedRoot
 	bestLen := -1
@@ -94,6 +99,12 @@ func (p *PathPolicy) match(path string) (AllowedRoot, bool) {
 func (p *PathPolicy) Check(path string, want Access) (AllowedRoot, error) {
 	if p == nil || path == "" {
 		return AllowedRoot{}, nil
+	}
+	// Before deciding WHERE the path is, insist it names one file unambiguously.
+	// An absolute path with an unresolved ".." does not: the check would rule on
+	// the lexically cleaned reading while the syscall follows the kernel's.
+	if err := requireCanonicalPath(path); err != nil {
+		return AllowedRoot{}, err
 	}
 	r, ok := p.match(path)
 	if ok && r.Access >= want {

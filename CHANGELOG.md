@@ -33,6 +33,32 @@
 
 ### Fixed
 
+- **The workspace boundary no longer admits a path whose `..` is cancelled
+  lexically while the kernel resolves it through a symlink.** `filepath.Abs` —
+  which every boundary check ran first — Cleans `sub/..` away as a pair before
+  any link is resolved. The kernel does the opposite: it follows `sub`, then
+  applies `..` to wherever that landed. When `sub` is a symlink out of the
+  workspace the two readings name different files, and an absolute path argument
+  reached the syscall as the same uncleaned text the check had approved. The
+  check's verdict was therefore not about the file that got touched.
+
+  A repository can commit a symlink, so this was reachable from a hostile clone.
+  Measured against the real tools: `write_file` wrote outside every allowed root,
+  `read_file` disclosed the target, and `find_files` listed it. One committed
+  `sub -> /` made the whole filesystem addressable as in-workspace — the
+  regression test pins that shape by serving `/etc/hosts` to a session pinned to
+  a temp directory. `search_in_files` and `find_replace` were contained, but only
+  incidentally: `WalkDir` composes entries with `filepath.Join`, which Cleans, so
+  their per-entry reads landed on a path that did not exist.
+
+  An absolute path carrying an unresolved `..` is now refused by
+  `PathPolicy.Check`, naming the cleaned form as the fix. Refused rather than
+  cleaned, deliberately: cleaning it would keep every call working while
+  silently retargeting the operation to a different file than the caller named.
+  Relative arguments are untouched — they are anchored with `filepath.Join`
+  before any check, so the anchored result is the single path both the check and
+  the operation use and there is no divergence to refuse.
+
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
   clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
   reconnecting proxy, so from the client's side the server never goes away — it
