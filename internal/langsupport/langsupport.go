@@ -82,6 +82,7 @@ var registry = []Language{
 	{Name: "css", Extensions: []string{".css"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "php", Extensions: []string{".php"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "scss", Extensions: []string{".scss"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
@@ -98,7 +99,6 @@ var registry = []Language{
 	// together. The list is therefore the coverage roadmap, in priority order.
 	{Name: "cpp", Extensions: []string{".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineNone, LSPAdapter: ""},

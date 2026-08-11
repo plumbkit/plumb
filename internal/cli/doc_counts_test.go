@@ -115,8 +115,8 @@ func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
 // as well as in TestBuildExtractorsCoversRegistry.
 func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	const (
-		wantLanguages = 24 // indexed languages; site shows 23 (.tsx folds into TypeScript), README says "15+"
-		wantUncovered = 8  // langsupport rows recognised but not yet indexed — decreases as extractors land
+		wantLanguages = 25 // indexed languages; site shows 24 (.tsx folds into TypeScript), README says "15+"
+		wantUncovered = 7  // langsupport rows recognised but not yet indexed — decreases as extractors land
 		wantClients   = 14 // plumb setup targets; site shows 14 ("Fourteen agents")
 	)
 	var supported int

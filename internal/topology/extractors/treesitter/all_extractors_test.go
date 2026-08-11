@@ -63,6 +63,10 @@ func allExtractorCases() []extractorCase {
 			"@use \"sass:math\";\n\n@mixin pad($n) {\n  padding: $n;\n}\n\n.btn {\n  @include pad(4px);\n}\n", "sass:math",
 		},
 		{
+			"xml", func() topology.Extractor { return NewXML() }, "a.xml",
+			"<xs:schema>\n  <xs:include schemaLocation=\"types.xsd\"/>\n  <xs:element name=\"Order\"/>\n</xs:schema>\n", "types.xsd",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
