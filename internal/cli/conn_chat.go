@@ -17,22 +17,44 @@ import (
 // call rather than only path-bearing ones — a message is about the agent, not
 // about the file it happens to be touching, and an agent that only ever calls
 // git or run_task must still receive it. That makes the cost of the check the
-// design problem: a SQLite read on every read_file would be a real regression.
+// design problem, and it is worth being precise about WHERE that cost is,
+// because the intuitive answer is wrong.
 //
-// The answer is the daemon-wide in-process notifier. A send bumps a generation
-// counter for the recipient; this path compares its cached counters and touches
-// the database only when one has moved. The steady state — no mail — is a map
-// lookup under one mutex and nothing else.
+// It is not I/O. A delivery check that finds nothing writes nothing: 200
+// consecutive zero-match claims produce 0 bytes of WAL, and the statement itself
+// executes in 7.6µs. Nor is taking the writer lock expensive in itself.
+//
+// The cost is the CLAIM'S QUERY PLAN. `UPDATE … WHERE id IN (SELECT … ORDER BY
+// created_at)` compiles to a LIST SUBQUERY plus a temp B-tree, rebuilt on every
+// execution to sort a result set that is almost always empty: 100-145µs, all of
+// it holding the writer lock. That is roughly twenty times longer than a bare
+// write needs the lock, which is the real problem — not the work itself but the
+// window it opens. Measured against a peer's leave_note holding that lock for
+// 500µs, a colliding claim costs p50 1.42ms, p99 7.07ms and up to 18ms: more
+// than an entire read_file, to answer "no".
+//
+// So there are two guards, cheapest first. The daemon-wide in-process notifier
+// answers "has anything happened at all": a send bumps a generation counter for
+// the recipient, this path compares its cached counters, and the steady state —
+// no mail — is a map lookup under one mutex and nothing else. When a counter has
+// moved, or the periodic backstop falls due, a SELECT 1 … LIMIT 1 probe
+// (Inbox.HasPending, ~20-30µs, no write lock) answers "is any of it for me",
+// because neither trigger is evidence that it is: the backstop fires
+// unconditionally, and a session name is a daemon-wide notifier key, so a send
+// to a same-named peer in another project bumps this one too. Only a probe hit
+// runs the claim.
 //
 // The counters are a fast path, not the truth. They reset when the daemon
-// restarts, and a message may have been written by a previous daemon, so a
+// restarts, and a message may have been written by a previous daemon, so the
 // periodic full check backstops them: a missed bump costs delivery latency,
 // never a message.
 
-// chatFullCheckInterval is how often the database is consulted even when the
+// chatFullCheckInterval is how often the database is probed even when the
 // notifier reports nothing new. It bounds the worst-case delivery delay after a
 // daemon restart (which zeroes the counters) without putting a query on the hot
-// path in the common case.
+// path in the common case. What it now triggers is the probe, not the claim, so
+// the periodic cost of an empty mailbox is one indexed lookup rather than a
+// write-locked statement that updates nothing.
 const chatFullCheckInterval = 30 * time.Second
 
 // chatWatch caches this connection's view of the notifier generations, so the
