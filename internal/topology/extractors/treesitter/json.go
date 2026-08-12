@@ -23,14 +23,20 @@ import (
 // Be precise about what this buys, because it is easy to over-claim and the
 // other markup extractors copy this pattern: the cap is PER-ARRAY, so it
 // bounds one shape — a single long array — and nothing else. Measured on
-// synthetic documents at the 512 KiB indexer limit: one long array of records
-// → 81 nodes (capped), an object of records (the package-lock.json shape) →
-// 22,616, and ~180 short arrays of 20 elements each → 57,482. Those last two
-// are not holes this constant should close: already-shipped TOML and YAML emit
-// 25,975 and 27,325 nodes on equivalent input with no cap at all, because a
-// large config file simply holds a large number of keys. The general backstop
-// for every format is [topology] max_file_size_bytes (512 KiB by default),
-// which decides whether a file is offered to an extractor in the first place.
+// synthetic documents at the 512 KiB indexer limit, one long array of records
+// yields 81 nodes (capped, against tens of thousands uncapped), while an object
+// of records — the package-lock.json shape — yields ~22,600 and a document of
+// many short arrays yields tens of thousands. Neither of those is a hole this
+// constant should close: already-shipped TOML and YAML emit node counts in the
+// same band on equivalent input with no cap at all, because a large config file
+// simply holds a large number of keys. The general backstop for every format is
+// [topology] max_file_size_bytes (512 KiB by default), which decides whether a
+// file is offered to an extractor in the first place.
+//
+// The two figures above are the ones that reproduce exactly on re-measurement;
+// earlier drafts of this comment quoted precise counts for the many-short-arrays
+// and YAML cases that turned out to depend heavily on key density, so they are
+// stated as magnitudes rather than numbers someone would later find wrong.
 const jsonMaxArrayElements = 20
 
 // JSONExtractor extracts JSON/JSONC configuration symbols using the
