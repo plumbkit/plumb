@@ -100,9 +100,6 @@ var registry = []Language{
 	// flipping its row to EngineTreeSitter and adding its constructor to
 	// cli.extractorCtors — the two edits TestBuildExtractorsCoversRegistry pins
 	// together. The list is therefore the coverage roadmap, in priority order.
-	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "cpp", Extensions: []string{".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "xml", Extensions: []string{".xml", ".xsd", ".xsl"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},

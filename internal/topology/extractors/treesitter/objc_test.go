@@ -187,17 +187,21 @@ func TestObjc_MethodsUseFullSelectors(t *testing.T) {
 func TestObjc_Fields(t *testing.T) {
 	nodes, _ := objcExtract(t, objcSrc)
 
-	prop := objcFind(t, nodes, topology.KindField, "secretName")
+	// A mutable property is KindVariable, not KindField: that kind is reserved
+	// for keys of data-format files, and topology.KindField's doc comment says a
+	// member of a code type is KindConstant when immutable and KindVariable
+	// otherwise. TestExtractors_MemberConventions enforces this package-wide.
+	prop := objcFind(t, nodes, topology.KindVariable, "secretName")
 	if prop.Qualified != "MTLWidget.secretName" {
 		t.Fatalf("property Qualified = %q", prop.Qualified)
 	}
-	ivar := objcFind(t, nodes, topology.KindField, "_tickCount")
+	ivar := objcFind(t, nodes, topology.KindVariable, "_tickCount")
 	if ivar.Qualified != "MTLWidget._tickCount" {
 		t.Fatalf("ivar Qualified = %q", ivar.Qualified)
 	}
 	// @dynamic is the only mention of `tally` in the file, so dropping it would
 	// leave the property with no symbol at all.
-	if !objcHas(nodes, topology.KindField, "tally") {
+	if !objcHas(nodes, topology.KindVariable, "tally") {
 		t.Fatalf("@dynamic dropped; got %s", objcSummary(nodes))
 	}
 }
@@ -540,8 +544,8 @@ func TestObjc_ParseFidelity(t *testing.T) {
 		{topology.KindMethod, "sharedWidget"},
 		{topology.KindMethod, "runBlock"},
 		{topology.KindMethod, "debugSummary"},
-		{topology.KindField, "secretName"},
-		{topology.KindField, "_tickCount"},
+		{topology.KindVariable, "secretName"},
+		{topology.KindVariable, "_tickCount"},
 		{topology.KindVariable, "kDefaultName"},
 		{topology.KindType, "MTLCompletion"},
 	}
@@ -598,5 +602,27 @@ NS_ASSUME_NONNULL_END
 	ok, _ := objcExtract(t, []byte("NS_ASSUME_NONNULL_BEGIN;\n@implementation Guarded\n- (void)work {}\n@end\n"))
 	if !objcHas(ok, topology.KindClass, "Guarded") {
 		t.Fatalf("terminated form also failed; got %s", objcSummary(ok))
+	}
+}
+
+// A `readonly` property publishes no setter, which is Objective-C's nearest
+// equivalent to a final field, so it is the immutable case and takes
+// KindConstant while every other property takes KindVariable.
+func TestObjc_ReadonlyPropertyIsAConstant(t *testing.T) {
+	src := []byte(`#import <Foundation/Foundation.h>
+
+@interface Widget : NSObject
+@property (nonatomic, readonly) NSString *identifier;
+@property (nonatomic, copy) NSString *title;
+@end
+`)
+	nodes, _ := objcExtract(t, src)
+
+	ro := objcFind(t, nodes, topology.KindConstant, "identifier")
+	if ro.Qualified != "Widget.identifier" {
+		t.Errorf("readonly property Qualified = %q, want Widget.identifier", ro.Qualified)
+	}
+	if !objcHas(nodes, topology.KindVariable, "title") {
+		t.Errorf("a mutable property should be KindVariable; got %s", objcSummary(nodes))
 	}
 }
