@@ -106,6 +106,18 @@ func idKey(raw json.RawMessage) string {
 // or any frame that does not round-trip as a JSON object with an object params,
 // is returned unchanged — so a session that injects nothing behaves exactly as
 // before. An existing _meta is preserved; only the given keys are set.
+//
+// The rewrite is also ENVELOPE-PRESERVING by construction: before returning, the
+// re-encoded frame's method and id are compared against the original's, and a
+// frame whose envelope moved is returned unchanged. That guard is not
+// theoretical. This function decodes into map[string]json.RawMessage, where a
+// DUPLICATE key is last-wins, while the routing envelope (parseEnvelope) and the
+// daemon's own mcp.Request both decode into a STRUCT, where a second copy that
+// fails to fit the field type is a soft error that leaves the first value in
+// place. So `{"method":"initialize","method":{}}` routes as initialize and used
+// to be re-emitted as `{"method":{}}` — the proxy acting on one message and the
+// daemon receiving another, which is the shape of every request-smuggling bug.
+// Found by FuzzProxyFrameRewrite.
 func injectInitMeta(frame []byte, kv map[string]json.RawMessage) []byte {
 	if len(kv) == 0 {
 		return frame
@@ -140,7 +152,18 @@ func injectInitMeta(frame []byte, kv map[string]json.RawMessage) []byte {
 	if err != nil {
 		return frame
 	}
+	if !sameEnvelope(frame, out) {
+		return frame
+	}
 	return out
+}
+
+// sameEnvelope reports whether two frames present the same routing envelope to
+// the proxy — same method, same id. It asks via parseEnvelope, the function the
+// router itself uses, so the guard cannot drift from what it is guarding.
+func sameEnvelope(before, after []byte) bool {
+	a, b := parseEnvelope(before), parseEnvelope(after)
+	return a.Method == b.Method && idKey(a.ID) == idKey(b.ID)
 }
 
 // buildInitMeta assembles the _meta key/values the proxy injects into the

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"keep me\"}]}}")
