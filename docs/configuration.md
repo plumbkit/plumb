@@ -728,7 +728,7 @@ these servers are installed):
 | `html` | `vscode-html-language-server --stdio` | weak: `index.html` |
 
 Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
-are validated; Kotlin and HTML are experimental (see the status table under
+are validated; HTML is experimental (see the status table under
 *Validation levels* in [Adding an LSP Adapter](adding-an-lsp.md#validation-levels)).
 
 jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` and

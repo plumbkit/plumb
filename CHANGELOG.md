@@ -143,6 +143,15 @@
   **by whichever model the server advertises**, push or pull. Mock-transport
   tests still promote nothing. Kotlin ships as **Validated (pull)**.
 
+  Kotlin is consequently the first language whose **auto** diagnostics mode is
+  `pull` rather than `push` (`autoDiagnosticsMode`). This is not a preference:
+  push mode never issues a pull request even when the server advertises
+  `diagnosticProvider`, so leaving the default at push would have made every
+  Kotlin diagnostics call wait out the push timeout and return nothing — an
+  adapter documented as validated and broken in the shipped configuration.
+  Override with `[lsp.kotlin] diagnostics = "push"` if you ever need the old
+  behaviour.
+
   Two things had to be measured rather than assumed, and both changed the code:
   the server accepts plumb's **full-document sync** despite advertising
   `textDocumentSync: 2` (verified by pushing whole-document changes and watching

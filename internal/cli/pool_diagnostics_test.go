@@ -43,13 +43,39 @@ func TestResolveRequestedDiagnosticsMode(t *testing.T) {
 	}
 }
 
-// autoDiagnosticsMode returns push for every language today (evidence-gated
-// future change lives in this one function).
-func TestAutoDiagnosticsMode_PushForEveryLanguage(t *testing.T) {
-	for _, lang := range []string{"go", "python", "rust", "swift", "zig", "typescript", "kotlin", "html", "java"} {
+// autoDiagnosticsMode returns push for every language whose server pushes — all
+// of them but Kotlin (evidence-gated changes live in this one function).
+func TestAutoDiagnosticsMode_PushForEveryPushingLanguage(t *testing.T) {
+	for _, lang := range []string{"go", "python", "rust", "swift", "zig", "typescript", "html", "java"} {
 		if got := autoDiagnosticsMode(lang); got != diagModePush {
 			t.Errorf("autoDiagnosticsMode(%q) = %q, want push", lang, got)
 		}
+	}
+}
+
+// TestAutoDiagnosticsMode_KotlinIsPull pins the one exception, and it is load
+// bearing rather than cosmetic: kotlin-lsp never sends publishDiagnostics, so a
+// push default means every diagnostics call on a Kotlin file waits out the push
+// timeout and returns nothing — with the adapter still advertising itself as
+// validated. Promoting an adapter to pull without flipping this leaves the
+// promotion true on paper and false in the product.
+func TestAutoDiagnosticsMode_KotlinIsPull(t *testing.T) {
+	if got := autoDiagnosticsMode("kotlin"); got != diagModePull {
+		t.Fatalf("autoDiagnosticsMode(kotlin) = %q, want pull — kotlin-lsp does not push at all, "+
+			"so the default config would negotiate a model the server never speaks", got)
+	}
+	// And through the knob resolution the pool actually calls, with the config
+	// left at its default: unset must reach pull, not just the raw helper.
+	if got := resolveRequestedDiagnosticsMode("", "kotlin"); got != diagModePull {
+		t.Fatalf("resolveRequestedDiagnosticsMode(\"\", kotlin) = %q, want pull", got)
+	}
+	if got := resolveRequestedDiagnosticsMode("auto", "kotlin"); got != diagModePull {
+		t.Fatalf("resolveRequestedDiagnosticsMode(auto, kotlin) = %q, want pull", got)
+	}
+	// An explicit push override is still honoured — the exception is a default,
+	// not a lock.
+	if got := resolveRequestedDiagnosticsMode("push", "kotlin"); got != diagModePush {
+		t.Fatalf("resolveRequestedDiagnosticsMode(push, kotlin) = %q, want push", got)
 	}
 }
 
