@@ -308,17 +308,29 @@ func (w *dartWalk) addVariables(list *tsg.Node, parent int64, prefix string, imm
 	}
 }
 
-// dartModifierBefore reports whether the node at index i is preceded by a
-// `const` or `final` marker, which at file scope is where Dart puts it: the
-// keyword is the declaration list's immediately preceding sibling, and anything
-// else there (`inferred_type` for `var`, or another declaration) means mutable.
+// dartModifierBefore reports whether the declaration at index i carries a
+// `const` or `final` marker.
+//
+// At file scope Dart scatters one declaration across several SIBLING nodes, so
+// the marker is not reliably adjacent: `const untyped = 1;` puts
+// const_builtin directly before the list, but `const int typedConst = 5;`
+// interposes a type_identifier, and `late final int x = 2;` interposes both a
+// `late` token and a type. Checking only the immediately preceding sibling
+// therefore called every TYPED file-scope constant mutable.
+//
+// The scan walks back to the statement boundary instead. `;` is what separates
+// one file-scope declaration from the next, so it is the correct stopping point:
+// anything beyond it belongs to a different declaration and must not lend its
+// modifier to this one.
 func dartModifierBefore(kids []*tsg.Node, i int, lang *tsg.Language) bool {
-	if i == 0 {
-		return false
-	}
-	switch kids[i-1].Type(lang) {
-	case "const_builtin", "final_builtin":
-		return true
+	for j := i - 1; j >= 0; j-- {
+		switch kids[j].Type(lang) {
+		case "const_builtin", "final_builtin":
+			return true
+		case ";":
+			// Reached the previous declaration; its modifiers are not ours.
+			return false
+		}
 	}
 	return false
 }
