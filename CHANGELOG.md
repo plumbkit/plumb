@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.16.5 (unreleased)
+## 0.16.6 (unreleased)
+
+<!-- New entries go HERE, under the unreleased heading. Date-stamping a
+     release does not conflict with a branch that adds entries under the
+     stamped heading, so a clean rebase is not evidence your entry is in
+     the right section — check which heading it landed under. -->
+
+## 0.16.5 (2026-08-12)
 
 ### Security
 
@@ -111,33 +118,6 @@
   guarding it, making it the one tool where the refusal could not fire; it
   answered about a file the caller had not named, as `exists: false` with no
   error, which is the silent retargeting this change exists to prevent.
-
-- **A cloned repository could write a file anywhere you can write, with mode bits
-  of its choosing, the moment a session attached.** `transaction_apply` keeps a
-  write-ahead log under `<workspace>/.plumb/tx-log/`, and `txlog.Scan` rolls back
-  any orphan it finds there on every attach and re-pin. That directory is an
-  ordinary directory inside the workspace, so a repository ships one just by
-  committing it — and the replay took `path` and `perm` straight from the
-  manifest. A manifest naming an absolute path outside the workspace had its
-  snapshot content written there verbatim, as you, unsandboxed, with no prompt;
-  `perm: 511` plus a `#!/bin/sh` payload created a world-executable script,
-  because `os.WriteFile` applies the manifest's mode whenever the replay creates
-  the file.
-
-  The `os.WriteFile` call carried `//nolint:gosec // G703: op.Path is a workspace
-  path validated by the transaction machinery` — true of `Rollback`, which
-  replays ops this process recorded in memory, and false of the orphan path,
-  which replays a file anyone can author. One suppression covered both callers.
-
-  Orphan replay is now confined to the session's own `PathPolicy`, injected as a
-  `PathGuard` (`txlog` sits below `internal/tools`, so it cannot import the
-  policy). A plain workspace-containment test would have been wrong: a
-  transaction legitimately writes to configured extra roots and `--allow-dir`
-  grants, and only the session's policy knows the difference between "outside the
-  workspace" and "outside every root this session may write". A refused op is
-  reported, not silently skipped, and the manifest's mode bits are declined in
-  favour of 0600. `Rollback` keeps replaying its in-memory manifest and is
-  unaffected.
 
 - **The replay no longer trusts a manifest path whose `..` the kernel resolves
   differently, and no longer refuses a legitimate symlink.** Two defects an
