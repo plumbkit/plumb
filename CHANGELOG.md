@@ -7,6 +7,66 @@
      stamped heading, so a clean rebase is not evidence your entry is in
      the right section — check which heading it landed under. -->
 
+### Added
+
+- **An unsupported language is now a stated limitation instead of a silent empty
+  answer, and the obsolete per-grammar parse cap is gone.** Asking for the Map of
+  a Rails app returned nothing, confidently: an extension with no extractor was
+  recorded with zero symbols and no error, `topology_status` counted those files
+  under **`indexed files`**, and `session_start` printed `Language: Ruby` /
+  `Scale: ~900 files (683 Ruby)` from a plain filesystem walk. Every signal said
+  the project was understood while the index held nothing for it. An agent can
+  route around a limitation it can see; it cannot route around silence, so it
+  reads the emptiness as a fact about the code.
+
+  `internal/langsupport` now carries rows for the 14 languages plumb recognises
+  but does not index (Ruby, C, C++, Objective-C, JSON, XML, C#, PHP, Elixir, Lua,
+  Scala, Dart, CSS, SCSS) at the previously-unused `EngineNone`, whose doc
+  already described exactly this state. Every consumer that gates on capability
+  already tested `Structural != EngineNone`, so the rows grant nothing — they
+  make "not covered" a fact the codebase can state, and turn the registry into
+  the coverage roadmap: wiring a language is a row flip plus a constructor, the
+  pair `TestBuildExtractorsCoversRegistry` already pins together.
+
+  The indexer stamps the recognised language on such a row while leaving
+  `content_hash` empty. That pairing — a named language with no hash — is both
+  the census key (one `GROUP BY`, cheap enough for the TUI's poll, rather than
+  resolving every path through the registry) and what keeps the behaviour
+  **self-healing**: shipping an extractor later makes the computed hash differ
+  from the stored `""`, so every affected file goes stale and is re-indexed with
+  no schema change or reindex flag. `indexed files` now counts only files
+  actually parsed, with the remainder split into `not covered: ruby (683), xml
+  (330)` (busiest first — the next extractor to write) and `unrecognised` for
+  binaries and lockfiles, which are deliberately kept out of the coverage report
+  so they cannot bury it. `file_outline` explains an empty outline for such a
+  file rather than printing a bare `(no symbols)`, and `session_start` warns when
+  the workspace's primary language is one of them; both point at
+  `search_in_files` and `read_file`, which still work.
+
+  Separately, **`langsupport.MaxParseBytes` is deleted** (the 256 KiB cap on
+  Markdown/HTML/YAML). It mitigated a GLR blow-up — a 266 KB Markdown file drove
+  a ~485 MB parse arena — that is fixed upstream: the same witness now parses in
+  **122 ms with a 58 MB peak**, and an 861 KB `CHANGELOG.md` in 367 ms / 145 MB,
+  with growth linear in source size. The cap had stopped bounding risk and was
+  only excluding large documents from the Map; the global
+  `max_file_size_bytes` (512 KiB) and the default-on 128 MB per-parse memory
+  budget already cover it. `max_file_size_bytes` is deliberately left at 512 KiB:
+  the indexer runs a single worker, so raising it is a serial per-resync cost for
+  outline value that falls off with document size, and that is its own decision
+  with its own evidence bar.
+
+  Guarded by `TestIndexer_RecordsUncoveredLanguageAndStaysRetryable` (the three
+  properties end to end on a real file: the row names the language, carries no
+  hash, and records no error), `TestIndexer_UnrecognisedFileIsNotACoverageGap`,
+  `TestReport_SeparatesUncoveredFromIndexed`, `TestFormatUncovered_BusiestFirst`
+  (ordering, since map iteration would otherwise reshuffle the line),
+  `TestIndexedLanguages` (an uncovered language must never appear as indexed),
+  and the `file_outline` / `session_start` note tests. The language pin in
+  `TestLanguageAndClientSourceCountsPinned` now counts *indexed* languages rather
+  than registry length, so the uncovered rows cannot inflate a figure the website
+  presents as capability, and a second pin tracks the uncovered count downward as
+  the coverage programme lands.
+
 ## 0.16.5 (2026-08-12)
 
 ### Security
@@ -507,64 +567,6 @@
   session woken by traffic it may not read, and a small existence disclosure.
 
 ### Added
-
-- **An unsupported language is now a stated limitation instead of a silent empty
-  answer, and the obsolete per-grammar parse cap is gone.** Asking for the Map of
-  a Rails app returned nothing, confidently: an extension with no extractor was
-  recorded with zero symbols and no error, `topology_status` counted those files
-  under **`indexed files`**, and `session_start` printed `Language: Ruby` /
-  `Scale: ~900 files (683 Ruby)` from a plain filesystem walk. Every signal said
-  the project was understood while the index held nothing for it. An agent can
-  route around a limitation it can see; it cannot route around silence, so it
-  reads the emptiness as a fact about the code.
-
-  `internal/langsupport` now carries rows for the 14 languages plumb recognises
-  but does not index (Ruby, C, C++, Objective-C, JSON, XML, C#, PHP, Elixir, Lua,
-  Scala, Dart, CSS, SCSS) at the previously-unused `EngineNone`, whose doc
-  already described exactly this state. Every consumer that gates on capability
-  already tested `Structural != EngineNone`, so the rows grant nothing — they
-  make "not covered" a fact the codebase can state, and turn the registry into
-  the coverage roadmap: wiring a language is a row flip plus a constructor, the
-  pair `TestBuildExtractorsCoversRegistry` already pins together.
-
-  The indexer stamps the recognised language on such a row while leaving
-  `content_hash` empty. That pairing — a named language with no hash — is both
-  the census key (one `GROUP BY`, cheap enough for the TUI's poll, rather than
-  resolving every path through the registry) and what keeps the behaviour
-  **self-healing**: shipping an extractor later makes the computed hash differ
-  from the stored `""`, so every affected file goes stale and is re-indexed with
-  no schema change or reindex flag. `indexed files` now counts only files
-  actually parsed, with the remainder split into `not covered: ruby (683), xml
-  (330)` (busiest first — the next extractor to write) and `unrecognised` for
-  binaries and lockfiles, which are deliberately kept out of the coverage report
-  so they cannot bury it. `file_outline` explains an empty outline for such a
-  file rather than printing a bare `(no symbols)`, and `session_start` warns when
-  the workspace's primary language is one of them; both point at
-  `search_in_files` and `read_file`, which still work.
-
-  Separately, **`langsupport.MaxParseBytes` is deleted** (the 256 KiB cap on
-  Markdown/HTML/YAML). It mitigated a GLR blow-up — a 266 KB Markdown file drove
-  a ~485 MB parse arena — that is fixed upstream: the same witness now parses in
-  **122 ms with a 58 MB peak**, and an 861 KB `CHANGELOG.md` in 367 ms / 145 MB,
-  with growth linear in source size. The cap had stopped bounding risk and was
-  only excluding large documents from the Map; the global
-  `max_file_size_bytes` (512 KiB) and the default-on 128 MB per-parse memory
-  budget already cover it. `max_file_size_bytes` is deliberately left at 512 KiB:
-  the indexer runs a single worker, so raising it is a serial per-resync cost for
-  outline value that falls off with document size, and that is its own decision
-  with its own evidence bar.
-
-  Guarded by `TestIndexer_RecordsUncoveredLanguageAndStaysRetryable` (the three
-  properties end to end on a real file: the row names the language, carries no
-  hash, and records no error), `TestIndexer_UnrecognisedFileIsNotACoverageGap`,
-  `TestReport_SeparatesUncoveredFromIndexed`, `TestFormatUncovered_BusiestFirst`
-  (ordering, since map iteration would otherwise reshuffle the line),
-  `TestIndexedLanguages` (an uncovered language must never appear as indexed),
-  and the `file_outline` / `session_start` note tests. The language pin in
-  `TestLanguageAndClientSourceCountsPinned` now counts *indexed* languages rather
-  than registry length, so the uncovered rows cannot inflate a figure the website
-  presents as capability, and a second pin tracks the uncovered count downward as
-  the coverage programme lands.
 
 - **The `[collab]` mailbox is now a real agent-to-agent conversation channel:
   ambient delivery on every tool result, a blocking `check_messages`, threaded
