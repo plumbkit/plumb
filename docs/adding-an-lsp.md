@@ -441,6 +441,17 @@ The test should:
    `internal/lsp/adapters/rust/integration_test.go`. Copy the fixture into a
    temp workspace first if the test mutates it, so a run cannot dirty
    `testdata/`.
+
+   **Unless a checked-in fixture cannot be made real.** Kotlin has no
+   `testdata/kotlin-fixture/`: kotlin-lsp derives its classpath from the build,
+   so the fixture has to be a project that actually *resolves*, and making that
+   work offline would mean vendoring the Kotlin compiler plugin and stdlib. It
+   generates the project at test time and **skips** when the build tool is
+   missing or the build fails — see `gradleFixture` in
+   `internal/lsp/adapters/kotlin/integration_test.go`. Prefer a checked-in
+   fixture; reach for this only when "real enough to resolve" and "small enough
+   to commit" genuinely conflict, and skip rather than fail, because a negative
+   result against an unresolved classpath proves nothing.
 5. Assert the diagnostics round-trip. **This is the promotion gate** (see the
    rule in *Validation levels* above and in
    `.claude/skills/add-lsp-adapter/SKILL.md`). Write the external change, send
