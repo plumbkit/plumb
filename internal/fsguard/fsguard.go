@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // RefuseWalk reports whether root is a macOS-protected directory that plumb
@@ -43,17 +45,27 @@ func RefuseWalk(root string, refuseHomeRoots bool) (bool, string) {
 	return false, ""
 }
 
-// canonical resolves symlinks and cleans the path. If symlink resolution
-// fails (e.g. path doesn't exist), the cleaned absolute path is returned.
+// canonical anchors a walk root to the process working directory and then hands
+// it to the shared canonicaliser.
+//
+// The anchoring is the deliberate difference from paths.Canonical, which refuses
+// to give a relative path a location (issue #181). Here that refusal would be
+// the WRONG direction: RefuseWalk matches protected directories by exact path,
+// so an unanchored "." would equal no protected root and the walk would be
+// allowed — in precisely the case where the process working directory IS $HOME
+// or $HOME/Documents, which is the prompt this package exists to prevent. A
+// refusal that fails open is not a refusal. Unlike the boundary policy, nothing
+// here decides what may be written; the worst outcome of anchoring is that plumb
+// declines to crawl a directory.
+//
+// Symlink resolution, the missing-path ancestor walk and the degraded-to-Clean
+// fallback all belong to paths.Canonical (issue #273).
 func canonical(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		abs = filepath.Clean(p)
+		abs = p
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved
-	}
-	return abs
+	return paths.Canonical(abs)
 }
 
 // protectedRoots returns the set of paths that should not be crawled.
