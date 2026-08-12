@@ -272,12 +272,21 @@ func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)
 }
 
+// toRelative expresses an absolute path the way the index stores it: relative to
+// the workspace root. A path that does not resolve inside the workspace is
+// returned unchanged, which the query then simply fails to match.
+//
+// Via paths.WorkspaceRel rather than filepath.Rel: s.workspace is the canonical
+// root the pool resolved, while path comes from the AGENT (file_outline,
+// workspace_symbols, topology_affected, the peer-activity annotation — all pass a
+// caller-supplied path straight through). A lexical compare of those two reports
+// a file sitting in the project as outside it whenever the project is reachable
+// two ways, and the failure is invisible: the absolute path is handed to
+// `WHERE f.path = ?`, which matches nothing and returns an empty result with no
+// error (issue #263).
 func (s *Store) toRelative(path string) string {
-	if filepath.IsAbs(path) {
-		rel, err := filepath.Rel(s.workspace, path)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			return rel
-		}
+	if rel, inside := paths.WorkspaceRel(s.workspace, path); inside {
+		return rel
 	}
 	return path
 }
