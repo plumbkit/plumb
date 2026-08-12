@@ -18,10 +18,26 @@
   deletion happens while enumerating candidates, before anything is parsed or
   written, so none of the replay's guards were in the path.
 
-  `Scan` now resolves the tx-log directory and refuses to walk it unless it
-  really lives inside the workspace. The check is on the RESOLVED paths rather
-  than an `Lstat` of the final component, because an intermediate component is
-  equally attacker-supplied: with `.plumb -> /`, `tx-log` is not itself a link.
+  `Scan` now resolves the tx-log directory and refuses to walk it unless it is
+  **exactly** `<workspace>/.plumb/tx-log`. The check is on the RESOLVED paths
+  rather than an `Lstat` of the final component, because an intermediate
+  component is equally attacker-supplied: with `.plumb -> /`, `tx-log` is not
+  itself a link.
+
+  The predicate is identity, not containment, and an independent review of the
+  first version is why. "Inside the workspace" admits the workspace root itself,
+  so `.plumb/tx-log -> ..` resolved to the root and every top-level directory
+  became an "orphaned transaction" to delete — `.git` included, taking local
+  branches, stashes and the reflog with it. `-> ../.git` did the same to the
+  object store and `-> .` to `.plumb/memories`. Each is a payload one character
+  shorter than the `../..` the first version's own regression test used. There is
+  exactly one directory `Scan` may ever walk and its name is known, so it now
+  says so.
+
+  The refusal is also no longer logged for a workspace that simply has no tx-log
+  yet, which is every workspace that has never run a transaction — an ERROR on
+  every attach is how the one message that signals a live attack stops being
+  read.
 
   Found by an independent adversarial review of PR #248, which was fixing the
   *write* half of the same function. Guarded by `TestScan_RefusesSymlinkedTxLogDir`,

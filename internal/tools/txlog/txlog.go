@@ -24,7 +24,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -177,8 +176,16 @@ func Scan(workspace string, liveCutoff time.Time) {
 		return
 	}
 	logDir := filepath.Join(workspace, txLogSubDir)
-	if !logDirInsideWorkspace(workspace, logDir) {
-		slog.Error("txlog: refusing to scan — the tx-log directory resolves outside the workspace",
+	if _, err := os.Lstat(logDir); err != nil {
+		// No tx-log at all is the ordinary case for a workspace that has never run
+		// a transaction. Returning before the containment verdict keeps the security
+		// error below meaning "something is wrong", rather than firing on every
+		// attach of every clean workspace — alarm fatigue on the one message that
+		// signals a live attack.
+		return
+	}
+	if !logDirIsTheRealTxLogDir(workspace, logDir) {
+		slog.Error("txlog: refusing to scan — the tx-log directory does not resolve to <workspace>/"+txLogSubDir,
 			"dir", logDir, "workspace", workspace)
 		return
 	}
@@ -223,9 +230,19 @@ func Scan(workspace string, liveCutoff time.Time) {
 // `.plumb -> /` the final `tx-log` component is not itself a link and an Lstat
 // check would pass it.
 //
-// A missing directory resolves to nothing and is reported as outside, which is
-// harmless: the ReadDir below would have returned IsNotExist anyway.
-func logDirInsideWorkspace(workspace, logDir string) bool {
+// The predicate is IDENTITY, not containment, and the difference is the whole
+// fix. "Inside the workspace" admits the workspace root itself and every
+// directory under it, so `.plumb/tx-log -> ..` resolves to the root, and Scan
+// then treats each top-level directory as an orphaned transaction and
+// RemoveAlls it — `.git` included, taking local branches, stashes and the reflog
+// with it. `-> ../.git` does the same to the object store, `-> .` to
+// `.plumb/memories`. Each is a payload one character shorter than the `../..`
+// the first version's own regression test used.
+//
+// There is exactly one directory Scan may ever walk, and its name is known, so
+// say so: anything that does not resolve to <workspace>/.plumb/tx-log is
+// refused, whether it points out of the workspace or back into it.
+func logDirIsTheRealTxLogDir(workspace, logDir string) bool {
 	root, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
 		return false
@@ -238,7 +255,7 @@ func logDirInsideWorkspace(workspace, logDir string) bool {
 	if err != nil {
 		return false
 	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	return rel == filepath.FromSlash(txLogSubDir)
 }
 
 // manifestStartedAt reads the StartedAt timestamp from a tx-log directory's
