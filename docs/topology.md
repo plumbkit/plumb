@@ -93,7 +93,7 @@ for how the two fit into plumb's layered design.
 ### Languages the Map does not cover
 
 The Map covers the languages listed above. For a language plumb recognises but
-has no extractor for — C#, Elixir and Scala — the files are still recorded, but they
+has no extractor for — Elixir and Scala — the files are still recorded, but they
 contribute no symbols.
 
 That gap is reported rather than left to be inferred, because an empty Map result
