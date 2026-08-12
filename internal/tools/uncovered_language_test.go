@@ -68,7 +68,15 @@ func TestUncoveredPrimaryLanguageNote(t *testing.T) {
 		lang string // the display label session_start detected
 		want string // "" ⇒ no note expected
 	}{
-		{"elixir is recognised but unindexed", "Elixir", "elixir"},
+		// The witness moves as extractors land: it was Ruby, then PHP, then
+		// Elixir. NOTE FOR WHOEVER WIRES THE LAST EXTRACTOR — langFileProfile only
+		// ever produces two labels that can be uncovered at all, "Elixir" and
+		// "C/C++ (CMake)", and the coverage programme indexes both. With Elixir
+		// landed, Scala is the only uncovered language left and it has no label
+		// here, so this table already has no non-empty witness. When Scala lands,
+		// Uncovered() is empty and every label correctly yields no note — assert
+		// that dormant state. It is the design completing, not breaking.
+		{"elixir is indexed since its extractor landed", "Elixir", ""},
 		// langFileProfile maps this label to .c/.cpp/.cc/.h/.hpp; the first
 		// uncovered extension decides, which is what makes the label→registry
 		// resolution work without a second hand-written table. Every one of

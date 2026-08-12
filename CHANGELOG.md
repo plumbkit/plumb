@@ -9,6 +9,23 @@
 
 ### Added
 
+- **Elixir is now indexed by the topology Map** (`.ex`, `.exs`) — `defmodule`
+  including nested and dotted names, `def`/`defp`, `defmacro`, `defguard`,
+  `defdelegate`, `defstruct` fields, `defprotocol` and `defimpl`, `@type` and
+  `@spec`, `alias`/`import`/`require`/`use` as imports, `@moduledoc`/`@doc` as
+  doc spans, and ExUnit `describe`/`test`/`property` cases.
+
+  Elixir has **no declaration keywords**: `defmodule` and `def` are ordinary
+  calls taking a do-block, so the extractor keys off call targets rather than
+  typed definition nodes — the same problem Ruby has, in a stronger form.
+
+  **Arity belongs in the qualified name.** Elixir identifies a function as
+  `greet/1`, and two clauses of different arity are genuinely different
+  functions, so they become separate nodes sharing a short name. Clauses of the
+  *same* arity collapse into one node, because they are one function. Operator
+  definitions (`def a <> b`) keep the operator as the name, which is how they are
+  called. Struct fields are `KindVariable`, never `KindField`.
+
 - **C# is now indexed by the topology Map** — namespaces in both the block and
   file-scoped spellings, classes, structs, records, enums and interfaces,
   methods, constructors, destructors, operators and indexers, properties, events
