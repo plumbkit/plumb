@@ -3,9 +3,9 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -57,7 +57,10 @@ func gitCommitRepo(w stats.RecentCall, workspace string) string {
 	if repo == "" {
 		return "."
 	}
-	if rel, err := filepath.Rel(workspace, repo); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// WorkspaceRel, not filepath.Rel: workspace is the canonical pin while repo is
+	// the agent's recorded argument, so a lexical compare prints an absolute path
+	// for a repo inside an aliased project (issue #263).
+	if rel, inside := paths.WorkspaceRel(workspace, repo); inside {
 		return rel
 	}
 	return repo

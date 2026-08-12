@@ -538,16 +538,19 @@ func resolveCLIWorkspaceDetailed(start string, cfg config.Config) (root string, 
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
-	pool := newWorkspacePool(context.Background(), cfg)
-	resolved, _, derr := pool.Detect(abs)
+	resolved, _, derr := newWorkspacePool(context.Background(), cfg).Detect(abs)
 	if derr != nil {
-		// No marker found. The daemon would refuse to attach here unless
-		// auto_attach is on, where it synthesises a root from abs instead — so
-		// synthesise it the same way rather than returning the raw path. Returning
-		// abs would leave the CLI (stats, config show, trust, run_task) keyed to a
-		// different spelling than the daemon's rows and roots store for exactly the
-		// aliased markerless project this branch describes (issue #263).
-		return pool.SynthesiseRoot(abs), cfg.Workspace.AutoAttach, nil
+		// No marker found. The directory the user named IS the answer here — only
+		// canonicalised, so the CLI (stats, config show, trust, run_task) keys on
+		// the same spelling the daemon's rows do (issue #263).
+		//
+		// Deliberately NOT SynthesiseRoot, which walks up to the nearest .git: it
+		// has no $HOME guard where Detect does, so under a dotfiles repo it would
+		// escape to $HOME and `plumb config unset --workspace ~/scratch` would edit
+		// $HOME/.plumb/config.toml. Nor would matching the daemon justify it — the
+		// daemon only synthesises when auto_attach is on, and this branch is
+		// precisely where the default config leaves it with no root at all.
+		return paths.Canonical(abs), cfg.Workspace.AutoAttach, nil
 	}
 	return resolved, true, nil
 }
