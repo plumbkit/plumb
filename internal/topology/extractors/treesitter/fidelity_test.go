@@ -51,6 +51,7 @@ func fidelityCases() []fidelityCase {
 		// cascade we introduced rather than re-measure a pinned upstream bug
 		// (objc_test.go pins those separately).
 		{"objc", grammars.ObjcLanguage, func() topology.Extractor { return NewObjC() }, string(objcSrc), "debugSummary"},
+		{"dart", grammars.DartLanguage, func() topology.Extractor { return NewDart() }, string(dartSrc), "trailingHelper"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 

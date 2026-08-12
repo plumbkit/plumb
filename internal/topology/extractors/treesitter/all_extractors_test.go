@@ -79,6 +79,10 @@ func allExtractorCases() []extractorCase {
 			"#import <Foundation/Foundation.h>\n\n@interface Widget : NSObject\n- (void)run;\n@end\n\n@implementation Widget\n- (void)run {\n}\n@end\n", "Foundation/Foundation.h",
 		},
 		{
+			"dart", func() topology.Extractor { return NewDart() }, "a.dart",
+			"import 'dart:async';\n\nint helper(int v) => v;\n\nint add(int a) => helper(a);\n", "dart:async",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},
