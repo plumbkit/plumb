@@ -7,7 +7,36 @@
      stamped heading, so a clean rebase is not evidence your entry is in
      the right section — check which heading it landed under. -->
 
+### Fixed
+
+- **The serve proxy no longer rewrites a frame whose routing envelope would
+  change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON
+  key is last-wins, while the proxy's own router and the daemon both decode into
+  a struct, where a second copy that does not fit the field type leaves the first
+  value in place. A frame carrying `"method"` twice was therefore routed as one
+  message and re-emitted as another — the proxy acting on an `initialize` request
+  while the daemon received something it would read as a response. The injector
+  now compares the re-encoded envelope against the original and returns the frame
+  untouched if it moved, so the rewrite is envelope-preserving by construction.
+
+  Found by `FuzzProxyFrameRewrite`, seven seconds into its first run.
+
 ### Added
+
+- **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
+  JSON-RPC frames in flight — folding the allow-dirs grant into the client's
+  `initialize` request, and appending the reconnect note to tool results.
+
+  Each carries a differential or round-trip oracle rather than "did not panic":
+  the rewrite must preserve the routing envelope; the injected allow-dirs grant
+  must be the proxy's, never a value the client supplied; injection must be
+  idempotent, because the handshake is replayed post-injection on every
+  reconnect; the reconnect note must only append, which is what its own
+  documentation claims; and a response must route back to the request that
+  produced it after the id has round-tripped through the daemon.
+
+  Crashing payloads are retained as a named corpus that runs under plain
+  `make test`, so every input found stays a regression test.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,

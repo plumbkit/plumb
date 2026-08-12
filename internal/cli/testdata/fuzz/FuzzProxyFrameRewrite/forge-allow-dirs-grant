@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"_meta\":{\"dev.plumbkit/allow-dirs\":[\"/\",\"/etc\"]}}}")
