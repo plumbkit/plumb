@@ -260,6 +260,19 @@ client's own MCP call timeout). That is how a session hands its turn to a peer
 after asking something, at a cost of one tool call per turn rather than one per
 poll. Requires `[collab] mailbox = true`.
 
+It also reports **your own unread mail**: every message you sent that nobody has
+read yet, with its age, appended to whatever else it returns. That is the one
+fact a sender cannot otherwise observe — delivery is polling-only, so "no reply"
+means either the peer read it and has not answered or never read it at all, and
+only this separates the two. It matters more since messages became bound to a
+session, because a bound message expires unread rather than passing to a
+successor. It reads both stores regardless of your own `cross_project` setting
+(that flag gates what this project will *read from* another, and these rows are
+your own), which is also where it earns most: a cross-project message to a
+recipient who never opted in expires unread by default. Listing is a **read** —
+it never consumes the message on the recipient's behalf. Silence means
+everything you sent has been picked up.
+
 **Inputs:** `wait_seconds` (integer, optional — block up to this long; `0`
 default).
 

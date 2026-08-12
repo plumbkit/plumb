@@ -381,3 +381,87 @@ func TestCheckMessages_DeliversABoundMessageToItsOwnSession(t *testing.T) {
 		t.Fatalf("a message bound to this very session must be delivered; got %q", out)
 	}
 }
+
+// TestCheckMessages_ReportsTheSendersOwnUnreadMail is the tool-level half of the
+// receipt. A sender previously had no way to distinguish "read and not answered"
+// from "never read", and binding sharpened that — a bound message expires unread
+// rather than passing to a successor — so the sender has to be able to see it.
+func TestCheckMessages_ReportsTheSendersOwnUnreadMail(t *testing.T) {
+	deps, local, global := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+
+	// One same-project message, one cross-project. Both authored by this session,
+	// neither read. The cross-project one is the case that matters most: the
+	// recipient's cross_project defaults off, so it expires unread by default.
+	mine := collab.NoteInput{
+		AuthorSession: "alice", AuthorID: deps.SessionID, Body: "same project",
+		Addressee: "bob", TTL: time.Hour,
+	}
+	if _, err := local.PutNote(context.Background(), mine, time.Now().Add(-12*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	across := mine
+	across.Body, across.Addressee = "other project", "carol"
+	across.OriginWorkspace, across.TargetWorkspace = wsRootOf(deps), "/proj/carol"
+	if _, err := global.PutNote(context.Background(), across, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"NOBODY has read", "to bob", "to carol", "12m ago", "/proj/carol"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("receipt missing %q; got %q", want, out)
+		}
+	}
+
+	// A peer's unread mail is not the caller's business, even in its own store.
+	put(t, local, "dave", "erin", "a message between two other agents", "", "", "")
+	out, err = NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "a message between two other agents") {
+		t.Errorf("the receipt leaked a peer's outbox; got %q", out)
+	}
+}
+
+// TestCheckMessages_ReceiptIsSilentWhenEverythingWasRead: the receipt must not
+// become noise appended to every call. Silence is the common case and means
+// something — everything this session sent has been picked up.
+func TestCheckMessages_ReceiptIsSilentWhenEverythingWasRead(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: deps.SessionID, Body: "hello bob",
+		Addressee: "bob", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "to bob") {
+		t.Fatalf("expected the unread receipt first; got %q", out)
+	}
+
+	// bob reads it. The receipt must fall silent — and bob could only read it
+	// because the receipt above was a read, not a claim.
+	claimed, err := local.ClaimNotes(context.Background(),
+		collab.Claimant{Name: "bob", ID: "sess-bob"}, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("bob claimed %d messages, want 1 — the receipt consumed it", len(claimed))
+	}
+	out, err = NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "NOBODY has read") {
+		t.Errorf("the receipt should be silent once everything was read; got %q", out)
+	}
+}

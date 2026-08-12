@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -50,6 +51,12 @@ func (*CheckMessages) Description() string {
 		"you were connected is readable only by this session, so a later session that " +
 		"takes your name after you disconnect cannot read your mail (and you cannot " +
 		"read your predecessor's).\n\n" +
+		"IT ALSO REPORTS YOUR OWN UNREAD MAIL. Any message you sent that nobody has " +
+		"read yet is listed back to you, with its age. That is the one thing you " +
+		"cannot otherwise observe: delivery is polling-only, so \"no reply\" means " +
+		"either the peer read it and has not answered or never read it at all, and " +
+		"only this distinguishes them. Listing is a read — it never consumes the " +
+		"message on the recipient's behalf.\n\n" +
 		"Requires [collab] mailbox = true. Messages from a session in another " +
 		"workspace are shown only when this project sets [collab] cross_project = " +
 		"true, and are labelled with the sending project.\n\n" +
@@ -111,15 +118,23 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 		Workspace: t.deps.StoreIfExists,
 		Global:    t.deps.GlobalStoreIfExists,
 	}
+	// The receipt is appended to whichever branch below answers, and is resolved
+	// after them so its ages are current even at the end of a 55-second wait.
+	return t.read(ctx, args, policy, inbox) + t.outboxReceipt(ctx), nil
+}
 
+// read is Execute's body once the gates have passed: claim, or wait and claim.
+// It returns no error — every branch is a message to the agent, including the
+// ones that report nothing.
+func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy CollabPolicy, inbox Inbox) string {
 	// Claim first: something may already be waiting, in which case there is
 	// nothing to wait for.
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy), nil
+		return t.render(rows, policy)
 	}
 	wait := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
 	if wait <= 0 {
-		return t.empty(policy), nil
+		return t.empty(policy)
 	}
 
 	// Snapshot the generations BEFORE waiting so a message written between the
@@ -129,10 +144,10 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
-		return fmt.Sprintf("No messages (waited %s).", humaniseTTL(wait)), nil
+		return fmt.Sprintf("No messages (waited %s).", humaniseTTL(wait))
 	}
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy), nil
+		return t.render(rows, policy)
 	}
 	// Woken but nothing to claim. The legitimate cause is a race inside THIS
 	// session: another delivery path (a tool-result block, or session_start) got
@@ -145,7 +160,96 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// certainly true and offers the race as a possibility.
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — each message is delivered exactly once.\n", nil
+		"first — each message is delivered exactly once.\n"
+}
+
+// receiptTimeout bounds the outbox read. It shares the delivery budget's
+// reasoning: a receipt is a courtesy on someone else's call, never a reason to
+// make that call slow.
+const receiptTimeout = 250 * time.Millisecond
+
+// maxReceiptRows caps how many unread sent messages are listed, so a sender that
+// has written to a dozen absent peers gets the oldest few — the ones worth
+// acting on — rather than a wall of its own text.
+const maxReceiptRows = 5
+
+// outboxReceipt reports this session's own messages that nobody has read yet.
+//
+// It is the half of the mailbox a sender could not otherwise see. Delivery is
+// polling-only, so "no reply" has always had two indistinguishable causes: the
+// peer read it and has not answered, or the peer never read it at all. Binding a
+// message to a session sharpened that — a bound message expires unread rather
+// than being inherited — which makes the difference something the sender must be
+// able to observe rather than infer.
+//
+// It reads BOTH stores regardless of this session's cross_project flag, which
+// gates delivery in the other direction: that flag decides whether this project
+// will READ another project's messages, and these rows are the caller's own. It
+// is also the case where the receipt matters most — a cross-project message to a
+// recipient who never opted in expires unread by default. Errors are swallowed
+// and the store is never created; a receipt must not fail the call it rides on.
+func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
+	if t.deps.SessionID == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
+	defer cancel()
+
+	now := time.Now()
+	var unread []collab.Row
+	for _, get := range []func() *collab.Store{t.deps.StoreIfExists, t.deps.GlobalStoreIfExists} {
+		if get == nil {
+			continue
+		}
+		s := get()
+		if s == nil {
+			continue
+		}
+		rows, err := s.UnreadSentBy(ctx, t.deps.SessionID, now, maxReceiptRows)
+		if err != nil {
+			slog.Debug("collab: outbox receipt failed", "session", t.deps.SessionID, "err", err)
+			continue
+		}
+		unread = append(unread, rows...)
+	}
+	return renderReceipt(unread, now)
+}
+
+// renderReceipt formats the unread-sent block, or "" when everything the session
+// sent has been read. Silence is the common case and carries its own meaning.
+func renderReceipt(unread []collab.Row, now time.Time) string {
+	if len(unread) == 0 {
+		return ""
+	}
+	shown := unread
+	if len(shown) > maxReceiptRows {
+		shown = shown[:maxReceiptRows]
+	}
+	var sb strings.Builder
+	sb.WriteString("\nYour own messages that NOBODY has read yet:\n")
+	bound := false
+	for _, r := range shown {
+		to := r.Addressee
+		if to == collab.AddresseeNext {
+			to = `"next" (nobody has attached since)`
+		}
+		fmt.Fprintf(&sb, "  to %s — sent %s ago, still unread", to, humaniseAge(now.Sub(r.CreatedAt)))
+		if r.TargetWorkspace != "" {
+			fmt.Fprintf(&sb, " (cross-project, to %s)", r.TargetWorkspace)
+		}
+		sb.WriteString("\n")
+		bound = bound || r.AddresseeID != ""
+	}
+	if n := len(unread) - len(shown); n > 0 {
+		fmt.Fprintf(&sb, "  …and %d more.\n", n)
+	}
+	sb.WriteString("  Unread means the peer has made no tool call since — it is idle, not refusing. ")
+	if bound {
+		sb.WriteString("A message bound to a session that has since ended will expire unread rather " +
+			"than pass to a later session of the same name, so re-send if you need it read. ")
+	}
+	sb.WriteString("Tell your human rather than waiting indefinitely.\n")
+	return sb.String()
 }
 
 func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {

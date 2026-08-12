@@ -188,3 +188,64 @@ func TestPendingNotes_AppliesTheSamePredicateAsTheClaim(t *testing.T) {
 		t.Fatalf("the intended session was listed %v, want both messages", bodies(pending))
 	}
 }
+
+// TestUnreadSentBy_IsTheSendersOwnOutboxOnly. The receipt exists so a sender can
+// tell "read and not answered" from "never read". It is addressed by author_id —
+// always a session ID — so it must show a session its own unread messages and
+// nobody else's: a query that leaked a peer's outbox would hand over the bodies
+// of messages this session was never party to.
+func TestUnreadSentBy_IsTheSendersOwnOutboxOnly(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	mustPut(t, s, NoteInput{AuthorSession: "me", AuthorID: "id-me", Body: "mine, unread", Addressee: "alice"}, now)
+	mustPut(t, s, NoteInput{AuthorSession: "peer", AuthorID: "id-peer", Body: "not mine", Addressee: "alice"}, now)
+
+	got, err := s.UnreadSentBy(ctx, "id-me", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Body != "mine, unread" {
+		t.Fatalf("outbox = %v, want only this session's own message", bodies(got))
+	}
+}
+
+// TestUnreadSentBy_DropsAMessageOnceItIsRead, and — the load-bearing half —
+// NEVER sets the watermark itself. A receipt that claimed on the sender's behalf
+// would consume a message the recipient has not seen, turning delivered-exactly-
+// once into delivered-never. So the recipient must still be able to claim after
+// any number of receipt reads.
+func TestUnreadSentBy_IsAReadAndNeverAClaim(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	mustPut(t, s, NoteInput{AuthorSession: "me", AuthorID: "id-me", Body: "please read this", Addressee: "alice"}, now)
+
+	for i := range 3 {
+		got, err := s.UnreadSentBy(ctx, "id-me", now, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("read #%d: outbox = %d, want the message to stay unread", i, len(got))
+		}
+	}
+
+	// The recipient can still collect it — the receipt consumed nothing.
+	claimed, err := s.ClaimNotes(ctx, Claimant{Name: "alice", ID: "sess-alice"}, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].Body != "please read this" {
+		t.Fatalf("the recipient claimed %v — a receipt read must not burn the watermark", bodies(claimed))
+	}
+
+	// And now the sender's outbox goes quiet, because it really was read.
+	got, err := s.UnreadSentBy(ctx, "id-me", now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("outbox still lists %v after the message was read", bodies(got))
+	}
+}

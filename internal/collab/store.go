@@ -306,6 +306,43 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 	return scanRows(rows)
 }
 
+// UnreadSentBy returns the unexpired notes AUTHORED by authorID that nobody has
+// claimed yet, oldest first — the sender's own outbox, and the only way a sender
+// can learn that a message did not land. Delivery is polling-only and a
+// recipient may never return, so "sent" and "read" are genuinely different
+// facts; without this the sender can observe only the first.
+//
+// It is a pure read: it must never set the watermark. Marking a row delivered
+// here would consume, on the SENDER's behalf, a message the recipient has not
+// seen — the exactly-once guarantee turned into exactly-never.
+//
+// Addressing is by author_id, which has always been a session ID rather than a
+// name, so this needs none of Claimant's identity machinery: a session asks only
+// about rows it wrote itself. That is also what makes it safe against the
+// daemon-level store without the recipient's cross_project gate — that gate
+// stops a project READING another project's messages, and these are the caller's
+// own. limit caps the scan (non-positive means no cap).
+func (s *Store) UnreadSentBy(ctx context.Context, authorID string, now time.Time, limit int) ([]Row, error) {
+	if s == nil || s.db == nil || authorID == "" {
+		return nil, nil
+	}
+	q := `SELECT ` + rowColumns + `
+		 FROM collab_rows
+		 WHERE kind = ? AND author_id = ? AND delivered_at = 0 AND expires_at > ?
+		 ORDER BY created_at ASC`
+	args := []any{string(KindNote), authorID, now.UnixNano()}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("collab: query sent notes: %w", err)
+	}
+	defer rows.Close()
+	return scanRows(rows)
+}
+
 // ClaimNotes hands the caller every unexpired note addressed to who.Name or to
 // "next" that nobody has claimed yet, OLDEST FIRST so a conversation reads in
 // order, and marks each one delivered to who.Name in the same statement.
