@@ -30,10 +30,11 @@ func (e *CExtractor) Extensions() []string { return []string{".c", ".h"} }
 
 // Extract parses src and returns C's declarations: function definitions and
 // prototypes as functions, structs, unions, enums and typedefs as types, their
-// members as fields, enumerators and top-level const/`#define` values as
-// constants, and `#include` as imports — with certain (1.0) containment edges
-// from an aggregate to its members and heuristic call edges between functions in
-// the same file. Returns (nil, nil, nil) when src cannot be parsed.
+// members as constants or variables by mutability, enumerators and top-level
+// const/`#define` values as constants, and `#include` as imports — with certain
+// (1.0) containment edges from an aggregate to its members and heuristic call
+// edges between functions in the same file. Returns (nil, nil, nil) when src
+// cannot be parsed.
 func (e *CExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
 	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
@@ -250,7 +251,7 @@ func (w *cWalk) addMembers(spec *tsg.Node, parent int64) {
 		}
 		idx := int64(len(w.nodes))
 		node := topology.Node{
-			Kind:      topology.KindField,
+			Kind:      w.memberKind(f),
 			Name:      name,
 			Qualified: w.qualify(parent, name),
 			Signature: strings.Join(strings.Fields(f.Text(w.src)), " "),
@@ -263,6 +264,29 @@ func (w *cWalk) addMembers(spec *tsg.Node, parent int64) {
 		w.nodes = append(w.nodes, node)
 		w.link(parent, idx)
 	}
+}
+
+// memberKind classifies a struct or union member. topology.KindField is for a
+// key of a DATA-FORMAT file — a SQL column, a TOML key — and a member of a code
+// type is a constant when declared immutable and a variable otherwise, which is
+// the convention every other code extractor follows.
+//
+// Where the `const` sits decides it: in `const char *p` the qualifier belongs to
+// the pointee and the member itself is mutable, while in `char *const p` it
+// belongs to the pointer, which IS the member. The grammar puts the second
+// inside the pointer_declarator, so reading qualifiers from the right scope is
+// the whole distinction.
+func (w *cWalk) memberKind(f *tsg.Node) topology.NodeKind {
+	scope := f
+	if p := childByType(f, "pointer_declarator", w.lang); p != nil {
+		scope = p
+	}
+	for _, c := range scope.Children() {
+		if c.Type(w.lang) == "type_qualifier" && c.Text(w.src) == "const" {
+			return topology.KindConstant
+		}
+	}
+	return topology.KindVariable
 }
 
 func (w *cWalk) addEnumerators(spec *tsg.Node, parent int64) {

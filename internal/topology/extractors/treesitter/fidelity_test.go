@@ -327,6 +327,11 @@ func TestExtractors_MemberConventions(t *testing.T) {
 			"IMMUT", "mutv", "localc",
 		},
 		{
+			"c", func() topology.Extractor { return NewC() }, "c.c",
+			"struct C {\n  const int immut;\n  int mut;\n};\nvoid m(void) { int localv = 3; }\n",
+			"immut", "mut", "localv",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "c.py",
 			"IMMUT_C = 1\nmutv = 2\ndef f():\n    localc = 3\n",
 			"IMMUT_C", "mutv", "localc",
