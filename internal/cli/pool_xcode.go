@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
@@ -43,11 +44,31 @@ func (xcodeArgvRunner) Run(ctx context.Context, workdir string, argv []string, t
 	}, err
 }
 
+// canonicalXcodeRoot is the key under which one Xcode build-server flow is
+// tracked per project. It ANCHORS a possibly-relative root and delegates the
+// resolution to paths.Canonical rather than doing its own.
+//
+// It used to be Abs + Clean, with no symlink resolution, which made it a
+// duplicate answer to "are these two paths the same place" that disagreed with
+// paths.Canonical. Because the result is a MAP KEY for the "one flow per root"
+// singleflight, disagreeing meant two spellings of one project — a checkout
+// reached through a symlinked parent, or /tmp versus /private/tmp on macOS —
+// started two concurrent xcodebuild flows against the same directory.
+//
+// The Abs anchor stays: paths.Canonical returns a relative path unchanged for a
+// relative input, so dropping it would reintroduce the divergence for any caller
+// that passes one. Same division as internal/fsguard.canonical — anchor here,
+// resolve there.
+//
+// paths.Canonical normalises SYMLINKS only. Two spellings differing just in CASE
+// still key separately on a case-insensitive filesystem; resolving that needs a
+// per-component directory read and would be wrong on the case-sensitive
+// filesystems plumb also runs on.
 func canonicalXcodeRoot(root string) string {
 	if abs, err := filepath.Abs(root); err == nil {
-		return filepath.Clean(abs)
+		root = abs
 	}
-	return filepath.Clean(root)
+	return paths.Canonical(root)
 }
 
 // ensureXcodeBuildServer starts one background configuration flow per canonical

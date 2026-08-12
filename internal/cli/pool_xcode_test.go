@@ -75,8 +75,18 @@ func waitXcodeState(t *testing.T, pool *workspacePool, root string, want xcodebs
 
 func TestPoolXcodeSingleflightUsesSafeArgvAndOneRestart(t *testing.T) {
 	root := t.TempDir()
-	project := filepath.Join(root, "App.xcodeproj")
-	mustMkdir(t, project)
+	mustMkdir(t, filepath.Join(root, "App.xcodeproj"))
+	// The expected argv is built from the CANONICAL root, not from t.TempDir()
+	// directly, because canonicalXcodeRoot now resolves symlinks: the flow keys on
+	// the resolved root and passes it through to xcodebuild.
+	//
+	// This is a deliberate behaviour change, not a test accommodating a fix. The
+	// argv now names the fully resolved project path rather than whichever spelling
+	// the caller happened to attach with, which is the point — two spellings of one
+	// project are one project. On macOS the difference is visible in every run:
+	// t.TempDir() returns /var/... while canonicalisation yields /private/var/...,
+	// so hard-coding the unresolved form here would pin the pre-fix behaviour.
+	project := filepath.Join(canonicalXcodeRoot(root), "App.xcodeproj")
 	runner := &blockingXcodeRunner{
 		root: root, started: make(chan struct{}), release: make(chan struct{}),
 	}
