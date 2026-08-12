@@ -10,12 +10,11 @@ import (
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
-// ObjCExtractor extracts Objective-C symbols using the gotreesitter Objective-C
-// grammar.
+// ObjCExtractor extracts Objective-C symbols using the gotreesitter grammar.
 //
-// Concurrency: stateless after construction and safe for concurrent use; each
-// Extract call borrows a parser from the shared per-grammar pool and returns it
-// before returning, because gotreesitter parsers are not safe for concurrent reuse.
+// Concurrency: stateless after construction and safe for concurrent use; a fresh
+// parser is created per Extract call because gotreesitter parsers are not safe for
+// concurrent reuse.
 type ObjCExtractor struct {
 	lang lazyGrammar
 }
@@ -27,22 +26,20 @@ func NewObjC() *ObjCExtractor {
 
 func (e *ObjCExtractor) Language() string { return "objc" }
 
-// Extensions covers implementation files only. A `.h` is claimed by the C extractor:
-// the two languages share that extension and nothing inside the file says which it
-// is, so the implementation suffix is the only division that never mis-assigns.
+// Extensions covers implementation files only: a `.h` is claimed by the C extractor,
+// since both languages use it and nothing inside says which.
 func (e *ObjCExtractor) Extensions() []string { return []string{".m", ".mm"} }
 
-// Extract parses src and returns Objective-C's declarations: `@interface`,
-// `@implementation` and their category/class-extension forms as classes,
-// `@protocol` as a type (a contract, mirroring Java's interface), methods keyed
-// by their full selector, `@property`, instance variables and
-// `@synthesize`/`@dynamic` as fields, and `#import`, `@import` and `@class` as
-// imports — with certain (1.0) containment edges and heuristic call edges for both
-// C calls and message sends. Everything C is inherited from cWalk, Objective-C being
-// a strict superset. A `test…` selector inside an XCTestCase subclass becomes
-// KindTest. Returns (nil, nil, nil) when src cannot be parsed. Deliberately NOT
-// emitted: locals (never descending into a method body is what suppresses them),
-// block literals bound to a local, `@required`/`@optional` (markers, not symbols).
+// Extract returns Objective-C's declarations: `@interface`, `@implementation` and
+// their category/class-extension forms as classes, `@protocol` as a type (a
+// contract, mirroring Java's interface), methods keyed by full selector,
+// `@property`/ivars/`@synthesize` as constants when readonly and variables
+// otherwise, and `#import`/`@import`/`@class` as imports — with certain (1.0)
+// containment and heuristic call edges for C calls and message sends. Everything C
+// is inherited from cWalk; a `test…` selector in an XCTestCase subclass becomes
+// KindTest. Returns (nil, nil, nil) when src cannot be parsed. NOT emitted: locals
+// (never descending into a method body suppresses them), block literals bound to a
+// local, `@required`/`@optional` (markers, not symbols).
 func (e *ObjCExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
 	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
@@ -62,15 +59,13 @@ func (e *ObjCExtractor) Extract(ctx context.Context, relPath string, src []byte)
 	})
 }
 
-// objcWalk embeds cWalk to inherit every C construct — a `#define`, a file-scope
-// `static const`, a C function, a struct — and re-owns exactly the methods that
-// RECURSE. That is the whole point: Go has no virtual dispatch, so cWalk.top calls
-// *cWalk's* top on the children of a `#ifdef` or an `extern "C"` block. Handing a
-// container down to it would dispatch everything nested inside through the C
-// switch, which has no case for `@implementation` — so a class guarded by `#if
-// TARGET_OS_IPHONE` would vanish silently rather than fail loudly. cWalk's leaf
-// handlers recurse into nothing and are delegated to unchanged. cWalk.qualify is
-// likewise not reused: it joins with ".". See methodQualified.
+// objcWalk embeds cWalk to inherit every C construct and re-owns exactly the methods
+// that RECURSE. Go has no virtual dispatch, so cWalk.top calls *cWalk's* top on the
+// children of a `#ifdef` or `extern "C"` block: handing a container down dispatches
+// everything nested inside through the C switch, which has no case for
+// `@implementation` — so a class guarded by `#if TARGET_OS_IPHONE` vanishes silently
+// rather than failing loudly. Leaf handlers recurse into nothing and are delegated
+// unchanged. cWalk.qualify is likewise not reused: it joins with ".".
 type objcWalk struct {
 	cWalk
 	// testClasses records classes whose interface declares XCTestCase ancestry, so
@@ -97,10 +92,9 @@ func (w *objcWalk) top(n *tsg.Node) {
 		w.addObjCTypedef(n)
 	case "implementation_definition":
 		// An orphan. A macro attribute inside the class — `AF_API_AVAILABLE(ios(10),
-		// macosx(10.12))` is the live example — defeats the `@implementation` header
-		// while leaving every member intact as a typed node under the recovery node:
-		// one real file yields no class_implementation and 82 sound
-		// method_definitions beneath the ERROR. Emitting them unowned is honest and
+		// macosx(10.12))` — defeats the `@implementation` header while leaving every
+		// member intact as a typed node under the ERROR: one real file yields no
+		// class_implementation and 82 sound method_definitions. Emitting them unowned
 		// beats losing a whole file's API to a header the grammar could not read.
 		if inner := firstNamedChild(n); inner != nil {
 			w.implMember(n, inner, -1, "", false)
@@ -254,12 +248,11 @@ func (w *objcWalk) implMember(wrapper, inner *tsg.Node, parent int64, owner stri
 	}
 }
 
-// addMethod emits one method, named by its FULL selector — the method's real
-// identity. `initWithFrame:` and `initWithCoder:` are different methods and both
-// are spelled `init…` up to the first colon, so naming one by its first keyword
-// alone would merge unrelated symbols. It is also what a backtrace, a `@selector()`
-// literal and the docs print, and the trailing colons survive for the same reason:
-// `setValue:` is not `setValue`.
+// addMethod emits one method, named by its FULL selector — its real identity.
+// `initWithFrame:` and `initWithCoder:` are both `init…` up to the first colon, so
+// first-keyword naming merges unrelated symbols; the full selector is also what a
+// backtrace, a `@selector()` literal and the docs print. Trailing colons survive
+// for the same reason: `setValue:` is not `setValue`.
 func (w *objcWalk) addMethod(n, doc *tsg.Node, parent int64, owner string, testCtx bool) {
 	selector, classMethod := w.selectorOf(n)
 	if selector == "" {
@@ -274,15 +267,25 @@ func (w *objcWalk) addMethod(n, doc *tsg.Node, parent int64, owner string, testC
 	w.noteFunc(selector, idx)
 }
 
-// addField emits a `@property`, an instance variable or a `@synthesize` — all
-// KindField, the kind a Java field and a Kotlin property get, since each is declared
-// storage on the type. The qualified name is dotted, because for DATA members that is
-// the Objective-C spelling: `self.name`.
+// addField emits a `@property`, ivar or `@synthesize` — NOT as KindField: that kind
+// is for keys of a data-format file, and its doc says a member of a *code* type is
+// KindConstant when immutable and KindVariable otherwise, which Java and Kotlin
+// follow and TestExtractors_MemberConventions enforces. A `readonly` property
+// publishes no setter, so it is the immutable case. The qualified name is dotted:
+// for DATA members that is the Objective-C spelling.
 func (w *objcWalk) addField(n *tsg.Node, name string, parent int64, owner string) {
 	if name == "" {
 		return
 	}
-	idx := w.addNamed(n, n, topology.KindField, name, owner+"."+name, normaliseSpace(n.Text(w.src)))
+	decl := normaliseSpace(n.Text(w.src))
+	kind := topology.KindVariable
+	// Matched against the attribute list alone, so a property merely named
+	// `readonlyThing` is not misread as immutable.
+	if l, r := strings.IndexByte(decl, '('), strings.IndexByte(decl, ')'); l >= 0 && r > l &&
+		strings.Contains(","+strings.ReplaceAll(decl[l+1:r], " ", "")+",", ",readonly,") {
+		kind = topology.KindConstant
+	}
+	idx := w.addNamed(n, n, kind, name, owner+"."+name, decl)
 	w.link(parent, idx)
 }
 
@@ -330,15 +333,12 @@ func (w *objcWalk) addModuleImport(n *tsg.Node) {
 }
 
 // addObjCTypedef names the two typedef shapes C's handler gets wrong, delegating
-// every other to it.
-//
-// `typedef void (^Block)(…)` buries its name two declarators deep, where C's scan
-// for a DIRECT type_identifier finds nothing — so the block type is dropped, or,
-// with a pointer return type, mis-named after it; a block typedef is how every
-// asynchronous Objective-C API spells its callback. `typedef NS_ENUM(NSInteger,
-// Name) { … }` is a macro the grammar cannot see through: the only direct
-// type_identifier is the MACRO name, so cWalk.addTypedef would emit a symbol called
-// NS_ENUM — worse than none — while the real one is the last type_identifier inside
+// the rest to it. `typedef void (^Block)(…)` buries its name two declarators deep,
+// past C's scan for a DIRECT type_identifier, so a block typedef — how every async
+// Objective-C API spells its callback — is dropped or mis-named after its return
+// type. `typedef NS_ENUM(NSInteger, Name) { … }` is a macro the grammar cannot see
+// through: its only direct type_identifier is the MACRO name, so cWalk.addTypedef
+// would emit a symbol called NS_ENUM; the real one is the last type_identifier in
 // the parenthesised arguments.
 func (w *objcWalk) addObjCTypedef(n *tsg.Node) {
 	var name string
@@ -437,11 +437,11 @@ func (w *objcWalk) protocolList(n *tsg.Node) string {
 	return ""
 }
 
-// selectorOf reconstructs a method's selector and reports whether it is a class
-// method: `- (void)a:(int)x b:(int)y` yields "a:b:", a method taking no arguments its
-// bare keyword. The keywords are the method's DIRECT identifier children — an
-// argument's name is nested inside its method_parameter and never reaches this loop —
-// and the method_parameter count decides whether colons belong.
+// selectorOf reconstructs a selector and reports whether the method is a class
+// method: `- (void)a:(int)x b:(int)y` yields "a:b:", an argument-less method its bare
+// keyword. Keywords are the method's DIRECT identifier children (an argument's name
+// nests inside its method_parameter and never reaches this loop); the
+// method_parameter count decides whether colons belong.
 func (w *objcWalk) selectorOf(n *tsg.Node) (selector string, classMethod bool) {
 	var keywords []string
 	params := 0
