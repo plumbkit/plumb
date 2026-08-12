@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // newIntentTestSession builds a connSession wired to a real per-temp-workspace
@@ -141,5 +144,58 @@ func TestIntentHint_AdvisoryOnlyIsAdditive(t *testing.T) {
 	}
 	if len(combined) <= len(base) {
 		t.Error("expected an advisory block to be appended")
+	}
+}
+
+// writeLiveSessionFile plants a session file directly in the session directory.
+// It exists because session.Register REFUSES a name a live session already
+// holds, so the duplicate-name state resolvePeer must survive cannot be reached
+// through the API — only by a stale or hand-written file, which is exactly the
+// case the resolver must not guess its way through.
+func writeLiveSessionFile(t *testing.T, info session.Info) {
+	t.Helper()
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("session.Dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	info.PID = os.Getpid() // a live pid, or listLocked marks it ended
+	info.StartedAt = time.Now()
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, info.ID+".json"), data, 0o600); err != nil {
+		t.Fatalf("write session file: %v", err)
+	}
+}
+
+// TestResolvePeer_BindsOneLiveSessionAndRefusesToGuess. Resolving a name is what
+// decides both where a message is stored and which session it is bound to, so it
+// must report the peer's ID when exactly one live session answers — and report
+// nothing when none or several do, leaving the message addressed by name alone
+// rather than bound to a coin toss that would deliver it to the wrong agent
+// while telling the sender it reached the right one.
+func TestResolvePeer_BindsOneLiveSessionAndRefusesToGuess(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s := newIntentTestSession(t, t.TempDir(), config.CollabConfig{Mailbox: true})
+
+	writeLiveSessionFile(t, session.Info{ID: "id-alice", Name: "alice", Folder: "/proj/a"})
+	writeLiveSessionFile(t, session.Info{ID: "id-bob", Name: "bob", Folder: "/proj/b"})
+
+	peer, ok := s.resolvePeer("alice")
+	if !ok || peer.ID != "id-alice" || peer.Workspace != "/proj/a" {
+		t.Fatalf("resolvePeer(alice) = %+v ok=%v, want id-alice at /proj/a", peer, ok)
+	}
+	if _, ok := s.resolvePeer("nobody"); ok {
+		t.Error("a name no live session holds must not resolve")
+	}
+
+	// A second live file under the same name: ambiguous, so unresolvable.
+	writeLiveSessionFile(t, session.Info{ID: "id-impostor", Name: "alice", Folder: "/proj/evil"})
+	if peer, ok := s.resolvePeer("alice"); ok {
+		t.Errorf("an ambiguous name resolved to %+v — binding must never be a guess", peer)
 	}
 }

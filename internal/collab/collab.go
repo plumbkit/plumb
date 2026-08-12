@@ -56,8 +56,13 @@ type Row struct {
 	Body          string   // redacted free text
 	PathGlobs     []string // intent only — the area being worked on; nil for a note
 	Addressee     string   // note only — a session name or AddresseeNext; "" for an intent
-	CreatedAt     time.Time
-	ExpiresAt     time.Time
+	// AddresseeID binds the note to ONE session: the stable ID of the live
+	// session that answered to Addressee when it was sent. Only that session may
+	// claim it. Empty means unbound — a pre-v3 row, a note to a peer that had not
+	// attached, or an AddresseeNext note — and is delivered by name alone.
+	AddresseeID string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 
 	// ConversationID groups a note with its replies into one thread. Minted by
 	// the store on a fresh message and echoed back by the recipient to reply.
@@ -106,6 +111,12 @@ type NoteInput struct {
 	Addressee     string
 	TTL           time.Duration
 
+	// AddresseeID binds the note to the one session that answered to Addressee at
+	// send time. Set it ONLY for a peer that is live and resolves to exactly one
+	// session; leave it empty otherwise, which keeps the historical name-only
+	// addressing that an unattached peer depends on. PutNote clears it for
+	// AddresseeNext.
+	AddresseeID string
 	// ConversationID threads this note onto an existing conversation. Empty mints
 	// a fresh one, which PutNote returns so the caller can tell the sender what to
 	// quote in order to continue the thread.

@@ -224,6 +224,19 @@ recipient's next `session_start`. A delivered message stays in the store until
 its TTL, which is what gives a conversation its transcript and its exchange
 count.
 
+A message is addressed to a **session**, not to a name. When the peer you name
+is connected, the message is bound to that exact session and only it can ever
+read it. Session names are reusable — an ended session does not reserve its
+name, and any session may `rename_session` to a free one — so without that
+binding a message its recipient never read would be handed to whoever next
+answers to the name, bodies included, while the sender was told it reached the
+peer it meant. The trade is deliberate and stated in the reply: a bound message
+**expires unread if its recipient never comes back**, which is the right failure
+for a private message. Addressing a peer that has *not* attached yet stores no
+binding and is delivered by name, as is `next` — that one is a first-claimer
+race by design. Messages written before this existed are likewise unbound and
+keep delivering by name.
+
 Addressing a session pinned to a **different workspace** is allowed, but such a
 message is delivered only if *that* project sets `[collab] cross_project = true`;
 otherwise it expires unread. Cross-project messages are stored in a daemon-level

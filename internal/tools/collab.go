@@ -111,11 +111,24 @@ type CollabDeps struct {
 	// Notifier is the daemon-wide wake-up signal: bumped on send, watched by the
 	// piggyback fast path and by check_messages' blocking wait. May be nil.
 	Notifier *collab.Notifier
-	// PeerWorkspace reports the workspace a named peer session is pinned to, and
-	// whether such a session is currently known. It decides whether a message is
-	// same-project (the workspace store) or cross-project (the daemon-level one).
-	// May be nil, in which case every message is treated as same-project.
-	PeerWorkspace func(name string) (workspace string, found bool)
+	// ResolvePeer reports the LIVE session answering to a name. May be nil, in
+	// which case every message is treated as same-project and bound by name only.
+	ResolvePeer func(name string) (PeerSession, bool)
+}
+
+// PeerSession is a live peer session resolved by name.
+//
+// Concurrency: a value type — safe to copy and read from any goroutine.
+type PeerSession struct {
+	// Workspace is the root the peer is pinned to. It decides whether a message
+	// is same-project (the workspace store) or cross-project (the daemon-level
+	// one).
+	Workspace string
+	// ID is the peer's stable session ID, which a message is bound to so that
+	// only that session can read it. A resolver reports found=false — rather
+	// than guessing — when no live session answers to the name or when more than
+	// one does, and the message then falls back to name-only addressing.
+	ID string
 }
 
 // resolveTTL turns a minutes count into a duration, applying the policy default

@@ -42,6 +42,14 @@ func (*LeaveNote) Description() string {
 		"message is delivered exactly once. A peer that is idle waiting on its human " +
 		"makes no tool calls and will not see it until it does something — so do not " +
 		"assume silence means refusal.\n\n" +
+		"ADDRESSED TO A SESSION, NOT TO A NAME. When the peer you name is connected, " +
+		"the message is bound to that exact session and only it can ever read it. " +
+		"Session names are reusable — an ended session does not reserve its name, and " +
+		"any session may rename to a free one — so without that binding a message its " +
+		"recipient never read would be handed to whoever next answers to the name. The " +
+		"trade is deliberate: a bound message expires unread if its recipient never " +
+		"comes back. Addressing a peer that has NOT attached yet stores no binding and " +
+		"is delivered by name, as is \"next\".\n\n" +
 		"CROSS-PROJECT. Addressing a session pinned to a different workspace is " +
 		"allowed, but it is delivered only if THAT project sets [collab] " +
 		"cross_project = true; otherwise it expires unread. Such a message is " +
@@ -130,6 +138,12 @@ type noteTarget struct {
 	crossProject  bool
 	peerWorkspace string
 	origin        string // the sender's workspace; stamped only when crossProject
+	// addresseeID binds the message to the one live session that answered to the
+	// addressee's name. Empty when the peer is not live (or the name resolves
+	// ambiguously), which leaves the message addressed by name alone — the
+	// historical behaviour, and the only one available for a peer that has not
+	// attached yet.
+	addresseeID string
 	// peerUnknown records that no live session answers to this name and no
 	// conversation history placed it, so the message was filed in this
 	// workspace's own mailbox on the assumption the peer will attach here.
@@ -148,23 +162,30 @@ type noteTarget struct {
 //
 // "next" is always same-project: "whoever attaches next" has no meaning across
 // projects, so it is never routed to the daemon-level store.
+//
+// Resolving the peer also decides whether the message is BOUND to it. A live
+// peer contributes its session ID, and only that session can then read the
+// message; a peer placed from conversation history contributes none, because
+// history proves where a name used to be, not who holds it now. That is the
+// deliberate trade: a bound message dies unread if its recipient never comes
+// back, which is better than being read by whoever inherits the name.
 func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (noteTarget, error) {
 	if to == collab.AddresseeNext {
 		return t.localTarget()
 	}
-	peerWS, found := "", false
-	if t.deps.PeerWorkspace != nil {
-		peerWS, found = t.deps.PeerWorkspace(to)
+	peer, found := PeerSession{}, false
+	if t.deps.ResolvePeer != nil {
+		peer, found = t.deps.ResolvePeer(to)
 	}
 	if !found && convID != "" {
 		// The peer is not connected, but this thread may remember where it lives.
 		if g := t.globalIfExists(); g != nil {
 			if w, ok := g.ConversationPeerWorkspace(ctx, convID, to); ok {
-				peerWS, found = w, true
+				peer.Workspace, found = w, true
 			}
 		}
 	}
-	if found && peerWS != "" && !sameWorkspace(peerWS, ws) {
+	if found && peer.Workspace != "" && !sameWorkspace(peer.Workspace, ws) {
 		if t.deps.GlobalStore == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
 		}
@@ -172,13 +193,17 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 		if store == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
 		}
-		return noteTarget{store: store, crossProject: true, peerWorkspace: peerWS, origin: ws}, nil
+		return noteTarget{
+			store: store, crossProject: true, peerWorkspace: peer.Workspace,
+			origin: ws, addresseeID: peer.ID,
+		}, nil
 	}
 	local, err := t.localTarget()
 	if err != nil {
 		return local, err
 	}
 	local.peerUnknown = !found
+	local.addresseeID = peer.ID
 	return local, nil
 }
 
@@ -228,6 +253,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		AuthorID:        t.deps.SessionID,
 		Body:            body,
 		Addressee:       args.To,
+		AddresseeID:     target.addresseeID,
 		TTL:             ttl,
 		ConversationID:  args.ConversationID,
 		OriginWorkspace: target.origin,
@@ -283,6 +309,11 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 	fmt.Fprintf(&sb, "  expires:      in %s\n", humaniseTTL(ttl))
 	if redacted {
 		sb.WriteString("  note:         a likely secret in the body was redacted before storage.\n")
+	}
+	if target.addresseeID != "" {
+		fmt.Fprintf(&sb, "  bound to:     the session called %q that is live right now — only it can read "+
+			"this. If it ends first the message expires unread rather than being handed to a "+
+			"later session that takes the name.\n", to)
 	}
 	if target.crossProject {
 		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s. It is delivered only if THAT "+

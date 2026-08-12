@@ -81,25 +81,39 @@ func (s *connSession) collabGlobalIfExists() *collab.Store {
 	return s.collabPool.getGlobal()
 }
 
-// peerWorkspace reports which workspace a named peer session is pinned to. It
-// decides whether a message stays in this workspace's collab.db or crosses into
-// the daemon-level store. A name that matches no live session is reported as not
-// found, and the caller then treats the message as same-project — addressing a
-// peer that has not connected yet is a legitimate thing to do.
-func (s *connSession) peerWorkspace(name string) (string, bool) {
+// resolvePeer reports the live session answering to a name: the workspace it is
+// pinned to (which decides whether a message stays in this workspace's collab.db
+// or crosses into the daemon-level store) and its stable session ID (which binds
+// the message to that session alone).
+//
+// A name that matches no live session is reported as not found, and the caller
+// then treats the message as same-project, unbound — addressing a peer that has
+// not connected yet is a legitimate thing to do. So is a name matching SEVERAL
+// live sessions: Register and Rename refuse a name a live session already holds,
+// so it should not happen, but binding to a guess when it does would deliver the
+// message to the wrong agent while telling the sender it reached the right one.
+// Matching is exact, as delivery is; the uniqueness check is case-insensitive
+// and so can only be stricter.
+func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 	if name == "" {
-		return "", false
+		return tools.PeerSession{}, false
 	}
 	all, err := session.List()
 	if err != nil {
-		return "", false
+		return tools.PeerSession{}, false
 	}
+	var found tools.PeerSession
+	matches := 0
 	for _, p := range all {
 		if p.Name == name {
-			return p.Folder, true
+			found = tools.PeerSession{Workspace: p.Folder, ID: p.ID}
+			matches++
 		}
 	}
-	return "", false
+	if matches != 1 {
+		return tools.PeerSession{}, false
+	}
+	return found, true
 }
 
 // collabDeps bundles everything the mailbox tools need. Note the deliberate
@@ -116,7 +130,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStore:         s.collabGlobalCreate,
 		GlobalStoreIfExists: s.collabGlobalIfExists,
 		Notifier:            s.collabPool.notifier(),
-		PeerWorkspace:       s.peerWorkspace,
+		ResolvePeer:         s.resolvePeer,
 	}
 }
 
@@ -132,6 +146,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
 		Self:      s.addressableName(),
+		SelfID:    s.sessID,
 		Root:      s.workspace(),
 		Policy:    s.collabPolicy(),
 		Workspace: s.collabStoreIfExists,

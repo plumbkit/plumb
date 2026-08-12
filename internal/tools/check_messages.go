@@ -46,6 +46,10 @@ func (*CheckMessages) Description() string {
 		"budget. It is a speed bump that forces a deliberate act, not an enforced limit " +
 		"on how long two agents may talk \u2014 when a thread is spent, surface it to your " +
 		"human rather than routing around the cap.\n\n" +
+		"Messages are addressed to a SESSION, not to a name: one written to you while " +
+		"you were connected is readable only by this session, so a later session that " +
+		"takes your name after you disconnect cannot read your mail (and you cannot " +
+		"read your predecessor's).\n\n" +
 		"Requires [collab] mailbox = true. Messages from a session in another " +
 		"workspace are shown only when this project sets [collab] cross_project = " +
 		"true, and are labelled with the sending project.\n\n" +
@@ -87,8 +91,21 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if self == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	// A session whose registration failed keeps a display name for the TUI and
+	// logs, but that name was drawn without a uniqueness check and sits in no
+	// file any peer's check can see, so it may shadow a live session. Claiming is
+	// destructive — a message is handed over exactly once — so a shadow would
+	// swallow the real recipient's mail. Every other delivery path takes its
+	// address from connSession.inbox, which withholds one here; this tool built
+	// its own from the display name and was the single lane around that gate.
+	if t.deps.SessionID == "" {
+		return "This session is not registered in the session directory, so it has no mailbox " +
+			"address and no peer can write to it. Registration failed at startup — see the " +
+			"daemon log.", nil
+	}
 	inbox := Inbox{
 		Self:      self,
+		SelfID:    t.deps.SessionID,
 		Root:      t.deps.Workspace(),
 		Policy:    policy,
 		Workspace: t.deps.StoreIfExists,

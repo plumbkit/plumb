@@ -312,12 +312,52 @@ func TestEnrichPanic_InAPathHintDoesNotConsumeAMessage(t *testing.T) {
 	if store == nil {
 		t.Fatal("expected the seeded store to exist")
 	}
-	pending, err := store.PendingNotes(context.Background(), "alice", ws, time.Now())
+	pending, err := store.PendingNotes(context.Background(), collab.Claimant{Name: "alice", Workspace: ws}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pending) != 1 {
 		t.Fatalf("a message must not be consumed by a hook that panicked and discarded "+
 			"its output; pending = %d, want 1", len(pending))
+	}
+}
+
+// seedBoundMessage stores a message addressed to `to` AND bound to one session
+// id, so only that session may read it.
+func seedBoundMessage(t *testing.T, s *connSession, ws, to, addresseeID, body string) {
+	t.Helper()
+	store := s.collabPool.acquire(ws)
+	if store == nil {
+		t.Fatal("acquire collab store")
+	}
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "peer", Body: body, Addressee: to,
+		AddresseeID: addresseeID, TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.collabPool.notifier().Bump(collab.NotifyKey(ws, to))
+}
+
+// TestMessageHint_BoundMessageReachesOnlyItsOwnSession pins the piggyback lane's
+// half of the binding, in both directions. This connection's inbox must carry
+// its session ID: without it a bound message is delivered to nobody, and with
+// the wrong one it would be delivered to a session that merely shares the name.
+func TestMessageHint_BoundMessageReachesOnlyItsOwnSession(t *testing.T) {
+	cc := config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512}
+
+	ws := t.TempDir()
+	mine := newChatTestSession(t, ws, "alice", cc)
+	seedBoundMessage(t, mine, ws, "alice", mine.sessID, "for this alice only")
+	if got := mine.messageHint(context.Background()); !strings.Contains(got, "for this alice only") {
+		t.Fatalf("the session a message is bound to must receive it; got %q", got)
+	}
+
+	// A different workspace, so the fresh session is racing nothing but the name.
+	otherWS := t.TempDir()
+	successor := newChatTestSession(t, otherWS, "alice", cc)
+	seedBoundMessage(t, successor, otherWS, "alice", "sess-that-has-ended", "for the previous alice")
+	if got := successor.messageHint(context.Background()); strings.Contains(got, "for the previous alice") {
+		t.Fatalf("a session reusing the name read its predecessor's message; got %q", got)
 	}
 }

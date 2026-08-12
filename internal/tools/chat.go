@@ -40,6 +40,12 @@ const maxDeliveredPerCall = 3
 type Inbox struct {
 	// Self is this session's display name — the address messages are sent to.
 	Self string
+	// SelfID is this session's stable session ID. A message sent to a peer that
+	// was live is bound to that peer's ID, and only the session holding it may
+	// claim it — so a later session inheriting the name reads nothing. Empty
+	// claims unbound messages only, which is every message written before the
+	// binding existed and every one addressed to a peer that had not attached.
+	SelfID string
 	// Root is this session's pinned workspace. A cross-project message names the
 	// workspace allowed to claim it, and this is what that is checked against —
 	// a session name alone is not a safe address, since names collide and
@@ -66,6 +72,12 @@ func (i Inbox) Keys() []string {
 		return nil
 	}
 	return []string{i.Self, collab.NotifyKey(i.Root, collab.AddresseeNext)}
+}
+
+// claimant is what the store matches a row against: this session's name, its
+// stable ID, and its pinned workspace.
+func (i Inbox) claimant() collab.Claimant {
+	return collab.Claimant{Name: i.Self, ID: i.SelfID, Workspace: i.Root}
 }
 
 // stores returns the stores to read, workspace first so a same-project message
@@ -110,7 +122,7 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 		if remaining <= 0 {
 			break
 		}
-		rows, err := s.ClaimNotes(ctx, i.Self, i.Root, now, remaining)
+		rows, err := s.ClaimNotes(ctx, i.claimant(), now, remaining)
 		if err != nil {
 			// Delivery is advisory and must never fail the tool call that carried
 			// it, but a swallowed error here means an agent silently did not get a

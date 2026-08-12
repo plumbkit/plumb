@@ -56,6 +56,99 @@ func openV1WithNote(t *testing.T, body, addressee string) string {
 	return ws
 }
 
+// v2Columns are the columns v2 added, reproduced verbatim so the v2 fixture
+// below stays frozen at the historical shape. Deriving it from chatColumns would
+// make the fixture follow every future addition and quietly stop testing the
+// upgrade it is named for.
+var v2Columns = []string{
+	`ALTER TABLE collab_rows ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE collab_rows ADD COLUMN delivered_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE collab_rows ADD COLUMN delivered_to TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`,
+}
+
+// openV2WithNote writes a collab.db in the shape plumb shipped once the mailbox
+// was threaded but before a message could be bound to a session, holding one
+// unread addressed note. This is the file every current user actually has, so it
+// is the migration that matters in practice — v1 → v3 is the older path.
+func openV2WithNote(t *testing.T, body, addressee string) string {
+	t.Helper()
+	ws := t.TempDir()
+	db, err := sqlitex.Open(DBPath(ws), sqlitex.Options{})
+	if err != nil {
+		t.Fatalf("open v2 db: %v", err)
+	}
+	if _, err := db.Exec(v1Schema); err != nil {
+		t.Fatalf("apply v1 schema: %v", err)
+	}
+	for _, ddl := range v2Columns {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("apply v2 column: %v", err)
+		}
+	}
+	now := time.Now()
+	if _, err := db.Exec(
+		`INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs, addressee,
+		                          created_at, expires_at, conversation_id)
+		 VALUES (?, 'v2-author', 'v2-id', ?, '', ?, ?, ?, 'cv2')`,
+		string(KindNote), body, addressee, now.UnixNano(), now.Add(time.Hour).UnixNano()); err != nil {
+		t.Fatalf("insert v2 note: %v", err)
+	}
+	if err := sqlitex.StampVersion(db, 2); err != nil {
+		t.Fatalf("stamp v2: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v2 db: %v", err)
+	}
+	return ws
+}
+
+// TestMigrate_V2NoteIsUnboundAndStillDelivers: a note already in flight when the
+// binding shipped carries no addressee id, and the NOT NULL DEFAULT backfill is
+// what keeps it deliverable — by name, to whoever answers, exactly as before.
+// Getting this wrong would strand every unread message in every existing
+// collab.db, and collab.db is the only copy.
+func TestMigrate_V2NoteIsUnboundAndStillDelivers(t *testing.T) {
+	ws := openV2WithNote(t, "sent before binding existed", "alice")
+
+	s, err := Open(ws)
+	if err != nil {
+		t.Fatalf("open (migrating) v2 store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	got, err := s.ClaimNotes(context.Background(),
+		Claimant{Name: "alice", ID: "some-session-that-did-not-exist-then"}, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Body != "sent before binding existed" {
+		t.Fatalf("v2 note lost in migration: %v", got)
+	}
+	if got[0].AddresseeID != "" {
+		t.Errorf("AddresseeID = %q, want empty — a backfilled row is unbound", got[0].AddresseeID)
+	}
+	if got[0].ConversationID != "cv2" {
+		t.Errorf("ConversationID = %q, want the v2 thread preserved", got[0].ConversationID)
+	}
+}
+
+// TestMigrate_ConcurrentOpensOnV2 races the ONE new ALTER, which is the upgrade
+// a real daemon performs: several connections open the same existing collab.db
+// at once, all see addressee_id missing, all try to add it, and every loser must
+// treat "a peer already did it" as success. TestMigrate_ConcurrentOpensOnV1
+// covers the same property for the older file; this covers the file people have.
+func TestMigrate_ConcurrentOpensOnV2(t *testing.T) {
+	const rounds = 6
+	for round := range rounds {
+		t.Run(strconv.Itoa(round), func(t *testing.T) {
+			raceOpens(t, openV2WithNote(t, "sent before binding existed", "alice"),
+				"sent before binding existed")
+		})
+	}
+}
+
 // TestMigrate_V1NoteSurvivesAndDeliversOnce is the migration's real contract.
 // collab.db is not a rebuildable index — its rows are the only copy — so a note
 // written by the previous version must still be there afterwards, and must
@@ -72,7 +165,7 @@ func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	got, err := s.ClaimNotes(ctx, "alice", "", now, 0)
+	got, err := s.ClaimNotes(ctx, Claimant{Name: "alice"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +175,7 @@ func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
 	if got[0].ConversationID != "" {
 		t.Errorf("a legacy row has no conversation; got %q", got[0].ConversationID)
 	}
-	again, err := s.ClaimNotes(ctx, "alice", "", now, 0)
+	again, err := s.ClaimNotes(ctx, Claimant{Name: "alice"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +244,14 @@ func TestMigrate_ConcurrentOpensOnV1(t *testing.T) {
 }
 
 func migrateRaceRound(t *testing.T) {
-	ws := openV1WithNote(t, "written before threading existed", "alice")
+	raceOpens(t, openV1WithNote(t, "written before threading existed", "alice"),
+		"written before threading existed")
+}
+
+// raceOpens opens ws from many goroutines at once, then asserts that no opener
+// failed, that every column landed, and that the seeded note survived intact.
+func raceOpens(t *testing.T, ws, wantBody string) {
+	t.Helper()
 
 	const openers = 24
 	var (
@@ -199,11 +299,11 @@ func migrateRaceRound(t *testing.T) {
 			t.Errorf("column %s missing after concurrent migration", c.name)
 		}
 	}
-	got, err := s.ClaimNotes(context.Background(), "alice", "", time.Now(), 0)
+	got, err := s.ClaimNotes(context.Background(), Claimant{Name: "alice", ID: "reader"}, time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Body != "written before threading existed" {
-		t.Fatalf("legacy note lost to the concurrent migration: %v", got)
+	if len(got) != 1 || got[0].Body != wantBody {
+		t.Fatalf("the seeded note was lost to the concurrent migration: %v", got)
 	}
 }

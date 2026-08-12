@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -236,4 +237,46 @@ func TestFormatWorkspaceSessions_CommitAttribution(t *testing.T) {
 func registerID(info session.Info) (string, error) {
 	reg, err := session.Register(info)
 	return reg.ID, err
+}
+
+// TestWorkspaceSessions_NotesListingIsBoundToThisSession pins the listing half
+// of the addressee binding at its wiring. The store's predicate is only as good
+// as the identity handed to it: passing the name without this session's id would
+// list a predecessor's unread mail — sender and body — to whoever inherited the
+// name, and would also hide a session's own bound mail from it.
+func TestWorkspaceSessions_NotesListingIsBoundToThisSession(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("open collab store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "bound-body-marker",
+		Addressee: "alice", AddresseeID: "sess-alice-1", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatalf("PutNote: %v", err)
+	}
+
+	listFor := func(selfID string) string {
+		t.Helper()
+		tool := NewWorkspaceSessions(func() string { return ws }, selfID).
+			WithCollab(
+				func() (bool, bool) { return false, true },
+				func() *collab.Store { return store },
+				func() string { return "alice" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return out
+	}
+
+	if out := listFor("sess-alice-1"); !strings.Contains(out, "bound-body-marker") {
+		t.Errorf("the session the message is bound to must see it listed; got %q", out)
+	}
+	if out := listFor("sess-alice-2"); strings.Contains(out, "bound-body-marker") {
+		t.Errorf("a session reusing the name was shown its predecessor's mail; got %q", out)
+	}
 }
