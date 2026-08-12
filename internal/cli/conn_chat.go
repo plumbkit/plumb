@@ -116,6 +116,16 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	if !s.chatWatch.due(keys, notifier.Gens(keys), time.Now()) {
 		return "" // provably nothing new since the last check: no query
 	}
+	// due() is not evidence that a message exists. The 30-second backstop returns
+	// true unconditionally, and a generation bump may belong to a same-named peer
+	// in a project this session cannot read. Both resolve to "nothing for me", so
+	// the common outcome of consulting the store is a claim that matches no rows —
+	// ~100-145µs of query planning under the writer lock to answer "no". The probe
+	// answers the same question with a LIMIT 1 lookup at ~20-30µs and takes no
+	// write lock; the claim runs only once something is actually waiting.
+	if !inbox.HasPending(ctx) {
+		return ""
+	}
 	rows := inbox.Claim(ctx)
 	if len(rows) == 0 {
 		return ""

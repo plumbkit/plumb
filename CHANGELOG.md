@@ -1176,6 +1176,33 @@
   existing `TestExtractReleasesArenaForReuse` and the deadline suite are
   unchanged and still green, and the Swift parity sweep holds its 6 drifted / 0
   extraction misses / 0 error mismatches baseline.
+- **The mailbox's response-path check now probes before it claims, removing the
+  last unconditional write from every tool call.** Message delivery is
+  piggybacked onto the result of any successful tool call. A notifier keeps that
+  free in the steady state, but its 30-second backstop deliberately consults the
+  store whether or not anything is waiting — and it did so with a full
+  `ClaimNotes`, an `UPDATE ... RETURNING` run to discover there was nothing to
+  update.
+
+  The cost is not the write. A zero-match claim writes **0 bytes** of WAL and
+  costs 7.6µs of execution. It is the claim's query PLAN — a `LIST SUBQUERY` plus
+  a temp B-tree built per execution to order a result set that turns out to be
+  empty — at **100-145µs**, all of it holding the writer lock. Cheap in
+  isolation; the problem is that it holds the lock roughly twenty times longer
+  than a bare write needs, which widens its own collision window. Measured
+  against a peer's `leave_note` holding that lock for 500µs: **p50 1.42ms, p99
+  7.07ms, max 18ms** — more than an entire `read_file`, spent answering "no".
+
+  `HasPendingNotes` answers the same question with an indexed `SELECT 1 ...
+  LIMIT 1` at **20-30µs**, taking no write lock at all, so it never queues behind
+  a peer's send. The claim now runs only once something is actually waiting.
+
+  The probe and the claim share one predicate (`claimableWhere`), because they
+  must agree exactly: a probe broader than the claim promises mail that never
+  arrives, one narrower suppresses a delivery, and neither raises an error — the
+  message simply does not show up. That is now three readers (`ClaimNotes`,
+  `PendingNotes`, `HasPendingNotes`) on one written-once identity rule rather
+  than three copies kept in agreement by hand.
 
 ### Fixed
 
