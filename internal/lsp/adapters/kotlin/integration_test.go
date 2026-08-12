@@ -98,8 +98,29 @@ class Greeter(private val name: String) {
 	return root
 }
 
-// startKotlinLSP spawns kotlin-lsp and returns a ready adapter.
+// startKotlinLSP spawns kotlin-lsp and returns a ready adapter, initialised the
+// way the POOL initialises it in production.
+//
+// That distinction is load-bearing. Kotlin's auto diagnostics mode is pull, so
+// `initParamsFor` swaps in `ClientCapabilitiesFor(true)` rather than the
+// adapter's own push-shaped DefaultInitParams. Testing the default shape would
+// validate a payload plumb never sends for this language — the same class of
+// mistake as promoting the adapter while the pool still negotiated push.
 func startKotlinLSP(t *testing.T, ws string) *kotlin.Adapter {
+	t.Helper()
+	return startKotlinLSPWith(t, ws, pullInitParams(ws))
+}
+
+// pullInitParams mirrors internal/cli's initParamsFor for a non-PullInitializer
+// adapter under the resolved "pull" mode: the adapter's defaults with the pull
+// client capability swapped in.
+func pullInitParams(ws string) protocol.InitializeParams {
+	params := kotlin.DefaultInitParams(protocol.FileURI(ws))
+	params.Capabilities = protocol.ClientCapabilitiesFor(true)
+	return params
+}
+
+func startKotlinLSPWith(t *testing.T, ws string, params protocol.InitializeParams) *kotlin.Adapter {
 	t.Helper()
 	bin := requireKotlinLSP(t)
 
@@ -131,7 +152,7 @@ func startKotlinLSP(t *testing.T, ws string) *kotlin.Adapter {
 	ad := kotlin.New(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	if _, err := ad.Initialize(ctx, kotlin.DefaultInitParams(protocol.FileURI(ws))); err != nil {
+	if _, err := ad.Initialize(ctx, params); err != nil {
 		t.Fatal("initialize:", err)
 	}
 	if err := ad.Initialized(ctx); err != nil {
@@ -268,4 +289,28 @@ func countErrors(diags []protocol.Diagnostic) int {
 		}
 	}
 	return n
+}
+
+// TestIntegration_AdvertisesPullUnderBothCapabilityShapes pins that
+// diagnosticProvider does not depend on which client-capability shape plumb
+// sends. The pool sends the pull shape for Kotlin; an adapter-level caller
+// sends the push-shaped default. If the server only advertised the pull
+// provider under one of them, `resolveDiagMode` would silently resolve to
+// "pull-requested-but-unavailable" in production while every adapter-level test
+// stayed green — so assert both rather than infer from one.
+func TestIntegration_AdvertisesPullUnderBothCapabilityShapes(t *testing.T) {
+	ws := gradleFixture(t)
+	for name, params := range map[string]protocol.InitializeParams{
+		"pool pull shape":     pullInitParams(ws),
+		"adapter push shape":  kotlin.DefaultInitParams(protocol.FileURI(ws)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ad := startKotlinLSPWith(t, ws, params)
+			if !ad.SupportsPullDiagnostics() {
+				t.Fatal("kotlin-lsp did not advertise diagnosticProvider under this capability shape — " +
+					"plumb would resolve pull-requested-but-unavailable and Kotlin would have no " +
+					"diagnostics path at all, since this server never pushes")
+			}
+		})
+	}
 }
