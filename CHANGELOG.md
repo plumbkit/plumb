@@ -649,11 +649,33 @@
   next parse too. So a file indexed under a tight deadline would silently
   truncate the next file that had no deadline at all, and a parser returned still
   pointing at a raised flag would abort the following parse before it began.
-  `extractWith` therefore sets the timeout unconditionally (including to 0) and
-  `releaseParser` clears both before returning the parser. Each is proven to
-  matter by mutation: removing either makes
-  `TestExtractWith_PooledParserDoesNotLeakTimeout` /
-  `...DoesNotLeakCancellation` fail.
+  Both are therefore scrubbed at BOTH ends of a borrow, by one
+  `scrubPooledParser` called on intake in `extractWith` and again in
+  `releaseParser`. Release alone covers only parsers that leave through
+  `releaseParser`; anything reaching the pool another way still carries the
+  previous borrower's state. Intake alone would leave a flag pointer keeping a
+  dead stack variable reachable until the next borrow.
+
+  Precisely: a non-nil flag is enough to ARM gotreesitter's parse budget, which
+  costs the compact fast path; aborting a parse additionally requires the
+  pointed-at value to be non-zero. A stale pointer is therefore only dangerous
+  once someone raises it — which is exactly what the previous borrower's watcher
+  goroutine does when its context is cancelled.
+
+  In the shipped daemon this is defence in depth rather than a reachable bug:
+  every production parse now routes through `extractFile`, which always attaches
+  a deadline, so the un-cancellable branch does not occur outside tests. It is
+  kept because the cost is two field writes and the failure mode it prevents —
+  `parse stopped early: cancelled` on a file nobody cancelled — is invisible in
+  the index and would be diagnosed as a corrupt grammar.
+
+  The guard is pinned by `TestScrubPooledParser_ClearsEverythingPlumbSets`,
+  which asserts the contract directly through the binding's getters. The two
+  planted-parser tests alongside it are end-to-end checks only and cannot be
+  relied on to fail: they need `sync.Pool` to hand back the parser they planted,
+  and a GC in any sibling test empties it. Measured on the mutant, the
+  cancellation test fails 3/3 under a narrow `-run` but passes 3/3 under a plain
+  package run — which is how CI runs it. The direct test fails 3/3 either way.
 
   **Mid-parse cancellation** (closes the long-standing follow-up (d) on the
   gotreesitter card): `extractWith` checked `ctx.Err()` once on entry and

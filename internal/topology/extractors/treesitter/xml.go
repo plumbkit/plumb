@@ -37,9 +37,9 @@ import (
 // wrapper tags is still recorded under the nearest landmark above it rather
 // than being lost or forced to invent intermediate nodes.
 //
-// Concurrency: stateless after construction and safe for concurrent use; a
-// fresh parser is created per Extract call because gotreesitter parsers are not
-// safe for concurrent reuse.
+// Concurrency: stateless after construction and safe for concurrent use; each
+// Extract call borrows a parser from the shared per-grammar pool and returns it,
+// because gotreesitter parsers are not safe for concurrent reuse.
 type XMLExtractor struct {
 	lang lazyGrammar
 }

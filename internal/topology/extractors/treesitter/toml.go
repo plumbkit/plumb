@@ -14,9 +14,8 @@ import (
 // grammar.
 //
 // Concurrency: stateless after construction and safe for concurrent use; each
-// Extract call borrows a parser from the shared per-grammar pool and returns it
-// before returning, because gotreesitter parsers are not safe for concurrent
-// reuse.
+// Extract call borrows a parser from the shared per-grammar pool and returns it,
+// because gotreesitter parsers are not safe for concurrent reuse.
 type TOMLExtractor struct {
 	lang lazyGrammar
 }

@@ -51,18 +51,33 @@ func parserPoolFor(lang *tsg.Language) *sync.Pool {
 	return p.(*sync.Pool)
 }
 
-// releaseParser clears the per-call state before the parser goes back, then
-// returns it.
+// scrubPooledParser clears the two fields plumb ever sets, returning a parser to
+// the state a freshly constructed one is in.
 //
-// Both fields MUST be cleared here. A pooled parser carries whatever the last
-// caller set, so a stale timeout would silently impose the previous file's
-// remaining deadline on a parse that was given none, and a stale flag pointer
-// would keep a dead stack variable alive and could abort the next parse before
-// it starts. Upstream's own pool clears exactly these two on checkout; a plain
-// sync.Pool does not, so this is the seam that has to.
-func releaseParser(pool *sync.Pool, parser *tsg.Parser) {
+// It runs at BOTH ends of a borrow — on intake in extractWith and on release in
+// releaseParser. Release alone is not enough: it only covers parsers that leave
+// through releaseParser, so any parser reaching the pool another way (a test
+// planting one, or a future caller that Puts directly) still carries the
+// previous caller's state. Intake alone is not enough either: a flag pointer
+// left on a pooled parser keeps a dead stack variable reachable until the next
+// borrow. Scrubbing at both ends costs two field writes and removes the
+// question.
+//
+// These are the only two setters plumb calls — included ranges, the logger, the
+// GLR trace and the ambiguity profile are never set, so they cannot go stale.
+// Anything added to that list must be added here too. (Upstream's own pool
+// scrubs a great deal more on checkout, including six setters and its
+// admission-switch state; a plain sync.Pool scrubs nothing, so this is the seam
+// that has to.)
+func scrubPooledParser(parser *tsg.Parser) {
 	parser.SetTimeoutMicros(0)
 	parser.SetCancellationFlag(nil)
+}
+
+// releaseParser clears the per-call state before the parser goes back, then
+// returns it.
+func releaseParser(pool *sync.Pool, parser *tsg.Parser) {
+	scrubPooledParser(parser)
 	pool.Put(parser)
 }
 
@@ -108,6 +123,10 @@ func extractWith(
 	pool := parserPoolFor(lang)
 	parser := pool.Get().(*tsg.Parser)
 
+	// Scrub before configuring: whatever this parser carries is the previous
+	// borrower's, and nothing below is guaranteed to overwrite all of it.
+	scrubPooledParser(parser)
+
 	// Set the timeout unconditionally, including to 0 ("no timeout"): a pooled
 	// parser would otherwise inherit the previous file's remaining deadline.
 	var timeoutMicros uint64
@@ -140,6 +159,10 @@ func extractWith(
 			}
 		}()
 	}
+	// No else branch: scrubPooledParser above already left the flag nil, which is
+	// what a context that cannot be cancelled needs. Clearing to nil rather than
+	// pointing at a fresh zero also keeps the compact fast path eligible, which
+	// it is not while any flag is set.
 
 	tree, err := parser.Parse(src)
 	// Returned here rather than by defer, and only once Parse has returned in

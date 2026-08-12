@@ -122,10 +122,44 @@ func TestExtractWith_PooledParserDoesNotLeakTimeout(t *testing.T) {
 	}
 }
 
+// TestScrubPooledParser_ClearsEverythingPlumbSets is the deterministic guard for
+// the intake/release scrub, and the one that actually holds.
+//
+// The two planted-parser tests around it are worth keeping as end-to-end checks,
+// but neither can be relied on to FAIL when the scrub is removed: they depend on
+// sync.Pool handing back the specific parser they planted, and sync.Pool is
+// emptied on every GC cycle. Measured on the mutant (scrub deleted): the
+// cancellation test fails 3/3 under `-run TestExtractWith_Pooled...` but passes
+// 3/3 under a plain `go test ./...` of this package, because the sibling tests
+// allocate enough to trigger a collection first. That is exactly how CI runs it,
+// so those tests would have waved the regression straight through.
+//
+// This one touches no pool and no GC: it asserts the contract directly on a
+// parser it owns, using the getters the binding exposes.
+func TestScrubPooledParser_ClearsEverythingPlumbSets(t *testing.T) {
+	parser := tsg.NewParser(grammars.MarkdownLanguage())
+	raised := uint32(1)
+	parser.SetTimeoutMicros(1)
+	parser.SetCancellationFlag(&raised)
+
+	scrubPooledParser(parser)
+
+	if got := parser.TimeoutMicros(); got != 0 {
+		t.Errorf("stale timeout survived the scrub: got %dµs, want 0", got)
+	}
+	if got := parser.CancellationFlag(); got != nil {
+		t.Errorf("stale cancellation flag survived the scrub: got %p, want nil", got)
+	}
+}
+
 // The same hazard for the cancellation flag: a parser returned to the pool still
 // pointing at a flag that has been set to 1 would abort the NEXT parse before it
 // started, turning one cancelled file into an unbounded run of spurious
 // failures.
+//
+// Retained as an end-to-end check only — see
+// TestScrubPooledParser_ClearsEverythingPlumbSets for why this one cannot be
+// trusted to fail on its own.
 func TestExtractWith_PooledParserDoesNotLeakCancellation(t *testing.T) {
 	lang := grammars.MarkdownLanguage()
 	dirty := tsg.NewParser(lang)
