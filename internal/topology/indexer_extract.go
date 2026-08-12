@@ -154,7 +154,7 @@ func uncoveredLanguage(relPath string) string {
 // maxExtractTimeout is the ceiling on any one file's parse, applied even when
 // the operator has configured no timeout at all.
 //
-// extract_timeout_seconds = 0 is documented as "disables the timeout", and it
+// extract_timeout_seconds = 0 WAS documented as "disables the timeout", and it
 // did exactly that: no deadline on the context, so extractWith set no parser
 // timeout either, and safeExtract's watchdog waits on a ctx.Done() that never
 // fires. A single pathological file could therefore wedge the one indexer worker

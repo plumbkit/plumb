@@ -522,9 +522,9 @@ func TestValidate_TopologyExtractTimeout(t *testing.T) {
 	if err := validate(cfg); err == nil {
 		t.Error("a negative extract_timeout_seconds must be rejected")
 	}
-	cfg.Topology.ExtractTimeoutSeconds = 0 // the documented "disabled" value
+	cfg.Topology.ExtractTimeoutSeconds = 0 // resolves to the maxExtractTimeout ceiling
 	if err := validate(cfg); err != nil {
-		t.Errorf("extract_timeout_seconds = 0 must be accepted as disabled, got %v", err)
+		t.Errorf("extract_timeout_seconds = 0 must be accepted, got %v", err)
 	}
 }
 

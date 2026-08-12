@@ -102,7 +102,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "topology.extract_timeout_seconds", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
-		Description: "Cap on how long one file's parse may take before it is abandoned (seconds). 0 disables the timeout.",
+		Description: "Cap on how long one file's parse may take before it is abandoned (seconds). May lower the built-in 2-minute ceiling but not remove it; 0 means the ceiling.",
 	},
 	{
 		Key: "topology.resync_batch", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
