@@ -285,6 +285,17 @@ func TestExtractors_MemberConventions(t *testing.T) {
 	}
 	cases := []mc{
 		{
+			// Ruby has no `let`/`final` marker on a member: what an attr_*
+			// declaration publishes is the mutability. attr_reader exposes a
+			// reader only (immutable), attr_accessor also a writer (mutable).
+			// This row is why the guard covers Ruby at all — without it the
+			// package-wide contract was vacuous for Ruby and the extractor
+			// shipped emitting KindField for both.
+			"ruby", func() topology.Extractor { return NewRuby() }, "c.rb",
+			"class C\n  attr_reader :immut\n  attr_accessor :mutv\n  def m\n    localc = 3\n  end\nend\n",
+			"immut", "mutv", "localc",
+		},
+		{
 			"java", func() topology.Extractor { return NewJava() }, "C.java",
 			"class C {\n  final int IMMUT = 1;\n  int mut = 2;\n  void m() { int localv = 3; }\n}\n",
 			"IMMUT", "mut", "localv",

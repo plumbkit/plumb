@@ -30,6 +30,21 @@ module Billing
       subtotal = total * 2
     end
 
+    # Ruby 3.0 endless methods: no parameter list and no body_statement, so the
+    # name has to come from the grammar's name field rather than a positional
+    # scan that stops at one of those.
+    def rate = RATE
+    def doubled = formatted(@total)
+    def tripled(n) = n * 3
+
+    def self.default = new(0)
+
+    # A def body can talk about another object; nothing it declares there
+    # belongs to this class.
+    def self.included(base)
+      base.attr_accessor :sneaky
+    end
+
     def self.build(total)
       new(total)
     end
@@ -100,10 +115,17 @@ func TestRuby_KindsExtracted(t *testing.T) {
 		{topology.KindType, "Billing"},
 		{topology.KindType, "Invoice"},
 		{topology.KindConstant, "RATE"},
-		{topology.KindField, "total"},
-		{topology.KindField, "customer"},
-		{topology.KindField, "issued_at"},
+		// attr_reader publishes no writer (immutable), attr_accessor does
+		// (mutable). KindField is reserved for keys of a data-format file.
+		{topology.KindConstant, "total"},
+		{topology.KindVariable, "customer"},
+		{topology.KindVariable, "issued_at"},
 		{topology.KindMethod, "initialize"},
+		// Ruby 3.0 endless methods, named by themselves and not by their body.
+		{topology.KindMethod, "rate"},
+		{topology.KindMethod, "doubled"},
+		{topology.KindMethod, "tripled"},
+		{topology.KindMethod, "default"},
 		{topology.KindMethod, "build"},
 		{topology.KindMethod, "formatted"},
 		{topology.KindMethod, "=="}, // operator methods parse as an operator node, not an identifier
@@ -118,14 +140,106 @@ func TestRuby_KindsExtracted(t *testing.T) {
 
 // Ruby marks a constant by capitalisation alone and the grammar gives locals and
 // constants the same `assignment` node, so a walk that does not track method
-// bodies emits every local variable as a symbol. `subtotal` is the witness.
+// bodies emits every local variable as a symbol.
+//
+// `subtotal` alone is a weak witness: it is rejected twice over, by the inMethod
+// flag AND by addConstant's node-type check, so deleting the flag leaves it
+// green and the guard untested. `sneaky` is the witness that discriminates —
+// `base.attr_accessor :sneaky` inside `def self.included` is valid, idiomatic
+// Ruby that declares an accessor on *another* object, and only the inMethod flag
+// keeps it out of the enclosing class.
 func TestRuby_LocalsInsideMethodsAreSuppressed(t *testing.T) {
 	nodes, _ := rbExtract(t)
 	for _, n := range nodes {
-		if n.Name == "subtotal" {
+		switch n.Name {
+		case "subtotal":
 			t.Errorf("local assignment inside a method leaked into the index as %s %q", n.Kind, n.Qualified)
+		case "sneaky":
+			t.Errorf("attr_accessor inside a method body leaked into the enclosing class as %s %q", n.Kind, n.Qualified)
 		}
 	}
+}
+
+// A constant assignment inside a def is a SyntaxError in Ruby proper (dynamic
+// constant assignment), but tree-sitter parses malformed source happily and the
+// indexer must not turn one into a symbol. That path is only reachable through
+// the inMethod flag, so it is asserted on its own source rather than on rbSrc.
+func TestRuby_ConstantAssignmentInsideMethodNotSurfaced(t *testing.T) {
+	nodes, _, err := NewRuby().Extract(context.Background(), "c.rb",
+		[]byte("class C\n  def m\n    INNER_CONST = 1\n  end\nend\n"))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Name == "INNER_CONST" {
+			t.Errorf("constant assignment inside a method leaked into the index as %s %q", n.Kind, n.Qualified)
+		}
+	}
+	// Anti-vacuity: the enclosing declarations are still there.
+	rbFind(t, nodes, topology.KindType, "C")
+	rbFind(t, nodes, topology.KindMethod, "m")
+}
+
+// TestRuby_EndlessMethodNamedByItself pins Ruby 3.0's endless method forms. A
+// positional name scan that stopped at the parameter list or the body ran past
+// the end of a parameterless endless def and named the method after the first
+// token of its body: `def endless = helper_call` was indexed as a method named
+// `helper_call` — a symbol that is actually a *call* — while the real `endless`
+// never appeared at all, and funcIdx aimed intra-file call edges at the phantom.
+//
+// The parenthesised form `def f(a) = ...` was never broken, only accidentally
+// safe, so it is pinned here too.
+func TestRuby_EndlessMethodNamedByItself(t *testing.T) {
+	src := []byte(`class C
+  RED = 1
+  def endless = helper_call
+  def color = RED
+  def endless2(a) = a + 1
+  def self.built = helper_call
+  def helper_call
+    2
+  end
+end
+`)
+	nodes, _, err := NewRuby().Extract(context.Background(), "c.rb", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, want := range []struct{ name, qualified string }{
+		{"endless", "C#endless"},
+		{"color", "C#color"},
+		{"endless2", "C#endless2"},
+		{"built", "C.built"},
+		{"helper_call", "C#helper_call"},
+	} {
+		if got := rbFind(t, nodes, topology.KindMethod, want.name).Qualified; got != want.qualified {
+			t.Errorf("method %s qualified = %q, want %q", want.name, got, want.qualified)
+		}
+	}
+	// The phantom: exactly one `helper_call` method, the real def. Two endless
+	// bodies mention it, and the buggy walk emitted a method for each.
+	if n := countNamed(nodes, "helper_call"); n != 1 {
+		t.Errorf("helper_call appears %d times; the endless bodies are being named as methods; nodes=%v", n, nodeNames(nodes))
+	}
+	// `RED` is the class constant, not a method named after `def color`'s body.
+	if got := rbFind(t, nodes, topology.KindConstant, "RED").Qualified; got != "C::RED" {
+		t.Errorf("RED qualified = %q, want C::RED", got)
+	}
+	for _, n := range nodes {
+		if n.Name == "RED" && n.Kind == topology.KindMethod {
+			t.Error("the body of `def color = RED` was emitted as a method")
+		}
+	}
+}
+
+func countNamed(nodes []topology.Node, name string) int {
+	n := 0
+	for _, node := range nodes {
+		if node.Name == name {
+			n++
+		}
+	}
+	return n
 }
 
 func TestRuby_QualifiedNamesUseRubyNotation(t *testing.T) {
@@ -141,7 +255,9 @@ func TestRuby_QualifiedNamesUseRubyNotation(t *testing.T) {
 		// Ruby backtrace prints and therefore what a search for it contains.
 		{topology.KindMethod, "formatted", "Billing::Invoice#formatted"},
 		{topology.KindMethod, "build", "Billing::Invoice.build"},
-		{topology.KindField, "customer", "Billing::Invoice#customer"},
+		{topology.KindVariable, "customer", "Billing::Invoice#customer"},
+		{topology.KindMethod, "rate", "Billing::Invoice#rate"},
+		{topology.KindMethod, "default", "Billing::Invoice.default"},
 	} {
 		if got := rbFind(t, nodes, tc.kind, tc.name).Qualified; got != tc.want {
 			t.Errorf("%s %s qualified = %q, want %q", tc.kind, tc.name, got, tc.want)

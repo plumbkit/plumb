@@ -37,7 +37,8 @@ func (e *RubyExtractor) Extensions() []string {
 
 // Extract parses src and returns Ruby's declarations: modules and classes as
 // types, their methods (instance and singleton) as methods, top-level defs as
-// functions, constant assignments as constants, attr_* declarations as fields,
+// functions, constant assignments as constants, attr_* declarations as members
+// (a KindConstant for attr_reader, a KindVariable for attr_writer/attr_accessor),
 // require/require_relative as imports, and both minitest `test_*` methods and
 // RSpec describe/context/it blocks as tests — with certain (1.0) containment
 // edges from each module or class to what it declares, and heuristic call edges
@@ -200,10 +201,22 @@ func (w *rubyWalk) addMethod(n *tsg.Node, enclosing int64, prefix string, single
 	w.walk(n, enclosing, prefix, true)
 }
 
-// methodName reads the def's name. `def self.build` puts `self` ahead of the
-// name, and operator methods (`def ==`) come through as an operator node rather
-// than an identifier, so the name is the last non-parameter, non-body token.
+// methodName reads the def's name from the grammar's own `name` field, which is
+// right for every form a def takes: `def self.build` (the field is `build`, not
+// `self`), `def obj.meth`, operator methods (`def ==`, `def []=`), setters
+// (`def name=`) and Ruby 3.0 endless methods (`def total = 1`).
+//
+// The field replaces a positional scan that stopped at the parameter list or
+// body. An endless method with no parameter list has neither, so the scan ran on
+// into the body and named the method after the first thing it found there:
+// `def endless = helper_call` was indexed as a method named `helper_call`, the
+// real `endless` never appeared, and funcIdx pointed call edges at the phantom.
+// The fallback scan is kept only for the impossible case of a def with no name
+// field, and deliberately stops before the `=` of an endless body.
 func (w *rubyWalk) methodName(n *tsg.Node) string {
+	if name := n.ChildByFieldName("name", w.lang); name != nil {
+		return name.Text(w.src)
+	}
 	var name string
 	for _, c := range n.Children() {
 		switch c.Type(w.lang) {
@@ -211,7 +224,7 @@ func (w *rubyWalk) methodName(n *tsg.Node) string {
 			if t := c.Text(w.src); t != "self" {
 				name = t
 			}
-		case "method_parameters", "body_statement", "parameters":
+		case "method_parameters", "body_statement", "parameters", "=":
 			return name
 		}
 	}
@@ -265,12 +278,13 @@ func (w *rubyWalk) addConstant(n *tsg.Node, enclosing int64, prefix string) {
 // dependency, an accessor and a test respectively, and omitting them would leave
 // a Rails or RSpec file looking almost empty.
 func (w *rubyWalk) addCall(n *tsg.Node, enclosing int64, prefix string, inMethod bool) {
-	switch w.callName(n) {
+	call := w.callName(n)
+	switch call {
 	case "require", "require_relative":
 		w.addImport(n)
 	case "attr_reader", "attr_writer", "attr_accessor":
 		if !inMethod {
-			w.addAttrs(n, enclosing, prefix)
+			w.addAttrs(n, enclosing, prefix, attrKind(call))
 		}
 	case "describe", "context", "it", "specify", "feature", "scenario":
 		if w.addSpec(n) {
@@ -319,10 +333,26 @@ func (w *rubyWalk) addImport(n *tsg.Node) {
 	w.nodes = append(w.nodes, node)
 }
 
-// addAttrs emits one field per symbol, so `attr_accessor :a, :b` yields two —
+// attrKind maps an attr_* declaration to the member kind the cross-language
+// convention requires. KindField is reserved for a key of a data-format file (a
+// SQL column, a TOML key); a member of a *code* type is a KindConstant when it
+// is immutable and a KindVariable otherwise, which is what Java, Rust, Swift and
+// Kotlin already emit.
+//
+// `attr_reader` publishes a reader and no writer, so the member it declares
+// cannot be reassigned through the object's own interface — the immutable case.
+// `attr_writer` and `attr_accessor` both publish a writer.
+func attrKind(call string) topology.NodeKind {
+	if call == "attr_reader" {
+		return topology.KindConstant
+	}
+	return topology.KindVariable
+}
+
+// addAttrs emits one member per symbol, so `attr_accessor :a, :b` yields two —
 // these are the accessors a reader is looking for, and collapsing them into one
 // node named after the first would be wrong rather than merely coarse.
-func (w *rubyWalk) addAttrs(n *tsg.Node, enclosing int64, prefix string) {
+func (w *rubyWalk) addAttrs(n *tsg.Node, enclosing int64, prefix string, kind topology.NodeKind) {
 	args := childByType(n, "argument_list", w.lang)
 	if args == nil {
 		return
@@ -341,7 +371,7 @@ func (w *rubyWalk) addAttrs(n *tsg.Node, enclosing int64, prefix string) {
 		}
 		idx := int64(len(w.nodes))
 		node := topology.Node{
-			Kind:      topology.KindField,
+			Kind:      kind,
 			Name:      name,
 			Qualified: qualified,
 			StartLine: line(a.StartPoint()),
