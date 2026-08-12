@@ -507,6 +507,31 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
+- **`check_messages` now tells a sender which of its own messages nobody has
+  read.** The mailbox reported delivery from the recipient's side only, so a
+  sender could observe that it sent something and never that it landed. Delivery
+  is polling-only, which makes "no reply" ambiguous by construction — the peer
+  read it and has not answered, or never read it at all — and binding a message
+  to a session sharpened that, since a bound message now expires unread rather
+  than passing to whoever next takes the name. The receipt is the other half of
+  "silence is not a refusal": it turns a caveat the agent had to remember into a
+  fact it is told.
+
+  It rides `check_messages` rather than `workspace_sessions` because that is the
+  mailbox's own read surface, it already carries the deps (including the
+  daemon-level store), and it is where the ambiguity is already explained. It is
+  addressed by `author_id`, which has always been a session ID rather than a
+  name, so it needs none of the addressee machinery — a session asks only about
+  rows it wrote itself. That is also why it reads the cross-project store without
+  the recipient-side `cross_project` gate: that gate stops a project reading
+  ANOTHER project's messages, and these are the caller's own. It is the case
+  where the receipt earns most, since a cross-project message to a project that
+  never opted in expires unread by default.
+
+  `UnreadSentBy` is a pure `SELECT`. A receipt that claimed on the sender's
+  behalf would consume a message the recipient has not seen, turning
+  delivered-exactly-once into delivered-never; the tests pin that the recipient
+  can still claim after any number of receipt reads.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,
