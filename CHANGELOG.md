@@ -548,7 +548,7 @@
   **122 ms with a 58 MB peak**, and an 861 KB `CHANGELOG.md` in 367 ms / 145 MB,
   with growth linear in source size. The cap had stopped bounding risk and was
   only excluding large documents from the Map; the global
-  `max_file_size_bytes` (512 KiB) and the default-on 512 MB per-parse memory
+  `max_file_size_bytes` (512 KiB) and the default-on 128 MB per-parse memory
   budget already cover it. `max_file_size_bytes` is deliberately left at 512 KiB:
   the indexer runs a single worker, so raising it is a serial per-resync cost for
   outline value that falls off with document size, and that is its own decision
