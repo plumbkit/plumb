@@ -256,7 +256,7 @@ func TestIntegrationXcodeConcurrentAttachSingleflight(t *testing.T) {
 	pool := &workspacePool{
 		baseCtx: context.Background(),
 		xcode: poolXcodeState{
-			trust: staticXcodeTrust(true), runner: runner,
+			runner: runner,
 			restart: func(string) error {
 				restartMu.Lock()
 				restarts++
@@ -272,7 +272,7 @@ func TestIntegrationXcodeConcurrentAttachSingleflight(t *testing.T) {
 		callers.Add(1)
 		go func() {
 			defer callers.Done()
-			pool.ensureXcodeBuildServer(root, cfg)
+			pool.ensureXcodeBuildServer(root, cfg, true)
 		}()
 	}
 	callers.Wait()

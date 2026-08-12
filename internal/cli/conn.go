@@ -93,6 +93,14 @@ type sessionView struct {
 	// trust gate is applied at the resolver seam (conn_commands.go).
 	commands      []config.CommandConfig
 	commandPolicy config.CommandsConfig
+	// execTrusted is whether this workspace may run the commands its project
+	// config supplies (run_command's [[command]] entries, execute_shell_command,
+	// the xcode build server). Resolved at config apply from the SAME bytes as
+	// commands/commandPolicy above, so the authorisation and the thing it
+	// authorises can never disagree — see config.ExecTrustedFor. Re-checking at the
+	// point of use would let a repository load hostile content and then restore the
+	// file to content that is trusted.
+	execTrusted bool
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.

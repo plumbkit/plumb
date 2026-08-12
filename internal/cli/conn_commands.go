@@ -7,7 +7,16 @@ package cli
 // only after `plumb trust`; global-config commands and policy are user-authored
 // and always honoured. The untrusted project's config is never forced back in
 // LoadProject (that is reserved for fields with no per-call gate); the gate lives
-// here, where the resolver can consult the trust store.
+// here, where the resolver can distinguish a project entry from a global one.
+//
+// The gate reads v.execTrusted, which config apply resolved from the same bytes
+// that produced v.commands / v.commandPolicy. It is NOT a trust-store lookup at
+// call time, and the difference matters twice over. It binds to CONTENT, so a
+// [[command]] added or rewritten after `plumb trust` is refused until re-granted
+// (before, the coarse per-root boolean blessed anything these sections later
+// came to contain). And it binds to the content actually LOADED, so a repository
+// cannot have hostile commands in the live config while the file on disk reads
+// as something the user once approved.
 
 import (
 	"errors"
@@ -36,10 +45,11 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 		return tools.ResolvedCommand{}, fmt.Errorf("run_command: unknown command %q; available: %s", name, strings.Join(avail, ", "))
 	}
 	fromProject := commandsFromProject(ws)
-	if fromProject && !config.NewTrustStore().IsTrusted(ws) {
+	if fromProject && !v.execTrusted {
 		return tools.ResolvedCommand{}, fmt.Errorf(
-			"run_command: %q comes from this project's .plumb/config.toml and is not trusted. "+
-				"review it, then run `plumb trust` in %s to allow this project's commands", name, ws)
+			"run_command: %q comes from this project's .plumb/config.toml and is not trusted for its current content. "+
+				"review it, then run `plumb trust` in %s to allow this project's commands "+
+				"(a grant is bound to the exact content approved, so editing them requires re-running it)", name, ws)
 	}
 	argv, err := substituteTarget(cmd.Exec, target)
 	if err != nil {
@@ -73,12 +83,12 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 	}
 	base := s.store.Current()
 	v := s.view()
-	trusted := config.NewTrustStore().IsTrusted(ws)
+	trusted := v.execTrusted
 	allowShell := gatedAllowShell(base.CommandPolicy, v.commandPolicy, trusted)
 	if !allowShell {
 		if !trusted && v.commandPolicy.AllowShell {
 			return tools.ResolvedShell{}, fmt.Errorf(
-				"execute_shell_command: this project's .plumb/config.toml enables shell execution, but the workspace is not trusted. "+
+				"execute_shell_command: this project's .plumb/config.toml enables shell execution, but its current content is not trusted. "+
 					"review it, then run `plumb trust` in %s", ws)
 		}
 		return tools.ResolvedShell{}, errors.New("execute_shell_command is disabled. enable it with [commands] allow_shell = true in your global config, " +

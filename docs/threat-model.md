@@ -477,17 +477,35 @@ Tracked, not hidden. Each is real today.
    refactor that makes an inert field reachable would need its classification
    revisited, which is what the test exists to force.
 
-8. **Trust binding is uneven.** `[tasks.*]` and the capability config are bound
-   to a content hash, so an edit after the grant stops being honoured. The
-   `[[command]]` allow-list, `[commands] allow_shell`/`deny_network` and
-   `[xcode] auto_build_server` are gated on the coarse per-root boolean instead,
-   so the same TOCTOU close does not extend to them.
+8. ~~**Trust binding is uneven.**~~ **CLOSED.** Every project-supplied surface
+   that decides which process plumb spawns is now bound to a content hash. The
+   `[[command]]` allow-list, `[commands] allow_shell`/`deny_network` and the
+   whole `[xcode]` table join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and
+   `[collab]` in `ProjectPolicySpec`, so they are disclosed by `plumb trust`
+   with their values and invalidated by any edit.
 
-   `[xcode]` is the sharpest of these: `auto_build_server` spawns `xcodebuild`
-   and `xcode-build-server`, and the coarse flag is set as a side effect of
-   approving something unrelated — so a user who once ran `plumb trust` to
-   approve a project's task command has, without being told, pre-authorised that
-   workspace's Xcode tooling for good.
+   Two things were live while this was open, not just the TOCTOU as originally
+   written:
+
+   - Anything **added after** a grant inherited it — a repository trusted for a
+     benign `[git]` tweak could append a `[[command]]` and have `run_command`
+     execute it.
+   - The coarse flag is set by the TUI's Commands tab on **any** project-scope
+     save ("trusted by authorship"). Saving one unrelated setting in a freshly
+     cloned repository therefore blessed every `[[command]]` that repository
+     already shipped, plus `allow_shell`, plus `auto_build_server` — none of
+     which the user authored or was shown.
+
+   The gate is now the conjunction of both grants (`config.ExecTrustedFor`): the
+   coarse flag still answers "has the user approved execution in this workspace
+   at all", and the hash answers "and is this the request they approved". A
+   project that supplies none of these sections needs only the coarse grant, so
+   commands from the user's own global config are unaffected.
+
+   The decision is resolved at config apply, from the same bytes as the merged
+   config it authorises, rather than re-read at the point of use — otherwise a
+   repository could load hostile content and then restore the file to content
+   that *is* trusted, and the check would pass while the loaded content ran.
 
 9. **Writing a file inside the workspace is an execution primitive.** A3's
    residual understates this: `.git/hooks/*` runs on the next commit,

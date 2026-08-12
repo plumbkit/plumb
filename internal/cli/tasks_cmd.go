@@ -45,11 +45,13 @@ otherwise ignores. This is ONE grant per workspace, and it covers all of them:
 
   · [tasks.<lang>]        build/lint/test/e2e commands run by run_task
   · [[command]]           the named command allow-list run by run_command
-  · [commands]            the shell policy, including allow_shell
+  · [commands]            the shell policy — allow_shell and deny_network
+  · [xcode]               auto_build_server, which runs xcodebuild here
   · [lsp.<lang>]          command, args, env, initialization_options and the
                           root markers — the argv of a process plumb spawns
   · [git]                 the destructive and network tiers, and the
                           protected-branch list
+  · [collab]              the cross-agent channel switches
 
 A project config is an untrusted surface — cloning a repository ships one — so
 none of that takes effect until you approve it here. Everything about to be
@@ -182,9 +184,11 @@ func runTrust(_ *cobra.Command, args []string) error {
 	// that binding and re-prompts. A trust.json upgraded from the old boolean
 	// format re-confirms here once.
 	fmt.Printf("trusted %s\n", root)
-	fmt.Println("  this grant covers the project's task commands, its [[command]] allow-list and [commands] shell policy,")
-	fmt.Println("  its [lsp.<lang>] server command/args/env, and its [git] tier policy.")
-	fmt.Println("  it is bound to the content shown above; changing any of it requires re-running `plumb trust`.")
+	fmt.Println("  this grant covers the project's task commands, its [[command]] allow-list, its [commands] shell")
+	fmt.Println("  policy, its [xcode] build-server settings, its [lsp.<lang>] server command/args/env, its [git]")
+	fmt.Println("  tier policy and its [collab] channel switches.")
+	fmt.Println("  every one of them is bound to the content shown above; changing any of it requires re-running")
+	fmt.Println("  `plumb trust`, which will show you what changed before you approve it again.")
 	return nil
 }
 

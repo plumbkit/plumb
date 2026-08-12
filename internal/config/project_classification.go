@@ -242,10 +242,11 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"rastro.enabled": ClassPreference,
 	"rastro.path":    ClassPreference,
 
-	// --- Xcode: auto_build_server spawns xcodebuild and xcode-build-server.
-	// Gated today on the COARSE per-root trust boolean rather than a content
-	// hash, which is weaker than the gate [git]/[lsp.<lang>] get. Tracked
-	// separately; classified here as trust-gated because that is what it is.
+	// --- Xcode: auto_build_server spawns xcodebuild and xcode-build-server,
+	// which runs THIS repository's own build. Bound to the policy content hash
+	// alongside [git]/[lsp.<lang>]: the whole table is in ProjectPolicySpec, so
+	// enabling it after a grant invalidates that grant. scheme and timeout are
+	// inputs to the same argv, so they are bound too.
 	"xcode.auto_build_server": ClassTrustGated,
 	"xcode.scheme":            ClassTrustGated,
 	"xcode.timeout":           ClassTrustGated,
@@ -256,11 +257,16 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"tasks.<lang>.test":   ClassTrustGated,
 	"tasks.<lang>.e2e":    ClassTrustGated,
 	"tasks.<lang>.verify": ClassTrustGated,
-	"command":             ClassTrustGated,
+	// The whole [[command]] array is one ProjectPolicySpec entry, so adding or
+	// rewriting any entry invalidates the grant. Order is part of the hash because
+	// FindCommand takes the first match by name.
+	"command": ClassTrustGated,
 	// [commands] allow_shell and deny_network are honoured from a project file
-	// only for a trusted workspace (gatedAllowShell / gatedDenyNetwork). Note the
-	// gate is the COARSE per-root trust boolean rather than a content hash —
-	// weaker than what [git] and [lsp.<lang>] get, and tracked separately.
+	// only for a trusted workspace (gatedAllowShell / gatedDenyNetwork), and the
+	// gate is now the policy CONTENT hash rather than the coarse per-root boolean
+	// — the same binding [git] and [lsp.<lang>] get. The coarse flag is still
+	// required in addition, since it is what says the user approved execution in
+	// this workspace at all (see config.ExecTrustedFor).
 	"commands.allow_shell":  ClassTrustGated,
 	"commands.deny_network": ClassTrustGated,
 	// require_sandbox is the one [commands] field a project may set untrusted,
