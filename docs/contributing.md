@@ -35,6 +35,13 @@ they reach the tree.
 > hook runs), not a standalone `gofumpt` binary — the two can pin different
 > versions and disagree.
 
+**Why `make lint-cross` exists.** golangci-lint only analyses files matching the
+current `GOOS`, so a Linux `make lint` never sees `sandbox_darwin*.go` /
+`process_darwin*.go` and a macOS run never sees the `_linux` files. This is not
+hypothetical: the widened linter set was trialled on Linux only and passed clean,
+then failed CI's macOS leg on the one `usetesting` hit hiding behind a build tag.
+CI's two-OS matrix is the backstop, not the first line.
+
 ## Code style (essentials)
 
 The full rules are in [`AGENTS.md`](../AGENTS.md); the ones people trip on:
