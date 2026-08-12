@@ -363,19 +363,27 @@ func TestDart_Extensions(t *testing.T) {
 // in a SIBLING node — reading the declaration's own text would call every
 // top-level binding mutable.
 func TestDart_BindingKindFollowsMutability(t *testing.T) {
-	src := []byte("const topConst = 1;\nfinal topFinal = 2;\nvar topVar = 3;\n\nclass C {\n  int mut = 0;\n  final String immut = 'x';\n  static const int SC = 4;\n  void m() { var localv = 5; }\n}\n")
+	// The TYPED file-scope forms are the ones that matter here: Dart scatters a
+	// declaration across sibling nodes, so `const int typedConst` interposes a
+	// type between the keyword and the list, and `late final int` interposes two
+	// nodes. Checking only the adjacent sibling called all of those mutable.
+	src := []byte("const topConst = 1;\nfinal topFinal = 2;\nvar topVar = 3;\nconst int typedConst = 5;\nfinal String typedFinal = 'y';\nlate final int lateFinal = 6;\nint bare = 7;\n\nclass C {\n  int mut = 0;\n  final String immut = 'x';\n  static const int SC = 4;\n  void m() { var localv = 5; }\n}\n")
 
 	nodes, _, err := NewDart().Extract(context.Background(), "a.dart", src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 	want := map[string]topology.NodeKind{
-		"topConst": topology.KindConstant,
-		"topFinal": topology.KindConstant,
-		"topVar":   topology.KindVariable,
-		"mut":      topology.KindVariable,
-		"immut":    topology.KindConstant,
-		"SC":       topology.KindConstant,
+		"topConst":   topology.KindConstant,
+		"topFinal":   topology.KindConstant,
+		"topVar":     topology.KindVariable,
+		"typedConst": topology.KindConstant,
+		"typedFinal": topology.KindConstant,
+		"lateFinal":  topology.KindConstant,
+		"bare":       topology.KindVariable,
+		"mut":        topology.KindVariable,
+		"immut":      topology.KindConstant,
+		"SC":         topology.KindConstant,
 	}
 	for name, kind := range want {
 		n, ok := dartNamed(nodes, name)
