@@ -30,6 +30,7 @@ func fidelityCases() []fidelityCase {
 		{"c", grammars.CLanguage, func() topology.Extractor { return NewC() }, string(cSrc), "trailing_helper"},
 		{"json", grammars.JsonLanguage, func() topology.Extractor { return NewJSON() }, string(jsonSrc), "email"},
 		{"css", grammars.CssLanguage, func() topology.Extractor { return NewCSS() }, string(cssSrc), "fade"},
+		{"elixir", grammars.ElixirLanguage, func() topology.Extractor { return NewElixir() }, elixirSample, "round trips"},
 		// csharpSrc is kept syntactically clean and small on purpose: any parse
 		// error collapses the name field of every class_declaration in the file
 		// (an upstream defect pinned in csharp_test.go), and a sample over ~40 KB

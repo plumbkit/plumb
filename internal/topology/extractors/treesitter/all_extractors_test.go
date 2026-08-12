@@ -55,6 +55,10 @@ func allExtractorCases() []extractorCase {
 			"@import \"base.css\";\n\n.btn {\n  color: red;\n}\n", "base.css",
 		},
 		{
+			"elixir", func() topology.Extractor { return NewElixir() }, "a.ex",
+			"defmodule Svc do\n  alias MyApp.Repo\n\n  def go, do: helper()\n\n  def helper, do: 1\nend\n", "MyApp.Repo",
+		},
+		{
 			"csharp", func() topology.Extractor { return NewCSharp() }, "a.cs",
 			"using System;\n\nclass Svc {\n    public int Go() { return Helper(); }\n    private int Helper() { return 1; }\n}\n", "System",
 		},
