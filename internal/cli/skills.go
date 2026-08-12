@@ -23,6 +23,22 @@ import (
 //
 // So: seven, and the eighth needs its own justification against this paragraph.
 //
+// plumb-chat is that eighth, and here is its argument. The test is trigger
+// disjointness, and the mailbox has no trigger overlap with anything above: it
+// fires on "another agent is working here and I need to reach it", which is not
+// a refusal (diagnose), not recall (memory), not version control (git), and not
+// a code operation at all. It is also the one lane where the cost of NOT having
+// a skill is measurable rather than aesthetic — the mailbox's three hardest
+// facts (delivery is poll-only, so silence is not refusal; the exchange cap
+// bounds one thread, not one conversation; cross-project delivery is the
+// recipient's gate and fails silently) are each a wrong default assumption
+// away from an agent escalating at a peer that never saw its message, or
+// talking to it forever. Folding those into plumb-explore or plumb-memory
+// would file them under a trigger phrase that does not match, which is the
+// failure the ceiling exists to prevent.
+//
+// So: eight, and the ninth needs its own justification against both paragraphs.
+//
 //go:embed skills
 var skillsFS embed.FS
 
