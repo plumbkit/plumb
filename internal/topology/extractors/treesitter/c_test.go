@@ -2,6 +2,7 @@ package treesitter
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,7 +91,7 @@ func TestC_KindsExtracted(t *testing.T) {
 		{topology.KindType, "Colour"},
 		{topology.KindConstant, "RED"},
 		{topology.KindConstant, "LIMIT"},
-		{topology.KindField, "value"},
+		{topology.KindVariable, "value"}, // a code type's member, never a KindField
 		{topology.KindFunction, "add"},
 		{topology.KindFunction, "trailing_helper"},
 	} {
@@ -148,8 +149,38 @@ func TestC_PointerAndArrayDeclaratorsResolveTheirName(t *testing.T) {
 		t.Fatalf("Extract: %v", err)
 	}
 	cFind(t, nodes, topology.KindFunction, "render")
-	cFind(t, nodes, topology.KindField, "name")
-	cFind(t, nodes, topology.KindField, "vals")
+	cFind(t, nodes, topology.KindVariable, "name")
+	cFind(t, nodes, topology.KindVariable, "vals")
+}
+
+// A member of a code type is a KindConstant or KindVariable by mutability, never
+// a KindField — that kind is reserved for a key of a data-format file (a SQL
+// column, a TOML key), per its doc comment on topology.KindField. The qualifier's
+// POSITION decides for a pointer: `const char *p` is a mutable pointer to
+// constant chars, `char *const p` is the constant one.
+func TestC_MembersAreConstantOrVariableNeverField(t *testing.T) {
+	src := []byte("struct S {\n  const int immut;\n  int mut;\n  const char *pstr;\n  char *const cptr;\n  volatile int vol;\n};\n")
+	nodes, _, err := NewC().Extract(context.Background(), "a.c", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Kind == topology.KindField {
+			t.Errorf("member %q emitted as KindField; a code type's member is a constant or a variable", n.Name)
+		}
+	}
+	for _, want := range []struct {
+		kind topology.NodeKind
+		name string
+	}{
+		{topology.KindConstant, "immut"},
+		{topology.KindVariable, "mut"},
+		{topology.KindVariable, "pstr"}, // const belongs to the pointee
+		{topology.KindConstant, "cptr"}, // const belongs to the pointer itself
+		{topology.KindVariable, "vol"},  // volatile is not immutable
+	} {
+		cFind(t, nodes, want.kind, want.name)
+	}
 }
 
 func TestC_LocalsInsideFunctionsAreSuppressed(t *testing.T) {
@@ -168,7 +199,7 @@ func TestC_ContainmentEdgeCertain(t *testing.T) {
 		if n.Kind == topology.KindType && n.Name == "Node" {
 			node = int64(i)
 		}
-		if n.Kind == topology.KindField && n.Name == "value" {
+		if n.Kind == topology.KindVariable && n.Name == "value" {
 			value = int64(i)
 		}
 	}
@@ -346,6 +377,70 @@ func TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect(t *testing.T) {
 	}
 }
 
+// TestC_EnumRecovery_NeverFabricatesASymbol is the counterweight to the
+// recovery: reading names out of raw source must not INVENT one.
+//
+// Every source below is valid C that trips the three-enumerator defect, so the
+// recovery runs on it; each also carries a comma that does NOT separate
+// enumerators. Splitting the body on raw commas turned those into symbols —
+// `/* red, green */` became a constant named `green` spanning "green */ B", and
+// `MAX(x, y)` became one named `y` — each with a confidence-1.0 containment edge
+// claiming membership of the enum. A fabricated declaration is the same failure
+// as a missing one with the sign flipped, and a corpus sweep that counts parse
+// errors and span validity sees neither.
+func TestC_EnumRecovery_NeverFabricatesASymbol(t *testing.T) {
+	for _, src := range []string{
+		"enum E { A, /* red, green */ B, C };\n",
+		"enum E { A, // one, two\n  B, C };\n",
+		"enum E { A = MAX(x, y), B, C };\n",
+		"enum E { A = ',x', B, C };\n",
+		"enum E { A = \"x, y\"[0], B, C };\n",
+		"enum E { A = (1, 2), B, C };\n",
+		"enum E {\n  A, /* first,\n       still a comment */\n  B,\n  C\n};\n",
+	} {
+		nodes, edges, err := NewC().Extract(context.Background(), "a.c", []byte(src))
+		if err != nil {
+			t.Fatalf("Extract(%q): %v", src, err)
+		}
+		var got []string
+		for i, n := range nodes {
+			if n.Kind != topology.KindConstant {
+				continue
+			}
+			got = append(got, n.Name)
+			if slice := src[n.StartByte:n.EndByte]; !strings.HasPrefix(slice, n.Name) {
+				t.Errorf("Extract(%q): enumerator %q spans %q, which does not start with the name", src, n.Name, slice)
+			}
+			for _, e := range edges {
+				if e.Kind == topology.EdgeContains && e.ToID == int64(i) && e.Confidence != 1.0 {
+					t.Errorf("Extract(%q): containment edge for %q has confidence %v", src, n.Name, e.Confidence)
+				}
+			}
+		}
+		if want := []string{"A", "B", "C"}; !slices.Equal(got, want) {
+			t.Errorf("Extract(%q) constants = %v, want exactly %v", src, got, want)
+		}
+	}
+}
+
+// A recovered enumerator must report ITS OWN lines, not the enclosing enum's.
+// Reporting L1-5 beside siblings that report L2-2 is precisely the tell the
+// workaround promises not to leave, and it falsifies the claim that a recovered
+// node is indistinguishable from a parsed one.
+func TestC_EnumRecovery_LineRangeIsTheEnumeratorsOwn(t *testing.T) {
+	src := []byte("enum E {\n  A,\n  B,\n  C\n};\n")
+	nodes, _, err := NewC().Extract(context.Background(), "a.c", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for name, want := range map[string]int{"A": 2, "B": 3, "C": 4} {
+		n := cFind(t, nodes, topology.KindConstant, name)
+		if n.StartLine != want || n.EndLine != want {
+			t.Errorf("enumerator %q = L%d-%d, want L%d-%d", name, n.StartLine, n.EndLine, want, want)
+		}
+	}
+}
+
 // TestC_EnumRecovery_TripwireForUpstreamFix fails when gotreesitter starts
 // parsing the three-enumerator form cleanly. That is the signal to delete
 // recoverEnumerators and this test, exactly as recoverIUOBangs was deleted once
@@ -367,8 +462,10 @@ func TestC_EnumRecovery_TripwireForUpstreamFix(t *testing.T) {
 	}
 	if !cThreeEnumParseIsDefective() {
 		t.Error("gotreesitter now parses a three-enumerator enum cleanly — " +
-			"DELETE cWalk.recoverEnumerators, leadingIdentifier, this test and " +
-			"TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect")
+			"DELETE c_enum_recovery.go, this test, " +
+			"TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect, " +
+			"TestC_EnumRecovery_NeverFabricatesASymbol and " +
+			"TestC_EnumRecovery_LineRangeIsTheEnumeratorsOwn")
 	}
 }
 
