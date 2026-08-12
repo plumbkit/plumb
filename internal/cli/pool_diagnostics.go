@@ -28,12 +28,24 @@ const (
 )
 
 // autoDiagnosticsMode returns the mode plumb negotiates for a language when its
-// [lsp.<lang>] diagnostics knob is "auto" (or unset). Every adapter defaults to
-// "push" today: push is the safe, universally-supported path, and moving an
-// adapter's auto policy to pull requires real-binary evidence recorded on the
-// card. This one function is the single, obvious place to change an adapter's
-// auto policy.
-func autoDiagnosticsMode(_ string) string {
+// [lsp.<lang>] diagnostics knob is "auto" (or unset). Push is the default: it is
+// the safe, universally-supported path, and moving an adapter's auto policy to
+// pull requires real-binary evidence recorded on the card. This one function is
+// the single, obvious place to change an adapter's auto policy.
+//
+// Kotlin is the sole exception, and not a preference: kotlin-lsp does not push
+// at all. Measured against the real binary on a file with two genuine errors,
+// with the client's publishDiagnostics capability advertised — zero
+// notifications in 75 s, while textDocument/diagnostic answered in 0.8 s. Left
+// on the push default it would negotiate a model the server never speaks, and
+// every diagnostics call would block for the full push timeout and return
+// nothing (push mode never issues a pull, even when the server advertises
+// diagnosticProvider — see internal/tools/diagnostics.go). Evidence:
+// internal/lsp/adapters/kotlin/doc.go.
+func autoDiagnosticsMode(language string) string {
+	if language == "kotlin" {
+		return diagModePull
+	}
 	return diagModePush
 }
 

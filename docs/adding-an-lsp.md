@@ -742,13 +742,19 @@ forced a shadowed method.
   and pruned by the pool janitor. **`--stdio` is mandatory**: the server defaults
   to a TCP socket on `127.0.0.1:9999` and **ignores unknown flags silently**, so
   a wrong invocation presents as a hang, not an error.
-- **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. `build.gradle.kts`
-  is also one of Java's, and a contested directory is resolved by whichever of
-  the two owns more source files beneath it (see `strongLangAt`), so a Kotlin
-  Gradle project attaches as Kotlin and a Java one using the Kotlin DSL as Java.
+- **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. ⚠️ `build.gradle.kts`
+  is **also one of Java's**, and marker matching resolves a contested directory
+  by language order — alphabetical — so **`java` wins, and a Kotlin Gradle
+  project's workspace primary is jdtls**. Per-file routing is unaffected (a
+  `.kt` file reaches this adapter by extension whatever owns the root), but
+  URI-less queries (`workspace_symbols`, the hierarchies) go to the primary.
+  Force Kotlin with `session_start({"language": "kotlin"})` or
+  `[lsp.java] enabled = false`. Deciding a contested root by what the project
+  actually contains is tracked separately: a first attempt was withdrawn after
+  review showed it misrouted the commonest Kotlin layout
+  (`src/main/kotlin/com/example/demo/`) and regressed polyglot Go repos.
   Deliberately NOT widened to `pom.xml` / `build.gradle`: that would contest
-  every Java project's root for the sake of the rarer Kotlin-Maven one, and a
-  `.kt` file reaches this adapter by extension whatever language owns the root.
+  every Java project's root for the sake of the rarer Kotlin-Maven one.
 - **Workspace model**: requires `rootUri` at the project root and derives the
   classpath from the build, so a bare directory of `.kt` files resolves nothing.
   Cold `--system-path`, small single-module project, Gradle's dependency cache
