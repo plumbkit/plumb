@@ -285,6 +285,20 @@ func (s *Store) Status() Status {
 // `WHERE f.path = ?`, which matches nothing and returns an empty result with no
 // error (issue #263).
 func (s *Store) toRelative(path string) string {
+	// A relative path is already index-shaped, and WorkspaceRel can never answer
+	// for one: filepath.Rel errors when the base is absolute and the target is not,
+	// so BOTH its passes fail and it returns the input unchanged — after resolving
+	// the workspace root with EvalSymlinks. That is an lstat chain per call for a
+	// guaranteed no-op, and the fswatcher hands Enqueue a relative path for every
+	// filesystem event (watcher.go relativises before calling the sink), so a
+	// checkout or an npm install pays it thousands of times on one goroutine.
+	//
+	// This guard is a cost guard, not a behaviour one: with or without it a
+	// relative path comes back unchanged, so no unit test can distinguish the two
+	// — BenchmarkToRelative_RelativeInput is what holds the line.
+	if !filepath.IsAbs(path) {
+		return path
+	}
 	if rel, inside := paths.WorkspaceRel(s.workspace, path); inside {
 		return rel
 	}

@@ -58,4 +58,34 @@ func TestStore_ToRelativeAcceptsAnAliasedPath(t *testing.T) {
 	if got := s.toRelative(outside); got != outside {
 		t.Errorf("toRelative(outside) = %q, want it returned unchanged (%q)", got, outside)
 	}
+
+	// An already-relative path — what the fswatcher hands Enqueue for every
+	// filesystem event — comes straight back.
+	if got := s.toRelative("internal/a.go"); got != "internal/a.go" {
+		t.Errorf("toRelative(relative) = %q, want it returned unchanged", got)
+	}
+}
+
+// BenchmarkToRelative_RelativeInput exists because the guard it measures cannot
+// be unit-tested: with or without `if !filepath.IsAbs(path)`, a relative path
+// comes back unchanged, so only the syscall count differs. Without the guard
+// WorkspaceRel resolves the workspace root with EvalSymlinks on every call before
+// failing both passes — an lstat chain per filesystem event, on the single
+// watcher-consumer goroutine. Measured at ~1.8 ns guarded against ~5400 ns
+// unguarded on a real workspace root; if this ever reads in microseconds again,
+// the guard has been removed.
+func BenchmarkToRelative_RelativeInput(b *testing.B) {
+	dir, err := filepath.EvalSymlinks(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	s, err := Open(dir, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, nil)
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	b.Cleanup(func() { _ = s.Close() })
+
+	for b.Loop() {
+		_ = s.toRelative("internal/auth/token.go")
+	}
 }
