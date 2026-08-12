@@ -597,6 +597,42 @@
 
 ### Fixed
 
+- **The two functions that answered "is this the same place?" have become one**
+  (issue #273). `internal/tools.canonicalRoot` and `internal/paths.Canonical`
+  were each documented as if it were the only one, and they disagreed on exactly
+  the cases each was written for. `canonicalRoot` anchored a relative path with
+  `filepath.Abs` and Cleaned before resolving symlinks; `Canonical` refuses both,
+  because anchoring resolves against the daemon's working directory — which
+  belongs to whichever client happened to spawn the singleton (issue #181) — and
+  `Clean` collapses `link/..` as a pair while the kernel follows `link` first and
+  applies `..` to wherever that landed (issue #264). `canonicalRoot` now
+  delegates, keeping only the `file://` decode the tool seam needs, and
+  `canonicalPathForBoundary` is gone.
+
+  The `..` **refusal** stays above the canonicaliser in `PathPolicy.Check`, which
+  is the property #264 landed: canonicalising such a path would silently retarget
+  the operation to a file the caller did not name. `Canonical` is an identity
+  function, not an authorisation check.
+
+  **A relative root in project config now grants nothing, where before it granted
+  access relative to the daemon's working directory.** `[workspace] extra_roots`
+  and `read_roots` are read from a file a hostile clone can carry, so
+  `"../sibling"` previously admitted a directory neither the user nor the config
+  author named — the daemon's cwd is not a location either of them chose. Such a
+  root is dropped at construction. Absolute roots are unaffected; if you relied
+  on a relative root, make it absolute.
+
+  `internal/fsguard` keeps its anchoring deliberately and delegates only the
+  resolution: `RefuseWalk` matches macOS-protected directories by exact path, so
+  an unanchored `"."` would match none and fail **open** precisely when the
+  working directory is `$HOME`. A refusal that fails open is not a refusal.
+
+  A new `internal/arch` rule pins path canonicalisation to `internal/paths`, so
+  the next copy fails a test instead of waiting for a reviewer to notice — the
+  same discipline that already covers atomic writes and byte formatting. The
+  sweep it forced found **five** matching declarations, not the two the issue
+  named.
+
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
   acquisition** (issue #263). The root was stored exactly as reported, with no
