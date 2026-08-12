@@ -393,6 +393,14 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// is refused by the policy for the life of the session — with a message
 	// telling the caller to pass a different path, which it cannot, because it
 	// never named one. Detect cleans its own input; only this fallback did not.
+	//
+	// Cleaning here is deliberately the opposite of what PathPolicy.Check does to
+	// a path ARGUMENT, which refuses rather than resolves. The asymmetry is the
+	// point: an argument is a claim about a file inside a boundary that already
+	// exists, so guessing which of two readings the caller meant could retarget a
+	// write. A root is not inside anything — it DEFINES the boundary — so there
+	// is no second file for it to be confused with, and Detect has always Cleaned
+	// its own return for the same reason.
 	d := filepath.Clean(seedDir)
 	for {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
