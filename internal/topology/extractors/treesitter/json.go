@@ -17,10 +17,20 @@ import (
 // element — tens of thousands of near-duplicate nodes carrying no more
 // search value than the first handful, since the schema repeats across
 // entries. Capping the walk keeps a small config array (docker-compose-style
-// port/volume lists, a package.json "files" list) fully indexed while
-// stopping a pathological data file from blowing out the node count; the
-// elements past the cap are simply not descended into, not dropped from the
-// source.
+// port/volume lists, a package.json "files" list) fully indexed; the elements
+// past the cap are simply not descended into, not dropped from the source.
+//
+// Be precise about what this buys, because it is easy to over-claim and the
+// other markup extractors copy this pattern: the cap is PER-ARRAY, so it
+// bounds one shape — a single long array — and nothing else. Measured on
+// synthetic documents at the 512 KiB indexer limit: one long array of records
+// → 81 nodes (capped), an object of records (the package-lock.json shape) →
+// 22,616, and ~180 short arrays of 20 elements each → 57,482. Those last two
+// are not holes this constant should close: already-shipped TOML and YAML emit
+// 25,975 and 27,325 nodes on equivalent input with no cap at all, because a
+// large config file simply holds a large number of keys. The general backstop
+// for every format is [topology] max_file_size_bytes (512 KiB by default),
+// which decides whether a file is offered to an extractor in the first place.
 const jsonMaxArrayElements = 20
 
 // JSONExtractor extracts JSON/JSONC configuration symbols using the
