@@ -276,11 +276,11 @@ func assertSpanRoundTrip(t *testing.T, got, want Node) {
 }
 
 // A database written by the release BEFORE uncovered-language stamping carries
-// rows with language='' and content_hash='' for files plumb recognises but has
+// rows with no language and no content hash for files plumb recognises but has
 // no extractor for. Those rows cannot heal on their own: an uncovered file is
-// deliberately stored with an empty hash, so isStale compares '' against '' and,
-// with an unchanged mtime, never re-examines the file. Report then counts them
-// as `unrecognised` — the confidently-wrong answer this feature exists to
+// deliberately stored with an empty hash, so isStale compares two empty hashes
+// and, with an unchanged mtime, never re-examines the file. Report then counts
+// them as `unrecognised` — the confidently-wrong answer this feature exists to
 // remove, only relabelled.
 //
 // The version gate is what fixes it, so this pins the version bump rather than
