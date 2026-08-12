@@ -12,12 +12,14 @@ import (
 // The tables in project_classification.go are guarded for completeness and
 // staleness, and oneWayBool is tested in isolation. None of that proves a
 // hostile value is refused on the way through LoadProject. It was not proven:
-// of the nine protections applyOneWayBools and forceGlobalOnlyToBase provide,
-// deleting any but one left the whole suite green — including edits.strict and
-// both fields this change was written to close.
+// of the fifteen forced/one-way assignments applyOneWayBools and
+// forceGlobalOnlyToBase make, deleting any but one left the whole suite green —
+// including edits.strict and both fields this change was written to close.
 //
 // Each case below is mutation-verified: removing its line from
-// applyOneWayBools/forceGlobalOnlyToBase fails that case and no other.
+// applyOneWayBools/forceGlobalOnlyToBase fails that case. Several also fail an
+// older, narrower test, which is fine — the claim is that no protection can be
+// deleted silently, not that exactly one test notices.
 
 // hardenedBase is a user who has deliberately TIGHTENED these settings
 // globally. Attacking against the compiled defaults is vacuous wherever the
@@ -46,6 +48,11 @@ func hardenedBase() Config {
 
 func loadHostileProject(t *testing.T, body string) Config {
 	t.Helper()
+	return projectCfgBase(t, hardenedBase(), body)
+}
+
+func projectCfgBase(t *testing.T, base Config, body string) Config {
+	t.Helper()
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
 		t.Fatal(err)
@@ -53,7 +60,7 @@ func loadHostileProject(t *testing.T, body string) Config {
 	if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadProject(hardenedBase(), ws)
+	got, err := LoadProject(base, ws)
 	if err != nil {
 		t.Fatalf("LoadProject: %v", err)
 	}
@@ -112,6 +119,14 @@ var enforcementCases = map[string]struct {
 		"[tools.client_profiles]\nclaude-code = \"lean\"\n",
 		func(c Config) bool { return len(c.Tools.ClientProfiles) > 0 },
 	},
+	// agent_config_writes decides whether the agent_config TOOL may write config
+	// at all. internal/cli/conn_config.go reads it from the MERGED project config,
+	// so a repository enabling it would hand the agent a config-writing capability
+	// the user never granted.
+	"agent_config_writes": {
+		"agent_config_writes = true\n",
+		func(c Config) bool { return c.AgentConfigWrites },
+	},
 	// [semantics] carries an API key and an outbound base URL: a project that
 	// could set them would exfiltrate query text to a host of its choosing.
 	"semantics.base_url": {
@@ -149,6 +164,37 @@ func TestLoadProject_FoldedKeysAreAlsoRefused(t *testing.T) {
 	}
 }
 
+// TestLoadProject_ForcedReferenceFieldsAreCloned pins that a forced field is a
+// COPY of the global value, not an alias of it.
+//
+// Slices and maps assigned across share their backing storage, so every
+// per-connection merged config would hold the same array/map as the global
+// store. No current consumer writes through them, but a forced field exists
+// precisely so a project cannot influence the global value — leaving it shared
+// makes that a property of caller discipline rather than of the merge.
+func TestLoadProject_ForcedReferenceFieldsAreCloned(t *testing.T) {
+	base := hardenedBase()
+	base.Workspace.ExtraRoots = []string{"/global/extra"}
+	base.Workspace.ReadRoots = []string{"/global/read"}
+	base.Tools.ClientProfiles = map[string]string{"claude-code": "full"}
+
+	got := projectCfgBase(t, base, "[workspace]\nextra_roots = [\"/hostile\"]\n")
+
+	if len(got.Workspace.ExtraRoots) > 0 {
+		got.Workspace.ExtraRoots[0] = "/mutated"
+	}
+	if got.Tools.ClientProfiles != nil {
+		got.Tools.ClientProfiles["claude-code"] = "lean"
+	}
+
+	if base.Workspace.ExtraRoots[0] != "/global/extra" {
+		t.Errorf("writing through the merged config mutated the global extra_roots: %v", base.Workspace.ExtraRoots)
+	}
+	if base.Tools.ClientProfiles["claude-code"] != "full" {
+		t.Errorf("writing through the merged config mutated the global client_profiles: %v", base.Tools.ClientProfiles)
+	}
+}
+
 // TestProjectClassification_EveryProtectedFieldIsEnforced makes the enforcement
 // table self-policing, exactly as the classification table already is: a field
 // newly marked ClassOneWay or ClassForcedGlobal must gain a case above, or the
@@ -159,11 +205,10 @@ func TestLoadProject_FoldedKeysAreAlsoRefused(t *testing.T) {
 // a deliberate act.
 func TestProjectClassification_EveryProtectedFieldIsEnforced(t *testing.T) {
 	exempt := map[string]string{
-		"ui.theme":            "presentation only; the TUI reads the global config directly",
-		"ui.path_style":       "presentation only",
-		"ui.keys":             "presentation only",
-		"web.port":            "daemon-global listener, bound before any project config loads",
-		"agent_config_writes": "read from the global config by the agent_config tool itself",
+		"ui.theme":      "presentation only; the TUI reads the global config directly",
+		"ui.path_style": "presentation only",
+		"ui.keys":       "presentation only",
+		"web.port":      "daemon-global listener, bound before any project config loads",
 		// merged.Semantics = base.Semantics replaces the struct wholesale, so the
 		// semantics.base_url case above exercises the same assignment every one of
 		// these fields depends on.

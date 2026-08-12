@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -369,8 +371,16 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// workspace the moment a session attaches, defeating the "a write outside the
 	// workspace is refused by construction" invariant. These roots are global-only
 	// (the agent_config tool already treats them as un-writable); force them to base.
-	merged.Workspace.ExtraRoots = base.Workspace.ExtraRoots
-	merged.Workspace.ReadRoots = base.Workspace.ReadRoots
+	// Cloned, not aliased. These are reference types, so assigning them shares the
+	// global store's backing array/map with every per-connection merged config; a
+	// consumer that appended to or wrote through one would mutate the global
+	// config for every other session. No current consumer does — they are all
+	// read-only, and Store.Current() is itself only a shallow copy — but a forced
+	// field exists precisely so a project cannot influence the global value, and
+	// leaving it shared makes that a property of caller discipline rather than of
+	// this function.
+	merged.Workspace.ExtraRoots = slices.Clone(base.Workspace.ExtraRoots)
+	merged.Workspace.ReadRoots = slices.Clone(base.Workspace.ReadRoots)
 	// allow_dependency_reads widens the READ boundary to the session language's
 	// toolchain roots (GOMODCACHE, the cargo registry, site-packages). It sits one
 	// field below the two above and was missed when they were forced: a user who
@@ -381,5 +391,5 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// [tools] client_profiles narrows the advertised tool set per client, and a
 	// project has no legitimate claim on which tools a given CLIENT is offered —
 	// that is a property of the client, not of the repository it has open.
-	merged.Tools.ClientProfiles = base.Tools.ClientProfiles
+	merged.Tools.ClientProfiles = maps.Clone(base.Tools.ClientProfiles)
 }

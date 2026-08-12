@@ -337,12 +337,16 @@ wrote workspace files also leaves a durable `episodic-*` markdown memory —
 redacted, provenance-stamped, indexed, and pruned to the newest
 `generated_memory_keep`.
 
-Three behaviours worth knowing (settled in 0.9.16): **per-project
-`generated_summaries` is honoured both ways** — a project may enable episodic
-summaries under a global opt-out *or* disable them under a global opt-in; only
-the idle *threshold* is global-resolved (`idle_summary_minutes` → `[session]
-idle_threshold_minutes`), and a session is always summarised before it is
-evicted, even when `eviction_ttl_minutes` is shorter than the threshold.
+Three behaviours worth knowing: **per-project `generated_summaries` is one-way**
+— a project may *disable* episodic summaries under a global opt-in, but may no
+longer *enable* them under a global opt-out. Summaries are written to disk from
+session content, so a repository turning them on for you produces an artefact
+you did not ask for; turning them off costs nothing. (This tightened the 0.9.16
+behaviour, which honoured the field in both directions — see
+`docs/project-config-trust.md`.) Only the idle *threshold* is global-resolved
+(`idle_summary_minutes` → `[session] idle_threshold_minutes`), and a session is
+always summarised before it is evicted, even when `eviction_ttl_minutes` is
+shorter than the threshold.
 **`search_memories` auto mode greps when FTS finds nothing** — a fresh index
 that returns zero FTS5 hits (the tokeniser is whole-token, so a substring like
 `essio` inside `UserSession` won't match) falls through to substring grep;
