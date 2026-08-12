@@ -127,6 +127,26 @@ real escape survived here until 2026-08-10:
 1. **Single-path calls** (`read_file`, the write tools) canonicalise the path,
    resolving symlinks, before the boundary check. A boundary test on an
    unresolved path is not a boundary test.
+
+   That canonicalisation is now also **refused rather than trusted** when it
+   cannot be faithful. `filepath.Abs` cancels `sub/..` LEXICALLY before any link
+   resolves, while the kernel resolves left to right — follows `sub`, then
+   applies `..` to wherever that landed. With `sub` a committed symlink the two
+   name different files, so the check ruled on one and the syscall touched
+   another: `write_file` wrote outside every allowed root, `read_file` disclosed
+   the target, `find_files` listed it, and a single committed `sub -> /` made the
+   whole filesystem addressable as in-workspace. `PathPolicy.Check` therefore
+   rejects an absolute path carrying an unresolved `..`, naming the cleaned form
+   as the fix. Refused rather than cleaned deliberately: cleaning would keep
+   every call working while silently retargeting the operation to a file the
+   caller never named. Relative paths are unaffected — they are anchored with
+   `filepath.Join`, which cleans, so the anchored result is the single path both
+   the check and the operation use.
+
+   Found 2026-08-12 by attacking a sibling fix's manifest handling and then
+   trying the same payload against the ordinary tools. The lesson repeats A2's
+   own opening: the mechanisms differ, and a claim true of one is not evidence
+   about the other.
 2. **Walk-based calls** (`search_in_files`, `find_files`, `find_replace`, the
    topology indexer) check the root, then check **every symlink the walk meets**,
    because only a symlink can escape a tree whose root was already checked. The
@@ -152,6 +172,47 @@ Residual: `.gitignore` and `.ignore` are repository-authored and honoured
 unconditionally by the walk, with no override exposed on the tools. A repository
 can therefore hide a file from every plumb search. plumb does not classify
 workspace content — and the workspace decides what plumb will even look at.
+
+### A2b — Attach-triggered abuse of the transaction log
+
+*A cloned repository ships `.plumb/tx-log/`, and the daemon acts on it before any
+agent step.*
+
+The sharpest shape in this document, and the one it originally failed to name.
+Every abuse case above assumes a tool call. This one needs none: `txlog.Scan`
+runs on **every attach and re-pin**, and `<workspace>/.plumb/tx-log/` is an
+ordinary directory inside the workspace, so a repository ships one by committing
+it. Opening a project was the whole exploit.
+
+Three distinct primitives lived there, all fixed in 0.16.5:
+
+1. **Directory deletion.** `Scan` treats each subdirectory as an orphaned
+   transaction and `os.RemoveAll`s those it recovers. Git stores symlinks
+   natively, so `.plumb/tx-log -> ~/Documents` had every subdirectory of the
+   target deleted; `-> ../..` needed no absolute path and so worked on any
+   machine. **No manifest was parsed** — the deletion happens while enumerating
+   candidates. Now the resolved directory must BE `<workspace>/.plumb/tx-log`.
+   Containment was not enough: "inside the workspace" admits the workspace root
+   itself, so `-> ..` still deleted `.git`.
+2. **Arbitrary file write.** The replay took `path` and `perm` straight from an
+   attacker-authored manifest — `perm: 511` plus a `#!/bin/sh` payload produced a
+   world-executable script. Now confined to the session's own `PathPolicy`,
+   injected as a guard, with the manifest's mode bits declined in favour of 0600.
+3. **Write through an inode the guard never saw.** `os.WriteFile` truncates in
+   place, so a **hardlink** at an admitted in-workspace name reached a file
+   outside every allowed root, invisible to a symlink check. Restores now use the
+   same stage-and-rename primitive as every other durable write.
+
+The write carried `//nolint:gosec` asserting the path was "validated by the
+transaction machinery". True of `Rollback`, which replays ops this process
+recorded in memory; false of the orphan path, which replays a file anyone can
+author. One suppression covered both callers — the same shape as the `//nolint`
+in gap 6 below.
+
+Residual: check-then-write remains. A process racing the daemon could swap a path
+between the guard and the syscall. Closing it needs `O_NOFOLLOW`, which is not
+portable across plumb's platforms; the gap it does close is the one that matters,
+since a hostile repository is a set of files, not a running process.
 
 ### A3 — Prompt injection steering the agent
 
@@ -349,10 +410,21 @@ Tracked, not hidden. Each is real today.
    When it does, it aggregates config, logs, session state and failure data into
    one shareable object — the single artefact most likely to leak, and the one
    needing the strictest redaction tests.
-3. **No fuzzing.** MCP framing, the argument-correction and alias engine, path
-   canonicalisation, symlink traversal, workspace roots, and transaction journals
-   all parse attacker-influenced input and have no fuzz targets or retained
-   corpora.
+3. **Fuzzing has started and covers one parser of six.** `FuzzResolveArgs`
+   (#258) fuzzes the argument-correction and alias engine, with retained corpora
+   that run under plain `make test` so every payload found stays a regression
+   test, and `make fuzz` discovers targets rather than listing them. **MCP
+   framing, path canonicalisation, symlink traversal, workspace roots and
+   transaction journals still have none.**
+
+   Worth recording why the oracle matters more than the target: the fix that
+   first target prompted was wrong twice. `dec.More()` (the stdlib defines it as
+   "the next byte is not `]` or `}`", so a trailing `}` slipped through), then
+   `bytes.TrimSpace`, which uses `unicode.IsSpace` and strips `\v`, `\f`, NBSP,
+   NEL, LS and PS — none of which JSON permits — so those bytes were gone before
+   the new check could see them. What finds that class in seconds is a
+   **differential against the parser the tools really use**, not a
+   "did not panic" assertion; the target carries one now.
 4. **No published retention or deletion controls** for stats, sessions,
    generated memories, logs, heap profiles, or bundles.
 5. **No SBOM or signed provenance** on release artefacts; checksums only.
@@ -360,11 +432,30 @@ Tracked, not hidden. Each is real today.
    author's threat model, which is the weakest kind. Treat it as a starting
    point for one, not as its result.
 
-   This is not a formality. The first adversarial pass over this document — one
-   reviewer, asked specifically to hunt for gaps it had failed to disclose —
-   found a live arbitrary-code-execution path that had been sitting behind a
-   `//nolint` comment asserting the opposite. The parsers named in gap 3 have
-   had no equivalent pass.
+   This is not a formality, and the evidence has grown. The first adversarial
+   pass over this document — one reviewer, asked specifically to hunt for gaps it
+   had failed to disclose — found a live arbitrary-code-execution path sitting
+   behind a `//nolint` comment asserting the opposite.
+
+   Since then, **six independent reviews have found defects in the FIX**, not
+   merely in the original code:
+
+   - A containment predicate that admitted the workspace root itself, so
+     `.plumb/tx-log -> ..` still deleted `.git` — a payload one character shorter
+     than the one in that fix's own regression test.
+   - A replay claiming to "mirror the write primitive" while using a different
+     one: `os.WriteFile` truncates an inode in place where `safeWrite` renames,
+     leaving a hardlink escape (A2b.3).
+   - A capability audit whose classification was complete and whose
+     ENFORCEMENT was unpinned — fourteen of fifteen protections could be deleted
+     with the suite still green.
+   - A boundary refusal that locked eight tools out of their own workspace.
+   - A fuzz target whose sharpest property had become unreachable, and a parser
+     fix that closed half its own differential.
+
+   Every one was in code its author believed finished, and each was caught by
+   someone attacking it rather than reading it. The parsers named in gap 3 have
+   still had no equivalent pass.
 
 7. **The project-config trust boundary has now been audited field by field**,
    and the enumeration is enforced rather than written down: every field of
