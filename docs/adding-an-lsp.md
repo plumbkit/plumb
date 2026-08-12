@@ -748,9 +748,12 @@ forced a shadowed method.
   `.kt` file reaches this adapter by extension whatever language owns the root.
 - **Workspace model**: requires `rootUri` at the project root and derives the
   classpath from the build, so a bare directory of `.kt` files resolves nothing.
-  `initialize` answers in 2–5 s, but the WORKSPACE takes appreciably longer, and
-  an unresolved workspace answers a pull instantly with zero items —
-  indistinguishable from "no errors".
+  Cold `--system-path`, small single-module project, Gradle's dependency cache
+  already warm (n=3): `initialize` **1.7–3.8 s**, first real diagnostics
+  **5.7–8.0 s** — a stable ~4 s gap, with no rust-analyzer-style multi-minute
+  warmup. A cold Gradle cache adds its own network resolve on top. The gap is
+  small but not zero, and until it closes a pull returns instantly with zero
+  items — indistinguishable from "no errors".
 - **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
 - **Adapter-specific surface**: the optional document-pull surface
   (`SupportsPullDiagnostics` + `Diagnostic`), and **lazy open for
