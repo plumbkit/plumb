@@ -19,12 +19,16 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		return
 	}
 	base := s.store.Current()
-	projectCfg, err := config.LoadProject(base, workspace)
+	projectCfg, policy, err := config.LoadProjectWithPolicy(base, workspace)
 	if err != nil {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
 		return
 	}
-	s.logProjectPolicy(workspace)
+	s.logProjectPolicy(workspace, policy)
+	// Resolved here, from the same load as projectCfg, and stored in the view: the
+	// command/shell/xcode gates must authorise the exact content they are about to
+	// run, not whatever the file says when the tool is later called.
+	execTrusted := config.ExecTrustedFor(workspace, policy)
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -48,6 +52,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.agentConfigWrites = projectCfg.AgentConfigWrites
 		v.commands = projectCfg.Commands
 		v.commandPolicy = projectCfg.CommandPolicy
+		v.execTrusted = execTrusted
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}
@@ -77,7 +82,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// Xcode fields are next-session settings. The first config apply for a root on
 	// this connection starts the pool-owned background flow; hot reloads do not
 	// retroactively execute newly-enabled project tooling in an existing session.
-	s.startXcodeForWorkspace(workspace, projectCfg.Xcode)
+	s.startXcodeForWorkspace(workspace, projectCfg.Xcode, execTrusted)
 	// A project config may set [tools] profile = "full" (or per-client) — tell the
 	// client to re-list when the resolved profile changed. Runs after the mutate
 	// above has returned, so it holds no lock when it calls view()/mutate().
@@ -90,9 +95,8 @@ func (s *connSession) applyProjectConfig(workspace string) {
 // config — correct, but a user debugging "my project config does nothing" needs
 // something in the daemon log to find. Silent on the common case, where the
 // project asks for none.
-func (s *connSession) logProjectPolicy(workspace string) {
-	st, err := config.ProjectPolicyStatusFor(workspace)
-	if err != nil || st.Spec.IsEmpty() {
+func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicyStatus) {
+	if st.Spec.IsEmpty() {
 		return
 	}
 	if st.Trusted {
@@ -104,7 +108,7 @@ func (s *connSession) logProjectPolicy(workspace string) {
 		"workspace", workspace, "keys", st.Spec.Keys())
 }
 
-func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig) {
+func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig, trusted bool) {
 	if s.pool == nil || workspace == "" {
 		return
 	}
@@ -119,7 +123,7 @@ func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeC
 	}
 	s.xcodeStarted[root] = true
 	s.xcodeStartedMu.Unlock()
-	s.pool.ensureXcodeBuildServer(root, cfg)
+	s.pool.ensureXcodeBuildServer(root, cfg, trusted)
 }
 
 // maybeNotifyToolProfileChange emits notifications/tools/list_changed when the

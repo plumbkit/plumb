@@ -91,10 +91,14 @@ func checkXcodeBuildServer(ws string, configured ...config.XcodeConfig) []checkR
 	if len(configured) > 0 {
 		xcodeCfg = configured[0]
 	}
-	if xcodeCfg.AutoBuildServer && !config.NewTrustStore().IsTrusted(ws) {
+	// Doctor is a one-shot CLI with no loaded session config to stay consistent
+	// with, so it asks the re-reading form. Same predicate as the daemon's gate: a
+	// coarse grant alone no longer suffices when the project itself supplies
+	// [xcode], because that content must be the content approved.
+	if xcodeCfg.AutoBuildServer && !config.ProjectExecTrusted(ws) {
 		return []checkResult{{
 			name: "Xcode build server", ok: true, warn: true,
-			detail: "automatic build-server setup is enabled but the workspace is untrusted",
+			detail: "automatic build-server setup is enabled but this workspace's current configuration is not trusted",
 			fix:    "review the workspace configuration, then run plumb trust in " + contractConfigPath(ws),
 		}}
 	}

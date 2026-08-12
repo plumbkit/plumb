@@ -7,6 +7,35 @@
      stamped heading, so a clean rebase is not evidence your entry is in
      the right section — check which heading it landed under. -->
 
+### Security
+
+- **The command allow-list, the shell gate and the Xcode build server are now
+  bound to the project config content you approved**, not to a per-workspace
+  boolean. `[[command]]`, `[commands] allow_shell`/`deny_network` and `[xcode]`
+  join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and `[collab]` in the trust hash, so
+  `plumb trust` discloses them with their values and any later edit invalidates
+  the grant until you approve it again. Closes threat-model known gap 8.
+
+  Two behaviours were live before this. Anything **added after** a grant
+  inherited it — a repository trusted for a benign `[git]` tweak could append a
+  `[[command]]` and have `run_command` execute it. And the coarse flag is set by
+  the TUI's Commands tab on **any** project-scope save, so saving one unrelated
+  setting in a freshly cloned repository blessed every `[[command]]` that
+  repository already shipped, plus `allow_shell`, plus `auto_build_server` —
+  which runs `xcodebuild`, and so that repository's own build.
+
+  The gate is now both grants together: the coarse flag still says you approved
+  execution in this workspace at all, and the hash says the request is the one
+  you approved. **A project that supplies none of these sections is unaffected**,
+  so commands from your own global config behave exactly as before. The decision
+  is resolved when the config is applied, from the same bytes as the config it
+  authorises, so a repository cannot run one set of commands while the file on
+  disk reads as something you once approved.
+
+  If you had trusted a workspace whose project config supplies any of these
+  sections, run `plumb trust` there once more — it will show you what it is
+  binding to before you approve it.
+
 ### Fixed
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would

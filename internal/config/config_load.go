@@ -278,26 +278,44 @@ func ProjectConfigPath(workspace string) string {
 // server, `plumb config show`, the TUI, the web settings API and doctor all
 // correct without any of them knowing about trust.
 func LoadProject(base Config, workspace string) (Config, error) {
+	cfg, _, err := LoadProjectWithPolicy(base, workspace)
+	return cfg, err
+}
+
+// LoadProjectWithPolicy is LoadProject plus the ProjectPolicyStatus it decided
+// on, computed from the SAME bytes as the returned config.
+//
+// A caller that must authorise something against the config it just loaded needs
+// both halves to come from one read. Re-deriving the status afterwards (via
+// ProjectPolicyStatusFor, which reads the file again) opens a window in which
+// the file changes between the two: a repository could be loaded with hostile
+// content and then restore the file to content that IS trusted, and the check
+// would pass while the loaded content is what runs. The session's exec gate
+// (sessionView.execTrusted) is the caller this exists for.
+func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicyStatus, error) {
 	merged := cloneConfig(base)
 	path := ProjectConfigPath(workspace)
 	data, present, err := readProjectConfigFile(path)
 	if err != nil {
-		return base, err
+		return base, ProjectPolicyStatus{}, err
 	}
 	raw := map[string]any{}
 	if present {
 		if err := toml.Unmarshal(data, &merged); err != nil {
-			return base, fmt.Errorf("parsing project config %s: %w", path, err)
+			return base, ProjectPolicyStatus{}, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
 		if err := toml.Unmarshal(data, &raw); err != nil {
-			return base, fmt.Errorf("parsing project config %s: %w", path, err)
+			return base, ProjectPolicyStatus{}, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
 	}
 	// The spec is computed from the same bytes that were just merged, so the
 	// content trust is checked against is exactly the content in play — a second
 	// read of the file could see a different version.
-	if spec := projectPolicySpecFrom(raw); spec.IsEmpty() ||
-		!projectPolicyTrust().IsTrustedForPolicy(workspace, spec) {
+	st := ProjectPolicyStatus{Path: path, Spec: projectPolicySpecFrom(raw)}
+	if !st.Spec.IsEmpty() {
+		st.Trusted = projectPolicyTrust().IsTrustedForPolicy(workspace, st.Spec)
+	}
+	if !st.InEffect() {
 		forceCapabilityFieldsToBase(base, &merged)
 	}
 	merged.LSP = dropUnknownLSPLanguages(base.LSP, merged.LSP)
@@ -309,9 +327,9 @@ func LoadProject(base Config, workspace string) (Config, error) {
 	applyEnv(&merged)
 	normaliseConfig(&merged)
 	if err := validate(merged); err != nil {
-		return base, fmt.Errorf("invalid project config: %w", err)
+		return base, ProjectPolicyStatus{}, fmt.Errorf("invalid project config: %w", err)
 	}
-	return merged, nil
+	return merged, st, nil
 }
 
 // readProjectConfigFile reads a project config, reporting an absent file as

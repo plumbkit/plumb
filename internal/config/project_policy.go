@@ -1,11 +1,9 @@
 package config
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -73,129 +71,6 @@ func (s ProjectPolicySpec) Describe() []string {
 		out[i] = e.Key + " = " + policyDisplay(e.Value)
 	}
 	return out
-}
-
-// Warning returns a short, plain-text reason this entry grants capability, or ""
-// when it does not warrant one. base is the trusted global config, needed to
-// judge a value that is dangerous only relative to what it replaces.
-//
-// The key is compared case-INSENSITIVELY. go-toml/v2 matches a TOML key to a
-// struct tag case-insensitively, so `[git] Allow_Push = true` reaches
-// GitConfig.AllowPush and is captured by the whole-table extraction — an exact
-// `switch e.Key` would print it with no warning at all.
-//
-// It is domain knowledge (which key is dangerous), left for the caller to format
-// — the same division as FlagsInlineInterpreter, which `plumb trust` already
-// uses to warn about a task command.
-func (e PolicyEntry) Warning(base Config) string {
-	key := strings.ToLower(e.Key)
-	if lang, field, ok := lspPolicyKey(key); ok {
-		return lspFieldWarning(lang, field)
-	}
-	switch key {
-	case "git.allow_destructive":
-		if v, ok := e.Value.(bool); ok && v {
-			return "opens the destructive git tier (reset, clean, checkout, rebase) for this repository"
-		}
-	case "git.allow_push":
-		if v, ok := e.Value.(bool); ok && v {
-			return "opens the network git tier (push, fetch, pull) — pushes use your credentials"
-		}
-	case "git.protected_branches":
-		return droppedBranchWarning(base.Git.ProtectedBranches, e.Value)
-	}
-	if field, ok := strings.CutPrefix(key, "collab."); ok {
-		return collabFieldWarning(field, e.Value)
-	}
-	return ""
-}
-
-// collabFieldWarning explains why a gated [collab] key grants capability. Split
-// out from Warning to stay within the gocyclo-15 contract, mirroring
-// lspFieldWarning.
-//
-// A field this does not recognise still warns: it reached the spec because it is
-// NOT one of the inert keys (see policyCollabFreeFields), so the honest thing to
-// say is that plumb cannot vouch for it. Each warning is phrased as what the
-// repository GAINS, since that is what the user is being asked to approve.
-func collabFieldWarning(field string, v any) string {
-	// A known switch set to false (or to a non-bool, which LoadProject will reject
-	// anyway) grants nothing, so it needs no warning. An UNRECOGNISED key is the
-	// opposite case: plumb cannot say what any value of it does, so it must warn
-	// whatever the value is — which is why this check sits inside the known cases
-	// rather than in front of them.
-	on, _ := v.(bool)
-	switch field {
-	case "cross_project":
-		if !on {
-			return ""
-		}
-		return "lets this repository's sessions receive messages from agents in OTHER projects on this machine"
-	case "mailbox":
-		if !on {
-			return ""
-		}
-		return "opens the agent-to-agent mailbox here — this repo's agents can send messages into other sessions"
-	case "intents":
-		if !on {
-			return ""
-		}
-		return "lets this repository's agents broadcast claims that other sessions are shown"
-	case "knowledge_handoff":
-		if !on {
-			return ""
-		}
-		return "lets this repository's agents write durable, cross-session-discoverable memories"
-	default:
-		return "a [collab] key plumb does not recognise as inert; it is gated because it may open a cross-agent channel"
-	}
-}
-
-// lspFieldWarning explains why a gated [lsp.<lang>] field grants capability. A
-// field this does not recognise still returns a warning: it reached the spec
-// because it is NOT one of the four provably inert keys, so the honest thing to
-// say is that plumb cannot vouch for it (see projectLSPPolicyKeys).
-func lspFieldWarning(lang, field string) string {
-	switch field {
-	case "command", "args", "env":
-		return "this is the argv/environment of a process plumb spawns as you, unsandboxed, on every attach"
-	case "initialization_options":
-		return "language servers treat initializationOptions as a command channel (rust-analyzer's check.overrideCommand runs an arbitrary argv; zls's enable_build_on_save runs this repo's build.zig)"
-	case "root_markers", "weak_root_markers":
-		return "this chooses whether the " + lang + " language server is elected for this repository"
-	default:
-		return "an [lsp." + lang + "] key plumb does not recognise as safe; it is gated because it may reach the language server's argv or environment"
-	}
-}
-
-// droppedBranchWarning reports whether a project-supplied protected_branches list
-// REMOVES a branch the global config protects.
-//
-// Warning only on an empty list was the bug: protected_branches is the complete
-// protected set (see the git tool's force-push check), so
-// `protected_branches = ["placeholder"]` unprotects main and master exactly as
-// thoroughly as `[]` does, while looking like a considered value.
-func droppedBranchWarning(global []string, v any) string {
-	list, ok := v.([]any)
-	if !ok {
-		return ""
-	}
-	kept := make(map[string]bool, len(list))
-	for _, e := range list {
-		if s, ok := e.(string); ok {
-			kept[strings.ToLower(s)] = true
-		}
-	}
-	var dropped []string
-	for _, b := range global {
-		if !kept[strings.ToLower(b)] {
-			dropped = append(dropped, b)
-		}
-	}
-	if len(dropped) == 0 {
-		return ""
-	}
-	return "removes " + strings.Join(dropped, ", ") + " from the never-force-push list"
 }
 
 // policyLSPFreeFields are the per-language [lsp.<lang>] fields that are NOT gated
@@ -310,14 +185,15 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			out = append(out, PolicyEntry{Key: "collab." + k, Value: v})
 		}
 	}
+	out = append(out, execPolicyEntries(raw)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
-// rawTables returns every top-level table in the parsed project config whose
-// name matches want case-insensitively.
+// rawValues returns every top-level value in the parsed project config whose key
+// matches want case-insensitively, WHATEVER its type.
 //
-// It returns a SLICE, not one table, because a lookup by exact name is a gate
+// It returns a SLICE, not one value, because a lookup by exact name is a gate
 // bypass. go-toml/v2 binds a table name to a struct field case-insensitively
 // exactly as it does a field name, so `[COLLAB]` decodes into Config.Collab —
 // but `raw["COLLAB"]` never matches an exact `raw["collab"]`, so those keys
@@ -329,12 +205,30 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 // TOML forbids defining the same table twice, but only for the same spelling:
 // `[collab]` and `[COLLAB]` are two distinct tables to the parser and both land
 // in the map, so every match must be walked rather than the first one taken.
+//
+// It is type-agnostic because not every gated section is a table. `[[command]]`
+// is an ARRAY of tables, which decodes to []any; the same array written inline
+// (`command = [{...}]`) decodes the same way, and a malformed `command = "x"`
+// decodes to a string. A helper that only recognised map[string]any would drop
+// all three from the spec — silently, which is the failure mode this whole file
+// exists to avoid. Taking the value whatever its shape means an unexpected type
+// is HASHED rather than ignored, so the gate fails closed on shapes nobody
+// anticipated.
+func rawValues(raw map[string]any, want string) []any {
+	var out []any
+	for k, v := range raw {
+		if strings.EqualFold(k, want) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// rawTables narrows rawValues to the matches that are tables, for the sections
+// that are walked key by key.
 func rawTables(raw map[string]any, want string) []map[string]any {
 	var out []map[string]any
-	for k, v := range raw {
-		if !strings.EqualFold(k, want) {
-			continue
-		}
+	for _, v := range rawValues(raw, want) {
 		if table, ok := v.(map[string]any); ok {
 			out = append(out, table)
 		}
@@ -374,6 +268,12 @@ func IsGatedProjectKey(dotted string) bool {
 		return true
 	case strings.HasPrefix(key, "collab."):
 		return !isFreeCollabField(strings.TrimPrefix(key, "collab."))
+	case key == "command":
+		return true
+	case strings.HasPrefix(key, "commands."):
+		return !isFreeCommandsField(strings.TrimPrefix(key, "commands."))
+	case strings.HasPrefix(key, "xcode."):
+		return true
 	}
 	return false
 }
@@ -548,33 +448,4 @@ func dropUnknownLSPLanguages(base, merged map[string]LSPConfig) map[string]LSPCo
 		}
 	}
 	return out
-}
-
-// policyDisplay renders a decoded TOML value in a compact TOML-ish form for the
-// disclosure surfaces. Strings are quoted so an argument containing a space, or
-// an empty one, is visible as such.
-func policyDisplay(v any) string {
-	switch t := v.(type) {
-	case string:
-		return strconv.Quote(t)
-	case []any:
-		parts := make([]string, len(t))
-		for i, e := range t {
-			parts[i] = policyDisplay(e)
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = k + " = " + policyDisplay(t[k])
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
-	default:
-		return fmt.Sprintf("%v", t)
-	}
 }

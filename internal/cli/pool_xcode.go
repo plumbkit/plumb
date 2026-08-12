@@ -15,15 +15,10 @@ import (
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
 
-type xcodeTrustChecker interface {
-	IsTrusted(string) bool
-}
-
 type poolXcodeState struct {
 	mu      sync.Mutex
 	states  map[string]xcodebsp.Status
 	running map[string]bool
-	trust   xcodeTrustChecker
 	runner  xcodebsp.Runner
 	restart func(string) error // nil in production; deterministic coordinator test seam
 }
@@ -32,7 +27,6 @@ func newPoolXcodeState() poolXcodeState {
 	return poolXcodeState{
 		states:  make(map[string]xcodebsp.Status),
 		running: make(map[string]bool),
-		trust:   config.NewTrustStore(),
 		runner:  xcodeArgvRunner{},
 	}
 }
@@ -58,7 +52,15 @@ func canonicalXcodeRoot(root string) string {
 
 // ensureXcodeBuildServer starts one background configuration flow per canonical
 // root. Concurrent sessions observe the same state and never generate/restart twice.
-func (p *workspacePool) ensureXcodeBuildServer(root string, cfg config.XcodeConfig) {
+//
+// trusted is passed IN rather than looked up here. Configuring the build server
+// runs xcodebuild, which runs this repository's own build, so the decision must
+// be bound to the [xcode] content the user actually approved. The session
+// resolves it at config apply from the same bytes that produced cfg
+// (config.ExecTrustedFor); a lookup inside this goroutine would authorise
+// against whatever the file said by the time it got scheduled, which is not the
+// same question.
+func (p *workspacePool) ensureXcodeBuildServer(root string, cfg config.XcodeConfig, trusted bool) {
 	if root == "" {
 		return
 	}
@@ -89,7 +91,7 @@ func (p *workspacePool) ensureXcodeBuildServer(root string, cfg config.XcodeConf
 		}
 		status := xcodebsp.Configure(ctx, xcodebsp.ConfigureRequest{
 			Root: root, Scheme: cfg.Scheme, Timeout: cfg.Timeout.Duration,
-			Enabled: cfg.AutoBuildServer, Trusted: p.xcode.trust != nil && p.xcode.trust.IsTrusted(root),
+			Enabled: cfg.AutoBuildServer, Trusted: trusted,
 		}, p.xcode.runner)
 		if status.State == xcodebsp.StateConfiguredNeedsBuildData {
 			p.setXcodeStatus(root, status)

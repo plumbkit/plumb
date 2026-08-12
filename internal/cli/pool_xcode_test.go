@@ -17,10 +17,6 @@ import (
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
 
-type staticXcodeTrust bool
-
-func (t staticXcodeTrust) IsTrusted(string) bool { return bool(t) }
-
 type blockingXcodeRunner struct {
 	root    string
 	started chan struct{}
@@ -90,14 +86,13 @@ func TestPoolXcodeSingleflightUsesSafeArgvAndOneRestart(t *testing.T) {
 		baseCtx: context.Background(),
 		entries: make(map[poolKey]*poolEntry),
 		xcode: poolXcodeState{
-			trust:   staticXcodeTrust(true),
 			runner:  runner,
 			restart: func(string) error { restartMu.Lock(); restarts++; restartMu.Unlock(); return nil },
 		},
 	}
 	cfg := config.XcodeConfig{AutoBuildServer: true, Timeout: config.Duration{Duration: time.Second}}
 
-	pool.ensureXcodeBuildServer(root, cfg)
+	pool.ensureXcodeBuildServer(root, cfg, true)
 	<-runner.started
 
 	var callers sync.WaitGroup
@@ -105,7 +100,7 @@ func TestPoolXcodeSingleflightUsesSafeArgvAndOneRestart(t *testing.T) {
 		callers.Add(1)
 		go func() {
 			defer callers.Done()
-			pool.ensureXcodeBuildServer(filepath.Join(root, "."), cfg)
+			pool.ensureXcodeBuildServer(filepath.Join(root, "."), cfg, true)
 		}()
 	}
 	callers.Wait()
@@ -139,12 +134,12 @@ func TestPoolXcodeNonXcodeWorkspaceExecutesNothing(t *testing.T) {
 	root := t.TempDir()
 	runner := &blockingXcodeRunner{root: root}
 	pool := &workspacePool{
-		baseCtx: context.Background(), xcode: poolXcodeState{trust: staticXcodeTrust(true), runner: runner},
+		baseCtx: context.Background(), xcode: poolXcodeState{runner: runner},
 	}
 
 	pool.ensureXcodeBuildServer(root, config.XcodeConfig{
 		AutoBuildServer: true, Timeout: config.Duration{Duration: time.Second},
-	})
+	}, true)
 	time.Sleep(20 * time.Millisecond)
 	if status := pool.xcodeStatus(root); status.State != "" {
 		t.Fatalf("non-Xcode workspace state = %q, want no lifecycle state", status.State)
@@ -171,9 +166,9 @@ func TestPoolXcodeDisabledAndUntrustedExecuteNothing(t *testing.T) {
 			runner := &blockingXcodeRunner{root: root}
 			pool := &workspacePool{
 				baseCtx: context.Background(),
-				xcode:   poolXcodeState{trust: staticXcodeTrust(tt.trusted), runner: runner},
+				xcode:   poolXcodeState{runner: runner},
 			}
-			pool.ensureXcodeBuildServer(root, tt.cfg)
+			pool.ensureXcodeBuildServer(root, tt.cfg, tt.trusted)
 			waitXcodeState(t, pool, root, tt.want)
 			if calls := runner.snapshot(); len(calls) != 0 {
 				t.Fatalf("runner calls = %#v, want none", calls)
@@ -214,16 +209,16 @@ func TestConnXcodeConfigAppliesOnNextSession(t *testing.T) {
 	pool := &workspacePool{
 		baseCtx: context.Background(),
 		xcode: poolXcodeState{
-			trust: staticXcodeTrust(true), runner: runner, restart: func(string) error { return nil },
+			runner: runner, restart: func(string) error { return nil },
 		},
 	}
 
 	current := &connSession{pool: pool}
-	current.startXcodeForWorkspace(root, config.XcodeConfig{})
+	current.startXcodeForWorkspace(root, config.XcodeConfig{}, true)
 	waitXcodeState(t, pool, root, xcodebsp.StateDisabled)
 	current.startXcodeForWorkspace(root, config.XcodeConfig{
 		AutoBuildServer: true, Timeout: config.Duration{Duration: time.Second},
-	})
+	}, true)
 	time.Sleep(20 * time.Millisecond)
 	if got := pool.xcodeStatus(root).State; got != xcodebsp.StateDisabled {
 		t.Fatalf("hot reload changed Xcode state to %q; setting is next-session", got)
@@ -235,7 +230,7 @@ func TestConnXcodeConfigAppliesOnNextSession(t *testing.T) {
 	next := &connSession{pool: pool}
 	next.startXcodeForWorkspace(root, config.XcodeConfig{
 		AutoBuildServer: true, Timeout: config.Duration{Duration: time.Second},
-	})
+	}, true)
 	waitXcodeState(t, pool, root, xcodebsp.StateWarming)
 	if calls := runner.snapshot(); len(calls) != 2 {
 		t.Fatalf("next session runner calls = %#v, want list + config", calls)
