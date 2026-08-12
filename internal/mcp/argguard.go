@@ -199,7 +199,9 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 // and so waves a trailing `}` through. Both shapes came from FuzzResolveArgs —
 // see its doc comment for the full account.
 func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
-	trimmed := bytes.TrimSpace(raw)
+	// JSON's whitespace set, not Unicode's: bytes.TrimSpace also strips \v, \f,
+	// NBSP, NEL, LS and PS, re-opening the differential the check below closes.
+	trimmed := bytes.Trim(raw, jsonWhitespace)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return map[string]any{}, nil
 	}

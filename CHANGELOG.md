@@ -918,9 +918,19 @@
   arguments before a tool sees them, which is what makes a rewrite worth fuzzing
   rather than merely testing.
 
-  Its sharpest assertion is that the engine never **synthesises** a safety flag
-  (`dirty_ok`, `force`, `confirm`) the caller did not supply: filling in a missing
-  guard-lifting flag would be privilege escalation, not a spelling correction.
+  Its sharpest assertion is a **differential against `json.Unmarshal`**, the
+  parser every tool actually uses: whenever the guard accepts bytes the stdlib
+  rejects, it has silently sanitised something on the way through. The one
+  divergence that is deliberate — MCP allows `arguments` to be absent, so empty
+  input becomes an empty object — is exempted by name rather than by weakening
+  the comparison.
+
+  A second property holds that the engine never **synthesises** a safety flag
+  (`dirty_ok`, `force`, `confirm`) with no input key to account for it: filling
+  in a missing guard-lifting flag would be privilege escalation, not a spelling
+  correction. Note what it does NOT say — the engine legitimately normalises
+  `dirtyok`, `dirty-ok` and `DirtyOk` **into** `dirty_ok`, because that is what
+  an alias engine is for. What it forbids is a flag appearing from nothing.
 
   `make fuzz` **discovers** targets rather than listing them (`FUZZTIME=60s` by
   default), because a hand-maintained list stops covering a target the day
@@ -936,20 +946,37 @@
   bytes meant.** `decodeArgsObject` validated arguments with a `json.Decoder`,
   which stops at the end of the first value and ignores whatever follows, while
   tools decode with plain `json.Unmarshal`, which refuses trailing data. So
-  `{"file_path":"a"}garbage` passed the guard — and then failed inside the tool
-  with a bare JSON error instead of this layer's remediation-bearing one.
+  `{"file_path":"a"}garbage` passed the guard.
 
-  Worse, the outcome depended on something unrelated. When an alias rewrite fired,
+  The outcome then depended on something unrelated: when an alias rewrite fired,
   `resolveArgs` re-marshalled the decoded map and **silently dropped** the
   trailing bytes, so the identical input was accepted or rejected according to
   whether the caller happened to spell a parameter with an alias.
 
-  Found by `FuzzResolveArgs` within a second of its first run — and the first
-  attempt at the fix, `dec.More()`, was wrong: the standard library defines it as
-  "the next byte is not `]` or `}`", because it exists to iterate a container's
-  elements, so it reported "nothing more" for a trailing `}` and let
-  `{"file_path":"a"} }` through. The fuzzer found that hole nine seconds into the
-  next run. Both payloads are retained as corpus.
+  **Scope, stated honestly:** no tool ever received those bytes. `params.Arguments`
+  is a `json.RawMessage` produced by a successful `json.Unmarshal` of the request
+  envelope, and such a value holds exactly one JSON value with nothing after it —
+  a request carrying trailing data is rejected one layer earlier. This is
+  defence in depth and an internal inconsistency removed, not a shipped bug that
+  reached a tool.
+
+  Found by `FuzzResolveArgs` within a second of its first run — and **the fix
+  needed three attempts, each found by a fuzzer or a reviewer, not by reasoning**:
+
+  1. `dec.More()` was wrong. The standard library defines it as "the next byte is
+     not `]` or `}`", because it exists to iterate a container's elements, so it
+     reported "nothing more" for a trailing `}` and let `{"file_path":"a"} }`
+     through. The fuzzer found that nine seconds into the next run.
+  2. A second `Decode` to `io.EOF` fixed that — but the input was first trimmed
+     with `bytes.TrimSpace`, which uses `unicode.IsSpace` and therefore strips
+     `\v`, `\f`, NBSP, NEL, LS and PS. **JSON permits only space, tab, CR and
+     LF**, so those bytes were removed before the new check could see them and
+     the differential was still live — including the alias-dependent half. An
+     independent review found this; the parity property above is what would have
+     caught it, and is now part of the target.
+  3. Trimming against JSON's own whitespace set closes it.
+
+  Every payload is retained as corpus.
 
 ### Changed
 
