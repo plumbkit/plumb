@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // --- shouldSkipDir ---
@@ -112,7 +114,24 @@ func TestIndexer_PopulatesLanguageInStatus(t *testing.T) {
 // indexed and, worse, stops being re-checked in a way that could not self-heal),
 // and it must not be counted under IndexedFiles (the confident-wrong answer this
 // work exists to remove).
-func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
+// The coverage programme is complete: every language in the registry has an
+// extractor, so langsupport.Uncovered() is empty and uncoveredLanguage() can
+// never return a name. This test used to need a WITNESS — a recognised but
+// unindexed language — and it moved as extractors landed: .rb, then .php, then
+// .scala, going red each time as the registry pin did its job.
+//
+// The mechanism is still here and still correct. What changes is what can be
+// asserted about it: with nothing uncovered, a file whose extractor is not
+// wired must be RECORDED but NOT blamed on coverage. That second half is the
+// one worth keeping — the empty content hash is what lets a later extractor
+// pick the file up on the next resync without anything marking it dirty, and
+// it was never directly pinned before.
+func TestIndexer_UncoveredPathIsDormantAndFilesStayRetryable(t *testing.T) {
+	if got := len(langsupport.Uncovered()); got != 0 {
+		t.Fatalf("Uncovered() = %d languages, want 0 — a new uncovered row was added, so this "+
+			"test should go back to naming it as the witness and asserting the gap is reported", got)
+	}
+
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
 	if err != nil {
@@ -123,12 +142,9 @@ func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "user.scala"), []byte("object User {}\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// Only a Go extractor is wired, so Scala reaches the uncovered path exactly
-	// as it does in production. The witness has to be a language that is still
-	// uncovered: this test first used .rb and correctly went red the moment the
-	// Ruby extractor landed, then .php and went red again when the PHP extractor
-	// landed. That is the registry pin doing its job rather than a fault —
-	// whoever wires Scala should move it on again.
+	// Only a minimal extractor is wired, so Scala takes the no-extractor path
+	// exactly as it does in production — but Scala is now an INDEXED language,
+	// so that path must not report a coverage gap.
 	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	if err := idx.processUpsert(context.Background(), "user.scala"); err != nil {
 		t.Fatalf("processUpsert: %v", err)
@@ -140,26 +156,53 @@ func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
 	).Scan(&lang, &hash, &errMsg); err != nil {
 		t.Fatalf("the file must still be recorded, so a later extractor can pick it up: %v", err)
 	}
-	if lang != "scala" {
-		t.Errorf("language = %q, want \"scala\" — without the name the coverage gap cannot be reported", lang)
+	if lang != "" {
+		t.Errorf("language = %q, want empty — no language is uncovered, so nothing should be stamped as one", lang)
 	}
 	if hash != "" {
-		t.Errorf("content_hash = %q, want empty — the empty hash is what makes this self-heal when Scala is wired", hash)
+		t.Errorf("content_hash = %q, want empty — the empty hash is what makes the file re-index for free", hash)
 	}
 	if errMsg != "" {
-		t.Errorf("error_msg = %q, want empty — an uncovered language is a limitation, not a failure", errMsg)
+		t.Errorf("error_msg = %q, want empty — a missing extractor is a limitation, not a failure", errMsg)
 	}
 
 	s := Report(db, dir, idx)
-	if s.IndexedFiles != 0 {
-		t.Errorf("IndexedFiles = %d, want 0 — nothing was parsed", s.IndexedFiles)
-	}
-	if got := s.UncoveredFiles["scala"]; got != 1 {
-		t.Errorf("UncoveredFiles[scala] = %d, want 1", got)
+	if len(s.UncoveredFiles) != 0 {
+		t.Errorf("UncoveredFiles = %v, want empty — nothing is uncovered", s.UncoveredFiles)
 	}
 	if slices.Contains(s.Languages, "scala") {
-		t.Error("scala contributed no symbols; listing it as an indexed language is the answer that misleads")
+		t.Error("this file contributed no symbols; listing it as an indexed language is the answer that misleads")
 	}
+
+	// The retryable half: wire an extractor for the file and re-run with the
+	// bytes and mtime untouched. The empty hash must make it stale, so it heals
+	// with no external prompt.
+	idx2 := newIndexer(dir, db, []Extractor{&minimalExtractor{}, &scalaishExtractor{}}, 512*1024, 0)
+	if err := idx2.processUpsert(context.Background(), "user.scala"); err != nil {
+		t.Fatalf("processUpsert after wiring an extractor: %v", err)
+	}
+	var nodes int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM topology_nodes n JOIN topology_files f ON f.id = n.file_id
+		 WHERE f.path = 'user.scala'`).Scan(&nodes); err != nil {
+		t.Fatalf("count nodes: %v", err)
+	}
+	if nodes == 0 {
+		t.Error("the file did not re-index once an extractor existed; the empty-hash self-heal is broken")
+	}
+}
+
+// scalaishExtractor stands in for a newly wired extractor: it claims .scala and
+// emits one node, which is all the self-heal assertion needs.
+type scalaishExtractor struct{}
+
+func (scalaishExtractor) Language() string     { return "scala" }
+func (scalaishExtractor) Extensions() []string { return []string{".scala"} }
+func (scalaishExtractor) Extract(_ context.Context, relPath string, _ []byte) ([]Node, []Edge, error) {
+	return []Node{{
+		Kind: KindType, Name: "User", Language: "scala", Path: relPath, StartLine: 1, EndLine: 1,
+		StartByte: 0, EndByte: 15, HasBytes: true,
+	}}, nil, nil
 }
 
 // An unrecognised file is a third case, and must not be mistaken for a coverage

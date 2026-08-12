@@ -3,6 +3,8 @@ package tools
 import (
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // The tests here all guard one property: when plumb cannot index a language, it
@@ -10,17 +12,31 @@ import (
 // limitation; it cannot route around silence, and every one of these surfaces
 // previously returned a confident-looking empty answer instead.
 
-// The witness must be a language that is still uncovered. This test used .rb
-// until the Ruby extractor landed and correctly went red — the registry pin
-// working, not a fault. Whoever wires Scala should move it on again.
-func TestUncoveredOutlineNote_NamesTheGapForAnUnindexedLanguage(t *testing.T) {
-	note := uncoveredOutlineNote("file:///ws/app/models/User.scala")
-	if note == "" {
-		t.Fatal("a .scala file has no extractor; the empty outline must be explained, not left bare")
+// This test used to need a WITNESS — a language plumb recognised but had no
+// extractor for — and it moved as the coverage programme landed: .rb, then
+// .php, then .scala, going red each time as the registry pin did its job.
+//
+// There is no witness left. Every language in the registry is now indexed, so
+// Uncovered() is empty and this note can never fire. That is the programme
+// completing, not the mechanism breaking, and the mechanism is still here and
+// still correct — the moment a new EngineNone row is added, the note starts
+// firing again and the assertion below starts failing, which is exactly the
+// signal whoever adds that language wants.
+//
+// So the property under test inverts: the note must stay SILENT while nothing
+// is uncovered.
+func TestUncoveredOutlineNote_SilentWhileEveryLanguageIsIndexed(t *testing.T) {
+	if got := len(langsupport.Uncovered()); got != 0 {
+		t.Fatalf("Uncovered() = %d languages, want 0 — a new uncovered row was added, "+
+			"so this test should go back to naming it as the witness", got)
 	}
-	for _, want := range []string{"scala", "read_file", "search_in_files"} {
-		if !strings.Contains(note, want) {
-			t.Errorf("note should name %q so the agent has somewhere to go; got:\n%s", want, note)
+	for _, uri := range []string{
+		"file:///ws/app/models/User.scala",
+		"file:///ws/lib/mod.ex",
+		"file:///ws/src/Widget.cs",
+	} {
+		if note := uncoveredOutlineNote(uri); note != "" {
+			t.Errorf("%s is indexed; no coverage-gap note expected, got:\n%s", uri, note)
 		}
 	}
 }
@@ -43,13 +59,15 @@ func TestUncoveredOutlineNote_SilentForIndexedAndUnknownTypes(t *testing.T) {
 	}
 }
 
-func TestFormatFileOutline_ExplainsAnEmptyOutlineForAnUncoveredLanguage(t *testing.T) {
+// The companion to the above: with nothing uncovered, an empty outline is a
+// fact about the FILE and must not be explained away as a coverage gap.
+func TestFormatFileOutline_EmptyOutlineIsNotBlamedOnCoverage(t *testing.T) {
 	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/models/User.scala", source: "topology"})
 	if !strings.Contains(out, "(no symbols)") {
 		t.Errorf("the empty-outline line should still be present:\n%s", out)
 	}
-	if !strings.Contains(out, "coverage gap") {
-		t.Errorf("an empty Scala outline must be attributed to coverage, not read as an empty file:\n%s", out)
+	if strings.Contains(out, "coverage gap") {
+		t.Errorf("Scala is indexed; an empty outline is a fact about the file:\n%s", out)
 	}
 }
 

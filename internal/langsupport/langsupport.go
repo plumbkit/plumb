@@ -92,20 +92,27 @@ var registry = []Language{
 
 	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
+	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
-	// These rows carry no capability — they exist so that "plumb does not cover
-	// this language" is a fact the codebase can state rather than an absence an
-	// agent has to infer from an empty Map. Without them ByPath reports ok=false
-	// for a .rb file, which is indistinguishable from a binary blob, and the
-	// indexer records the file with zero symbols and no explanation.
+	// THIS BLOCK IS NOW EMPTY, and that is the coverage programme completing
+	// rather than the mechanism breaking. Every language plumb recognises has an
+	// extractor, so Uncovered() returns nothing and the "not covered:" line has
+	// nothing to report.
+	//
+	// The machinery stays because the next language added will need it. These rows
+	// carry no capability — they exist so that "plumb does not cover this
+	// language" is a fact the codebase can state rather than an absence an agent
+	// has to infer from an empty Map. Without one, ByPath reports ok=false for the
+	// file, which is indistinguishable from a binary blob, and the indexer records
+	// it with zero symbols and no explanation.
 	//
 	// Every consumer that gates on capability already tests Structural !=
 	// EngineNone, so adding a row here grants nothing. Wiring a language means
 	// flipping its row to EngineTreeSitter and adding its constructor to
 	// cli.extractorCtors — the two edits TestBuildExtractorsCoversRegistry pins
-	// together. The list is therefore the coverage roadmap, in priority order.
-	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},
+	// together.
 }
 
 // Uncovered returns the registry entries for languages plumb recognises but

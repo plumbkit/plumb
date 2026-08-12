@@ -213,6 +213,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"c":          func() topology.Extractor { return treesitter.NewC() },
 	"json":       func() topology.Extractor { return treesitter.NewJSON() },
 	"css":        func() topology.Extractor { return treesitter.NewCSS() },
+	"scala":      func() topology.Extractor { return treesitter.NewScala() },
 	"elixir":     func() topology.Extractor { return treesitter.NewElixir() },
 	"csharp":     func() topology.Extractor { return treesitter.NewCSharp() },
 	"php":        func() topology.Extractor { return treesitter.NewPHP() },

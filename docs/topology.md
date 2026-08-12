@@ -92,12 +92,15 @@ for how the two fit into plumb's layered design.
 
 ### Languages the Map does not cover
 
-The Map covers the languages listed above. For a language plumb recognises but
-has no extractor for — Scala — the files are still recorded, but they
-contribute no symbols.
+**There are currently none.** Every language plumb recognises now has an
+extractor, so `topology_status` has no coverage gap to report. This section
+stays because the machinery does, and because the next language added will need
+it.
 
-That gap is reported rather than left to be inferred, because an empty Map result
-is otherwise indistinguishable from a codebase that genuinely has nothing in it:
+For a language plumb recognises but has no extractor for, the files are still
+recorded and contribute no symbols. That gap is reported rather than left to be
+inferred, because an empty Map result is otherwise indistinguishable from a
+codebase that genuinely has nothing in it:
 
 - `topology_status` lists it as `not covered: xml (330), json (312)`, busiest
   first, and no longer counts those files under `indexed files`.

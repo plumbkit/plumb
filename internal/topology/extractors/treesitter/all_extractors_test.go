@@ -55,6 +55,10 @@ func allExtractorCases() []extractorCase {
 			"@import \"base.css\";\n\n.btn {\n  color: red;\n}\n", "base.css",
 		},
 		{
+			"scala", func() topology.Extractor { return NewScala() }, "a.scala",
+			"import scala.collection.mutable\n\nobject Svc {\n  def go(): Int = helper()\n  def helper(): Int = 1\n}\n", "scala.collection.mutable",
+		},
+		{
 			"elixir", func() topology.Extractor { return NewElixir() }, "a.ex",
 			"defmodule Svc do\n  alias MyApp.Repo\n\n  def go, do: helper()\n\n  def helper, do: 1\nend\n", "MyApp.Repo",
 		},
