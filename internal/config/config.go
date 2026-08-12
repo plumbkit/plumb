@@ -289,10 +289,10 @@ type TopologyConfig struct {
 	MaxFileSizeBytes int64 `toml:"max_file_size_bytes"`
 	// ExtractTimeoutSeconds caps how long one file's parse may take before the
 	// indexer abandons it, records it as a file error, and moves on. The size
-	// gates above bound how much source a grammar sees, not how long it spends:
-	// a pathological error-recovery path can burn tens of seconds on a file well
-	// under MaxFileSizeBytes, and the indexer runs a single worker, so one such
-	// file stalls the whole index. Default 10. 0 disables the timeout.
+	// gates above bound how much source a grammar sees, not how long it spends: a
+	// pathological error-recovery path can burn tens of seconds on a small file,
+	// and one indexer worker means such a file stalls the whole index. Default 10;
+	// 0 means the built-in 2-minute ceiling, which this may lower but not remove.
 	ExtractTimeoutSeconds int `toml:"extract_timeout_seconds"`
 	// ResyncBatch is the number of files a full resync extracts before pausing
 	// for ResyncPauseMs, so the indexer yields CPU to live tool calls on a large

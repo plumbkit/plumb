@@ -614,6 +614,18 @@
   Guarded by `TestEffectiveExtractTimeout_CeilingCannotBeRemoved` and
   `TestExtractFile_DeadlineAppliedEvenWhenTimeoutDisabled`.
 
+  **This is a semantic change to a documented setting, so every surface that
+  described the old meaning moved with it** — not only the reference docs. The
+  field registry's description is the one that mattered: a single string, but it
+  renders on four surfaces (`agent_config describe`, the TUI settings pane, the
+  web settings `help` field, and the CLI), so an agent asking plumb how to
+  configure the indexer was being told `0` disables the timeout after it no
+  longer did. The validation error, the config and indexer struct docs, and a
+  test named `...ExtractTimeoutZero_DisablesTheDeadline` (which passed only
+  because 20ms is inside two minutes) said the same. The test now asserts the
+  real contract, `effectiveExtractTimeout(0) == maxExtractTimeout`, instead of
+  asserting an absence that no longer exists.
+
 - **Tree-sitter parsers are pooled per grammar instead of rebuilt for every file,
   and a cancelled parse now stops in ~1 ms instead of running to completion.**
   `extractWith` — the envelope every tree-sitter extractor shares — called

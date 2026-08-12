@@ -132,7 +132,11 @@ func TestIndexer_ExtractTimeout_RecordsErrorAndMovesOn(t *testing.T) {
 	}
 }
 
-func TestIndexer_ExtractTimeoutZero_DisablesTheDeadline(t *testing.T) {
+// A configured 0 no longer means "no deadline" — it resolves to the
+// maxExtractTimeout ceiling. What it must still guarantee is that an ordinary
+// parse is not abandoned: the ceiling is far above any legitimate single-file
+// parse, so a 20ms extractor completes and records no error.
+func TestIndexer_ExtractTimeoutZero_UsesTheCeilingAndDoesNotAbandon(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
 	if err != nil {
@@ -145,7 +149,7 @@ func TestIndexer_ExtractTimeoutZero_DisablesTheDeadline(t *testing.T) {
 	}
 
 	idx := newIndexer(dir, db, []Extractor{&slowExtractor{delay: 20 * time.Millisecond}}, 512*1024, 0)
-	idx.extractTimeout = 0 // disabled
+	idx.extractTimeout = 0 // resolves to maxExtractTimeout, not "unbounded"
 
 	if err := idx.processUpsert(context.Background(), "slow.go"); err != nil {
 		t.Fatalf("processUpsert: %v", err)
@@ -156,7 +160,11 @@ func TestIndexer_ExtractTimeoutZero_DisablesTheDeadline(t *testing.T) {
 		t.Fatalf("query file row: %v", err)
 	}
 	if msg != "" {
-		t.Errorf("error_msg = %q, want empty — a disabled timeout must never abandon a parse", msg)
+		t.Errorf("error_msg = %q, want empty — a parse well inside the ceiling must never be abandoned", msg)
+	}
+
+	if got := effectiveExtractTimeout(0); got != maxExtractTimeout {
+		t.Errorf("effectiveExtractTimeout(0) = %v, want the %v ceiling — 0 must not mean unbounded", got, maxExtractTimeout)
 	}
 }
 

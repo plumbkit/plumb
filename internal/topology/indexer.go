@@ -33,8 +33,9 @@ type Indexer struct {
 	// extractTimeout caps one file's parse. The size gates bound how much source
 	// a grammar sees, not how long it spends on it — a pathological error-recovery
 	// path can burn tens of seconds on a file well inside maxSize — and the worker
-	// below is a single goroutine, so one such file stalls the whole index. 0
-	// disables the timeout.
+	// below is a single goroutine, so one such file stalls the whole index. This
+	// may lower the maxExtractTimeout ceiling but not remove it, so 0 resolves to
+	// the ceiling rather than to "unbounded" — see effectiveExtractTimeout.
 	extractTimeout time.Duration
 
 	queue chan indexOp
