@@ -9,6 +9,33 @@
 
 ### Added
 
+- **C# is now indexed by the topology Map** — namespaces in both the block and
+  file-scoped spellings, classes, structs, records, enums and interfaces,
+  methods, constructors, destructors, operators and indexers, properties, events
+  and fields, delegates, local functions, top-level statements, all four `using`
+  spellings as imports, and attribute-driven test detection.
+
+  Properties, events and fields are `KindConstant` when immutable (`const`,
+  `readonly`, get-only, init-only) and `KindVariable` otherwise — never
+  `KindField`, which is reserved for keys of a data-format file.
+
+  Two upstream grammar defects are worth knowing about. **Any parse error
+  collapses the `name` field of every `class_declaration` in the file**,
+  including classes that parsed perfectly before the damage; the failure is
+  silent rather than empty, so a positional "last identifier in the declaration
+  head" fallback is what keeps such a file legible. And **parse cost is
+  superlinear in construct density**, not in size or error recovery: 14 of 618
+  corpus files (2.3%) exceeded a 5-second budget, most with zero ERROR nodes, so
+  with the default `extract_timeout_seconds = 10` roughly 2% of a
+  Newtonsoft-shaped repository is recorded as an extraction error.
+
+  Measured over **618 real files** (Newtonsoft.Json, Polly, Serilog, AutoMapper):
+  9,837 nodes, 8,765 edges, **zero invalid byte spans**. Type recall is **100.0%
+  on cleanly-parsing files**, 94.1% on files carrying a parse defect, 99.9%
+  overall — a figure first measured at 99.0% and corrected upward after sampling
+  the misses, 15 of 17 of which were the grep oracle misreading `record struct X`
+  as a type named `struct`.
+
 - **Dart is now indexed by the topology Map** — classes, mixins, enums and
   extensions with their members, constructors (default, named and factory),
   getters and setters, top-level functions, type aliases, top-level variables,
