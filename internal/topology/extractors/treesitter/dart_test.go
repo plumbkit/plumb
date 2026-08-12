@@ -80,8 +80,8 @@ func TestDart_LandmarksExtracted(t *testing.T) {
 		"src/models.dart":        topology.KindImport,
 		"defaultLabel":           topology.KindConstant,
 		"Counter":                topology.KindClass,
-		"count":                  topology.KindField,
-		"label":                  topology.KindField,
+		"count":                  topology.KindVariable,
+		"label":                  topology.KindConstant,
 		"bump":                   topology.KindMethod,
 		"reset":                  topology.KindMethod,
 		"Loggable":               topology.KindClass,
@@ -352,5 +352,47 @@ func TestDart_Extensions(t *testing.T) {
 	}
 	if got := e.Extensions(); len(got) != 1 || got[0] != ".dart" {
 		t.Errorf("Extensions() = %v, want [.dart]", got)
+	}
+}
+
+// A binding's kind follows its MUTABILITY, not where it sits. KindField is for
+// keys of a data-format file; a member of a code type is KindConstant when
+// immutable and KindVariable otherwise, which is what
+// TestExtractors_MemberConventions enforces package-wide. Dart marks the
+// distinction plainly with final/const, and at file scope it puts that keyword
+// in a SIBLING node — reading the declaration's own text would call every
+// top-level binding mutable.
+func TestDart_BindingKindFollowsMutability(t *testing.T) {
+	src := []byte("const topConst = 1;\nfinal topFinal = 2;\nvar topVar = 3;\n\nclass C {\n  int mut = 0;\n  final String immut = 'x';\n  static const int SC = 4;\n  void m() { var localv = 5; }\n}\n")
+
+	nodes, _, err := NewDart().Extract(context.Background(), "a.dart", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	want := map[string]topology.NodeKind{
+		"topConst": topology.KindConstant,
+		"topFinal": topology.KindConstant,
+		"topVar":   topology.KindVariable,
+		"mut":      topology.KindVariable,
+		"immut":    topology.KindConstant,
+		"SC":       topology.KindConstant,
+	}
+	for name, kind := range want {
+		n, ok := dartNamed(nodes, name)
+		if !ok {
+			t.Errorf("%q not extracted", name)
+			continue
+		}
+		if n.Kind != kind {
+			t.Errorf("%q: kind = %q, want %q", name, n.Kind, kind)
+		}
+	}
+	for _, n := range nodes {
+		if n.Kind == topology.KindField {
+			t.Errorf("%q emitted as KindField; a code-type member is never KindField", n.Name)
+		}
+	}
+	if _, ok := dartNamed(nodes, "localv"); ok {
+		t.Error("a function-local binding should not be surfaced")
 	}
 }

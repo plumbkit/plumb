@@ -117,7 +117,11 @@ func (w *dartWalk) walkTop(n *tsg.Node, parent int64, prefix string) {
 		case "declaration":
 			w.addDeclaration(c, parent, prefix)
 		case "static_final_declaration_list", "initialized_identifier_list":
-			w.addVariables(c, parent, prefix)
+			// At file scope the `const`/`final` keyword is a SIBLING of the
+			// declaration list rather than part of it, so the modifier has to
+			// come from the preceding node — reading the list's own text would
+			// call every top-level binding mutable.
+			w.addVariables(c, parent, prefix, dartModifierBefore(kids, i, w.lang))
 		case "ERROR":
 			// Keep walking through a recovery node: the declarations inside one
 			// are still parsed correctly as their own typed nodes, so descending
@@ -244,6 +248,30 @@ func (w *dartWalk) addDeclaration(n *tsg.Node, parent int64, prefix string) {
 	}
 }
 
+// dartBindingKind decides a binding's kind from its MUTABILITY, not from where
+// it sits.
+//
+// NOT KindField, and not "field because it has a parent": that kind is for a key
+// of a data-format file, and topology.KindField's own doc comment says a member
+// of a *code* type is KindConstant when immutable and KindVariable otherwise —
+// which Java, Kotlin, Swift, Rust and Zig all follow and
+// TestExtractors_MemberConventions enforces. Dart marks the distinction plainly,
+// so there is no excuse for keying off position: `final` and `const` are the
+// immutable case at any scope, everything else is mutable.
+func dartBindingKind(decl string) topology.NodeKind {
+	for _, f := range strings.Fields(decl) {
+		switch f {
+		case "final", "const":
+			return topology.KindConstant
+		case "=", "var":
+			// Reached the initialiser or an explicit `var`; no immutable marker
+			// preceded it.
+			return topology.KindVariable
+		}
+	}
+	return topology.KindVariable
+}
+
 // addFields emits the names a field declaration binds, using the declaration
 // itself for the span so the type stays inside it.
 func (w *dartWalk) addFields(decl, list *tsg.Node, parent int64, prefix string) {
@@ -256,26 +284,43 @@ func (w *dartWalk) addFields(decl, list *tsg.Node, parent int64, prefix string) 
 		if name == "" {
 			continue
 		}
-		kind := topology.KindField
-		if parent < 0 {
-			kind = topology.KindVariable
-		}
-		w.emit(decl, decl, parent, prefix, kind, name, normaliseSpace(decl.Text(w.src)))
+		w.emit(decl, decl, parent, prefix, dartBindingKind(decl.Text(w.src)), name, normaliseSpace(decl.Text(w.src)))
 	}
 }
 
 // addVariables handles top-level `const`/`final`/`var` bindings, which arrive
 // as a bare list rather than wrapped in a declaration.
-func (w *dartWalk) addVariables(list *tsg.Node, parent int64, prefix string) {
+func (w *dartWalk) addVariables(list *tsg.Node, parent int64, prefix string, immutable bool) {
 	for _, c := range list.Children() {
 		id := firstNamedChild(c)
 		if id == nil {
 			continue
 		}
-		if name := id.Text(w.src); name != "" {
-			w.emit(c, c, parent, prefix, topology.KindConstant, name, normaliseSpace(c.Text(w.src)))
+		name := id.Text(w.src)
+		if name == "" {
+			continue
 		}
+		kind := topology.KindVariable
+		if immutable {
+			kind = topology.KindConstant
+		}
+		w.emit(c, c, parent, prefix, kind, name, normaliseSpace(c.Text(w.src)))
 	}
+}
+
+// dartModifierBefore reports whether the node at index i is preceded by a
+// `const` or `final` marker, which at file scope is where Dart puts it: the
+// keyword is the declaration list's immediately preceding sibling, and anything
+// else there (`inferred_type` for `var`, or another declaration) means mutable.
+func dartModifierBefore(kids []*tsg.Node, i int, lang *tsg.Language) bool {
+	if i == 0 {
+		return false
+	}
+	switch kids[i-1].Type(lang) {
+	case "const_builtin", "final_builtin":
+		return true
+	}
+	return false
 }
 
 // addImport records `import`, `export` and `part`. An export is a re-export and
