@@ -46,6 +46,7 @@ public:
 private:
   double x_;
   double y_;
+  const int kMaxPoints = 64;
 };
 
 struct Pair {
@@ -167,8 +168,8 @@ func TestCpp_KindsExtracted(t *testing.T) {
 		{topology.KindMethod, "operator+"},
 		{topology.KindMethod, "origin"},
 		{topology.KindMethod, "sum"}, // inline member definition
-		{topology.KindField, "x_"},
-		{topology.KindField, "a"},
+		{topology.KindVariable, "x_"},
+		{topology.KindVariable, "a"},
 		{topology.KindFunction, "identity"}, // function template
 		{topology.KindFunction, "counter"},  // reference return
 		{topology.KindVariable, "instances_"},
@@ -196,7 +197,7 @@ func TestCpp_NamespaceQualifiesButEmitsNoSymbol(t *testing.T) {
 	}{
 		{topology.KindClass, "Point", "geom::Point"},
 		{topology.KindMethod, "sum", "geom::Pair::sum"},
-		{topology.KindField, "x_", "geom::Point::x_"},
+		{topology.KindVariable, "x_", "geom::Point::x_"},
 		{topology.KindConstant, "Red", "geom::Colour::Red"},
 		{topology.KindConstant, "kPi", "geom::kPi"},
 	} {
@@ -217,8 +218,8 @@ func TestCpp_ClassMembersAreOwnedByTheirClass(t *testing.T) {
 	}{
 		{topology.KindMethod, "norm"},
 		{topology.KindMethod, "origin"},
-		{topology.KindField, "x_"},
-		{topology.KindField, "y_"},
+		{topology.KindVariable, "x_"},
+		{topology.KindVariable, "y_"},
 	} {
 		child := cppIndexOf(nodes, w.kind, w.name)
 		if !cppHasEdge(edges, topology.EdgeContains, point, child) {
@@ -570,4 +571,37 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// A member's kind follows its mutability, not where it sits. KindField is for
+// keys of a data-format file; topology.KindField's own doc comment says a member
+// of a code type is KindConstant when immutable and KindVariable otherwise, and
+// TestExtractors_MemberConventions enforces that across the package — C++ is now
+// in that table, which is what stops this drifting back.
+func TestCpp_MemberKindFollowsMutability(t *testing.T) {
+	nodes, _ := cppExtract(t)
+
+	var immutable, mutable bool
+	for _, n := range nodes {
+		switch n.Name {
+		case "kMaxPoints":
+			immutable = n.Kind == topology.KindConstant
+			if n.Kind != topology.KindConstant {
+				t.Errorf("const member kind = %q, want %q", n.Kind, topology.KindConstant)
+			}
+		case "x_":
+			mutable = n.Kind == topology.KindVariable
+			if n.Kind != topology.KindVariable {
+				t.Errorf("mutable member kind = %q, want %q", n.Kind, topology.KindVariable)
+			}
+		}
+	}
+	if !immutable || !mutable {
+		t.Fatalf("fixture must exercise both cases: immutable=%v mutable=%v", immutable, mutable)
+	}
+	for _, n := range nodes {
+		if n.Kind == topology.KindField {
+			t.Errorf("%q emitted as KindField; a code-type member is never KindField", n.Name)
+		}
+	}
 }

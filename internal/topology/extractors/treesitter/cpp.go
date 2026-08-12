@@ -296,13 +296,16 @@ func (w *cppWalk) addDecl(n, outer *tsg.Node, sc cppScope) {
 		return
 	}
 	name := lastSegment(raw)
+	// Mutability decides the kind, in or out of a class. NOT KindField: that kind
+	// is for a key of a data-format file (a SQL column, a TOML key), and
+	// topology.KindField's own doc comment says a member of a *code* type is
+	// KindConstant when immutable and KindVariable otherwise — which Java and
+	// Kotlin follow and TestExtractors_MemberConventions enforces. Keying off
+	// where the member sits rather than whether it is const put C++ outside that
+	// convention, and the guard could not catch it because C++ was not in the
+	// table.
 	kind := topology.KindVariable
-	switch {
-	case sc.inClass:
-		// A member declared const is still a field; where it sits matters more
-		// to a reader than its mutability.
-		kind = topology.KindField
-	case w.isConstDecl(n):
+	if w.isConstDecl(n) {
 		kind = topology.KindConstant
 	}
 	w.emit(kind, name, cppQualify(sc.prefix, raw), normaliseSpace(n.Text(w.src)), outer, sc.parent)

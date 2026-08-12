@@ -315,6 +315,11 @@ func TestExtractors_MemberConventions(t *testing.T) {
 			"immut", "mutv", "localc",
 		},
 		{
+			"cpp", func() topology.Extractor { return NewCpp() }, "c.cpp",
+			"class C {\n  const int IMMUT = 1;\n  int mut = 2;\n  void m() { int localv = 3; }\n};\n",
+			"IMMUT", "mut", "localv",
+		},
+		{
 			"java", func() topology.Extractor { return NewJava() }, "C.java",
 			"class C {\n  final int IMMUT = 1;\n  int mut = 2;\n  void m() { int localv = 3; }\n}\n",
 			"IMMUT", "mut", "localv",
