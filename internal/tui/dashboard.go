@@ -12,12 +12,18 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // detectWorkspaceFolder walks up from the current working directory looking
 // for a .plumb/ marker, go.mod, pyproject.toml, or setup.py to identify the
 // active project workspace.
+//
+// The result is canonicalised because it is compared against session.Folder,
+// which the daemon's pool resolved (issue #263). Launched from an aliased cwd
+// — macOS /tmp, a symlinked checkout — an un-canonicalised answer makes the TUI
+// list one project twice in the memory workspace picker.
 func detectWorkspaceFolder() string {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -26,7 +32,7 @@ func detectWorkspaceFolder() string {
 	for {
 		for _, marker := range []string{".plumb", "go.mod", "pyproject.toml", "setup.py"} {
 			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				return dir
+				return paths.Canonical(dir)
 			}
 		}
 		parent := filepath.Dir(dir)
