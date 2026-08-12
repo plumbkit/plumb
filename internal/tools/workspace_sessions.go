@@ -271,7 +271,8 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 	}
 	if mailboxOn && t.selfName != nil {
 		if name := t.selfName(); name != "" {
-			notes, err := store.PendingNotes(ctx, name, t.workspace(), now)
+			who := collab.Claimant{Name: name, ID: t.selfSessID, Workspace: t.workspace()}
+			notes, err := store.PendingNotes(ctx, who, now)
 			if err == nil {
 				writeCollabNotes(&sb, notes, now)
 			}

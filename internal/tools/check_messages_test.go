@@ -32,7 +32,7 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 
 	deps := CollabDeps{
 		Workspace:           func() string { return ws },
-		PeerWorkspace:       func(string) (string, bool) { return "", false },
+		ResolvePeer:         func(string) (PeerSession, bool) { return PeerSession{}, false },
 		SessionName:         func() string { return self },
 		SessionID:           "sess-" + self,
 		Policy:              func() CollabPolicy { return policy },
@@ -242,7 +242,7 @@ func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
 
 	// bob wrote to alice from another project, then disconnected.
 	conv := put(t, global, "bob", "alice", "question from my repo", "", "/proj/bob", myWS)
-	deps.PeerWorkspace = func(string) (string, bool) { return "", false } // bob is gone
+	deps.ResolvePeer = func(string) (PeerSession, bool) { return PeerSession{}, false } // bob is gone
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"to":"bob","body":"my answer","conversation_id":`+jsonStr(conv)+`}`))
@@ -255,14 +255,14 @@ func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
 
 	// It must be in the cross-project store addressed back to bob's workspace —
 	// NOT in alice's own mailbox where bob could never see it.
-	back, err := global.ClaimNotes(context.Background(), "bob", "/proj/bob", time.Now(), 0)
+	back, err := global.ClaimNotes(context.Background(), collab.Claimant{Name: "bob", Workspace: "/proj/bob"}, time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(back) != 1 || back[0].Body != "my answer" {
 		t.Fatalf("bob should be able to claim the reply in his workspace; got %v", back)
 	}
-	stray, err := local.ClaimNotes(context.Background(), "bob", myWS, time.Now(), 0)
+	stray, err := local.ClaimNotes(context.Background(), collab.Claimant{Name: "bob", Workspace: myWS}, time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
 // "delivered to the agent I meant".
 func TestLeaveNote_UnplaceablePeerSaysSo(t *testing.T) {
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
-	deps.PeerWorkspace = func(string) (string, bool) { return "", false }
+	deps.ResolvePeer = func(string) (PeerSession, bool) { return PeerSession{}, false }
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"to":"ghost","body":"hello?"}`))
@@ -322,5 +322,62 @@ func TestLeaveNote_ExchangeBudgetRefusesReply(t *testing.T) {
 	}
 	if strings.Contains(fresh, "NOT sent") {
 		t.Errorf("a fresh conversation must not inherit a spent budget; got %q", fresh)
+	}
+}
+
+// TestCheckMessages_UnregisteredSessionHasNoAddress. A session whose
+// registration failed keeps a display name for the TUI and logs, but that name
+// entered no file any peer's uniqueness check can see, so it may duplicate a
+// live session's. Claiming is destructive — a message is handed over exactly
+// once — so an addressable shadow silently swallows the real recipient's mail.
+// Every other delivery path takes its address from connSession.inbox, which
+// withholds one here; check_messages built its own from the display name and was
+// the single lane around that gate.
+func TestCheckMessages_UnregisteredSessionHasNoAddress(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	deps.SessionID = "" // session.Register failed
+	put(t, local, "bob", "alice", "meant for the real alice", "", "", "")
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "meant for the real alice") {
+		t.Fatalf("an unregistered session claimed a live peer's message: %q", out)
+	}
+	if !strings.Contains(out, "not registered") {
+		t.Errorf("the refusal should say why there is no address; got %q", out)
+	}
+
+	// And the message is still there for whoever legitimately holds the name.
+	got, err := local.ClaimNotes(context.Background(),
+		collab.Claimant{Name: "alice", ID: "sess-alice"}, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the real recipient claimed %d messages, want 1 — the shadow consumed it", len(got))
+	}
+}
+
+// TestCheckMessages_DeliversABoundMessageToItsOwnSession pins the wiring, not
+// the predicate: the inbox must present this session's ID as well as its name.
+// Dropping it fails in the quiet direction — bound messages simply never arrive,
+// for anyone — which no test of the impersonation case would ever catch.
+func TestCheckMessages_DeliversABoundMessageToItsOwnSession(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "bound and addressed to me",
+		Addressee: "alice", AddresseeID: deps.SessionID, TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "bound and addressed to me") {
+		t.Fatalf("a message bound to this very session must be delivered; got %q", out)
 	}
 }

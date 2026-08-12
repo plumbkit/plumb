@@ -1526,6 +1526,53 @@
   mismatch as the bug, one layer down.
 
 
+### Security
+
+- **A message left for a peer could be read by whoever next took that peer's
+  name.** `collab_rows.addressee` held a session NAME, and `ClaimNotes` matched
+  on it alone. Names are drawn from a pool of a few thousand, an ended session
+  does not reserve its name, and `rename_session` lets any live session take a
+  free one — so a note whose recipient exited before reading it was handed, body
+  included, to the next holder of that name. Messages outlive sessions (a row
+  stays until its TTL), delivery is exactly-once, and the sender saw
+  `delivered_to = "alice"` — so the intended recipient never got it and nothing
+  in the exchange said so. Accidental collision was unlikely; deliberate
+  impersonation was one `rename_session` call and undetectable to the sender.
+
+  Schema **v3** adds `addressee_id`. `leave_note` resolves the addressee to a
+  live session at send time and stamps its stable ID; `ClaimNotes` and
+  `PendingNotes` now hand over a row only when it is unbound **or** bound to the
+  claiming session's own ID. `PendingNotes` had to move in step or
+  `workspace_sessions` would advertise — sender and body — a message the reader
+  could never claim.
+
+  **The binding is only ever stamped on a peer that is live and resolves to
+  exactly one session.** Addressing a peer that has not attached yet is
+  legitimate and stays name-only; so does `next`, which is a first-claimer race
+  by design and which `PutNote` therefore un-binds itself rather than trusting
+  callers; so does a peer placed from conversation history, since history proves
+  where a name *used to* be, not who holds it now. An ambiguous name resolves to
+  nothing rather than to a guess — binding to the wrong session would misdeliver
+  while reporting success. The trade is stated in the tool's reply: a bound
+  message **expires unread if its recipient never returns**, which is the right
+  failure for a private message.
+
+  Migration is additive and idempotent in the established shape — driven by which
+  columns exist rather than by the stamped version, and tolerant of a second
+  opener racing between the pragma read and the `ALTER`. `collab.db` is not a
+  rebuildable index; its rows are the only copy. Every pre-v3 row backfills to
+  `''` and keeps delivering by name, so nothing already in flight was stranded.
+
+- **`check_messages` was the one delivery path that could claim mail for a name
+  it did not own.** It built its inbox from the raw display name, while every
+  other path (the tool-result block, `session_start`) takes its address from
+  `connSession.inbox`, which withholds one when `session.Register` failed. Such a
+  session's name was drawn without a uniqueness check and sits in no file any
+  peer's check can see, so it can shadow a live session — and because claiming is
+  destructive, the shadow swallowed the real recipient's message. It now refuses
+  with the reason instead of claiming.
+
+
 ## 0.16.5 (2026-08-12)
 
 ### Security

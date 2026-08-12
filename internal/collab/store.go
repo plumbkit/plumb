@@ -24,54 +24,6 @@ import (
 // row always lives at least this long.
 const minTTL = time.Minute
 
-const schema = `
-CREATE TABLE IF NOT EXISTS collab_rows (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind           TEXT    NOT NULL,
-    author_session TEXT    NOT NULL DEFAULT '',
-    author_id      TEXT    NOT NULL DEFAULT '',
-    body           TEXT    NOT NULL DEFAULT '',
-    path_globs     TEXT    NOT NULL DEFAULT '',
-    addressee      TEXT    NOT NULL DEFAULT '',
-    created_at     INTEGER NOT NULL DEFAULT 0,
-    expires_at     INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_collab_kind    ON collab_rows(kind);
-CREATE INDEX IF NOT EXISTS idx_collab_expires ON collab_rows(expires_at);
-CREATE INDEX IF NOT EXISTS idx_collab_author  ON collab_rows(author_id);
-`
-
-// chatColumns are the schema-v2 additions that turn a one-way note into a
-// threaded, read-tracked message. They are applied by ALTER TABLE rather than
-// folded into the CREATE above so that an existing v1 collab.db — which is NOT a
-// rebuildable index; its rows are the only copy of the data — migrates in place
-// instead of being dropped and recreated. Adding a column with a NOT NULL
-// DEFAULT backfills every existing row, so a legacy note lands with an empty
-// conversation, a zero delivered_at (i.e. unread) and no origin workspace —
-// exactly the values a note written before threading existed should carry.
-var chatColumns = []struct{ name, ddl string }{
-	{"conversation_id", `ALTER TABLE collab_rows ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`},
-	{"delivered_at", `ALTER TABLE collab_rows ADD COLUMN delivered_at INTEGER NOT NULL DEFAULT 0`},
-	{"delivered_to", `ALTER TABLE collab_rows ADD COLUMN delivered_to TEXT NOT NULL DEFAULT ''`},
-	{"origin_workspace", `ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`},
-	{"target_workspace", `ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`},
-}
-
-// chatIndexes accelerate the two hot chat queries: "what is unread for me" and
-// "how many exchanges has this conversation had". Created after the columns
-// exist, so they are separate from the base schema above.
-const chatIndexes = `
-CREATE INDEX IF NOT EXISTS idx_collab_inbox ON collab_rows(addressee, delivered_at, expires_at);
-CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
-`
-
-// schemaVersion is the current on-disk collab schema version, stamped in PRAGMA
-// user_version. Unlike topology.db, collab.db is NOT a rebuildable index — its
-// rows are the only copy of expiring advisory data — so a schema change must
-// migrate additively rather than dropping the table. v1 was the initial shape;
-// v2 adds the chat columns (see chatColumns), applied in place.
-const schemaVersion = 2
-
 // Store is the per-workspace collab.db handle.
 //
 // Concurrency: safe for concurrent use — every method runs a self-contained
@@ -124,73 +76,6 @@ func Open(workspace string) (*Store, error) {
 	return &Store{db: db, ws: workspace}, nil
 }
 
-func initDB(db *sql.DB) error {
-	if _, err := db.Exec(schema); err != nil {
-		return fmt.Errorf("collab: apply schema: %w", err)
-	}
-	if err := migrateChatColumns(db); err != nil {
-		return err
-	}
-	if _, err := db.Exec(chatIndexes); err != nil {
-		return fmt.Errorf("collab: apply chat indexes: %w", err)
-	}
-	// Stamped unconditionally: it records what wrote the file. The migration above
-	// is driven by which columns actually exist rather than by this stamp, so a
-	// file written by a future plumb and reopened by an older one cannot be
-	// mis-migrated on the strength of a version number alone.
-	return sqlitex.StampVersion(db, schemaVersion)
-}
-
-// migrateChatColumns adds any schema-v2 chat column the table is missing. It is
-// driven by PRAGMA table_info rather than the stamped version so it is
-// idempotent and safe to run on every open, including on a v1 file that a
-// crashed migration left half-way.
-func migrateChatColumns(db *sql.DB) error {
-	have, err := collabRowsColumns(db)
-	if err != nil {
-		return err
-	}
-	for _, c := range chatColumns {
-		if have[c.name] {
-			continue
-		}
-		if _, err := db.Exec(c.ddl); err != nil {
-			// SQLite has no ADD COLUMN IF NOT EXISTS, so the inspection above and
-			// this ALTER are two steps another process opening the same collab.db can
-			// slip between — the loser gets "duplicate column name" and, without this,
-			// its whole Open fails on work that has in fact been done. Re-inspect
-			// rather than matching the driver's message text: if the column is present
-			// now, a peer added it and there is nothing left to do; if it is still
-			// absent, the failure is genuine and propagates.
-			if after, qErr := collabRowsColumns(db); qErr == nil && after[c.name] {
-				continue
-			}
-			return fmt.Errorf("collab: add column %s: %w", c.name, err)
-		}
-	}
-	return nil
-}
-
-// collabRowsColumns returns the set of column names currently on collab_rows.
-// It drives the migration, which must be decided by what the table actually has
-// rather than by the stamped schema version.
-func collabRowsColumns(db *sql.DB) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info('collab_rows')`)
-	if err != nil {
-		return nil, fmt.Errorf("collab: inspect collab_rows: %w", err)
-	}
-	defer rows.Close()
-	out := make(map[string]bool)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("collab: inspect collab_rows: %w", err)
-		}
-		out[name] = true
-	}
-	return out, rows.Err()
-}
-
 // Close releases the database handle.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
@@ -241,8 +126,8 @@ var ErrConversationFull = errors.New("collab: conversation has reached its excha
 // exchange budget can be appended to the SAME statement as a WHERE clause.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
                           addressee, created_at, expires_at, conversation_id, origin_workspace,
-                          target_workspace)
-	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?`
+                          target_workspace, addressee_id)
+	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?`
 
 // budgetGuard suppresses the insert when the thread has already spent its
 // budget. It counts only UNEXPIRED rows, so the budget reads the same whether or
@@ -259,6 +144,14 @@ const budgetGuard = `
 // sender quotes to continue the thread. The body is stored verbatim (callers
 // redact first). TTL is clamped to minTTL.
 //
+// in.AddresseeID, when set, BINDS the note to that one session: only a claimant
+// presenting the same ID may read it. It is the caller's job to set it only for
+// a live, unambiguously resolved peer; an empty value keeps the historical
+// name-only addressing, which is what an unattached peer and every pre-v3 row
+// rely on. AddresseeNext is forced back to unbound here rather than trusted to
+// arrive that way, because "whoever attaches next" is a race by definition and a
+// bound one would be a race only its winner-in-advance could win.
+//
 // A positive in.MaxExchanges caps the conversation, and a note that would exceed
 // it is refused with ErrConversationFull. The cap is enforced HERE, in one
 // statement, because counting in the caller and then inserting is two steps: two
@@ -274,6 +167,10 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	addr := strings.TrimSpace(in.Addressee)
 	if addr == "" {
 		addr = AddresseeNext
+	}
+	addrID := strings.TrimSpace(in.AddresseeID)
+	if addr == AddresseeNext {
+		addrID = ""
 	}
 	conv := strings.TrimSpace(in.ConversationID)
 	if conv == "" {
@@ -296,7 +193,7 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	args := []any{
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace,
+		in.TargetWorkspace, addrID,
 	}
 	capped := in.MaxExchanges > 0
 	if capped {
@@ -354,22 +251,54 @@ func (s *Store) LiveIntents(ctx context.Context, now time.Time) ([]Row, error) {
 	return scanRows(rows)
 }
 
-// PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to
-// sessionName, newest first, without claiming them. Used by the listing path
+// Claimant is the session asking for its mail: the three things a row is matched
+// against. They travel together because all three are load-bearing and all three
+// are strings — passed positionally, transposing the ID and the workspace would
+// silently widen delivery instead of failing.
+//
+// Concurrency: a value type — safe to copy and read from any goroutine.
+type Claimant struct {
+	// Name is the address a note is written to.
+	Name string
+	// ID is this session's stable session-directory ID. A note bound to a
+	// session ID is readable only by the session holding it; an unbound note
+	// (every pre-v3 row, and every note to a peer that was not live when it was
+	// sent) is readable by the name alone.
+	ID string
+	// Workspace is the caller's pinned root, which scopes cross-project mail: a
+	// row carrying a target_workspace is claimable only by a session pinned there.
+	Workspace string
+}
+
+// addresseeMatch is the identity half of the delivery predicate, shared by the
+// listing and claiming paths so a session is never shown mail it could not
+// claim. A row with an empty addressee_id is unbound and keeps the historical
+// name-only semantics; a bound one is readable only by the session it names.
+//
+// This is what stops a session name being an identity. Names come from a small
+// pool, an ended session does not reserve its name, and rename_session lets a
+// session pick one — so a note left for a peer that exits before reading it
+// would otherwise be handed to whoever next answers to that name, with the
+// sender told it was delivered to the peer it meant.
+const addresseeMatch = `AND (addressee_id = '' OR addressee_id = ?)`
+
+// PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to the
+// claimant, newest first, without claiming them. Used by the listing path
 // (workspace_sessions), which reports what is waiting rather than handing it
 // over. It never returns "next" notes — those are claimed only by ClaimNotes,
 // so listing them would advertise a message the caller may lose the race for.
-func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string, now time.Time) ([]Row, error) {
-	if s == nil || s.db == nil || sessionName == "" {
+func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) ([]Row, error) {
+	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
 		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
+		   `+addresseeMatch+`
 		   AND (target_workspace = '' OR target_workspace = ?)
 		 ORDER BY created_at DESC`,
-		string(KindNote), sessionName, now.UnixNano(), workspace)
+		string(KindNote), who.Name, now.UnixNano(), who.ID, who.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}
@@ -377,9 +306,9 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 	return scanRows(rows)
 }
 
-// ClaimNotes hands the caller every unexpired note addressed to sessionName or
-// to "next" that nobody has claimed yet, OLDEST FIRST so a conversation reads in
-// order, and marks each one delivered to sessionName in the same statement.
+// ClaimNotes hands the caller every unexpired note addressed to who.Name or to
+// "next" that nobody has claimed yet, OLDEST FIRST so a conversation reads in
+// order, and marks each one delivered to who.Name in the same statement.
 //
 // Claiming replaced the original delete-on-delivery: a delivered row stays until
 // its TTL, which is what gives a conversation a readable transcript and a
@@ -388,12 +317,14 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 // atomic UPDATE matching only `delivered_at = 0`, two sessions racing for the
 // same "next" note cannot both win: the second one's UPDATE matches no rows.
 //
-// workspace is the caller's pinned workspace root, and is what makes a session
-// NAME safe to address by. A row carrying a target_workspace is claimable only
-// by a session pinned there; same-project rows carry none and are scoped by the
-// database they live in. Without this a session could claim another project's
-// cross-project mail just by adopting the right name — names come from a small
-// pool with no uniqueness check, and rename_session lets a session pick one.
+// who.Workspace and who.ID are together what make a session NAME safe to address
+// by. A row carrying a target_workspace is claimable only by a session pinned
+// there; same-project rows carry none and are scoped by the database they live
+// in. Without that a session could claim another project's cross-project mail
+// just by adopting the right name. Within one project the same argument applies
+// across TIME rather than across projects, and addresseeMatch answers it: a bound
+// row names the session it is for, so a later session that inherits the name
+// cannot read its predecessor's mail.
 //
 // limit caps how many are claimed (non-positive means no cap). The cap is
 // applied by the STATEMENT, not by the caller trimming the result: a claimed row
@@ -408,8 +339,8 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 // several sessions wake at once (one send bumps every watcher), so that shape
 // failed on essentially every concurrent burst. A single UPDATE takes the write
 // lock up front, so contention is handled by busy_timeout as normal.
-func (s *Store) ClaimNotes(ctx context.Context, sessionName, workspace string, now time.Time, limit int) ([]Row, error) {
-	if s == nil || s.db == nil || sessionName == "" {
+func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, limit int) ([]Row, error) {
+	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
 	// A cross-project row is claimable only by a session pinned to its target;
@@ -417,11 +348,11 @@ func (s *Store) ClaimNotes(ctx context.Context, sessionName, workspace string, n
 	scope := `AND (target_workspace = '' OR target_workspace = ?)`
 	select_ := `SELECT id FROM collab_rows
 			 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-			   AND (addressee = ? OR addressee = ?) ` + scope + `
+			   AND (addressee = ? OR addressee = ?) ` + addresseeMatch + ` ` + scope + `
 			 ORDER BY created_at ASC`
 	args := []any{
-		now.UnixNano(), sessionName, // SET delivered_at, delivered_to
-		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace,
+		now.UnixNano(), who.Name, // SET delivered_at, delivered_to
+		string(KindNote), now.UnixNano(), who.Name, AddresseeNext, who.ID, who.Workspace,
 	}
 	if limit > 0 {
 		select_ += ` LIMIT ?`
@@ -540,7 +471,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // from the scanner.
 const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
 	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
-	 target_workspace`
+	 target_workspace, addressee_id`
 
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	var out []Row
@@ -554,7 +485,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
 			&globs, &r.Addressee, &createdNs, &expNs,
 			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace,
-			&r.TargetWorkspace); err != nil {
+			&r.TargetWorkspace, &r.AddresseeID); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)
 		}
 		r.Kind = Kind(kind)

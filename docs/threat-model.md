@@ -398,6 +398,17 @@ Note these are **safety** mitigations against accident, not **security**
 mitigations against a malicious peer. A peer agent running as the same user can
 do anything the user can.
 
+**Mailbox addressing.** A session *name* is not an identity: names come from a
+pool of a few thousand, an ended session does not reserve its name, and
+`rename_session` lets a live session take any free one. A message left for a
+peer that exits before reading it was therefore claimable by whoever next
+answered to that name. Delivery is now bound to the recipient's session ID when
+that peer is live (`collab_rows.addressee_id`), so a successor reads nothing;
+`Register`/`Rename` refuse a name a live session already holds, closing the
+concurrent case; and cross-project rows remain scoped by `target_workspace`.
+Unbound rows — a peer that had not attached, `next`, and anything written before
+the binding existed — are still addressed by name alone, which is the residual.
+
 ### A7 — Store corruption or downgrade
 
 *A persistent store is corrupted, truncated, or from a future schema.*
