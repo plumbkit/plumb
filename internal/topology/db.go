@@ -102,11 +102,11 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 // Version 2 exists because uncovered-language stamping cannot backfill itself.
 // An uncovered file is stored with an EMPTY content hash — that is what makes it
 // re-index for free once an extractor lands — but isStale compares the stored
-// hash against the newly computed one, and for an uncovered file that is also
-// empty. So for a row written before this feature (language='', hash=''), an
-// unchanged mtime plus ''=='' means the file is never re-examined and the
-// language is never stamped. Report then counts it as `unrecognised` rather than
-// `not covered: ruby (683)` — which is precisely the confidently-wrong answer
+// hash against the newly computed one, and for an uncovered file that one is
+// empty too. So a row written before this feature, carrying no language and no
+// hash, sees two empty hashes and an unchanged mtime: it is never re-examined
+// and its language is never stamped. Report then counts it as `unrecognised`
+// rather than `not covered: ruby (683)` — precisely the confidently-wrong answer
 // this feature exists to remove, only relabelled. Bumping the version drops the
 // tables so every row is written afresh.
 //
