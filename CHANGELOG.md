@@ -568,12 +568,29 @@
   Canonical is an identity function, not an authorisation check; the boundary policy
   still decides what is *safe*, and it already resolved both sides.
 
-  Two one-time effects on upgrade, both self-healing and neither a correctness
+  The same shape had to be closed one layer deeper, in the places that compare
+  the canonical root against a path supplied by the AGENT rather than produced by
+  the pool. `topology.Store.toRelative` was the one that mattered: it fed the
+  absolute path to `WHERE f.path = ?`, so **every topology query for an aliased
+  project returned empty** — no error, nothing logged — which also silently
+  emptied `session_start`'s peer-area annotations. `gitCommitRepo` had it too.
+  Both now use `paths.WorkspaceRel`, as do `hintRelPath`, `episodicRelPath`,
+  `relevant_memories`, `peerArea` and `workspace_sessions`. The TUI's
+  `detectWorkspaceFolder` is canonicalised for the same reason — it is compared
+  against `session.Folder`, so an aliased cwd listed one project twice in the
+  memory picker.
+
+  Three one-time effects on upgrade, all self-healing and none a correctness
   loss. A persisted pin written under the old spelling is re-canonicalised and
   re-persisted on its first restore, but the strict-mode **read** records keyed to
   the old spelling will not rehydrate with it, so the first read of a file in such a
-  session is asked for again. And stats rows attributed to the old spelling stay in
-  their own bucket rather than merging into the canonical one.
+  session is asked for again. Stats rows attributed to the old spelling stay in
+  their own bucket rather than merging into the canonical one. And a project
+  **trusted** under the old spelling reads as untrusted under the new one —
+  `config.canonRoot` keys the trust store on `filepath.Abs` alone — so
+  `run_command`, `execute_shell_command`, `run_task` and trusted project-config
+  fields refuse until `plumb trust` is run again. That one fails closed and says
+  so, which is the right direction for a trust grant to move on an upgrade.
 
   Guards: `internal/paths/canonical_test.go` (two spellings agree; a missing path
   resolves against its existing ancestor; `..` resolved in kernel order, not

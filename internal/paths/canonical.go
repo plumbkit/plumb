@@ -65,9 +65,11 @@ func Canonical(p string) string {
 }
 
 // WorkspaceRel expresses absPath relative to workspace, and reports whether it
-// lies inside. It is the one place plumb answers "where is this file, within
-// this project?" — the question every workspace-relative display, memory-glob
-// match and peer-area annotation asks.
+// lies inside. Use it wherever a CANONICAL workspace root is compared against a
+// path that came from somewhere else — an agent argument, a recorded stats row,
+// a client-reported URI. (Callers whose two sides share an origin, like a walk
+// rooted at the workspace or an LSP path against the root that server was
+// initialised with, do not need it and still use filepath.Rel.)
 //
 // The two arguments routinely come from different places: workspace is the
 // canonical root the pool resolved, absPath is whatever spelling the agent or
@@ -87,6 +89,13 @@ func Canonical(p string) string {
 // has its answer. Only a genuine escape is rejected — exactly ".." or a "../"
 // prefix — so an in-workspace directory named "..config" still resolves. The
 // returned path is slash-separated.
+//
+// This is a naming question, not a containment check. Because the lexical pass
+// answers first, a path that lies inside the workspace lexically but escapes it
+// through a symlink is reported as inside — matching what these callers did
+// before, and harmless for them, since they are choosing how to DISPLAY or MATCH
+// a path rather than deciding whether it may be touched. Anything deciding
+// access must go through the boundary policy, which resolves unconditionally.
 func WorkspaceRel(workspace, absPath string) (rel string, inside bool) {
 	if workspace == "" || absPath == "" {
 		return "", false
