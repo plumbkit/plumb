@@ -74,6 +74,35 @@ var PrimitiveRules = []PrimitiveRule{
 		},
 	},
 	{
+		// Added for issue #273, after the tree grew a SECOND path canonicaliser
+		// that disagreed with the first on the two cases each was written for:
+		// one anchored a relative path to the daemon's working directory (the
+		// silent cross-repository write of #181) and Cleaned ".." lexically
+		// before resolving symlinks (the check-and-syscall divergence of #264),
+		// while the other refuses both. Neither said it was one of two, so the
+		// next caller would pick whichever it found first. The sweep that came
+		// with the rule found FIVE declarations matching, not the two the issue
+		// named — which is the argument for the rule rather than for another
+		// round of manual consolidation.
+		//
+		// "Same place?" is one question and gets one answer: paths.Canonical.
+		// Anchoring a relative path is a SEPARATE decision each caller must make
+		// visibly, above the canonicaliser — and so is refusing an unresolved
+		// "..", which is an authorisation check, not an identity function.
+		Primitive: "path canonicalisation",
+		Home:      "internal/paths",
+		Prefixes:  []string{"canonical"},
+		Allowed: map[string]string{
+			"internal/tools.canonicalRoot":        "the boundary seam's adapter: decodes a file:// URI, a spelling paths.Canonical deliberately does not know because it is also called with plain paths from inside the daemon. Every resolution step is delegated",
+			"internal/tools.canonicalAddPaths":    "not a canonicaliser: it builds the git ls-files pathspecs and the absolute forms to match them against, and calls canonicalRoot for the resolution itself",
+			"internal/fsguard.canonical":          "anchors a relative walk root to the process cwd BEFORE delegating. RefuseWalk matches protected directories by exact path, so an unanchored \".\" would match none and fail OPEN exactly when the cwd IS $HOME — the opposite direction from the boundary policy, where anchoring is the hazard. Resolution is delegated",
+			"internal/cli.canonicalXcodeRoot":     "the same anchor-then-delegate division as internal/fsguard.canonical: filepath.Abs anchors a possibly-relative root so the \"one build-server flow per root\" singleflight key is stable, then paths.Canonical does the resolution. Before that fold it was Abs+Clean with NO symlink resolution, so two spellings of one project each started their own concurrent xcodebuild — four runner calls where one flow makes two",
+			"internal/config.canonicalTaskHash":   "canonicalises a []TaskCommandSpec into a stable byte sequence for hashing — a struct-encoding question with no filesystem in it",
+			"internal/config.canonicalPolicyHash": "as canonicalTaskHash, for ProjectPolicySpec",
+			"internal/mcp.canonicalFor":           "resolves an argument ALIAS to its canonical JSON key; no path ever enters it",
+		},
+	},
+	{
 		Primitive: "byte-size formatting",
 		Home:      "internal/textfmt",
 		Exact: []string{
