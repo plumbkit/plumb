@@ -274,3 +274,59 @@ func assertSpanRoundTrip(t *testing.T, got, want Node) {
 			got.DocStartByte, got.DocEndByte, want.DocStartByte, want.DocEndByte)
 	}
 }
+
+// A database written by the release BEFORE uncovered-language stamping carries
+// rows with language='' and content_hash='' for files plumb recognises but has
+// no extractor for. Those rows cannot heal on their own: an uncovered file is
+// deliberately stored with an empty hash, so isStale compares '' against '' and,
+// with an unchanged mtime, never re-examines the file. Report then counts them
+// as `unrecognised` — the confidently-wrong answer this feature exists to
+// remove, only relabelled.
+//
+// The version gate is what fixes it, so this pins the version bump rather than
+// the symptom: a database stamped at 1 must be rebuilt, dropping those rows so
+// the indexer writes them afresh with the language stamped.
+func TestOpenDB_UncoveredRowsFromVersion1AreRebuilt(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "topology.db")
+
+	// A version-1 database holding exactly the shape that cannot self-heal.
+	seed, err := openDB(dbPath)
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	if _, err := seed.Exec(
+		`INSERT INTO topology_files(path, mtime_ns, content_hash, language, error_msg)
+		 VALUES ('app/models/user.rb', 123, '', '', '')`); err != nil {
+		t.Fatalf("seed uncovered row: %v", err)
+	}
+	if _, err := seed.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatalf("stamp version 1: %v", err)
+	}
+	seed.Close()
+
+	db, err := openDB(dbPath)
+	if err != nil {
+		t.Fatalf("openDB after version 1: %v", err)
+	}
+	defer db.Close()
+
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != SchemaVersion {
+		t.Errorf("user_version = %d, want %d", version, SchemaVersion)
+	}
+	if SchemaVersion < 2 {
+		t.Fatal("SchemaVersion must be at least 2: without a bump, a pre-existing index reports every uncovered file as unrecognised, permanently")
+	}
+
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM topology_files`).Scan(&rows); err != nil {
+		t.Fatalf("count files: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("topology_files still holds %d row(s); the un-healable rows must be dropped so the resync rewrites them", rows)
+	}
+}
