@@ -40,9 +40,15 @@
 //   - textDocument/prepareRename has no handler ("no handler for request"),
 //     even though renameProvider is advertised. Harmless today: plumb's
 //     rename_symbol calls Rename directly and never prepares.
-//   - Cold start is fast for an IntelliJ-derived server — initialize answers in
-//     2–5 s — but the WORKSPACE takes appreciably longer to resolve, and an
-//     unresolved workspace answers a pull instantly with zero items, which is
+//   - Cold start is fast for an IntelliJ-derived server. On a cold
+//     --system-path (n=3, small single-module project, Gradle's own dependency
+//     cache already warm): initialize answered in 1.7–3.8 s, and the first real
+//     diagnostics arrived at 5.7–8.0 s — a stable ~4 s after initialize. No
+//     rust-analyzer-style multi-minute warmup. A cold Gradle dependency cache
+//     adds its own network resolve on top, which is Gradle's cost, not the
+//     server's.
+//     That gap is small but it is NOT zero, and it is a trap: until the
+//     workspace resolves, a pull returns instantly with zero items, which is
 //     indistinguishable from "no errors". Anything asserting on diagnostics must
 //     poll rather than sample once.
 //
