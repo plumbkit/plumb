@@ -135,6 +135,38 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 	return out
 }
 
+// HasPending reports whether any store holds a message this session could claim,
+// without claiming one. It is the cheap half of the delivery check: the caller
+// on the per-tool-call response path uses it to decide whether Claim is worth
+// running at all, since that path is overwhelmingly a miss and a claim is an
+// expensive way to establish it.
+//
+// It is advisory in the same way Claim is: errors are swallowed (a probe must
+// never fail the tool call carrying it) and a true answer can still be followed
+// by an empty claim when a peer got there first.
+func (i Inbox) HasPending(ctx context.Context) bool {
+	if !i.Policy.Mailbox || i.Self == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
+	defer cancel()
+
+	now := time.Now()
+	for _, s := range i.stores() {
+		found, err := s.HasPendingNotes(ctx, i.claimant(), now)
+		if err != nil {
+			// Fail towards delivering: a probe that cannot answer must not be the
+			// reason a message is withheld. The claim behind it is the authority.
+			slog.Debug("collab: probe messages failed", "session", i.Self, "err", err)
+			return true
+		}
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
 // AtCap reports whether a claim filled the per-call ceiling, meaning more
 // messages are probably still waiting. Callers that cache a "nothing new"
 // baseline use it to avoid parking the remainder behind that cache.

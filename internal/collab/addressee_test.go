@@ -249,3 +249,93 @@ func TestUnreadSentBy_IsAReadAndNeverAClaim(t *testing.T) {
 		t.Fatalf("outbox still lists %v after the message was read", bodies(got))
 	}
 }
+
+// TestHasPendingNotes_AgreesWithTheClaimInEveryCase is the probe's whole
+// contract. It exists only to decide whether ClaimNotes is worth running, so a
+// disagreement is a delivery bug that presents as silence: a probe broader than
+// the claim promises mail that never arrives, and one narrower suppresses a
+// claim that would have delivered. Neither raises an error, so the agreement has
+// to be pinned rather than assumed.
+//
+// The probe runs BEFORE the claim in each case, which is also the assertion that
+// it mutates nothing: were it to consume, the claim behind it would come back
+// empty and every "want delivery" row would fail.
+func TestHasPendingNotes_AgreesWithTheClaimInEveryCase(t *testing.T) {
+	const myWS, otherWS = "/proj/mine", "/proj/theirs"
+	me := Claimant{Name: "alice", ID: "sess-alice-1", Workspace: myWS}
+
+	cases := []struct {
+		name     string
+		note     NoteInput
+		age      time.Duration // how long before "now" the note was written
+		claimant Claimant
+		want     bool
+	}{
+		{"addressed to me, unbound", NoteInput{Addressee: "alice"}, 0, me, true},
+		{"addressed to me and bound to me", NoteInput{Addressee: "alice", AddresseeID: "sess-alice-1"}, 0, me, true},
+		{"bound to my predecessor", NoteInput{Addressee: "alice", AddresseeID: "sess-alice-0"}, 0, me, false},
+		{"addressed to someone else", NoteInput{Addressee: "bob"}, 0, me, false},
+		{"next arrival", NoteInput{Addressee: AddresseeNext}, 0, me, true},
+		{"expired", NoteInput{Addressee: "alice"}, 2 * time.Hour, me, false},
+		{
+			"cross-project, my workspace",
+			NoteInput{Addressee: "alice", TargetWorkspace: myWS, OriginWorkspace: otherWS},
+			0, me, true,
+		},
+		{
+			"cross-project, another workspace",
+			NoteInput{Addressee: "alice", TargetWorkspace: otherWS, OriginWorkspace: myWS},
+			0, me, false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTestStore(t)
+			ctx, now := context.Background(), time.Now()
+			in := tc.note
+			in.AuthorID, in.Body, in.TTL = "id-sender", tc.name, time.Hour
+			mustPut(t, s, in, now.Add(-tc.age))
+
+			probed, err := s.HasPendingNotes(ctx, tc.claimant, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := s.ClaimNotes(ctx, tc.claimant, now, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			delivered := len(claimed) > 0
+
+			if delivered != tc.want {
+				t.Fatalf("ClaimNotes delivered=%v, want %v — the fixture, not the probe, is wrong", delivered, tc.want)
+			}
+			if probed != delivered {
+				t.Errorf("probe said %v but the claim delivered %v; a probe that disagrees with the "+
+					"claim it guards silently drops or invents mail", probed, delivered)
+			}
+		})
+	}
+}
+
+// TestHasPendingNotes_GoesQuietOnceTheMessageIsClaimed: the probe reads the same
+// watermark the claim sets, so a delivered message must stop waking the response
+// path. Otherwise every tool call after the first delivery would probe true and
+// then claim nothing — the exact cost the probe was added to remove, restored.
+func TestHasPendingNotes_GoesQuietOnceTheMessageIsClaimed(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	me := Claimant{Name: "alice", ID: "sess-alice"}
+
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "read me", Addressee: "alice"}, now)
+
+	if ok, err := s.HasPendingNotes(ctx, me, now); err != nil || !ok {
+		t.Fatalf("probe before the claim = %v (err %v), want true", ok, err)
+	}
+	if _, err := s.ClaimNotes(ctx, me, now, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.HasPendingNotes(ctx, me, now); err != nil || ok {
+		t.Fatalf("probe after the claim = %v (err %v), want false", ok, err)
+	}
+}
