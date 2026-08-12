@@ -9,6 +9,28 @@
 
 ### Added
 
+- **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
+  imports with selectors and wildcards, classes, case classes, objects, enums,
+  traits, methods, `val`/`var`, type and opaque-type aliases, Scala 3 `given`
+  instances and extension methods, and ScalaTest/munit cases.
+
+  **The grammar handles Scala 3 indentation syntax fully**, which was the open
+  question: an indented `class C:` body produces the same `template_body` node
+  the braced form does, so the extractor needs no special case. 133 of 600
+  sampled real files use it and score **98.3%** top-level recall, marginally
+  better than the brace style. `val` is a constant and `var` a variable at any
+  scope — Scala's own keywords are exactly the immutable/mutable distinction the
+  cross-language convention asks for.
+
+  **This completes the language-coverage programme.** Every language in the
+  registry now has an extractor: `wantUncovered` is **0**, `langsupport.Uncovered()`
+  returns nothing, and the `not covered:` line has nothing to report. The
+  machinery that reports coverage gaps is untouched and still correct — it is
+  simply dormant, and the tests that used to need an uncovered *witness* now
+  assert that dormancy instead. Adding a new `EngineNone` row makes them fail
+  again, which is the signal whoever adds that language wants. That is the design
+  completing, not breaking.
+
 - **Elixir is now indexed by the topology Map** (`.ex`, `.exs`) — `defmodule`
   including nested and dotted names, `def`/`defp`, `defmacro`, `defguard`,
   `defdelegate`, `defstruct` fields, `defprotocol` and `defimpl`, `@type` and
