@@ -12,13 +12,13 @@ import (
 
 // The witness must be a language that is still uncovered. This test used .rb
 // until the Ruby extractor landed and correctly went red — the registry pin
-// working, not a fault. Whoever wires PHP should move it on again.
+// working, not a fault. Whoever wires Scala should move it on again.
 func TestUncoveredOutlineNote_NamesTheGapForAnUnindexedLanguage(t *testing.T) {
-	note := uncoveredOutlineNote("file:///ws/app/Models/User.php")
+	note := uncoveredOutlineNote("file:///ws/app/models/User.scala")
 	if note == "" {
-		t.Fatal("a .php file has no extractor; the empty outline must be explained, not left bare")
+		t.Fatal("a .scala file has no extractor; the empty outline must be explained, not left bare")
 	}
-	for _, want := range []string{"php", "read_file", "search_in_files"} {
+	for _, want := range []string{"scala", "read_file", "search_in_files"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note should name %q so the agent has somewhere to go; got:\n%s", want, note)
 		}
@@ -44,12 +44,12 @@ func TestUncoveredOutlineNote_SilentForIndexedAndUnknownTypes(t *testing.T) {
 }
 
 func TestFormatFileOutline_ExplainsAnEmptyOutlineForAnUncoveredLanguage(t *testing.T) {
-	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/Models/User.php", source: "topology"})
+	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/models/User.scala", source: "topology"})
 	if !strings.Contains(out, "(no symbols)") {
 		t.Errorf("the empty-outline line should still be present:\n%s", out)
 	}
 	if !strings.Contains(out, "coverage gap") {
-		t.Errorf("an empty PHP outline must be attributed to coverage, not read as an empty file:\n%s", out)
+		t.Errorf("an empty Scala outline must be attributed to coverage, not read as an empty file:\n%s", out)
 	}
 }
 
