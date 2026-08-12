@@ -215,6 +215,13 @@ func TestFileStatus_ParentTraversalIsRefused(t *testing.T) {
 	if err == nil && !strings.Contains(out, "not in canonical form") {
 		t.Errorf("file_status answered about a path it should have refused:\n%s", out)
 	}
+	// Asserted on the EFFECT as well as the message, so a reworded refusal cannot
+	// make this pass vacuously: the tool must not ANSWER. (Not asserted on the
+	// cleaned path appearing in the output — the refusal itself quotes it, as the
+	// fix to apply, and matching on that would fail against a correct refusal.)
+	if strings.Contains(out, "exists:") {
+		t.Errorf("file_status reported a status for a path it should have refused:\n%s", out)
+	}
 }
 
 // --- controls: the refusals above must be specific, not a blanket outage ---

@@ -127,6 +127,16 @@ func (p *PathPolicy) OutsideWorkspaceLabel(path string) string {
 	if p == nil {
 		return ""
 	}
+	// A path match() cannot rule on — an unresolved ".." makes it fail closed —
+	// reaches the !ok branch below, which returns "", and a caller reads that as
+	// "inside the workspace". That is the fail-OPEN direction for this advisory
+	// label, and it is the opposite of what the same condition means everywhere
+	// else in this type. Unreachable today (every caller guards first, and the
+	// guard refuses such a path outright) but the annotation is the sort of thing
+	// a future tool adds without a guard in front of it.
+	if hasParentTraversal(path) {
+		return "unresolved path"
+	}
 	r, ok := p.match(path)
 	if !ok || r.Label == "workspace" {
 		return ""
