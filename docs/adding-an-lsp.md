@@ -721,11 +721,14 @@ forced a shadowed method.
   the IntelliJ platform. Install with `brew install --cask kotlin-lsp`
   (JetBrains also publish `JetBrains/utils`; both resolve to the same CDN
   artifact). **1.3 GB installed.**
-  **macOS:** the downloaded binary is unsigned and carries `com.apple.quarantine`;
-  Gatekeeper DELETES it on first execution and the error lies — *"No such file or
-  directory"* for a file that was just there. Run
+  **macOS — always run
   `xattr -dr com.apple.quarantine /opt/homebrew/Caskroom/kotlin-lsp` after
-  installing. (Observed on macOS 27; unconfirmed on a released macOS.)
+  installing.** The downloaded binary is unsigned and carries
+  `com.apple.quarantine`; Gatekeeper DELETES it on first execution and the error
+  lies — *"No such file or directory"* for a file that was just there. Observed
+  on macOS 27 and not retested per release; stated unconditionally because the
+  command is a no-op where it is not needed, and the failure it prevents is one
+  nobody debugs quickly.
   `kotlin-lsp` is a deprecated shim that `exec`s `bin/intellij-server` with the
   same arguments and warns on stderr at every start. It is the default because it
   is the only PATH-portable name; point `[lsp.kotlin] command` at

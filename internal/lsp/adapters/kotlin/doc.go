@@ -62,11 +62,16 @@
 //
 // Install with `brew install --cask kotlin-lsp` (JetBrains also publish their
 // own tap, JetBrains/utils; both resolve to the same CDN artifact). It is a
-// 1.3 GB installation. On macOS the downloaded binary carries
-// com.apple.quarantine and Gatekeeper DELETES it on first execution, reporting
-// the lie "No such file or directory" for a file that was just there — run
+// 1.3 GB installation.
+//
+// On macOS, always run
 // `xattr -dr com.apple.quarantine /opt/homebrew/Caskroom/kotlin-lsp` after
-// installing. (Observed on macOS 27; unconfirmed on a released macOS.)
+// installing. The downloaded binary is unsigned and carries
+// com.apple.quarantine; Gatekeeper DELETES it on first execution and reports
+// the lie "No such file or directory" for a file that was just there. This was
+// observed on macOS 27 and not retested on every release, but the command is a
+// no-op where it is not needed — so it is stated unconditionally rather than
+// left as a maybe a reader could reasonably skip and then lose an hour to.
 //
 // plumb invokes `kotlin-lsp --stdio`, plus a per-root `--system-path` cache
 // directory appended by internal/cli's argsFor and pruned by the pool janitor.
