@@ -101,6 +101,38 @@ jobs:
       - name: make test-race
         run: make test-race
 
+  # ── The embedded web UI is COMMITTED, not built at release time. ──
+  # internal/web/assets.go embeds ui/dist, and nothing else in this pipeline
+  # rebuilds it, so whatever is committed is what ships. Twice now a dependency
+  # bump has refreshed the lockfile and left dist untouched, so the binary
+  # carried assets its own source no longer produced. This job rebuilds and
+  # fails if the result differs from what is committed.
+  #
+  # This is only a sound gate because the build is input-independent: Tailwind
+  # used to scan dist/ itself (it is not gitignored) and re-emit class names
+  # from its own previous output, so the result depended on whether dist/ was
+  # present. src/app.css now excludes it with `@source not "../dist"`. If this
+  # job ever fails on an untouched tree, suspect that exclusion before assuming
+  # someone forgot to run `make web-ui`.
+  web-ui-fresh:
+    name: web ui freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/web/ui/package-lock.json
+      - name: make web-ui
+        run: make web-ui
+      - name: dist must match the committed assets
+        run: |
+          if ! git diff --exit-code --stat -- internal/web/ui/dist; then
+            echo "::error::internal/web/ui/dist is stale — run 'make web-ui' and commit the result."
+            exit 1
+          fi
+
   # ── The credibility job: real-binary LSP integration on both OSes. ──
   # This is what turns "Validated (macOS only)" into "Validated (macOS + Linux)".
   integration:

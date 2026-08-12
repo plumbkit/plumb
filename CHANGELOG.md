@@ -653,6 +653,37 @@
   resolution: `RefuseWalk` matches macOS-protected directories by exact path, so
   an unanchored `"."` would match none and fail **open** precisely when the
   working directory is `$HOME`. A refusal that fails open is not a refusal.
+- **The web UI stylesheet was feeding on its own output, so it only ever grew.**
+  Tailwind v4 auto-detects source files from the project root and skips what git
+  ignores — but `internal/web/ui/dist` is deliberately NOT ignored, because
+  `internal/web/assets.go` embeds it. Tailwind was therefore scanning the
+  previous build's CSS, reading class names back out of it, and re-emitting
+  them. Self-sustaining: a utility survived every later build even after the
+  markup that used it was deleted, and the output depended on whether `dist/`
+  happened to be present when you built. `src/app.css` now excludes it with
+  `@source not "../dist"`.
+
+  Measured at Tailwind 4.3.3: **18,144 bytes with a populated `dist` against
+  16,177 clean** — 12% of the shipped stylesheet was utilities no source file
+  references (`.blur`, `.ordinal`, `.transition`, `.transform`, `.resize`, an
+  entire `@layer properties` block and its `@property` declarations). With the
+  exclusion, a clean build, a rebuild over a populated `dist`, and a rebuild
+  over the previously committed assets all produce byte-identical output.
+
+  **The committed assets were also stale**, independently: rebuilding main at
+  its own pinned vite version reproduced neither committed filename hash,
+  because the 8.1.5 → 8.2.0 bump refreshed the lockfile without running
+  `make web-ui`. Since nothing rebuilds `dist` at release time, the binary was
+  shipping assets its own source no longer produced. Both are corrected here.
+
+  A **`web ui freshness` CI job** now rebuilds and fails if the result differs
+  from what is committed, so this cannot drift again unnoticed. It is only a
+  sound gate because the contamination fix above made the build
+  input-independent.
+
+  vite also moves to **8.2.1**, which is a no-op for the shipped bytes — 8.2.0
+  and 8.2.1 build identical output, verified by building both and comparing
+  hashes. Upstream 8.2.1 is routine bugfixes with no advisory against 8.2.0.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
