@@ -50,6 +50,7 @@ type skillCounts struct {
 }
 
 var skillContentCounts = map[string]skillCounts{
+	"plumb-chat":           {calls: 5, bullets: 3},
 	"plumb-diagnose":       {calls: 6, bullets: 2},
 	"plumb-explore":        {calls: 0, bullets: 14},
 	"plumb-git":            {calls: 10, bullets: 3},

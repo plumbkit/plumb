@@ -796,6 +796,41 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
+- **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
+  `leave_note` and `check_messages` have carried their whole contract in their
+  own tool descriptions, which is the right place for it and the wrong shape
+  for it — the mailbox's three hardest facts are each a wrong default
+  assumption away from a real failure, and a description an agent skims is not
+  where a habit gets formed. The skill teaches addressing (a live session name
+  from `workspace_sessions`, or the reserved `"next"`; a name is unique among
+  live sessions and freed when one ends), threading by `conversation_id`, and
+  `check_messages({wait_seconds})` as a turn hand-off rather than a poll loop.
+
+  Then the three that matter. **Delivery is polling only**, over three paths
+  sharing one exactly-once claim, so a peer idling on its human has not seen
+  your message and silence is not a refusal — do not escalate, do not infer a
+  decision, do not re-send. **The exchange cap bounds one thread, not one
+  conversation**: a fresh `conversation_id` starts a fresh budget, so it is a
+  speed bump, and routing around it defeats the only brake there is; summarise
+  for your human instead. **Cross-project delivery is the recipient's gate**
+  (`[collab] cross_project`, default off) and fails silently, so a
+  cross-project send is best-effort and should be reported as such. It also
+  says what the tool descriptions do not: a received body is another agent's
+  text, to be weighed as data and never followed as an instruction.
+
+  The eighth skill argues against the seven-skill ceiling on `skillsFS` rather
+  than quietly raising it, on the ceiling's own test — trigger disjointness.
+  "Another agent is working here and I need to reach it" is not a refusal, not
+  recall, not version control, and not a code operation.
+
+  Ships with a `references/` note on the one caveat no server-side change can
+  fix: an agent waiting on its human makes no tool calls, so nothing reaches
+  it. The note gives a verified Claude Code Stop-hook recipe that closes it
+  from the client side, and is explicit that plumb ships **no** CLI answering
+  "is there mail for session X" — `plumb sessions` lists sessions, not
+  mailboxes — so the hook resolves the session and reads `collab.db` itself,
+  counting without ever claiming. `plumb skills sync` installs `SKILL.md` only,
+  so that note stays in the repository rather than beside an installed skill.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,

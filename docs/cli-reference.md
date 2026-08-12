@@ -247,7 +247,7 @@ not writing them — so `TestSkillCapableClients_ArePinned` makes the
 skill-capable client set a deliberate edit, not something that drifts by
 accident.
 
-`plumb skills sync` installs or refreshes the seven embedded skills into the
+`plumb skills sync` installs or refreshes the eight embedded skills into the
 skills directories of every skill-capable client that **registers plumb**, or
 only the named client with `plumb skills sync <client>` (an unknown name is a
 usage error listing the valid ones; naming an unregistered client is an error
@@ -265,9 +265,15 @@ Clients with no skill channel get the same routing as a condensed
 `internal/tools/session_start_guidance.go`) — one authored source, two render
 targets: the skills are the canonical, expanded home for multi-tool
 workflows, and tool descriptions and `session_start` guidance point at them
-rather than restating them. Seven is a stated ceiling, not drift: the
-reasoning lives on `skillsFS` in `internal/cli/skills.go`, and an eighth
-skill has to argue against it.
+rather than restating them. The count is a stated ceiling, not drift: the
+reasoning lives on `skillsFS` in `internal/cli/skills.go`, where each skill
+past the stated limit has to argue against it in writing — `plumb-chat` is the
+eighth and does so there, so a ninth argues against both paragraphs.
+
+Only `SKILL.md` is installed. A skill directory in this repository may carry
+supporting material — `plumb-chat` ships a `references/` note on waking an
+idle agent — and that material stays in the repository; `sync` does not copy
+it into a client's skills directory.
 
 ---
 
