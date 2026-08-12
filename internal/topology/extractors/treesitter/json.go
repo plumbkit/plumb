@@ -45,9 +45,9 @@ const jsonMaxArrayElements = 20
 // becomes containment — the same convention TOMLExtractor and YAMLExtractor
 // use, so a search for a key behaves the same across config formats.
 //
-// Concurrency: stateless after construction and safe for concurrent use; a
-// fresh parser is created per Extract call because gotreesitter parsers are
-// not safe for concurrent reuse.
+// Concurrency: stateless after construction and safe for concurrent use; each
+// Extract call borrows a parser from the shared per-grammar pool and returns it,
+// because gotreesitter parsers are not safe for concurrent reuse.
 type JSONExtractor struct {
 	lang lazyGrammar
 }
