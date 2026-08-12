@@ -34,8 +34,12 @@ type extractorCase struct {
 func allExtractorCases() []extractorCase {
 	return []extractorCase{
 		{
+			// The sample carries a constant, an attr_* member and an RSpec block
+			// as well as the import and the defs: Ruby emits from six sites and
+			// only three were exercised, so deleting setSpan from addConstant or
+			// addAttrs left TestExtractorsEmitByteSpans green.
 			"ruby", func() topology.Extractor { return NewRuby() }, "a.rb",
-			"require 'json'\n\nclass Invoice\n  def total\n    helper\n  end\n\n  def helper\n    1\n  end\nend\n", "json",
+			"require 'json'\n\nclass Invoice\n  RATE = 1\n  attr_accessor :total\n\n  def sum\n    helper\n  end\n\n  def helper\n    1\n  end\nend\n\nRSpec.describe Invoice do\n  it \"sums\" do\n    expect(1).to eq(1)\n  end\nend\n", "json",
 		},
 		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
