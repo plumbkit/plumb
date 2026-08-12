@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Tailwind v4 auto-detects source files from the project root and skips what
+   git ignores. dist/ is NOT ignored here — it is committed, because
+   internal/web/assets.go embeds it — so without this exclusion Tailwind scans
+   its OWN previous output, reads the class names back out of the emitted CSS,
+   and re-emits them. That is self-sustaining: every utility a build emits is
+   preserved by the next one even after the markup using it is deleted, so the
+   stylesheet only ever grows and the output depends on whether dist/ happened
+   to be present. Measured at 4.3.3: 18,144 bytes with a populated dist against
+   16,177 clean, the difference being utilities no source file references. */
+@source not "../dist";
+
 /* The palette is driven entirely by CSS custom properties set at runtime from
    /api/theme, so the whole UI tracks the selected plumb theme. These are the
    dark-plumb defaults; theme.js overwrites them on load and on theme change. */
