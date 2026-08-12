@@ -411,9 +411,9 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 	}
 	for i, f := range a.Files {
 		// Relative inputs resolve against the git toplevel, not a.Repo, which may
-		// be a subdirectory. canonicalPathForBoundary also resolves an existing
-		// parent when the leaf was deleted, so macOS /var and /private/var aliases
-		// compare equal to git ls-files output.
+		// be a subdirectory. canonicalRoot also resolves an existing parent when the
+		// leaf was deleted, so macOS /var and /private/var aliases compare equal to
+		// git ls-files output.
 		abs := canonicalFiles[i]
 		if tracked[abs] {
 			valid = append(valid, f)
@@ -429,35 +429,29 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 }
 
 func canonicalAddPaths(repoRoot string, files []string) (string, []string, []string) {
-	canonicalRoot := filepath.Clean(repoRoot)
-	if resolved, err := canonicalPathForBoundary(repoRoot); err == nil {
-		canonicalRoot = resolved
-	}
+	// Named root, not canonicalRoot: the local would shadow the shared
+	// canonicaliser this function calls.
+	root := canonicalRoot(repoRoot)
 
 	canonicalFiles := make([]string, len(files))
 	pathspecs := make([]string, 0, len(files))
 	for i, f := range files {
 		abs := f
 		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(canonicalRoot, f)
+			abs = filepath.Join(root, f)
 		}
-		if resolved, err := canonicalPathForBoundary(abs); err == nil {
-			abs = resolved
-		} else {
-			abs = filepath.Clean(abs)
-		}
-		canonicalFiles[i] = abs
+		canonicalFiles[i] = canonicalRoot(abs)
 
 		if !filepath.IsAbs(f) {
 			pathspecs = append(pathspecs, f)
 			continue
 		}
-		rel, err := filepath.Rel(canonicalRoot, abs)
+		rel, err := filepath.Rel(root, canonicalFiles[i])
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			pathspecs = append(pathspecs, rel)
 		}
 	}
-	return canonicalRoot, canonicalFiles, pathspecs
+	return root, canonicalFiles, pathspecs
 }
 
 func parseGitArgs(raw json.RawMessage) (gitToolArgs, error) {

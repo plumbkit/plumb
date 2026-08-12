@@ -3,7 +3,6 @@ package tools
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -153,19 +152,33 @@ func PathWithinWorkspace(workspace, path string) bool {
 	return withinRoot(canonicalRoot(workspace), canonicalRoot(path))
 }
 
-// canonicalRoot resolves path for boundary comparison: symlinks are followed
-// for the path and its nearest existing ancestor (so a not-yet-created file
-// resolves against its real parent), falling back to a lexical clean when
-// resolution fails entirely. Both PathPolicy roots and candidate paths pass
-// through it, so matching is always on resolved paths.
+// canonicalRoot resolves path for boundary comparison. Both PathPolicy roots
+// and candidate paths pass through it, so matching is always on resolved paths.
+//
+// It is the boundary seam's adapter over paths.Canonical, and adds exactly one
+// thing: tool arguments may arrive as a file:// URI, which paths.Canonical does
+// not know about (it is called with plain paths from inside the daemon too).
+// Everything else — following symlinks, resolving the nearest existing ancestor
+// for a path that does not exist yet, degrading to a lexical clean when nothing
+// resolves — is the shared canonicaliser's, so "are these the same place?" has
+// ONE answer here and at workspace-root identity (issue #273).
+//
+// Two behaviours it deliberately does NOT have, both of which it used to:
+//
+//   - It does not anchor a relative path with filepath.Abs. A relative path
+//     names no location, and the daemon's working directory belongs to whichever
+//     client happened to spawn it — resolving against it is the silent
+//     cross-repository write of issue #181. An unanchored relative path matches
+//     no root and is refused, which is the fail-closed direction.
+//   - It does not Clean before resolving. Clean collapses "link/.." as a pair
+//     while the kernel follows `link` first, so cleaning first lets two paths
+//     naming DIFFERENT directories canonicalise to one string (issue #264).
+//
+// It is an identity function, not an authorisation check: the refusal of an
+// unresolved ".." lives in requireCanonicalPath, ABOVE this, and must stay
+// there — canonicalising such a path would silently retarget the operation.
 func canonicalRoot(path string) string {
-	if path == "" {
-		return ""
-	}
-	if p, err := canonicalPathForBoundary(path); err == nil {
-		return p
-	}
-	return filepath.Clean(cleanToolPath(path))
+	return paths.Canonical(cleanToolPath(path))
 }
 
 // withinRoot reports whether the already-canonicalised path lies within root
@@ -239,34 +252,4 @@ func requireCanonicalPath(path string) error {
 				"segment — or with a workspace-relative path, which plumb anchors safely.",
 		},
 	)
-}
-
-func canonicalPathForBoundary(path string) (string, error) {
-	abs, err := filepath.Abs(cleanToolPath(path))
-	if err != nil {
-		return "", err
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
-	}
-	dir := abs
-	var suffix []string
-	for {
-		if _, err := os.Stat(dir); err == nil {
-			resolved, err := filepath.EvalSymlinks(dir)
-			if err != nil {
-				return "", err
-			}
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
-			}
-			return filepath.Clean(resolved), nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return filepath.Clean(abs), nil
-		}
-		suffix = append(suffix, filepath.Base(dir))
-		dir = parent
-	}
 }

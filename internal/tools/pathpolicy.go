@@ -1,5 +1,7 @@
 package tools
 
+import "path/filepath"
+
 // Access is the permission level a PathPolicy root grants. Roots are additive:
 // a path is allowed at the highest access of any root that contains it.
 type Access int
@@ -46,14 +48,28 @@ type PathPolicy struct {
 // NewPathPolicy canonicalises primary and roots and returns an immutable policy.
 // primary is the workspace root named in the boundary-violation message; it
 // should also appear in roots (typically with AccessReadWrite). Roots with an
-// empty path or AccessNone are dropped.
+// empty path or AccessNone are dropped, as is a root that does not canonicalise
+// to an absolute path — see below.
 func NewPathPolicy(primary string, roots []AllowedRoot) *PathPolicy {
 	canon := make([]AllowedRoot, 0, len(roots))
 	for _, r := range roots {
 		if r.Path == "" || r.Access == AccessNone {
 			continue
 		}
-		canon = append(canon, AllowedRoot{Path: canonicalRoot(r.Path), Access: r.Access, Label: r.Label})
+		p := canonicalRoot(r.Path)
+		// A relative root names no location, so it cannot grant access to one.
+		// Roots reach here from project config ([workspace] extra_roots /
+		// read_roots, the granted-roots store), which is a file a hostile clone can
+		// carry — and the daemon's working directory belongs to whichever client
+		// happened to spawn it, so anchoring "../sibling" against it would grant
+		// access somewhere neither the user nor the config author named (issue
+		// #181). Dropped here, where the decision is visible and the policy's own
+		// root list is the record, rather than kept as an entry that silently
+		// matches nothing in the longest-prefix scan.
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		canon = append(canon, AllowedRoot{Path: p, Access: r.Access, Label: r.Label})
 	}
 	return &PathPolicy{primary: canonicalRoot(primary), roots: canon}
 }

@@ -174,12 +174,8 @@ func intentCoversRepo(globs []string, ws, repoRoot string, tier gitTier) bool {
 	// Canonicalise both sides: repoRoot comes from `git rev-parse
 	// --show-toplevel`, which resolves symlinks the pinned workspace path may
 	// keep (macOS /var vs /private/var), so a naive Rel would escape with "..".
-	if resolved, err := canonicalPathForBoundary(repoRoot); err == nil {
-		repoRoot = resolved
-	}
-	if resolved, err := canonicalPathForBoundary(ws); err == nil {
-		ws = resolved
-	}
+	repoRoot = canonicalRoot(repoRoot)
+	ws = canonicalRoot(ws)
 	rel, err := filepath.Rel(ws, repoRoot)
 	if err != nil {
 		return false
