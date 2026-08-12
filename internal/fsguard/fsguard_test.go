@@ -63,6 +63,37 @@ func TestRefuseWalk_AllowsSubpath(t *testing.T) {
 	}
 }
 
+// TestRefuseWalk_RelativeRootIsAnchored pins the one thing this package's
+// canonicaliser does that the shared paths.Canonical deliberately refuses to do
+// (issue #273): it anchors a relative root to the process working directory.
+//
+// paths.Canonical leaves a relative path relative, because giving one a location
+// is the silent cross-repository write of issue #181. Here that same refusal
+// would fail OPEN: RefuseWalk matches protected directories by exact path, so an
+// unanchored "." equals no protected root and the walk proceeds — in exactly the
+// case where the working directory IS the protected directory. plumb would then
+// crawl $HOME and raise the TCC prompt this package exists to prevent. A refusal
+// that fails open is not a refusal.
+func TestRefuseWalk_RelativeRootIsAnchored(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin-only")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	// Control: without this the relative assertions below could pass for the
+	// wrong reason (or fail because the fixture's HOME was never protected).
+	if got, _ := RefuseWalk(home, true); !got {
+		t.Fatalf("control failed: RefuseWalk(%s, true) = false — the fixture's $HOME is not being treated as protected, so the relative cases prove nothing", home)
+	}
+	for _, rel := range []string{".", "./", "sub/.."} {
+		if got, _ := RefuseWalk(rel, true); !got {
+			t.Errorf("RefuseWalk(%q, true) = false with the working directory AT $HOME; a relative root must be anchored before it is matched", rel)
+		}
+	}
+}
+
 func TestRefuseWalk_AllowsUnrelatedPath(t *testing.T) {
 	if got, _ := RefuseWalk("/tmp", true); got {
 		t.Errorf("RefuseWalk(/tmp, true) = true, want false")
