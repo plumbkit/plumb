@@ -120,30 +120,31 @@ func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := os.WriteFile(filepath.Join(dir, "user.php"), []byte("<?php\nclass User {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "user.scala"), []byte("object User {}\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// Only a Go extractor is wired, so PHP reaches the uncovered path exactly as
-	// it does in production. The witness has to be a language that is still
+	// Only a Go extractor is wired, so Scala reaches the uncovered path exactly
+	// as it does in production. The witness has to be a language that is still
 	// uncovered: this test first used .rb and correctly went red the moment the
-	// Ruby extractor landed, which is the registry pin doing its job rather than
-	// a fault — whoever wires PHP should move it on again.
+	// Ruby extractor landed, then .php and went red again when the PHP extractor
+	// landed. That is the registry pin doing its job rather than a fault —
+	// whoever wires Scala should move it on again.
 	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
-	if err := idx.processUpsert(context.Background(), "user.php"); err != nil {
+	if err := idx.processUpsert(context.Background(), "user.scala"); err != nil {
 		t.Fatalf("processUpsert: %v", err)
 	}
 
 	var lang, hash, errMsg string
 	if err := db.QueryRow(
-		`SELECT language, content_hash, error_msg FROM topology_files WHERE path = 'user.php'`,
+		`SELECT language, content_hash, error_msg FROM topology_files WHERE path = 'user.scala'`,
 	).Scan(&lang, &hash, &errMsg); err != nil {
 		t.Fatalf("the file must still be recorded, so a later extractor can pick it up: %v", err)
 	}
-	if lang != "php" {
-		t.Errorf("language = %q, want \"php\" — without the name the coverage gap cannot be reported", lang)
+	if lang != "scala" {
+		t.Errorf("language = %q, want \"scala\" — without the name the coverage gap cannot be reported", lang)
 	}
 	if hash != "" {
-		t.Errorf("content_hash = %q, want empty — the empty hash is what makes this self-heal when PHP is wired", hash)
+		t.Errorf("content_hash = %q, want empty — the empty hash is what makes this self-heal when Scala is wired", hash)
 	}
 	if errMsg != "" {
 		t.Errorf("error_msg = %q, want empty — an uncovered language is a limitation, not a failure", errMsg)
@@ -153,11 +154,11 @@ func TestIndexer_RecordsUncoveredLanguageAndStaysRetryable(t *testing.T) {
 	if s.IndexedFiles != 0 {
 		t.Errorf("IndexedFiles = %d, want 0 — nothing was parsed", s.IndexedFiles)
 	}
-	if got := s.UncoveredFiles["php"]; got != 1 {
-		t.Errorf("UncoveredFiles[php] = %d, want 1", got)
+	if got := s.UncoveredFiles["scala"]; got != 1 {
+		t.Errorf("UncoveredFiles[scala] = %d, want 1", got)
 	}
-	if slices.Contains(s.Languages, "php") {
-		t.Error("php contributed no symbols; listing it as an indexed language is the answer that misleads")
+	if slices.Contains(s.Languages, "scala") {
+		t.Error("scala contributed no symbols; listing it as an indexed language is the answer that misleads")
 	}
 }
 

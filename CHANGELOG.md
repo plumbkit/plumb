@@ -9,6 +9,54 @@
 
 ### Added
 
+- **PHP is now indexed by the topology Map** — namespaces (both the
+  semicolon and braced forms), classes, interfaces, traits and enums with their
+  methods, properties and constants, standalone functions, file-scope closures
+  and arrow functions, all four `use` spellings as imports, and PHPUnit tests.
+
+  Qualified names use PHP's own notation — `App\Billing\Invoice`,
+  `App\Billing\Invoice::total`, `App\Billing\Invoice::$issued` — keeping the
+  `$` only on properties, which is how PHP itself distinguishes `C::CONST` from
+  `C::$prop`.
+
+  **Properties are constants or variables, never `KindField`.** That kind is for
+  keys of a data-format file; `topology.KindField`'s own doc comment says a
+  member of a *code* type is `KindConstant` when immutable and `KindVariable`
+  otherwise, which Java and Kotlin already follow and
+  `TestExtractors_MemberConventions` enforces. A `readonly` property is the
+  immutable case.
+
+  Deliberately not emitted: ordinary locals (only *file-scope* closures become
+  symbols — a `$fn = fn() => …` inside a method is an inline callback, of which
+  real PHP has thousands), `define('X', 1)` (a function call, not a declaration —
+  the modern `const` form *is* emitted), trait `use`/`insteadof` (composition,
+  not an import), attributes, and anonymous classes (their methods still are).
+
+  Interleaved HTML is not a problem, and it is worth knowing why: the grammar
+  wraps only the `?> … <?php` run in a `text_interpolation` node and leaves the
+  declarations on either side as ordinary siblings of `program`, so a plain
+  descent reaches every block.
+
+  Measured over **17,545 real `.php` files** (Laravel, Symfony, Guzzle, Monolog,
+  PHPUnit): 219,962 nodes, 179,701 edges, **zero extraction errors, zero invalid
+  byte spans**, and 0.12% of files carrying a parse defect. Recall against a grep
+  ground truth is **99.97% on cleanly-parsing files** and 99.96% overall — and of
+  the clean-file misses inspected, all were oracle false positives (PHP source
+  inside heredoc templates and `eval()` strings).
+
+  One upstream grammar defect: a heredoc/nowdoc terminator immediately followed
+  by `]` — the PHP 7.3+ flexible heredoc inside an array literal — is not
+  recognised, and the scanner swallows the rest of the file, yielding zero
+  symbols. `EOPHP;`, `EOPHP,` and `EOPHP)` all parse; only `]` fails.
+
+  Unusually, walking into ERROR recovery nodes **does not pay here** and this was
+  measured rather than assumed: on the 21 real defective files it recovers
+  nothing (403 nodes either way), because PHP's dominant failure mode swallows
+  the tail into a *string body*, leaving no typed declaration nodes to recover.
+  It is kept — it costs nothing and does recover declarations from a merely
+  truncated file, which a half-written buffer mid-edit genuinely is — but it does
+  not earn its place here the way it did on SCSS and Objective-C.
+
 - **CSS is now indexed by the topology Map** — rule sets named by their selector,
   `@media`/`@supports` blocks as sections containing the rules nested inside
   them, `@keyframes` by name, custom properties as constants, and `@import` as

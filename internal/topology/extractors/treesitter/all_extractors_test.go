@@ -55,6 +55,10 @@ func allExtractorCases() []extractorCase {
 			"@import \"base.css\";\n\n.btn {\n  color: red;\n}\n", "base.css",
 		},
 		{
+			"php", func() topology.Extractor { return NewPHP() }, "a.php",
+			"<?php\nnamespace App;\n\nuse App\\Model\\User;\n\nclass Svc {\n    public function go(): int { return $this->helper(); }\n    private function helper(): int { return 1; }\n}\n", "App\\Model\\User",
+		},
+		{
 			"python", func() topology.Extractor { return NewPython() }, "a.py",
 			"import os\n\n\ndef f():\n    return g()\n\n\ndef g():\n    pass\n", "os",
 		},

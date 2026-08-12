@@ -80,7 +80,7 @@ flowchart LR
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
   is syntactic (Go AST; pure-Go tree-sitter for TypeScript/TSX/JSX, Python,
-  Ruby, C, JSON, CSS, JavaScript, Rust, Zig, Kotlin, Java, Bash, HCL, SQL, Dockerfile, TOML,
+  Ruby, C, PHP, JSON, CSS, JavaScript, Rust, Zig, Kotlin, Java, Bash, HCL, SQL, Dockerfile, TOML,
   YAML and Markdown; and canonical-grammar WASM for Swift), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
@@ -93,7 +93,7 @@ for how the two fit into plumb's layered design.
 ### Languages the Map does not cover
 
 The Map covers the languages listed above. For a language plumb recognises but
-has no extractor for — C++, Objective-C, XML, C#, PHP, Elixir, Lua, Scala,
+has no extractor for — C++, Objective-C, XML, C#, Elixir, Lua, Scala,
 Dart and SCSS — the files are still recorded, but they
 contribute no symbols.
 
@@ -122,7 +122,7 @@ pipeline has four parts:
 1. **Extractors read your source.** Per language, a lightweight extractor turns
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
-   `go/parser` + `go/ast` (precise, no cgo); Python, Ruby, C, JSON, CSS, Rust, Zig, Kotlin, Java,
+   `go/parser` + `go/ast` (precise, no cgo); Python, Ruby, C, PHP, JSON, CSS, Rust, Zig, Kotlin, Java,
    JavaScript (`.js`/`.mjs`/`.cjs`), TypeScript (`.ts`) and TSX/JSX
    (`.tsx`/`.jsx`) use the pure-Go gotreesitter runtime; Swift uses the
    canonical tree-sitter grammar compiled to WASM and run via wazero, until

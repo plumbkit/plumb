@@ -30,6 +30,10 @@ func fidelityCases() []fidelityCase {
 		{"c", grammars.CLanguage, func() topology.Extractor { return NewC() }, string(cSrc), "trailing_helper"},
 		{"json", grammars.JsonLanguage, func() topology.Extractor { return NewJSON() }, string(jsonSrc), "email"},
 		{"css", grammars.CssLanguage, func() topology.Extractor { return NewCSS() }, string(cssSrc), "fade"},
+		// phpSrc contains no heredoc: a heredoc terminator followed by `]` derails
+		// the scanner into swallowing the file tail, and this guard must measure a
+		// cascade we introduced rather than re-measure that upstream defect.
+		{"php", grammars.PhpLanguage, func() topology.Extractor { return NewPHP() }, string(phpSrc), "trailing_helper"},
 		{"bash", grammars.BashLanguage, func() topology.Extractor { return NewBash() }, `#!/usr/bin/env bash
 set -euo pipefail
 
