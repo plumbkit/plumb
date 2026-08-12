@@ -590,6 +590,16 @@
   and each half of `WorkspaceRel` reverted in turn, failing exactly the tests that
   claim to cover it.
 
+  The whole pipeline is also pinned end to end by a new integration test,
+  `TestSmoke_TwoSessions_AliasedWorkspaceDeliversSameProject` (`cmd/smoke`, run by
+  CI on both OSes): two real `plumb serve` processes against one real daemon pin
+  one project by two spellings, and the note between them must route same-project,
+  arrive, and leave an aliased path resolvable inside the workspace. The unit
+  tests cover the resolution; this exists because the failure was a
+  whole-pipeline one — pin, session registry, peer lookup, routing decision, store
+  selection, delivery, five layers that each looked correct alone. Against `main`
+  it reproduces every symptom.
+
   Two `cli` test fixtures now hand out canonical directories, because the roots
   they stand in for are: `freshTempDir` and `setupTwoProjects`. On macOS
   `os.MkdirTemp`/`t.TempDir` land under `/var`, itself a symlink to `/private/var`,
