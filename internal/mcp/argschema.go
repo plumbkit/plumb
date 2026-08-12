@@ -6,6 +6,18 @@ import (
 	"sync"
 )
 
+// jsonWhitespace is the complete set RFC 8259 permits between tokens: space,
+// horizontal tab, line feed, carriage return.
+//
+// Deliberately NOT unicode.IsSpace, which bytes.TrimSpace uses and which also
+// matches \v, \f, NBSP, NEL, LS and PS. Trimming those before decodeArgsObject's
+// trailing-byte check re-opened the very differential that check exists to close:
+// the guard accepted bytes json.Unmarshal rejects, and when an alias rewrite
+// fired the re-marshalled output dropped them, so identical input passed or
+// failed according to how the caller spelled a parameter. FuzzResolveArgs'
+// parity property covers it.
+const jsonWhitespace = " \t\n\r"
+
 // aliasTargetSet is the set of canonical parameter names that some entry in
 // paramAliases can stand in for (the union of the table's target names).
 // Computed once.
