@@ -99,11 +99,25 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 // topology tables are DROPped and recreated, and the indexer repopulates them
 // on the resync that runs at every attach.
 //
+// Version 2 exists because uncovered-language stamping cannot backfill itself.
+// An uncovered file is stored with an EMPTY content hash — that is what makes it
+// re-index for free once an extractor lands — but isStale compares the stored
+// hash against the newly computed one, and for an uncovered file that is also
+// empty. So for a row written before this feature (language='', hash=''), an
+// unchanged mtime plus ''=='' means the file is never re-examined and the
+// language is never stamped. Report then counts it as `unrecognised` rather than
+// `not covered: ruby (683)` — which is precisely the confidently-wrong answer
+// this feature exists to remove, only relabelled. Bumping the version drops the
+// tables so every row is written afresh.
+//
 // History:
 //
 //	0 — pre-versioned (every release up to 0.9.21)
 //	1 — added byte/column declaration spans + doc-comment spans to topology_nodes
-const SchemaVersion = 1
+//	2 — uncovered-language stamping: rows indexed before it carry language='' and
+//	    content_hash='', which is indistinguishable from an unrecognised file and
+//	    cannot heal on its own (see below)
+const SchemaVersion = 2
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The
