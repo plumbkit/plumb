@@ -163,7 +163,16 @@ func (l *Log) Rollback() {
 		return
 	}
 	for _, op := range l.manifest.Ops {
-		restoreOp(l.dir, op, op.Perm, op.Path)
+		// Resolve here too. The forward write went through safeWrite, which follows
+		// a symlink to its target, so the file this transaction actually changed is
+		// the resolved one; restoring the link's own name would replace the link
+		// with a regular file instead of undoing the write. Resolution failure
+		// falls back to the recorded path rather than abandoning the rollback.
+		target := op.Path
+		if resolved, err := replayTarget(op.Path); err == nil {
+			target = resolved
+		}
+		restoreOp(l.dir, op, op.Perm, target)
 	}
 	if err := os.RemoveAll(l.dir); err != nil {
 		slog.Error("txlog: failed to remove log dir after rollback", "dir", l.dir, "err", err)
@@ -372,6 +381,18 @@ func replayOrphan(dir string, guard PathGuard) {
 				"snap", snapshotPath(dir, op.N), "manifest", manifestPath, "err", err)
 			continue
 		}
+		// A HARDLINK is not a symlink: Lstat reports a perfectly ordinary file, so
+		// the check above waves it through while the inode is somewhere else
+		// entirely. `0-before` hardlinked to ~/.ssh/id_ed25519 would have its
+		// content read and written to an admitted in-workspace path — the same
+		// exfiltration the symlink check exists to stop, one indirection lower.
+		// A snapshot is a file THIS daemon created moments before crashing, so it
+		// has exactly one link; more than one means someone else made it.
+		if err := refuseMultiplyLinked(snapshotPath(dir, op.N)); err != nil {
+			slog.Error("txlog: replay REFUSED — snapshot file has more than one hard link",
+				"snap", snapshotPath(dir, op.N), "manifest", manifestPath, "err", err)
+			continue
+		}
 		// Write to the RESOLVED target, not to op.Path: the guard has just ruled on
 		// target, and handing the syscall a different string is exactly the bug this
 		// function exists to close.
@@ -382,30 +403,32 @@ func replayOrphan(dir string, guard PathGuard) {
 // replayTarget returns the file a write to path would actually modify, so the
 // caller can re-check THAT against the boundary guard.
 //
-// It mirrors the write primitive: a resolvable symlink is followed (safeWrite
-// writes through a link), a non-link is itself, and a missing path is itself —
-// the replay may legitimately recreate a file the transaction deleted.
+// EVERY component is resolved, not just the last one. An earlier version only
+// called EvalSymlinks when the final component was itself a link, so a link in
+// an ANCESTOR left the returned target equal to the input and the caller's
+// re-check never ran — the exact hole the re-check exists to close, reachable
+// with `sub -> /outside` and an ordinary file name below it.
 //
-// A DANGLING link is refused rather than followed or replaced. os.WriteFile
-// would follow it and create the target wherever it points, and there is no
-// resolved name to re-check because the target does not exist; a policy
-// canonicalises a missing path through its nearest existing ancestor, so
-// <workspace>/payload -> ~/.zshenv is admitted as <workspace>/payload. Refusing
-// costs one logged restore and closes an arbitrary-write primitive.
+// A DANGLING link is refused rather than followed or replaced: there is no
+// resolved name to re-check, and a policy canonicalises a missing path through
+// its nearest existing ancestor, so <workspace>/payload -> ~/.zshenv would be
+// admitted as <workspace>/payload.
 func replayTarget(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
+	if _, err := os.Lstat(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return path, nil
+			// The file is absent — the transaction may have deleted it, and the
+			// replay recreates it. Its ancestors still need resolving.
+			parent, perr := filepath.EvalSymlinks(filepath.Dir(path))
+			if perr != nil {
+				return "", fmt.Errorf("cannot resolve the parent directory: %w", perr)
+			}
+			return filepath.Join(parent, filepath.Base(path)), nil
 		}
 		return "", fmt.Errorf("cannot stat path: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return path, nil
-	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("path is a dangling symlink: %w", err)
+		return "", fmt.Errorf("path is a dangling or unresolvable symlink: %w", err)
 	}
 	return resolved, nil
 }
@@ -491,15 +514,24 @@ func restoreOp(dir string, op opMeta, perm os.FileMode, target string) {
 		slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
 		return
 	}
-	// G703 is correct that op.Path is tainted: on the replayOrphan path it comes
-	// out of a file a cloned repository can author. It is admitted here only
-	// because the caller has just cleared it — Rollback replays ops this process
-	// recorded in memory, each boundary-checked before the write it undoes, and
-	// replayOrphan admits nothing admitReplayPath's guard rejected. Deliberately
-	// narrow: the previous suppression claimed the manifest itself was
-	// trustworthy, which was true of one caller and false of the other, and that
-	// is what made an attacker-authored manifest an arbitrary-write primitive.
-	if err := os.WriteFile(target, content, perm); err != nil { //nolint:gosec // G703: target is either in-process-recorded (Rollback) or resolved-and-guard-admitted (replayOrphan); see admitReplayPath and replayTarget
+	// Written through the same stage-and-rename primitive as every other durable
+	// write in the tree, and that is a security property here, not just a
+	// durability one.
+	//
+	// os.WriteFile OPENS THE EXISTING INODE AND TRUNCATES IT. A hardlink at an
+	// admitted in-workspace name therefore made the guard's verdict true of the
+	// NAME and false of the FILE: the content landed in whatever the inode was
+	// also linked from, outside every allowed root. A rename replaces the
+	// directory entry instead, so another link to the old inode is untouched.
+	//
+	// This is also what safeWrite has always done, which matters because the
+	// previous version of this function claimed to "mirror the write primitive"
+	// while using a different one. It mirrors it now.
+	//
+	// Not merely hostile input: pnpm hardlinks node_modules entries into a global
+	// store, and cp -l and build caches do the same, so an in-place write during
+	// recovery would corrupt every other project sharing that store.
+	if err := fsync.AtomicWrite(target, content, fsync.Options{Mode: perm, Label: "txlog"}); err != nil {
 		slog.Error("txlog: rollback: cannot restore file", "path", target, "err", err)
 		return
 	}

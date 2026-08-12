@@ -168,6 +168,30 @@
   permission denial read as a clean bill of health for a path it had not
   inspected.
 
+- **The replay is confined at the inode, not just at the name.** A second
+  independent review found the redesign's guard true of the *name* and false of
+  the *file*. `os.WriteFile` opens the existing inode and truncates it, so a
+  **hardlink** at an admitted in-workspace name wrote through to a file outside
+  every allowed root — and the symlink refusal cannot see it, because `Lstat`
+  reports an ordinary regular file. The redesign's claim to "mirror the write
+  primitive" was right about symlink-following and wrong about the mechanism:
+  `safeWrite` stages and **renames**, which replaces the directory entry and
+  leaves any other link to the old inode alone.
+
+  The restore now goes through that same `fsync.AtomicWrite` primitive, which
+  closes the escape and makes recovery crash-safe as a side effect — a package
+  whose entire purpose is crash durability had been restoring with a
+  non-atomic, unsynced write. This is not only about hostile input: pnpm
+  hardlinks `node_modules` entries into a global store, and `cp -l` and build
+  caches do the same, so an in-place write during recovery would have corrupted
+  every other project sharing that store.
+
+  Alongside: a **hardlinked snapshot** is refused (the same blind spot, in the
+  read direction — `0-before` linked to `~/.ssh/id_ed25519` had its content
+  copied into the workspace), and the resolved-target re-check now resolves
+  **every** component rather than only the last, so a symlinked *ancestor* no
+  longer slips past it.
+
 - **A tool added by a daemon rebuild is no longer invisible to already-connected
   clients.** The MCP tool list is fetched once, at connect. `plumb serve` is a
   reconnecting proxy, so from the client's side the server never goes away — it
