@@ -86,6 +86,7 @@ var registry = []Language{
 	{Name: "lua", Extensions: []string{".lua"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "cpp", Extensions: []string{".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "objc", Extensions: []string{".m", ".mm"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "dart", Extensions: []string{".dart"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
@@ -103,7 +104,6 @@ var registry = []Language{
 	{Name: "csharp", Extensions: []string{".cs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "elixir", Extensions: []string{".ex", ".exs"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "scala", Extensions: []string{".scala", ".sc"}, Structural: EngineNone, LSPAdapter: ""},
-	{Name: "dart", Extensions: []string{".dart"}, Structural: EngineNone, LSPAdapter: ""},
 }
 
 // Uncovered returns the registry entries for languages plumb recognises but

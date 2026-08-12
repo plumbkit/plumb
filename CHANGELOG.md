@@ -9,6 +9,40 @@
 
 ### Added
 
+- **Dart is now indexed by the topology Map** — classes, mixins, enums and
+  extensions with their members, constructors (default, named and factory),
+  getters and setters, top-level functions, type aliases, top-level variables,
+  `import`/`export`/`part` as imports, and the cases a `package:test` or
+  `flutter_test` suite declares.
+
+  One shape of the grammar drives most of the extractor: **a function's signature
+  and its body are siblings, not parent and child.** `int add(a, b)` and
+  `=> a + b` arrive as a `function_signature` followed by a `function_body` under
+  the same parent, so every emission pairs a signature with the body that follows
+  it. Taking the signature's own span would truncate every function in the file
+  at its opening brace. The same layout defeats the shared
+  `walkCallSites`/`scopeByType` helper — a body sits outside its own signature's
+  subtree, so no call would ever be attributed — which is why call edges are
+  collected from the paired bodies instead.
+
+  Dart tests are not declarations: `test('adds', () { … })` is an ordinary call
+  taking a closure, so nothing in the declaration walk sees them. They are still
+  the symbols someone navigates a test file by, and over 250 real files they
+  accounted for more missing names than every other shape combined, so `test`,
+  `testWidgets` and `group` are recognised, with cases nested under their group.
+
+  A named constructor is written `Counter.zero`, so the name already carries its
+  class and the qualified name does not repeat it. Locals are not emitted: Dart
+  marks them unambiguously, and a closure inside a build method is an
+  implementation detail.
+
+  Measured over **501 real files** (Flutter samples, `package:http`, Riverpod):
+  13,394 nodes, 9,863 edges, **zero invalid byte spans and no file yielding
+  nothing**. Recall against a grep ground truth is **94.8%** for functions and
+  82.4% for classes. The gotreesitter Dart grammar is in excellent shape — every
+  construct probed parsed without a defect; the one known gap is the mixin
+  application form `class A = B with C;`, which yields no symbol.
+
 - **PHP is now indexed by the topology Map** — namespaces (both the
   semicolon and braced forms), classes, interfaces, traits and enums with their
   methods, properties and constants, standalone functions, file-scope closures
