@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("")
+string("--rerere-autoupdate\x00--cleanup=verbatim\x00--empty=drop\x00abc1234")

@@ -57,6 +57,8 @@ func TestClassifyGit(t *testing.T) {
 		{"status", nil, tierRead},
 		{"log", []string{"--oneline"}, tierRead},
 		{"diff", []string{"HEAD"}, tierRead},
+		{"show", []string{"HEAD"}, tierRead},
+		{"blame", []string{"file.go"}, tierRead},
 		{"shortlog", nil, tierRead},
 		{"check-ignore", []string{"node_modules"}, tierRead},
 		{"add", []string{}, tierWrite},
@@ -86,6 +88,7 @@ func TestClassifyGit(t *testing.T) {
 		{"reset", []string{"--hard"}, tierDestructive},
 		{"clean", []string{"-fd"}, tierDestructive},
 		{"rebase", []string{"main"}, tierDestructive},
+		{"revert", []string{"abc1234"}, tierDestructive},
 		// cherry-pick is flat-destructive: the bare form and every state flag
 		// land at the same tier, unlike the arg-dependent verbs above.
 		{"cherry-pick", []string{"abc1234"}, tierDestructive},
@@ -109,6 +112,27 @@ func TestClassifyGit(t *testing.T) {
 	for _, c := range cases {
 		if got := classifyGit(c.sub, c.args); got != c.want {
 			t.Errorf("classifyGit(%q, %v) = %d, want %d", c.sub, c.args, got, c.want)
+		}
+	}
+
+	// Every arg-independent verb needs an ABSOLUTE row above — one naming its
+	// tier outright. The invariance property (git_classify_invariance_test.go
+	// and git_classify_fuzz_test.go) compares each verb against its own nil
+	// baseline, so a mutant demoting a verb for EVERY form, nil included, moves
+	// the baseline with it and passes. Only a row here pins it. `show`, `blame`
+	// and `revert` had none: demoting `revert` wholesale was caught by
+	// TestPlumbGitSkillTierTableMatchesClassifier alone, a test whose job is
+	// doc-sync, not tier-pinning — one edit to the skill's table away from
+	// catching nothing.
+	pinned := map[string]bool{}
+	for _, c := range cases {
+		pinned[c.sub] = true
+	}
+	for _, sub := range gitArgIndependent {
+		if !pinned[sub] {
+			t.Errorf("no row above names %q, so nothing pins its tier absolutely — the invariance "+
+				"property only compares it against its own nil baseline, which a whole-verb "+
+				"demotion moves too", sub)
 		}
 	}
 }
