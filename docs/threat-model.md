@@ -83,6 +83,19 @@ touches. Where resolution fails for other reasons the root falls back to a
 lexical clean. A2 has the detail and the reason; this summary is not a
 substitute for it.
 
+The boundary has a second half that is easy to miss: **how the root is chosen
+can widen it**. The path policy admits everything under the pinned root, so a
+detection or synthesis step that resolves a root wider than the project — the
+home directory via a dotfiles `.git`, a `~/.plumb` left behind by an earlier
+auto-attach, a persisted pin replayed from a weak origin — defeats every
+downstream path check without any individual check being wrong. Workspace
+detection is therefore part of this boundary, with its own rules (see
+*Workspace detection* in `docs/architecture.md`): the ascent terminates at the
+home directory, `$HOME` is matched by filesystem identity from both the
+environment and the OS user database, naming `$HOME` as the workspace requires
+an explicit `session_start` declaration, and a machine-created `~/.plumb`
+marker is treated as residue rather than intent.
+
 **B4 — daemon → git.** Tiered policy: read, write, destructive, network. Each
 tier is separately enabled; destructive and network additionally require
 `confirm: true`. Force-pushing a protected branch and using an ad-hoc URL or
