@@ -1,14 +1,25 @@
 @import "tailwindcss";
 
 /* Tailwind v4 auto-detects source files from the project root and skips what
-   git ignores. dist/ is NOT ignored here — it is committed, because
-   internal/web/assets.go embeds it — so without this exclusion Tailwind scans
-   its OWN previous output, reads the class names back out of the emitted CSS,
-   and re-emits them. That is self-sustaining: every utility a build emits is
-   preserved by the next one even after the markup using it is deleted, so the
-   stylesheet only ever grows and the output depends on whether dist/ happened
-   to be present. Measured at 4.3.3: 18,144 bytes with a populated dist against
-   16,177 clean, the difference being utilities no source file references. */
+   git ignores. That default is what makes node_modules invisible to the scan.
+   dist/ is NOT ignored here — it is committed, because internal/web/assets.go
+   embeds it — so the BUNDLE re-admits everything the ignore rule excluded: the
+   1.2 MB of vendored echarts/uplot/svelte that vite inlines into dist/assets is
+   the same code Tailwind refused to scan in node_modules, now sitting in a
+   directory it does scan. Tailwind then emits utilities for bare tokens it finds
+   in that vendor JS — `transform`, `blur`, `ordinal`, `transition`, `collapse`
+   and friends — none of which any Svelte file uses as a class.
+
+   Measured at 4.3.3: 16,177 bytes clean against 18,144 with a populated dist,
+   the difference being 13 such utilities. Isolated by planting one artefact at a
+   time in an otherwise-empty dist: the previous build's CSS changes nothing, the
+   JS bundle produces the entire delta.
+
+   It is NOT a feedback loop, and it does not only grow — the earlier committed
+   CSS carried `.resize\!{resize:both!important}` and a rebuild over that very
+   dist drops it. So the trigger is any non-ignored bundled artefact, not "the
+   stylesheet reading itself". If another build output lands somewhere scannable
+   under internal/web/ui, expect the same bloat and exclude it the same way. */
 @source not "../dist";
 
 /* The palette is driven entirely by CSS custom properties set at runtime from
