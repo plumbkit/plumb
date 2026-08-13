@@ -2,6 +2,7 @@ package collab
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -337,5 +338,197 @@ func TestHasPendingNotes_GoesQuietOnceTheMessageIsClaimed(t *testing.T) {
 	}
 	if ok, err := s.HasPendingNotes(ctx, me, now); err != nil || ok {
 		t.Fatalf("probe after the claim = %v (err %v), want false", ok, err)
+	}
+}
+
+// TestClaimant_InheritedIDsReadTheirPredecessorAndNothingWider is the store's
+// half of the inheritance contract. An inherited identity must do exactly one
+// thing — let a reconnected session collect mail bound to the session it
+// continues — and must not become a general widening of what it may read.
+func TestClaimant_InheritedIDsReadTheirPredecessorAndNothingWider(t *testing.T) {
+	const myWS, otherWS = "/proj/mine", "/proj/theirs"
+	// A session that came back through the authenticated reconnect: new own ID,
+	// its predecessor inherited.
+	heir := Claimant{Name: "alice", ID: "sess-alice-2", InheritedIDs: []string{"sess-alice-1"}, Workspace: myWS}
+
+	cases := []struct {
+		name string
+		note NoteInput
+		want bool
+	}{
+		{"bound to the inherited predecessor", NoteInput{Addressee: "alice", AddresseeID: "sess-alice-1"}, true},
+		{"bound to this session itself", NoteInput{Addressee: "alice", AddresseeID: "sess-alice-2"}, true},
+		{"unbound", NoteInput{Addressee: "alice"}, true},
+		{"bound to a session it never was", NoteInput{Addressee: "alice", AddresseeID: "sess-someone-else"}, false},
+		{"addressed to another name", NoteInput{Addressee: "bob", AddresseeID: "sess-alice-1"}, false},
+		{
+			"cross-project to another workspace, bound to the predecessor",
+			NoteInput{Addressee: "alice", AddresseeID: "sess-alice-1", TargetWorkspace: otherWS, OriginWorkspace: myWS},
+			false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTestStore(t)
+			ctx, now := context.Background(), time.Now()
+			in := tc.note
+			in.AuthorID, in.Body, in.TTL = "id-bob", tc.name, time.Hour
+			mustPut(t, s, in, now)
+
+			probed, err := s.HasPendingNotes(ctx, heir, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := s.ClaimNotes(ctx, heir, now, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(claimed) > 0; got != tc.want {
+				t.Fatalf("claim delivered=%v, want %v", got, tc.want)
+			}
+			// The probe guards the claim, so a disagreement here is a delivery bug
+			// even when the claim itself is right.
+			if probed != (len(claimed) > 0) {
+				t.Errorf("probe said %v but the claim delivered %v", probed, len(claimed) > 0)
+			}
+		})
+	}
+}
+
+// TestClaimant_InheritedIDsDoNotWidenNext: "next" is a first-claimer race and
+// always carries an empty addressee_id, so it is matched by the unbound arm no
+// matter how many identities a claimant presents. A heir must win it on exactly
+// the same terms as anyone else — once, and not twice for having two IDs.
+func TestClaimant_InheritedIDsDoNotWidenNext(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "for the next arrival", Addressee: AddresseeNext}, now)
+
+	heir := Claimant{Name: "alice", ID: "sess-2", InheritedIDs: []string{"sess-1"}}
+	got, err := s.ClaimNotes(ctx, heir, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("a heir claimed %d 'next' notes, want exactly 1", len(got))
+	}
+	again, err := s.ClaimNotes(ctx, heir, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("the heir claimed the same 'next' note again (%d) — extra identities must not "+
+			"multiply a row into several deliveries", len(again))
+	}
+}
+
+// TestPendingNotes_ListsInheritedMailToo keeps the third reader in step. The
+// listing applies the same identity set as the claim, or a reconnected session
+// is told its mailbox is empty while the delivery paths hand it messages.
+func TestPendingNotes_ListsInheritedMailToo(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	mustPut(t, s, NoteInput{
+		AuthorID: "id-bob", Body: "bound to the predecessor",
+		Addressee: "alice", AddresseeID: "sess-alice-1",
+	}, now)
+
+	heir := Claimant{Name: "alice", ID: "sess-alice-2", InheritedIDs: []string{"sess-alice-1"}}
+	listed, err := s.PendingNotes(ctx, heir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("the listing showed %v, want the inherited message", bodies(listed))
+	}
+
+	// A session with no inheritance still sees nothing, so the listing widened
+	// for the heir alone.
+	stranger := Claimant{Name: "alice", ID: "sess-alice-2"}
+	listed, err = s.PendingNotes(ctx, stranger, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("a session without the inheritance was shown %v", bodies(listed))
+	}
+}
+
+// TestClaimant_IdentitiesRejectsBlanksAndDuplicates: the IN list is built from
+// this, so a blank slipping in would be bound as a parameter and a duplicate
+// would widen the statement for nothing. Neither changes what matches — the
+// unbound arm already covers ” — but the list is the security-relevant part of
+// the predicate and it should carry only what it means.
+func TestClaimant_IdentitiesRejectsBlanksAndDuplicates(t *testing.T) {
+	who := Claimant{ID: "own", InheritedIDs: []string{"", "prev", "prev", "own"}}
+	got := who.identities()
+	want := []string{"own", "prev"}
+	if len(got) != len(want) {
+		t.Fatalf("identities() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("identities() = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestAddresseeMatch_InterpolatesNoData is what the two //nolint:gosec G202
+// directives in mailbox.go rest on. Session IDs became part of the statement's
+// SHAPE (the length of the IN list) when a claimant gained several identities,
+// so the query text is now assembled at runtime. The safety property is that
+// only the COUNT crosses into the SQL — every value is bound — and a property
+// asserted in a comment is one a later edit can quietly break.
+func TestAddresseeMatch_InterpolatesNoData(t *testing.T) {
+	hostile := Claimant{
+		Name: "alice",
+		ID:   `' OR 1=1 --`,
+		InheritedIDs: []string{
+			`"; DROP TABLE collab_rows; --`,
+			"sess-legitimate",
+		},
+	}
+
+	// The precise property: no caller VALUE appears in the statement text. The
+	// generated SQL does legitimately contain '' — the fixed unbound-row literal —
+	// so a blanket "no quotes" check would be testing the wrong thing.
+	values := append([]string{hostile.ID, hostile.Name}, hostile.InheritedIDs...)
+
+	idSQL, args := addresseeMatch(hostile)
+	for _, v := range values {
+		if strings.Contains(idSQL, v) {
+			t.Fatalf("generated SQL carries the caller value %q: %q", v, idSQL)
+		}
+	}
+	if got, want := strings.Count(idSQL, "?"), len(args); got != want {
+		t.Fatalf("%d placeholders for %d arguments — a mismatch binds the wrong values", got, want)
+	}
+	if len(args) != 3 {
+		t.Fatalf("args = %v, want all three identities bound as parameters", args)
+	}
+
+	// And the whole predicate composes the same way.
+	where, whereArgs := claimable(hostile, time.Now())
+	for _, v := range values {
+		if strings.Contains(where, v) {
+			t.Fatalf("claimable() carries the caller value %q: %q", v, where)
+		}
+	}
+	if got, want := strings.Count(where, "?"), len(whereArgs); got != want {
+		t.Fatalf("claimable(): %d placeholders for %d arguments", got, want)
+	}
+
+	// End to end: a hostile identity must simply match nothing, not error and not
+	// return somebody else's row.
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "bound elsewhere", Addressee: "alice", AddresseeID: "sess-other"}, now)
+	got, err := s.ClaimNotes(ctx, hostile, now, 0)
+	if err != nil {
+		t.Fatalf("a hostile identity must be inert, not an error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("hostile identity claimed %v", bodies(got))
 	}
 }

@@ -131,6 +131,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStoreIfExists: s.collabGlobalIfExists,
 		Notifier:            s.collabPool.notifier(),
 		ResolvePeer:         s.resolvePeer,
+		InheritedSessionIDs: s.inheritedSessionIDs,
 	}
 }
 
@@ -145,12 +146,13 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 // simply never arrive. Inbox.Claim treats an empty Self as "mailbox off".
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
-		Self:      s.addressableName(),
-		SelfID:    s.sessID,
-		Root:      s.workspace(),
-		Policy:    s.collabPolicy(),
-		Workspace: s.collabStoreIfExists,
-		Global:    s.collabGlobalIfExists,
+		Self:         s.addressableName(),
+		SelfID:       s.sessID,
+		InheritedIDs: s.inheritedSessionIDs(),
+		Root:         s.workspace(),
+		Policy:       s.collabPolicy(),
+		Workspace:    s.collabStoreIfExists,
+		Global:       s.collabGlobalIfExists,
 	}
 }
 

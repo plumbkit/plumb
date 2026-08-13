@@ -280,3 +280,46 @@ func TestWorkspaceSessions_NotesListingIsBoundToThisSession(t *testing.T) {
 		t.Errorf("a session reusing the name was shown its predecessor's mail; got %q", out)
 	}
 }
+
+// TestWorkspaceSessions_ListsInheritedMail keeps the listing in step with the
+// delivery paths after a daemon restart. A reconnected session that inherited
+// its predecessor's identity receives its bound mail; if the listing did not
+// apply the same identities it would report an empty mailbox while the messages
+// were being handed over on the next tool call.
+func TestWorkspaceSessions_ListsInheritedMail(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("open collab store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "inherited-body-marker",
+		Addressee: "alice", AddresseeID: "sess-before-restart", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatalf("PutNote: %v", err)
+	}
+
+	listFor := func(inherited []string) string {
+		t.Helper()
+		out, err := NewWorkspaceSessions(func() string { return ws }, "sess-after-restart").
+			WithInheritedSessions(func() []string { return inherited }).
+			WithCollab(
+				func() (bool, bool) { return false, true },
+				func() *collab.Store { return store },
+				func() string { return "alice" }).
+			Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return out
+	}
+
+	if out := listFor([]string{"sess-before-restart"}); !strings.Contains(out, "inherited-body-marker") {
+		t.Errorf("a session that inherited its predecessor must see its mail listed; got %q", out)
+	}
+	if out := listFor(nil); strings.Contains(out, "inherited-body-marker") {
+		t.Errorf("a session with no inheritance was shown the bound message; got %q", out)
+	}
+}

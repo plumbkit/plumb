@@ -409,6 +409,17 @@ concurrent case; and cross-project rows remain scoped by `target_workspace`.
 Unbound rows — a peer that had not attached, `next`, and anything written before
 the binding existed — are still addressed by name alone, which is the residual.
 
+A reconnecting session inherits its predecessor's session ID so a daemon restart
+does not strand bound mail. That grant is authorised by the **proxy session ID**
+(122 bits from `crypto/rand`, generated per `plumb serve`, replayed only inside
+its own `initialize` handshake, and never written to a session file, a log, or
+any tool result) — never by answering to a name, which is the distinction the
+whole binding rests on. It is the same bearer token that already restores
+strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
+if it were forgeable, those would have been forgeable first. A same-user process
+can of course read `session_state.db` directly, which is the standing
+peer-agent-as-same-user boundary above, not a property of this mechanism.
+
 ### A7 — Store corruption or downgrade
 
 *A persistent store is corrupted, truncated, or from a future schema.*

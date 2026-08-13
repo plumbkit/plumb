@@ -147,6 +147,10 @@ type sessionView struct {
 	// once during the initialize exchange, before attach, and preserved across
 	// re-pins. "" when the client is not a session-id-injecting serve proxy.
 	proxySessionID string
+	// inheritedSessionIDs are predecessor plumb session IDs this connection may
+	// also read mailbox messages for, granted ONLY by the proxy-authenticated
+	// persisted-state path (see inheritSessionID). Nil for every other session.
+	inheritedSessionIDs []string
 
 	// workspaceHint is the serve proxy's advisory working directory, transported
 	// in the initialize params' _meta (see onWorkspaceHint). Consulted only as

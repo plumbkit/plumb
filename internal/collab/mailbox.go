@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -20,12 +22,13 @@ import (
 // message simply does not show up, or shows up to the wrong agent. So the rule
 // lives here, written once, rather than being copied and kept in step by hand.
 
-// Claimant is the session asking for its mail: the three things a row is matched
-// against. They travel together because all three are load-bearing and all three
-// are strings — passed positionally, transposing the ID and the workspace would
-// silently widen delivery instead of failing.
+// Claimant is the session asking for its mail: everything a row is matched
+// against. The fields travel together because all of them are load-bearing and
+// all of them are strings — passed positionally, transposing the ID and the
+// workspace would silently widen delivery instead of failing.
 //
 // Concurrency: a value type — safe to copy and read from any goroutine.
+// InheritedIDs must not be mutated after construction.
 type Claimant struct {
 	// Name is the address a note is written to.
 	Name string
@@ -34,24 +37,69 @@ type Claimant struct {
 	// (every pre-v3 row, and every note to a peer that was not live when it was
 	// sent) is readable by the name alone.
 	ID string
+	// InheritedIDs are session IDs this session PROVABLY continues — the
+	// predecessor whose place it took when a daemon restart brought the same
+	// serve proxy back. They are accepted exactly like ID, so mail bound to a
+	// session that a restart ended still reaches the agent it was written for.
+	//
+	// The word that matters is provably. An inherited ID is granted only by the
+	// persisted-state path, keyed on the proxy's own unguessable session ID,
+	// which the reconnecting proxy presents from its own memory. It is never
+	// granted for answering to a name: that would hand any session its
+	// predecessor's mailbox for the cost of a rename_session call, which is the
+	// hole addressee_id exists to close.
+	InheritedIDs []string
 	// Workspace is the caller's pinned root, which scopes cross-project mail: a
 	// row carrying a target_workspace is claimable only by a session pinned there.
 	Workspace string
 }
 
-// addresseeMatch is the identity half of the delivery predicate, shared by the
-// listing and claiming paths so a session is never shown mail it could not
-// claim. A row with an empty addressee_id is unbound and keeps the historical
-// name-only semantics; a bound one is readable only by the session it names.
+// identities returns the addressee_id values this claimant may read, its own
+// first. Blanks and duplicates among the inherited IDs are dropped, so a stray
+// empty string cannot turn the IN list into a match on unbound rows it was not
+// meant to widen — though that particular case is harmless, since the unbound
+// arm already matches those.
+//
+// The result always holds at least one element (the caller's own ID, possibly
+// empty), which keeps the generated IN list syntactically valid without a
+// special case.
+func (c Claimant) identities() []string {
+	out := make([]string, 0, 1+len(c.InheritedIDs))
+	out = append(out, c.ID)
+	for _, id := range c.InheritedIDs {
+		if id == "" || slices.Contains(out, id) {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+// addresseeMatch builds the identity half of the delivery predicate together
+// with its arguments, so the placeholder count and the values bound to them
+// cannot disagree — the failure a separate SQL constant and args function
+// invites once the number of identities stops being fixed.
+//
+// A row with an empty addressee_id is unbound and keeps the historical
+// name-only semantics; a bound one is readable only by a session presenting the
+// ID it names.
 //
 // This is what stops a session name being an identity. Names come from a small
 // pool, an ended session does not reserve its name, and rename_session lets a
 // session pick one — so a note left for a peer that exits before reading it
 // would otherwise be handed to whoever next answers to that name, with the
 // sender told it was delivered to the peer it meant.
-const addresseeMatch = `AND (addressee_id = '' OR addressee_id = ?)`
+func addresseeMatch(who Claimant) (string, []any) {
+	ids := who.identities()
+	marks := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		marks[i], args[i] = "?", id
+	}
+	return `AND (addressee_id = '' OR addressee_id IN (` + strings.Join(marks, ", ") + `))`, args
+}
 
-// claimableWhere is the FULL predicate for "a note this claimant may be handed":
+// claimable is the FULL predicate for "a note this claimant may be handed":
 // unexpired, unclaimed, addressed to it or to "next", identity-matched, and
 // within its workspace scope. ClaimNotes and HasPendingNotes share it verbatim.
 //
@@ -60,13 +108,18 @@ const addresseeMatch = `AND (addressee_id = '' OR addressee_id = ?)`
 // not arrive; one that is narrower suppresses a claim that would have delivered.
 // Either way the bug is invisible — the message simply does not show up — so the
 // rule is written once rather than kept in agreement by hand.
-const claimableWhere = `kind = ? AND delivered_at = 0 AND expires_at > ?
-		   AND (addressee = ? OR addressee = ?) ` + addresseeMatch + `
-		   AND (target_workspace = '' OR target_workspace = ?)`
-
-// claimableArgs binds claimableWhere, in its parameter order.
-func claimableArgs(who Claimant, now time.Time) []any {
-	return []any{string(KindNote), now.UnixNano(), who.Name, AddresseeNext, who.ID, who.Workspace}
+//
+// Note what the identity clause does NOT touch. "next" is matched by the
+// addressee arm and always carries an empty addressee_id, so no number of
+// identities widens it. target_workspace is its own AND term, so an inherited ID
+// never reaches another project's mail. Both remain exactly as strict as before.
+func claimable(who Claimant, now time.Time) (string, []any) {
+	idSQL, idArgs := addresseeMatch(who)
+	where := `kind = ? AND delivered_at = 0 AND expires_at > ?
+			   AND (addressee = ? OR addressee = ?) ` + idSQL + `
+			   AND (target_workspace = '' OR target_workspace = ?)`
+	args := append([]any{string(KindNote), now.UnixNano(), who.Name, AddresseeNext}, idArgs...)
+	return where, append(args, who.Workspace)
 }
 
 // HasPendingNotes reports whether ClaimNotes would hand this claimant anything,
@@ -87,10 +140,10 @@ func (s *Store) HasPendingNotes(ctx context.Context, who Claimant, now time.Time
 	if s == nil || s.db == nil || who.Name == "" {
 		return false, nil
 	}
+	where, args := claimable(who, now)
 	var one int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM collab_rows WHERE `+claimableWhere+` LIMIT 1`,
-		claimableArgs(who, now)...).Scan(&one)
+		`SELECT 1 FROM collab_rows WHERE `+where+` LIMIT 1`, args...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -109,14 +162,19 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
+	idSQL, idArgs := addresseeMatch(who)
+	args := append([]any{string(KindNote), who.Name, now.UnixNano()}, idArgs...)
+	//nolint:gosec // G202: idSQL is generated by addresseeMatch from a count, not from
+	// caller data — it contains only "?" placeholders and fixed SQL, and every identity
+	// is bound as a parameter. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
 		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
-		   `+addresseeMatch+`
+		   `+idSQL+`
 		   AND (target_workspace = '' OR target_workspace = ?)
 		 ORDER BY created_at DESC`,
-		string(KindNote), who.Name, now.UnixNano(), who.ID, who.Workspace)
+		append(args, who.Workspace)...)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}
@@ -198,16 +256,20 @@ func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, lim
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
+	where, whereArgs := claimable(who, now)
 	select_ := `SELECT id FROM collab_rows
-			 WHERE ` + claimableWhere + `
+			 WHERE ` + where + `
 			 ORDER BY created_at ASC`
 	args := append(
 		[]any{now.UnixNano(), who.Name}, // SET delivered_at, delivered_to
-		claimableArgs(who, now)...)
+		whereArgs...)
 	if limit > 0 {
 		select_ += ` LIMIT ?`
 		args = append(args, limit)
 	}
+	//nolint:gosec // G202: select_ is built from claimable, whose only variable part is
+	// a generated "?" list — no caller data reaches the statement text; identities and
+	// the limit are bound. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
 		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
 		 WHERE id IN (`+select_+`)

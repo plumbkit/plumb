@@ -203,43 +203,43 @@ func TestDeletePin(t *testing.T) {
 
 func TestNameRoundTrip(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SaveName("p", "swift-falcon"); err != nil {
-		t.Fatalf("SaveName: %v", err)
+	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
 	}
-	name, ok, err := s.LoadName("p")
+	got, ok, err := s.LoadIdentity("p")
 	if err != nil {
-		t.Fatalf("LoadName: %v", err)
+		t.Fatalf("LoadIdentity: %v", err)
 	}
-	if !ok || name != "swift-falcon" {
-		t.Fatalf("LoadName = (%q,%v), want (swift-falcon, true)", name, ok)
+	if !ok || got.Name != "swift-falcon" {
+		t.Fatalf("LoadIdentity = (%+v,%v), want (swift-falcon, true)", got, ok)
 	}
 }
 
 func TestNameUpsertOverwrites(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SaveName("p", "old-name"); err != nil {
-		t.Fatalf("SaveName 1: %v", err)
+	if err := s.SaveIdentity("p", "old-name", ""); err != nil {
+		t.Fatalf("SaveIdentity 1: %v", err)
 	}
-	if err := s.SaveName("p", "new-name"); err != nil {
-		t.Fatalf("SaveName 2: %v", err)
+	if err := s.SaveIdentity("p", "new-name", ""); err != nil {
+		t.Fatalf("SaveIdentity 2: %v", err)
 	}
-	name, ok, err := s.LoadName("p")
+	got, ok, err := s.LoadIdentity("p")
 	if err != nil {
-		t.Fatalf("LoadName: %v", err)
+		t.Fatalf("LoadIdentity: %v", err)
 	}
-	if !ok || name != "new-name" {
-		t.Fatalf("LoadName = (%q,%v), want (new-name, true)", name, ok)
+	if !ok || got.Name != "new-name" {
+		t.Fatalf("LoadIdentity = (%+v,%v), want (new-name, true)", got, ok)
 	}
 }
 
 func TestLoadNameMissing(t *testing.T) {
 	s := newTestStore(t)
-	_, ok, err := s.LoadName("nope")
+	_, ok, err := s.LoadIdentity("nope")
 	if err != nil {
-		t.Fatalf("LoadName: %v", err)
+		t.Fatalf("LoadIdentity: %v", err)
 	}
 	if ok {
-		t.Fatalf("LoadName ok = true for an unrecorded proxy, want false")
+		t.Fatalf("LoadIdentity ok = true for an unrecorded proxy, want false")
 	}
 }
 
@@ -251,8 +251,8 @@ func TestPruneByTTL(t *testing.T) {
 	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin: %v", err)
 	}
-	if err := s.SaveName("p", "swift-falcon"); err != nil {
-		t.Fatalf("SaveName: %v", err)
+	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
+		t.Fatalf("SaveIdentity: %v", err)
 	}
 	// Backdate all rows so the prune cutoff (now) is strictly after them.
 	old := time.Now().Add(-48 * time.Hour).UnixMilli()
@@ -279,7 +279,7 @@ func TestPruneByTTL(t *testing.T) {
 	if _, _, _, ok, _ := s.LoadPin("p"); ok {
 		t.Fatalf("pin survived prune")
 	}
-	if _, ok, _ := s.LoadName("p"); ok {
+	if _, ok, _ := s.LoadIdentity("p"); ok {
 		t.Fatalf("name survived prune")
 	}
 }
@@ -298,8 +298,8 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 		if err := s.UpsertPin(id, "/ws", "go", PinSourceRoots); err != nil {
 			t.Fatalf("UpsertPin(%s): %v", id, err)
 		}
-		if err := s.SaveName(id, "swift-falcon-"+id); err != nil {
-			t.Fatalf("SaveName(%s): %v", id, err)
+		if err := s.SaveIdentity(id, "swift-falcon-"+id, ""); err != nil {
+			t.Fatalf("SaveIdentity(%s): %v", id, err)
 		}
 	}
 	// Backdate everything well past the cutoff.
@@ -321,7 +321,7 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 	if _, _, _, ok, _ := s.LoadPin("live"); !ok {
 		t.Error("live session lost its pin")
 	}
-	if _, ok, _ := s.LoadName("live"); !ok {
+	if _, ok, _ := s.LoadIdentity("live"); !ok {
 		t.Error("live session lost its name")
 	}
 	// The abandoned one is still reclaimed.
@@ -331,7 +331,7 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 	if _, _, _, ok, _ := s.LoadPin("dead"); ok {
 		t.Error("dead session's pin survived")
 	}
-	if _, ok, _ := s.LoadName("dead"); ok {
+	if _, ok, _ := s.LoadIdentity("dead"); ok {
 		t.Error("dead session's name survived")
 	}
 }
@@ -367,10 +367,10 @@ func TestNilStoreMethodsAreSafe(t *testing.T) {
 	if _, _, _, ok, err := s.LoadPin("p"); err != nil || ok {
 		t.Fatalf("nil LoadPin: ok=%v err=%v", ok, err)
 	}
-	if err := s.SaveName("p", "swift-falcon"); err != nil {
+	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
 		t.Fatalf("nil SaveName: %v", err)
 	}
-	if _, ok, err := s.LoadName("p"); err != nil || ok {
+	if _, ok, err := s.LoadIdentity("p"); err != nil || ok {
 		t.Fatalf("nil LoadName: ok=%v err=%v", ok, err)
 	}
 	if err := s.Prune(time.Now()); err != nil {
