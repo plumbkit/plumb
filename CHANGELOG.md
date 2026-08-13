@@ -66,6 +66,30 @@
 
   Crashing payloads are retained as a named corpus that runs under plain
   `make test`, so every input found stays a regression test.
+- **Fuzz targets over path canonicalisation and the boundary policy, checked
+  against the kernel rather than against a second string implementation.**
+
+  `FuzzPathPolicyCheckAgainstKernel` asks the filesystem the question the policy
+  is really answering: when `PathPolicy.Check` ALLOWS a write, the write is
+  performed and the resolved location compared against the root `Check` named. A
+  string-containment assertion cannot see the failure this catches, because the
+  whole defect class is the policy and the syscall disagreeing about which file a
+  path names — exactly the escape closed in 0.16.5.
+
+  `FuzzCanonicalAgreesWithKernel` asserts that `paths.Canonical(p)` names the
+  same file as `p` (by inode identity, not text), that it has a fixed point, and
+  that an absolute path stays absolute.
+
+  Both are mutation-verified against the pre-fix code: reverting canonicalisation
+  to its lexical form reproduces the escape and each target catches it, with the
+  boundary one showing the write landing outside every allowed root and
+  overwriting a canary. Escape payloads are retained as a named corpus that runs
+  under plain `make test`.
+
+  Recorded while doing it, because the code comments imply the opposite: the two
+  `..` refusals are defence in depth for this class, not the defence. Deleting
+  both leaves every payload still refused. The load-bearing code is the symlink
+  resolution in `canonicalRoot`.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,
