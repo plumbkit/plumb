@@ -81,10 +81,25 @@
   that an absolute path stays absolute.
 
   Both are mutation-verified against the pre-fix code: reverting canonicalisation
-  to its lexical form reproduces the escape and each target catches it, with the
-  boundary one showing the write landing outside every allowed root and
-  overwriting a canary. Escape payloads are retained as a named corpus that runs
-  under plain `make test`.
+  to its lexical form reproduces the escape and each target catches it — the
+  boundary one showing a write landing outside every allowed root and overwriting
+  a canary, the canonicaliser one catching an unresolved symlink left in its own
+  output. Escape payloads are retained as a named corpus that runs under plain
+  `make test`.
+
+  The canonicaliser target needed that second property to earn its place. An
+  inode-identity differential alone does NOT catch a lexical implementation: for
+  a `..`-free path the unresolved result still follows the same symlink to the
+  same file, so the comparison is trivially true. Requiring that `EvalSymlinks`
+  is a no-op on the OUTPUT — the fixed-point form of "fully resolved" — is what
+  fails immediately. Found by a reviewer reverting the code and watching the
+  target pass.
+
+  The harness resolves where a write would land BEFORE performing it, and reports
+  an out-of-sandbox target without writing. A lexical safety check there was a
+  real hole: this target exists to run against broken path resolution, and the
+  `toRoot -> /` fixture meant a regressed policy could make `make test` write
+  through it onto the real filesystem.
 
   Recorded while doing it, because the code comments imply the opposite: the two
   `..` refusals are defence in depth for this class, not the defence. Deleting

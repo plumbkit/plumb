@@ -113,15 +113,35 @@ func newBoundarySandbox(t *testing.T) *boundarySandbox {
 	}
 }
 
-// insideSandbox reports whether a path is lexically under the sandbox, used only
-// to decide whether performing a write is SAFE — never as the containment
-// oracle.
-func (s *boundarySandbox) insideSandbox(p string) bool {
+// safeToWrite reports whether performing the write would land inside the test's
+// own sandbox. It resolves the path the way the KERNEL will, and that is not
+// fastidiousness — a lexical check here is a hole that writes on the real
+// filesystem.
+//
+// The first version compared filepath.Rel(s.root, filepath.Clean(p)), which
+// cannot see through the `toRoot -> /` symlink this very fixture creates. For
+// `<sandbox>/ws/toRoot/etc/hosts` the lexical check says "inside", while the
+// kernel resolves the parent to /etc. Nothing then stood between the fuzzer and
+// a real write except Check itself — the code under test. That is exactly
+// backwards: this target exists to be run against BROKEN path resolution (a
+// regression, or a deliberate mutation, which is standard practice here), and
+// under a lexical canonicalRoot the corpus entry `toRoot/etc/hosts` runs under
+// plain `make test` and writes through the symlink to a kernel-resolved
+// location. A reviewer demonstrated it landing in /tmp on the real filesystem.
+//
+// So safety is decided by the same kernel resolution the oracle uses, applied
+// BEFORE the write rather than after it. A path whose resolved parent is outside
+// the sandbox is never written — it is reported as the escape it is.
+func (s *boundarySandbox) safeToWrite(p string) (resolved string, ok bool) {
 	if !filepath.IsAbs(p) {
-		return false
+		return "", false
 	}
-	rel, err := filepath.Rel(s.root, filepath.Clean(p))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return "", false // parent does not exist or cannot be resolved; no write to attempt
+	}
+	target := filepath.Join(dir, filepath.Base(p))
+	return target, withinResolved(s.root, target)
 }
 
 func FuzzPathPolicyCheckAgainstKernel(f *testing.F) {
@@ -177,16 +197,22 @@ func FuzzPathPolicyCheckAgainstKernel(f *testing.F) {
 				continue
 			}
 
-			// 2. Ask the KERNEL. If the path is outside the sandbox we do not write —
-			//    an allowed path outside the sandbox is itself the finding.
-			if !s.insideSandbox(path) {
-				t.Errorf("Check allowed a path outside the test sandbox entirely: %q\n"+
-					"the policy's only root is %q", path, s.ws)
+			// 2. Resolve where a write WOULD land, by the kernel's rules, before
+			//    performing one. A target outside the sandbox is the finding itself and
+			//    is reported WITHOUT writing — the point is to detect the escape, never
+			//    to perform it.
+			landed, safe := s.safeToWrite(path)
+			if landed == "" {
+				continue // unresolvable parent: nothing a write would tell us
+			}
+			if !safe {
+				t.Errorf("BOUNDARY ESCAPE: Check allowed %q, which resolves to %q — "+
+					"outside the test sandbox entirely, and outside the only allowed root %q.\n"+
+					"Reported without writing.", path, landed, s.ws)
 				continue
 			}
-			landed, ok := writeAndResolve(t, path)
-			if !ok {
-				continue // the write could not be performed (missing parent, ENOTDIR, …)
+			if !confirmWrite(t, path, landed) {
+				continue // the write could not be performed (ENOTDIR, EACCES, …)
 			}
 			if !withinResolved(s.ws, landed) {
 				t.Errorf("BOUNDARY ESCAPE: Check allowed %q, but the write landed at %q,\n"+
@@ -201,24 +227,29 @@ func FuzzPathPolicyCheckAgainstKernel(f *testing.F) {
 	})
 }
 
-// writeAndResolve performs the write the policy just authorised and returns
-// where the byte ACTUALLY landed, resolved by the kernel. ok is false when the
-// write could not be attempted at all, which is not a policy question.
+// confirmWrite performs the write the policy authorised, having already
+// established that its kernel-resolved target is inside the sandbox, and
+// verifies the byte really is at that target.
 //
-// The resolution is done on the containing directory after the write, so
-// symlinked components are followed exactly as the kernel followed them —
-// deliberately NOT by re-running plumb's own canonicaliser, which would make the
-// oracle circular and blind to the very disagreement it exists to detect.
-func writeAndResolve(t *testing.T, path string) (string, bool) {
+// Resolution happens BEFORE the write (safeToWrite) so a broken policy cannot
+// make this harness write outside its sandbox; the write then confirms the
+// resolution was not merely theoretical. It is deliberately NOT plumb's own
+// canonicaliser doing the resolving — that would make the oracle circular and
+// blind to the exact disagreement it exists to detect.
+func confirmWrite(t *testing.T, path, expected string) bool {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("plumb-fuzz-marker"), 0o600); err != nil {
-		return "", false
+		return false
 	}
-	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
-	if err != nil {
-		return "", false
+	got, err := os.ReadFile(expected)
+	if err != nil || string(got) != "plumb-fuzz-marker" {
+		// The byte is not where the kernel resolution said it would be. Either the
+		// resolution is wrong or something else moved underneath us; both are worth
+		// knowing and neither is a policy verdict, so report rather than assert.
+		t.Logf("write to %q did not appear at the resolved target %q (%v)", path, expected, err)
+		return false
 	}
-	return filepath.Join(dir, filepath.Base(path)), true
+	return true
 }
 
 // withinResolved reports containment of an already-resolved path under an
@@ -247,9 +278,13 @@ func TestPathPolicy_KnownEscapePayloadsAreRefused(t *testing.T) {
 	} {
 		path := filepath.Join(s.ws, suffix)
 		if _, err := s.policy.Check(path, AccessReadWrite); err == nil {
-			landed, ok := writeAndResolve(t, path)
-			if ok && !withinResolved(s.ws, landed) {
-				t.Errorf("payload %q was allowed and escaped to %q", suffix, landed)
+			// Resolve first, report without writing. Under a regressed policy this
+			// payload resolves outside the sandbox, and writing to find that out is
+			// what would put a file on the real filesystem.
+			landed, safe := s.safeToWrite(path)
+			if landed != "" && !withinResolved(s.ws, landed) {
+				t.Errorf("payload %q was allowed and resolves to %q, outside the workspace (safe-to-write=%v)",
+					suffix, landed, safe)
 			}
 		}
 		// The secret must never have been overwritten, whatever the policy said.
