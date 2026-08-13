@@ -45,10 +45,7 @@ func TestParseOutput_Valid(t *testing.T) {
 		]
 	}`)
 
-	findings, err := parseOutput(data, "golangci-lint")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	findings := parseOutput(data, "golangci-lint")
 	if len(findings) != 2 {
 		t.Fatalf("got %d findings, want 2", len(findings))
 	}
@@ -78,21 +75,15 @@ func TestParseOutput_Valid(t *testing.T) {
 
 func TestParseOutput_EmptyIssues(t *testing.T) {
 	data := []byte(`{"Issues": []}`)
-	findings, err := parseOutput(data, "golangci-lint")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	findings := parseOutput(data, "golangci-lint")
 	if len(findings) != 0 {
 		t.Errorf("got %d findings, want 0", len(findings))
 	}
 }
 
 func TestParseOutput_Malformed(t *testing.T) {
-	// Malformed JSON should return nil, nil (graceful degradation).
-	findings, err := parseOutput([]byte(`not json`), "golangci-lint")
-	if err != nil {
-		t.Fatalf("expected nil error for malformed JSON, got: %v", err)
-	}
+	// Malformed JSON should return no findings (graceful degradation).
+	findings := parseOutput([]byte(`not json`), "golangci-lint")
 	if findings != nil {
 		t.Errorf("expected nil findings for malformed JSON")
 	}
@@ -100,10 +91,7 @@ func TestParseOutput_Malformed(t *testing.T) {
 
 func TestParseOutput_NullIssues(t *testing.T) {
 	data := []byte(`{"Issues": null}`)
-	findings, err := parseOutput(data, "golangci-lint")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	findings := parseOutput(data, "golangci-lint")
 	if len(findings) != 0 {
 		t.Errorf("got %d findings, want 0", len(findings))
 	}

@@ -11,6 +11,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -56,8 +59,10 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 	// golangci-lint resolves the Go module from its working directory. The daemon
 	// runs from "/", which is in no module, so anchor the run at the analysed file's
 	// directory. files are the absolute paths of just-written source files.
+	var base string
 	if dir := filepath.Dir(files[0]); filepath.IsAbs(dir) {
 		cmd.Dir = dir
+		base = dir
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -77,7 +82,100 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 		}
 		return nil, nil
 	}
-	return parseOutput(stdout.Bytes(), a.Name())
+	return flagStaleCache(parseOutput(stdout.Bytes(), a.Name()), base, a.Name()), nil
+}
+
+// StaleCacheCode is the Code carried by the synthetic finding that replaces a
+// findings set golangci-lint attributed entirely to files that are not on disk.
+const StaleCacheCode = "stale-cache"
+
+// StaleCacheHint is the remediation an agent or human should run. golangci-lint's
+// cache is process-global and machine-wide, so plumb reports rather than cleans
+// it — see flagStaleCache.
+const StaleCacheHint = "golangci-lint cache clean"
+
+// flagStaleCache detects golangci-lint's stale-cache failure mode: after a
+// sibling git worktree is deleted, the shared cache keeps returning issues
+// attributed to paths inside the removed directory. The agent then debugs a
+// "lint regression" in files that do not exist — recorded instances produced 29
+// and 9 phantom findings, and the cost is precisely that it looks like a genuine
+// regression in the change you just made.
+//
+// The signal is deliberately ALL-or-nothing: it fires only when EVERY finding
+// names a path absent from disk. A mixed set proves the run did make contact
+// with the current tree, and announcing "stale cache, ignore everything" while
+// one finding is real would be a worse failure than the bug — so a mixed set is
+// returned untouched. When every finding is phantom nothing actionable is lost
+// by replacing them: no agent can fix a file that does not exist.
+//
+// plumb reports and does not remediate. `golangci-lint cache clean` mutates
+// state shared by every concurrent agent and by the user's own terminal, and the
+// re-run it implies is a cold-cache lint pass — far beyond the post-write
+// analyser timeout (2 s by default), so auto-remediation would in practice
+// degrade into silence while slowing every peer down. The message names the
+// command instead.
+//
+// base is the directory golangci-lint ran in (cmd.Dir), which is what its output
+// paths are relative to; empty base means the process working directory, which is
+// already what os.Stat resolves a relative path against.
+func flagStaleCache(findings []quality.Finding, base, source string) []quality.Finding {
+	if len(findings) == 0 || !allPathsMissing(findings, base) {
+		return findings
+	}
+	return []quality.Finding{{
+		Severity: quality.SeverityWarning,
+		Code:     StaleCacheCode,
+		Source:   source,
+		Message: fmt.Sprintf("suppressed %d finding(s): every one names a file that is not on disk, "+
+			"which means golangci-lint returned them from a stale cache (typically a deleted sibling "+
+			"worktree), not from your code. Run `%s`, then lint again.", len(findings), StaleCacheHint),
+	}}
+}
+
+// allPathsMissing reports whether every finding names a path absent from disk,
+// at one os.Stat per DISTINCT path.
+//
+// Conservative by construction: a path counts as missing only when the stat
+// fails with "does not exist". Anything present in any form counts as present —
+// including a directory — and so does a path we could not check at all (an empty
+// filename, or a stat that failed for another reason such as a permission-denied
+// parent). A check that cannot see a file must never claim the file is gone.
+func allPathsMissing(findings []quality.Finding, base string) bool {
+	checked := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		p := resolveFindingPath(f.File, base)
+		present, seen := checked[p]
+		if !seen {
+			present = pathPresent(p)
+			checked[p] = present
+		}
+		if present {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveFindingPath maps a golangci-lint output path to one os.Stat can use.
+// Measured behaviour: golangci-lint emits paths relative to its own working
+// directory — running it at a module root reports "sub/deep/bad.go", one level
+// down "deep/bad.go", and in the file's own directory "bad.go". Resolving
+// against anything else (the module root, say) would make every finding stat as
+// missing, which is the one way this check could turn real findings into a bogus
+// stale-cache report.
+func resolveFindingPath(p, base string) string {
+	if p == "" || base == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
+func pathPresent(p string) bool {
+	if p == "" {
+		return true // nothing to check — cannot claim it is gone
+	}
+	_, err := os.Stat(p)
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // lookPath is the PATH lookup seam (tests substitute it).
@@ -168,13 +266,16 @@ type lintIssue struct {
 	} `json:"Pos"`
 }
 
-func parseOutput(data []byte, source string) ([]quality.Finding, error) {
+// parseOutput converts golangci-lint's JSON document into findings. Malformed
+// output yields no findings rather than an error: the write has already
+// succeeded and a linter we cannot parse must not fail it.
+func parseOutput(data []byte, source string) []quality.Finding {
 	var out lintOutput
 	// golangci-lint appends a human-readable summary after the JSON document on
 	// stdout when issues are present, so decode only the leading JSON value and
 	// ignore any trailing text (json.Unmarshal would reject it).
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&out); err != nil {
-		return nil, nil // malformed output — treat as no findings
+		return nil // malformed output — treat as no findings
 	}
 	findings := make([]quality.Finding, 0, len(out.Issues))
 	for _, issue := range out.Issues {
@@ -192,5 +293,5 @@ func parseOutput(data []byte, source string) ([]quality.Finding, error) {
 			Source:   source,
 		})
 	}
-	return findings, nil
+	return findings
 }
