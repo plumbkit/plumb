@@ -254,8 +254,11 @@ func Scan(workspace string, liveCutoff time.Time, guard PathGuard) {
 	}
 }
 
-// logDirInsideWorkspace reports whether <workspace>/.plumb/tx-log really lives
-// inside the workspace once symlinks are resolved.
+// logDirIsTheRealTxLogDir reports whether <workspace>/.plumb/tx-log really is
+// that directory once symlinks are resolved — an identity check, not a
+// containment one. Containment is not enough here: the workspace root admits
+// itself, so a tx-log resolving to the workspace would pass a containment test
+// and still let Scan delete .git.
 //
 // Without this, Scan is a directory-DELETION primitive, and one that needs no
 // manifest at all. `.plumb/tx-log` — or `.plumb` itself — is an ordinary path

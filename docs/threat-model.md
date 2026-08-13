@@ -75,7 +75,10 @@ exist because of it.
 path-bearing call is resolved and boundary-checked against the connection's
 pinned root plus explicitly granted `allow_dir` roots. Alias spellings
 (symlinks, macOS firmlinks, case-insensitive paths) are canonicalised before the
-check, because a boundary test on an unresolved path is not a boundary test.
+check, because a boundary test on an unresolved path is not a boundary test —
+or, where canonicalisation cannot be faithful, the call is refused outright
+rather than cleaned into something checkable. A2 has the detail and the reason;
+this summary is not a substitute for it.
 
 **B4 — daemon → git.** Tiered policy: read, write, destructive, network. Each
 tier is separately enabled; destructive and network additionally require
@@ -134,7 +137,9 @@ real escape survived here until 2026-08-10:
    applies `..` to wherever that landed. With `sub` a committed symlink the two
    name different files, so the check ruled on one and the syscall touched
    another: `write_file` wrote outside every allowed root, `read_file` disclosed
-   the target, `find_files` listed it, and a single committed `sub -> /` made the
+   the target, `find_files` listed it (its `path` root argument goes through the
+   single-path guard, even though the walk it then performs is item 2's
+   mechanism), and a single committed `sub -> /` made the
    whole filesystem addressable as in-workspace. `PathPolicy.Check` therefore
    rejects an absolute path carrying an unresolved `..`, naming the cleaned form
    as the fix. Refused rather than cleaned deliberately: cleaning would keep
@@ -410,12 +415,24 @@ Tracked, not hidden. Each is real today.
    When it does, it aggregates config, logs, session state and failure data into
    one shareable object — the single artefact most likely to leak, and the one
    needing the strictest redaction tests.
-3. **Fuzzing has started and covers one parser of six.** `FuzzResolveArgs`
-   (#258) fuzzes the argument-correction and alias engine, with retained corpora
-   that run under plain `make test` so every payload found stays a regression
-   test, and `make fuzz` discovers targets rather than listing them. **MCP
-   framing, path canonicalisation, symlink traversal, workspace roots and
-   transaction journals still have none.**
+3. **Fuzzing has started and covers two parsers of six.** `FuzzResolveArgs`
+   (#258) fuzzes the argument-correction and alias engine, and `FuzzScanReplay`
+   fuzzes the transaction-journal replay path — the one part of `txlog` that
+   parses input plumb did not write — asserting confinement as its invariant.
+   Both keep retained corpora that run under plain `make test`, so every payload
+   found stays a regression test, and `make fuzz` discovers targets rather than
+   listing them. **MCP framing, path canonicalisation, symlink traversal and
+   workspace roots still have none.**
+
+   An earlier revision of this section counted one of six and listed transaction
+   journals among the uncovered. That was wrong: `FuzzScanReplay` landed inside
+   0.16.5, in the same commit that confined orphan replay, and that commit's own
+   message calls it "the first fuzz target in the tree". The error is recorded
+   rather than quietly fixed because it cost something real — a second agent
+   scoped work to build a journal fuzzer that already existed, and caught it only
+   because a third checked the claim against the tree. A threat model that
+   UNDERSTATES coverage is not the harmless direction of wrong; it buys duplicated
+   work with the same currency an overclaim buys false confidence.
 
    Worth recording why the oracle matters more than the target: the fix that
    first target prompted was wrong twice. `dec.More()` (the stdlib defines it as
@@ -437,8 +454,8 @@ Tracked, not hidden. Each is real today.
    had failed to disclose — found a live arbitrary-code-execution path sitting
    behind a `//nolint` comment asserting the opposite.
 
-   Since then, **six independent reviews have found defects in the FIX**, not
-   merely in the original code:
+   Since then, **every independent review of a fix has found defects in the FIX**,
+   not merely in the original code. Five, each in work its author had finished:
 
    - A containment predicate that admitted the workspace root itself, so
      `.plumb/tx-log -> ..` still deleted `.git` — a payload one character shorter
@@ -447,9 +464,16 @@ Tracked, not hidden. Each is real today.
      one: `os.WriteFile` truncates an inode in place where `safeWrite` renames,
      leaving a hardlink escape (A2b.3).
    - A capability audit whose classification was complete and whose
-     ENFORCEMENT was unpinned — fourteen of fifteen protections could be deleted
-     with the suite still green.
-   - A boundary refusal that locked eight tools out of their own workspace.
+     ENFORCEMENT was unpinned — of the twelve protections the two enforcement
+     helpers provide, deleting any but ONE left the whole suite green, so the
+     enforcement could have been removed wholesale while the classification went
+     on describing a protection that no longer existed.
+   - A root-canonicalisation mismatch that made `filepath.Rel` report a file
+     sitting inside the project as an escape. Its real signature was SILENCE, not
+     refusal: `hintRelPath` returned `""` so memory hint injection stopped firing
+     for a whole project with no error and no log, and `topology.Store.toRelative`
+     returned empty result sets. Only `relevant_memories` actually answered with a
+     refusal — about a path the boundary guard had admitted two lines earlier.
    - A fuzz target whose sharpest property had become unreachable, and a parser
      fix that closed half its own differential.
 
