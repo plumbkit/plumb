@@ -465,3 +465,54 @@ func TestCheckMessages_ReceiptIsSilentWhenEverythingWasRead(t *testing.T) {
 		t.Errorf("the receipt should be silent once everything was read; got %q", out)
 	}
 }
+
+// TestCheckMessages_DeliversMailBoundToAnInheritedSession pins this tool's own
+// inherited-identity plumbing. CheckMessages builds its Inbox here rather than
+// reusing connSession.inbox, so deps.InheritedSessionIDs is a THIRD wiring path:
+// the shared one is pinned by TestInherit_ImpostorCannotReadBoundMailEndToEnd
+// and the listing by TestWorkspaceSessions_ListsInheritedMail, and dropping it
+// here left both green.
+//
+// It is not a security hole — it fails toward under-delivery — but it strands
+// pre-restart mail in the one tool an agent calls when it is waiting for a
+// reply, which is the moment the message matters most and the moment nobody is
+// looking at anything else.
+func TestCheckMessages_DeliversMailBoundToAnInheritedSession(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	const predecessor = "sess-alice-before-restart"
+	deps.InheritedSessionIDs = func() []string { return []string{predecessor} }
+
+	// Written to alice while the PRE-RESTART session held the name, so the row is
+	// bound to a session ID this connection does not have.
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "sent before the daemon restarted",
+		Addressee: "alice", AddresseeID: predecessor, TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "sent before the daemon restarted") {
+		t.Fatalf("mail bound to the inherited predecessor was not delivered; got %q", out)
+	}
+
+	// And without the inheritance the same session reads nothing, so the test is
+	// exercising the plumbing rather than an unbound row.
+	deps2, local2, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	if _, err := local2.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "sent before the daemon restarted",
+		Addressee: "alice", AddresseeID: predecessor, TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	out, err = NewCheckMessages(deps2).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "sent before the daemon restarted") {
+		t.Fatalf("a session with no inheritance read a bound message; got %q", out)
+	}
+}
