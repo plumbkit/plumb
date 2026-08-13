@@ -1,0 +1,350 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/session"
+)
+
+// putTestNote writes one note addressed to `to` in workspace's collab.db,
+// creating the store on first use, and returns the conversation it landed in.
+func putTestNote(t *testing.T, workspace, from, to, body string) string {
+	t.Helper()
+	store, err := collab.Open(workspace)
+	if err != nil {
+		t.Fatalf("opening collab store: %v", err)
+	}
+	defer store.Close()
+	conv, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: from,
+		AuthorID:      "id-" + from,
+		Body:          body,
+		Addressee:     to,
+		TTL:           time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("putting note: %v", err)
+	}
+	return conv
+}
+
+// TestMailWaiting_NeverClaims is the load-bearing test of `plumb mail`.
+//
+// The command exists so a hook can ask, from outside a session, whether an
+// agent has mail. That caller is not the recipient. If the probe set the
+// delivery watermark, the row would be marked delivered to an agent that never
+// saw a word of it — plumb's exactly-once guarantee inverted into
+// exactly-never, and silently, because a consumed message looks exactly like a
+// message nobody sent.
+//
+// It is pinned from BOTH ends, because either alone can pass while the property
+// is broken. Repeated probing must keep reporting the message (a claim would
+// make the second probe report zero), AND a subsequent real claim must still
+// deliver it (the row must still be handed over, not merely still counted).
+func TestMailWaiting_NeverClaims(t *testing.T) {
+	ws := t.TempDir()
+	putTestNote(t, ws, "peer-two", "peer-one", "the rate limiter is yours")
+
+	for i := 1; i <= 3; i++ {
+		ages, err := mailWaiting(ws, "peer-one")
+		if err != nil {
+			t.Fatalf("probe %d: %v", i, err)
+		}
+		if len(ages) != 1 {
+			t.Fatalf("probe %d reported %d waiting messages, want 1 — a probe that consumes its "+
+				"answer has claimed the message on behalf of an agent that never read it", i, len(ages))
+		}
+	}
+
+	// The other end: the message must still be DELIVERABLE, not merely still
+	// counted. A probe that marked the row delivered would leave nothing here.
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("reopening collab store: %v", err)
+	}
+	defer store.Close()
+	rows, err := store.ClaimNotes(context.Background(), "peer-one", ws, time.Now(), 0)
+	if err != nil {
+		t.Fatalf("claiming: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("the real claim delivered %d messages, want 1 — probing consumed the message, "+
+			"so the recipient can never receive it", len(rows))
+	}
+	if rows[0].Body != "the rate limiter is yours" {
+		t.Errorf("delivered body = %q, want the original", rows[0].Body)
+	}
+
+	// And once genuinely delivered, the probe agrees it is gone.
+	ages, err := mailWaiting(ws, "peer-one")
+	if err != nil {
+		t.Fatalf("probe after claim: %v", err)
+	}
+	if len(ages) != 0 {
+		t.Errorf("probe after a real claim reported %d waiting, want 0 — the probe is not reading "+
+			"the same watermark delivery writes", len(ages))
+	}
+}
+
+// TestMailWaiting_ReadOnlyHandleCannotWrite pins the mechanism rather than the
+// behaviour above: the store `plumb mail` holds must REFUSE a write, so the
+// no-claim property survives someone later wiring a different query through it.
+func TestMailWaiting_ReadOnlyHandleCannotWrite(t *testing.T) {
+	ws := t.TempDir()
+	putTestNote(t, ws, "peer-two", "peer-one", "hello")
+
+	store, err := collab.OpenReadOnly(ws)
+	if err != nil {
+		t.Fatalf("opening read-only: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.ClaimNotes(context.Background(), "peer-one", ws, time.Now(), 0); err == nil {
+		t.Fatal("ClaimNotes succeeded through the read-only handle — mode=ro is not in force, so " +
+			"nothing but caller discipline stops `plumb mail` consuming a message")
+	}
+}
+
+// TestMailWaiting_NoMailboxIsNotAnError: collab.db is created lazily, so a
+// workspace whose sessions never exchanged a message has none. That is "no
+// mail", not a failure — a hook must not be broken by the common case.
+func TestMailWaiting_NoMailboxIsNotAnError(t *testing.T) {
+	ages, err := mailWaiting(t.TempDir(), "peer-one")
+	if err != nil {
+		t.Fatalf("workspace with no collab.db: %v", err)
+	}
+	if len(ages) != 0 {
+		t.Errorf("got %d waiting, want 0", len(ages))
+	}
+}
+
+// TestMailWaiting_ExcludesOtherAddressees checks the disclosure boundary at the
+// query: a probe for one session must not count another's mail. Names are the
+// address, so an over-broad filter would let anyone learn that a peer has mail.
+func TestMailWaiting_ExcludesOtherAddressees(t *testing.T) {
+	ws := t.TempDir()
+	putTestNote(t, ws, "peer-two", "someone-else", "not for peer-one")
+	putTestNote(t, ws, "peer-two", collab.AddresseeNext, "for whoever arrives")
+
+	ages, err := mailWaiting(ws, "peer-one")
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 0 {
+		t.Errorf("got %d waiting for peer-one, want 0 — a note to another session, or to %q, is "+
+			"not this session's mail", len(ages), collab.AddresseeNext)
+	}
+}
+
+// TestMailWaiting_AgesOldestFirst pins the ordering the JSON contract promises,
+// since a hook applying a staleness rule reads ages_seconds[0] as the oldest.
+func TestMailWaiting_AgesOldestFirst(t *testing.T) {
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("opening collab store: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	for _, age := range []time.Duration{30 * time.Second, 20 * time.Minute, 5 * time.Minute} {
+		if _, err := store.PutNote(context.Background(), collab.NoteInput{
+			AuthorSession: "peer-two", AuthorID: "id-peer-two",
+			Body: "x", Addressee: "peer-one", TTL: time.Hour,
+		}, now.Add(-age)); err != nil {
+			t.Fatalf("putting note: %v", err)
+		}
+	}
+
+	ages, err := mailWaiting(ws, "peer-one")
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 3 {
+		t.Fatalf("got %d ages, want 3", len(ages))
+	}
+	for i := 1; i < len(ages); i++ {
+		if ages[i] > ages[i-1] {
+			t.Fatalf("ages %v are not oldest-first — a hook reading ages_seconds[0] as the oldest "+
+				"would apply its staleness rule to the wrong message", ages)
+		}
+	}
+}
+
+// TestMailReport_EmptyAgesMarshalAsArray pins the JSON contract on the common
+// case. A nil slice marshals as null, and `jq '.ages_seconds | length'` errors
+// on null — so a consumer would break precisely when there is no mail, which is
+// almost every invocation.
+func TestMailReport_EmptyAgesMarshalAsArray(t *testing.T) {
+	for _, ws := range []string{"", t.TempDir()} {
+		ages, err := mailWaiting(ws, "peer-one")
+		if err != nil {
+			t.Fatalf("mailWaiting(%q): %v", ws, err)
+		}
+		blob, err := json.Marshal(mailReport{Session: "peer-one", AgesSeconds: ages})
+		if err != nil {
+			t.Fatalf("marshalling: %v", err)
+		}
+		if !strings.Contains(string(blob), `"ages_seconds":[]`) {
+			t.Errorf("workspace %q rendered %s — ages_seconds must be an empty array, never null", ws, blob)
+		}
+	}
+}
+
+// TestMatchSessions_ResolvesSymlinkedWorkspace: a session's Folder is recorded
+// symlink-resolved, while --workspace is whatever was typed. On macOS that
+// difference is routine (/tmp -> /private/tmp), and a lexical compare would
+// match nothing while looking like "no session here".
+func TestMatchSessions_ResolvesSymlinkedWorkspace(t *testing.T) {
+	target, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolving temp dir: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "link-to-repo")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	all := []session.Info{{Name: "quiet-mesa", Folder: target}}
+	if got := matchSessions(all, "workspace", link); len(got) != 1 {
+		t.Errorf("--workspace via a symlink matched %d sessions, want 1 — the argument is not being "+
+			"canonicalised the way a session root is", len(got))
+	}
+}
+
+// TestMailSelector_RefusesZeroOrSeveral: the selectors answer one question three
+// ways, so a call naming none is unanswerable and one naming two would need a
+// precedence rule no caller could predict.
+func TestMailSelector_RefusesZeroOrSeveral(t *testing.T) {
+	t.Cleanup(resetMailFlags)
+
+	resetMailFlags()
+	if _, _, err := mailSelector(); err == nil {
+		t.Error("no selector was accepted — the command cannot know which session to report on")
+	}
+
+	resetMailFlags()
+	mailFlagSession, mailFlagExternalID = "quiet-mesa", "abc123"
+	if _, _, err := mailSelector(); err == nil {
+		t.Error("two selectors were accepted — resolution would depend on an unstated precedence")
+	}
+
+	resetMailFlags()
+	mailFlagSession = "  quiet-mesa  "
+	name, value, err := mailSelector()
+	if err != nil {
+		t.Fatalf("one selector: %v", err)
+	}
+	if name != "session" || value != "quiet-mesa" {
+		t.Errorf("got (%q, %q), want (\"session\", \"quiet-mesa\")", name, value)
+	}
+}
+
+func resetMailFlags() {
+	mailFlagSession, mailFlagExternalID, mailFlagWorkspace, mailFlagJSON = "", "", "", false
+}
+
+// TestMatchSessions_SelectorsAndAmbiguity covers the resolution rules a hook
+// depends on: --external-id is exact (the reason it exists), --workspace is a
+// best-effort fallback that must report ambiguity rather than pick, and a
+// session with no resolved folder has no mailbox to check.
+func TestMatchSessions_SelectorsAndAmbiguity(t *testing.T) {
+	ws := t.TempDir()
+	all := []session.Info{
+		{Name: "quiet-mesa", Folder: ws, ExternalID: "cc-session-1"},
+		{Name: "swift-falcon", Folder: ws},
+		{Name: "lone-heron", Folder: t.TempDir()},
+		{Name: "pending", Folder: ""},
+	}
+
+	if got := matchSessions(all, "external-id", "cc-session-1"); len(got) != 1 || got[0].Name != "quiet-mesa" {
+		t.Errorf("--external-id matched %v, want exactly quiet-mesa — the selector a hook relies on "+
+			"must be exact even when sessions share a folder", mailNames(got))
+	}
+	if got := matchSessions(all, "workspace", ws); len(got) != 2 {
+		t.Errorf("--workspace matched %d sessions, want 2 — the caller must be told it is ambiguous, "+
+			"not handed a guess", len(got))
+	}
+	if got := matchSessions(all, "session", "pending"); len(got) != 0 {
+		t.Errorf("a session with no resolved folder matched — there is no workspace to hold its mailbox")
+	}
+	if got := matchSessions(all, "workspace", filepath.Join(ws, ".")+string(filepath.Separator)); len(got) != 2 {
+		t.Errorf("an untidy but equivalent --workspace path matched %d, want 2", len(got))
+	}
+}
+
+// TestRunMail_ResolvesByExternalID is the end-to-end path the Stop hook takes:
+// a client knows its own conversation id and nothing else, session_start
+// persists it as external_id, and the probe resolves from that alone.
+func TestRunMail_ResolvesByExternalID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Cleanup(resetMailFlags)
+	resetMailFlags()
+
+	ws := t.TempDir()
+	info, err := session.Register(session.Info{Name: "quiet-mesa", Folder: ws, Language: "go"})
+	if err != nil {
+		t.Fatalf("registering session: %v", err)
+	}
+	session.SetExternalID(info.ID, "cc-session-1")
+	putTestNote(t, ws, "swift-falcon", "quiet-mesa", "ratelimit is yours")
+
+	mailFlagExternalID = "cc-session-1"
+	got, err := resolveMailSession()
+	if err != nil {
+		t.Fatalf("resolving by external id: %v", err)
+	}
+	if got.Name != "quiet-mesa" {
+		t.Fatalf("resolved %q, want quiet-mesa", got.Name)
+	}
+	ages, err := mailWaiting(got.Folder, got.Name)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 1 {
+		t.Fatalf("got %d waiting, want 1", len(ages))
+	}
+}
+
+// TestResolveMailSession_UnknownIsAnError: a selector matching nothing is a
+// usage error, not "no mail". Reporting zero would tell a hook that a session it
+// failed to find is quietly up to date.
+func TestResolveMailSession_UnknownIsAnError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Cleanup(resetMailFlags)
+	resetMailFlags()
+
+	mailFlagSession = "no-such-session"
+	_, err := resolveMailSession()
+	if err == nil {
+		t.Fatal("an unknown session resolved successfully")
+	}
+	if !strings.Contains(err.Error(), "no live session") {
+		t.Errorf("error %q does not say the session was not found", err)
+	}
+}
+
+// TestMailSentence_SaysWhichSession: resolving by --external-id or --workspace
+// means the caller may not know the session name, so the human form has to name
+// what it actually answered about.
+func TestMailSentence_SaysWhichSession(t *testing.T) {
+	empty := mailSentence(mailReport{Session: "quiet-mesa"})
+	if !strings.Contains(empty, "quiet-mesa") || !strings.Contains(empty, "No messages") {
+		t.Errorf("empty report renders as %q", empty)
+	}
+	full := mailSentence(mailReport{Session: "quiet-mesa", Count: 2, AgesSeconds: []int{300, 30}})
+	for _, want := range []string{"2 messages", "quiet-mesa", "oldest 5m", "newest 30s", "check_messages"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("report %q does not mention %q", full, want)
+		}
+	}
+	if strings.Contains(full, "swift-falcon") {
+		t.Error("the sentence leaked a sender name")
+	}
+}

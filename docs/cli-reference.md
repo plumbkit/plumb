@@ -29,6 +29,7 @@ language `none`.
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
+| [`plumb mail`](#plumb-mail) | Report whether a session has unread agent-to-agent messages |
 | [`plumb stats`](#plumb-stats) | Show tool-call statistics (alias: `status`) |
 | [`plumb diagnostics`](#plumb-diagnostics) | Print LSP diagnostics (alias: `diag`, `diags`) |
 | [`plumb log-level`](#plumb-log-level) | Change the running daemon's log level |
@@ -346,6 +347,61 @@ session name, ID, resolved workspace, and client identity.
 | Flag | Default | Effect |
 |---|---|---|
 | `--all` | `false` | Include sessions whose workspace has not resolved yet (Folder empty). |
+
+---
+
+## `plumb mail`
+
+```
+plumb mail (--session <name> | --external-id <id> | --workspace <dir>) [--json]
+```
+
+Report how many agent-to-agent messages are waiting for a plumb session,
+without reading or consuming them.
+
+It exists for a client-side hook that wakes an idle agent. Plumb's mailbox
+([`[collab] mailbox`](configuration.md)) delivers by polling — a message is
+handed over on a tool result, a `check_messages` call, or `session_start` — so
+an agent that has finished its turn and is waiting on its human never learns
+that a peer wrote to it. Nothing server-side can reach it; this lets the client
+ask the question from outside any session.
+
+**It never claims.** The handle is `mode=ro`, so the delivery watermark cannot
+be set: the messages stay undelivered and reach the agent through
+`check_messages` as usual. A probe that consumed its answer would mark a message
+delivered to an agent that never saw it — exactly-once turned into
+exactly-never.
+
+**It reports only whether, and how stale**: a count and the age of each waiting
+message, never bodies, senders, or conversation ids. A session *name* is not an
+identity (names come from a small pool, an ended session frees its name, and
+`rename_session` lets a session pick one), and a message body is another agent's
+free text — printed here it would flow straight into whatever consumes this
+output, which is an injection channel into the agent the mailbox otherwise
+labels these as unverified claims for.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--session <name>` | — | A live session's name, as shown by `plumb sessions`. |
+| `--external-id <id>` | — | The value a session passed to `session_start`'s `session_id` — a client's own conversation id. The reliable selector for a hook, which knows its conversation but not the session name. |
+| `--workspace <dir>` | — | A directory, when exactly one live session is pinned there. Reports ambiguity rather than guessing. |
+| `--json` | `false` | Emit `{"session","workspace","count","ages_seconds"}` instead of a sentence. `ages_seconds` is oldest first. |
+
+Name exactly one selector. Exit status is 0 whether or not mail is waiting, and
+non-zero only on error, so "has mail" is never confused with "the check failed"
+— read the count. A workspace that has never used the mailbox has no
+`collab.db`, which is reported as no mail rather than an error.
+
+Scope: the workspace mailbox only. Cross-project messages live in the
+daemon-level store behind the recipient's `[collab] cross_project` opt-in and
+are not reported. Notes addressed to `"next"` are excluded, matching the listing
+path `workspace_sessions` uses: such a note goes to whichever session claims it
+first, so counting it for every candidate would report the same message to
+several sessions that cannot all have it. The cost is that a `"next"` note left
+while a session is idle will not show up here.
+
+The `plumb-chat` skill's `references/idle-agent-wake-hook.md` gives the full
+Claude Code Stop-hook recipe built on this command.
 
 ---
 

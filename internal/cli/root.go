@@ -107,7 +107,7 @@ func init() {
 		}
 	})
 
-	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, restartCmd, initCmd, setupCmd, skillsCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd, enableLSPCmd, debugCmd, webCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, restartCmd, initCmd, setupCmd, skillsCmd, versionCmd, configCmd, sessionsCmd, mailCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd, enableLSPCmd, debugCmd, webCmd)
 	rootCmd.AddCommand(trustCmd)
 	rootCmd.AddCommand(taskCmds...)
 }

@@ -796,6 +796,48 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
+- **`plumb mail`: ask, from outside a session, whether an agent has messages
+  waiting.** The mailbox delivers by polling, so an agent that has finished its
+  turn and is waiting on its human never learns a peer wrote to it. Nothing
+  server-side can reach it — the daemon cannot push over MCP — so the client
+  has to ask, and until now there was no way to. A hook had to open `collab.db`
+  and write the delivery predicate itself.
+
+  **It never claims, and the guarantee is structural rather than promised.** The
+  caller is not the recipient; marking a row delivered on its behalf would spend
+  the exactly-once guarantee on an agent that never saw the text, and silently,
+  because a consumed message is indistinguishable from one nobody sent. The new
+  `collab.OpenReadOnly` hands back a `mode=ro` handle, so a claim issued through
+  it fails at the driver — the property survives someone later wiring a
+  different query in. `Open`-and-only-SELECT was the obvious implementation and
+  is the one deliberately not taken: it leaves the rule resting on every future
+  caller's care, and `Open` is not side-effect-free either (it migrates, stamps
+  the schema version, and writes a `.gitignore` entry).
+
+  **It reports whether, and how stale — never what.** A count and the age of
+  each waiting message; no bodies, no senders, no conversation ids. Three
+  independent reasons, any one sufficient. A session *name* is not an identity:
+  names come from a small pool, an ended session frees its name, and
+  `rename_session` lets a session pick one, so content keyed on a name is
+  content anyone can ask for by guessing. A body is another agent's free text,
+  and printing it here pipes it into whatever consumes the output — a hook's
+  feedback string — which is an injection channel into the very agent the
+  mailbox renders these as unverified *claims* for. And the body has a better
+  destination already: it stays unclaimed and arrives through a real delivery
+  path, in context, correctly labelled.
+
+  Three selectors, because identifying the session is the actual difficulty.
+  `--external-id` matches what a session passed to `session_start`'s
+  `session_id`, which is the only thing a hook reliably knows about itself;
+  `--session` takes a name; `--workspace` is the fallback and reports ambiguity
+  rather than guessing, since waking the wrong agent is worse than waking none.
+  Exit status is 0 whether or not mail is waiting and non-zero only on error, so
+  a data answer is never confused with a failure.
+
+  Counting goes through `collab.PendingNotes` — the same listing path
+  `workspace_sessions` uses — rather than a query written in the CLI, so the
+  delivery predicate stays defined in one place.
+
 - **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
   `leave_note` and `check_messages` have carried their whole contract in their
   own tool descriptions, which is the right place for it and the wrong shape
