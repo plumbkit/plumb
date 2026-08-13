@@ -239,8 +239,8 @@ func TestPersist_NameNotRestoredOntoOverlappingSession(t *testing.T) {
 	}
 	// The stored mapping is untouched, so the next (non-overlapping) reconnect
 	// still restores it.
-	if name, ok, _ := ss.LoadName("proxyX"); !ok || name != "steady-otter" {
-		t.Errorf("stored name = (%q,%v), want the persisted steady-otter left intact", name, ok)
+	if got, ok, _ := ss.LoadIdentity("proxyX"); !ok || got.Name != "steady-otter" {
+		t.Errorf("stored identity = (%+v,%v), want the persisted steady-otter left intact", got, ok)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestPersist_DisabledWritesNothing(t *testing.T) {
 	if len(recs) != 0 {
 		t.Fatalf("persist_state=false wrote %d rows, want 0", len(recs))
 	}
-	if _, ok, err := ss.LoadName("proxyX"); err != nil || ok {
+	if _, ok, err := ss.LoadIdentity("proxyX"); err != nil || ok {
 		t.Fatalf("persist_state=false recorded a session name: ok=%v err=%v", ok, err)
 	}
 }
@@ -403,7 +403,7 @@ func TestPersist_StoredNameRejectedByValidationIsReplaced(t *testing.T) {
 	defer ss.Close()
 
 	// A row written by an older daemon, before "next" was reserved.
-	if err := ss.SaveName("proxyX", "next"); err != nil {
+	if err := ss.SaveIdentity("proxyX", "next", ""); err != nil {
 		t.Fatalf("SaveName: %v", err)
 	}
 
@@ -414,12 +414,12 @@ func TestPersist_StoredNameRejectedByValidationIsReplaced(t *testing.T) {
 	}
 	first.close()
 
-	stored, ok, err := ss.LoadName("proxyX")
+	stored, ok, err := ss.LoadIdentity("proxyX")
 	if err != nil {
-		t.Fatalf("LoadName: %v", err)
+		t.Fatalf("LoadIdentity: %v", err)
 	}
-	if !ok || stored != name {
-		t.Fatalf("stored name = (%q, %v), want the unusable row replaced with %q", stored, ok, name)
+	if !ok || stored.Name != name {
+		t.Fatalf("stored identity = (%+v, %v), want the unusable row replaced with %q", stored, ok, name)
 	}
 
 	// The point of replacing it: the NEXT reconnect is stable.

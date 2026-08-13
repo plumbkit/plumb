@@ -114,6 +114,10 @@ type CollabDeps struct {
 	// ResolvePeer reports the LIVE session answering to a name. May be nil, in
 	// which case every message is treated as same-project and bound by name only.
 	ResolvePeer func(name string) (PeerSession, bool)
+	// InheritedSessionIDs returns predecessor session IDs this session provably
+	// continues, so it can still read mail bound to the session a daemon restart
+	// ended. May be nil.
+	InheritedSessionIDs func() []string
 }
 
 // PeerSession is a live peer session resolved by name.

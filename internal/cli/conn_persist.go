@@ -8,8 +8,11 @@ package cli
 // recognise the reconnected connection as a continuation of the previous one and
 // rehydrate the state that would otherwise be lost: strict-mode read tracking,
 // (for clients that do not report roots) the pinned workspace, and the session
-// name (mailbox notes are addressed by name, so a rename on every reconnect
-// would orphan them).
+// name AND mailbox identity — a note is addressed by name, so a rename on every
+// reconnect would orphan it, and a note to a live peer is bound to that peer's
+// session ID, so the reconnected connection must also inherit its predecessor's
+// ID to collect what was written before the restart (see inheritSessionID, which
+// is where the authorisation for that lives).
 //
 // Everything here is gated on [session].persist_state, a non-nil store, and a
 // non-empty proxy session ID (reads and pins additionally need a pinned
@@ -63,17 +66,18 @@ func (s *connSession) restoreName(id string) {
 	if !s.namePersistEnabled(v) {
 		return
 	}
-	name, ok, err := s.sessionState.LoadName(id)
+	prev, ok, err := s.sessionState.LoadIdentity(id)
 	if err != nil {
-		s.log().Debug("daemon: load session name failed", "err", err)
+		s.log().Debug("daemon: load session identity failed", "err", err)
 		return
 	}
 	if !ok {
 		s.persistName(v.sessName)
 		return
 	}
-	_, err = s.renameSession(name)
+	_, err = s.renameSession(prev.Name)
 	if err == nil {
+		s.inheritSessionID(prev.SessionID)
 		return
 	}
 	if errors.Is(err, session.ErrNameTaken) {
@@ -83,7 +87,7 @@ func (s *connSession) restoreName(id string) {
 		// alone, so the next reconnect — by which time the predecessor has gone —
 		// gets the name back.
 		s.log().Debug("daemon: persisted session name still held by a live session; keeping the generated name",
-			"persisted", name, "using", v.sessName)
+			"persisted", prev.Name, "using", v.sessName)
 		return
 	}
 	// Not merely busy: this daemon rejects the stored name outright (it predates a
@@ -93,18 +97,63 @@ func (s *connSession) restoreName(id string) {
 	// churn this persistence exists to prevent, and silent at Debug. Replace it
 	// with the name the session actually has so it converges after one reconnect.
 	s.log().Debug("daemon: persisted session name is no longer valid; replacing it",
-		"persisted", name, "using", v.sessName, "err", err)
+		"persisted", prev.Name, "using", v.sessName, "err", err)
 	s.persistName(v.sessName)
 }
 
-// persistName records the session's current name under its proxy session ID.
+// inheritSessionID accepts a predecessor's plumb session ID as a second mailbox
+// identity for this session, so messages BOUND to the session a daemon restart
+// ended still reach the agent they were written for. Without it, binding a
+// message to a session — which is what stops a name-reuser reading it — would
+// also strand every unread message across a restart, since the reconnected
+// connection registers under a fresh session ID.
+//
+// It is called from exactly one place, and that is the whole security argument.
+// The grant is authorised by the PROXY session ID: a 122-bit random value the
+// serve process generates for itself, replays only inside its own initialize
+// handshake, and which plumb never writes to a session file, a log line, or any
+// tool result. Presenting it is evidence of being the same serve process; being
+// called "alice" is not. Inheriting on the strength of a name would hand any
+// session its predecessor's mailbox for the cost of one rename_session, which is
+// precisely the hole the binding closed.
+//
+// It is also gated on the rename having SUCCEEDED, so a session only inherits an
+// identity while actually holding the name that identity answered to.
+//
+// The chain is bounded at ONE predecessor, deliberately. persistName re-records
+// this session's OWN ID under the proxy key, so the next restart inherits this
+// session and forgets the one before it. A message that survives two restarts
+// unread is therefore orphaned — bounded, rather than an ever-growing set of
+// identities that would slowly widen what one session may read.
+func (s *connSession) inheritSessionID(prevID string) {
+	if prevID == "" || prevID == s.sessID {
+		return
+	}
+	s.mutate(func(v *sessionView) { v.inheritedSessionIDs = []string{prevID} })
+	s.log().Debug("daemon: inherited predecessor mailbox identity", "predecessor", prevID)
+}
+
+// inheritedSessionIDs returns the predecessor identities this session may also
+// read mail for. Nil for every session that did not come back through the
+// authenticated persisted-state path, which is the overwhelming majority.
+func (s *connSession) inheritedSessionIDs() []string {
+	return s.view().inheritedSessionIDs
+}
+
+// persistName records the session's current name AND its own session ID under
+// its proxy session ID, so the next reconnect can both come back under the name
+// and prove which session it continues.
+//
+// Recording this session's own ID — never an inherited one — is what bounds the
+// inheritance chain at a single predecessor: after a second restart the ID
+// stored here is this session's, and the one it inherited is forgotten.
 func (s *connSession) persistName(name string) {
 	v := s.view()
 	if !s.namePersistEnabled(v) || name == "" {
 		return
 	}
-	if err := s.sessionState.SaveName(v.proxySessionID, name); err != nil {
-		s.log().Debug("daemon: persist session name failed", "err", err)
+	if err := s.sessionState.SaveIdentity(v.proxySessionID, name, s.sessID); err != nil {
+		s.log().Debug("daemon: persist session identity failed", "err", err)
 	}
 }
 

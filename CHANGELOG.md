@@ -507,6 +507,43 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
+- **A daemon restart no longer strands a message bound to the session it ended.**
+  Binding a message to a recipient's session ID stopped a later holder of the
+  name reading it; the cost was that a restart, which re-registers the
+  reconnected connection under a fresh session ID, orphaned every bound message
+  that had not yet been read. `persist_state` exists precisely so a restart is
+  transparent to a connected agent, and this was the one thing it had stopped
+  covering.
+
+  The reconnecting session now also inherits its predecessor's plumb session ID
+  (`session_state.db` schema v4 records it beside the name), and the delivery
+  predicate accepts a *set* of identities rather than one.
+
+  **The grant is authorised by the proxy session ID, never by a name.** That ID
+  is 122 bits from `crypto/rand`, generated per `plumb serve`, replayed only
+  inside its own `initialize` handshake, and never written to a session file, a
+  log line, or any tool result — so presenting it is evidence of being the same
+  serve process, whereas being called `alice` is evidence of nothing. Inheriting
+  on the strength of a name would hand any session its predecessor's mailbox for
+  the cost of one `rename_session`, which is the hole the binding closed. It is
+  the same bearer token that already restores strict-mode read tracking and the
+  workspace pin, so this is not a new trust anchor.
+
+  The inheritance is narrow by construction. It never widens `next` (always
+  unbound, matched by the name arm), never crosses `target_workspace` (its own
+  AND term), and never touches the `check_messages` registration gate. All three
+  readers — claim, probe and listing — take the same identity set, so a session
+  cannot be shown mail it may not collect, or collect mail it was not shown.
+
+  **The chain is bounded at one predecessor.** Each reconnect re-records its OWN
+  session ID, so the next inherits it and forgets the one before. A message
+  unread across two restarts expires rather than being inherited indefinitely by
+  a long-lived proxy.
+
+  A pre-v4 row carries no session ID, restores the name exactly as before, and
+  inherits nothing — an empty stored ID reads as "no predecessor", never as a
+  wildcard.
+
 - **`check_messages` now tells a sender which of its own messages nobody has
   read.** The mailbox reported delivery from the recipient's side only, so a
   sender could observe that it sent something and never that it landed. Delivery

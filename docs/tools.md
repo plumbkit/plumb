@@ -235,7 +235,11 @@ peer it meant. The trade is deliberate and stated in the reply: a bound message
 for a private message. Addressing a peer that has *not* attached yet stores no
 binding and is delivered by name, as is `next` — that one is a first-claimer
 race by design. Messages written before this existed are likewise unbound and
-keep delivering by name.
+keep delivering by name. A **daemon restart does not orphan bound mail**: the
+reconnecting session inherits its predecessor's identity, but only on the
+strength of the proxy session ID `plumb serve` replays in its handshake — never
+for merely answering to the name. One predecessor is carried, so a message
+unread across two restarts expires instead.
 
 Addressing a session pinned to a **different workspace** is allowed, but such a
 message is delivered only if *that* project sets `[collab] cross_project = true`;

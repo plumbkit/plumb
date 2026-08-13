@@ -111,12 +111,13 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 			"daemon log.", nil
 	}
 	inbox := Inbox{
-		Self:      self,
-		SelfID:    t.deps.SessionID,
-		Root:      t.deps.Workspace(),
-		Policy:    policy,
-		Workspace: t.deps.StoreIfExists,
-		Global:    t.deps.GlobalStoreIfExists,
+		Self:         self,
+		SelfID:       t.deps.SessionID,
+		InheritedIDs: t.inheritedIDs(),
+		Root:         t.deps.Workspace(),
+		Policy:       policy,
+		Workspace:    t.deps.StoreIfExists,
+		Global:       t.deps.GlobalStoreIfExists,
 	}
 	// The receipt is appended to whichever branch below answers, and is resolved
 	// after them so its ages are current even at the end of a 55-second wait.
@@ -161,6 +162,15 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, another call in this session claimed it " +
 		"first — each message is delivered exactly once.\n"
+}
+
+// inheritedIDs are the predecessor identities this session may also read for,
+// or nil when it did not come back through the authenticated reconnect path.
+func (t *CheckMessages) inheritedIDs() []string {
+	if t.deps.InheritedSessionIDs == nil {
+		return nil
+	}
+	return t.deps.InheritedSessionIDs()
 }
 
 // receiptTimeout bounds the outbox read. It shares the delivery budget's

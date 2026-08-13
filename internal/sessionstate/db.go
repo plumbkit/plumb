@@ -81,7 +81,9 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	1 — initial schema: read_tracking + pinned_workspace
 //	2 — pinned_workspace.source: why the workspace was pinned
 //	3 — session_names: the session name recorded under a proxy session ID
-const SchemaVersion = 3
+//	4 — session_names.plumb_session_id: the session ID that name belonged to,
+//	    so a reconnect can inherit its predecessor's mailbox identity
+const SchemaVersion = 4
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -189,6 +191,16 @@ func migrate(db *sql.DB, from int) error {
 )`
 		if _, err := db.Exec(addNames); err != nil {
 			return fmt.Errorf("sessionstate: migrate v3 (session_names): %w", err)
+		}
+	}
+	if from < 4 {
+		// The plumb session ID the name belonged to, so a reconnecting proxy can
+		// inherit its predecessor's mailbox identity and collect messages bound to
+		// it. A pre-v4 row back-fills to "" and inherits nothing, which is the
+		// behaviour that shipped before this column existed.
+		const addSessionID = `ALTER TABLE session_names ADD COLUMN plumb_session_id TEXT NOT NULL DEFAULT ''`
+		if _, err := db.Exec(addSessionID); err != nil {
+			return fmt.Errorf("sessionstate: migrate v4 (session_names.plumb_session_id): %w", err)
 		}
 	}
 	return nil
@@ -329,47 +341,71 @@ func (s *Store) DeletePin(proxySessionID string) error {
 	return nil
 }
 
-// SaveName records the session name under a proxy session ID, so a reconnect
-// after a daemon restart comes back under the same name. nil-safe; a no-op when
-// proxySessionID or name is empty.
-func (s *Store) SaveName(proxySessionID, name string) error {
+// Identity is what a proxy session was last known as: the display name it
+// answered to, and the plumb session ID that name belonged to.
+//
+// The two travel together because a reconnect needs both. The name is what peers
+// address; the session ID is what a message addressed to that name is BOUND to,
+// so a reconnecting proxy has to present its predecessor's ID to collect mail
+// written before the restart. Storing the ID beside the name is what makes that
+// inheritance provable rather than assumed from the name alone.
+type Identity struct {
+	// Name is the session's display name.
+	Name string
+	// SessionID is the plumb session ID that held Name. Empty on a row written
+	// before this column existed, which inherits nothing.
+	SessionID string
+}
+
+// SaveIdentity records the session name and its plumb session ID under a proxy
+// session ID, so a reconnect after a daemon restart comes back under the same
+// name and can prove which session it continues. nil-safe; a no-op when
+// proxySessionID or name is empty. sessionID may be empty (an unregistered
+// session has no identity to hand on).
+func (s *Store) SaveIdentity(proxySessionID, name, sessionID string) error {
 	if s == nil || proxySessionID == "" || name == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO session_names (proxy_session_id, name, updated_at)
-		 VALUES (?, ?, ?)
+		`INSERT INTO session_names (proxy_session_id, name, plumb_session_id, updated_at)
+		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(proxy_session_id)
-		 DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at`,
-		proxySessionID, name, time.Now().UnixMilli(),
+		 DO UPDATE SET name=excluded.name, plumb_session_id=excluded.plumb_session_id,
+		               updated_at=excluded.updated_at`,
+		proxySessionID, name, sessionID, time.Now().UnixMilli(),
 	)
 	if err != nil {
-		return fmt.Errorf("sessionstate: save name: %w", err)
+		return fmt.Errorf("sessionstate: save identity: %w", err)
 	}
 	return nil
 }
 
-// LoadName returns the session name recorded under proxySessionID. ok is false
-// when no name is recorded. nil-safe (returns ok=false).
-func (s *Store) LoadName(proxySessionID string) (name string, ok bool, err error) {
+// LoadIdentity returns the identity recorded under proxySessionID. ok is false
+// when none is recorded. nil-safe (returns ok=false).
+//
+// A row written before the plumb_session_id column existed returns an empty
+// SessionID, so an upgraded daemon restores the name exactly as it always did
+// and inherits nothing — the caller must treat an empty SessionID as "no
+// predecessor", never as a wildcard.
+func (s *Store) LoadIdentity(proxySessionID string) (id Identity, ok bool, err error) {
 	if s == nil || proxySessionID == "" {
-		return "", false, nil
+		return Identity{}, false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT name FROM session_names WHERE proxy_session_id=?`,
+		`SELECT name, plumb_session_id FROM session_names WHERE proxy_session_id=?`,
 		proxySessionID,
 	)
-	switch err := row.Scan(&name); err {
+	switch err := row.Scan(&id.Name, &id.SessionID); err {
 	case nil:
-		return name, true, nil
+		return id, true, nil
 	case sql.ErrNoRows:
-		return "", false, nil
+		return Identity{}, false, nil
 	default:
-		return "", false, fmt.Errorf("sessionstate: load name: %w", err)
+		return Identity{}, false, fmt.Errorf("sessionstate: load identity: %w", err)
 	}
 }
 

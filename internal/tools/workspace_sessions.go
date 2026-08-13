@@ -49,6 +49,7 @@ var writeToolNames = []string{
 type WorkspaceSessions struct {
 	workspace     func() string
 	selfSessID    string
+	inheritedIDs  func() []string
 	boundaryCheck func(string) error // read boundary guard
 	topo          topologyStoreFn    // may be nil; live topology store for write annotation
 	peerAware     func() bool        // may be nil (treated as off); [collab] peer_awareness snapshot
@@ -70,6 +71,15 @@ func NewWorkspaceSessions(workspace func() string, selfSessID string) *Workspace
 }
 
 // WithBoundary wires the read boundary guard. Returns the receiver for chaining.
+// WithInheritedSessions wires the predecessor identities this session provably
+// continues. The listing must apply them for the same reason the claim does: a
+// session that inherited its predecessor's mailbox would otherwise be told it
+// has nothing waiting while the delivery paths hand it messages.
+func (t *WorkspaceSessions) WithInheritedSessions(fn func() []string) *WorkspaceSessions {
+	t.inheritedIDs = fn
+	return t
+}
+
 func (t *WorkspaceSessions) WithBoundary(fn func(string) error) *WorkspaceSessions {
 	t.boundaryCheck = fn
 	return t
@@ -271,7 +281,13 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 	}
 	if mailboxOn && t.selfName != nil {
 		if name := t.selfName(); name != "" {
-			who := collab.Claimant{Name: name, ID: t.selfSessID, Workspace: t.workspace()}
+			var inherited []string
+			if t.inheritedIDs != nil {
+				inherited = t.inheritedIDs()
+			}
+			who := collab.Claimant{
+				Name: name, ID: t.selfSessID, InheritedIDs: inherited, Workspace: t.workspace(),
+			}
 			notes, err := store.PendingNotes(ctx, who, now)
 			if err == nil {
 				writeCollabNotes(&sb, notes, now)

@@ -46,6 +46,11 @@ type Inbox struct {
 	// claims unbound messages only, which is every message written before the
 	// binding existed and every one addressed to a peer that had not attached.
 	SelfID string
+	// InheritedIDs are predecessor session IDs this session provably continues,
+	// granted only by the proxy-authenticated reconnect path. They let mail bound
+	// to a session a daemon restart ended still reach the agent it was written
+	// for. Empty for a session that did not come back that way.
+	InheritedIDs []string
 	// Root is this session's pinned workspace. A cross-project message names the
 	// workspace allowed to claim it, and this is what that is checked against —
 	// a session name alone is not a safe address, since names collide and
@@ -77,7 +82,7 @@ func (i Inbox) Keys() []string {
 // claimant is what the store matches a row against: this session's name, its
 // stable ID, and its pinned workspace.
 func (i Inbox) claimant() collab.Claimant {
-	return collab.Claimant{Name: i.Self, ID: i.SelfID, Workspace: i.Root}
+	return collab.Claimant{Name: i.Self, ID: i.SelfID, InheritedIDs: i.InheritedIDs, Workspace: i.Root}
 }
 
 // stores returns the stores to read, workspace first so a same-project message

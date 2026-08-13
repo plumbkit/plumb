@@ -209,3 +209,70 @@ func TestPinRoundTripsSource(t *testing.T) {
 		t.Fatalf("source = %q, want %q", src, PinSourceSessionStart)
 	}
 }
+
+// openV3 hand-builds a database in the v3 shape — session_names WITHOUT the
+// plumb_session_id column, user_version=3 — which is the shape every daemon
+// installed before mailbox identity inheritance has on disk.
+func openV3(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open v3: %v", err)
+	}
+	defer db.Close()
+	const v3 = `
+CREATE TABLE IF NOT EXISTS pinned_workspace (
+    proxy_session_id TEXT    PRIMARY KEY,
+    workspace        TEXT    NOT NULL,
+    language         TEXT    NOT NULL DEFAULT '',
+    updated_at       INTEGER NOT NULL,
+    source           TEXT    NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS session_names (
+    proxy_session_id TEXT    PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    updated_at       INTEGER NOT NULL
+);
+INSERT INTO session_names (proxy_session_id, name, updated_at)
+VALUES ('legacy-proxy', 'steady-otter', 1);
+PRAGMA user_version = 3;
+`
+	if _, err := db.Exec(v3); err != nil {
+		t.Fatalf("seed v3: %v", err)
+	}
+}
+
+// TestMigrateV3ToV4_NameSurvivesAndInheritsNothing. The v4 column exists so a
+// reconnect can prove which session it continues. A row written before it
+// existed carries no such proof, so it must restore the NAME exactly as it
+// always did and hand out NO identity — an empty SessionID has to read as "no
+// predecessor", never as a wildcard that would match every bound row.
+func TestMigrateV3ToV4_NameSurvivesAndInheritsNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	openV3(t, path)
+
+	s, err := openAt(path)
+	if err != nil {
+		t.Fatalf("open (migrating) v3: %v", err)
+	}
+	defer s.Close()
+
+	got, ok, err := s.LoadIdentity("legacy-proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got.Name != "steady-otter" {
+		t.Fatalf("LoadIdentity = (%+v, %v), want the v3 name preserved", got, ok)
+	}
+	if got.SessionID != "" {
+		t.Errorf("SessionID = %q, want empty — a pre-v4 row proves no predecessor", got.SessionID)
+	}
+
+	// And the column really is usable afterwards.
+	if err := s.SaveIdentity("legacy-proxy", "steady-otter", "sess-new"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.LoadIdentity("legacy-proxy"); got.SessionID != "sess-new" {
+		t.Errorf("after upgrade SessionID = %q, want sess-new", got.SessionID)
+	}
+}
