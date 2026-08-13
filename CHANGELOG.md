@@ -628,14 +628,26 @@
   in 0.9.24). The sources that do reach the policy are your global config, the
   granted-roots store, `--allow-dir`, and the dependency resolvers.
 
-  **A relative `workspace` is now refused at `session_start` rather than pinned.**
-  Detection resolved it against the daemon's working directory while the policy
-  declined to, so the two halves disagreed and the session pinned successfully to
-  a root that granted nothing — every path refused, including the workspace's own
-  files, with an error naming the workspace as `.` and advising a re-pin that had
-  just happened. It now fails at the pin with an explanation. Pass an absolute
-  path: `.` means the *client's* directory, which is not the one a shared daemon
-  would resolve.
+  **A relative workspace root can no longer brick a session.** Detection resolved
+  a relative root against the daemon's working directory while the policy
+  declined to, so the two halves disagreed: the session pinned *successfully* to
+  a root that granted nothing, then refused every path — including the
+  workspace's own files — with an error naming the workspace as `.` and advising
+  the re-pin that had just happened.
+
+  Six routes can set the pinned root (`session_start`'s re-pin, `roots/list` at
+  initialize and on change, the `plumb serve` cwd hint, the auto-attach seed, and
+  synthetic re-attach on rehydrate). Guarding one of them was tried first and
+  simply moved the failure, so the invariant now sits where all six converge: a
+  non-absolute root yields **no policy**, and the boundary answers with the
+  unattached error, which says what to do. `session_start` additionally refuses a
+  relative `workspace` up front, so the problem is reported at the call that
+  caused it. Pass an absolute path — `.` means the *client's* directory, which is
+  not the one a shared daemon resolves.
+
+  The route most likely to fire in practice is the last: restoring a persisted
+  markerless root recorded by an earlier version that accepted relative
+  workspaces.
 
   `internal/fsguard` keeps its anchoring deliberately and delegates only the
   resolution: `RefuseWalk` matches macOS-protected directories by exact path, so
