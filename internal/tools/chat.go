@@ -44,7 +44,7 @@ type Inbox struct {
 	// was live is bound to that peer's ID, and only the session holding it may
 	// claim it — so a later session inheriting the name reads nothing. Empty
 	// claims unbound messages only, which is every message written before the
-	// binding existed and every one addressed to a peer that had not attached.
+	// binding existed and every one addressed to a peer that was not connected.
 	SelfID string
 	// InheritedIDs are predecessor session IDs this session provably continues,
 	// granted only by the proxy-authenticated reconnect path. They let mail bound

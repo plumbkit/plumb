@@ -232,7 +232,7 @@ binding a message its recipient never read would be handed to whoever next
 answers to the name, bodies included, while the sender was told it reached the
 peer it meant. The trade is deliberate and stated in the reply: a bound message
 **expires unread if its recipient never comes back**, which is the right failure
-for a private message. Addressing a peer that has *not* attached yet stores no
+for a private message. Addressing a peer that is *not connected* stores no
 binding and is delivered by name, as is `next` — that one is a first-claimer
 race by design. Messages written before this existed are likewise unbound and
 keep delivering by name. A **daemon restart does not orphan bound mail**: the

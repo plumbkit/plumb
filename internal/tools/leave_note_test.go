@@ -68,7 +68,7 @@ func TestLeaveNote_AddressedAndRedacted(t *testing.T) {
 // impersonation fix. A message can only be bound to a session that exists to be
 // bound to, so the tool stamps the peer's session id when one is live and stamps
 // nothing when the name resolves to no live session — the latter being the case
-// that must keep working, since addressing a peer that has not attached yet is
+// that must keep working, since addressing a peer that is not connected is
 // legitimate and always was.
 func TestLeaveNote_BindsToTheLivePeerButNotToAnAbsentOne(t *testing.T) {
 	for _, tc := range []struct {
