@@ -8,6 +8,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -62,6 +63,31 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
+	}
+	// A RELATIVE workspace is refused rather than resolved. The only anchor
+	// available here is the daemon's working directory, and the daemon is a
+	// singleton whose cwd belongs to whichever client happened to spawn it — so
+	// "." from a client means that client's directory, which is not the one the
+	// daemon would use. Resolving it produces a confidently wrong project (issue
+	// #181's silent cross-repository write); refusing costs one corrected call.
+	//
+	// Without this, detection and the boundary policy disagreed: pool.detect
+	// resolved the relative seed against the daemon cwd and the pin SUCCEEDED,
+	// then NewPathPolicy dropped the non-absolute root it produced, leaving a
+	// policy with no roots that refused every path including the workspace's own
+	// files.
+	//
+	// Same reasoning as UnattachedWorkspaceError, one level up: a path argument is
+	// refused when there is no workspace to anchor it to, and a workspace is
+	// refused when there is nothing to anchor IT to.
+	if !filepath.IsAbs(folder) {
+		return "", fmt.Errorf(
+			"repin: workspace %q is relative, so it names no particular directory. "+
+				"Pass an absolute path: the daemon is shared between clients and its working "+
+				"directory belongs to whichever one started it, so resolving %q here would "+
+				"pin a project you did not name",
+			folder, folder,
+		)
 	}
 	root, language, err := s.pool.Detect(folder)
 	synthetic := err != nil

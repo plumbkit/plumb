@@ -116,6 +116,15 @@ func TestPathPolicy_RelativePathGrantsNothing(t *testing.T) {
 	ws := evalTempDir(t)
 	pol := NewPathPolicy(ws, []AllowedRoot{{Path: ws, Access: AccessReadWrite, Label: "workspace"}})
 
+	// Run FROM INSIDE the workspace. Without this the test passes for the wrong
+	// reason: the process cwd is the package directory, far outside ws, so a
+	// policy that DID anchor the relative path to the cwd would still refuse it,
+	// and the assertion below could never fail. An independent review caught this
+	// — the mutation that re-anchors relative paths left the test green until the
+	// cwd was moved inside the root, which is the only configuration where
+	// anchoring silently ADMITS rather than refuses.
+	t.Chdir(ws)
+
 	if _, err := pol.Check("relative.txt", AccessReadWrite); err == nil {
 		t.Error("the policy admitted a relative path, which names no location")
 	}

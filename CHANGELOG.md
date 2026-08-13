@@ -614,24 +614,33 @@
   the operation to a file the caller did not name. `Canonical` is an identity
   function, not an authorisation check.
 
-  **A relative root in project config now grants nothing, where before it granted
-  access relative to the daemon's working directory.** `[workspace] extra_roots`
-  and `read_roots` are read from a file a hostile clone can carry, so
-  `"../sibling"` previously admitted a directory neither the user nor the config
-  author named — the daemon's cwd is not a location either of them chose. Such a
-  root is dropped at construction. Absolute roots are unaffected; if you relied
-  on a relative root, make it absolute.
+  **A relative root now grants nothing, where before it granted access relative
+  to the daemon's working directory**, whose value belongs to whichever client
+  happened to spawn the singleton. Such a root is dropped at construction.
+  Absolute roots are unaffected; if you relied on a relative one, make it
+  absolute. Note `os.ExpandEnv` does not expand `~`, so a global
+  `extra_roots = ["~/shared"]` is a relative path and is now dropped — it never
+  named your home directory in the first place.
+
+  This is a correctness fix for **your own configuration**, not a hardening one.
+  A cloned repository cannot supply roots at all: `config_load` forces
+  `Workspace.ExtraRoots` and `ReadRoots` back to the trusted global base (closed
+  in 0.9.24). The sources that do reach the policy are your global config, the
+  granted-roots store, `--allow-dir`, and the dependency resolvers.
+
+  **A relative `workspace` is now refused at `session_start` rather than pinned.**
+  Detection resolved it against the daemon's working directory while the policy
+  declined to, so the two halves disagreed and the session pinned successfully to
+  a root that granted nothing — every path refused, including the workspace's own
+  files, with an error naming the workspace as `.` and advising a re-pin that had
+  just happened. It now fails at the pin with an explanation. Pass an absolute
+  path: `.` means the *client's* directory, which is not the one a shared daemon
+  would resolve.
 
   `internal/fsguard` keeps its anchoring deliberately and delegates only the
   resolution: `RefuseWalk` matches macOS-protected directories by exact path, so
   an unanchored `"."` would match none and fail **open** precisely when the
   working directory is `$HOME`. A refusal that fails open is not a refusal.
-
-  A new `internal/arch` rule pins path canonicalisation to `internal/paths`, so
-  the next copy fails a test instead of waiting for a reviewer to notice — the
-  same discipline that already covers atomic writes and byte formatting. The
-  sweep it forced found **five** matching declarations, not the two the issue
-  named.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
