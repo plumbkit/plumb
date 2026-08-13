@@ -978,17 +978,60 @@
   then became a single read-write root for the session, putting every SSH key,
   browser profile and credential file under it inside the boundary, with nothing
   in the tool call to announce that the workspace had widened.
+- **The home directory can no longer become the workspace root by accident —
+  through a dotfiles repo, an incidental tool path, a persisted pin, or
+  auto-attach residue.** `Detect` skipped its `.git` check at `$HOME`, but
+  `SynthesiseRoot` — the synthetic-root fallback — walked up to the nearest
+  `.git` with no such guard, so a session seeded anywhere under a `$HOME`
+  dotfiles repo resolved the workspace to `$HOME` itself. The entire home
+  directory then became a single read-write root for the session, putting every
+  SSH key, browser profile and credential file under it inside the boundary,
+  with nothing in the tool call to announce that the workspace had widened.
 
-  Only reachable with `auto_attach` enabled (off by default), and the CLI half
-  was already closed by declining to call `SynthesiseRoot` at all — but the
-  daemon calls it from four places, so the guard now lives in the function.
+  This was **reachable in the default configuration** — an earlier draft of
+  this entry claimed it needed `[workspace] auto_attach` (off by default),
+  which was wrong: only the first-tool-call seeding path is gated on
+  `auto_attach`; the `session_start` re-pin, the client roots-changed re-pin,
+  and persisted-pin rehydration all synthesise unconditionally. An independent
+  adversarial review (findings B1–B3, S1–S5) also showed the first cut of the
+  guard closed only one of three routes. The complete rules:
 
-  It blocks **ascending** into `$HOME`, not naming it: a seed that *is* `$HOME`
-  still resolves to `$HOME`, because an explicit pin must always succeed (issue
-  #182). Compared with `os.SameFile`, not by string, so a symlinked or
-  firmlinked spelling cannot slip past — a mutation proved the string form
-  reopens the escape, and `TestSynthesiseRoot_HomeGuardIsByIdentityNotByString`
-  now pins it.
+  - **Ascending into `$HOME` is blocked, and reaching it stops the walk** —
+    for both `Detect` and `SynthesiseRoot`. Merely skipping `$HOME` and
+    climbing on meant a `.git` *above* the home directory resolved `$HOME`'s
+    parent: wider, not narrower. A markerless dir under a dotfiles home now
+    synthesises to itself.
+  - **Naming `$HOME` as the workspace requires an explicit declaration.** The
+    seed reaching `SynthesiseRoot` is fed by ordinary tool arguments, so "a
+    seed that IS `$HOME` is honoured" meant one `read_file` of `~/.zshrc`
+    pinned the entire home directory — and a persisted `$HOME` pin replayed
+    the same way on every reconnect. The exemption is now keyed on the pin's
+    origin: only a `session_start` `workspace` arg (live, or replayed with
+    that stored origin) may name `$HOME`; an incidental tool path, a
+    client-reported root, and a weak-origin persisted pin are refused (issue
+    #182's explicit-pin contract is preserved, and is tested).
+  - **A bare `~/.plumb` is residue, not intent.** `Detect` honoured a
+    `.plumb` marker before any home guard, so the `~/.plumb` an earlier
+    build's `auto_attach_persist` created kept resolving `$HOME` forever,
+    auto-attach off, making the rest of the fix inert. At `$HOME` (only), a
+    `.plumb` now needs evidence a human made it — a `context.md` (`plumb
+    init`) or `config.toml`; otherwise it is ignored with a logged
+    remediation. **If an earlier build left one behind: remove `~/.plumb`**,
+    or run `plumb init` in your home directory if you genuinely want it to be
+    a workspace. `auto_attach_persist` now refuses to create `~/.plumb` at
+    all.
+  - **The guard's identity is environment-resistant.** `$HOME` is matched by
+    filesystem identity (`os.SameFile` — a mutation proved a string compare
+    reopens the escape through symlinked/firmlinked spellings), and the
+    guarded set is fed by both the `$HOME` variable and the OS user database
+    (`os/user`), so a client that empties or repoints `HOME` — the daemon
+    inherits its spawner's environment — no longer disarms it. If no home is
+    determinable at all the guards fail open, but now log loudly instead of
+    disarming silently.
+
+  Guarded by the `pool_synthesise_root`, `pool_homeguard`, and `conn_homepin`
+  test files, each route wired to its caller with issue-#182 and
+  project-under-`$HOME` controls.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
