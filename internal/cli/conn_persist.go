@@ -240,7 +240,22 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 		// call and the deliberate pin would fall through to the weaker
 		// cwd-hint/seed rungs. Re-synthesise under the loaded origin instead —
 		// attachSynthetic is first-wins, preserving this function's idempotence.
-		s.attachSynthetic(ctx, resolved, source, pinTriggerRestore)
+		//
+		// explicit only when the STORED origin is session_start: replaying a pin
+		// does not upgrade its provenance, so a $HOME row an earlier build
+		// persisted from a weaker source cannot ride the replay back into being
+		// the workspace. A row the caller genuinely created with
+		// session_start({workspace: "~"}) still restores — issue #182.
+		//
+		// Seeded from `resolved`, not the raw stored root: restoreRootIntact has
+		// already verified and resolved it, and re-synthesising from the raw value
+		// would discard that.
+		synth := s.pool.SynthesiseRoot(resolved, source == sessionstate.PinSourceSessionStart)
+		if synth == "" {
+			s.log().Warn("daemon: not restoring persisted pin — it names the home directory and was not set by an explicit session_start", "root", resolved, "source", string(source))
+			return
+		}
+		s.attachSynthetic(ctx, synth, source, pinTriggerRestore)
 	} else {
 		s.attachWorkspacePinFrom(ctx, "file://"+resolved, source, pinTriggerRestore)
 	}

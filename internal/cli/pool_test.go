@@ -423,7 +423,7 @@ func TestSynthesiseRoot_GitDirAtSeed(t *testing.T) {
 	mustMkdir(t, filepath.Join(dir, ".git"))
 
 	pool := detectTestPool()
-	got := pool.SynthesiseRoot(dir)
+	got := pool.SynthesiseRoot(dir, false)
 	if got != dir {
 		t.Errorf("SynthesiseRoot: got %s, want %s", got, dir)
 	}
@@ -436,7 +436,7 @@ func TestSynthesiseRoot_GitDirInAncestor(t *testing.T) {
 	mustMkdir(t, sub)
 
 	pool := detectTestPool()
-	got := pool.SynthesiseRoot(sub)
+	got := pool.SynthesiseRoot(sub, false)
 	if got != root {
 		t.Errorf("SynthesiseRoot: got %s, want %s", got, root)
 	}
@@ -451,7 +451,7 @@ func TestSynthesiseRoot_NoGitFallsBackToSeed(t *testing.T) {
 	mustMkdir(t, sub)
 
 	pool := detectTestPool()
-	got := pool.SynthesiseRoot(sub)
+	got := pool.SynthesiseRoot(sub, false)
 	// The seed is sub; no .git anywhere above it in the temp tree.
 	if got != sub {
 		t.Errorf("SynthesiseRoot: got %s, want %s (seed fallback)", got, sub)

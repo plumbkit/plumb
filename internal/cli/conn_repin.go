@@ -93,7 +93,14 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	synthetic := err != nil
 	if synthetic {
 		// No .plumb/marker/.git found — the folder itself becomes the workspace.
-		root = s.pool.SynthesiseRoot(folder)
+		// Only a session_start-origin call is an explicit declaration; a
+		// roots-driven re-pin (the client's reported folder set changed) is not,
+		// so a client that starts reporting $HOME as a root cannot pin the whole
+		// home directory — SynthesiseRoot refuses it and the pin stays put.
+		root = s.pool.SynthesiseRoot(folder, origin == sessionstate.PinSourceSessionStart)
+		if root == "" {
+			return "", fmt.Errorf("refusing to pin the home directory %s as a workspace from a non-explicit source (%s): call session_start({workspace: %q}) if you really mean to make your entire home directory the workspace", folder, pinSourceLabel(origin), folder)
+		}
 		language = LanguageNone
 	}
 	// root is canonical here — both Detect and SynthesiseRoot resolve symlinks

@@ -210,7 +210,14 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
-		synthRoot := s.pool.SynthesiseRoot(startDir)
+		// explicit only for a session_start workspace arg: an incidental tool
+		// path (reading ~/.zshrc) is not a declaration that $HOME is the
+		// workspace, so SynthesiseRoot refuses to name it (returns "").
+		synthRoot := s.pool.SynthesiseRoot(startDir, origin == sessionstate.PinSourceSessionStart)
+		if synthRoot == "" {
+			s.log().Warn("daemon: refusing to synthesise the home directory as a workspace from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
+			return
+		}
 		s.attachSynthetic(toolCtx, synthRoot, origin, pinTriggerLive)
 		if s.store.Current().Workspace.AutoAttachPersist {
 			go func() {

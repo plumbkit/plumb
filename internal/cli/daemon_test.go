@@ -284,7 +284,7 @@ func TestDetectAndSynthesiseRoot_GitTreeAgree(t *testing.T) {
 	}
 
 	// SynthesiseRoot walks up to the same .git-bearing ancestor.
-	if got := pool.SynthesiseRoot(sub); got != root {
+	if got := pool.SynthesiseRoot(sub, false); got != root {
 		t.Errorf("SynthesiseRoot = %q, want %q (.git ancestor)", got, root)
 	}
 }
@@ -297,7 +297,7 @@ func TestAutoAttach_SynthesiseRootNoGit(t *testing.T) {
 	mustMkdir(t, sub)
 
 	pool := detectTestPool()
-	got := pool.SynthesiseRoot(sub)
+	got := pool.SynthesiseRoot(sub, false)
 	if got != sub {
 		t.Errorf("SynthesiseRoot = %q, want seed %q", got, sub)
 	}

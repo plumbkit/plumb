@@ -100,11 +100,14 @@ func (s *connSession) pinnedRootStillReported(roots []string) bool {
 
 // resolveRootFolder resolves an absolute folder to its workspace root the same
 // way repinWorkspaceFrom does: the detected project root, or the folder itself
-// synthesised as a root when no marker is found. Kept in step with that resolution.
+// synthesised as a root when no marker is found. Kept in step with that
+// resolution — including explicit=false: a client-reported root is not a
+// session_start declaration, so a reported $HOME resolves to "" here exactly
+// as the re-pin itself would refuse it (it then simply never matches the pin).
 func (s *connSession) resolveRootFolder(folder string) string {
 	root, _, err := s.pool.Detect(folder)
 	if err != nil {
-		return s.pool.SynthesiseRoot(folder)
+		return s.pool.SynthesiseRoot(folder, false)
 	}
 	return root
 }
