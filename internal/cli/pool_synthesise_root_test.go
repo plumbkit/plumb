@@ -80,7 +80,7 @@ func TestSynthesiseRoot_DoesNotEscapeToHome(t *testing.T) {
 	}
 
 	got := (&workspacePool{}).SynthesiseRoot(seed)
-	if sameDirAs(got, homeFileInfo()) {
+	if sameDirAs(got, homeDirInfos()) {
 		t.Errorf("SynthesiseRoot(%q) escaped to $HOME (%q); a dotfiles repo at the home "+
 			"directory must not become the workspace for everything beneath it", seed, got)
 	}
@@ -138,7 +138,7 @@ func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
 	}
 
 	got := (&workspacePool{}).SynthesiseRoot(seed)
-	if sameDirAs(got, homeFileInfo()) {
+	if sameDirAs(got, homeDirInfos()) {
 		t.Errorf("SynthesiseRoot(%q) escaped to $HOME (%q) — $HOME was named through a "+
 			"symlink, so a string compare missed it; the guard must compare by "+
 			"filesystem identity", seed, got)
