@@ -575,12 +575,20 @@ func resolveCLIWorkspaceDetailed(start string, cfg config.Config) (root string, 
 		// canonicalised, so the CLI (stats, config show, trust, run_task) keys on
 		// the same spelling the daemon's rows do (issue #263).
 		//
-		// Deliberately NOT SynthesiseRoot, which walks up to the nearest .git: it
-		// has no $HOME guard where Detect does, so under a dotfiles repo it would
-		// escape to $HOME and `plumb config unset --workspace ~/scratch` would edit
-		// $HOME/.plumb/config.toml. Nor would matching the daemon justify it — the
-		// daemon only synthesises when auto_attach is on, and this branch is
-		// precisely where the default config leaves it with no root at all.
+		// Deliberately NOT SynthesiseRoot. The original reason — it had no $HOME
+		// guard where Detect did, so under a dotfiles repo `plumb config unset
+		// --workspace ~/scratch` would have edited $HOME/.plumb/config.toml — no
+		// longer applies: SynthesiseRoot now carries the same guard and its walk
+		// stops at $HOME, so on this branch the two agree almost everywhere. The
+		// reasons that remain: (1) the CLI's markerless contract is "the
+		// directory the user NAMED", not "whatever the daemon's auto_attach
+		// fallback would synthesise" — the daemon only synthesises when
+		// auto_attach is on, and this branch is precisely where the default
+		// config leaves it with no root at all; and (2) SynthesiseRoot's
+		// non-explicit mode refuses a $HOME seed outright, which would turn
+		// `plumb config show --workspace ~` into an empty answer for an
+		// inspection command that must be able to name any directory
+		// (TestResolveCLIWorkspaceDetailed_HomeItselfIsInspectable pins this).
 		return paths.Canonical(abs), cfg.Workspace.AutoAttach, nil
 	}
 	return resolved, true, nil

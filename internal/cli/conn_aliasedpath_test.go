@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // TestEpisodicRelPath_AliasedPathResolvesInside: an episodic memory records the
@@ -39,12 +40,14 @@ func TestEpisodicRelPath_AliasedPathResolvesInside(t *testing.T) {
 // the CLI's markerless branch, which had no test at all — the change there
 // survived mutation until a review pointed it out.
 //
-// Two properties, and the second is why this branch must NOT call
-// SynthesiseRoot. Detect deliberately skips its .git check at $HOME;
-// SynthesiseRoot has no such guard and walks up to the nearest .git. Under a
-// dotfiles repo that escapes to $HOME itself — and this value flows into
-// `plumb config unset --workspace`, which would then edit $HOME/.plumb/config.toml
-// instead of the directory the user named.
+// Two properties: canonical, and never an ancestor the user did not name (this
+// value flows into `plumb config unset --workspace`, which would then edit a
+// .plumb/config.toml the user never pointed at). Historically this fixture
+// also discriminated "must not call SynthesiseRoot" — back when that function
+// had no $HOME guard, calling it here walked up to the dotfiles .git. It now
+// carries the same guard and stops at $HOME, so on THIS shape the two answers
+// coincide; the test that still separates them is
+// TestResolveCLIWorkspaceDetailed_HomeItselfIsInspectable below.
 func TestResolveCLIWorkspaceDetailed_MarkerlessRootIsCanonicalButNotEscaped(t *testing.T) {
 	base := freshTempDir(t)
 	realDir := filepath.Join(base, "real", "scratch")
@@ -52,10 +55,8 @@ func TestResolveCLIWorkspaceDetailed_MarkerlessRootIsCanonicalButNotEscaped(t *t
 	if err := os.Symlink(filepath.Join(base, "real"), filepath.Join(base, "alias")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	// A dotfiles repo AT $HOME, above the markerless directory. This is the shape
-	// that separates the two: Detect deliberately skips its .git check at $HOME (so
-	// it fails here, reaching the markerless branch), while SynthesiseRoot has no
-	// such guard and would walk straight up to it.
+	// A dotfiles repo AT $HOME, above the markerless directory: Detect refuses
+	// the .git there, so the markerless branch is reached.
 	t.Setenv("HOME", base)
 	mustGitDir(t, base)
 
@@ -72,6 +73,32 @@ func TestResolveCLIWorkspaceDetailed_MarkerlessRootIsCanonicalButNotEscaped(t *t
 	}
 	if attachable {
 		t.Error("a markerless dir must report non-attachable under the default config")
+	}
+}
+
+// TestResolveCLIWorkspaceDetailed_HomeItselfIsInspectable pins the behaviour
+// that still separates the CLI's markerless branch from SynthesiseRoot, now
+// that both carry the $HOME guard: the CLI is an INSPECTION surface, so
+// `plumb config show --workspace ~` must answer about the home directory the
+// user named — while SynthesiseRoot's non-explicit mode refuses a $HOME seed
+// (returns "") because for the daemon that seed is an incidental tool path.
+// A review showed the previous fixture no longer discriminated: rewiring the
+// branch through SynthesiseRoot left every test green. Under this one the
+// rewire returns "" (non-explicit) and fails.
+func TestResolveCLIWorkspaceDetailed_HomeItselfIsInspectable(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustGitDir(t, home) // dotfiles repo at $HOME: Detect refuses it, reaching the markerless branch
+
+	root, attachable, err := resolveCLIWorkspaceDetailed(home, config.Defaults())
+	if err != nil {
+		t.Fatalf("resolveCLIWorkspaceDetailed: %v", err)
+	}
+	if want := paths.Canonical(home); root != want {
+		t.Errorf("root = %q, want %q — naming the home directory to an inspection command must answer about it", root, want)
+	}
+	if attachable {
+		t.Error("the home directory must report non-attachable under the default config")
 	}
 }
 
