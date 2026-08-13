@@ -1560,6 +1560,34 @@
   Guarded by the `pool_synthesise_root`, `pool_homeguard`, and `conn_homepin`
   test files, each route wired to its caller with issue-#182 and
   project-under-`$HOME` controls.
+- **An overruled project `[git]` block now says so in `session_start`, so the
+  agent reading the policy learns why it does not match the repository's own
+  config.** An untrusted project `.plumb/config.toml` has its `[git]` block
+  forced back to the global config — correct, since cloning a repository ships
+  one and honouring it unasked would hand a hostile repo history destruction and
+  pushes with the user's credentials. That drop was announced to the **user** (a
+  daemon log line at attach, `plumb doctor`, `plumb config show`, a TUI marker)
+  but not to the **agent**, whose only view of the policy is the orientation
+  packet. So an agent read `Push/fetch/pull: off.`, could not reconcile it with
+  the `allow_push = true` sitting in the repo it was looking at, concluded the
+  tier was unimplemented, and shelled out to raw git for most of its git work —
+  bypassing the very policy the drop exists to enforce. A safety feature that
+  cannot explain itself is indistinguishable from a bug.
+
+  The git-policy section now carries, directly under the resolved policy, a
+  notice naming the ignored keys, why a project config cannot open the
+  destructive or network tier on its own, and both fixes: `plumb trust` to apply
+  the request here, or the global config / `PLUMB_GIT_ALLOW_DESTRUCTIVE` /
+  `PLUMB_GIT_ALLOW_PUSH` to set the policy everywhere.
+
+  **Presence, not value, is what triggers it.** The keys come from the project's
+  raw TOML (`ProjectPolicySpec`, already built for the trust hash), so
+  `allow_destructive = false` is reported as ignored exactly like `= true` — the
+  two are indistinguishable in the decoded config, and the user who wrote either
+  one has the same question. Quiet in both common cases: no `[git]` key at all,
+  and trusted — where the policy printed above already *is* the project's, so a
+  notice would report a working feature. The trust boundary itself is unchanged;
+  only its visibility is.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at

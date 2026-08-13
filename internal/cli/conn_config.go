@@ -117,6 +117,21 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 		"workspace", workspace, "keys", st.Spec.Keys())
 }
 
+// projectPolicyKeys reports the capability-granting keys a workspace's project
+// config sets and whether that exact request is trusted. It is session_start's
+// view of the same state logProjectPolicy writes to the daemon log — the log
+// reaches the user, this reaches the AGENT, which is the surface that was
+// missing. A read error resolves to "nothing asked for": orientation must not
+// fail because a project config could not be re-read, and the safe default is
+// the quiet one.
+func projectPolicyKeys(workspace string) ([]string, bool) {
+	st, err := config.ProjectPolicyStatusFor(workspace)
+	if err != nil {
+		return nil, false
+	}
+	return st.Spec.Keys(), st.Trusted
+}
+
 func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig, trusted bool) {
 	if s.pool == nil || workspace == "" {
 		return

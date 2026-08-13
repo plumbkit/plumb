@@ -773,3 +773,40 @@ func TestValidateGit_RejectsUnusableEnvNames(t *testing.T) {
 		t.Errorf("a well-formed env must validate, got %v", err)
 	}
 }
+
+// TestProjectPolicySpec_CapturesFalseValuedGitKey pins the presence-not-value
+// rule the visibility surfaces depend on.
+//
+// `allow_destructive = false` is indistinguishable from an absent key once the
+// config is decoded — both leave the field at the global value — so any surface
+// that judged "did this project set [git]?" from the merged struct would report
+// nothing. The spec is extracted from the project's RAW TOML instead, which is
+// what lets session_start, `plumb doctor` and `plumb config show` tell a user
+// their [git] block was read and overruled even when its value raises no
+// privilege. A user who wrote it and saw nothing happen has exactly the same
+// question as one who wrote `= true`.
+func TestProjectPolicySpec_CapturesFalseValuedGitKey(t *testing.T) {
+	tempTrustStore(t)
+	ws := projectConfigWorkspace(t, "[git]\nallow_destructive = false\n")
+
+	spec, err := ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicySpecFor: %v", err)
+	}
+	if want := []string{"git.allow_destructive"}; !reflect.DeepEqual(spec.Keys(), want) {
+		t.Errorf("spec keys = %v, want %v — a present-but-false [git] key must still be reported as asked for", spec.Keys(), want)
+	}
+
+	// Reported, never honoured. Against a base that has the tier OPEN, the
+	// project's false must not close it either: [git] is forced back whole, so
+	// visibility is all the project's block earns.
+	base := defaults
+	base.Git.AllowDestructive = true
+	merged, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if !merged.Git.AllowDestructive {
+		t.Error("an untrusted project [git] key must not change the resolved policy in either direction")
+	}
+}
