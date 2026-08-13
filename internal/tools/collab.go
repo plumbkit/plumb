@@ -116,28 +116,6 @@ type CollabDeps struct {
 	// same-project (the workspace store) or cross-project (the daemon-level one).
 	// May be nil, in which case every message is treated as same-project.
 	PeerWorkspace func(name string) (workspace string, found bool)
-	// ClientName returns the MCP client's reported name (""/nil when unknown).
-	// Wired for the same reason session_start and daemon_info take it: the
-	// mailbox tools name each other, and whether the OTHER half is reachable
-	// depends on the client — see nameLeanToolsOnly.
-	ClientName func() string
-	// ToolProfile returns this connection's resolved tool profile ("lean" or
-	// "full"). May be nil, treated as "full" — the permissive answer, matching
-	// SessionStart.resolvedToolProfile's unwired default.
-	ToolProfile func() string
-}
-
-// nameLeanToolsOnly reports whether text these tools emit — a tool description
-// or a result — must confine itself to the lean tool set. The rule lives in
-// leanNamingOnly; this supplies the collab half of its inputs.
-//
-// It matters here because the mailbox pair is NOT lean: leave_note's result and
-// description both point at check_messages, and under either reason
-// leanNamingOnly covers, that pointer is broken. Nil-safe, so the pure-metadata
-// constructions in the tools/list budget test (NewLeaveNote(CollabDeps{})) get
-// the full text rather than a panic.
-func (d CollabDeps) nameLeanToolsOnly() bool {
-	return leanNamingOnly(d.ToolProfile != nil && d.ToolProfile() == "lean", d.ClientName)
 }
 
 // resolveTTL turns a minutes count into a duration, applying the policy default

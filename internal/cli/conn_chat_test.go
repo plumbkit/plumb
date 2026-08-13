@@ -137,18 +137,47 @@ func TestMessageHint_DeliveredOnceAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestMessageHint_SilentForMailboxTools: check_messages and leave_note claim and
-// render messages themselves, so piggybacking on them would double-deliver.
+// TestMessageHint_SilentForMailboxTools: each of these surfaces the same
+// messages itself — check_messages claims and renders, session_start renders its
+// "## Messages" section, workspace_sessions lists the unread ones — so
+// piggybacking would show them twice in one response.
 func TestMessageHint_SilentForMailboxTools(t *testing.T) {
 	ws := t.TempDir()
 	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
 	seedMessage(t, s, ws, "bob", "alice", "should not double-deliver")
 
-	for _, tool := range []string{"check_messages", "leave_note", "session_start"} {
+	for _, tool := range []string{"check_messages", "session_start", "workspace_sessions"} {
 		got := s.enrichToolOutput(context.Background(), tool, json.RawMessage(`{}`), "out")
 		if strings.Contains(got, "should not double-deliver") {
 			t.Errorf("%s must not carry a piggybacked message block", tool)
 		}
+	}
+}
+
+// TestMessageHint_DeliveredOnALeaveNoteResult is the fan-out case that leaving
+// leave_note in mailboxSilentTools lost outright.
+//
+// leave_note surfaces nothing of its own — no Inbox, no claim, no
+// RenderMessages — so it cannot double-deliver; the only effect of its silence
+// was to skip delivery on the call an exchange most often makes next. An agent
+// messaging alice, then bob, then carol never renders alice's reply at all: each
+// leave_note suppresses it and the next call is another leave_note.
+func TestMessageHint_DeliveredOnALeaveNoteResult(t *testing.T) {
+	ws := t.TempDir()
+	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
+	seedMessage(t, s, ws, "bob", "alice", "the parser branch is yours")
+
+	got := s.enrichToolOutput(context.Background(), "leave_note",
+		json.RawMessage(`{}`), "Message sent to session carol.\n")
+	if !strings.Contains(got, "the parser branch is yours") {
+		t.Errorf("a pending reply must ride back on a leave_note result; got %q", got)
+	}
+	if !strings.Contains(got, "Message sent to session carol.") {
+		t.Errorf("the tool's own result must survive enrichment; got %q", got)
+	}
+	// Still exactly once: the claim is shared, so the next call gets nothing.
+	if again := s.enrichToolOutput(context.Background(), "git", json.RawMessage(`{}`), "OUT"); strings.Contains(again, "the parser branch is yours") {
+		t.Errorf("the message was delivered twice; got %q", again)
 	}
 }
 

@@ -117,8 +117,6 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStoreIfExists: s.collabGlobalIfExists,
 		Notifier:            s.collabPool.notifier(),
 		PeerWorkspace:       s.peerWorkspace,
-		ClientName:          s.clientNameStr,
-		ToolProfile:         func() string { p, _ := s.resolveToolProfile(); return p },
 	}
 }
 
