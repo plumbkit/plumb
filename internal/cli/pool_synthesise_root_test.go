@@ -101,6 +101,46 @@ func TestSynthesiseRoot_HomeAsTheSeedIsStillHonoured(t *testing.T) {
 	}
 }
 
+// TestSynthesiseRoot_HomeGuardIsByIdentityNotByString pins WHY the guard uses
+// os.SameFile rather than comparing strings against $HOME.
+//
+// Found by mutation: swapping sameDirAs for `d != os.UserHomeDir()` left every
+// other test in this file green, so nothing was holding the identity comparison
+// in place. The walk cleans its path but never resolves symlinks, so the moment
+// $HOME is reached under a second spelling — a symlinked path, or the macOS
+// /var -> /private/var firmlink that every t.TempDir() sits behind — a string
+// compare does not recognise it and the escape reopens.
+//
+// Layout: HOME is the real directory; the seed is named through a symlink to it,
+// so the two spellings differ but denote the same inode.
+func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	mustMkdir(t, filepath.Join(home, ".git"))
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	alias := filepath.Join(base, "home-alias")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	seed := filepath.Join(alias, "scratch", "markerless")
+	mustMkdir(t, seed)
+
+	// Precondition: the two spellings really do differ as strings, or a string
+	// compare would pass here and the test would prove nothing.
+	if alias == home {
+		t.Fatal("fixture: alias and home are the same string")
+	}
+
+	got := (&workspacePool{}).SynthesiseRoot(seed)
+	if sameDirAs(got, homeFileInfo()) {
+		t.Errorf("SynthesiseRoot(%q) escaped to $HOME (%q) — $HOME was named through a "+
+			"symlink, so a string compare missed it; the guard must compare by "+
+			"filesystem identity", seed, got)
+	}
+}
+
 // TestSynthesiseRoot_GitBelowHomeStillWins is the control: the guard is about
 // $HOME specifically, not about .git under it. An ordinary project checked out
 // inside the home directory — which is where most projects live — must still

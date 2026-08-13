@@ -969,6 +969,26 @@
   Codex, Gemini CLI and Kimi Code, contains neither, and the lean profile hides
   both — so the gate suppressed the hint only for clients that could in fact
   reach the tool, costing them `wait_seconds` for nothing.
+- **A dotfiles repo at `$HOME` no longer turns the whole home directory into the
+  workspace.** `Detect` skips its `.git` check at `$HOME` by filesystem identity,
+  so a dotfiles checkout there cannot capture every path beneath it.
+  `SynthesiseRoot` — the `[workspace] auto_attach` fallback — walked up to the
+  nearest `.git` with no such guard, so a tool call seeded anywhere under such a
+  repo synthesised the workspace to `$HOME` itself. The entire home directory
+  then became a single read-write root for the session, putting every SSH key,
+  browser profile and credential file under it inside the boundary, with nothing
+  in the tool call to announce that the workspace had widened.
+
+  Only reachable with `auto_attach` enabled (off by default), and the CLI half
+  was already closed by declining to call `SynthesiseRoot` at all — but the
+  daemon calls it from four places, so the guard now lives in the function.
+
+  It blocks **ascending** into `$HOME`, not naming it: a seed that *is* `$HOME`
+  still resolves to `$HOME`, because an explicit pin must always succeed (issue
+  #182). Compared with `os.SameFile`, not by string, so a symlinked or
+  firmlinked spelling cannot slip past — a mutation proved the string form
+  reopens the escape, and `TestSynthesiseRoot_HomeGuardIsByIdentityNotByString`
+  now pins it.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
