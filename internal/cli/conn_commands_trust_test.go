@@ -185,6 +185,33 @@ func TestTaskTrust_FoldedTasksTableStillGated(t *testing.T) {
 	}
 }
 
+// TestTaskProvenance_UnreadableConfigFailsClosed covers the error path, which is
+// the half a reviewer's mutation caught as untested.
+//
+// taskProvenance decides whether run_task's trust gate applies at all. If the
+// project config cannot be read — malformed TOML, a permission error — the honest
+// answer is not "then it is not project-supplied", because that SKIPS the gate
+// for a file whose contents are unknown. A security check that cannot run must
+// refuse, so an error reports project-supplied and the trust check downstream
+// does the refusing.
+//
+// Mutating the error branch to return ("config", false) leaves the rest of the
+// suite green, which is why this case exists.
+func TestTaskProvenance_UnreadableConfigFailsClosed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	// Malformed TOML: LoadProjectRaw fails, so ProjectTaskCommands returns an error.
+	writeExecProject(t, ws, "[tasks.go\nthis is not toml = = =\n")
+
+	if _, err := config.ProjectTaskCommands(ws); err == nil {
+		t.Fatal("premise broken: the fixture parses, so the error path is not exercised")
+	}
+	if _, fromProject := taskProvenance(ws, "go", "test"); !fromProject {
+		t.Error("an unreadable project config reported not-project-supplied, which SKIPS " +
+			"run_task's trust gate for a file whose contents are unknown")
+	}
+}
+
 // TestExecTrust_ApprovedContentRuns is the other direction. A binding that
 // refuses everything is not a fix, and without this case every assertion above
 // would pass against a hardcoded `return false`.
