@@ -19,6 +19,12 @@ import (
 // about a tier. Only membership is pinned, and adding a subcommand to
 // classifyGit means adding it here — which is the moment to notice the skill
 // needs a line too.
+//
+// The argIndependent half is a load-bearing claim, not a label: deriving a
+// single skill-table tier from one classifyGit(sub, nil) call is only sound
+// while the tier really is arg-independent.
+// TestClassifyGit_ArgIndependentSubcommandsAreInvariant
+// (git_classify_invariance_test.go) is what holds that up.
 var (
 	gitArgIndependent = []string{
 		"status", "log", "diff", "show", "blame", "shortlog", "check-ignore",

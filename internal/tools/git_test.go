@@ -257,18 +257,31 @@ func TestGit_WriteBlockedWhenDisabled(t *testing.T) {
 
 // TestGit_CherryPickGatedAsDestructive proves cherry-pick reaches the
 // destructive gate rather than any other tier, through Execute — the path a
-// caller actually takes. Both refusals discriminate: were cherry-pick
+// caller actually takes. Every case discriminates, in a different direction.
+//
+// Cases 1 and 2 rule out the tiers BELOW destructive: were cherry-pick
 // classified as a write, AllowWrites:true would let case 1 through; were it
 // missing from classifyGit altogether it would fall to the default reject arm
-// and both cases would fail with "not permitted" instead. The final case is the
-// control — with the tier enabled and confirmed, the gate stops objecting and
-// the call proceeds to the repository resolution it has no workspace for.
+// and both would fail with "not permitted" instead.
+//
+// Case 3 is the control, and it is armed. The obvious control — enable the tier,
+// confirm, and assert the call falls through to "no repository resolved" — is
+// tier-AGNOSTIC: a read-tier classification produces that same string, because
+// the gate returns nil for reads, the limiter is skipped, and checkBoundary
+// refuses on the empty repo regardless. So it proves the gate is
+// policy-conditional rather than a blanket refusal, but pins no tier at all.
+// Exhausting the write-rate limiter first turns it into a real assertion:
+// Execute consults the limiter only when tier != tierRead, so a rate-limit
+// refusal here is positive evidence the call was classified above read — and it
+// still proves the gate passed, since gateGit runs first and its refusal would
+// have won.
 func TestGit_CherryPickGatedAsDestructive(t *testing.T) {
 	cases := []struct {
-		name    string
-		policy  GitPolicy
-		confirm bool
-		wantErr string
+		name        string
+		policy      GitPolicy
+		confirm     bool
+		spendBudget bool
+		wantErr     string
 	}{
 		{
 			name:    "refused without allow_destructive",
@@ -283,15 +296,24 @@ func TestGit_CherryPickGatedAsDestructive(t *testing.T) {
 			wantErr: "requires confirm",
 		},
 		{
-			name:    "passes the gate when enabled and confirmed",
-			policy:  GitPolicy{AllowWrites: true, AllowDestructive: true},
-			confirm: true,
-			wantErr: "no repository resolved",
+			name:        "passes the gate, and spends the non-read write budget",
+			policy:      GitPolicy{AllowWrites: true, AllowDestructive: true},
+			confirm:     true,
+			spendBudget: true,
+			wantErr:     "rate limit exceeded",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tool := NewGit(WriteDeps{}, func() GitPolicy { return c.policy })
+			deps := WriteDeps{}
+			if c.spendBudget {
+				lim := NewRateLimiter(1, time.Hour)
+				if !lim.Allow() {
+					t.Fatal("fresh limiter refused its first operation")
+				}
+				deps.Limiter = lim
+			}
+			tool := NewGit(deps, func() GitPolicy { return c.policy })
 			_, err := callGit(t, tool, map[string]any{
 				"subcommand": "cherry-pick",
 				"args":       []string{"abc1234"},
