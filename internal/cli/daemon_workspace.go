@@ -104,6 +104,30 @@ func workspaceArgPresent(args json.RawMessage) bool {
 	return a.Workspace != ""
 }
 
+// seedIsWorkspaceArg reports whether seed came from the call's `workspace`
+// argument, rather than merely alongside one.
+//
+// workspaceArgPresent answers a different question — "may this pin be sticky?"
+// — and is the wrong test for "did the caller declare THIS directory to be the
+// workspace?". seedPathFromArgs prefers uri/file_path/path/root OVER workspace,
+// and several tools take both: relevant_memories and write_memory each accept a
+// path AND a workspace. So the two can name different directories, and treating
+// presence as a declaration let an incidental path be laundered into a
+// deliberate pin of a directory the caller never named — which matters most for
+// $HOME, where the deliberate-pin exemption is the only way in.
+//
+// Compared after URI decoding, since a seed may arrive as file:// while the
+// workspace argument is a plain path or vice versa.
+func seedIsWorkspaceArg(args json.RawMessage, seed string) bool {
+	var a struct {
+		Workspace string `json:"workspace"`
+	}
+	if seed == "" || json.Unmarshal(args, &a) != nil || a.Workspace == "" {
+		return false
+	}
+	return paths.URIToPath(a.Workspace) == paths.URIToPath(seed)
+}
+
 // seedPathFromArgs extracts a single filesystem path from a tool call's raw
 // JSON arguments. Probes the argument shapes plumb's tools use:
 //
