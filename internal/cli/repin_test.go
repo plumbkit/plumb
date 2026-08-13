@@ -20,6 +20,52 @@ func mustGitDir(t *testing.T, dir string) {
 	}
 }
 
+// TestRepinWorkspace_RefusesARelativeWorkspace is the regression an independent
+// review of #284 caught, where the two halves of the daemon disagreed about
+// whether a relative path names a location.
+//
+// pool.detect resolves a relative seed against the daemon's working directory,
+// so session_start({workspace: "."}) SUCCEEDED and pinned. Detect then returned
+// that relative string unchanged — paths.Canonical refuses to anchor one — and
+// NewPathPolicy dropped the very root that had just been detected, leaving a
+// policy with ZERO roots that refused every path including the workspace's own
+// files. The session was bricked, and the boundary error named the workspace as
+// "." while telling the agent to re-pin to that project's root, which is exactly
+// what it had done.
+//
+// It is refused at the pin instead. The daemon is shared between clients and its
+// cwd belongs to whichever one started it, so "." from a client does not mean
+// the directory the daemon would resolve — anchoring it pins a project nobody
+// named. Failing closed with an explanation costs one corrected call; the
+// alternative was a session that could not read its own workspace.
+func TestRepinWorkspace_RefusesARelativeWorkspace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	pool := detectTestPool()
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
+	defer s.close()
+
+	// Run from inside a real project, so a daemon that DID anchor to its cwd
+	// would find a plausible root and "succeed" — the failure mode under test.
+	t.Chdir(root)
+
+	for _, rel := range []string{".", "./", "sub", "a/../b"} {
+		if _, err := s.repinWorkspace(context.Background(), rel, "", false); err == nil {
+			t.Errorf("repinWorkspace(%q) was accepted; a relative workspace names no "+
+				"directory and must be refused rather than resolved against the daemon's cwd", rel)
+		}
+	}
+
+	// Control: the absolute form of the same directory still pins, so the refusal
+	// is about the spelling and not a re-pin that has stopped working.
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("control failed — an absolute re-pin was refused: %v", err)
+	}
+}
+
 // TestRepinWorkspace_IgnoresInactiveLanguageOverride verifies the language
 // override is a no-op when the named language is not active (uninstalled,
 // disabled, or unknown): detection wins, so a typo or an absent server never

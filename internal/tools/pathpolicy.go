@@ -57,15 +57,29 @@ func NewPathPolicy(primary string, roots []AllowedRoot) *PathPolicy {
 			continue
 		}
 		p := canonicalRoot(r.Path)
-		// A relative root names no location, so it cannot grant access to one.
-		// Roots reach here from project config ([workspace] extra_roots /
-		// read_roots, the granted-roots store), which is a file a hostile clone can
-		// carry — and the daemon's working directory belongs to whichever client
-		// happened to spawn it, so anchoring "../sibling" against it would grant
-		// access somewhere neither the user nor the config author named (issue
-		// #181). Dropped here, where the decision is visible and the policy's own
-		// root list is the record, rather than kept as an entry that silently
-		// matches nothing in the longest-prefix scan.
+		// A relative root names no location, so it cannot grant access to one. The
+		// only anchor available is the daemon's working directory, which belongs to
+		// whichever client happened to spawn the singleton — so anchoring
+		// "../sibling" against it would grant access somewhere the config author
+		// never named (issue #181). Dropped here, where the decision is visible and
+		// the policy's own root list is the record, rather than kept as an entry
+		// that silently matches nothing in the longest-prefix scan.
+		//
+		// NOT an attacker-supplied value, and this comment used to claim it was. A
+		// cloned repository cannot reach here: config_load forces
+		// Workspace.ExtraRoots and ReadRoots back to the trusted global base, so
+		// project config contributes no roots at all (closed in 0.9.24, stated in
+		// SECURITY.md). What does reach here is the user's OWN global config, the
+		// granted-roots store they typed into the TUI, --allow-dir (already absolute
+		// from the serve process), and the dependency resolvers. So this is a
+		// correctness fix for the user's own configuration, not a hardening one —
+		// worth stating plainly, because a wrong threat model is a worse defect than
+		// a missing one.
+		//
+		// One shape it makes visible: os.ExpandEnv does not expand "~", so a global
+		// extra_roots = ["~/shared"] is a RELATIVE path, and is now dropped rather
+		// than resolved against a daemon cwd where it never named the user's home
+		// directory anyway.
 		if !filepath.IsAbs(p) {
 			continue
 		}
