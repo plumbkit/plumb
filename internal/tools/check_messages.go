@@ -102,9 +102,14 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// logs, but that name was drawn without a uniqueness check and sits in no
 	// file any peer's check can see, so it may shadow a live session. Claiming is
 	// destructive — a message is handed over exactly once — so a shadow would
-	// swallow the real recipient's mail. Every other delivery path takes its
-	// address from connSession.inbox, which withholds one here; this tool built
-	// its own from the display name and was the single lane around that gate.
+	// swallow the real recipient's mail.
+	//
+	// This tool built its address from the display name rather than taking it
+	// from connSession.inbox, which already withholds one here. workspace_sessions
+	// had the same defect on its listing path, found later by an independent
+	// review; both are closed now. Do not restate either as "the only one" — the
+	// pattern is that each surface deriving its own address is a fresh chance to
+	// skip the gate, so the guard belongs at every one of them.
 	if t.deps.SessionID == "" {
 		return "This session is not registered in the session directory, so it has no mailbox " +
 			"address and no peer can write to it. Registration failed at startup — see the " +

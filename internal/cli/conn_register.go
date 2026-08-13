@@ -182,7 +182,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithCollab(
 			func() (bool, bool) { c := s.collabConfig(); return c.Intents, c.Mailbox },
 			s.collabStoreIfExists,
-			s.sessionName,
+			// addressableName, NOT sessionName: an unregistered session keeps a
+			// display name for the TUI and logs, but that name was drawn with no
+			// uniqueness check and may shadow a live peer. Listing its mail would
+			// print that peer's sender and body to the shadow.
+			s.addressableName,
 		))
 	collabDeps := s.collabDeps()
 	srv.Register(tools.NewShareIntent(collabDeps))
