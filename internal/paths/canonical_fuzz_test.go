@@ -54,6 +54,10 @@ func FuzzCanonicalAgreesWithKernel(f *testing.F) {
 	f.Add("missing/deeper/still")
 	f.Add("link/../a")
 	f.Add("loop")
+	f.Add("deep")
+	f.Add("deep/..")
+	f.Add("deep/../..")
+	f.Add("deep/../../b")
 	f.Add("a/b/../../a/b")
 	f.Add(strings.Repeat("a/", 40) + "b")
 
@@ -72,6 +76,13 @@ func FuzzCanonicalAgreesWithKernel(f *testing.F) {
 		if err := os.Symlink(filepath.Join(base, "a"), filepath.Join(base, "link")); err != nil {
 			t.Skip() // no symlink support on this platform
 		}
+		// A DEEPER symlink, so `..` after it diverges between the lexical and the
+		// kernel reading. With only the one-level `link -> base/a`, `link/..`
+		// resolves to base either way and the #264 divergence shape is unreachable —
+		// which is why an earlier version of this target could not catch the
+		// regression it was written for.
+		mustMk(t, filepath.Join(base, "a", "b", "c"))
+		_ = os.Symlink(filepath.Join(base, "a", "b", "c"), filepath.Join(base, "deep"))
 		_ = os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(base, "dangling"))
 		loop := filepath.Join(base, "loop")
 		_ = os.Symlink(loop, loop)
@@ -92,13 +103,32 @@ func FuzzCanonicalAgreesWithKernel(f *testing.F) {
 			}
 		}
 
-		// Property 2 — idempotence.
+		// Property 2 — the output contains NO unresolved symlinked component.
+		//
+		// This is the property that actually catches a lexical canonicaliser, and
+		// the SameFile differential above does not: for a `..`-free input a lexical
+		// implementation leaves the symlink in place, so the result still follows
+		// the same link to the same inode and SameFile is trivially true. Asking
+		// instead that EvalSymlinks is a NO-OP on the OUTPUT is the fixed-point form
+		// of "this path is fully resolved", and a lexical result fails it at once.
+		//
+		// A reviewer found the gap by reverting Canonical to filepath.Clean and
+		// watching this target still pass while the pinned test failed.
+		if got != "" && filepath.IsAbs(got) {
+			if resolved, err := filepath.EvalSymlinks(got); err == nil && resolved != got {
+				t.Errorf("Canonical left an unresolved symlink in its output:\n"+
+					"  in:       %q\n  out:      %q\n  resolved: %q\n"+
+					"two spellings of one place then compare unequal", p, got, resolved)
+			}
+		}
+
+		// Property 3 — idempotence.
 		if twice := Canonical(got); twice != got {
 			t.Errorf("Canonical has no fixed point:\n  once:  %q\n  twice: %q\n"+
 				"callers that canonicalise at different depths will disagree about one path", got, twice)
 		}
 
-		// Property 3 — an absolute input stays absolute.
+		// Property 4 — an absolute input stays absolute.
 		if filepath.IsAbs(p) && got != "" && !filepath.IsAbs(got) {
 			t.Errorf("Canonical(%q) = %q, which is relative — it would resolve against "+
 				"the process working directory at the point of use", p, got)
