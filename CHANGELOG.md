@@ -654,36 +654,54 @@
   an unanchored `"."` would match none and fail **open** precisely when the
   working directory is `$HOME`. A refusal that fails open is not a refusal.
 - **The web UI stylesheet was feeding on its own output, so it only ever grew.**
+- **The web UI stylesheet was built from its own vendor bundle, so it shipped
+  utilities nothing uses.**
   Tailwind v4 auto-detects source files from the project root and skips what git
-  ignores — but `internal/web/ui/dist` is deliberately NOT ignored, because
-  `internal/web/assets.go` embeds it. Tailwind was therefore scanning the
-  previous build's CSS, reading class names back out of it, and re-emitting
-  them. Self-sustaining: a utility survived every later build even after the
-  markup that used it was deleted, and the output depended on whether `dist/`
-  happened to be present when you built. `src/app.css` now excludes it with
+  ignores — the default that keeps `node_modules` out of the scan. But
+  `internal/web/ui/dist` is deliberately NOT ignored, because
+  `internal/web/assets.go` embeds it, and **the bundle re-admits exactly what the
+  ignore rule excluded**: the 1.2 MB of vendored echarts/uplot/svelte vite inlines
+  into `dist/assets` is the same code Tailwind refused to read in `node_modules`,
+  now sitting in a directory it does read. Tailwind emitted utilities for bare
+  tokens it found in that vendor JS. `src/app.css` now excludes it with
   `@source not "../dist"`.
 
-  Measured at Tailwind 4.3.3: **18,144 bytes with a populated `dist` against
-  16,177 clean** — 12% of the shipped stylesheet was utilities no source file
-  references (`.blur`, `.ordinal`, `.transition`, `.transform`, `.resize`, an
-  entire `@layer properties` block and its `@property` declarations). With the
-  exclusion, a clean build, a rebuild over a populated `dist`, and a rebuild
-  over the previously committed assets all produce byte-identical output.
+  Measured at Tailwind 4.3.3: **16,177 bytes clean against 18,144 with a
+  populated `dist`** — 12% of the shipped stylesheet was 13 utilities no source
+  file references (`.blur`, `.ordinal`, `.transition`, `.transform`, `.collapse`
+  and friends, plus an `@layer properties` block and its `@property`
+  declarations). Isolated by planting one artefact at a time in an otherwise
+  empty `dist`: the previous build's **CSS changes nothing**; the **JS bundle
+  produces the entire delta**. With the exclusion, a clean build, a rebuild over
+  a populated `dist`, and a rebuild over the previously committed assets all
+  produce byte-identical output.
 
-  **The committed assets were also stale**, independently: rebuilding main at
-  its own pinned vite version reproduced neither committed filename hash,
-  because the 8.1.5 → 8.2.0 bump refreshed the lockfile without running
-  `make web-ui`. Since nothing rebuilds `dist` at release time, the binary was
-  shipping assets its own source no longer produced. Both are corrected here.
+  Worth stating precisely, because the obvious reading is wrong and would send
+  the next person after the wrong artefact: this is **not** a feedback loop and
+  the stylesheet does not only grow. The previously committed CSS carried
+  `.resize\!{resize:both!important}` and a rebuild over that very `dist` drops
+  it. The trigger is any non-ignored bundled artefact, not a stylesheet reading
+  itself.
+
+  That single cause is also the whole reason the committed assets no longer
+  matched their source. The **JS was never stale** — the committed bundle is
+  byte-identical to a clean rebuild — and no used class was ever missing, so the
+  shipped CSS was a strict superset and nothing was visibly broken. There was one
+  root cause here, not two.
 
   A **`web ui freshness` CI job** now rebuilds and fails if the result differs
   from what is committed, so this cannot drift again unnoticed. It is only a
-  sound gate because the contamination fix above made the build
-  input-independent.
+  sound gate because the fix above made the build input-independent, and it
+  checks `git status --porcelain` rather than `git diff` — a diff cannot see an
+  untracked file, so a newly emitted asset would leave every tracked file
+  matching and the gate green.
 
-  vite also moves to **8.2.1**, which is a no-op for the shipped bytes — 8.2.0
-  and 8.2.1 build identical output, verified by building both and comparing
-  hashes. Upstream 8.2.1 is routine bugfixes with no advisory against 8.2.0.
+  vite also moves to **8.2.1**, a no-op for the shipped bytes — 8.2.0 and 8.2.1
+  build identical output, verified by building both and comparing hashes.
+  Nothing advises against 8.2.0 itself. Unrelated and unfixed by this change:
+  `npm audit` reports a high-severity advisory on `nanoid` (GHSA-2v37-7h3g-55p8)
+  reached transitively through postcss. It is build-time only, so it does not
+  ship in the binary, and `govulncheck` is Go-only and will never see it.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at

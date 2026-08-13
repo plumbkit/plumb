@@ -108,18 +108,20 @@ jobs:
   # carried assets its own source no longer produced. This job rebuilds and
   # fails if the result differs from what is committed.
   #
-  # This is only a sound gate because the build is input-independent: Tailwind
-  # used to scan dist/ itself (it is not gitignored) and re-emit class names
-  # from its own previous output, so the result depended on whether dist/ was
-  # present. src/app.css now excludes it with `@source not "../dist"`. If this
-  # job ever fails on an untouched tree, suspect that exclusion before assuming
-  # someone forgot to run `make web-ui`.
+  # This is only a sound gate because the build is input-independent. It was not:
+  # Tailwind scans dist/ (not gitignored, since the assets are committed), and
+  # the vendored JS vite bundles into it re-admits the very code the ignore rule
+  # keeps out of node_modules, so utilities appeared for tokens no Svelte file
+  # uses and the output depended on whether dist/ was present. src/app.css now
+  # excludes it with `@source not "../dist"`. That directive fails SILENTLY if
+  # its path is wrong, so if this job starts failing on an untouched tree,
+  # suspect the exclusion before assuming someone skipped `make web-ui`.
   web-ui-fresh:
     name: web ui freshness
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -128,7 +130,14 @@ jobs:
         run: make web-ui
       - name: dist must match the committed assets
         run: |
-          if ! git diff --exit-code --stat -- internal/web/ui/dist; then
+          # porcelain, not `git diff`: a diff cannot see an UNTRACKED file, so a
+          # newly emitted asset (a code-split chunk, a font) would leave every
+          # tracked file matching and the gate green, shipping an index.html
+          # that references something not embedded.
+          drift="$(git status --porcelain -- internal/web/ui/dist)"
+          if [ -n "$drift" ]; then
+            echo "$drift"
+            git diff --stat -- internal/web/ui/dist || true
             echo "::error::internal/web/ui/dist is stale — run 'make web-ui' and commit the result."
             exit 1
           fi
