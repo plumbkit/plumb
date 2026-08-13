@@ -59,6 +59,38 @@ func TestOnBeforeTool_IncidentalHomeSeedDoesNotAttach(t *testing.T) {
 	}
 }
 
+// TestOnBeforeTool_WorkspaceArgDoesNotLaunderAnIncidentalSeed is the round-3
+// finding, and the same class one level up from the test above.
+//
+// The exemption was keyed on `workspaceArgPresent(args)` — "is a workspace key
+// present anywhere in this call" — while the SEED comes from seedPathFromArgs,
+// which prefers uri/file_path/path/root OVER workspace. Tools take both:
+// relevant_memories and write_memory each accept a path AND a workspace. So a
+// call naming one directory as its workspace and touching a file in $HOME
+// seeded $HOME while counting as a deliberate declaration of it.
+//
+// The pin is stamped session_start and persisted, so it also survived every
+// later reconnect through the rehydrate guard — in the DEFAULT configuration,
+// escalating past auto_attach entirely.
+func TestOnBeforeTool_WorkspaceArgDoesNotLaunderAnIncidentalSeed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	home := dotfilesHome(t)
+	mkTestFile(t, filepath.Join(home, ".zshrc"), "export EDITOR=vi\n")
+	elsewhere := freshTempDir(t)
+	s := autoAttachSession(t)
+
+	// The shape of relevant_memories / write_memory: a path AND a workspace,
+	// naming different directories. The workspace named is NOT the home
+	// directory, so nothing here declares the home directory to be anything.
+	s.onBeforeTool(context.Background(), "relevant_memories",
+		json.RawMessage(`{"path":"`+filepath.Join(home, ".zshrc")+`","workspace":"`+elsewhere+`"}`))
+
+	if got := s.workspace(); got == home {
+		t.Fatalf("a workspace key naming %q laundered an incidental $HOME path into a pin of %q; "+
+			"the declaration has to be about the directory being named", elsewhere, got)
+	}
+}
+
 // TestOnBeforeTool_ExplicitHomeWorkspaceStillAttaches is the issue #182
 // control: session_start({workspace: "<home>"}) is a genuine declaration and
 // must still succeed — only non-explicit seeds are refused.

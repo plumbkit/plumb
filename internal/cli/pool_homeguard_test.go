@@ -13,12 +13,14 @@ package cli
 //     the guard protecting the real home directory.
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
 	"testing"
 
-	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // TestSameDirAs_NoHomeFailsOpen pins the deliberate fail-open: when no home
@@ -190,22 +192,38 @@ func TestDetect_DeliberatePlumbAtHomeHonoured(t *testing.T) {
 // a workspace that CONTAINS the home directory and every credential in it —
 // wider than the boundary the guard exists to keep, and reachable with no
 // deliberate declaration through a client reporting such a folder in its roots.
-func TestSynthesiseRoot_RefusesADirectoryContainingHome(t *testing.T) {
-	base := freshTempDir(t)
-	mustMkdir(t, filepath.Join(base, ".git")) // a repo ABOVE the home directory
+func TestRepin_NonExplicitRootContainingHomeIsRefused(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
 	home := filepath.Join(base, "home")
 	mustMkdir(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	seed := filepath.Join(home, "scratch", "markerless")
-	mustMkdir(t, seed)
+	mustMkdir(t, filepath.Join(base, ".git")) // so Detect would otherwise resolve it
 
-	got := (&workspacePool{}).SynthesiseRoot(seed, false)
-	if got == paths.Canonical(base) {
-		t.Errorf("SynthesiseRoot returned %q, which CONTAINS the home directory %q", got, home)
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	defer s.close()
+
+	// PinSourceRoots: a client REPORTING this folder, not a caller declaring it.
+	if _, err := s.repinWorkspaceFrom(context.Background(), base, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err == nil {
+		t.Errorf("a non-explicit re-pin to %q was accepted; it contains the home directory %q, "+
+			"so every credential under it would be inside the boundary", base, home)
 	}
-	if want := paths.Canonical(seed); got != want {
-		t.Errorf("SynthesiseRoot = %q, want the seed %q", got, want)
+
+	// Control 1: the same directory named EXPLICITLY still pins — issue #182 says
+	// an explicit pin always succeeds, and this refusal must not weaken that.
+	if _, err := s.repinWorkspaceFrom(context.Background(), base, "", sessionstate.PinSourceSessionStart, pinTriggerLive, true); err != nil {
+		t.Errorf("control failed — an EXPLICIT pin of %q was refused: %v", base, err)
+	}
+
+	// Control 2: an ordinary project, which contains no home directory, still
+	// pins from a non-explicit origin — so the refusal is about containment and
+	// not a re-pin that has stopped working.
+	proj := filepath.Join(home, "proj")
+	mustMkdir(t, filepath.Join(proj, ".git"))
+	if _, err := s.repinWorkspaceFrom(context.Background(), proj, "", sessionstate.PinSourceRoots, pinTriggerLive, true); err != nil {
+		t.Errorf("control failed — an ordinary project re-pin was refused: %v", err)
 	}
 }
 
