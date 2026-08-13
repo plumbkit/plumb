@@ -639,12 +639,26 @@ it guesses parameter names and the call is rejected client-side, before it ever
 reaches plumb). plumb exempts its highest-frequency tools from that deferral by
 advertising them with `_meta["anthropic/alwaysLoad"] = true` in `tools/list`
 (`MetaAlwaysLoadKey`, `internal/mcp/server.go`; emitted in `handleToolsList`
-when `Server.AlwaysLoad` accepts the name, wired to `tools.IsLean` in
-`conn_register.go`). The pinned set is **exactly `LeanTools`** — one list
-serving double duty: the lean-profile visibility set *and* the never-deferred
-set. Clients that predate the convention ignore the unknown `_meta` and are
-unaffected; no config knob is exposed (a per-machine override is
-`alwaysLoad: true` on the plumb server entry in the client's own MCP config).
+when `Server.AlwaysLoad` accepts the name, wired in `conn_register.go` to
+`tools.IsLean || tools.IsBootstrap || tools.IsMailbox`). The pinned set is
+`LeanTools` plus two sets pinned for their own reasons:
+
+- **`BootstrapTools`** — so a future profile change can never un-pin
+  `session_start`/`git`/`read_file`/`edit_file`. It is a subset of `LeanTools`
+  today, so it adds nothing yet; it is named to keep that guarantee independent
+  of lean membership.
+- **`MailboxTools`** (`leave_note`, `check_messages`) — disjoint from
+  `LeanTools`, so this genuinely widens the pinned set by two. These are the
+  only tools whose own output tells the agent to call the other one, and
+  deferring one half of a half-finished exchange leaves the agent holding an
+  instruction it cannot follow. They are pinned as a **pair**; a one-sided edit
+  recreates the defect and fails `TestMailboxToolsArePairedAndNonLean`.
+
+Pinning is not visibility: it changes only whether a schema is deferred, so it
+is independent of both the `[tools]` profile and `[collab] mailbox`. Clients
+that predate the convention ignore the unknown `_meta` and are unaffected; no
+config knob is exposed (a per-machine override is `alwaysLoad: true` on the
+plumb server entry in the client's own MCP config).
 
 ## `[lsp.<language>]` — language servers
 

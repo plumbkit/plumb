@@ -7,116 +7,69 @@ import (
 	"testing"
 )
 
-// leave_note's reply hint and its tool description both name check_messages,
-// which is NOT in the lean set. These tests pin the reachability rule stated in
-// leanNamingOnly: name it when the client can reach it, and when it cannot, say
-// the true thing that needs no tool (a reply rides back on the next ordinary
-// tool result) rather than handing over a broken pointer.
-//
-// The two suppression triggers are independent and only one is observable by
-// plumb, so each is exercised separately: the lean PROFILE (plumb hid the tool
-// from tools/list) and a client-side ALLOWLIST-capable client (the client's own
-// config may have removed it before a call could reach plumb).
+// leave_note's reply hint names check_messages, which is not in the lean set.
+// An earlier attempt made the hint reachability-aware and suppressed the name
+// for some clients; these tests pin the shipped wording and the invariant that
+// removed the need for any gating.
 
-// sendNote runs one successful send and returns the rendered result.
-func sendNote(t *testing.T, mutate func(*CollabDeps)) string {
-	t.Helper()
+func TestLeaveNote_ReplyHintNamesBothDeliveryPaths(t *testing.T) {
 	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
-	if mutate != nil {
-		mutate(&deps)
-	}
 	out, err := NewLeaveNote(deps).Execute(context.Background(), json.RawMessage(`{"body":"ping","to":"alice"}`))
 	if err != nil {
 		t.Fatalf("leave_note: %v", err)
 	}
-	return out
-}
-
-func TestLeaveNote_ReplyHintNamesCheckMessagesWhenReachable(t *testing.T) {
-	// Full profile, a client with no plumb-written allowlist: check_messages is
-	// advertised and pinned, so naming it is a working pointer.
-	out := sendNote(t, func(d *CollabDeps) {
-		d.ToolProfile = func() string { return "full" }
-		d.ClientName = func() string { return "claude-code" }
-	})
-	if !strings.Contains(out, "check_messages") {
-		t.Errorf("a reachable check_messages must be named; got %q", out)
+	// The ACTIVE path. wait_seconds is the only way to hand your turn to a peer
+	// rather than poll, and an agent cannot infer the parameter from the name.
+	if !strings.Contains(out, "call check_messages with a wait_seconds value") {
+		t.Errorf("the waiting path must be named in full; got %q", out)
 	}
-	if !strings.Contains(out, "wait_seconds") {
-		t.Errorf("the waiting mechanism must be spelled out; got %q", out)
+	// The PASSIVE path, which is what actually fires for an agent that carries on
+	// working. Naming only the active one implied a reply needed a call the agent
+	// might never make.
+	if !strings.Contains(out, "otherwise it is appended to the result of your next tool call") {
+		t.Errorf("the no-action delivery path must be named too; got %q", out)
 	}
 }
 
-func TestLeaveNote_ReplyHintSuppressedWhenUnreachable(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*CollabDeps)
-	}{
-		{
-			// The server hid it: under lean, check_messages is not in tools/list.
-			"lean profile",
-			func(d *CollabDeps) {
-				d.ToolProfile = func() string { return "lean" }
-				d.ClientName = func() string { return "claude-code" }
-			},
-		},
-		{
-			// The CLIENT may have hidden it. codex declares ClientSideAllowlist, so
-			// `plumb setup codex --lean` can strip every non-lean tool from its own
-			// config — a filter plumb cannot observe, hence the resolved profile is
-			// deliberately "full" here.
-			"client-side allowlist client",
-			func(d *CollabDeps) {
-				d.ToolProfile = func() string { return "full" }
-				d.ClientName = func() string { return "codex" }
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			out := sendNote(t, tc.mutate)
-			if strings.Contains(out, "check_messages") {
-				t.Errorf("check_messages may be unreachable for this client and must not be named; got %q", out)
-			}
-			// Suppression must not leave the agent with nothing: delivery does not
-			// depend on check_messages at all.
-			if !strings.Contains(out, "next tool call") {
-				t.Errorf("the suppressed form must still say how a reply arrives; got %q", out)
-			}
-		})
-	}
-}
-
-// TestLeaveNote_DescriptionFollowsTheSameRule covers the other place the name
-// ships — the text in tools/list, which every client reads.
-func TestLeaveNote_DescriptionFollowsTheSameRule(t *testing.T) {
-	reachable := NewLeaveNote(CollabDeps{
-		ToolProfile: func() string { return "full" },
-		ClientName:  func() string { return "claude-code" },
-	}).Description()
-	if !strings.Contains(reachable, "check_messages") {
-		t.Errorf("description must name the receive half when it is reachable; got %q", reachable)
-	}
-
-	for _, deps := range []CollabDeps{
-		{ToolProfile: func() string { return "lean" }},
-		{ClientName: func() string { return "gemini" }},
-	} {
-		got := NewLeaveNote(deps).Description()
-		if strings.Contains(got, "check_messages") {
-			t.Errorf("description must not name a possibly-filtered tool; got %q", got)
+// TestMailboxPairIsReachableTogether is the invariant that makes gating this
+// hint on reachability pointless, and it is the thing to re-check before anyone
+// re-introduces such a gate.
+//
+// leave_note's hint and description both point at check_messages. Every
+// server-side or config-side mechanism that can remove check_messages removes
+// leave_note with it: the lean profile advertises only LeanTools (neither is in
+// it), and a client-side allowlist is exactly LeanToolNames() — what
+// `plumb setup <client> --lean` writes into Codex/Gemini/Kimi's own config —
+// which contains neither. So a suppression rule can only fire when leave_note is
+// equally gone (nothing renders) or when check_messages is in fact present
+// (a working pointer, needlessly withheld — which is what cost a stock Codex
+// session the wait_seconds mechanism). The one mechanism that CAN split the pair
+// is client-side schema deferral, and MailboxTools/AlwaysLoad is its fix.
+//
+// If either half ever becomes independently reachable, this fails — and the
+// suppression question genuinely reopens.
+func TestMailboxPairIsReachableTogether(t *testing.T) {
+	for name := range MailboxTools {
+		if IsLean(name) {
+			t.Errorf("%q is now lean while its partner may not be; the lean profile can split the pair", name)
 		}
-		if !strings.Contains(got, "send half of plumb's mailbox") {
-			t.Errorf("suppressing the name must not gut the description; got %q", got)
+	}
+	for _, name := range LeanToolNames() {
+		if IsMailbox(name) {
+			t.Errorf("%q is in the client-side allowlist LeanToolNames(); an allowlist can now keep one half and drop the other", name)
 		}
 	}
 }
 
-// TestLeaveNote_DescriptionUnwiredDepsAreFull pins the nil-safety the tools/list
-// budget test depends on: NewLeaveNote(CollabDeps{}) calls only the metadata
-// methods, and must get the full text rather than a panic or the suppressed form.
-func TestLeaveNote_DescriptionUnwiredDepsAreFull(t *testing.T) {
-	if got := NewLeaveNote(CollabDeps{}).Description(); !strings.Contains(got, "check_messages") {
-		t.Errorf("unwired deps must resolve to the permissive full text; got %q", got)
+// TestLeaveNote_DescriptionNamesTheReceiveHalf covers the other place the name
+// ships — the text in tools/list, which every client reads. It must be a fixed
+// string: Description is called under mcp.Server.mu.RLock (see snapshotTools).
+func TestLeaveNote_DescriptionNamesTheReceiveHalf(t *testing.T) {
+	got := NewLeaveNote(CollabDeps{}).Description()
+	if !strings.Contains(got, "check_messages is the receive half") {
+		t.Errorf("description must name the receive half; got %q", got)
+	}
+	if !strings.Contains(got, "when it calls check_messages") {
+		t.Errorf("description must name check_messages as a peer's delivery path; got %q", got)
 	}
 }

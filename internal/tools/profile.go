@@ -92,16 +92,27 @@ func IsBootstrap(name string) bool { return BootstrapTools[name] }
 // one tool-search round-trip; for a half-finished exchange it is an instruction
 // the agent has already been given and cannot follow. A real agent hit exactly
 // that: it had leave_note, was told to call check_messages, and could not find
-// it.
+// it. Client-side schema deferral is the ONE mechanism that can split the pair,
+// and pinning is its whole fix.
 //
 // THE PAIRING IS THE POINT. Add or remove both together — the asymmetry (send
 // reachable, receive not) IS the defect, so a one-sided edit here recreates it.
 // TestMailboxToolsArePairedAndNonLean pins that.
 //
-// Pinning does NOT make the pair reachable everywhere: a client that filters
-// plumb's tools in its own config (clientcaps.ClientSideAllowlist) removes both
-// before a call could reach plumb, and plumb cannot observe that. Prose that
-// names either tool must therefore still consult leanNamingOnly.
+// No OTHER mechanism can produce that asymmetry, which is why nothing in the
+// mailbox's prose is gated on reachability. Both names leave and enter together
+// everywhere else: the lean profile hides both from tools/list (neither is in
+// LeanTools), and a client-side allowlist — LeanToolNames(), what
+// `plumb setup <client> --lean` writes — contains neither, so it strips both
+// before a call could reach plumb. A rule that suppressed the name of one would
+// only ever fire when the other was equally gone (nothing to render) or when
+// both were present (a working pointer, needlessly withheld).
+//
+// Membership is NOT gated on [collab] mailbox. The tools are registered and
+// advertised regardless of that flag — pinning changes only whether a schema is
+// deferred, so gating it would leave both tools listed but their schemas hidden,
+// which is strictly worse than the two schemas it saves. It would also make the
+// pin depend on a hot-reloadable value read after tools/list was already sent.
 var MailboxTools = map[string]bool{
 	"leave_note":     true,
 	"check_messages": true,
@@ -109,24 +120,6 @@ var MailboxTools = map[string]bool{
 
 // IsMailbox reports whether name is one of the mailbox pair (see MailboxTools).
 func IsMailbox(name string) bool { return MailboxTools[name] }
-
-// leanNamingOnly reports whether plumb-authored prose for this connection must
-// confine itself to the lean tool set. It is the ONE predicate every such
-// decision consults; do not re-derive it from a profile check alone.
-//
-// Two independent reasons, and the second is invisible to the first: the SERVER
-// may have hidden the non-lean tools (the lean profile), or the CLIENT may have
-// filtered them out in its own config, which plumb cannot see at all — for a
-// --lean Codex or Gemini CLI the resolved profile is "full" and the tools are
-// still gone. Prose that keyed only off the profile therefore steered those
-// users at tools their own config had removed.
-//
-// leanProfile is passed rather than resolved here because each caller reaches
-// its profile differently (session_start via its own accessor, the collab tools
-// via CollabDeps); the rule they must agree on is this OR, not the plumbing.
-func leanNamingOnly(leanProfile bool, clientNameFn func() string) bool {
-	return leanProfile || clientSideAllowlistCapable(clientNameFn)
-}
 
 // LeanToolNames returns the sorted, deduplicated UNION of LeanTools and
 // BootstrapTools. It is the single source of truth for a CLIENT-SIDE tool

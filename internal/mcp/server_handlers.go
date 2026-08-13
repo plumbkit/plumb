@@ -110,6 +110,14 @@ type toolSnapshot struct {
 //
 // Concurrency: takes s.mu in read mode for the duration of the copy only; the
 // returned slice shares no mutable state with the server.
+//
+// Tool.Description() is therefore called UNDER s.mu.RLock, which makes it the
+// one metadata method that must not reach back into the connection. Every
+// description in the tree is a fixed string today; a client-aware one would be
+// re-entering, and sync.RWMutex is not recursive when a writer is queued — a
+// description that consulted session_start's 3-value profile accessor would go
+// hiddenToolCount → Server.ToolNames → s.mu.RLock and deadlock. Vary a
+// description by client only by hoisting the decision out to registration time.
 func (s *Server) snapshotTools() []toolSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

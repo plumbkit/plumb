@@ -26,19 +26,10 @@ func NewLeaveNote(deps CollabDeps) *LeaveNote { return &LeaveNote{deps: deps} }
 
 func (*LeaveNote) Name() string { return "leave_note" }
 
-// Description is client-aware for one reason: it names check_messages, which is
-// not in the lean set, so under either arm of nameLeanToolsOnly that name may be
-// a pointer to a tool this client cannot reach. The rest of the text is fixed.
-func (t *LeaveNote) Description() string {
-	receiveHalf := " check_messages is the receive half."
-	peerReads := "when it calls check_messages"
-	if t.deps.nameLeanToolsOnly() {
-		receiveHalf = ""
-		peerReads = "when it reads its mailbox"
-	}
+func (*LeaveNote) Description() string {
 	return "Send a message to another agent — a named peer session, or \"next\" " +
 		"(whoever attaches to this workspace next). This is the send half of plumb's " +
-		"mailbox." + receiveHalf + "\n\n" +
+		"mailbox; check_messages is the receive half.\n\n" +
 		"CONVERSATIONS. Every message belongs to a thread. Omit conversation_id to " +
 		"start one (the reply tells you the new id); pass the conversation_id you " +
 		"were given to answer in the same thread. A thread is capped at [collab] " +
@@ -47,7 +38,7 @@ func (t *LeaveNote) Description() string {
 		"thread to keep talking.\n\n" +
 		"DELIVERY is by polling only — plumb cannot push. A message reaches the peer " +
 		"when it next makes any tool call (pending messages are appended to the " +
-		"result), " + peerReads + ", or at its next session_start. Each " +
+		"result), when it calls check_messages, or at its next session_start. Each " +
 		"message is delivered exactly once. A peer that is idle waiting on its human " +
 		"makes no tool calls and will not see it until it does something — so do not " +
 		"assume silence means refusal.\n\n" +
@@ -265,33 +256,22 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// costs delivery latency (the next periodic check still finds the row), never
 	// the message.
 	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
-	return formatNoteResult(body, args.To, conv, ttl, redacted, target, t.deps.nameLeanToolsOnly()), nil
+	return formatNoteResult(body, args.To, conv, ttl, redacted, target), nil
 }
 
-// replyDeliveryLine tells the sender how a reply reaches it.
-//
-// The unconditional form of this line used to name check_messages on EVERY
-// successful send. check_messages is not in the lean set, so for a lean-profile
-// connection it is hidden from tools/list, and for a client holding its own
-// plumb-written allowlist it is gone from the client's config entirely — a state
-// plumb cannot observe. Either way the agent was handed a name it could not act
-// on, having just been told the exchange was under way.
-//
-// The suppressed form is not silence. Delivery does not depend on
-// check_messages at all: messages are appended to the result of any ordinary
-// tool call (internal/cli/conn_hints.go), so the fallback states the mechanism
-// that always works. check_messages remains the way to WAIT — hand your turn to
-// a peer instead of polling — which is why it is still named when it is
-// nameable.
-func replyDeliveryLine(leanNamesOnly bool) string {
-	if leanNamesOnly {
-		return "  A reply needs no action from you: it is appended to the result of your next tool call.\n"
-	}
+// replyDeliveryLine names BOTH delivery paths, because they are not
+// alternatives an agent can infer from one another. Waiting server-side is the
+// only way to hand your turn to a peer rather than poll, and it needs a tool
+// call the agent must be told about; the passive path needs no action at all and
+// is what actually fires for an agent that just carries on working. Naming only
+// the active one left an agent believing a reply required a call it might never
+// make.
+func replyDeliveryLine() string {
 	return "  To wait for a reply, call check_messages with a wait_seconds value; " +
 		"otherwise it is appended to the result of your next tool call.\n"
 }
 
-func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget, leanNamesOnly bool) string {
+func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget) string {
 	var sb strings.Builder
 	dest := "session " + to
 	if to == collab.AddresseeNext {
@@ -314,6 +294,6 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 			"attaching HERE will read it. If you meant an agent in another project, wait for "+
 			"it to attach and send again.\n", to, to)
 	}
-	sb.WriteString(replyDeliveryLine(leanNamesOnly))
+	sb.WriteString(replyDeliveryLine())
 	return sb.String()
 }

@@ -60,13 +60,19 @@ func memoriesDirSig(ws string) int64 {
 }
 
 // mailboxSilentTools are the tools that must never carry a piggybacked message
-// block. The mailbox tools themselves would double-deliver (they already claim
-// and render), and session_start renders its own "## Messages" section.
+// block, because each already surfaces the same messages itself and appending
+// the claimed bodies underneath would show them twice in one response:
+// check_messages claims and renders, session_start renders its own "## Messages"
+// section, and workspace_sessions lists the unread ones.
+//
+// leave_note is deliberately NOT here, despite being the other half of the
+// mailbox. It surfaces nothing — it holds no Inbox, claims no row and calls no
+// RenderMessages — so it cannot double-deliver, and while it was silent a reply
+// waiting for the sender was skipped on exactly the call an exchange most often
+// makes next: sending on to the next peer. In a fan-out that repeats
+// indefinitely, and the reply is never rendered at all.
 var mailboxSilentTools = map[string]bool{
-	"check_messages": true, "leave_note": true, "session_start": true,
-	// workspace_sessions lists unread messages itself; appending the claimed
-	// bodies underneath would show the same message twice in one response.
-	"workspace_sessions": true,
+	"check_messages": true, "session_start": true, "workspace_sessions": true,
 }
 
 // enrichToolOutput appends plumb's advisory blocks to a successful tool result.

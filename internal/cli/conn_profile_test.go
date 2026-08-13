@@ -2,6 +2,9 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -322,4 +325,66 @@ func TestAlwaysLoad_PinsTheMailboxPair(t *testing.T) {
 	if srv.AlwaysLoad("topology_routes") {
 		t.Error("topology_routes is pinned — the long tail must stay deferred, or the pin saves nothing")
 	}
+}
+
+// TestAlwaysLoadDocMatchesWiring guards docs/configuration.md's "always-loaded
+// (pinned) tools" paragraph against the drift that had already happened: it
+// claimed the pinned set was "exactly LeanTools", "wired to tools.IsLean". That
+// was accidentally true while the extra predicate was IsBootstrap (a subset of
+// lean); MailboxTools is disjoint, so the same sentence became false the moment
+// it was added — and nothing went red.
+//
+// The predicate list is read from the wiring itself, so the doc and the code
+// must move together in BOTH directions: a predicate dropped from the code while
+// the doc still names it fails just as loudly as one added without documenting.
+func TestAlwaysLoadDocMatchesWiring(t *testing.T) {
+	root := repoRootFromCaller(t)
+	wired := alwaysLoadPredicates(t, root)
+	if len(wired) == 0 {
+		t.Fatal("no tools.Is* predicates found in the AlwaysLoad wiring — the extractor is broken")
+	}
+
+	b, err := os.ReadFile(filepath.Join(root, "docs/configuration.md"))
+	if err != nil {
+		t.Fatalf("reading docs/configuration.md: %v", err)
+	}
+	doc := string(b)
+	for _, p := range wired {
+		if !strings.Contains(doc, "tools."+p) {
+			t.Errorf("docs/configuration.md does not name %q, which AlwaysLoad is wired to — "+
+				"the pinned set it describes is wrong", "tools."+p)
+		}
+	}
+	// The other direction: the doc must not advertise a predicate the code dropped.
+	for _, p := range []string{"IsLean", "IsBootstrap", "IsMailbox"} {
+		if strings.Contains(doc, "tools."+p) && !slices.Contains(wired, p) {
+			t.Errorf("docs/configuration.md names tools.%s but AlwaysLoad no longer uses it", p)
+		}
+	}
+}
+
+// alwaysLoadPredicates returns the tools.Is* predicate names appearing in the
+// srv.AlwaysLoad assignment in conn_register.go.
+func alwaysLoadPredicates(t *testing.T, root string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, "internal/cli/conn_register.go"))
+	if err != nil {
+		t.Fatalf("reading conn_register.go: %v", err)
+	}
+	src := string(b)
+	start := strings.Index(src, "srv.AlwaysLoad = ")
+	if start < 0 {
+		t.Fatal("srv.AlwaysLoad assignment not found in conn_register.go")
+	}
+	body := src[start:]
+	if end := strings.Index(body, "\n}"); end >= 0 {
+		body = body[:end]
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`tools\.(Is[A-Za-z]+)\(`).FindAllStringSubmatch(body, -1) {
+		if !slices.Contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
 }
