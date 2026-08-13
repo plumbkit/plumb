@@ -39,6 +39,30 @@ func (*Analyser) Supports(path string) bool {
 	return ext == ".go"
 }
 
+// pathModeAbs makes golangci-lint report absolute filenames.
+//
+// This is load-bearing for the stale-cache check, not a cosmetic choice. There
+// is NO fixed directory a relative golangci-lint path can be resolved against:
+// `run.relative-path-mode` selects between the working directory, the go.mod
+// directory, the git root, and the config file's directory, and the DEFAULT is
+// itself conditional — `cfg` when a config file is discovered, `wd` when none
+// is. Measured with v2.12.2, same module, file at <root>/sub/deep/bad.go:
+//
+//	no config, cwd=<root>/sub/deep         -> "bad.go"
+//	config at <root>, cwd=<root>/sub/deep  -> "sub/deep/bad.go"
+//	relative-path-mode: gitroot            -> "<modroot>/sub/deep/bad.go"
+//	output.path-prefix: myprefix           -> "myprefix/sub/deep/bad.go"
+//
+// Resolving against any single base therefore mis-stats real findings for some
+// perfectly ordinary project — and a real finding stat'd as missing is exactly
+// how this check would suppress findings that matter. --path-mode=abs removes
+// the guess: measured across all four relative-path-modes, three working
+// directories, with and without a config file, and with output.path-prefix set,
+// it reports the same absolute path every time. Findings are never rendered by
+// path (quality.Runner.format prints only line, code and message), so this
+// changes nothing an agent or user sees.
+const pathModeAbs = "--path-mode=abs"
+
 // Analyse runs golangci-lint on files and returns parsed findings.
 // Returns (nil, nil) if golangci-lint is not on PATH, the linter fails to
 // run, or it reports no issues.
@@ -52,37 +76,59 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 		return nil, nil // binary absent — skip, but not silently (logged once)
 	}
 
-	// --output.json.path=stdout is the golangci-lint v2 spelling; the v1
-	// --out-format=json flag was removed and errors with "unknown flag".
-	args := append([]string{"run", "--output.json.path=stdout"}, files...)
-	cmd := exec.CommandContext(ctx, bin, args...)
 	// golangci-lint resolves the Go module from its working directory. The daemon
 	// runs from "/", which is in no module, so anchor the run at the analysed file's
 	// directory. files are the absolute paths of just-written source files.
-	var base string
-	if dir := filepath.Dir(files[0]); filepath.IsAbs(dir) {
-		cmd.Dir = dir
-		base = dir
+	var dir string
+	if d := filepath.Dir(files[0]); filepath.IsAbs(d) {
+		dir = d
 	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 
-	// golangci-lint exits non-zero when it finds issues; that is not an error
-	// for us — we parse the JSON output regardless of exit code.
-	runErr := cmd.Run()
+	stdout, stderr, runErr := runLinter(ctx, bin, dir, files, true)
+	// --path-mode landed in golangci-lint v2.1.0; an earlier v2 exits on the
+	// unknown flag before writing anything. Retry without it rather than lose
+	// every finding — the stale-cache check then declines to run, because the
+	// paths come back relative and pathPresent will not judge those.
+	if len(stdout) == 0 && runErr != nil {
+		stdout, stderr, runErr = runLinter(ctx, bin, dir, files, false)
+	}
 
 	// A successful run always writes a JSON document to stdout (even with zero
 	// issues), so empty stdout means the linter failed to run rather than a
 	// clean file. Surface that instead of silently reporting "no findings".
-	if stdout.Len() == 0 {
+	if len(stdout) == 0 {
 		if runErr != nil {
-			slog.WarnContext(ctx, "golangci-lint failed to run",
-				"error", runErr, "stderr", stderrTail(stderr.String()))
+			slog.WarnContext(ctx, "golangci-lint failed to run", "error", runErr, "stderr", stderr)
 		}
 		return nil, nil
 	}
-	return flagStaleCache(parseOutput(stdout.Bytes(), a.Name()), base, a.Name()), nil
+	return flagStaleCache(parseOutput(stdout, a.Name()), a.Name()), nil
+}
+
+// runLinter performs one golangci-lint run, returning its stdout, a bounded
+// tail of stderr, and the process error. golangci-lint exits non-zero when it
+// finds issues; that is not an error for us — the caller parses stdout
+// regardless of exit code.
+//
+// --output.json.path=stdout is the golangci-lint v2 spelling; the v1
+// --out-format=json flag was removed and errors with "unknown flag".
+func runLinter(ctx context.Context, bin, dir string, files []string, absPaths bool) ([]byte, string, error) {
+	args := make([]string, 0, len(files)+3)
+	args = append(args, "run", "--output.json.path=stdout")
+	if absPaths {
+		args = append(args, pathModeAbs)
+	}
+	args = append(args, files...)
+
+	cmd := exec.CommandContext(ctx, bin, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderrTail(stderr.String()), err
 }
 
 // StaleCacheCode is the Code carried by the synthetic finding that replaces a
@@ -115,11 +161,12 @@ const StaleCacheHint = "golangci-lint cache clean"
 // degrade into silence while slowing every peer down. The message names the
 // command instead.
 //
-// base is the directory golangci-lint ran in (cmd.Dir), which is what its output
-// paths are relative to; empty base means the process working directory, which is
-// already what os.Stat resolves a relative path against.
-func flagStaleCache(findings []quality.Finding, base, source string) []quality.Finding {
-	if len(findings) == 0 || !allPathsMissing(findings, base) {
+// The check operates only on absolute paths (see pathModeAbs and pathPresent),
+// which is what makes it safe: a finding in a file that exists cannot stat as
+// missing, so a real finding can never be suppressed. That is a property of the
+// construction, not a list of path layouts someone remembered to handle.
+func flagStaleCache(findings []quality.Finding, source string) []quality.Finding {
+	if len(findings) == 0 || !allPathsMissing(findings) {
 		return findings
 	}
 	return []quality.Finding{{
@@ -133,21 +180,17 @@ func flagStaleCache(findings []quality.Finding, base, source string) []quality.F
 }
 
 // allPathsMissing reports whether every finding names a path absent from disk,
-// at one os.Stat per DISTINCT path.
-//
-// Conservative by construction: a path counts as missing only when the stat
-// fails with "does not exist". Anything present in any form counts as present —
-// including a directory — and so does a path we could not check at all (an empty
-// filename, or a stat that failed for another reason such as a permission-denied
-// parent). A check that cannot see a file must never claim the file is gone.
-func allPathsMissing(findings []quality.Finding, base string) bool {
+// at one stat per DISTINCT path. The memoisation is not a micro-optimisation:
+// the recorded stale-cache incidents carried 29 and 9 findings, and a phantom
+// set is typically many findings across few files, so the distinct-path count is
+// what the syscall bill should track.
+func allPathsMissing(findings []quality.Finding) bool {
 	checked := make(map[string]bool, len(findings))
 	for _, f := range findings {
-		p := resolveFindingPath(f.File, base)
-		present, seen := checked[p]
+		present, seen := checked[f.File]
 		if !seen {
-			present = pathPresent(p)
-			checked[p] = present
+			present = pathPresent(f.File)
+			checked[f.File] = present
 		}
 		if present {
 			return false
@@ -156,25 +199,30 @@ func allPathsMissing(findings []quality.Finding, base string) bool {
 	return true
 }
 
-// resolveFindingPath maps a golangci-lint output path to one os.Stat can use.
-// Measured behaviour: golangci-lint emits paths relative to its own working
-// directory — running it at a module root reports "sub/deep/bad.go", one level
-// down "deep/bad.go", and in the file's own directory "bad.go". Resolving
-// against anything else (the module root, say) would make every finding stat as
-// missing, which is the one way this check could turn real findings into a bogus
-// stale-cache report.
-func resolveFindingPath(p, base string) string {
-	if p == "" || base == "" || filepath.IsAbs(p) {
-		return p
-	}
-	return filepath.Join(base, p)
-}
+// statFile is the stat seam (tests substitute it).
+var statFile = os.Stat
 
+// pathPresent reports whether p names something on disk, erring towards
+// "present" in every case it cannot settle. Two rules, both deliberate:
+//
+// A non-absolute path is always present. plumb asks for absolute paths
+// (pathModeAbs), so a relative one means the run fell back for an older
+// golangci-lint that rejects --path-mode — and a relative path has no
+// unambiguous base to resolve against (that is the whole reason for the flag).
+// Judging it would mean guessing, and the cost of guessing wrong is suppressing
+// a real finding, so the check simply declines to run. An empty filename is
+// covered by the same rule.
+//
+// A path counts as missing ONLY when the stat fails with "does not exist".
+// Anything present in any form counts as present — including a directory — and
+// so does a path that could not be checked at all, such as one under a
+// permission-denied parent. A check that cannot see a file must never claim the
+// file is gone.
 func pathPresent(p string) bool {
-	if p == "" {
-		return true // nothing to check — cannot claim it is gone
+	if !filepath.IsAbs(p) {
+		return true
 	}
-	_, err := os.Stat(p)
+	_, err := statFile(p)
 	return !errors.Is(err, fs.ErrNotExist)
 }
 

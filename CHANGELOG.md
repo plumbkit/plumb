@@ -90,8 +90,29 @@
   everything" while one finding is real would be worse than the bug. Only
   "does not exist" counts as absent — a directory, or a path that cannot be
   stat'd at all, counts as present, since a check that cannot see a file must
-  never claim the file is gone. Output paths are resolved against the directory
-  golangci-lint ran in, which is what its relative paths are measured from.
+  never claim the file is gone.
+
+  Making that safe required pinning down what golangci-lint's output paths are
+  actually relative to, and the answer is: it depends. `run.relative-path-mode`
+  selects between the working directory, the go.mod directory, the git root and
+  the config file's directory, and the default is itself conditional — `cfg` when
+  a config file is discovered, `wd` when none is — while `output.path-prefix`
+  prepends an arbitrary string on top. Measured against golangci-lint v2.12.2, a
+  run anchored in a file's own directory still reports `sub/deep/bad.go` whenever
+  a config file exists, which is the ordinary case (plumb's own repository has
+  one). Resolving output paths against any single fixed directory therefore
+  mis-stats real findings for perfectly ordinary projects, and a real finding
+  stat'd as missing is precisely how this check would suppress findings that
+  matter.
+
+  So the analyser stops guessing: it passes `--path-mode=abs` and stats absolute
+  paths only. A finding in a file that exists cannot then stat as missing, which
+  makes the safety a property of the construction rather than a list of layouts
+  someone remembered to handle. `--path-mode` arrived in golangci-lint v2.1.0, so
+  a run that fails outright is retried once without the flag; findings then come
+  back relative and the stale-cache check declines to judge them, leaving older
+  binaries exactly as they were. Findings are never displayed by path, so none of
+  this changes what an agent or user sees.
 
   plumb reports rather than remediates: `golangci-lint cache clean` mutates state
   shared by every concurrent agent and by the user's own terminal, and the re-run
