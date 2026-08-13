@@ -102,7 +102,15 @@ func classifyGit(sub string, args []string) gitTier {
 		return classifyStash(args)
 	case "checkout":
 		return classifyCheckout(args)
-	case "reset", "clean", "rebase", "revert":
+	// cherry-pick is flat-classified, like rebase — its closest analogue, and the
+	// other sequencer verb here. Arg inspection (classifyStash, classifyBranch,
+	// classifyCheckout) exists only where a subcommand's arg space SPANS tiers;
+	// cherry-pick's does not. Its state flags are no safer than the bare form:
+	// --continue commits and moves HEAD, --skip and --abort reset the working
+	// tree (discarding any conflict resolution), and --quit strands a
+	// half-applied pick. Every form belongs at the same tier, so splitting them
+	// would only invent a distinction the safe-bias rule then has to collapse.
+	case "reset", "clean", "rebase", "revert", "cherry-pick":
 		return tierDestructive
 	case "push", "fetch", "pull":
 		return tierNetwork

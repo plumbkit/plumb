@@ -734,7 +734,8 @@ Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
 `diff`, `show`, `blame`, `shortlog`, and branch/tag/stash listing). **Write**
 needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
 branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
-`checkout`, `restore`, `rebase`, …) needs `allow_destructive` + `confirm:true`.
+`checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, …) needs
+`allow_destructive` + `confirm:true`.
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
 Force-push to a protected branch and ad-hoc URL pushes are always refused. See
 [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating). The

@@ -23,7 +23,7 @@ var (
 	gitArgIndependent = []string{
 		"status", "log", "diff", "show", "blame", "shortlog", "check-ignore",
 		"add", "commit", "mv",
-		"reset", "clean", "rebase", "revert",
+		"reset", "clean", "rebase", "revert", "cherry-pick",
 		"push", "fetch", "pull",
 	}
 	// Classified by inspecting their args, so they belong in the skill's

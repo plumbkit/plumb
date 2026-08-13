@@ -124,6 +124,24 @@
   `..` refusals are defence in depth for this class, not the defence. Deleting
   both leaves every payload still refused. The load-bearing code is the symlink
   resolution in `canonicalRoot`.
+- **`git cherry-pick` is admitted to the destructive tier** — it needs `[git]
+  allow_destructive` **and** `confirm: true`, alongside `reset`, `clean`,
+  `rebase` and `revert`. It was previously absent from `classifyGit` entirely,
+  so it fell to the reject arm and was refused pre-policy with "subcommand
+  \"cherry-pick\" is not permitted", which no configuration could change. Unlike
+  `worktree`'s deliberate omission, this one carried no rationale: cherry-pick is
+  an ordinary history operation that sits naturally beside `revert`, and the only
+  thing its absence achieved was pushing agents out to raw `git` in a shell —
+  bypassing the policy gate, the per-repo serialisation lock and the stale
+  `index.lock` reaper all at once, which is strictly worse for safety than gating
+  it.
+
+  **Flat-classified, like `rebase`.** Every form sits at the same tier, state
+  flags included: `--continue` commits and moves HEAD, `--skip` and `--abort`
+  reset the working tree (discarding conflict resolution), and `--quit` strands a
+  half-applied pick. Arg inspection (`classifyStash`, `classifyBranch`,
+  `classifyCheckout`) exists only where a subcommand's arg space spans tiers;
+  cherry-pick's does not.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,
