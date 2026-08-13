@@ -133,10 +133,10 @@ func checkEnvelopePreserved(t *testing.T, in, out []byte) {
 func checkInjectionAuthoritative(t *testing.T, in, out []byte) {
 	t.Helper()
 	if bytes.Equal(in, out) {
-		// The injector declined (not an object, or params not an object). Then it
-		// must ALSO not have left a client-forged grant it silently endorsed — but
-		// that is the caller's problem, not this function's, and is asserted
-		// separately in TestInjectInitMeta_DeclinedFrameCarriesNoProxyGrant.
+		// The injector declined — the frame is not an object, its params are not an
+		// object, or the rewrite would have moved the envelope. What a DECLINED
+		// frame does with a client-supplied grant is a separate question with a
+		// deliberately-accepted answer; see TestInjectInitMeta_DeclinedFrameKeepsClientMeta.
 		return
 	}
 	got, ok := metaValue(out, mcp.MetaAllowDirsKey)
@@ -333,6 +333,60 @@ func daemonEchoedID(raw json.RawMessage) (json.RawMessage, bool) {
 		return nil, false
 	}
 	return out, true
+}
+
+// TestInjectInitMeta_DeclinedFrameKeepsClientMeta pins the LIMIT of the
+// injection-authority property, so it is a payload-bearing fact rather than a
+// sentence in a merged pull request nobody greps.
+//
+// injectInitMeta is authoritative only when it INJECTS. When it declines — an
+// empty kv (the proxy holds no `serve --allow-dir` grant), a frame that is not a
+// JSON object, or params that are not an object — the frame is returned byte for
+// byte, so a client-supplied dev.plumbkit/allow-dirs in its own _meta reaches the
+// daemon untouched.
+//
+// That is deliberate, not an oversight. The daemon trusts its socket peer: a
+// client connecting directly, with no `plumb serve` in between, sets _meta itself
+// and there is nobody to overrule it. The proxy overwriting the key when it has
+// something to say, and passing the frame through when it does not, is the same
+// contract. What would make it a defect is the proxy holding a grant and letting
+// the client's value win, which is what the fuzz oracle covers.
+//
+// If the trust model ever changes so that a client may not name its own roots,
+// this test is where that decision lands: it fails, and the fix is to strip the
+// key on decline rather than to adjust the expectation.
+func TestInjectInitMeta_DeclinedFrameKeepsClientMeta(t *testing.T) {
+	t.Parallel()
+	frame := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"` +
+		mcp.MetaAllowDirsKey + `":["/","/etc"]}}}`)
+
+	// No grant: buildInitMeta returns nil, so the injector declines.
+	out := injectInitMeta(frame, buildInitMeta(nil, "", ""))
+	if !bytes.Equal(out, frame) {
+		t.Fatalf("a declining injector rewrote the frame\n in: %s\nout: %s", frame, out)
+	}
+	got, ok := metaValue(out, mcp.MetaAllowDirsKey)
+	if !ok {
+		t.Fatal("premise broken: the client's own _meta grant is not in the fixture")
+	}
+	if string(got) != `["/","/etc"]` {
+		t.Errorf("client _meta grant = %s, want it passed through unchanged", got)
+	}
+
+	// And the property that DOES hold: once the proxy has a grant, its value wins
+	// over the client's, whatever the client wrote.
+	withGrant := injectInitMeta(frame, buildInitMeta(proxyDirs, "", ""))
+	got, ok = metaValue(withGrant, mcp.MetaAllowDirsKey)
+	if !ok {
+		t.Fatal("the proxy's grant is absent after injection")
+	}
+	var dirs []string
+	if err := json.Unmarshal(got, &dirs); err != nil {
+		t.Fatalf("allow-dirs is not a string array: %s", got)
+	}
+	if len(dirs) != len(proxyDirs) || dirs[0] != proxyDirs[0] {
+		t.Errorf("client kept influence over the grant: got %v, want the proxy's %v", dirs, proxyDirs)
+	}
 }
 
 // TestIDKey_DistinctLargeIDsCollide records the KNOWN, unfixed defect the
