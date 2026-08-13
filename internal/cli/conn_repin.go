@@ -89,6 +89,27 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 			folder, folder,
 		)
 	}
+	// A root that CONTAINS the home directory is refused unless the caller
+	// declared it. sameDirAs guards the home directory itself; this guards the
+	// rung above, where /Users (or /home, or /) admits a workspace holding every
+	// home directory on the machine and every credential in them — strictly wider
+	// than the capture the identity guard exists to block, and reachable with no
+	// declaration at all through a client reporting such a folder in its roots.
+	//
+	// Only non-explicit origins are refused: an explicit session_start naming
+	// such a directory is a declaration, and issue #182's contract is that an
+	// explicit pin always succeeds. The refusal has to live at the pin, because
+	// SynthesiseRoot's fallback returns the SEED — which in this case is the
+	// offending directory itself, so stopping its walk there changes nothing.
+	if origin != sessionstate.PinSourceSessionStart && containsHomeDir(folder, homeDirInfos()) {
+		return "", fmt.Errorf(
+			"repin: %s contains the home directory, so pinning it would put every file under "+
+				"it — including credentials and SSH keys — inside the workspace boundary. "+
+				"Pin the project directory instead. If you genuinely mean it, name it in an "+
+				"explicit session_start workspace argument",
+			folder,
+		)
+	}
 	root, language, err := s.pool.Detect(folder)
 	synthetic := err != nil
 	if synthetic {
