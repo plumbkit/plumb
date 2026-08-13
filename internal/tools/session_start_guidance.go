@@ -90,15 +90,12 @@ func (t *SessionStart) leanProfile() bool {
 	return profile == "lean"
 }
 
-// nameLeanToolsOnly reports whether guidance must confine itself to the lean set.
-// Two independent reasons, and the second is invisible to the first: the SERVER
-// may have hidden the non-lean tools (leanProfile), or the CLIENT may have
-// filtered them out in its own config, which plumb cannot see at all — for a
-// --lean Codex or Gemini CLI the resolved profile is "full" and the tools are
-// still gone. Guidance that keyed only off the profile therefore steered those
-// users at tools their own config had removed.
+// nameLeanToolsOnly reports whether guidance must confine itself to the lean
+// set. The rule itself — and the two independent reasons behind it — lives in
+// leanNamingOnly, which the collab tools consult through the same predicate;
+// this method only supplies session_start's half of the inputs.
 func (t *SessionStart) nameLeanToolsOnly() bool {
-	return t.leanProfile() || clientSideAllowlistCapable(t.clientNameFn)
+	return leanNamingOnly(t.leanProfile(), t.clientNameFn)
 }
 
 // writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure

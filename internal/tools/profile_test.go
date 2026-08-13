@@ -282,6 +282,28 @@ func TestLeanToolNames_CoversBootstrap(t *testing.T) {
 	}
 }
 
+// TestMailboxToolsArePairedAndNonLean pins the invariant the pin set exists
+// for. The mailbox halves instruct the agent to call each other, so they must be
+// pinned TOGETHER — an asymmetry (send reachable, receive not) is the defect
+// itself. And they are deliberately NOT lean, which is precisely why the pin is
+// load-bearing: without it, nothing else in the profile machinery keeps them in
+// a pinning client's context.
+func TestMailboxToolsArePairedAndNonLean(t *testing.T) {
+	want := []string{"leave_note", "check_messages"}
+	if len(MailboxTools) != len(want) {
+		t.Fatalf("MailboxTools has %d entries, want exactly %d — the pair is the contract", len(MailboxTools), len(want))
+	}
+	for _, name := range want {
+		if !IsMailbox(name) {
+			t.Errorf("MailboxTools is missing %q — the halves must be pinned together", name)
+		}
+		if IsLean(name) {
+			t.Errorf("%q is in LeanTools; MailboxTools documents itself as the non-lean pair — "+
+				"reconcile the two rather than leaving them contradictory", name)
+		}
+	}
+}
+
 // TestBootstrapToolsExactSet pins BootstrapTools to exactly the four
 // orientation tools, so accidental growth (or shrinkage) is a reviewable
 // event rather than a silent drift.
