@@ -417,14 +417,15 @@ Tracked, not hidden. Each is real today.
    When it does, it aggregates config, logs, session state and failure data into
    one shareable object — the single artefact most likely to leak, and the one
    needing the strictest redaction tests.
-3. **Fuzzing has started and covers two parsers of six.** `FuzzResolveArgs`
-   (#258) fuzzes the argument-correction and alias engine, and `FuzzScanReplay`
+3. **Fuzzing has started and covers three parsers of six.** `FuzzResolveArgs`
+   (#258) fuzzes the argument-correction and alias engine; `FuzzScanReplay`
    fuzzes the transaction-journal replay path — the one part of `txlog` that
-   parses input plumb did not write — asserting confinement as its invariant.
-   Both keep retained corpora that run under plain `make test`, so every payload
-   found stays a regression test, and `make fuzz` discovers targets rather than
-   listing them. **MCP framing, path canonicalisation, symlink traversal and
-   workspace roots still have none.**
+   parses input plumb did not write — asserting confinement as its invariant;
+   and `FuzzProxyFrameRewrite` with `FuzzIDKeyRoutesResponsesToRequests` (#286)
+   fuzz the serve proxy's MCP framing. All keep retained corpora that run under
+   plain `make test`, so every payload found stays a regression test, and
+   `make fuzz` discovers targets rather than listing them. **Path
+   canonicalisation, symlink traversal and workspace roots still have none.**
 
    An earlier revision of this section counted one of six and listed transaction
    journals among the uncovered. That was wrong: `FuzzScanReplay` landed inside
@@ -435,10 +436,10 @@ Tracked, not hidden. Each is real today.
    only thing that catches it is checking the claim against the tree rather than
    against this document.
 
-   Counts here go stale by design, so verify before citing: `make fuzz` discovers
-   targets, and `grep -rn "^func Fuzz" .` is the authority. Work adding MCP
-   framing targets is in flight as of this revision, which will make it three of
-   six and remove framing from the uncovered list.
+   Counts here go stale by design, so verify before citing rather than trusting
+   this line: `make fuzz` discovers targets, and `grep -rn "^func Fuzz" .` is the
+   authority. This paragraph has already been wrong once and stale once — the
+   framing targets landed between the writing of this revision and its merge.
 
    Worth recording why the oracle matters more than the target: the fix that
    first target prompted was wrong twice. `dec.More()` (the stdlib defines it as
