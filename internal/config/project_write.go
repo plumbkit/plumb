@@ -45,6 +45,22 @@ func LoadProjectRaw(workspace string) (map[string]any, error) {
 
 // ProjectValuePresent reports whether the dotted key path is explicitly set in
 // the workspace's project config (i.e. it is an override, not inherited).
+//
+// NEVER USE THIS TO DECIDE WHETHER A SECURITY GATE APPLIES. It matches keys
+// EXACTLY, via lookupNested, while go-toml/v2 binds a TOML key to a struct field
+// case-INSENSITIVELY. So a project supplying `[[COMMAND]]` or `[TASKS.go]` has
+// its value decoded into the merged Config and honoured by the consumer, while
+// this function reports absent — and a caller using it as "is this
+// project-supplied, so does the trust gate apply?" skips the gate entirely.
+//
+// That was not hypothetical: it was the mechanism of two live arbitrary-code-
+// execution bypasses, one in run_command and one in run_task, both closed by
+// deriving provenance from the trust spec instead (ProjectPolicyStatus.Asked,
+// ProjectTaskCommands — both case-insensitive, both built with rawTables).
+//
+// It remains correct for what it is FOR: the TUI and web settings screens'
+// "overridden vs inherited" annotation, where a fold variant showing as
+// inherited is a cosmetic inaccuracy rather than a bypass.
 func ProjectValuePresent(workspace string, path []string) (bool, error) {
 	m, err := LoadProjectRaw(workspace)
 	if err != nil {
