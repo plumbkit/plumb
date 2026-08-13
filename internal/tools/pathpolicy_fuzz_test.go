@@ -211,18 +211,35 @@ func FuzzPathPolicyCheckAgainstKernel(f *testing.F) {
 					"Reported without writing.", path, landed, s.ws)
 				continue
 			}
-			if !confirmWrite(t, path, landed) {
-				continue // the write could not be performed (ENOTDIR, EACCES, …)
-			}
+			// 3. Assert containment on the RESOLVED target, BEFORE and independently of
+			//    whether the write succeeds.
+			//
+			//    Ordering matters here and got it wrong once. With the assertions after
+			//    confirmWrite, a write that merely failed for an unrelated reason
+			//    (ENOTDIR, EACCES, a name too long) skipped them — so a genuine escape
+			//    whose write happened to fail was silently swallowed as "could not
+			//    write" instead of being reported. A fix that hides the bug it exists to
+			//    surface is worse than no fix, and the resolution is already known at
+			//    this point, so nothing is gained by waiting for the syscall.
+			escaped := false
 			if !withinResolved(s.ws, landed) {
-				t.Errorf("BOUNDARY ESCAPE: Check allowed %q, but the write landed at %q,\n"+
-					"which is outside the only allowed root %q.\n"+
-					"The policy ruled on one file and the syscall touched another — the #264 class.",
+				escaped = true
+				t.Errorf("BOUNDARY ESCAPE: Check allowed %q, which resolves to %q,\n"+
+					"outside the only allowed root %q.\n"+
+					"The policy ruled on one file and a syscall would touch another — the #264 class.",
 					path, landed, s.ws)
 			}
 			if withinResolved(s.outside, landed) {
-				t.Errorf("BOUNDARY ESCAPE: %q reached the out-of-policy directory: landed at %q", path, landed)
+				escaped = true
+				t.Errorf("BOUNDARY ESCAPE: %q reaches the out-of-policy directory: %q", path, landed)
 			}
+			if escaped {
+				continue // already reported; do not also perform the write
+			}
+			// 4. Confirm empirically that the resolution was not merely theoretical.
+			//    Only reached for a target proven to be inside the workspace, so the
+			//    write is safe by construction.
+			confirmWrite(t, path, landed)
 		}
 	})
 }
