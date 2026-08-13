@@ -143,14 +143,36 @@
   `classifyCheckout`) exists only where a subcommand's arg space spans tiers;
   cherry-pick's does not.
 
-  **"Every form" is now a tested property, not a sampled one.** All five flat
-  verbs — `reset`, `clean`, `rebase`, `revert`, `cherry-pick` — are driven
-  through a battery of argument vectors and their tier asserted invariant across
-  it, so a later edit that split one verb's arm on an argument fails loudly
-  instead of quietly demoting a history rewrite to the read tier, which skips the
-  policy gate, the write-rate limiter, the per-repo serialisation lock and the
-  `expected_head` ref guard alike. A sampled table could not catch that: every
-  row for a flat verb runs one identical code path.
+  **Argument-invariance is now a generated property, not a sampled table.**
+  All five flat verbs — `reset`, `clean`, `rebase`, `revert`, `cherry-pick` —
+  and the thirteen others `classifyGit` decides without reading arguments are
+  asserted to return one tier across every vector `FuzzClassifyGitArgInvariance`
+  builds. Its seed corpus is generated rather than listed: every entry of a
+  pinned vocabulary of real git arguments — flags, `=`-joined flags, revisions,
+  ranges, `--` separators, the empty string, and the tokens the *argument-
+  dependent* arms key on — at every length from 0 to 10, in two window families.
+  So no length and no vocabulary entry can be missing the way a hand-written
+  battery's were, and adding a token covers it at every length for free.
+
+  The bound is worth stating exactly rather than as "every form": what plain
+  `make test` guarantees is invariance across everything that vocabulary can
+  spell at those lengths, plus the retained corpus entries; `make fuzz` extends
+  it past the vocabulary, the target's freeform half mutating raw tokens no list
+  contains. The hand-written battery stays alongside it as the fast, readable
+  regression guard documenting the forms a person would actually type.
+
+  This is the file's highest-value invariant because a demotion to the read tier
+  skips the policy gate, the write-rate limiter, the per-repo serialisation lock
+  and the `expected_head` ref guard alike. Two mutants prove the sampled table
+  could not hold it: an arm keyed on `len(args) == 3` (which real calls like
+  `git cherry-pick -n -x <rev>` and `git clean -f -d .` reach) and one keyed on
+  `--rerere-autoupdate` / `--cleanup=verbatim` / `--empty=drop`, three flags
+  git-cherry-pick(1) documents and the battery did not name. Both survived the
+  entire `internal/tools` suite with no failing subtest; both now fail it, and
+  both are retained as named corpus entries. `TestClassifyGit` also gained an
+  absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
+  and an invariance property compares a verb only against its own `nil`
+  baseline, which a whole-verb demotion moves too.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,

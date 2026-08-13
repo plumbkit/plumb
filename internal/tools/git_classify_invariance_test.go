@@ -94,12 +94,21 @@ var gitArgBattery = []struct {
 	{"mixed-bag", []string{"-n", "--ff", "-m", "1", "--", "a", "b"}},
 }
 
-// TestClassifyGit_ArgIndependentSubcommandsAreInvariant proves the property
-// gitArgIndependent's name asserts and nothing else pinned: for these
-// subcommands classifyGit's answer does not move with the arguments at all.
+// TestClassifyGit_ArgIndependentSubcommandsAreInvariant drives the property
+// gitArgIndependent's name asserts — for these subcommands classifyGit's answer
+// does not move with the arguments — over the realistic forms above.
 //
-// It exists because a hand-written table can only demonstrate the forms someone
-// thought to list. Every row of TestClassifyGit for a flat verb runs one
+// Read the scope literally: this is a SAMPLE, and a deliberately chosen one. It
+// demonstrates the forms a person would actually type, fast and readably, and it
+// is the guard whose failure output is easiest to act on. It is not the property.
+// Its 64 vectors have an argument-length histogram of {0:2, 1:51, 2:10, 7:1} —
+// no length between 3 and 6, none above 7 — and its flag universe is a list
+// someone wrote down. FuzzClassifyGitArgInvariance (git_classify_fuzz_test.go)
+// is what generates vectors instead of listing them, and what caught the two
+// mutants sitting in precisely those two holes.
+//
+// Both files exist because a hand-written table can only demonstrate the forms
+// someone thought to list. Every row of TestClassifyGit for a flat verb runs one
 // identical code path, so a later edit that split a verb's arm on an argument —
 // "`--ff` is only a write", "`--strategy` just names a merge driver, that's a
 // read" — leaves every one of those rows green. Four such mutants survived the
