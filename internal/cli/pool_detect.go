@@ -74,7 +74,7 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 
 // detect is Detect's marker walk, before canonicalisation.
 func (p *workspacePool) detect(start string) (root, language string, err error) {
-	homeInfo := homeFileInfo()
+	homeInfo := homeDirInfos()
 	d := filepath.Clean(start)
 	first := true
 	for {
@@ -119,19 +119,6 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		}
 		d = parent
 	}
-}
-
-// homeFileInfo stats $HOME once for os.SameFile identity comparisons (robust to
-// trailing slashes and symlink/firmlink aliasing where a string compare is
-// defeated). Returns nil when the home directory is undeterminable, leaving the
-// $HOME guards inert rather than refusing a legitimate repo.
-func homeFileInfo() os.FileInfo {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil
-	}
-	info, _ := os.Stat(home)
-	return info
 }
 
 // strongLangAt returns the first active language whose RootMarkers exist
@@ -383,24 +370,6 @@ func (p *workspacePool) lspLanguageForRoot(dir string) string {
 	return p.weakLangAt(dir)
 }
 
-// sameDirAs reports whether dir refers to the same directory as info (typically
-// the user's $HOME), comparing by filesystem identity via os.SameFile. This is
-// robust to trailing slashes, "."/".." segments, and symlink / macOS-firmlink
-// aliasing, where a raw string compare against $HOME would be defeated by any
-// non-canonical spelling. Returns false when info is nil (home undeterminable)
-// or dir cannot be stat'd, leaving the .git guard inert rather than refusing a
-// legitimate repo in those cases.
-func sameDirAs(dir string, info os.FileInfo) bool {
-	if info == nil {
-		return false
-	}
-	di, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	return os.SameFile(di, info)
-}
-
 // SynthesiseRoot returns a synthetic workspace root for seedDir, used as a
 // last resort when Detect has already failed. It walks up from seedDir
 // looking for a .git directory (the conventional project-root signal for
@@ -442,7 +411,7 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// write. A root is not inside anything — it DEFINES the boundary — so there
 	// is no second file for it to be confused with, and Detect has always Cleaned
 	// its own return for the same reason.
-	homeInfo := homeFileInfo()
+	homeInfo := homeDirInfos()
 	d := filepath.Clean(seedDir)
 	for {
 		if !sameDirAs(d, homeInfo) {
@@ -468,7 +437,7 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 // capture every .plumb workspace beneath it. $HOME and anything above it are
 // never a project root, so they are never consulted for the language.
 func (p *workspacePool) detectLanguageAt(dir string) string {
-	homeInfo := homeFileInfo()
+	homeInfo := homeDirInfos()
 	d := dir
 	for {
 		if sameDirAs(d, homeInfo) {

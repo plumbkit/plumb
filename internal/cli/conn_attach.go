@@ -282,7 +282,7 @@ func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, fol
 	}
 	// LanguageNone: look for language roots in child subdirectories. Never scan
 	// $HOME (a stray ~/.plumb must not trigger a full-home descent).
-	if sameDirAs(folder, homeFileInfo()) {
+	if sameDirAs(folder, homeDirInfos()) {
 		s.sessionProxy.setDiscovered(folder, nil)
 		return LanguageNone, "", nil, nil
 	}
