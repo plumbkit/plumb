@@ -25,6 +25,11 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	projectCfg, policy, err := config.LoadProjectWithPolicy(base, workspace)
 	if err != nil {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
+		// Record the skip. An unparseable project config is ignored WHOLE — its
+		// [git] block as thoroughly as an untrusted one — and saying nothing here
+		// leaves the agent with less to go on than the untrusted case, since there
+		// is not even a `plumb trust` to reach for.
+		s.mutate(func(v *sessionView) { v.projectGit = tools.ProjectGitStatus{Unreadable: true} })
 		return
 	}
 	s.logProjectPolicy(workspace, policy)
@@ -37,6 +42,15 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// with rawValues, so no spelling escapes it. Deriving it here rather than
 	// re-reading the file is what closed the case-fold bypass — see conn_commands.go.
 	projectCommands := policy.Asked("command")
+	// Same bytes again, and for the same reason: session_start's ignored-[git]
+	// notice must describe the request that produced the policy below it, not
+	// whatever a fresh read of the trust store says when the tool is later called.
+	// The trust store is written by `plumb trust` and watched by nothing, so a
+	// re-read would flip the notice to silent while the cached policy stayed
+	// global — leaving `Push/fetch/pull: off.` with no explanation and the tool
+	// still refusing, which is the very bug the notice exists to prevent, reached
+	// by obeying it.
+	projectGit := projectGitStatusOf(policy)
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -62,6 +76,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.commandPolicy = projectCfg.CommandPolicy
 		v.execTrusted = execTrusted
 		v.projectCommands = projectCommands
+		v.projectGit = projectGit
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}
@@ -117,19 +132,40 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 		"workspace", workspace, "keys", st.Spec.Keys())
 }
 
-// projectPolicyKeys reports the capability-granting keys a workspace's project
-// config sets and whether that exact request is trusted. It is session_start's
-// view of the same state logProjectPolicy writes to the daemon log — the log
-// reaches the user, this reaches the AGENT, which is the surface that was
-// missing. A read error resolves to "nothing asked for": orientation must not
-// fail because a project config could not be re-read, and the safe default is
-// the quiet one.
-func projectPolicyKeys(workspace string) ([]string, bool) {
-	st, err := config.ProjectPolicyStatusFor(workspace)
-	if err != nil {
-		return nil, false
+// projectGitStatusOf converts a resolved project-policy status into the shape
+// session_start renders. Pure, so the capture at config apply is the only place
+// the answer is decided.
+func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
+	out := tools.ProjectGitStatus{Trusted: st.Trusted}
+	for _, e := range st.Spec {
+		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}
-	return st.Spec.Keys(), st.Trusted
+	return out
+}
+
+// gitConfig returns the current resolved git tool config.
+func (s *connSession) gitConfig() config.GitConfig {
+	return s.view().git
+}
+
+// gitPolicy returns the connection's current resolved git policy. Reads the
+// live git config off the lock-free snapshot (hot-reloaded via mutate) and is
+// the single source of truth shared by the git tool's gate and session_start's
+// policy report.
+func (s *connSession) gitPolicy() tools.GitPolicy {
+	return gitPolicyFrom(s.gitConfig())
+}
+
+// projectGitStatus is session_start's view of the state logProjectPolicy writes
+// to the daemon log — the log reaches the user, this reaches the AGENT, which is
+// the surface that was missing.
+//
+// It is served from the same snapshot as gitPolicy above, and deliberately does
+// no lookup of its own: the two are captured together by applyProjectConfig, so
+// what the notice claims about the policy and what the policy actually is cannot
+// drift apart between them.
+func (s *connSession) projectGitStatus() tools.ProjectGitStatus {
+	return s.view().projectGit
 }
 
 func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig, trusted bool) {
