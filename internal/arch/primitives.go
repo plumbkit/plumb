@@ -90,21 +90,19 @@ var PrimitiveRules = []PrimitiveRule{
 		// visibly, above the canonicaliser — and so is refusing an unresolved
 		// "..", which is an authorisation check, not an identity function.
 		//
-		// Two known duplicates are deliberately NOT allowlisted, so this rule
-		// FAILS until each is folded: internal/tools.canonicalPathForBoundary and
-		// internal/cli.canonicalXcodeRoot. Writing a forward-dated reason for
-		// either — one true only after the fold that removes it — would make the
-		// tests pass while the file asserted something false about the code
-		// actually present, and no test can catch that. A failing test can be
-		// read; a green lie cannot.
+		// Every entry below was written against the code on main at the commit that
+		// adds it, and that ordering was ENFORCED rather than promised. While the two
+		// duplicates this rule exists to remove were still present
+		// (internal/tools.canonicalPathForBoundary, folded by #284, and
+		// internal/cli.canonicalXcodeRoot, folded by #282) neither was allowlisted,
+		// so TestSharedPrimitives stayed RED and named them.
 		//
-		// Those two omissions are also what makes the entries below safe. Several
-		// of them describe functions AFTER the folds that this rule cannot merge
-		// without — canonicalRoot and fsguard.canonical delegate to paths.Canonical
-		// only once the fold lands. Because the un-allowlisted duplicates keep
-		// TestSharedPrimitives red until then, there is no ordering in which this
-		// file reaches main describing code that is not there. The enforcement is
-		// the guarantee; the draft flag on a pull request is not one.
+		// An earlier draft did allowlist the second one with a reason describing its
+		// post-fold body. The tests passed on a tree where the function was still
+		// Abs+Clean, while the entry asserted in the past tense that a live defect
+		// had been fixed. Nothing in this file's machinery can detect that: a failing
+		// test can be read, a green lie cannot. Never write an entry for code that is
+		// not on main yet, however certain the fold is.
 		Primitive: "path canonicalisation",
 		Home:      "internal/paths",
 		Prefixes:  []string{"canonical"},
@@ -112,6 +110,7 @@ var PrimitiveRules = []PrimitiveRule{
 			"internal/tools.canonicalRoot":        "the boundary seam's adapter: decodes a file:// URI, a spelling paths.Canonical deliberately does not know because it is also called with plain paths from inside the daemon. Every resolution step is delegated",
 			"internal/tools.canonicalAddPaths":    "not a canonicaliser: it builds the git ls-files pathspecs and the absolute forms to match them against, and calls canonicalRoot for the resolution itself",
 			"internal/fsguard.canonical":          "anchors a relative walk root to the process cwd BEFORE delegating. RefuseWalk matches protected directories by exact path, so an unanchored \".\" would match none and fail OPEN exactly when the cwd IS $HOME — the opposite direction from the boundary policy, where anchoring is the hazard. Resolution is delegated",
+			"internal/cli.canonicalXcodeRoot":     "the same anchor-then-delegate division as internal/fsguard.canonical: filepath.Abs anchors a possibly-relative root so the \"one build-server flow per root\" singleflight key is stable, then paths.Canonical resolves it. Before that fold it was Abs+Clean with NO symlink resolution, so two spellings of one project each started their own concurrent xcodebuild — four runner calls where one flow makes two",
 			"internal/config.canonicalTaskHash":   "canonicalises a []TaskCommandSpec into a stable byte sequence for hashing — a struct-encoding question with no filesystem in it",
 			"internal/config.canonicalPolicyHash": "as canonicalTaskHash, for ProjectPolicySpec",
 			"internal/mcp.canonicalFor":           "resolves an argument ALIAS to its canonical JSON key; no path ever enters it",
