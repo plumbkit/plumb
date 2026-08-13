@@ -210,10 +210,19 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
-		// explicit only for a session_start workspace arg: an incidental tool
-		// path (reading ~/.zshrc) is not a declaration that $HOME is the
-		// workspace, so SynthesiseRoot refuses to name it (returns "").
-		synthRoot := s.pool.SynthesiseRoot(startDir, origin == sessionstate.PinSourceSessionStart)
+		// Explicit only when the SEED IS the workspace argument — not merely when a
+		// workspace key is present somewhere in the call.
+		//
+		// seedPathFromArgs prefers uri/file_path/path/root OVER workspace, so the
+		// two routinely name different directories: relevant_memories and
+		// write_memory both take a path AND a workspace. Keying on presence let
+		// `{path: "~/.zshrc", workspace: "/some/project"}` seed $HOME while counting
+		// as a deliberate declaration — laundering an incidental path into an
+		// explicit $HOME pin that then PERSISTS as session_start and rehydrates on
+		// every later reconnect, in the default configuration. Found by review, and
+		// it is the same class this guard exists to close, one level up: the
+		// declaration has to be about the directory being named.
+		synthRoot := s.pool.SynthesiseRoot(startDir, seedIsWorkspaceArg(args, seedPath))
 		if synthRoot == "" {
 			s.log().Warn("daemon: refusing to synthesise the home directory as a workspace from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
 			return

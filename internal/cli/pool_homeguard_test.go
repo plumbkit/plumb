@@ -17,6 +17,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // TestSameDirAs_NoHomeFailsOpen pins the deliberate fail-open: when no home
@@ -134,23 +136,44 @@ func TestDetect_ResidualPlumbAtHomeIgnored(t *testing.T) {
 }
 
 // TestDetect_DeliberatePlumbAtHomeHonoured is the control for the residue
-// guard: a user who ran `plumb init` in their home directory (context.md), or
-// wrote a project config there (config.toml), has declared the intent the
-// guard exists to demand — that marker must keep working.
+// guard: a user who ran `plumb init` in their home directory has declared the
+// intent the guard exists to demand, and that marker must keep working.
+//
+// context.md ONLY. An earlier version of this test also accepted config.toml,
+// and review showed why that defeats the guard: config.toml is MACHINE-written
+// by config.SetProjectValue, whose callers include the agent_config tool, the
+// web settings API, and — with no opt-in at all — any project-scoped save in
+// the TUI. A user who pinned $HOME once and then changed a single setting would
+// have minted their own permanent proof of intent. The config.toml case below
+// now asserts the OPPOSITE of what it used to, deliberately.
 func TestDetect_DeliberatePlumbAtHomeHonoured(t *testing.T) {
-	for _, evidence := range []string{"context.md", "config.toml"} {
-		t.Run(evidence, func(t *testing.T) {
+	for _, tc := range []struct {
+		evidence   string
+		honoured   bool
+		whyRefused string
+	}{
+		{evidence: "context.md", honoured: true},
+		{evidence: "config.toml", honoured: false, whyRefused: "machine-written by SetProjectValue from the TUI, the web API and agent_config, so it proves nothing about intent"},
+	} {
+		t.Run(tc.evidence, func(t *testing.T) {
 			home := freshTempDir(t)
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			mustMkdir(t, filepath.Join(home, ".plumb"))
-			mustWrite(t, filepath.Join(home, ".plumb", evidence), "# deliberate\n")
+			mustWrite(t, filepath.Join(home, ".plumb", tc.evidence), "# marker\n")
 			sub := filepath.Join(home, "notes")
 			mustMkdir(t, sub)
 
 			root, lang, err := detectTestPool().Detect(sub)
+			if !tc.honoured {
+				if err == nil {
+					t.Errorf("Detect resolved %q as the workspace on the strength of a %s — %s",
+						root, tc.evidence, tc.whyRefused)
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("Detect: %v — a deliberate ~/.plumb (%s) must be honoured", err, evidence)
+				t.Fatalf("Detect: %v — a deliberate ~/.plumb (%s) must be honoured", err, tc.evidence)
 			}
 			if root != home {
 				t.Errorf("root = %q, want %q", root, home)
@@ -159,6 +182,30 @@ func TestDetect_DeliberatePlumbAtHomeHonoured(t *testing.T) {
 				t.Errorf("language = %q, want %q", lang, LanguageNone)
 			}
 		})
+	}
+}
+
+// TestSynthesiseRoot_RefusesADirectoryContainingHome closes the rung above the
+// identity guard. Refusing $HOME while accepting /Users (or /home, or /) admits
+// a workspace that CONTAINS the home directory and every credential in it —
+// wider than the boundary the guard exists to keep, and reachable with no
+// deliberate declaration through a client reporting such a folder in its roots.
+func TestSynthesiseRoot_RefusesADirectoryContainingHome(t *testing.T) {
+	base := freshTempDir(t)
+	mustMkdir(t, filepath.Join(base, ".git")) // a repo ABOVE the home directory
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	seed := filepath.Join(home, "scratch", "markerless")
+	mustMkdir(t, seed)
+
+	got := (&workspacePool{}).SynthesiseRoot(seed, false)
+	if got == paths.Canonical(base) {
+		t.Errorf("SynthesiseRoot returned %q, which CONTAINS the home directory %q", got, home)
+	}
+	if want := paths.Canonical(seed); got != want {
+		t.Errorf("SynthesiseRoot = %q, want the seed %q", got, want)
 	}
 }
 
