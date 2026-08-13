@@ -76,6 +76,28 @@
   `WaitDelay`. When the delay does expire, the reply explains what happened and
   quotes git's own output rather than surfacing exec's bare "WaitDelay expired
   before I/O complete".
+- **Post-write lint findings that name files which do not exist are now called
+  what they are: a stale golangci-lint cache.** Delete a sibling git worktree and
+  the linter's shared cache keeps returning issues attributed to paths inside the
+  removed directory — recorded instances produced 29 and 9 phantom findings. The
+  cost is that it looks exactly like a genuine regression in the change you just
+  made, so the time goes into debugging files that are gone.
+
+  The golangci-lint analyser now stats each distinct finding path before
+  reporting. The signal is deliberately all-or-nothing: it fires only when
+  *every* finding names an absent path, because a mixed set proves the run did
+  make contact with the current tree, and announcing "stale cache, ignore
+  everything" while one finding is real would be worse than the bug. Only
+  "does not exist" counts as absent — a directory, or a path that cannot be
+  stat'd at all, counts as present, since a check that cannot see a file must
+  never claim the file is gone. Output paths are resolved against the directory
+  golangci-lint ran in, which is what its relative paths are measured from.
+
+  plumb reports rather than remediates: `golangci-lint cache clean` mutates state
+  shared by every concurrent agent and by the user's own terminal, and the re-run
+  it implies is a cold-cache lint pass, far beyond the post-write analyser
+  timeout — auto-remediation would degrade into silence while slowing every peer
+  down. The replacement finding names the command instead.
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON

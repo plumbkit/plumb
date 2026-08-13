@@ -266,3 +266,23 @@ func TestStale_FreshFile(t *testing.T) {
 		t.Error("stale with exact mtime should return false")
 	}
 }
+
+// A finding with no line number — the shape of golangci-lint's stale-cache
+// signal — must still reach the agent's report section with its code and
+// message intact. The signal is worthless if the presentation layer drops it.
+func TestRunner_Format_LinelessFindingSurfaces(t *testing.T) {
+	r := NewRunner(RunnerConfig{
+		Analysers:          []Analyser{&stubAnalyser{name: "golangci-lint"}},
+		MaxFindingsPerFile: 5,
+	})
+	out := r.format([]Finding{{Code: "stale-cache", Message: "run `golangci-lint cache clean`"}})
+	if !strings.Contains(out, "stale-cache") {
+		t.Errorf("format() = %q, want the finding's code", out)
+	}
+	if !strings.Contains(out, "golangci-lint cache clean") {
+		t.Errorf("format() = %q, want the remediation from the finding's message", out)
+	}
+	if strings.Contains(out, "L0") {
+		t.Errorf("format() = %q, must not render a bogus L0 prefix for a lineless finding", out)
+	}
+}
