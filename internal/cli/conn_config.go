@@ -29,6 +29,11 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// command/shell/xcode gates must authorise the exact content they are about to
 	// run, not whatever the file says when the tool is later called.
 	execTrusted := config.ExecTrustedFor(workspace, policy)
+	// Provenance from the same spec, so `[[COMMAND]]` is recognised as
+	// project-supplied. Asked() compares case-insensitively and the spec is built
+	// with rawValues, so no spelling escapes it. Deriving it here rather than
+	// re-reading the file is what closed the case-fold bypass — see conn_commands.go.
+	projectCommands := policy.Asked("command")
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -53,6 +58,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.commands = projectCfg.Commands
 		v.commandPolicy = projectCfg.CommandPolicy
 		v.execTrusted = execTrusted
+		v.projectCommands = projectCommands
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}

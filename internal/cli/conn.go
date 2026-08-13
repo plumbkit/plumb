@@ -101,6 +101,10 @@ type sessionView struct {
 	// point of use would let a repository load hostile content and then restore the
 	// file to content that is trusted.
 	execTrusted bool
+	// projectCommands: does this project supply [[command]] at all, in ANY
+	// spelling? Resolved from the policy spec at apply, never re-read — see
+	// conn_commands.go for the case-fold bypass a re-read caused.
+	projectCommands bool
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.
