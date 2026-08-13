@@ -302,15 +302,16 @@ func (t *SessionStart) writeSessionGitPolicy(sb *strings.Builder, ws string) {
 }
 
 // projectGitNotice reports a project [git] block that was overruled, so the
-// resolved policy above cannot be mistaken for a bug when it contradicts the
-// .plumb/config.toml in the workspace. Empty when unwired, or when there is
-// nothing to say — see formatProjectGitNotice.
+// resolved policy printed above it cannot be mistaken for a bug when it
+// contradicts the .plumb/config.toml in the workspace. It is emitted after the
+// policy, and compared against it: a key the project asked for and already has
+// is not named. Empty when unwired, or when there is nothing to say — see
+// formatProjectGitNotice.
 func (t *SessionStart) projectGitNotice(ws string) string {
 	if t.projectGitFn == nil {
 		return ""
 	}
-	keys, trusted := t.projectGitFn(ws)
-	return formatProjectGitNotice(ws, keys, trusted)
+	return formatProjectGitNotice(ws, t.projectGitFn(), t.gitPolicyFn())
 }
 
 // formatGitPolicy renders the git policy body. Pure — no I/O. The closing line

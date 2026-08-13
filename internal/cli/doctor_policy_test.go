@@ -2,9 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -152,41 +149,4 @@ func TestPolicySourceFor_AnnotatesIgnoredRequest(t *testing.T) {
 	if got := policySourceFor(st, "lsp.go.command", "global config"); got != "project config (trusted)" {
 		t.Errorf("a trusted request should be attributed to the project, got %q", got)
 	}
-}
-
-// TestProjectPolicyKeys covers the adapter that hands the same state to
-// session_start. Doctor tells the USER a project config is being ignored;
-// this is what tells the AGENT, whose only view of the git policy is the
-// orientation packet — the surface where a silent drop got a session shelling
-// out to raw git rather than believing the tiers existed.
-func TestProjectPolicyKeys(t *testing.T) {
-	t.Run("no project config: quiet", func(t *testing.T) {
-		keys, trusted := projectPolicyKeys(t.TempDir())
-		if len(keys) != 0 || trusted {
-			t.Errorf("keys=%v trusted=%v, want none/false for a workspace with no .plumb/config.toml", keys, trusted)
-		}
-	})
-
-	t.Run("project [git] block: reported, untrusted", func(t *testing.T) {
-		// A fresh temp dir cannot be in the host's real trust store, so the
-		// untrusted verdict here is deterministic without stubbing it.
-		ws := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		body := "[git]\nallow_destructive = true\nallow_push = false\n"
-		if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		keys, trusted := projectPolicyKeys(ws)
-		if trusted {
-			t.Error("an untrusted temp workspace must not report its [git] request as in force")
-		}
-		// allow_push = false is present-but-not-privilege-raising: it must still be
-		// reported, or a user who wrote it gets the same silence that started this.
-		want := []string{"git.allow_destructive", "git.allow_push"}
-		if !slices.Equal(keys, want) {
-			t.Errorf("keys = %v, want %v", keys, want)
-		}
-	})
 }

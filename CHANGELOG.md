@@ -364,6 +364,57 @@
   file with its recorded reason (bounded, most recently touched first), the
   web API returns them as `fileErrors`, and `plumb doctor` names the first
   reason when every file failed.
+- **An overruled project `[git]` block now says so in `session_start`, so the
+  agent reading the policy learns why it does not match the repository's own
+  config.** An untrusted project `.plumb/config.toml` has its `[git]` block
+  forced back to the global config — correct, since cloning a repository ships
+  one and honouring it unasked would hand a hostile repo history destruction and
+  pushes with the user's credentials. That drop was announced to the **user** (a
+  daemon log line at attach, `plumb doctor`, `plumb config show`, a TUI marker)
+  but not to the **agent**, whose only view of the policy is the orientation
+  packet. So an agent read `Push/fetch/pull: off.`, could not reconcile it with
+  the `allow_push = true` sitting in the repo it was looking at, concluded the
+  tier was unimplemented, and shelled out to raw git for most of its git work —
+  bypassing the very policy the drop exists to enforce. A safety feature that
+  cannot explain itself is indistinguishable from a bug.
+
+  The git-policy section now carries, beneath the resolved policy it annotates, a
+  notice naming the ignored keys, explaining that `[git]` is taken from the
+  global config *wholesale* until the request is approved, and giving both fixes:
+  `plumb trust` (with `--yes` for a non-interactive grant) to apply the request
+  here, or the global config / `PLUMB_GIT_ALLOW_WRITES` /
+  `PLUMB_GIT_ALLOW_DESTRUCTIVE` / `PLUMB_GIT_ALLOW_PUSH` /
+  `PLUMB_GIT_COMMIT_TRAILER` to set the policy everywhere. Because the table is
+  forced back whole, the reason runs in both directions: unapproved, a project
+  can neither open the destructive or network tier and shorten the
+  protected-branch list, nor turn writes or the commit trailer off.
+
+  **Presence, not value, is what triggers it** for a key that actually differs.
+  The keys come from the project's raw TOML (`ProjectPolicySpec`, already built
+  for the trust hash), so `allow_destructive = false` against an open tier is
+  reported exactly like `= true` against a closed one — both were read and
+  overruled, and the user who wrote either has the same question. But a key whose
+  requested value the session *already* resolved is not named: on a machine that
+  grants the tiers globally, a cloned repository asking for them too would
+  otherwise be told its keys were "NOT in force" beneath a policy showing them
+  on, with a `plumb trust` that would change nothing. Quiet, too, when the
+  project sets no `[git]` key and when the request is trusted. A
+  `.plumb/config.toml` that cannot be **parsed** gets its own notice, since it is
+  skipped whole and no `plumb trust` would help.
+
+  **The notice and the policy it describes are one snapshot**, captured together
+  when the project config is applied. They have to be: `plumb trust` writes
+  `DataDir/trust.json`, which nothing watches, so re-deriving the notice per call
+  would have let the grant silence it while the cached policy stayed exactly as
+  restrictive — leaving `Push/fetch/pull: off.` with no explanation and the git
+  tool still refusing, which is the original bug reached by following the
+  notice's own advice. The remediation therefore says what is true: either fix
+  lands when the workspace is next attached (a new session, `plumb restart`, or a
+  re-pin), not mid-session.
+
+  The trust boundary itself is unchanged; only its visibility is. An untrusted
+  workspace still resolves the whole `[git]` table from the global config, now
+  pinned at the session layer as well as the loader.
 
 ## 0.16.6 (2026-08-14)
 
@@ -1560,35 +1611,6 @@
   Guarded by the `pool_synthesise_root`, `pool_homeguard`, and `conn_homepin`
   test files, each route wired to its caller with issue-#182 and
   project-under-`$HOME` controls.
-- **An overruled project `[git]` block now says so in `session_start`, so the
-  agent reading the policy learns why it does not match the repository's own
-  config.** An untrusted project `.plumb/config.toml` has its `[git]` block
-  forced back to the global config — correct, since cloning a repository ships
-  one and honouring it unasked would hand a hostile repo history destruction and
-  pushes with the user's credentials. That drop was announced to the **user** (a
-  daemon log line at attach, `plumb doctor`, `plumb config show`, a TUI marker)
-  but not to the **agent**, whose only view of the policy is the orientation
-  packet. So an agent read `Push/fetch/pull: off.`, could not reconcile it with
-  the `allow_push = true` sitting in the repo it was looking at, concluded the
-  tier was unimplemented, and shelled out to raw git for most of its git work —
-  bypassing the very policy the drop exists to enforce. A safety feature that
-  cannot explain itself is indistinguishable from a bug.
-
-  The git-policy section now carries, directly under the resolved policy, a
-  notice naming the ignored keys, why a project config cannot open the
-  destructive or network tier on its own, and both fixes: `plumb trust` to apply
-  the request here, or the global config / `PLUMB_GIT_ALLOW_DESTRUCTIVE` /
-  `PLUMB_GIT_ALLOW_PUSH` to set the policy everywhere.
-
-  **Presence, not value, is what triggers it.** The keys come from the project's
-  raw TOML (`ProjectPolicySpec`, already built for the trust hash), so
-  `allow_destructive = false` is reported as ignored exactly like `= true` — the
-  two are indistinguishable in the decoded config, and the user who wrote either
-  one has the same question. Quiet in both common cases: no `[git]` key at all,
-  and trusted — where the policy printed above already *is* the project's, so a
-  notice would report a working feature. The trust boundary itself is unchanged;
-  only its visibility is.
-
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
   acquisition** (issue #263). The root was stored exactly as reported, with no

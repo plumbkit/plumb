@@ -820,16 +820,43 @@ in the TUI settings editor by a `⁶` marker on the row — which shows the valu
 actually in force, not the one in the project file.
 
 All of those address the **user**. An untrusted `[git]` request is additionally
-reported to the **agent**, in `session_start`'s git-policy section, directly under
-the resolved policy: it names the ignored keys, why a project config cannot open
-the destructive or network tier by itself, and both fixes (`plumb trust` here, or
-the global config / `PLUMB_GIT_*` everywhere). Without it an agent sees only
+reported to the **agent**, in `session_start`'s git-policy section, beneath the
+resolved policy it annotates: it names the ignored keys, explains that plumb
+takes the whole `[git]` table from the global config until the request is
+approved, and gives both fixes (`plumb trust` here — `--yes` to skip the prompt —
+or the global config / `PLUMB_GIT_*` everywhere). Without it an agent sees only
 `Push/fetch/pull: off.`, cannot reconcile that with the `allow_push = true` in
 the repository it is looking at, and concludes the tier is unimplemented — which
 is an argument for shelling out to raw git, bypassing the policy the drop exists
-to enforce. The notice is emitted only when the project actually sets a `[git]`
-key and that request is untrusted; a trusted one needs none, because the policy
-printed above it is already the project's.
+to enforce.
+
+Three details keep every line of that notice checkable against the policy printed
+above it:
+
+- **It names only keys that genuinely differ.** The requested value is compared
+  against the resolved policy field by field, so a workspace that already grants
+  the tiers globally and then clones a repository asking for them too gets
+  nothing — claiming those keys were "NOT in force" would be false, with a
+  `plumb trust` that would change nothing attached to it. A `[git]` field the
+  notice does not recognise cannot be compared, so it is named rather than
+  assumed satisfied.
+- **The reason runs in both directions**, because `[git]` is forced back
+  *wholesale*, not tier by tier: unapproved, a project can neither open the
+  destructive or network tier and shorten the protected-branch list, nor turn
+  `allow_writes` or `commit_trailer` off. All four `PLUMB_GIT_*` variables are
+  named for the same reason.
+- **The remediation does not promise an in-session effect.** The notice and the
+  policy above it are one snapshot, captured together when the project config was
+  applied. `plumb trust` writes `DataDir/trust.json`, which nothing watches, so
+  the grant lands when the workspace is next attached — a new session, `plumb
+  restart`, or a re-pin — and until then both the policy and the notice keep
+  saying exactly what they said before.
+
+The notice is silent when the project sets no `[git]` key, when the request is
+trusted (the policy printed above already *is* the project's), and when every
+requested value already matches. A `.plumb/config.toml` that **cannot be parsed**
+gets a different notice: it is skipped whole, so its `[git]` block is as ignored
+as an untrusted one — and there is no `plumb trust` that would help.
 
 | Field | Type | Effect |
 |---|---|---|

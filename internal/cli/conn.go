@@ -109,6 +109,11 @@ type sessionView struct {
 	// spelling? Resolved from the policy spec at apply, never re-read — see
 	// conn_commands.go for the case-fold bypass a re-read caused.
 	projectCommands bool
+	// projectGit is what this project's config asks for in the capability-granting
+	// sections and whether it is trusted, captured at apply beside the git block it
+	// describes so session_start's notice and the policy it annotates are one
+	// snapshot. Never re-read — see conn_config.go.
+	projectGit tools.ProjectGitStatus
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.
@@ -517,19 +522,6 @@ func (s *connSession) collabConfig() config.CollabConfig {
 // a per-call disk read; swapped per project like the blocks above.
 func (s *connSession) toolsConfig() config.ToolsConfig {
 	return s.view().tools
-}
-
-// gitConfig returns the current resolved git tool config.
-func (s *connSession) gitConfig() config.GitConfig {
-	return s.view().git
-}
-
-// gitPolicy returns the connection's current resolved git policy. Reads the
-// live git config off the lock-free snapshot (hot-reloaded via mutate) and is
-// the single source of truth shared by the git tool's gate and session_start's
-// policy report.
-func (s *connSession) gitPolicy() tools.GitPolicy {
-	return gitPolicyFrom(s.gitConfig())
 }
 
 // refuseHomeRoots reports whether the session refuses home-directory roots.

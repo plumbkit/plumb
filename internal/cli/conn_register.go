@@ -224,7 +224,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLSPWarmup(s.lspWarming).
 		WithLSPDiagMode(s.lspDiagMode).
 		WithXcodeHint(xcodeHintFn).
-		WithProjectPolicy(projectPolicyKeys).
+		WithProjectPolicy(s.projectGitStatus).
 		WithRepin(s.repinWorkspace).
 		WithPinConflict(func(requested string) {
 			ws := s.workspace()
