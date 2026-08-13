@@ -87,6 +87,7 @@ type SessionStart struct {
 	clientNameFn  func() string                                                                     // may be nil; returns current MCP client name
 	topo          topologyStoreFn                                                                   // may be nil; returns the live topology store, or nil when disabled
 	gitPolicyFn   func() GitPolicy                                                                  // may be nil; git policy section skipped when nil
+	projectGitFn  func(ws string) (keys []string, trusted bool)                                     // may be nil; the capability-granting keys this project's config sets, and whether that exact request is trusted
 	lspLangFn     func() string                                                                     // may be nil; the LSP language attached to this session ("" when none)
 	lspLangsFn    func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn   func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
@@ -102,6 +103,19 @@ type SessionStart struct {
 	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
+}
+
+// WithProjectPolicy wires the accessor for a workspace's capability-granting
+// project-config request: the dotted keys its .plumb/config.toml sets, and
+// whether that exact request has been trusted. The git-policy section uses it to
+// say so when a project [git] block is being overruled.
+//
+// Injected rather than read here so internal/tools keeps its config dependency
+// at the boundary (as with gitPolicyFn and collabFn) and tests never reach the
+// real trust store.
+func (t *SessionStart) WithProjectPolicy(fn func(ws string) ([]string, bool)) *SessionStart {
+	t.projectGitFn = fn
+	return t
 }
 
 // WithXcodeHint wires side-effect-free build-server guidance into orientation.

@@ -234,9 +234,9 @@ and network calls additionally require `confirm: true` per call.
 > `.plumb/config.toml` may set it only for a workspace you have approved with
 > `plumb trust` — a cloned repository would otherwise grant itself history
 > destruction and pushes with your credentials the moment a session attaches.
-> Until then the whole block falls back to your global config, and `plumb doctor`
-> plus `plumb config show` report which keys are being ignored. See
-> [Project-config trust](#project-config-trust).
+> Until then the whole block falls back to your global config, and `plumb doctor`,
+> `plumb config show` and `session_start`'s git-policy section all report which
+> keys are being ignored. See [Project-config trust](#project-config-trust).
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
@@ -818,6 +818,18 @@ provenance reads `global config — project asked, UNTRUSTED`, and the requested
 values are printed in full below the table), by a daemon log line at attach, and
 in the TUI settings editor by a `⁶` marker on the row — which shows the value
 actually in force, not the one in the project file.
+
+All of those address the **user**. An untrusted `[git]` request is additionally
+reported to the **agent**, in `session_start`'s git-policy section, directly under
+the resolved policy: it names the ignored keys, why a project config cannot open
+the destructive or network tier by itself, and both fixes (`plumb trust` here, or
+the global config / `PLUMB_GIT_*` everywhere). Without it an agent sees only
+`Push/fetch/pull: off.`, cannot reconcile that with the `allow_push = true` in
+the repository it is looking at, and concludes the tier is unimplemented — which
+is an argument for shelling out to raw git, bypassing the policy the drop exists
+to enforce. The notice is emitted only when the project actually sets a `[git]`
+key and that request is untrusted; a trusted one needs none, because the policy
+printed above it is already the project's.
 
 | Field | Type | Effect |
 |---|---|---|

@@ -297,7 +297,20 @@ func (t *SessionStart) writeSessionGitPolicy(sb *strings.Builder, ws string) {
 	}
 	sb.WriteString("## Git (via the `git` tool — live policy)\n\n")
 	sb.WriteString(formatGitPolicy(t.gitPolicyFn()))
+	sb.WriteString(t.projectGitNotice(ws))
 	sb.WriteString("\n")
+}
+
+// projectGitNotice reports a project [git] block that was overruled, so the
+// resolved policy above cannot be mistaken for a bug when it contradicts the
+// .plumb/config.toml in the workspace. Empty when unwired, or when there is
+// nothing to say — see formatProjectGitNotice.
+func (t *SessionStart) projectGitNotice(ws string) string {
+	if t.projectGitFn == nil {
+		return ""
+	}
+	keys, trusted := t.projectGitFn(ws)
+	return formatProjectGitNotice(ws, keys, trusted)
 }
 
 // formatGitPolicy renders the git policy body. Pure — no I/O. The closing line
