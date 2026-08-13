@@ -61,7 +61,11 @@ func TestSynthesiseRoot_ReturnsACanonicalPath(t *testing.T) {
 // places — conn_attach, conn_persist, conn_repin, conn_roots — so the guard has
 // to live in the function.
 func TestSynthesiseRoot_DoesNotEscapeToHome(t *testing.T) {
-	home := t.TempDir()
+	// freshTempDir, not t.TempDir: `make test` sets GOTMPDIR to .testcache INSIDE
+	// the repo, so t.TempDir() sits under plumb's own .git and the walk finds that
+	// instead of falling back to the seed. Bare `go test` does not set it, which
+	// is why this passed locally and failed on every CI job.
+	home := freshTempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // windows
 	mustMkdir(t, filepath.Join(home, ".git"))
@@ -91,7 +95,7 @@ func TestSynthesiseRoot_DoesNotEscapeToHome(t *testing.T) {
 // (issue #182's contract), and a user who points plumb at their home directory
 // has declared that intent. Only the silent upward escape is blocked.
 func TestSynthesiseRoot_HomeAsTheSeedIsStillHonoured(t *testing.T) {
-	home := t.TempDir()
+	home := freshTempDir(t) // see the GOTMPDIR note above
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	mustMkdir(t, filepath.Join(home, ".git"))
@@ -114,7 +118,7 @@ func TestSynthesiseRoot_HomeAsTheSeedIsStillHonoured(t *testing.T) {
 // Layout: HOME is the real directory; the seed is named through a symlink to it,
 // so the two spellings differ but denote the same inode.
 func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
-	base := t.TempDir()
+	base := freshTempDir(t) // see the GOTMPDIR note above
 	home := filepath.Join(base, "home")
 	mustMkdir(t, filepath.Join(home, ".git"))
 	t.Setenv("HOME", home)
@@ -146,7 +150,7 @@ func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
 // inside the home directory — which is where most projects live — must still
 // resolve to the project, or the guard would have broken the common case.
 func TestSynthesiseRoot_GitBelowHomeStillWins(t *testing.T) {
-	home := t.TempDir()
+	home := freshTempDir(t) // see the GOTMPDIR note above
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	mustMkdir(t, filepath.Join(home, ".git")) // dotfiles repo at $HOME, as above
