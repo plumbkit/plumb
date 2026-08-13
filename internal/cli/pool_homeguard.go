@@ -9,7 +9,27 @@ import (
 	"log/slog"
 	"os"
 	"os/user"
+	"path/filepath"
 )
+
+// deliberatePlumbMarker reports whether the .plumb directory at dir carries
+// evidence a human put it there: a context.md (written by `plumb init` and by
+// git_init's init_plumb) or a config.toml (written by `plumb config set`, or
+// by hand). materialisePlumbDir — the [workspace] auto_attach_persist path —
+// creates a BARE .plumb, and the daemon's own artefacts (topology.db,
+// collab.db, memories/) are machine-generated wherever the session happens to
+// run, so their presence proves nothing about intent. Consulted only when the
+// marker sits at the home directory; everywhere else any .plumb is honoured
+// exactly as before — a project marker does not need papers, only the one
+// directory whose capture puts every credential file inside the boundary does.
+func deliberatePlumbMarker(dir string) bool {
+	for _, name := range []string{"context.md", "config.toml"} {
+		if _, err := os.Stat(filepath.Join(dir, ".plumb", name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // homeDirInfos stats the candidate home directories for os.SameFile identity
 // comparisons (robust to trailing slashes and symlink/firmlink aliasing, where

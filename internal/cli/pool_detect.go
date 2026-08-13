@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,12 +45,22 @@ const LanguageNone = "none"
 //     boundary, so a repo with no language marker (a scripts / multi-language
 //     repo) still resolves — returned as (root, "none"). This is what lets
 //     such workspaces attach in the default config; without it the session
-//     never resolves and the TUI shows "resolving…" forever. The user's $HOME
-//     is excluded: a dotfiles repo at $HOME must not turn all of $HOME into a
-//     workspace.
+//     never resolves and the TUI shows "resolving…" forever.
 //
 // If no marker is found, walk up to the parent. If we walk past the filesystem
 // root, return an error.
+//
+// The user's home directory TERMINATES the walk: a dotfiles repo or a stray
+// ~/go.mod must not turn all of $HOME into a workspace, and nothing above the
+// home directory can legitimately be a project root either — so reaching
+// $HOME without a match is an error, not a rung. The one thing honoured AT
+// $HOME is a deliberate `.plumb/` marker (one carrying a context.md or
+// config.toml — see deliberatePlumbMarker): a user who ran `plumb init` in
+// their home directory has declared that intent. A bare `.plumb/` there is
+// treated as residue (the auto_attach_persist path of an earlier build could
+// materialise one) and ignored with a logged remediation, because honouring it
+// would silently re-open the whole-home workspace on every future session,
+// with auto_attach off.
 //
 // The root is returned CANONICALISED — symlinks resolved (issue #263). The pool
 // is where plumb answers "which project is this?", so it is where that answer
@@ -78,20 +89,36 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 	d := filepath.Clean(start)
 	first := true
 	for {
+		atHome := sameDirAs(d, homeInfo)
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
 		// plumb workspace, and stats / project config should follow that
 		// declaration regardless of whether a language server can attach.
+		// AT the home directory only a deliberate marker counts: a bare
+		// ~/.plumb is residue an earlier build's auto_attach_persist could
+		// have created, and honouring it would resolve $HOME as the workspace
+		// on every session from then on, auto_attach or not.
 		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
-			return d, p.languageForRoot(d), nil
-		}
-		// Next: first language whose STRONG root marker exists at d. Skip $HOME
-		// (by filesystem identity) so a stray ~/go.mod cannot turn all of $HOME
-		// into a language workspace for any path beneath it.
-		if !sameDirAs(d, homeInfo) {
-			if lang := p.strongLangAt(d); lang != "" {
-				return d, lang, nil
+			if !atHome || deliberatePlumbMarker(d) {
+				return d, p.languageForRoot(d), nil
 			}
+			p.homePlumbWarn.Do(func() {
+				slog.Warn("workspace detection: ignoring the .plumb marker at the home directory — it carries no context.md or config.toml, so it looks machine-created (an earlier build's auto_attach_persist). Remove ~/.plumb to silence this, or run `plumb init` in your home directory if you genuinely want all of it to be one workspace",
+					"dir", filepath.Join(d, ".plumb"))
+			})
+		}
+		// The home directory terminates the walk: neither $HOME (a dotfiles
+		// .git, a stray ~/go.mod) nor anything above it may become a workspace
+		// root for a path beneath it. Continuing upward — the old shape, which
+		// merely SKIPPED the markers here — meant a .git above the home
+		// directory resolved $HOME's parent: a root strictly wider than the
+		// escape this guard exists to block.
+		if atHome {
+			return "", "", fmt.Errorf("no project root found between %s and the home directory (which is never ascended past)", start)
+		}
+		// Next: first language whose STRONG root marker exists at d.
+		if lang := p.strongLangAt(d); lang != "" {
+			return d, lang, nil
 		}
 		// A .git directory marks a project boundary even without a strong
 		// marker. A weak, promiscuous marker (package.json, index.html) names
@@ -99,12 +126,12 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		// pointed at (first iteration) — never at an arbitrary ancestor, so a
 		// stray tooling package.json up the tree cannot hijack the workspace.
 		gitHere := false
-		if d != filepath.Dir(d) && !sameDirAs(d, homeInfo) {
+		if d != filepath.Dir(d) {
 			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
 				gitHere = true
 			}
 		}
-		if (gitHere || first) && !sameDirAs(d, homeInfo) {
+		if gitHere || first {
 			if lang := p.weakLangAt(d); lang != "" {
 				return d, lang, nil
 			}

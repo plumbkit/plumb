@@ -37,7 +37,18 @@ func recoverWorkspaceTxlog(folder string, scan func(string)) {
 // materialisePlumbDir creates <root>/.plumb/ if it does not already exist.
 // Called on the AutoAttachPersist path so the next session resolves via the
 // normal marker rather than going through synthetic attachment again.
+//
+// The home directory is refused outright — even for an explicit $HOME pin,
+// which attaches for the session without one. A machine-created ~/.plumb
+// outlives the pin that made it and would resolve $HOME as the workspace for
+// every future session (auto_attach or not); detect treats exactly that shape
+// as residue. If the user genuinely wants their home directory to be a
+// standing workspace, `plumb init` there records the intent in a form the
+// residue guard honours (context.md).
 func materialisePlumbDir(root string) error {
+	if sameDirAs(root, homeDirInfos()) {
+		return fmt.Errorf("refusing to create %s: the home directory must not become a plumb workspace as a side effect; run `plumb init` there if you genuinely mean it", filepath.Join(root, ".plumb"))
+	}
 	return os.MkdirAll(filepath.Join(root, ".plumb"), 0o755)
 }
 

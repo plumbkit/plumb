@@ -94,6 +94,12 @@ type workspacePool struct {
 	// caller's disconnect tear it down for everyone. Never nil after newWorkspacePool.
 	baseCtx context.Context
 	xcode   poolXcodeState
+
+	// homePlumbWarn rate-limits the "ignoring residual ~/.plumb" warning to
+	// once per pool: detect runs on hot paths (per-file routing), and the
+	// remediation message would otherwise flood the log while the residue sits
+	// there.
+	homePlumbWarn sync.Once
 }
 
 type langConfig struct {
