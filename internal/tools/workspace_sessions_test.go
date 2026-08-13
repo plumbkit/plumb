@@ -323,3 +323,53 @@ func TestWorkspaceSessions_ListsInheritedMail(t *testing.T) {
 		t.Errorf("a session with no inheritance was shown the bound message; got %q", out)
 	}
 }
+
+// TestWorkspaceSessions_UnregisteredSessionIsShownNoMail closes the second
+// disclosure lane. addressee_id protects BOUND rows here, but an unbound row —
+// a pre-v3 note, or one to a peer that had not connected — is matched by name
+// alone, and this block prints the sender and the body. An unregistered session
+// carries a display name drawn without a uniqueness check, so it can shadow a
+// live peer; listing consumes nothing, which is precisely why it was overlooked.
+func TestWorkspaceSessions_UnregisteredSessionIsShownNoMail(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("open collab store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	// UNBOUND: addressed by name only, which is what addressee_id cannot protect.
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "id-bob", Body: "unbound-body-marker",
+		Addressee: "alice", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatalf("PutNote: %v", err)
+	}
+
+	listFor := func(selfID, selfName string) string {
+		t.Helper()
+		out, err := NewWorkspaceSessions(func() string { return ws }, selfID).
+			WithCollab(
+				func() (bool, bool) { return false, true },
+				func() *collab.Store { return store },
+				func() string { return selfName }).
+			Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return out
+	}
+
+	// A registered session holding the name legitimately sees it.
+	if out := listFor("sess-alice", "alice"); !strings.Contains(out, "unbound-body-marker") {
+		t.Fatalf("a registered session must see its own pending mail; got %q", out)
+	}
+	// An unregistered shadow must not — not the body, and not the sender.
+	out := listFor("", "alice")
+	if strings.Contains(out, "unbound-body-marker") {
+		t.Errorf("an unregistered session was shown a live peer's message body; got %q", out)
+	}
+	if strings.Contains(out, "notes for you") {
+		t.Errorf("an unregistered session was shown a notes block at all; got %q", out)
+	}
+}

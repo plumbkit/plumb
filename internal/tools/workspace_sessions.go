@@ -279,7 +279,14 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 			writeCollabIntents(&sb, t.selfSessID, intents, now)
 		}
 	}
-	if mailboxOn && t.selfName != nil {
+	// selfSessID is checked as well as the name because this block PRINTS the
+	// sender and body of every pending note. A session whose registration failed
+	// has no mailbox address — its name entered no file any peer's uniqueness
+	// check can see, so it may shadow a live peer — and listing is a disclosure
+	// even though it consumes nothing. The caller wires addressableName, which is
+	// already empty in that case; this is the tool refusing to depend on its
+	// caller having done so.
+	if mailboxOn && t.selfName != nil && t.selfSessID != "" {
 		if name := t.selfName(); name != "" {
 			var inherited []string
 			if t.inheritedIDs != nil {

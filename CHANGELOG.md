@@ -1652,14 +1652,29 @@
   rebuildable index; its rows are the only copy. Every pre-v3 row backfills to
   `''` and keeps delivering by name, so nothing already in flight was stranded.
 
-- **`check_messages` was the one delivery path that could claim mail for a name
-  it did not own.** It built its inbox from the raw display name, while every
-  other path (the tool-result block, `session_start`) takes its address from
-  `connSession.inbox`, which withholds one when `session.Register` failed. Such a
-  session's name was drawn without a uniqueness check and sits in no file any
-  peer's check can see, so it can shadow a live session — and because claiming is
-  destructive, the shadow swallowed the real recipient's message. It now refuses
-  with the reason instead of claiming.
+- **Two mailbox surfaces addressed themselves by display name, skipping the
+  registration gate.** A session whose `session.Register` failed keeps a display
+  name for the TUI and logs, but that name was drawn without a uniqueness check
+  and sits in no file any peer's check can see — so it can shadow a live session.
+  The delivery paths that take their address from `connSession.inbox` (the
+  tool-result block, `session_start`) already withheld one; these two derived
+  their own and did not.
+
+  `check_messages` **claimed**, which is destructive: delivery is exactly-once,
+  so the shadow swallowed the real recipient's message. It now refuses with the
+  reason instead.
+
+  `workspace_sessions` **listed**, which consumes nothing — and is why it was
+  missed on the first pass and found later by an independent review. It is still
+  a disclosure: the block prints the sender and the body. `addressee_id` protects
+  bound rows here, so the residual was unbound ones — a pre-v3 note, or a note to
+  a peer that had not connected. It is now wired to `addressableName` and
+  additionally refuses to render the block without a session ID, so the tool does
+  not depend on its caller having passed the right accessor.
+
+  The lesson is the pattern, not the count: every surface that derives its own
+  mailbox address is a fresh chance to skip the gate, so the guard belongs at
+  each of them rather than in one place they are all assumed to route through.
 
 
 ## 0.16.5 (2026-08-12)
