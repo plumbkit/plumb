@@ -39,7 +39,12 @@ import (
 //
 // So: eight, and the ninth needs its own justification against both paragraphs.
 //
-//go:embed skills
+// The pattern is SKILL.md files rather than the whole tree: a skill directory
+// may carry supporting material (plumb-chat has a references/ note), and
+// embeddedSkills only ever reads SKILL.md, so anything else would be bytes in
+// every user's binary that nothing can reach.
+//
+//go:embed skills/*/SKILL.md
 var skillsFS embed.FS
 
 // embeddedSkill is a named skill file to be installed into a client's skills

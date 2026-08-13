@@ -12,10 +12,12 @@ import (
 //
 // It exists for inspection from OUTSIDE a session — today `plumb mail`, which
 // answers "is anything waiting for this session?" so a client-side hook can
-// decide whether to wake an idle agent. That caller is not the recipient and
-// must never consume the recipient's mail: setting the delivery watermark on
-// its behalf would turn plumb's exactly-once guarantee into exactly-never, the
-// message marked delivered while the agent it was written for never saw a word.
+// keep a turn going rather than let the agent go quiet with mail unread. (It
+// cannot reach an agent that is already idle; nothing can.) That caller is not
+// the recipient, and must never consume the recipient's mail: setting the
+// delivery watermark on its behalf would turn plumb's exactly-once guarantee
+// into exactly-never, the message marked delivered while the agent it was
+// written for never saw a word.
 //
 // The obvious implementation is "call Open and only run SELECTs", and that is
 // the one deliberately not taken. It leaves the guarantee resting on every

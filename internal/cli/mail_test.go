@@ -218,6 +218,77 @@ func TestMatchSessions_ResolvesSymlinkedWorkspace(t *testing.T) {
 	}
 }
 
+// TestMatchByWorkspace_WalksUpToTheNearestRoot is the regression test for the
+// defect that made --workspace useless in practice.
+//
+// plumb acquires a workspace by walking UP to a root marker, so a session pinned
+// to /repo serves every directory under it — and the hook that passes its `cwd`
+// is routinely somewhere like /repo/internal/cli. Exact equality answered "no
+// live session matches" for a session that was live and pinned exactly there,
+// and because every failure path in the recipe's hook allows the stop, the wake
+// hook silently never fired.
+func TestMatchByWorkspace_WalksUpToTheNearestRoot(t *testing.T) {
+	root := t.TempDir()
+	deep := filepath.Join(root, "internal", "cli")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", deep, err)
+	}
+	all := []session.Info{{Name: "quiet-mesa", Folder: root}}
+
+	for _, arg := range []string{root, deep, filepath.Join(root, "internal")} {
+		got := matchSessions(all, "workspace", arg)
+		if len(got) != 1 || got[0].Name != "quiet-mesa" {
+			t.Errorf("--workspace %q matched %v, want quiet-mesa — a directory inside a session's "+
+				"root belongs to that session", arg, mailNames(got))
+		}
+	}
+
+	if got := matchSessions(all, "workspace", t.TempDir()); len(got) != 0 {
+		t.Errorf("an unrelated directory matched %v, want nothing", mailNames(got))
+	}
+}
+
+// TestMatchByWorkspace_NearestRootWinsWhenNested: a superproject and its
+// submodule both contain the argument. Reporting both would be "ambiguous" and
+// refuse, so a hook in the inner project would break the moment someone attached
+// a session to the outer one. The deepest root is what plumb's own upward walk
+// would have found.
+func TestMatchByWorkspace_NearestRootWinsWhenNested(t *testing.T) {
+	outer := t.TempDir()
+	inner := filepath.Join(outer, "plumb")
+	deep := filepath.Join(inner, "internal", "cli")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", deep, err)
+	}
+	all := []session.Info{
+		{Name: "outer-session", Folder: outer},
+		{Name: "inner-session", Folder: inner},
+	}
+
+	got := matchSessions(all, "workspace", deep)
+	if len(got) != 1 || got[0].Name != "inner-session" {
+		t.Fatalf("nested roots matched %v, want only inner-session — the nearest root is the one "+
+			"plumb would resolve, and reporting both refuses instead of answering", mailNames(got))
+	}
+	if got := matchSessions(all, "workspace", outer); len(got) != 1 || got[0].Name != "outer-session" {
+		t.Errorf("the outer root matched %v, want outer-session", mailNames(got))
+	}
+}
+
+// TestMatchByWorkspace_SameRootIsStillAmbiguous: nearest-wins must not paper
+// over the case the refusal exists for — two agents on the SAME project, where
+// picking one would wake the wrong agent.
+func TestMatchByWorkspace_SameRootIsStillAmbiguous(t *testing.T) {
+	root := t.TempDir()
+	all := []session.Info{
+		{Name: "quiet-mesa", Folder: root},
+		{Name: "swift-falcon", Folder: root},
+	}
+	if got := matchSessions(all, "workspace", root); len(got) != 2 {
+		t.Errorf("two sessions on one root matched %d, want 2 so the caller is told it is ambiguous", len(got))
+	}
+}
+
 // TestMailSelector_RefusesZeroOrSeveral: the selectors answer one question three
 // ways, so a call naming none is unanswerable and one naming two would need a
 // precedence rule no caller could predict.

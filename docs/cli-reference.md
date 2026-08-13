@@ -359,12 +359,17 @@ plumb mail (--session <name> | --external-id <id> | --workspace <dir>) [--json]
 Report how many agent-to-agent messages are waiting for a plumb session,
 without reading or consuming them.
 
-It exists for a client-side hook that wakes an idle agent. Plumb's mailbox
-([`[collab] mailbox`](configuration.md)) delivers by polling — a message is
-handed over on a tool result, a `check_messages` call, or `session_start` — so
-an agent that has finished its turn and is waiting on its human never learns
-that a peer wrote to it. Nothing server-side can reach it; this lets the client
-ask the question from outside any session.
+It exists for a client-side hook that keeps a turn going when mail is waiting.
+Plumb's mailbox ([`[collab] mailbox`](configuration.md)) delivers by polling — a
+message is handed over on a tool result, a `check_messages` call, or
+`session_start` — so an agent that has finished its turn and is waiting on its
+human never learns that a peer wrote to it. Nothing server-side can reach it;
+this lets the client ask the question from outside any session.
+
+It narrows that window rather than closing it. An agent that is *already* idle
+cannot be reached at all: its end-of-turn hook has run and allowed, and nothing
+fires again until its human speaks. Mail arriving after the turn ends waits as
+before, so this is not a delivery mechanism.
 
 **It never claims.** The handle is `mode=ro`, so the delivery watermark cannot
 be set: the messages stay undelivered and reach the agent through
@@ -372,19 +377,25 @@ be set: the messages stay undelivered and reach the agent through
 delivered to an agent that never saw it — exactly-once turned into
 exactly-never.
 
-**It reports only whether, and how stale**: a count and the age of each waiting
-message, never bodies, senders, or conversation ids. A session *name* is not an
-identity (names come from a small pool, an ended session frees its name, and
-`rename_session` lets a session pick one), and a message body is another agent's
-free text — printed here it would flow straight into whatever consumes this
-output, which is an injection channel into the agent the mailbox otherwise
-labels these as unverified claims for.
+**It reports no message content**: the resolved session name, its workspace
+root, a count, and the age of each waiting message — nothing about any message
+beyond that it exists and when it arrived. Never bodies, senders, or
+conversation ids. Note what that boundary is not: the workspace root is an
+absolute path in the output, and `--session`/`--external-id` answer for any live
+session on the machine, including one in another project — the same surface
+`plumb sessions` already prints. This is not a permission boundary; what it
+holds back is message content. A session *name* is not an identity (names come
+from a small pool, an ended session frees its name, and `rename_session` lets a
+session pick one), and a message body is another agent's free text — printed
+here it would flow straight into whatever consumes this output, which is an
+injection channel into the agent the mailbox otherwise labels these as
+unverified claims for.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--session <name>` | — | A live session's name, as shown by `plumb sessions`. |
 | `--external-id <id>` | — | The value a session passed to `session_start`'s `session_id` — a client's own conversation id. The reliable selector for a hook, which knows its conversation but not the session name. |
-| `--workspace <dir>` | — | A directory, when exactly one live session is pinned there. Reports ambiguity rather than guessing. |
+| `--workspace <dir>` | — | A directory *inside* a session's workspace — plumb resolves a workspace by walking up to a root marker, so a session pinned to `/repo` answers for `/repo/internal/cli`. The nearest enclosing root wins when workspaces nest; several sessions sharing that root is an error, not a guess. |
 | `--json` | `false` | Emit `{"session","workspace","count","ages_seconds"}` instead of a sentence. `ages_seconds` is oldest first. |
 
 Name exactly one selector. Exit status is 0 whether or not mail is waiting, and

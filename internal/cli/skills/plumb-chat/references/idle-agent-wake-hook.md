@@ -1,4 +1,4 @@
-# Waking an idle agent that has mail
+# Catching mail before an agent goes quiet
 
 Plumb's mailbox delivers by polling. Every path — the block appended to a tool
 result, `check_messages`, `session_start` — needs the recipient to make a call.
@@ -6,10 +6,27 @@ An agent that has finished its turn and is waiting on its human makes no calls
 at all, so no amount of server-side cleverness reaches it. The daemon cannot
 push over MCP; that is a property of the transport, not a gap in plumb.
 
-The client can close it. A Claude Code **Stop hook** fires when the agent
-finishes responding, and a Stop hook may keep the turn going. So the shape is:
-at end of turn, ask whether mail is waiting, and if it is, continue the turn
-with that as the instruction instead of going quiet.
+A Claude Code **Stop hook** narrows that window. It fires when the agent
+finishes responding, and it may keep the turn going, so the shape is: at the
+moment of going quiet, ask whether mail is waiting, and if it is, continue the
+turn instead.
+
+**Be precise about what this does not do.** It cannot wake an agent that is
+*already* idle. That agent's Stop hook has already run and allowed the stop, and
+nothing fires again until its human speaks. So a message that arrives one second
+after the turn ends waits for the human exactly as before. The hook closes the
+narrow race where mail is already waiting at end of turn — worth having, and not
+a delivery guarantee.
+
+Which means the `plumb-chat` rule stands unchanged: **silence is still not a
+refusal**. Do not read "the wake hook is installed" as "my peer has seen this".
+Most of the time it has not.
+
+For an [agent team](https://code.claude.com/docs/en/agent-teams), the event that
+genuinely covers the idle case is **`TeammateIdle`** — "when a teammate is about
+to go idle after finishing its turn" — where exit code 2 prevents the teammate
+going idle so it continues working. It takes no matcher and fires every time.
+That is the right hook for a teammate; this note does not build it.
 
 Everything about the Claude Code contract below was verified against
 <https://code.claude.com/docs/en/hooks> on 2026-08-13. Everything about plumb
@@ -39,10 +56,11 @@ a selector. Nothing populates it automatically, so the setup below does.
 ## Part 1 — bind the conversation to the plumb session
 
 Without this, a hook knows its conversation id and its working directory, and
-plumb knows neither. `--workspace` is the fallback, and it is only unambiguous
-when one live session is pinned to the directory; where several agents share a
-repository — which is exactly when peers message each other — it cannot pick,
-and refuses rather than waking the wrong agent.
+plumb knows neither. `--workspace` is the fallback: it takes any directory
+inside a session's workspace — `cwd` works, it need not be the root — and
+resolves to the nearest enclosing one. But it can only answer when a single
+session holds that root, and where several agents share a repository, which is
+exactly when peers message each other, it refuses rather than picking one.
 
 A `SessionStart` hook can put the id in front of the agent. `SessionStart`
 returns `hookSpecificOutput.additionalContext`, a string added to the agent's
