@@ -143,6 +143,15 @@
   `classifyCheckout`) exists only where a subcommand's arg space spans tiers;
   cherry-pick's does not.
 
+  **"Every form" is now a tested property, not a sampled one.** All five flat
+  verbs — `reset`, `clean`, `rebase`, `revert`, `cherry-pick` — are driven
+  through a battery of argument vectors and their tier asserted invariant across
+  it, so a later edit that split one verb's arm on an argument fails loudly
+  instead of quietly demoting a history rewrite to the read tier, which skips the
+  policy gate, the write-rate limiter, the per-repo serialisation lock and the
+  `expected_head` ref guard alike. A sampled table could not catch that: every
+  row for a flat verb runs one identical code path.
+
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,
   traits, methods, `val`/`var`, type and opaque-type aliases, Scala 3 `given`
