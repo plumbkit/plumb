@@ -857,36 +857,37 @@
   `npm audit` reports a high-severity advisory on `nanoid` (GHSA-2v37-7h3g-55p8)
   reached transitively through postcss. It is build-time only, so it does not
   ship in the binary, and `govulncheck` is Go-only and will never see it.
-- **`leave_note` no longer ends every send by telling the agent to call a tool
-  it may not have.** The reply hint named `check_messages` unconditionally, and
-  `check_messages` is not in the lean set — so three separate mechanisms could
-  have removed it, none of which gated the line. Under the **lean profile** it is
-  hidden from `tools/list`; for a client holding a plumb-written allowlist
-  (Codex, Gemini CLI, Kimi Code) it is stripped from the client's own config, a
-  filter plumb cannot observe at all; and on a **pinning client** it was deferred
-  behind an MCP tool-search round-trip. A real agent hit the last of these: it
-  had `leave_note`, was told to call `check_messages`, and could not find it.
+- **A reply left for an agent that is still sending no longer waits for an
+  unrelated tool call — and the mailbox pair is pinned together.** Two changes to
+  the same exchange.
 
-  The pointer is now gated by the same predicate `session_start`'s guidance
-  already used — extracted to `leanNamingOnly` so there is one rule and not two
-  — and, crucially, the suppressed form is not silence. Delivery never depended
-  on `check_messages`: a reply is appended to the result of the sender's next
-  ordinary tool call, so the fallback states the mechanism that always works and
-  names nothing. `check_messages` is still named where it is nameable, because
-  waiting server-side (rather than polling) is the thing only it can do. The tool
-  DESCRIPTION, which ships in `tools/list` to every client, follows the same rule.
+  `leave_note` was listed in `mailboxSilentTools`, the set of tools that never
+  carry a piggybacked message block. That set is justified by its members already
+  surfacing the same messages themselves, which was never true of `leave_note`:
+  it holds no `Inbox`, claims no row and calls no `RenderMessages`. It surfaced
+  nothing, so a reply waiting for the sender was skipped on precisely the call an
+  exchange makes next — sending on to the next peer. In a fan-out that repeats
+  for every peer and the reply is never rendered at all. It is no longer silent.
 
-  **The mailbox pair is now pinned together** (`mcp.Server.AlwaysLoad` gains
-  `tools.MailboxTools`), which is what closes the deferral case. `leave_note` and
-  `check_messages` are the only two tools in the registry whose own output
-  instructs the agent to call the other one; for an ordinary deferred tool the
-  cost of deferral is a round-trip, but for a half-finished exchange it is an
-  instruction the agent has already been given and cannot follow. They stay
-  **out** of the lean set — a collaboration feature most sessions never use has
-  no claim on a lean client's advertised surface, and pinning does not rescue the
-  client-side-allowlist case anyway, which is why the gated hint is not optional.
-  The pairing is the contract: `TestMailboxToolsArePairedAndNonLean` fails on a
-  one-sided edit, since the asymmetry is the defect itself.
+  Separately, `check_messages` is not in the lean set, so on a pinning client it
+  sat behind an MCP tool-search round-trip while `leave_note` was in hand — and
+  `leave_note`'s output tells the agent to call it. A real agent hit exactly
+  that: it had `leave_note`, was told to call `check_messages`, and could not
+  find it. `mcp.Server.AlwaysLoad` now gains `tools.MailboxTools`, so the two
+  travel together. They stay **out** of the lean set — a collaboration feature
+  most sessions never use has no claim on a lean client's advertised surface —
+  but the pairing is the contract, and `TestMailboxToolsArePairedAndNonLean`
+  fails on a one-sided edit, since the asymmetry is the defect itself.
+
+  The reply hint now names both paths rather than only `check_messages`: waiting
+  server-side with `wait_seconds`, which is the thing only `check_messages` can
+  do, and the passive path that needs no action. It is stated unconditionally.
+  An earlier cut of this change gated the hint on client reachability; that was
+  dropped, because no plumb-side mechanism makes `leave_note` reachable while
+  `check_messages` is not — `LeanToolNames()`, the allowlist plumb writes for
+  Codex, Gemini CLI and Kimi Code, contains neither, and the lean profile hides
+  both — so the gate suppressed the hint only for clients that could in fact
+  reach the tool, costing them `wait_seconds` for nothing.
 
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
