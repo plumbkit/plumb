@@ -59,7 +59,7 @@ type Row struct {
 	// AddresseeID binds the note to ONE session: the stable ID of the live
 	// session that answered to Addressee when it was sent. Only that session may
 	// claim it. Empty means unbound — a pre-v3 row, a note to a peer that had not
-	// attached, or an AddresseeNext note — and is delivered by name alone.
+	// connected, or an AddresseeNext note — and is delivered by name alone.
 	AddresseeID string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
@@ -114,7 +114,7 @@ type NoteInput struct {
 	// AddresseeID binds the note to the one session that answered to Addressee at
 	// send time. Set it ONLY for a peer that is live and resolves to exactly one
 	// session; leave it empty otherwise, which keeps the historical name-only
-	// addressing that an unattached peer depends on. PutNote clears it for
+	// addressing that a peer which is not connected depends on. PutNote clears it for
 	// AddresseeNext.
 	AddresseeID string
 	// ConversationID threads this note onto an existing conversation. Empty mints

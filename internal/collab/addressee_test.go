@@ -70,8 +70,8 @@ func TestClaimNotes_BoundNoteIsInvisibleToANameReuser(t *testing.T) {
 
 // TestClaimNotes_UnboundNotesStillDeliverByName is the compatibility half, and
 // it matters at least as much as the binding: an unbound row is every message
-// written before this column existed, every message to a peer that had not
-// attached yet, and every "next" note. If binding had made those undeliverable,
+// written before this column existed, every message to a peer that was not
+// connected, and every "next" note. If binding had made those undeliverable,
 // the fix would have silently emptied every mailbox already in flight.
 func TestClaimNotes_UnboundNotesStillDeliverByName(t *testing.T) {
 	s, _ := openTestStore(t)

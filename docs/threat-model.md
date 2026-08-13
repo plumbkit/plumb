@@ -406,7 +406,7 @@ answered to that name. Delivery is now bound to the recipient's session ID when
 that peer is live (`collab_rows.addressee_id`), so a successor reads nothing;
 `Register`/`Rename` refuse a name a live session already holds, closing the
 concurrent case; and cross-project rows remain scoped by `target_workspace`.
-Unbound rows — a peer that had not attached, `next`, and anything written before
+Unbound rows — a peer that was not connected, `next`, and anything written before
 the binding existed — are still addressed by name alone, which is the residual.
 
 A reconnecting session inherits its predecessor's session ID so a daemon restart

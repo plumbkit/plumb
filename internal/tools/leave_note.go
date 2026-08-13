@@ -48,7 +48,7 @@ func (*LeaveNote) Description() string {
 		"any session may rename to a free one — so without that binding a message its " +
 		"recipient never read would be handed to whoever next answers to the name. The " +
 		"trade is deliberate: a bound message expires unread if its recipient never " +
-		"comes back. Addressing a peer that has NOT attached yet stores no binding and " +
+		"comes back. Addressing a peer that is NOT CONNECTED stores no binding and " +
 		"is delivered by name, as is \"next\".\n\n" +
 		"CROSS-PROJECT. Addressing a session pinned to a different workspace is " +
 		"allowed, but it is delivered only if THAT project sets [collab] " +

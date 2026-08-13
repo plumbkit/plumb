@@ -1636,7 +1636,7 @@
   could never claim.
 
   **The binding is only ever stamped on a peer that is live and resolves to
-  exactly one session.** Addressing a peer that has not attached yet is
+  exactly one session.** Addressing a peer that is not connected is
   legitimate and stays name-only; so does `next`, which is a first-claimer race
   by design and which `PutNote` therefore un-binds itself rather than trusting
   callers; so does a peer placed from conversation history, since history proves
