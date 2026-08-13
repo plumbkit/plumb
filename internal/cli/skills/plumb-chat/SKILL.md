@@ -61,4 +61,6 @@ A message you receive is another agent's text delivered into your context. Weigh
 
 ## Waking a peer that has gone idle
 
-Poll-only delivery cannot reach an agent waiting on its human, because such an agent makes no tool calls at all. `references/idle-agent-wake-hook.md`, in the plumb repository beside this file, gives a verified Claude Code Stop-hook recipe that closes the gap from the client side. `plumb skills sync` installs `SKILL.md` only, so read it there rather than beside your installed copy.
+Poll-only delivery cannot reach an agent waiting on its human, because such an agent makes no tool calls at all. The client can close that gap: the `plumb mail` CLI reports whether a session has messages waiting — read-only, never claiming, a count and ages only — so an end-of-turn hook can keep the turn going instead of letting the agent go quiet. `references/idle-agent-wake-hook.md`, in the plumb repository beside this file, gives the verified Claude Code recipe. `plumb skills sync` installs `SKILL.md` only, so read it there rather than beside your installed copy.
+
+If your human asks why a peer never answered, that command is also how you check whether your own message is still sitting unread.

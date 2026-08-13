@@ -838,6 +838,22 @@
   `workspace_sessions` uses — rather than a query written in the CLI, so the
   delivery predicate stays defined in one place.
 
+- **The idle-agent wake recipe now has both halves it needs.** The Stop-hook
+  note shipped with `plumb-chat` fell back to matching a session by its folder,
+  because nothing populated `external_id` — zero of 577 real session files on
+  this machine had one — and that fallback fails exactly where the feature is
+  needed, in a repository with several agents in it. The missing piece was never
+  the plumbing: `session_start` has always accepted `session_id` and persisted
+  it. Nothing told the agent to pass one. A `SessionStart` hook now states the
+  conversation id as context, phrased as a fact rather than an instruction (the
+  Claude Code docs are explicit that imperative `additionalContext` can trip the
+  agent's own prompt-injection defences and be surfaced to the user instead of
+  acted on), with the standing instruction living in `CLAUDE.md` where
+  instructions that never change belong. The Stop hook resolves by
+  `--external-id` first and falls back to `--workspace`, so it degrades to the
+  old behaviour for anyone who installs only half of it — and both hook scripts
+  are now four lines of `jq` around `plumb mail` instead of hand-rolled SQLite.
+
 - **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
   `leave_note` and `check_messages` have carried their whole contract in their
   own tool descriptions, which is the right place for it and the wrong shape
