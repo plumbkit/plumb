@@ -834,11 +834,26 @@
   Exit status is 0 whether or not mail is waiting and non-zero only on error, so
   a data answer is never confused with a failure.
 
+  `--workspace` resolves the way plumb resolves a workspace: by containment,
+  nearest enclosing root first. Exact equality was the first implementation and
+  was wrong in the case the selector exists for — plumb acquires a workspace by
+  walking UP to a root marker, so a session pinned to `/repo` serves
+  `/repo/internal/cli`, which is exactly the `cwd` a hook passes. It answered
+  "no live session matches" for a session pinned precisely there, and since
+  every failure path in the recipe's hook allows the stop, the wake hook
+  silently never fired and never said why. Nested roots resolve to the deepest,
+  so a submodule session is not made ambiguous by one on its superproject;
+  several sessions sharing that root still refuse, which is the case where
+  guessing wakes the wrong agent.
+
   Counting goes through `collab.PendingNotes` — the same listing path
   `workspace_sessions` uses — rather than a query written in the CLI, so the
-  delivery predicate stays defined in one place.
+  delivery predicate stays defined in one place. It reads the workspace mailbox
+  only: a cross-project message sits in the daemon-level store behind the
+  recipient's `[collab] cross_project` opt-in (off by default) and is not
+  counted.
 
-- **The idle-agent wake recipe now has both halves it needs.** The Stop-hook
+- **The end-of-turn mail recipe now has both halves it needs.** The Stop-hook
   note shipped with `plumb-chat` fell back to matching a session by its folder,
   because nothing populated `external_id` — zero of 577 real session files on
   this machine had one — and that fallback fails exactly where the feature is
@@ -851,8 +866,25 @@
   acted on), with the standing instruction living in `CLAUDE.md` where
   instructions that never change belong. The Stop hook resolves by
   `--external-id` first and falls back to `--workspace`, so it degrades to the
-  old behaviour for anyone who installs only half of it — and both hook scripts
-  are now four lines of `jq` around `plumb mail` instead of hand-rolled SQLite.
+  old behaviour for anyone who installs only half of it — and is now a few lines
+  of `jq` around `plumb mail` instead of hand-rolled SQLite. The `SessionStart`
+  script only reports the id; it calls nothing.
+
+  Note what this does NOT do: it adds no code, and `external_id` is populated
+  only if the user installs the hook AND the agent passes the id to
+  `session_start`. The linkage is documented and possible, not automatic.
+
+  The recipe is also retitled, because the old framing was wrong in a way that
+  undercut the skill it ships with. A `Stop` hook cannot wake an agent that is
+  ALREADY idle — that agent's hook has run and allowed, and nothing fires again
+  until its human speaks. It keeps an agent from going quiet at the instant it
+  finishes a turn, and only if mail is waiting right then; a message arriving a
+  second later waits for the human exactly as before. That matters because
+  `plumb-chat` teaches "silence is not a refusal", and an agent believing peers
+  get woken would weaken that discipline on a false premise. For an agent team
+  the event that genuinely covers going idle is Claude Code's `TeammateIdle`,
+  where exit 2 keeps the teammate working; the note names it and does not build
+  it.
 
 - **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
   `leave_note` and `check_messages` have carried their whole contract in their
@@ -881,14 +913,14 @@
   "Another agent is working here and I need to reach it" is not a refusal, not
   recall, not version control, and not a code operation.
 
-  Ships with a `references/` note on the one caveat no server-side change can
-  fix: an agent waiting on its human makes no tool calls, so nothing reaches
-  it. The note gives a verified Claude Code Stop-hook recipe that closes it
-  from the client side, and is explicit that plumb ships **no** CLI answering
-  "is there mail for session X" — `plumb sessions` lists sessions, not
-  mailboxes — so the hook resolves the session and reads `collab.db` itself,
-  counting without ever claiming. `plumb skills sync` installs `SKILL.md` only,
-  so that note stays in the repository rather than beside an installed skill.
+  Ships with a `references/` note on the caveat no server-side change can fix:
+  an agent that is waiting on its human makes no tool calls, so nothing reaches
+  it. The note gives a verified Claude Code Stop-hook recipe that narrows the
+  window from the client side, built on `plumb mail` (above). `plumb skills
+  sync` installs `SKILL.md` only, so that note stays in the repository rather
+  than beside an installed skill; the skill links to it on GitHub, and the embed
+  pattern narrowed to `skills/*/SKILL.md` to match — embedding the whole tree
+  would have put ~8 KB of unreachable reference note in every user's binary.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,

@@ -14,18 +14,24 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // mail.go — `plumb mail`: does a session have agent-to-agent messages waiting?
 //
-// It exists for ONE caller shape: a client-side hook deciding whether to wake an
-// agent that has finished its turn. Plumb's mailbox delivers by polling, and an
-// agent idling on its human makes no tool calls, so nothing plumb does
-// server-side can reach it. Only the client can, and the client needs a way to
-// ask the question from outside any session. Before this, a hook had to open
+// It exists for ONE caller shape: a client-side hook, at the moment an agent
+// finishes its turn, deciding whether to keep that turn going. Plumb's mailbox
+// delivers by polling, and an agent idling on its human makes no tool calls, so
+// nothing plumb does server-side reaches it. Only the client can, and the client
+// needs a way to ask from outside any session. Before this, a hook had to open
 // collab.db and write the delivery predicate itself.
+//
+// It narrows that window; it does not close it. An agent already sitting idle
+// has had its end-of-turn hook run and allow, and nothing fires again until its
+// human speaks — so mail arriving after the turn ends still waits. Do not build
+// on this as if it were delivery.
 //
 // TWO RULES SHAPE EVERYTHING BELOW.
 //
@@ -34,18 +40,27 @@ import (
 // the text. The handle is mode=ro (collab.OpenReadOnly) so this is enforced by
 // the driver rather than by the author's care.
 //
-// It reveals only whether, and how stale. A hook asks "is there something",
-// never "what is it", so the answer is a count and the ages of the waiting
-// messages — no bodies, no senders, no conversation ids. Three reasons, and any
-// one of them is sufficient. A session NAME is not an identity: names come from
-// a small pool, an ended session frees its name, and rename_session lets a
-// session pick one, so anyone who can run this command could otherwise read a
-// peer's mail by guessing what it is called. A message body is another agent's
-// free text, and printing it here would pipe it straight into whatever consumes
-// this output — a hook's feedback string — which is an injection channel into
-// the very agent the mailbox renders these as unverified claims for. And the
-// body has somewhere better to go: it stays unclaimed, and arrives through a
-// real delivery path, in the recipient's context, correctly labelled.
+// It reveals no message CONTENT. A hook asks "is there something", never "what
+// is it", so the answer is the resolved session name, its workspace root, a
+// count, and the ages of the waiting messages — and nothing about any message
+// beyond that it exists and when it arrived. No bodies, no senders, no
+// conversation ids.
+//
+// Be exact about what that boundary is and is not. It is not confidentiality
+// about which sessions exist or where they are pinned: the workspace root is an
+// absolute path in the output, and --session / --external-id will answer for any
+// live session on the machine, including one in another project. That is the
+// same surface `plumb sessions` already prints to anyone who can run it, and the
+// command is not a permission boundary. What it holds is the message content
+// itself, for two reasons either of which is sufficient. A session NAME is not
+// an identity — names come from a small pool, an ended session frees its name,
+// and rename_session lets a session pick one — so content keyed on a name would
+// be readable by anyone who guesses one. And a body is another agent's free
+// text: printing it here pipes it straight into whatever consumes this output, a
+// hook's feedback string, which is an injection channel into the very agent the
+// mailbox renders these as unverified claims for. The body has somewhere better
+// to go — it stays unclaimed and arrives through a real delivery path, in the
+// recipient's context, correctly labelled.
 
 var (
 	mailFlagSession    string
@@ -60,9 +75,11 @@ var mailCmd = &cobra.Command{
 	Long: `Report how many messages are waiting for a plumb session, without reading
 or consuming them.
 
-Intended for a client-side hook that wakes an idle agent: plumb's mailbox
-delivers by polling, so an agent waiting on its human never learns that a peer
-wrote to it. This answers "is there something" from outside the session.
+Intended for a client-side hook that keeps a turn going when mail is waiting:
+plumb's mailbox delivers by polling, so an agent waiting on its human never
+learns that a peer wrote to it. This answers "is there something" from outside
+the session. It narrows that window rather than closing it — an agent already
+idle is not reachable at all.
 
 It is strictly read-only — the messages stay undelivered and reach the agent
 through ` + "`check_messages`" + ` as usual — and reports only a count and the ages
@@ -76,10 +93,16 @@ Name exactly one selector:
   --external-id  the value a session passed to session_start's session_id
                  (a client's own conversation id — the reliable selector for a
                  hook, which knows its conversation but not the session name)
-  --workspace    a directory, when exactly one live session is pinned there
+  --workspace    a directory inside a session's workspace; the nearest enclosing
+                 root wins, and several sessions on that root is an error
 
 Exit status is 0 whether or not mail is waiting, and non-zero only on error, so
-"has mail" is never confused with "the check failed". Read the count.`,
+"has mail" is never confused with "the check failed". Read the count.
+
+Scope: the workspace mailbox only. Cross-project messages live in a
+daemon-level store behind the recipient's [collab] cross_project opt-in (off by
+default) and are not counted. Notes addressed to "next" are excluded too — they
+go to whichever session claims first.`,
 	Args:        cobra.NoArgs,
 	RunE:        runMail,
 	Annotations: map[string]string{annoSkipLogo: "true"},
@@ -88,12 +111,15 @@ Exit status is 0 whether or not mail is waiting, and non-zero only on error, so
 func init() {
 	mailCmd.Flags().StringVar(&mailFlagSession, "session", "", "live session name to check")
 	mailCmd.Flags().StringVar(&mailFlagExternalID, "external-id", "", "session_id the session passed to session_start")
-	mailCmd.Flags().StringVar(&mailFlagWorkspace, "workspace", "", "workspace root with exactly one live session")
+	mailCmd.Flags().StringVar(&mailFlagWorkspace, "workspace", "", "a directory inside a session's workspace; nearest enclosing root wins")
 	mailCmd.Flags().BoolVar(&mailFlagJSON, "json", false, "emit a JSON object instead of a sentence")
 }
 
-// mailReport is the whole disclosure surface. Adding a field here is a decision
-// about what a caller outside the session may learn; see the file comment.
+// mailReport is the whole disclosure surface: the resolved session, its
+// workspace root, how many messages wait, and how old each is. Adding a field
+// here is a decision about what a caller outside the session may learn — see the
+// file comment, and note that no field describes any individual message beyond
+// its existence and age.
 type mailReport struct {
 	Session   string `json:"session"`
 	Workspace string `json:"workspace"`
@@ -180,27 +206,16 @@ func mailSelector() (name, value string, err error) {
 // resolved folder is skipped throughout: its workspace is where a mailbox would
 // live, so there is nothing to check for one.
 func matchSessions(all []session.Info, selector, value string) []session.Info {
-	var want []string
 	if selector == "workspace" {
-		want = workspaceArgSpellings(value)
-		if len(want) == 0 {
-			return nil
-		}
+		return matchByWorkspace(all, value)
 	}
 	var out []session.Info
 	for _, s := range all {
 		if s.Folder == "" {
 			continue
 		}
-		var hit bool
-		switch selector {
-		case "session":
-			hit = s.Name == value
-		case "external-id":
-			hit = s.ExternalID == value
-		case "workspace":
-			hit = slices.Contains(want, filepath.Clean(s.Folder))
-		}
+		hit := (selector == "session" && s.Name == value) ||
+			(selector == "external-id" && s.ExternalID == value)
 		if hit {
 			out = append(out, s)
 		}
@@ -208,35 +223,53 @@ func matchSessions(all []session.Info, selector, value string) []session.Info {
 	return out
 }
 
-// workspaceArgSpellings returns the forms a --workspace argument may legitimately
-// take when compared with a recorded session root: the absolute path, and its
-// symlink-resolved form when those differ.
+// matchByWorkspace resolves --workspace the way plumb itself resolves one: a
+// directory belongs to the session whose root CONTAINS it, nearest root first.
 //
-// A session's Folder arrives already canonicalised — internal/cli resolves
-// symlinks once when it acquires the workspace (issue #263) — while this value
-// is whatever a human or a hook typed. On macOS the difference is routine, since
-// /tmp is a symlink to /private/tmp, and a lexical compare of the two spellings
-// matches nothing while reading as "no session here" rather than as a path
-// problem.
+// Exact equality was the original implementation and it was wrong in the case
+// this selector exists for. Plumb acquires a workspace by walking UP to a root
+// marker, so a session pinned to /repo serves every directory beneath it, and
+// the hook that passes its `cwd` is routinely somewhere like
+// /repo/internal/cli. Comparing the two literally answered "no live session
+// matches" for a session that was live and pinned exactly there — and because
+// every failure path in the recipe's hook allows the stop, the result was a
+// wake hook that silently never fired and never said why.
 //
-// Only the ARGUMENT is normalised, never the session's Folder. Re-resolving the
-// stored root would re-litigate an invariant the acquisition site already
-// guarantees and put a syscall per session behind every call — the same reasoning
-// that keeps EvalSymlinks out of leave_note's sameWorkspace. Accepting either
-// spelling of the untrusted side costs nothing and needs no such assumption.
-func workspaceArgSpellings(value string) []string {
+// Containment goes through paths.WorkspaceRel, which already tries both the
+// literal and the canonical spelling of each side, so the symlink asymmetry
+// between a recorded (canonicalised) root and a typed argument is handled there
+// rather than re-derived here.
+//
+// NEAREST wins. Nested workspaces are ordinary — a superproject with a
+// submodule, a repository with a nested module — and both roots contain the
+// argument. Returning both would report ambiguity and refuse, so a hook in the
+// inner project would stop working the moment someone attached a session to the
+// outer one. The deepest root is the one plumb's own upward walk would have
+// found. Genuine ambiguity — several sessions sharing that same deepest root —
+// still refuses, which is the case where guessing would wake the wrong agent.
+func matchByWorkspace(all []session.Info, value string) []session.Info {
 	abs, err := filepath.Abs(value)
 	if err != nil {
 		return nil
 	}
-	abs = filepath.Clean(abs)
-	out := []string{abs}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		if resolved = filepath.Clean(resolved); resolved != abs {
-			out = append(out, resolved)
+	best := make([]session.Info, 0, 1) // one session on the nearest root is the normal case
+	bestDepth := -1
+	for _, s := range all {
+		if s.Folder == "" {
+			continue
+		}
+		if _, inside := paths.WorkspaceRel(s.Folder, abs); !inside {
+			continue
+		}
+		switch depth := len(filepath.Clean(s.Folder)); {
+		case depth > bestDepth:
+			// A nearer root discards everything matched so far, reusing the buffer.
+			best, bestDepth = append(best[:0], s), depth
+		case depth == bestDepth:
+			best = append(best, s)
 		}
 	}
-	return out
+	return best
 }
 
 func mailNames(matches []session.Info) []string {
@@ -260,6 +293,13 @@ func mailNames(matches []session.Info) []string {
 // agents for one message that all but one of them will lose the race for. The
 // cost is real: a "next" note left while a session sits idle will not wake it,
 // and it arrives whenever that session next makes a call of its own.
+//
+// It reads the WORKSPACE mailbox only. A cross-project message lands in the
+// daemon-level store, which a recipient reads only when its own project sets
+// [collab] cross_project, and resolving that opt-in means resolving the
+// workspace's config — work this probe does not do. So a cross-project message
+// is never counted here and will not wake anyone. cross_project is off by
+// default, which is what keeps that a footnote rather than a hole.
 //
 // An absent collab.db is not an error. It is created lazily on first use, so a
 // workspace whose sessions have never exchanged a message simply has no mailbox
