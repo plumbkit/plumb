@@ -44,7 +44,7 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 		}
 		return tools.ResolvedCommand{}, fmt.Errorf("run_command: unknown command %q; available: %s", name, strings.Join(avail, ", "))
 	}
-	fromProject := commandsFromProject(ws)
+	fromProject := v.projectCommands
 	if fromProject && !v.execTrusted {
 		return tools.ResolvedCommand{}, fmt.Errorf(
 			"run_command: %q comes from this project's .plumb/config.toml and is not trusted for its current content. "+
@@ -142,12 +142,23 @@ func (s *connSession) effectiveRequireSandbox() bool {
 	return s.store.Current().CommandPolicy.RequireSandbox || s.view().commandPolicy.RequireSandbox
 }
 
-// commandsFromProject reports whether the workspace's .plumb/config.toml defines
-// the [[command]] array, so its entries are project-sourced and need trust.
-func commandsFromProject(ws string) bool {
-	present, _ := config.ProjectValuePresent(ws, []string{"command"})
-	return present
-}
+// (commandsFromProject removed.) Provenance now comes from the session view,
+// resolved at config apply from the same bytes as v.commands and v.execTrusted.
+//
+// It used to call config.ProjectValuePresent(ws, []string{"command"}), which
+// bottoms out in an EXACT map lookup of raw["command"]. That was a gate bypass,
+// not a cosmetic issue: go-toml/v2 binds a table name to a struct field
+// case-insensitively, so a cloned repository shipping `[[COMMAND]]` had its
+// entry decoded into Config.Commands and returned by FindCommand, while the
+// exact lookup missed the raw key — fromProject came back false, the trust gate
+// was skipped entirely, and the argv ran as the user with provenance mislabelled
+// "global". Arbitrary code execution from an untrusted clone, and the same
+// defect class #243 closed for [lsp.<lang>].
+//
+// Deriving it from the policy spec fixes both halves: the spec is built with
+// rawValues (case-insensitive, any value shape), and it is the spec computed
+// during THIS session's config apply, so there is no second read of the file to
+// disagree with the config actually loaded.
 
 // commandWorkdir resolves a command's working_dir (validated relative and
 // non-escaping at load) to an absolute path within the workspace.

@@ -8,6 +8,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -109,14 +110,40 @@ func substituteTarget(argv []string, target string) ([]string, error) {
 
 // taskProvenance reports the layer a slot's command comes from and whether the
 // project overrides it (so the trust gate applies). verify consults build+test.
+// It asks ProjectTaskCommands — the same enumeration the trust hash binds to —
+// rather than looking the key up by name, and compares case-INSENSITIVELY.
+//
+// The old version called config.ProjectValuePresent(ws, {"tasks", lang, slot}),
+// an exact map lookup, and that was a gate bypass. go-toml/v2 binds a table name
+// to a struct field case-insensitively, so a cloned repository shipping
+// `[TASKS.go] test = "..."` had its command decoded into Config.Tasks and run by
+// run_task, while the exact lookup missed the raw key: fromProject came back
+// false and the trust check below was skipped entirely. The command was also
+// absent from ProjectTaskCommands, so it was never in the hash either — both
+// halves of the defence missed the same spelling. Arbitrary code execution from
+// an untrusted clone, and the sibling of the [[COMMAND]] bypass in
+// conn_commands.go.
+//
+// A read error fails CLOSED (treated as project-supplied, so the trust gate
+// applies). A gate that cannot determine provenance must not assume the safe
+// answer.
 func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
 	slots := []string{slot}
 	if slot == "verify" {
 		slots = []string{"build", "test"}
 	}
-	for _, sl := range slots {
-		if present, _ := config.ProjectValuePresent(ws, []string{"tasks", lang, sl}); present {
-			return "project", true
+	cmds, err := config.ProjectTaskCommands(ws)
+	if err != nil {
+		return "project", true
+	}
+	for _, c := range cmds {
+		if !strings.EqualFold(c.Lang, lang) {
+			continue
+		}
+		for _, sl := range slots {
+			if strings.EqualFold(c.Slot, sl) {
+				return "project", true
+			}
 		}
 	}
 	return "config", false

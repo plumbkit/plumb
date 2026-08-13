@@ -121,10 +121,26 @@ func ProjectTaskCommands(root string) ([]TaskCommandSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	tasks, ok := raw["tasks"].(map[string]any)
-	if !ok {
-		return nil, nil
+	// rawTables, not raw["tasks"]. An exact-name lookup here is a GATE BYPASS:
+	// go-toml/v2 binds a table name to a struct field case-insensitively, so
+	// `[TASKS.go]` decodes into Config.Tasks and its command reaches the runner,
+	// while `raw["tasks"]` misses it entirely — the command is absent from this
+	// set, therefore absent from the trust hash, and taskProvenance (which used
+	// the same exact lookup) reported it as not-project-supplied, so the gate was
+	// skipped altogether. A cloned repository shipping `[TASKS.go] test = ...`
+	// could have it run by run_task with no `plumb trust`. Same defect class as
+	// #243's `Command`, in the sibling that was not audited with it.
+	var out []TaskCommandSpec
+	for _, tasks := range rawTables(raw, "tasks") {
+		out = append(out, taskSpecsFrom(tasks)...)
 	}
+	return out, nil
+}
+
+// taskSpecsFrom flattens one [tasks] table into (lang, slot, command) triples.
+// Keys keep the spelling the project used, so two spellings of one language both
+// appear and both are hashed — the same rule projectPolicySpecFrom follows.
+func taskSpecsFrom(tasks map[string]any) []TaskCommandSpec {
 	var out []TaskCommandSpec
 	for lang, v := range tasks {
 		slots, ok := v.(map[string]any)
@@ -139,7 +155,7 @@ func ProjectTaskCommands(root string) ([]TaskCommandSpec, error) {
 			out = append(out, TaskCommandSpec{Lang: lang, Slot: slot, Command: cmd})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // inlineInterpreters is the set of argv[0] basenames that execute code passed

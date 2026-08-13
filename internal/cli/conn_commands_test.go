@@ -9,18 +9,41 @@ import (
 // TestCommandsFromProject mirrors TestTaskProvenance: a [[command]] array in the
 // project config marks its entries project-sourced (so run_command's trust gate
 // applies), while no project array means the commands are global.
+//
+// It now asks the SESSION VIEW rather than a standalone helper. The helper it
+// replaced looked the raw key up by exact name, which missed `[[COMMAND]]` and
+// skipped the trust gate entirely; provenance is resolved from the policy spec
+// at config apply instead. The fold spellings are exercised here as well as in
+// conn_commands_trust_test.go, because this is the test that describes what
+// "project-sourced" MEANS.
 func TestCommandsFromProject(t *testing.T) {
-	ws := t.TempDir()
-	if commandsFromProject(ws) {
-		t.Fatal("a workspace with no project config must report fromProject=false")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	projectCommands := func(t *testing.T, body string) bool {
+		t.Helper()
+		ws := t.TempDir()
+		if body != "" {
+			writeExecProject(t, ws, body)
+		}
+		return execTrustSession(t, ws).view().projectCommands
 	}
-	if err := config.SetProjectValue(ws, []string{"command"}, []map[string]any{
-		{"name": "lint", "exec": []string{"golangci-lint", "run"}},
-	}); err != nil {
-		t.Fatalf("SetProjectValue: %v", err)
+
+	if projectCommands(t, "") {
+		t.Error("a workspace with no project config must report fromProject=false")
 	}
-	if !commandsFromProject(ws) {
-		t.Error("a workspace whose project config defines [[command]] must report fromProject=true")
+	if projectCommands(t, "[edits]\nrate_limit_per_minute = 7\n") {
+		t.Error("a project config with no [[command]] must report fromProject=false")
+	}
+	for _, body := range []string{
+		"[[command]]\nname = \"lint\"\nexec = [\"golangci-lint\", \"run\"]\n",
+		"[[COMMAND]]\nname = \"lint\"\nexec = [\"golangci-lint\", \"run\"]\n",
+		"[[Command]]\nname = \"lint\"\nexec = [\"golangci-lint\", \"run\"]\n",
+		"command = [{name = \"lint\", exec = [\"golangci-lint\", \"run\"]}]\n",
+	} {
+		if !projectCommands(t, body) {
+			t.Errorf("a project config defining commands must report fromProject=true: %q", body)
+		}
 	}
 }
 
