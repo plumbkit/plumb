@@ -414,6 +414,19 @@ func sameDirAs(dir string, info os.FileInfo) bool {
 // Like Detect, the result is canonicalised (issue #263): a markerless root is
 // still a root, and issue #182's contract is explicit that an explicit pin must
 // not behave differently for want of a marker.
+//
+// Also like Detect, the .git check SKIPS $HOME, compared by filesystem identity
+// rather than by string so a symlinked or firmlinked spelling cannot slip past.
+// A dotfiles repo checked out at the home directory is common, and without the
+// guard every markerless directory beneath it synthesised to $HOME — making the
+// whole home directory a single read-write root for the session, with every SSH
+// key, browser profile and credential file under it inside the boundary, and the
+// project the user was actually in no longer the unit of isolation.
+//
+// The guard blocks ASCENDING into $HOME, not naming it: a seed that IS $HOME
+// still returns $HOME, because an explicit pin must always succeed (issue #182)
+// and pointing plumb at your home directory is a declaration of intent. What it
+// removes is the silent escape.
 func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// Clean the seed before anything else. A synthesised root is stored as the
 	// session's workspace, and several tools boundary-check that string directly
@@ -429,10 +442,13 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// write. A root is not inside anything — it DEFINES the boundary — so there
 	// is no second file for it to be confused with, and Detect has always Cleaned
 	// its own return for the same reason.
+	homeInfo := homeFileInfo()
 	d := filepath.Clean(seedDir)
 	for {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return paths.Canonical(d)
+		if !sameDirAs(d, homeInfo) {
+			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+				return paths.Canonical(d)
+			}
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
