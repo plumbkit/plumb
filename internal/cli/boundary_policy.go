@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -108,6 +109,30 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 	ws := v.acquiredRoot
 	if ws == "" {
+		return nil
+	}
+	// A workspace root that is not absolute names no location, so no policy can
+	// be built from it. Returning nil here makes checkBoundary answer with
+	// UnattachedWorkspaceError — which is both the accurate description (nothing
+	// usable is pinned) and the actionable one ("call session_start with an
+	// absolute project root").
+	//
+	// This is the CHOKE POINT on purpose. Six paths can set acquiredRoot —
+	// session_start's re-pin, roots/list at initialize and on change, the serve
+	// proxy's cwd hint, the auto-attach seed, and synthetic re-attach on
+	// rehydrate. Guarding the re-pin alone was tried first and an independent
+	// review demonstrated the same brick still reachable through three of the
+	// others; guarding a fifth would have left the sixth. Every one of them ends
+	// up here, so the invariant holds however the root arrived.
+	//
+	// Without it the two halves of the daemon disagree: detection resolves a
+	// relative seed against the daemon's working directory and the pin SUCCEEDS,
+	// then NewPathPolicy drops the non-absolute root it produced, leaving a
+	// policy with no roots that refuses every path — including the workspace's
+	// own files — while the error names the workspace as "." and advises the
+	// re-pin that just happened. Refusing to build the policy at all turns a
+	// bricked session into one clear, correct sentence.
+	if !filepath.IsAbs(ws) {
 		return nil
 	}
 	roots := []tools.AllowedRoot{{Path: ws, Access: tools.AccessReadWrite, Label: "workspace"}}

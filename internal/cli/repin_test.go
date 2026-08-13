@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // mustGitDir makes dir a git-rooted project so workspacePool.Detect resolves it
@@ -63,6 +66,82 @@ func TestRepinWorkspace_RefusesARelativeWorkspace(t *testing.T) {
 	// is about the spelling and not a re-pin that has stopped working.
 	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("control failed — an absolute re-pin was refused: %v", err)
+	}
+}
+
+// TestBoundaryPolicy_RelativeRootNeverBricksTheSession is the second round of
+// the same defect, and the reason the invariant now lives at the policy rather
+// than at one pin.
+//
+// Refusing a relative workspace in repinWorkspaceFrom fixed the path the first
+// review demonstrated and MOVED the brick: an independent re-review showed it
+// still reachable through attachWorkspacePinFrom and attachSynthetic — i.e. via
+// roots/list at initialize and on change, the serve proxy's cwd hint, and
+// rehydratePin restoring a persisted markerless root. That last one is the
+// upgrade path from a version that ACCEPTED relative workspaces and persisted
+// them, so it is the likeliest of all to fire in the field.
+//
+// Guarding a fifth caller would have left the sixth. buildPathPolicy is where
+// every one of them converges, so the assertion is on the OBSERVABLE property —
+// a session never ends up unable to read its own workspace — rather than on any
+// particular pin path refusing.
+//
+// ONE path is driven here, and that is stated rather than dressed up. Earlier
+// drafts also drove attachWorkspace and repinWorkspace, and mutation testing
+// showed both were PASSENGERS: attachWorkspace needs a URI shape this harness
+// does not build so it never attached at all, and setting acquiredRoot directly
+// does not rebuild the policy. Each "passed" under the mutation that removes the
+// guard. rehydrate is the one that reproduces end to end — and it is also the
+// one most likely to fire in the field, being the upgrade path from a version
+// that accepted relative workspaces and persisted them. A subtest that cannot
+// fail is worse than no subtest, because it is counted as coverage.
+func TestBoundaryPolicy_RelativeRootNeverBricksTheSession(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+
+	for _, tc := range []struct {
+		name   string
+		attach func(s *connSession, rel string)
+	}{
+		{"synthetic re-attach on rehydrate", func(s *connSession, rel string) {
+			s.attachSynthetic(context.Background(), rel, sessionstate.PinSourceRoots, pinTriggerRestore)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A MARKERLESS relative directory, named the way a client actually
+			// sends one. It has to be markerless: with a .git present, Detect
+			// resolves and returns an absolute root, so the case never arises and
+			// the subtest could not fail. An earlier draft used "." and two of the
+			// three subtests were dead weight — one never attached at all.
+			base := freshTempDir(t)
+			proj := filepath.Join(base, "proj")
+			if err := os.MkdirAll(proj, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			inside := filepath.Join(proj, "main.go")
+			if err := os.WriteFile(inside, []byte("package main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// Run where the relative name resolves, so a daemon that anchored to
+			// its own cwd would produce a plausible-looking root rather than an
+			// obvious error — which is the failure under test.
+			t.Chdir(base)
+
+			s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+			defer s.close()
+			tc.attach(s, "proj")
+
+			err := s.checkBoundary(inside, tools.AccessRead)
+			if err == nil {
+				return // attached properly, or refused the relative root before pinning
+			}
+			// The session must never be left pinned to something that refuses its
+			// OWN files. If a root was accepted at all, it has to work.
+			if strings.Contains(err.Error(), "is in a different project") {
+				t.Errorf("BRICKED: the session pinned a relative root and then refused a file "+
+					"inside its own workspace:\n%v", err)
+			}
+		})
 	}
 }
 
