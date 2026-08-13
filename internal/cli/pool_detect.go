@@ -384,19 +384,28 @@ func (p *workspacePool) lspLanguageForRoot(dir string) string {
 // still a root, and issue #182's contract is explicit that an explicit pin must
 // not behave differently for want of a marker.
 //
-// Also like Detect, the .git check SKIPS $HOME, compared by filesystem identity
-// rather than by string so a symlinked or firmlinked spelling cannot slip past.
-// A dotfiles repo checked out at the home directory is common, and without the
-// guard every markerless directory beneath it synthesised to $HOME — making the
-// whole home directory a single read-write root for the session, with every SSH
-// key, browser profile and credential file under it inside the boundary, and the
-// project the user was actually in no longer the unit of isolation.
+// The home directory is special-cased three ways, compared by filesystem
+// identity (not string) so a symlinked or firmlinked spelling cannot slip past:
 //
-// The guard blocks ASCENDING into $HOME, not naming it: a seed that IS $HOME
-// still returns $HOME, because an explicit pin must always succeed (issue #182)
-// and pointing plumb at your home directory is a declaration of intent. What it
-// removes is the silent escape.
-func (p *workspacePool) SynthesiseRoot(seedDir string) string {
+//   - The walk never ascends INTO $HOME. A dotfiles repo checked out at the
+//     home directory is common, and without the guard every markerless
+//     directory beneath it synthesised to $HOME — making the whole home
+//     directory a single read-write root for the session, with every SSH key,
+//     browser profile and credential file under it inside the boundary.
+//   - Reaching $HOME STOPS the walk (fall back to the seed). Merely skipping
+//     the .git check there and continuing upward meant a .git ABOVE the home
+//     directory synthesised $HOME's PARENT — a root strictly WIDER than the
+//     escape the guard exists to block.
+//   - A seed that IS $HOME is honoured only when the caller marks it
+//     explicit. explicit means the seed is a workspace the caller genuinely
+//     declared — a session_start workspace arg, live or replayed (issue #182:
+//     an explicit pin must always succeed, and pointing plumb at your home
+//     directory is a declaration of intent). An incidental seed — a tool-path
+//     argument, a client-reported root, a persisted pin that never came from
+//     session_start — is NOT a declaration: one read_file of ~/.zshrc must
+//     not pin the entire home directory. For those callers a $HOME seed
+//     returns "" (refused), and the session stays unattached.
+func (p *workspacePool) SynthesiseRoot(seedDir string, explicit bool) string {
 	// Clean the seed before anything else. A synthesised root is stored as the
 	// session's workspace, and several tools boundary-check that string directly
 	// rather than a path derived from it, so a root carrying an unresolved ".."
@@ -413,11 +422,21 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	// its own return for the same reason.
 	homeInfo := homeDirInfos()
 	d := filepath.Clean(seedDir)
+	if sameDirAs(d, homeInfo) {
+		if !explicit {
+			return ""
+		}
+		return paths.Canonical(d)
+	}
 	for {
-		if !sameDirAs(d, homeInfo) {
-			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-				return paths.Canonical(d)
-			}
+		if sameDirAs(d, homeInfo) {
+			// Reached $HOME ascending: stop. Never consult its .git, never walk
+			// above it — a root at or above the home directory can only ever be
+			// wider than the boundary this guard exists to keep.
+			return paths.Canonical(filepath.Clean(seedDir))
+		}
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return paths.Canonical(d)
 		}
 		parent := filepath.Dir(d)
 		if parent == d {

@@ -35,7 +35,7 @@ func TestSynthesiseRoot_ReturnsACanonicalPath(t *testing.T) {
 		{"already canonical", projRoot},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := pool.SynthesiseRoot(tc.seed)
+			got := pool.SynthesiseRoot(tc.seed, false)
 			if got != filepath.Clean(got) {
 				t.Errorf("SynthesiseRoot(%q) = %q, which is not canonical (Clean = %q)",
 					tc.seed, got, filepath.Clean(got))
@@ -79,7 +79,7 @@ func TestSynthesiseRoot_DoesNotEscapeToHome(t *testing.T) {
 		t.Fatalf("fixture: no .git at the fake $HOME: %v", err)
 	}
 
-	got := (&workspacePool{}).SynthesiseRoot(seed)
+	got := (&workspacePool{}).SynthesiseRoot(seed, false)
 	if sameDirAs(got, homeDirInfos()) {
 		t.Errorf("SynthesiseRoot(%q) escaped to $HOME (%q); a dotfiles repo at the home "+
 			"directory must not become the workspace for everything beneath it", seed, got)
@@ -89,19 +89,57 @@ func TestSynthesiseRoot_DoesNotEscapeToHome(t *testing.T) {
 	}
 }
 
-// TestSynthesiseRoot_HomeAsTheSeedIsStillHonoured keeps the guard from
-// overreaching. Refusing to ASCEND into $HOME is not the same as refusing $HOME
-// when the caller named it: an explicit session_start pin must always succeed
+// TestSynthesiseRoot_HomeAsTheSeedNeedsAnExplicitDeclaration is the two sides
+// of the $HOME-seed rule.
+//
+// EXPLICIT honours it: an explicit session_start pin must always succeed
 // (issue #182's contract), and a user who points plumb at their home directory
-// has declared that intent. Only the silent upward escape is blocked.
-func TestSynthesiseRoot_HomeAsTheSeedIsStillHonoured(t *testing.T) {
+// has declared that intent.
+//
+// Non-explicit refuses it: the first cut of this guard exempted any seed whose
+// STRING was $HOME, but the seed reaching SynthesiseRoot is fed by
+// seedPathFromArgs — uri / file_path / path — so a single read_file of
+// ~/.zshrc seeded $HOME and pinned the entire home directory. Reading a
+// dotfile is not a declaration of intent; only the caller's stated origin is.
+func TestSynthesiseRoot_HomeAsTheSeedNeedsAnExplicitDeclaration(t *testing.T) {
 	home := freshTempDir(t) // see the GOTMPDIR note above
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	mustMkdir(t, filepath.Join(home, ".git"))
 
-	if got, want := (&workspacePool{}).SynthesiseRoot(home), paths.Canonical(home); got != want {
-		t.Errorf("SynthesiseRoot(%q) = %q, want %q — an explicitly named root must be honoured", home, got, want)
+	if got, want := (&workspacePool{}).SynthesiseRoot(home, true), paths.Canonical(home); got != want {
+		t.Errorf("SynthesiseRoot(%q, explicit) = %q, want %q — an explicitly named root must be honoured", home, got, want)
+	}
+	if got := (&workspacePool{}).SynthesiseRoot(home, false); got != "" {
+		t.Errorf("SynthesiseRoot(%q, non-explicit) = %q, want refusal — an incidental seed (a tool path, a client root, a replayed non-explicit pin) must not name the home directory as the workspace", home, got)
+	}
+	// The refusal is about $HOME's identity, not its spelling.
+	if got := (&workspacePool{}).SynthesiseRoot(home+string(filepath.Separator), false); got != "" {
+		t.Errorf("SynthesiseRoot(%q, non-explicit) = %q, want refusal — a trailing-slash spelling must not slip past", home+string(filepath.Separator), got)
+	}
+}
+
+// TestSynthesiseRoot_ReachingHomeStopsTheWalk: the guard must TERMINATE the
+// ascent at $HOME, not merely skip its .git check and keep climbing. With a
+// .git ABOVE the home directory the skip-and-continue shape returned $HOME's
+// PARENT — a root strictly WIDER than the $HOME escape the guard was built to
+// block. Reaching $HOME falls back to the seed, whatever sits above.
+func TestSynthesiseRoot_ReachingHomeStopsTheWalk(t *testing.T) {
+	base := freshTempDir(t)                   // see the GOTMPDIR note above
+	mustMkdir(t, filepath.Join(base, ".git")) // a repo ABOVE the home directory
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	seed := filepath.Join(home, "scratch", "markerless")
+	mustMkdir(t, seed)
+
+	got := (&workspacePool{}).SynthesiseRoot(seed, false)
+	if got == paths.Canonical(base) || sameDirAs(got, homeDirInfos()) {
+		t.Fatalf("SynthesiseRoot(%q) = %q — the walk climbed to or past $HOME; reaching the home directory must stop it", seed, got)
+	}
+	if want := paths.Canonical(seed); got != want {
+		t.Errorf("SynthesiseRoot(%q) = %q, want the seed %q", seed, got, want)
 	}
 }
 
@@ -137,7 +175,7 @@ func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
 		t.Fatal("fixture: alias and home are the same string")
 	}
 
-	got := (&workspacePool{}).SynthesiseRoot(seed)
+	got := (&workspacePool{}).SynthesiseRoot(seed, false)
 	if sameDirAs(got, homeDirInfos()) {
 		t.Errorf("SynthesiseRoot(%q) escaped to $HOME (%q) — $HOME was named through a "+
 			"symlink, so a string compare missed it; the guard must compare by "+
@@ -159,7 +197,7 @@ func TestSynthesiseRoot_GitBelowHomeStillWins(t *testing.T) {
 	seed := filepath.Join(proj, "internal", "deep")
 	mustMkdir(t, seed)
 
-	if got, want := (&workspacePool{}).SynthesiseRoot(seed), paths.Canonical(proj); got != want {
+	if got, want := (&workspacePool{}).SynthesiseRoot(seed, false), paths.Canonical(proj); got != want {
 		t.Errorf("SynthesiseRoot(%q) = %q, want the project root %q", seed, got, want)
 	}
 }
@@ -174,7 +212,7 @@ func TestPathPolicy_AdmitsItsOwnRoot(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(projRoot, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ws := (&workspacePool{}).SynthesiseRoot(filepath.Join(projRoot, "sub") + "/..")
+	ws := (&workspacePool{}).SynthesiseRoot(filepath.Join(projRoot, "sub")+"/..", false)
 
 	pol := tools.NewPathPolicy(ws, []tools.AllowedRoot{
 		{Path: ws, Access: tools.AccessReadWrite, Label: "workspace"},
