@@ -151,7 +151,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "git.allow_destructive", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Gate reset/clean/checkout/restore/rebase/revert (each call also needs confirm).",
+		Description: "Gate reset/clean/checkout/restore/rebase/revert/cherry-pick (each call also needs confirm).",
 	},
 	{
 		Key: "git.allow_push", Type: FieldBool, ReloadTier: ReloadLive,

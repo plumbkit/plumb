@@ -256,8 +256,8 @@ type GitConfig struct {
 	// create, tag create, stash push/pop). Default true.
 	AllowWrites bool `toml:"allow_writes"`
 	// AllowDestructive gates the destructive tier (reset, clean, checkout,
-	// restore, rebase, revert, branch/tag delete, stash drop/clear). Each call
-	// also requires confirm:true. Default false.
+	// restore, rebase, revert, cherry-pick, branch/tag delete, stash
+	// drop/clear). Each call also requires confirm:true. Default false.
 	AllowDestructive bool `toml:"allow_destructive"`
 	// AllowPush gates the network tier (push, fetch, pull). Each call also
 	// requires confirm:true. Default false.

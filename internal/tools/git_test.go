@@ -86,6 +86,16 @@ func TestClassifyGit(t *testing.T) {
 		{"reset", []string{"--hard"}, tierDestructive},
 		{"clean", []string{"-fd"}, tierDestructive},
 		{"rebase", []string{"main"}, tierDestructive},
+		// cherry-pick is flat-destructive: the bare form and every state flag
+		// land at the same tier, unlike the arg-dependent verbs above.
+		{"cherry-pick", []string{"abc1234"}, tierDestructive},
+		{"cherry-pick", nil, tierDestructive},
+		{"cherry-pick", []string{"--continue"}, tierDestructive},
+		{"cherry-pick", []string{"--abort"}, tierDestructive},
+		{"cherry-pick", []string{"--quit"}, tierDestructive},
+		{"cherry-pick", []string{"--skip"}, tierDestructive},
+		{"cherry-pick", []string{"-n", "abc1234"}, tierDestructive},
+		{"cherry-pick", []string{"-x", "abc1234^..def5678"}, tierDestructive},
 		{"push", nil, tierNetwork},
 		{"fetch", nil, tierNetwork},
 		{"pull", nil, tierNetwork},
@@ -242,6 +252,76 @@ func TestGit_WriteBlockedWhenDisabled(t *testing.T) {
 	_, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "x"})
 	if err == nil || !strings.Contains(err.Error(), "write operations are disabled") {
 		t.Fatalf("expected write-disabled error, got %v", err)
+	}
+}
+
+// TestGit_CherryPickGatedAsDestructive proves cherry-pick reaches the
+// destructive gate rather than any other tier, through Execute — the path a
+// caller actually takes. Both refusals discriminate: were cherry-pick
+// classified as a write, AllowWrites:true would let case 1 through; were it
+// missing from classifyGit altogether it would fall to the default reject arm
+// and both cases would fail with "not permitted" instead. The final case is the
+// control — with the tier enabled and confirmed, the gate stops objecting and
+// the call proceeds to the repository resolution it has no workspace for.
+func TestGit_CherryPickGatedAsDestructive(t *testing.T) {
+	cases := []struct {
+		name    string
+		policy  GitPolicy
+		confirm bool
+		wantErr string
+	}{
+		{
+			name:    "refused without allow_destructive",
+			policy:  GitPolicy{AllowWrites: true},
+			confirm: true,
+			wantErr: "destructive operations are disabled",
+		},
+		{
+			name:    "refused without confirm",
+			policy:  GitPolicy{AllowWrites: true, AllowDestructive: true},
+			confirm: false,
+			wantErr: "requires confirm",
+		},
+		{
+			name:    "passes the gate when enabled and confirmed",
+			policy:  GitPolicy{AllowWrites: true, AllowDestructive: true},
+			confirm: true,
+			wantErr: "no repository resolved",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tool := NewGit(WriteDeps{}, func() GitPolicy { return c.policy })
+			_, err := callGit(t, tool, map[string]any{
+				"subcommand": "cherry-pick",
+				"args":       []string{"abc1234"},
+				"confirm":    c.confirm,
+			})
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("cherry-pick: want error containing %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestGit_CherryPickStateFlagsGatedAsDestructive pins the state-machine flags to
+// the same gate as the bare form. They are the forms an agent reaches for while
+// resolving a conflict, and each one moves HEAD or discards work, so an
+// arg-dependent classification that let one of them through at a lower tier
+// would be the exact failure this flat classification exists to prevent.
+func TestGit_CherryPickStateFlagsGatedAsDestructive(t *testing.T) {
+	for _, flag := range []string{"--continue", "--abort", "--quit", "--skip"} {
+		t.Run(flag, func(t *testing.T) {
+			tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+			_, err := callGit(t, tool, map[string]any{
+				"subcommand": "cherry-pick",
+				"args":       []string{flag},
+				"confirm":    true,
+			})
+			if err == nil || !strings.Contains(err.Error(), "destructive operations are disabled") {
+				t.Fatalf("cherry-pick %s: want destructive-tier refusal, got %v", flag, err)
+			}
+		})
 	}
 }
 

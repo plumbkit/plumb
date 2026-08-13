@@ -241,7 +241,7 @@ and network calls additionally require `confirm: true` per call.
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
 | `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `branch`/`tag` create, `stash` push/pop. |
-| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
+| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |

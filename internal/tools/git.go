@@ -18,7 +18,7 @@ var gitSchema = json.RawMessage(`{
   "properties": {
     "subcommand": {
       "type": "string",
-      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
+      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, cherry-pick, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
     },
     "args": {
       "type": "array",
@@ -113,8 +113,8 @@ func (t *Git) Description() string {
 	return "Run git through one tiered, policy-gated tool (no shell). Read subcommands (status, log, diff, " +
 		"show, blame, shortlog, branch/tag/stash listing) always run. " +
 		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) need [git] allow_writes (default on). " +
-		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) " +
-		"need allow_destructive AND confirm:true. " +
+		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, cherry-pick, branch/tag delete, " +
+		"stash drop) need allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) need allow_push AND confirm:true; force-pushing a protected branch " +
 		"(via -f/--force or a +refspec) and using an ad-hoc URL/remote (incl. any <transport>:: helper) on any network " +
 		"subcommand are always refused — and a force push must name its destination branch (a bare -f or +HEAD that " +

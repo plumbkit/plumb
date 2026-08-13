@@ -13,7 +13,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 |---|---|---|
 | read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore` | always allowed |
 | write | `add`, `commit`, `mv` | `[git] allow_writes` |
-| destructive | `reset`, `clean`, `rebase`, `revert` | `[git] allow_destructive` **and** a confirmation |
+| destructive | `reset`, `clean`, `rebase`, `revert`, `cherry-pick` | `[git] allow_destructive` **and** a confirmation |
 | network | `push`, `fetch`, `pull` | `[git] allow_push` **and** a confirmation |
 
 `rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
