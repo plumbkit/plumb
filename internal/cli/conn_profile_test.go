@@ -7,6 +7,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -291,5 +292,34 @@ func TestToolProfileClassification(t *testing.T) {
 		if !registered[ctor] {
 			t.Errorf("lean constructor %s is no longer registered in registerAllTools", ctor)
 		}
+	}
+}
+
+// TestAlwaysLoad_PinsTheMailboxPair asserts the real registerHooks wiring, not a
+// restatement of it: the pin predicate the daemon installs must cover both
+// halves of the mailbox.
+//
+// The pair is not lean and not bootstrap, so before this wiring both were
+// deferred behind an MCP tool-search round-trip on a pinning client — and an
+// agent that had just been told by leave_note's own result to call
+// check_messages could not find it. The long tail must stay deferred, which is
+// what the negative case guards: this is a targeted pin, not an "always load
+// everything" escape hatch.
+func TestAlwaysLoad_PinsTheMailboxPair(t *testing.T) {
+	srv := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	(&connSession{}).registerHooks(srv)
+	if srv.AlwaysLoad == nil {
+		t.Fatal("registerHooks left AlwaysLoad unset — nothing is pinned at all")
+	}
+	for _, name := range []string{"leave_note", "check_messages"} {
+		if !srv.AlwaysLoad(name) {
+			t.Errorf("%q is not pinned; the mailbox halves must stay together in the client's context", name)
+		}
+	}
+	if !srv.AlwaysLoad("session_start") {
+		t.Error("session_start (bootstrap) must stay pinned")
+	}
+	if srv.AlwaysLoad("topology_routes") {
+		t.Error("topology_routes is pinned — the long tail must stay deferred, or the pin saves nothing")
 	}
 }

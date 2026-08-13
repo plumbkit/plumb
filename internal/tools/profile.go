@@ -79,6 +79,55 @@ var BootstrapTools = map[string]bool{
 // tools (see BootstrapTools).
 func IsBootstrap(name string) bool { return BootstrapTools[name] }
 
+// MailboxTools is the agent-to-agent mailbox PAIR. It is deliberately not part
+// of LeanTools — a collaboration feature most sessions never use has no claim on
+// a lean client's advertised surface — but both halves are pinned into the
+// context of a client that supports pinning (mcp.Server.AlwaysLoad, see
+// conn_register.go).
+//
+// WHY PIN A NON-LEAN PAIR. These are the only two tools in the registry whose
+// own OUTPUT instructs the agent to call the other one: leave_note's reply tells
+// the sender to read its mailbox, and check_messages' reply tells the reader to
+// answer with leave_note. For an ordinary deferred tool the cost of deferral is
+// one tool-search round-trip; for a half-finished exchange it is an instruction
+// the agent has already been given and cannot follow. A real agent hit exactly
+// that: it had leave_note, was told to call check_messages, and could not find
+// it.
+//
+// THE PAIRING IS THE POINT. Add or remove both together — the asymmetry (send
+// reachable, receive not) IS the defect, so a one-sided edit here recreates it.
+// TestMailboxToolsArePairedAndNonLean pins that.
+//
+// Pinning does NOT make the pair reachable everywhere: a client that filters
+// plumb's tools in its own config (clientcaps.ClientSideAllowlist) removes both
+// before a call could reach plumb, and plumb cannot observe that. Prose that
+// names either tool must therefore still consult leanNamingOnly.
+var MailboxTools = map[string]bool{
+	"leave_note":     true,
+	"check_messages": true,
+}
+
+// IsMailbox reports whether name is one of the mailbox pair (see MailboxTools).
+func IsMailbox(name string) bool { return MailboxTools[name] }
+
+// leanNamingOnly reports whether plumb-authored prose for this connection must
+// confine itself to the lean tool set. It is the ONE predicate every such
+// decision consults; do not re-derive it from a profile check alone.
+//
+// Two independent reasons, and the second is invisible to the first: the SERVER
+// may have hidden the non-lean tools (the lean profile), or the CLIENT may have
+// filtered them out in its own config, which plumb cannot see at all — for a
+// --lean Codex or Gemini CLI the resolved profile is "full" and the tools are
+// still gone. Prose that keyed only off the profile therefore steered those
+// users at tools their own config had removed.
+//
+// leanProfile is passed rather than resolved here because each caller reaches
+// its profile differently (session_start via its own accessor, the collab tools
+// via CollabDeps); the rule they must agree on is this OR, not the plumbing.
+func leanNamingOnly(leanProfile bool, clientNameFn func() string) bool {
+	return leanProfile || clientSideAllowlistCapable(clientNameFn)
+}
+
 // LeanToolNames returns the sorted, deduplicated UNION of LeanTools and
 // BootstrapTools. It is the single source of truth for a CLIENT-SIDE tool
 // allowlist — the list `plumb setup <client> --lean` writes into the client's
@@ -116,11 +165,13 @@ func LeanToolNames() []string {
 
 // IsLean reports whether name is advertised under the lean profile.
 //
-// Double duty: this same set is also the "always loaded" set wired into
-// mcp.Server.AlwaysLoad (see conn_register.go) — the tools plumb pins into a
-// Claude Code client's context so MCP tool search never defers them behind a
-// ToolSearch round-trip. Editing LeanTools moves BOTH behaviours; that is
-// intentional ("the tools that matter most" is one list, not two).
+// Double duty: this same set is also the backbone of the "always loaded" set
+// wired into mcp.Server.AlwaysLoad (see conn_register.go) — the tools plumb pins
+// into a Claude Code client's context so MCP tool search never defers them
+// behind a ToolSearch round-trip. Editing LeanTools moves BOTH behaviours; that
+// is intentional ("the tools that matter most" is one list, not two). The pin
+// set is that list plus BootstrapTools and MailboxTools, each of which states
+// its own reason for being pinned without being advertised-under-lean.
 func IsLean(name string) bool { return LeanTools[name] }
 
 // ProfileNote is the terse session_start/orientation line reporting the
