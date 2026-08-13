@@ -866,8 +866,8 @@
   surfacing the same messages themselves, which was never true of `leave_note`:
   it holds no `Inbox`, claims no row and calls no `RenderMessages`. It surfaced
   nothing, so a reply waiting for the sender was skipped on precisely the call an
-  exchange makes next — sending on to the next peer. In a fan-out that repeats
-  for every peer and the reply is never rendered at all. It is no longer silent.
+  exchange makes next — sending on to the next peer. In a fan-out that repeats for
+  every peer, and the reply is never rendered at all. It is no longer silent.
 
   Separately, `check_messages` is not in the lean set, so on a pinning client it
   sat behind an MCP tool-search round-trip while `leave_note` was in hand — and
