@@ -1,10 +1,10 @@
 # Waking an idle agent that has mail
 
-Plumb's mailbox delivers by polling only. Every path — the block appended to a
-tool result, `check_messages`, `session_start` — needs the recipient to make a
-call. An agent that has finished its turn and is waiting on its human makes no
-calls at all, so no amount of server-side cleverness reaches it. The daemon
-cannot push over MCP; that is a property of the transport, not a gap in plumb.
+Plumb's mailbox delivers by polling. Every path — the block appended to a tool
+result, `check_messages`, `session_start` — needs the recipient to make a call.
+An agent that has finished its turn and is waiting on its human makes no calls
+at all, so no amount of server-side cleverness reaches it. The daemon cannot
+push over MCP; that is a property of the transport, not a gap in plumb.
 
 The client can close it. A Claude Code **Stop hook** fires when the agent
 finishes responding, and a Stop hook may keep the turn going. So the shape is:
@@ -13,57 +13,116 @@ with that as the instruction instead of going quiet.
 
 Everything about the Claude Code contract below was verified against
 <https://code.claude.com/docs/en/hooks> on 2026-08-13. Everything about plumb
-was verified against the source in this repository. Where a piece is missing,
-this document says so rather than guessing.
+was verified against the source in this repository.
 
-## What plumb does not give you
+## The two commands this needs
 
-**There is no plumb CLI subcommand that answers "is there mail for session X".**
-`plumb sessions` lists live sessions (id, name, language, folder, adapter, pid,
-start time) and nothing about their mailboxes; it has one flag, `--all`, and no
-`--json`. No other subcommand touches `collab.db`. Do not write a hook that
-shells out to a `plumb mail`-style command — it does not exist.
+**`plumb mail`** answers the question from outside a session:
 
-What would make this recipe a one-liner is a read-only, non-claiming probe:
-something like `plumb mail --session <name> --json`, exiting 0 when the mailbox
-is empty and 1 when it is not, reading the same rows `PendingNotes` reads
-(`internal/collab/store.go`) without touching the `delivered_at` watermark. The
-non-claiming part is the whole point — see *Never claim from the hook* below.
+    plumb mail --external-id "$session_id" --json
+    → {"session":"quiet-mesa","workspace":"/repo","count":2,"ages_seconds":[240,30]}
 
-Until that exists, a hook has to do two things itself: work out which plumb
-session it is, and query `collab.db` directly.
+It is strictly read-only and **never claims**: the messages stay undelivered and
+reach the agent through `check_messages` as usual. It reports a count and the
+ages of what is waiting — never bodies, senders or conversation ids, because a
+hook's question is "is there something", not "what is it". Exit status is 0
+whether or not mail is waiting and non-zero only on error, so read the count
+rather than the exit code.
 
-## The Stop hook contract
+It names one session three ways: `--session <name>`, `--external-id <id>`, or
+`--workspace <dir>`. Which one you can use is the other half of the problem.
 
-Verified facts, and the ones a working hook depends on:
+**`session_start`** takes a `session_id` parameter, and plumb stores it on the
+session as `external_id`. That is what turns a client's own conversation id into
+a selector. Nothing populates it automatically, so the setup below does.
 
-- The event name is `Stop`. It runs when the main agent has finished
-  responding. It does **not** run on a user interrupt, and an API error fires
-  `StopFailure` instead.
+## Part 1 — bind the conversation to the plumb session
+
+Without this, a hook knows its conversation id and its working directory, and
+plumb knows neither. `--workspace` is the fallback, and it is only unambiguous
+when one live session is pinned to the directory; where several agents share a
+repository — which is exactly when peers message each other — it cannot pick,
+and refuses rather than waking the wrong agent.
+
+A `SessionStart` hook can put the id in front of the agent. `SessionStart`
+returns `hookSpecificOutput.additionalContext`, a string added to the agent's
+context before the first prompt; plain stdout also reaches the agent for this
+event, so a context-only hook needs no JSON at all.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/you/.claude/hooks/plumb-session-link.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The matcher is omitted so it fires on every start reason — `startup`, `resume`,
+`clear`, `compact` and `fork` all rebuild the context this text belongs in. Use
+an absolute path, or `${CLAUDE_PROJECT_DIR}/.claude/hooks/…` for a hook
+committed with a project; those placeholders are the documented way to reference
+a script independently of the working directory.
+
+`plumb-session-link.sh`:
+
+```bash
+#!/usr/bin/env bash
+# SessionStart hook: state this conversation's id, so the agent can record it
+# on its plumb session. Plain stdout reaches the agent for this event.
+set -euo pipefail
+sid=$(jq -r '.session_id // empty')
+[[ -n "$sid" ]] || exit 0
+printf 'plumb session linkage: this conversation has id %s. The plumb session_start tool records it via its session_id parameter, which is what lets tooling map this conversation to its plumb session: session_start({session_id: "%s"}).\n' "$sid" "$sid"
+```
+
+Note the phrasing. The docs are explicit that `additionalContext` should read as
+factual statements rather than out-of-band system instructions — text framed as
+a command can trip the agent's prompt-injection defences and be surfaced to the
+user instead of acted on. So the hook states the id and what the parameter is
+for, and the standing instruction to pass it belongs in `CLAUDE.md`:
+
+> When calling plumb's `session_start`, pass the conversation id reported by the
+> SessionStart hook as `session_id`. It links this conversation to its plumb
+> session so `plumb mail` can find it.
+
+If you would rather not depend on the agent making that call, skip Part 1 and
+accept `--workspace`: it works whenever one session is pinned to the directory,
+and reports ambiguity rather than guessing when several are.
+
+## Part 2 — the Stop hook
+
+Verified facts the hook depends on:
+
+- The event is `Stop`. It runs when the main agent has finished responding, does
+  **not** run on a user interrupt, and an API error fires `StopFailure` instead.
 - `Stop` has **no matcher support** — it always fires. Omit `matcher`.
-- Input arrives on stdin as JSON. Beyond the common fields (`session_id`,
-  `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`), Stop hooks
-  receive `stop_hook_active`, `last_assistant_message`, `background_tasks`, and
+- Input arrives on stdin as JSON: the common fields (`session_id`,
+  `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`) plus
+  `stop_hook_active`, `last_assistant_message`, `background_tasks` and
   `session_crons`.
 - `stop_hook_active` is `true` when Claude Code is **already continuing as a
-  result of a stop hook**. This is the recursion guard, and the docs are
-  explicit that you must check it (or process the transcript) to avoid blocking
-  on a condition that never resolves.
-- Independently of your guard, **Claude Code overrides the hook and ends the
-  turn after 8 consecutive blocks**. That is the backstop, not the design.
-- To keep the turn going, return one of:
-  - `{"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": "…"}}`
-    — non-error feedback. The conversation continues so the agent can act on
-    it; the transcript labels it `Stop hook feedback` and no hook-error
-    notification is shown. This is the right shape here: unread mail is the
-    hook working as designed.
-  - `{"decision": "block", "reason": "…"}` — `reason` is required and tells the
-    agent why it should continue. It carries the same loop protections, but
-    presents as a hook error.
-  - Exiting 2 with a message on stderr routes the same way as `reason`.
+  result of a stop hook**. This is the recursion guard, and the docs say to
+  check it (or process the transcript) to avoid blocking on a condition that
+  never resolves.
+- Independently, **Claude Code ends the turn after 8 consecutive blocks**. That
+  is the backstop, not the design.
+- To keep the turn going, return `hookSpecificOutput.additionalContext` with
+  `hookEventName: "Stop"` — non-error feedback, shown in the transcript as
+  `Stop hook feedback` with no hook-error notification. `{"decision": "block",
+  "reason": "…"}` does the same with the same loop protections but presents as
+  an error, and exiting 2 with stderr routes like `reason`. Unread mail is the
+  hook working as designed, so `additionalContext` is the right shape.
 - Exit 0 with no output allows the stop.
-
-### Settings
 
 Hooks live in `~/.claude/settings.json` (all your projects),
 `.claude/settings.json` (one project, committable), or
@@ -77,7 +136,7 @@ Hooks live in `~/.claude/settings.json` (all your projects),
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/plumb-mail-wake.sh",
+            "command": "/Users/you/.claude/hooks/plumb-mail-wake.sh",
             "timeout": 10
           }
         ]
@@ -88,110 +147,42 @@ Hooks live in `~/.claude/settings.json` (all your projects),
 ```
 
 `timeout` defaults to 600 seconds for command hooks, which is far too long for
-something on the end-of-turn path; set it low. The handler runs in the current
-directory with Claude Code's environment.
+the end-of-turn path; set it low.
 
-## Identifying the plumb session
-
-This is the hard half, and the reason the recipe below is conservative.
-
-Plumb writes one JSON file per session under `<data dir>/plumb/sessions/`:
-`~/Library/Application Support/plumb/sessions/` on macOS,
-`$XDG_DATA_HOME/plumb/sessions/` (default `~/.local/share/plumb/sessions/`)
-elsewhere. The fields that matter are `name` (the mailbox address), `folder`
-(the pinned workspace) and `ended_at`.
-
-**`ended_at` is serialised even when the session is live**, as the zero time
-`"0001-01-01T00:00:00Z"`. A naive truthiness test on that field reports every
-session as ended. Compare against the zero value, or against a year prefix.
-
-There is no field that maps a Claude Code conversation to a plumb session by
-default. `external_id` would do it — it holds whatever the agent passed as
-`session_start`'s `session_id` — but nothing sets it automatically, so in
-practice it is empty.
-
-That leaves two options:
-
-1. **Match on `folder` == the hook's `cwd`, and require exactly one match.**
-   Simple, no cooperation needed, and correct for the common case of one agent
-   per repository. When several live sessions share a folder — which is normal
-   when subagents are running — it is ambiguous, and the hook must allow the
-   stop rather than guess. Waking the wrong agent is worse than not waking.
-2. **Close the loop with a `SessionStart` hook.** `SessionStart` hooks can
-   return `hookSpecificOutput.additionalContext`, which lands in the agent's
-   context before the first prompt. Have it inject the Claude Code
-   `session_id` and an instruction to call
-   `session_start({session_id: "<that value>"})`. Plumb persists it as
-   `external_id`, and the Stop hook can then match exactly. This is reliable
-   but depends on the agent actually making that call.
-
-## Never claim from the hook
-
-Claiming is what marks a message delivered, and plumb guarantees exactly-once
-delivery by routing every reader through the same claim. A hook that ran the
-claiming query would consume the message outside the agent's context: the
-watermark would say delivered while the agent had never seen the text.
-
-So the hook **counts** and never updates, and its feedback must not paste the
-message body either. Two reasons: the body stays unclaimed and arrives through
-a real delivery path, where it is correctly labelled as another agent's
-unverified claim; and hook feedback that carries a peer's free text is a
-straight injection channel into your agent's instructions.
-
-Tell the agent that mail is waiting and to call `check_messages`. Nothing more.
-
-## The recipe
-
-`~/.claude/hooks/plumb-mail-wake.sh`, `chmod +x`. Needs `jq` and `sqlite3`.
+`plumb-mail-wake.sh`, `chmod +x`. Needs `jq`, and `plumb` on the `PATH` the hook
+inherits from Claude Code.
 
 ```bash
 #!/usr/bin/env bash
 # Stop hook: keep the turn alive when a plumb peer has written to this session.
-# Counts unread mail; never claims it. Allows the stop on any ambiguity.
+# Asks `plumb mail`, which never claims. Allows the stop on any ambiguity.
 set -euo pipefail
 
 allow() { exit 0; }   # exit 0 with no output = let the turn end
 
 input=$(cat)
-[[ "$(jq -r '.stop_hook_active // false' <<<"$input")" == "true" ]] && allow
-cwd=$(jq -r '.cwd // empty' <<<"$input")
-[[ -n "$cwd" ]] || allow
-
-sessions="${XDG_DATA_HOME:-}"
-if [[ -z "$sessions" ]]; then
-  case "$(uname -s)" in
-    Darwin) sessions="$HOME/Library/Application Support" ;;
-    *)      sessions="$HOME/.local/share" ;;
-  esac
+if [[ "$(jq -r '.stop_hook_active // false' <<<"$input")" == "true" ]]; then
+  allow                                  # already continuing because of a hook
 fi
-sessions="$sessions/plumb/sessions"
-[[ -d "$sessions" ]] || allow
 
-# Live sessions pinned to this directory. ended_at is present-but-zero while
-# live, so test the zero value, not emptiness.
-mapfile -t names < <(
-  jq -r --arg cwd "$cwd" '
-    select((.ended_at // "0001-01-01T00:00:00Z") | startswith("0001-01-01"))
-    | select(.folder == $cwd) | .name // empty
-  ' "$sessions"/*.json 2>/dev/null | sort -u
-)
-[[ ${#names[@]} -eq 1 ]] || allow   # none, or ambiguous: do not guess
+sid=$(jq -r '.session_id // empty' <<<"$input")
+cwd=$(jq -r '.cwd // empty' <<<"$input")
 
-db="$cwd/.plumb/collab.db"
-[[ -f "$db" ]] || allow             # created lazily; absent means never used
+# Exact first, directory second. Each failure mode - no linkage, no session,
+# several sessions in one directory - is a non-zero exit, and falls through.
+report=""
+if [[ -n "$sid" ]]; then
+  report=$(plumb mail --external-id "$sid" --json 2>/dev/null) || report=""
+fi
+if [[ -z "$report" && -n "$cwd" ]]; then
+  report=$(plumb mail --workspace "$cwd" --json 2>/dev/null) || report=""
+fi
+[[ -n "$report" ]] || allow
 
-now_ns=$(( $(date +%s) * 1000000000 ))
-unread=$(sqlite3 -readonly "$db" "
-  SELECT COUNT(*) FROM collab_rows
-   WHERE kind = 'note'
-     AND addressee = '${names[0]}'
-     AND delivered_at = 0
-     AND expires_at > $now_ns
-     AND (target_workspace = '' OR target_workspace = '$cwd');
-" 2>/dev/null) || allow
-[[ "${unread:-0}" -gt 0 ]] || allow
+count=$(jq -r '.count // 0' <<<"$report")
+[[ "$count" -gt 0 ]] || allow
 
-jq -n --argjson n "$unread" '{
+jq -n --argjson n "$count" '{
   hookSpecificOutput: {
     hookEventName: "Stop",
     additionalContext: ("You have \($n) unread plumb message(s) from a peer agent. " +
@@ -200,40 +191,37 @@ jq -n --argjson n "$unread" '{
 }'
 ```
 
-### Why it is shaped this way
+## Why it is shaped this way
 
-- **Every failure allows the stop.** A missing database, an unparseable
-  session file, an ambiguous folder, a sqlite error — all fall through to
-  `allow`. A wake hook that fails closed would strand turns on an unrelated
-  fault.
-- **`addressee = <name>` only**, never `'next'`. Plumb's own listing path
-  (`PendingNotes`) excludes `next` notes deliberately: they are claimed by
-  whoever asks first, so advertising one to every candidate would promise a
-  message most of them will lose the race for.
-- **`expires_at > now`** in nanoseconds, matching the column's unit. Rows are
-  filtered by expiry on every read regardless of whether the reaper has run.
-- **`target_workspace` scoping** mirrors `ClaimNotes`: a cross-project row is
-  claimable only by a session pinned to its target, and a same-project row
-  carries none.
+- **Every failure allows the stop.** No linkage, no matching session, an
+  ambiguous directory, a daemon that is down — all fall through to `allow`. A
+  wake hook that failed closed would strand turns on an unrelated fault.
+- **It asks for a count and acts on a count.** `plumb mail` will not report a
+  body, and the hook would not want one: text a peer wrote, pasted into hook
+  feedback, is a direct injection channel into the agent the mailbox otherwise
+  labels these as unverified claims for. The body stays unclaimed and arrives
+  through a real delivery path, in context, correctly labelled.
 - **`stop_hook_active` short-circuits first**, so one wake per continuation
   chain. Blocking again on genuinely new mail would be defensible — the
   condition self-resolves once the agent calls `check_messages`, which claims
-  the rows — but this is a hook that runs on every turn of every session, and
-  the conservative reading is the one to ship. Claude Code's 8-block cap is a
-  backstop for the other choice, not a licence to skip the guard.
+  the rows — but this runs on every turn of every session, and the conservative
+  reading is the one to ship. The 8-block cap is a backstop for the other
+  choice, not a licence to skip the guard.
+- **`ages_seconds` is there if you want a staleness rule.** Messages expire
+  after `[collab] intent_ttl_minutes` (default 120), and one a few minutes from
+  expiry may not be worth an interruption. `ages_seconds[0]` is the oldest.
 
-### What it does not cover
+## What it does not cover
 
-- **Cross-project mail.** Those rows live in the daemon-level store
-  (`collab-xproject.db` in plumb's data directory), readable only by a project
-  that set `[collab] cross_project`. The hook above reads the workspace store
-  only. Extending it means reading the second database and re-checking that
-  opt-in, which is `[collab]` config the hook would have to resolve itself.
-- **`sqlite3 -readonly` against a WAL database.** It needs the `-shm` file to
-  be present and readable. While the daemon holds the database open this
-  holds; a stale or unreadable sidecar surfaces as a sqlite error, which the
-  script treats as "no mail" and allows the stop.
-- **Subagents.** A subagent's Stop is converted to `SubagentStop`, which takes
-  the same decision-control format. The recipe above is not wired for it, and
-  the folder-matching heuristic is exactly what breaks when several sessions
-  share a workspace.
+- **Cross-project mail.** Those rows live in the daemon-level store, readable
+  only by a project that set `[collab] cross_project` (off by default).
+  `plumb mail` reads the workspace mailbox only, so a cross-project message
+  will not wake anyone.
+- **Notes addressed to `"next"`.** `plumb mail` excludes them, matching plumb's
+  own listing path: a `"next"` note goes to whichever session claims it first,
+  so counting it for every candidate would wake several agents for a message all
+  but one of them will lose the race for. The cost is real — a `"next"` note
+  left while a session sits idle will not wake it, and arrives whenever that
+  session next makes a call of its own.
+- **Subagents.** A subagent's `Stop` is converted to `SubagentStop`, which takes
+  the same decision-control format. The recipe is not wired for it.
