@@ -2,8 +2,100 @@ package config
 
 import (
 	"maps"
+	"strings"
 	"testing"
+	"time"
 )
+
+// TestGitWriteTimeout_DefaultIsTenMinutes pins the value, not merely its
+// existence. The bound it replaces was two minutes under a comment calling that
+// generous for a slow pre-commit hook — the claim this whole change exists to
+// correct — so a default that silently drifted back down would restore the
+// defect while every other test still passed.
+func TestGitWriteTimeout_DefaultIsTenMinutes(t *testing.T) {
+	if got := Defaults().Git.WriteTimeout.Duration; got != 10*time.Minute {
+		t.Errorf("default git.write_timeout = %s, want 10m", got)
+	}
+}
+
+// TestGitWriteTimeout_ProjectCannotSetItUntrusted is the trust boundary. The
+// knob is a safety decision in both directions: a large value lets a wedged
+// child pin the per-repository lock against every other session on the machine,
+// and a small one makes plumb SIGKILL git mid-commit and strand an index.lock.
+// A cloned repository must not be able to choose either without `plumb trust`,
+// which it gets for free by living inside [git] — provided it really is inside
+// the block forceCapabilityFieldsToBase resets whole.
+func TestGitWriteTimeout_ProjectCannotSetItUntrusted(t *testing.T) {
+	ws := t.TempDir()
+	writeProjectConfig(t, ws, "[git]\nwrite_timeout = \"1ms\"\n")
+
+	got, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if got.Git.WriteTimeout.Duration != 10*time.Minute {
+		t.Errorf("an untrusted project set git.write_timeout to %s; it must stay at the global value", got.Git.WriteTimeout.Duration)
+	}
+
+	// And the request must be VISIBLE rather than silently dropped, or the user
+	// has nothing to approve and no way to see what was ignored.
+	st, err := ProjectPolicyStatusFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicyStatusFor: %v", err)
+	}
+	if !st.Asked("git.write_timeout") {
+		t.Errorf("the trust disclosure does not mention the request: %v", st.Spec.Keys())
+	}
+}
+
+// TestGitWriteTimeout_TrustedProjectAndEnvOverride covers the two layers that
+// SHOULD be able to move it: a trusted project file, and the environment (which
+// is applied after the untrusted fields are forced back, so it must survive).
+func TestGitWriteTimeout_TrustedProjectAndEnvOverride(t *testing.T) {
+	ws := t.TempDir()
+	writeProjectConfig(t, ws, "[git]\nwrite_timeout = \"25m\"\n")
+	store := tempTrustStore(t)
+	trustWorkspace(t, store, ws)
+
+	got, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if got.Git.WriteTimeout.Duration != 25*time.Minute {
+		t.Errorf("trusted project git.write_timeout = %s, want 25m", got.Git.WriteTimeout.Duration)
+	}
+
+	t.Setenv("PLUMB_GIT_WRITE_TIMEOUT", "90s")
+	got, err = LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject with env: %v", err)
+	}
+	if got.Git.WriteTimeout.Duration != 90*time.Second {
+		t.Errorf("env git.write_timeout = %s, want 90s — env is the highest-priority layer", got.Git.WriteTimeout.Duration)
+	}
+}
+
+// TestGitWriteTimeout_NegativeRejected_ZeroAccepted pins the asymmetry. A
+// negative duration is nonsense and is refused at load; ZERO is accepted and
+// resolves to the compiled default at the point of use, because the one value
+// that must be unreachable is "no bound at all" — an unbounded git child holds
+// the repository lock and the shutdown drain for as long as it lives.
+func TestGitWriteTimeout_NegativeRejected_ZeroAccepted(t *testing.T) {
+	cfg := Defaults()
+	cfg.Git.WriteTimeout = Duration{-time.Second}
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("a negative git.write_timeout must be refused at load")
+	}
+	if !strings.Contains(err.Error(), "git.write_timeout") {
+		t.Errorf("the error must name the offending key, got %v", err)
+	}
+
+	cfg.Git.WriteTimeout = Duration{0}
+	if err := validate(cfg); err != nil {
+		t.Errorf("zero must load (it means the compiled default), got %v", err)
+	}
+}
 
 // TestLoadProject_GitEnvComposesIdenticallyForEverySpelling pins the composition
 // rule for a TRUSTED project's [git] env: the project's value wins for the keys
