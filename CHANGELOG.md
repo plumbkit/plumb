@@ -9,6 +9,34 @@
 
 ### Fixed
 
+- **The fsync-seam tests asserted a path SPELLING, so they went red on macOS
+  without anything being broken.** They compared the directory a write path
+  fsynced against the string `t.TempDir()` returned. Once `safeWrite` began
+  resolving symlinks (0.16.7's `lockPathKey` fix, so a write lands where its
+  write lock was taken), the recorded spelling became `/private/var/...` while
+  the test still held `/var/...` — one directory, two names, and a failure only
+  macOS could produce. Four tests in `internal/tools` failed on every macOS run
+  and passed on Linux.
+
+  The durability guarantee was checked before the assertion was changed, because
+  a test that has not been touched in months going red is as easily a real
+  regression as a brittle assertion, and editing a test to match a regression in
+  a write path is worse than leaving it red. It is not one: the fsynced
+  directory was confirmed to be the same inode the caller named, directly and
+  through a symlinked parent, and the write still lands in the real directory.
+  Resolving a symlink names the same place; the kernel resolves it again on
+  open.
+
+  The assertion now compares directory IDENTITY (`os.SameFile`) rather than
+  spelling — which is both what the fsync contract actually promises and the
+  stricter check, since a write path that fsynced a genuinely different
+  directory now fails where a resolved-string comparison could be satisfied by
+  anything that resolved alike. A new test pins the decision so it cannot drift
+  back: it writes through a symlinked parent and requires the fsync to hit that
+  directory and not its ancestor. Both were confirmed to fail against a write
+  path mutated to fsync the grandparent and against one with the directory
+  fsync removed.
+
 - **Post-write lint findings that name files which do not exist are now called
   what they are: a stale golangci-lint cache.** Delete a sibling git worktree and
   the linter's shared cache keeps returning issues attributed to paths inside the
