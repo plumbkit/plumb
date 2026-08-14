@@ -112,6 +112,106 @@ func TestHomeDirInfos_RealHomeGuardedDespiteRepointedHOME(t *testing.T) {
 	}
 }
 
+// TestContainsHomeDir_StrictAncestryOnly pins the predicate's basic shape: an
+// ancestor of the home directory is contained; the home itself, its children,
+// its siblings, an empty dir argument and an empty home set are not. The
+// empty-set and stat-failure cases fail OPEN like sameDirAs — a broken
+// environment must degrade to inert guards, never to refusing every repo.
+func TestContainsHomeDir_StrictAncestryOnly(t *testing.T) {
+	base := freshTempDir(t) // stands in for /Users
+	home := filepath.Join(base, "users", "alice")
+	mustMkdir(t, home)
+	sibling := filepath.Join(base, "users", "bob")
+	mustMkdir(t, sibling)
+	child := filepath.Join(home, "Projects")
+	mustMkdir(t, child)
+	homes := []string{home}
+
+	for _, tc := range []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"parent", filepath.Join(base, "users"), true},
+		{"grandparent", base, true},
+		{"filesystem root", "/", true},
+		{"home itself is identity's question", home, false},
+		{"child of home", child, false},
+		{"sibling of home", sibling, false},
+		{"empty dir", "", false},
+		{"unstat-able dir fails open", filepath.Join(base, "no-such-dir"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsHomeDir(tc.dir, homes); got != tc.want {
+				t.Errorf("containsHomeDir(%q, %q) = %v, want %v", tc.dir, homes, got, tc.want)
+			}
+		})
+	}
+	if containsHomeDir(filepath.Join(base, "users"), nil) {
+		t.Error("containsHomeDir with no homes must fail open (inert), not refuse")
+	}
+}
+
+// TestContainsHomeDir_CaseAliasedAncestor is one half of finding B1 on round 6
+// of PR #288's review: ancestry was decided with filepath.Rel over
+// paths.Canonical, and EvalSymlinks collapses SYMLINKS only — it does not fold
+// case on a case-insensitive volume. So a case-variant spelling of /Users
+// (provably the same directory, per os.SameFile) walked straight past all five
+// containment sites at once, and one find_files call could pin a workspace
+// containing every home directory. Ancestry is now decided the way identity
+// is, with os.SameFile per ancestor, which no alternative spelling defeats.
+//
+// Skips on a case-sensitive filesystem (Linux CI): the alias precondition
+// cannot be built there. The firmlink half is the darwin-gated test below.
+func TestContainsHomeDir_CaseAliasedAncestor(t *testing.T) {
+	base := freshTempDir(t)
+	parent := filepath.Join(base, "Users")
+	home := filepath.Join(parent, "alice")
+	mustMkdir(t, home)
+
+	alias := filepath.Join(base, "USERS")
+	pi, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ai, err := os.Stat(alias)
+	if err != nil || !os.SameFile(pi, ai) {
+		t.Skipf("filesystem is case-sensitive; the aliased spelling %q does not resolve to %q", alias, parent)
+	}
+
+	if !containsHomeDir(alias, []string{home}) {
+		t.Errorf("containsHomeDir(%q, [%q]) = false; %q IS the parent of the home directory "+
+			"(os.SameFile proves it) — a case-variant spelling must not defeat the ancestry test", alias, home, alias)
+	}
+}
+
+// TestContainsHomeDir_FirmlinkAliasedAncestor is the other half of finding B1:
+// the macOS firmlink alias. /System/Volumes/Data/Users and /Users are one
+// directory (os.SameFile), but EvalSymlinks resolves neither into the other —
+// firmlinks are not symlinks — so the lexical ancestry test returned false for
+// the alias and SynthesiseRoot handed back the wide root. Reproduced here
+// against the machine's real layout; skips where the layout is absent.
+func TestContainsHomeDir_FirmlinkAliasedAncestor(t *testing.T) {
+	const aliasUsers = "/System/Volumes/Data/Users"
+	ui, err := os.Stat("/Users")
+	if err != nil {
+		t.Skip("no /Users on this machine")
+	}
+	ai, err := os.Stat(aliasUsers)
+	if err != nil || !os.SameFile(ui, ai) {
+		t.Skipf("%s is not a firmlink alias of /Users here", aliasUsers)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || filepath.Dir(filepath.Clean(home)) != "/Users" {
+		t.Skipf("home %q is not directly under /Users", home)
+	}
+
+	if !containsHomeDir(aliasUsers, []string{home}) {
+		t.Errorf("containsHomeDir(%q, [%q]) = false; the firmlink alias IS /Users "+
+			"(os.SameFile proves it), so it strictly contains the home directory", aliasUsers, home)
+	}
+}
+
 // TestDetect_ResidualPlumbAtHomeIgnored is finding B2 on PR #288: detect
 // consulted the .plumb marker BEFORE any home guard, so the bare ~/.plumb an
 // earlier build's auto_attach_persist created kept resolving $HOME as the
