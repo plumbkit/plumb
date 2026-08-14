@@ -533,7 +533,9 @@
   unbound, matched by the name arm), never crosses `target_workspace` (its own
   AND term), and never touches the `check_messages` registration gate. All three
   readers — claim, probe and listing — take the same identity set, so a session
-  cannot be shown mail it may not collect, or collect mail it was not shown.
+  is never shown mail it may not collect. The converse does not hold and is not
+  meant to: `PendingNotes` deliberately omits the `"next"` arm, because listing a
+  message the caller may lose the race for would advertise what it cannot have.
 
   **The chain is bounded at one predecessor.** Each reconnect re-records its OWN
   session ID, so the next inherits it and forgets the one before. A message
@@ -1234,7 +1236,7 @@
   LIMIT 1` at **20-30µs**, taking no write lock at all, so it never queues behind
   a peer's send. The claim now runs only once something is actually waiting.
 
-  The probe and the claim share one predicate (`claimableWhere`), because they
+  The probe and the claim share one predicate (`claimable`), because they
   must agree exactly: a probe broader than the claim promises mail that never
   arrives, one narrower suppresses a delivery, and neither raises an error — the
   message simply does not show up. That is now three readers (`ClaimNotes`,
