@@ -87,6 +87,7 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 // detect is Detect's marker walk, before canonicalisation.
 func (p *workspacePool) detect(start string) (root, language string, err error) {
 	homeInfo := homeDirInfos()
+	homePaths := homeDirPaths()
 	d := filepath.Clean(start)
 	first := true
 	for {
@@ -102,7 +103,7 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		// Detect first and falls back to SynthesiseRoot on failure, which honours
 		// an explicitly declared wide root. So an explicit pin still succeeds; only
 		// the routes with no declaration lose it, which is the whole distinction.
-		atHome := sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo)
+		atHome := sameDirAs(d, homeInfo) || containsHomeDir(d, homePaths)
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
 		// plumb workspace, and stats / project config should follow that
