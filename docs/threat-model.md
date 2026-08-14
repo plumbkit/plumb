@@ -96,6 +96,48 @@ environment and the OS user database, naming `$HOME` as the workspace requires
 an explicit `session_start` declaration, and a machine-created `~/.plumb`
 marker is treated as residue rather than intent.
 
+The same declaration requirement covers a root that **contains** a home
+directory — `/Users`, `/home`, `/`, `/System/Volumes/Data` on macOS (issue
+#306) — and that guard deserves a precise statement, because three earlier
+implementations of it were each defeated by a different macOS path-aliasing
+shape before this one shipped.
+
+**What IS guarded.** A root that is, or contains, the machine's home
+directory (as the OS user database records it) is refused for every origin
+but an explicit `session_start`. Containment is answered by probing rather
+than walking: each suffix of the home path is joined to the candidate and
+handed to the kernel to resolve, then compared to home by filesystem
+identity — so the firmlink aliases that defeated the earlier attempts are
+answered correctly (`/System/Volumes/Data/Users` IS `/Users`, same inode;
+`/System/Volumes/Data` contains `$HOME` while sharing an inode with no
+ancestor of it), and both shapes are asserted live on macOS hardware. The
+refusal sits at the three writers of a connection's acquired root and at
+`materialisePlumbDir` (so `auto_attach_persist` cannot mint a standing marker
+at a wide root). Detection itself is **not** where containment is enforced:
+it has no notion of a declaration, and refusing there broke hermetic build
+sandboxes whose `$HOME` lives inside the checkout (`HOME=$PWD/.home`, Bazel
+execroots, nix-shell, CI images). That is also why containment keys on the
+user-database home rather than the client-repointable `$HOME`: a sandbox's
+repointed `$HOME` inside its checkout stays attachable, while the machine's
+real credential store stays guarded.
+
+The guard is also re-asked on every path-policy rebuild, not only at attach:
+the pinned root is a STRING, re-canonicalised each time the policy is rebuilt
+(the config poll alone runs every 30 seconds), and nothing stops a pinned
+directory being swapped for a symlink to a home-containing one between attach
+and a rebuild — no race needed, only write access to its parent. An
+undeclared session whose canonical root now contains a home directory gets no
+policy at all (every path refused, session marked blocked) rather than a
+home-wide boundary.
+
+**What is NOT guarded.** A root that reaches home only through a symlink
+planted inside the root under an unrelated name; a Linux bind mount of home
+under the root; and spellings differing only in case (the standing limit of
+plumb's case handling). And a DECLARED pin of a wide directory always
+succeeds — issue #182's contract — so a deliberate `session_start` of
+`/Users` still attaches; only the undeclared routes and the permanent marker
+are refused.
+
 **B4 — daemon → git.** Tiered policy: read, write, destructive, network. Each
 tier is separately enabled; destructive and network additionally require
 `confirm: true`. Force-pushing a protected branch and using an ad-hoc URL or

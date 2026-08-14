@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
@@ -94,6 +97,57 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 	return s.view().policy
 }
 
+// policyRootRefused reports whether a path policy may NOT be built on the
+// pinned root, for either of two reasons.
+//
+// A workspace root that is not absolute names no location, so no policy can
+// be built from it. Refusing here makes checkBoundary answer with
+// UnattachedWorkspaceError — which is both the accurate description (nothing
+// usable is pinned) and the actionable one ("call session_start with an
+// absolute project root").
+//
+// Both checks live at this CHOKE POINT on purpose. Six paths can set
+// acquiredRoot — session_start's re-pin, roots/list at initialize and on
+// change, the serve proxy's cwd hint, the auto-attach seed, and synthetic
+// re-attach on rehydrate. Guarding the re-pin alone was tried first and an
+// independent review demonstrated the same brick still reachable through
+// three of the others; guarding a fifth would have left the sixth. Every one
+// of them ends up here, so the invariant holds however the root arrived.
+//
+// Without the absolute check the two halves of the daemon disagree:
+// detection resolves a relative seed against the daemon's working directory
+// and the pin SUCCEEDS, then NewPathPolicy drops the non-absolute root it
+// produced, leaving a policy with no roots that refuses every path —
+// including the workspace's own files — while the error names the workspace
+// as "." and advises the re-pin that just happened. Refusing to build the
+// policy at all turns a bricked session into one clear, correct sentence.
+//
+// The containment re-check (issue #306) covers what attach-time checks
+// structurally cannot: the root-setting writers verified the DIRECTORY at
+// attach time, but the pinned STRING is re-canonicalised on every policy
+// rebuild — the config poll alone runs every 30 seconds — and between attach
+// and any rebuild nothing stops the directory being swapped for a symlink to
+// a home-containing one (no race needed: whoever can write the directory's
+// parent can swap it). Without this check one rebuild would absorb the swap
+// and hand the session a home-wide boundary that nothing ever declared. So
+// each build re-asks what the canonical root IS, and an undeclared session
+// whose root now contains a home directory gets NO policy: checkBoundary
+// then answers every path with UnattachedWorkspaceError — fail closed, the
+// posture of no pin at all — and the session is marked blocked so the
+// operator can see why. A declared session_start pin is exempt here as
+// everywhere in this guard (issue #182).
+func (s *connSession) policyRootRefused(v *sessionView, ws string) bool {
+	if !filepath.IsAbs(ws) {
+		return true
+	}
+	if v.pinOrigin != sessionstate.PinSourceSessionStart && containsUserHome(paths.Canonical(ws)) {
+		s.log().Warn("daemon: refusing to build a path policy — the pinned root now contains a home directory", "root", ws, "origin", string(v.pinOrigin))
+		s.markBoundaryViolation(fmt.Sprintf("workspace root %s now contains a home directory (issue #306); re-pin deliberately with session_start", ws))
+		return true
+	}
+	return false
+}
+
 // buildPathPolicy assembles the allowlist for v's pinned workspace: the
 // workspace (read-write), configured extra roots (read-write), configured read
 // roots (read-only), the trusted per-workspace roots the user granted manually
@@ -111,28 +165,7 @@ func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 	if ws == "" {
 		return nil
 	}
-	// A workspace root that is not absolute names no location, so no policy can
-	// be built from it. Returning nil here makes checkBoundary answer with
-	// UnattachedWorkspaceError — which is both the accurate description (nothing
-	// usable is pinned) and the actionable one ("call session_start with an
-	// absolute project root").
-	//
-	// This is the CHOKE POINT on purpose. Six paths can set acquiredRoot —
-	// session_start's re-pin, roots/list at initialize and on change, the serve
-	// proxy's cwd hint, the auto-attach seed, and synthetic re-attach on
-	// rehydrate. Guarding the re-pin alone was tried first and an independent
-	// review demonstrated the same brick still reachable through three of the
-	// others; guarding a fifth would have left the sixth. Every one of them ends
-	// up here, so the invariant holds however the root arrived.
-	//
-	// Without it the two halves of the daemon disagree: detection resolves a
-	// relative seed against the daemon's working directory and the pin SUCCEEDS,
-	// then NewPathPolicy drops the non-absolute root it produced, leaving a
-	// policy with no roots that refuses every path — including the workspace's
-	// own files — while the error names the workspace as "." and advises the
-	// re-pin that just happened. Refusing to build the policy at all turns a
-	// bricked session into one clear, correct sentence.
-	if !filepath.IsAbs(ws) {
+	if s.policyRootRefused(v, ws) {
 		return nil
 	}
 	roots := []tools.AllowedRoot{{Path: ws, Access: tools.AccessReadWrite, Label: "workspace"}}

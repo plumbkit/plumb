@@ -130,6 +130,12 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		// merely SKIPPED the markers here — meant a .git above the home
 		// directory resolved $HOME's parent: a root strictly wider than the
 		// escape this guard exists to block.
+		//
+		// That is a statement about THIS walk, not a general containment
+		// guarantee: detect() still answers for seeds OUTSIDE home. What keeps
+		// a CONTAINER of home (an undeclared /Users, /home, /) from becoming a
+		// pinned root is undeclaredWideRootErr at the root-setting writers —
+		// detection narrows; attach cannot widen.
 		if atHome {
 			return "", "", fmt.Errorf("no project root found between %s and the home directory (which is never used as a workspace root, nor ascended past)", start)
 		}

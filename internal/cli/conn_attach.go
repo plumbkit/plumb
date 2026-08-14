@@ -53,6 +53,14 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		folder = projectRoot
 	}
 
+	// Containment guard (issue #306): a DETECTED wide root — a marker placed
+	// at a directory that is or CONTAINS a home directory — still needs a
+	// declaration before it may be pinned.
+	if err := undeclaredWideRootErr(folder, origin); err != nil {
+		s.log().Warn("daemon: refusing to pin a wide workspace root", "root", folder, "origin", string(origin), "reason", err)
+		return
+	}
+
 	s.mutate(func(v *sessionView) {
 		if v.acquiredRoot != "" {
 			return
@@ -97,7 +105,17 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 // marker) from an incidental tool-path seed (PinSourceUnknown: not sticky,
 // never persisted). trigger separates a live seed from rehydratePin's restore
 // of a persisted synthetic pin, so the provenance label reads restore:… .
+//
+// A root that is or CONTAINS a home directory is refused here for every
+// origin but an explicit session_start (undeclaredWideRootErr, issue #306):
+// SynthesiseRoot refuses a home-IDENTITY seed on its own, but a CONTAINER of
+// home synthesises to itself untouched, and this is where the pin's origin is
+// in scope.
 func (s *connSession) attachSynthetic(_ context.Context, root string, origin sessionstate.PinSource, trigger pinTrigger) {
+	if err := undeclaredWideRootErr(root, origin); err != nil {
+		s.log().Warn("daemon: refusing to pin a wide synthetic workspace root", "root", root, "origin", string(origin), "reason", err)
+		return
+	}
 	s.mutate(func(v *sessionView) {
 		if v.acquiredRoot != "" {
 			return
