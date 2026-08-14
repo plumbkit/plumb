@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -220,13 +221,22 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 		if s == nil {
 			continue
 		}
-		rows, err := s.UnreadSentBy(ctx, t.deps.SessionID, now, maxReceiptRows)
+		// One past the display cap, per store, so the render can say there is more
+		// without an unbounded scan. The cap cannot be applied per store and then
+		// trusted as a total: two stores each capped at the display limit yield
+		// twice it, and the overflow count would be measuring the query rather than
+		// the mailbox.
+		rows, err := s.UnreadSentBy(ctx, t.deps.SessionID, now, maxReceiptRows+1)
 		if err != nil {
 			slog.Debug("collab: outbox receipt failed", "session", t.deps.SessionID, "err", err)
 			continue
 		}
 		unread = append(unread, rows...)
 	}
+	// Each store returns its own rows oldest-first; concatenating two of them does
+	// not. Sort so the messages shown are genuinely the oldest — the ones whose
+	// silence has lasted longest and is worth acting on.
+	slices.SortStableFunc(unread, func(a, b collab.Row) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return renderReceipt(unread, now)
 }
 
@@ -256,7 +266,10 @@ func renderReceipt(unread []collab.Row, now time.Time) string {
 		bound = bound || r.AddresseeID != ""
 	}
 	if n := len(unread) - len(shown); n > 0 {
-		fmt.Fprintf(&sb, "  …and %d more.\n", n)
+		// "at least": each store was queried with its own cap, so this counts what
+		// was fetched, not what exists. Reporting it as an exact total would be a
+		// number the query cannot support.
+		fmt.Fprintf(&sb, "  …and at least %d more.\n", n)
 	}
 	sb.WriteString("  Unread means the peer has made no tool call since — it is idle, not refusing. ")
 	if bound {
