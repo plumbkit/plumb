@@ -307,6 +307,7 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 		if err := toml.Unmarshal(data, &raw); err != nil {
 			return base, ProjectPolicyStatus{}, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
+		merged.Git.Env = composeGitEnv(base.Git.Env, merged.Git.Env)
 	}
 	// The spec is computed from the same bytes that were just merged, so the
 	// content trust is checked against is exactly the content in play — a second
@@ -330,6 +331,41 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 		return base, ProjectPolicyStatus{}, fmt.Errorf("invalid project config: %w", err)
 	}
 	return merged, st, nil
+}
+
+// composeGitEnv gives [git] env the composition rule every SCALAR field in this
+// config already has: the project's value wins for the keys it names, and a
+// global value it is silent about survives.
+//
+// It has to be stated explicitly because go-toml does not unmarshal the three
+// spellings of a table key alike when the destination map is pre-populated (and
+// merged's is — it starts as a clone of base). Under `[git]`, an inline
+// `env = { X = "y" }` REPLACES the map wholesale, while a `[git.env]` sub-table
+// and a `git.env.X` dotted key merge into it. Left alone, two spellings of the
+// same intent would resolve to different environments for the git child, and the
+// inline one would additionally let a project DELETE a variable the user set
+// globally — which is precisely what the knob's own contract (it extends the
+// inherited environment, and there is deliberately no way to unset an entry)
+// says it cannot do on the other axis. This is a composition rule, not a
+// boundary: all three spellings are trust-gated regardless.
+//
+// projectEnv is merged's own map (a clone of base's, or a fresh one go-toml
+// built for the inline form), never base's, so filling it in place cannot reach
+// the caller's config.
+func composeGitEnv(baseEnv, projectEnv map[string]string) map[string]string {
+	if len(baseEnv) == 0 {
+		return projectEnv
+	}
+	out := projectEnv
+	if out == nil {
+		out = make(map[string]string, len(baseEnv))
+	}
+	for k, v := range baseEnv {
+		if _, named := out[k]; !named {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // readProjectConfigFile reads a project config, reporting an absent file as

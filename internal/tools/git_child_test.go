@@ -127,9 +127,11 @@ func TestGit_ConfiguredEnvReachesTheChild(t *testing.T) {
 }
 
 // TestGitChildEnv_DeterministicOnCaseFold pins that two names differing only by
-// case resolve by a defined rule (sorted order) rather than by map-iteration
-// luck. macOS and Windows have case-insensitive environments, so this is a real
-// collision, not a hypothetical one.
+// case are emitted in a defined order (sorted) rather than by map-iteration
+// luck. Linux and Darwin have case-SENSITIVE environments, so there both names
+// simply survive; Windows is where it matters — os/exec folds case when it
+// deduplicates cmd.Env and keeps the last matching entry, so the winner is
+// "last after sorting", which is only well-defined because of the sort.
 func TestGitChildEnv_DeterministicOnCaseFold(t *testing.T) {
 	overrides := map[string]string{"Plumb_Fold": "upper-first", "plumb_fold": "lower-first"}
 	first := gitChildEnv(overrides)
