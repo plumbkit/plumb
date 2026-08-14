@@ -136,6 +136,9 @@ func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	if t.deps.SessionName() == "" || t.deps.SessionID == "" {
+		return "session is not registered and has no attributable finding identity — reconnect before sharing findings", nil
+	}
 	return t.run(ws, args)
 }
 

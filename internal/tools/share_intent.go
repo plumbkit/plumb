@@ -104,19 +104,23 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	self := t.deps.SessionName()
+	if self == "" || t.deps.SessionID == "" {
+		return "session is not registered and has no safe intent identity — reconnect before sharing an intent", nil
+	}
 	store := t.deps.Store()
 	if store == nil {
 		return "", errors.New("share_intent: cross-agent store unavailable for this workspace")
 	}
-	return t.run(ctx, store, policy, args)
+	return t.run(ctx, store, policy, args, self)
 }
 
-func (t *ShareIntent) run(ctx context.Context, store *collab.Store, policy CollabPolicy, args shareIntentArgs) (string, error) {
+func (t *ShareIntent) run(ctx context.Context, store *collab.Store, policy CollabPolicy, args shareIntentArgs, self string) (string, error) {
 	body, redacted := redactBody(args.Body)
 	ttl := resolveTTL(policy.IntentTTLMinutes, args.TTLMinutes)
 	now := time.Now()
 	in := collab.IntentInput{
-		AuthorSession: t.deps.SessionName(),
+		AuthorSession: self,
 		AuthorID:      t.deps.SessionID,
 		Body:          body,
 		PathGlobs:     args.PathGlobs,

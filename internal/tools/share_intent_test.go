@@ -80,6 +80,30 @@ func TestShareIntent_EnabledStoresRedactedIntent(t *testing.T) {
 	}
 }
 
+func TestShareIntent_UnregisteredSessionFailsClosed(t *testing.T) {
+	deps, store, created := collabTestDeps(t, CollabPolicy{Intents: true})
+	deps.SessionName = func() string { return "" }
+	deps.SessionID = ""
+
+	out, err := NewShareIntent(deps).Execute(context.Background(), json.RawMessage(`{"body":"orphaned work"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "not registered") || !strings.Contains(out, "reconnect") {
+		t.Fatalf("unregistered session lacked a safe remedy: %q", out)
+	}
+	if *created {
+		t.Fatal("unregistered session touched the intent store")
+	}
+	intents, err := store.LiveIntents(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 0 {
+		t.Fatalf("unregistered session persisted orphaned intents: %#v", intents)
+	}
+}
+
 func TestShareIntent_MissingBodyRejected(t *testing.T) {
 	deps, _, _ := collabTestDeps(t, CollabPolicy{Intents: true})
 	tool := NewShareIntent(deps)

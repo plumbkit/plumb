@@ -104,7 +104,17 @@
   end-to-end exactly-once is not claimed. Cross-project metadata follows the
   recipient's resolved consent in `workspace_sessions`, TUI, and Web; split-store
   Web counts are merged. When peers are active, `session_start` always states the
-  effective collab policy even if detailed peer awareness is disabled.
+  effective collab policy even if detailed peer awareness is disabled. Deleting or
+  invalidating a project config immediately reapplies the global base, so a stale
+  cross-project grant cannot survive in the delivery session. Named addressees use
+  the bounded session-name contract before storage, and unregistered sessions cannot
+  persist unattributed intents or findings.
+
+  Collaboration body fields and native body-bearing outputs are omitted from
+  permanent tool-call telemetry while byte counts and safe routing metadata remain.
+  Stats schema v17 also clears those fields from historical collaboration rows, so
+  pre-upgrade notes, intents, findings, and session-start/message output do not
+  outlive their purpose-built redaction and retention stores.
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON

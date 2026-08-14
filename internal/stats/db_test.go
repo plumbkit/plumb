@@ -441,6 +441,55 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	}
 }
 
+func TestMigrationSanitizesHistoricalCollaborationBodies(t *testing.T) {
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v16.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+
+	secret := "ghp_0123456789abcdefghijklmnopqrstuvwxyz1"
+	inputs := map[string]string{
+		"leave_note":     `{"to":"Bob","body":"` + secret + `"}`,
+		"share_intent":   `{"body":"` + secret + `"}`,
+		"share_findings": `{"summary":"` + secret + `"}`,
+		"check_messages": `{"wait_seconds":5}`,
+		"session_start":  `{"purpose":"audit"}`,
+		"read_file":      `{"file_path":"safe.go"}`,
+	}
+	for tool, input := range inputs {
+		if _, err := raw.Exec(`INSERT INTO tool_calls (tool, called_at, input_json, output_text) VALUES (?, 1, ?, ?)`,
+			tool, input, "delivered "+secret); err != nil {
+			t.Fatalf("seed %s: %v", tool, err)
+		}
+	}
+	if err := migrate(raw, 16); err != nil {
+		t.Fatalf("migrate 16→%d: %v", SchemaVersion, err)
+	}
+
+	for tool, originalInput := range inputs {
+		var input, output string
+		if err := raw.QueryRow(`SELECT input_json, output_text FROM tool_calls WHERE tool = ?`, tool).Scan(&input, &output); err != nil {
+			t.Fatalf("read %s: %v", tool, err)
+		}
+		if tool == "read_file" {
+			if input != originalInput || output != "delivered "+secret {
+				t.Fatalf("ordinary telemetry changed: input=%q output=%q", input, output)
+			}
+			continue
+		}
+		if strings.Contains(input, secret) || strings.Contains(output, secret) || output != "" {
+			t.Errorf("%s historical collaboration content survived: input=%q output=%q", tool, input, output)
+		}
+		if tool != "check_messages" && tool != "session_start" && input != "{}" {
+			t.Errorf("%s sensitive input was not cleared: %q", tool, input)
+		}
+	}
+}
+
 // TestSavingsColumnsUnscoredByDefault proves P0 is a no-behaviour-change schema
 // add: a fresh database carries the four savings columns, and a row recorded
 // without explicit savings reads back as unscored (all zero), matching the
@@ -476,13 +525,13 @@ func TestMigrateAddsSavingsColumns(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer raw.Close()
-	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER, input_json TEXT NOT NULL DEFAULT '', output_text TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("seed v8 tool_calls: %v", err)
 	}
 	if _, err := raw.Exec(`INSERT INTO tool_calls (tool, called_at) VALUES ('read_file', 1)`); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
-	if err := migrate(raw, 8, SchemaVersion); err != nil {
+	if err := migrate(raw, 8); err != nil {
 		t.Fatalf("migrate 8→%d: %v", SchemaVersion, err)
 	}
 	for _, col := range []string{"tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
@@ -731,10 +780,10 @@ func TestEpisodicSchemaParity(t *testing.T) {
 		t.Fatalf("open migrated: %v", err)
 	}
 	defer migrated.Close()
-	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER, input_json TEXT NOT NULL DEFAULT '', output_text TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("seed v7 schema: %v", err)
 	}
-	if err := migrate(migrated, 7, SchemaVersion); err != nil {
+	if err := migrate(migrated, 7); err != nil {
 		t.Fatalf("migrate 7→%d: %v", SchemaVersion, err)
 	}
 

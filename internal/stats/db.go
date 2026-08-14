@@ -124,6 +124,16 @@ var migrations = []migration{
 	{from: 13, to: 14, addColumn: "error_kind", sql: `ALTER TABLE tool_calls ADD COLUMN error_kind            TEXT NOT NULL DEFAULT ''`},
 	{from: 14, to: 15, addColumn: "error_retryable", sql: `ALTER TABLE tool_calls ADD COLUMN error_retryable       INTEGER NOT NULL DEFAULT 0`},
 	{from: 15, to: 16, addColumn: "remediation_class", sql: `ALTER TABLE tool_calls ADD COLUMN remediation_class     TEXT NOT NULL DEFAULT ''`},
+	// v17 removes collaboration bodies captured by historical telemetry rows.
+	// These tools have purpose-built redaction/TTL storage; stats is never pruned,
+	// so retaining a second raw copy would permanently defeat those guarantees.
+	{from: 16, to: 17, sql: `UPDATE tool_calls
+SET input_json = CASE
+        WHEN tool IN ('leave_note', 'share_intent', 'share_findings') THEN '{}'
+        ELSE input_json
+    END,
+    output_text = ''
+WHERE tool IN ('leave_note', 'share_intent', 'share_findings', 'check_messages', 'session_start')`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -131,13 +141,13 @@ var migrations = []migration{
 var ErrReadOnlySchemaUpgradeRequired = errors.New("stats schema upgrade required")
 
 // migrate applies all pending forward migrations from currentVersion up to
-// targetVersion. ADD COLUMN steps are skipped when the column already exists,
+// SchemaVersion. ADD COLUMN steps are skipped when the column already exists,
 // which keeps the path idempotent in two cases: (a) an unstamped database
 // created by a build that defined the column in the baseline schema; (b)
 // re-running migrate after a partial earlier run.
-func migrate(db *sql.DB, currentVersion, targetVersion int) error {
+func migrate(db *sql.DB, currentVersion int) error {
 	for _, m := range migrations {
-		if m.from < currentVersion || m.to > targetVersion {
+		if m.from < currentVersion || m.to > SchemaVersion {
 			continue
 		}
 		if m.addColumn != "" {
@@ -214,7 +224,8 @@ func DBPathFor() string {
 //	14 — added error_kind column (failure telemetry)
 //	15 — added error_retryable column (failure telemetry)
 //	16 — added remediation_class column (failure telemetry)
-const SchemaVersion = 16
+//	17 — removed historical collaboration bodies from permanent tool-call telemetry
+const SchemaVersion = 17
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -240,7 +251,7 @@ func Open() (*DB, error) {
 		return nil, err
 	}
 	if currentVersion < SchemaVersion {
-		if err := migrate(db, currentVersion, SchemaVersion); err != nil {
+		if err := migrate(db, currentVersion); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -302,8 +313,8 @@ type Call struct {
 	OutputBytes   int
 	Success       bool
 	ErrorMsg      string
-	InputJSON     string // raw JSON args as sent to the tool (capped at 64 KiB)
-	OutputText    string // full tool output (capped at 64 KiB)
+	InputJSON     string // JSON args, caller-sanitized where needed (capped at 64 KiB)
+	OutputText    string // tool output, caller-sanitized where needed (capped at 64 KiB)
 	ClientName    string // MCP clientInfo.name (e.g. "claude-code")
 	ClientVersion string // MCP clientInfo.version
 

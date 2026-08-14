@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // LeaveNote is the leave_note MCP tool: a session leaves a short note for a
@@ -94,6 +95,13 @@ func parseLeaveNoteArgs(raw json.RawMessage) (leaveNoteArgs, error) {
 	a.ConversationID = strings.TrimSpace(a.ConversationID)
 	if a.To == "" && a.ConversationID == "" {
 		a.To = collab.AddresseeNext
+	}
+	if a.To != "" && a.To != collab.AddresseeNext {
+		to, err := session.NormaliseName(a.To)
+		if err != nil {
+			return a, fmt.Errorf("leave_note: invalid addressee: %w", err)
+		}
+		a.To = to
 	}
 	return a, nil
 }

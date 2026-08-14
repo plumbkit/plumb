@@ -259,10 +259,49 @@ func withFailure(c stats.Call, failure *toolerror.Error) stats.Call {
 	return c
 }
 
+const collaborationStatsOutputOmitted = "[collaboration content omitted from stats]"
+
+// statsToolData removes collaboration bodies before telemetry persistence. Those
+// bodies already have purpose-built redaction, byte-window, and TTL semantics in
+// collab/memory storage; duplicating them into the never-pruned stats database
+// would bypass every one of those guarantees. Raw byte counts remain on the Call,
+// while safe routing metadata (for example to, conversation_id, paths, and waits)
+// stays queryable.
+func statsToolData(toolName string, args json.RawMessage, output string) (string, string) {
+	var sensitiveFields []string
+	switch toolName {
+	case "leave_note", "share_intent":
+		sensitiveFields = []string{"body"}
+	case "share_findings":
+		sensitiveFields = []string{"summary", "description"}
+	case "check_messages", "session_start":
+		// Their inputs contain no body, but their native output may deliver one.
+	default:
+		return string(args), output
+	}
+
+	safeOutput := ""
+	if output != "" {
+		safeOutput = collaborationStatsOutputOmitted
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(args, &fields); err != nil {
+		return "{}", safeOutput
+	}
+	for _, field := range sensitiveFields {
+		delete(fields, field)
+	}
+	safeArgs, err := json.Marshal(fields)
+	if err != nil {
+		return "{}", safeOutput
+	}
+	return string(safeArgs), safeOutput
+}
+
 // onAfterTool records a completed tool call in the stats store and refreshes
 // the session's last-seen timestamp so idle detection stays accurate. Savings are
 // scored here, at write time: this is the single point where the tool name,
-// client identity, raw args and output all co-exist.
+// client identity, raw sizes and body-free collaboration telemetry co-exist.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 	session.Touch(s.sessID)
 	v := s.view()
@@ -279,6 +318,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	// Score savings under the counterfactual model. Failed calls (output cleared
 	// upstream) score 0 by construction inside Score.
 	saved := clientcaps.Score(toolName, clientName, len(output), baselineBytesFrom(output), batchSizeFor(toolName, args), !isError)
+	inputJSON, outputText := statsToolData(toolName, args, output)
 	s.statsStore.Record(root, withFailure(stats.Call{
 		SessionID:           s.sessID,
 		SessionName:         sessionName,
@@ -289,8 +329,8 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		OutputBytes:         len(output),
 		Success:             !isError,
 		ErrorMsg:            errMsg,
-		InputJSON:           string(args),
-		OutputText:          output,
+		InputJSON:           inputJSON,
+		OutputText:          outputText,
 		ClientName:          clientName,
 		ClientVersion:       clientVersion,
 		TokensSaved:         saved.Total(),

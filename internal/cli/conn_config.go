@@ -25,7 +25,8 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	projectCfg, policy, err := config.LoadProjectWithPolicy(base, workspace)
 	if err != nil {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
-		return
+		projectCfg = base
+		policy = config.ProjectPolicyStatus{}
 	}
 	s.logProjectPolicy(workspace, policy)
 	// Resolved here, from the same load as projectCfg, and stored in the view: the
@@ -62,9 +63,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.commandPolicy = projectCfg.CommandPolicy
 		v.execTrusted = execTrusted
 		v.projectCommands = projectCommands
-		if !cfgMtime.IsZero() {
-			v.lastCfgMtime = cfgMtime
-		}
+		v.lastCfgMtime = cfgMtime
 		v.policy = s.buildPathPolicy(v)
 	})
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
@@ -190,19 +189,22 @@ func (s *connSession) checkAndReloadConfig() {
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	info, err := os.Stat(configPath)
 	if err != nil {
+		// A removed project config must revoke its overrides immediately. Other stat
+		// failures also reapply the global base so an unreadable file cannot preserve
+		// a previously granted capability in the live session view.
+		if os.IsNotExist(err) && s.view().lastCfgMtime.IsZero() {
+			return
+		}
+		s.applyProjectConfig(workspace)
+		s.log().Info("daemon: project config removed or unreadable; global config reapplied", "workspace", workspace)
 		return
 	}
 	mtime := info.ModTime()
-	alreadySeen := false
-	s.mutate(func(v *sessionView) {
-		alreadySeen = mtime.Equal(v.lastCfgMtime)
-		if !alreadySeen {
-			v.lastCfgMtime = mtime
-		}
-	})
-	if alreadySeen {
+	if mtime.Equal(s.view().lastCfgMtime) {
 		return
 	}
+	// applyProjectConfig records the mtime only after it has either applied the
+	// parsed project config or replaced an invalid one with the global base.
 	s.applyProjectConfig(workspace)
 	s.log().Info("daemon: project config hot-reloaded", "workspace", workspace)
 }

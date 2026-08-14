@@ -88,6 +88,73 @@ func TestCheckAndReloadConfig_AppliesOnNewMtime(t *testing.T) {
 	}
 }
 
+func TestCheckAndReloadConfig_DeletionRevokesProjectConsent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(plumbDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[collab]\ncross_project = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	grantExecTrust(t, ws)
+
+	s := &connSession{ctx: context.Background(), store: config.NewStore(config.Defaults())}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+	s.applyProjectConfig(ws)
+	if !s.collabConfig().CrossProject {
+		t.Fatal("project consent was not enabled before deletion")
+	}
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	s.checkAndReloadConfig()
+	if s.collabConfig().CrossProject {
+		t.Fatal("deleted project config left cross-project delivery enabled")
+	}
+	if !s.view().lastCfgMtime.IsZero() {
+		t.Fatal("deleted project config did not clear its applied mtime")
+	}
+}
+
+func TestCheckAndReloadConfig_InvalidFileRevokesProjectConsent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(plumbDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[collab]\ncross_project = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	grantExecTrust(t, ws)
+
+	s := &connSession{ctx: context.Background(), store: config.NewStore(config.Defaults())}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+	s.applyProjectConfig(ws)
+	if !s.collabConfig().CrossProject {
+		t.Fatal("project consent was not enabled before invalidation")
+	}
+	if err := os.WriteFile(configPath, []byte("[collab\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(configPath, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	s.checkAndReloadConfig()
+	if s.collabConfig().CrossProject {
+		t.Fatal("invalid project config left cross-project delivery enabled")
+	}
+}
+
 func TestCheckAndReloadConfig_SkipsWhenWorkspaceUnresolved(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

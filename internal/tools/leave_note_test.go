@@ -64,6 +64,24 @@ func TestLeaveNote_AddressedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestLeaveNote_InvalidAddresseeRejectedBeforeStorage(t *testing.T) {
+	deps, _, created := collabTestDeps(t, CollabPolicy{Mailbox: true})
+	tool := NewLeaveNote(deps)
+	for _, to := range []string{"NEXT", "has space", "line\nbreak", strings.Repeat("a", 26)} {
+		raw, err := json.Marshal(leaveNoteArgs{Body: "hello", To: to})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tool.Execute(context.Background(), raw); err == nil ||
+			!strings.Contains(err.Error(), "invalid addressee") {
+			t.Errorf("to %q was not rejected clearly: %v", to, err)
+		}
+	}
+	if *created {
+		t.Fatal("invalid addressee touched the mailbox store")
+	}
+}
+
 func TestLeaveNote_MissingBodyRejected(t *testing.T) {
 	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true})
 	tool := NewLeaveNote(deps)

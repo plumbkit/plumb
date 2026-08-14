@@ -106,6 +106,27 @@ func TestShareFindings_RoutedByRelevant(t *testing.T) {
 	}
 }
 
+func TestShareFindings_UnregisteredSessionFailsClosed(t *testing.T) {
+	deps, ws := shareFindingsTestDeps(t, CollabPolicy{KnowledgeHandoff: true}, 50)
+	deps.SessionName = func() string { return "" }
+	deps.SessionID = ""
+
+	out, err := NewShareFindings(deps).Execute(context.Background(), json.RawMessage(`{"summary":"unattributed finding"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "not registered") || !strings.Contains(out, "reconnect") {
+		t.Fatalf("unregistered session lacked a safe remedy: %q", out)
+	}
+	mems, err := memory.List(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mems) != 0 {
+		t.Fatalf("unregistered session persisted unattributed findings: %#v", mems)
+	}
+}
+
 func TestShareFindings_MissingSummaryRejected(t *testing.T) {
 	deps, _ := shareFindingsTestDeps(t, CollabPolicy{KnowledgeHandoff: true}, 50)
 	tool := NewShareFindings(deps)
