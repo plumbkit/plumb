@@ -392,6 +392,35 @@ func TestServer_EnrichToolOutput(t *testing.T) {
 	}
 }
 
+func TestServer_ToolResultMeta(t *testing.T) {
+	s := newServer()
+	s.ToolResultMeta = func(_ context.Context, name string, _ json.RawMessage) map[string]any {
+		if name == "echo" {
+			return map[string]any{mcp.MetaResolvedWorkspaceKey: "/ws"}
+		}
+		return nil
+	}
+	resps := serveOn(t, s, `{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
+	result, _ := resps[0]["result"].(map[string]any)
+	if result["isError"].(bool) {
+		t.Fatalf("unexpected isError")
+	}
+	meta, _ := result["_meta"].(map[string]any)
+	if meta[mcp.MetaResolvedWorkspaceKey] != "/ws" {
+		t.Fatalf("result _meta = %v, want %s=/ws", meta, mcp.MetaResolvedWorkspaceKey)
+	}
+}
+
+func TestServer_ToolResultMeta_NilLeavesPayloadBare(t *testing.T) {
+	// No hook wired: a successful result carries no `_meta` key at all, staying
+	// byte-identical to the pre-`_meta` payload.
+	resps := serve(t, `{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
+	result, _ := resps[0]["result"].(map[string]any)
+	if _, present := result["_meta"]; present {
+		t.Fatalf("unhooked success carried _meta: %v", result)
+	}
+}
+
 func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 	resps := serve(t, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nope","arguments":{}}}`)
 	if len(resps) != 1 {

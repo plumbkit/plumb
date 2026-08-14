@@ -9,6 +9,25 @@
 
 ### Security
 
+- **A deleted pinned workspace no longer rehydrates to the enclosing
+  repository after a daemon restart.** If a workspace pinned by an explicit
+  `session_start` disappeared before the daemon restarted — a removed git
+  worktree is the standing case — the restore path walked *up* the filesystem
+  and re-pinned the nearest ancestor that looked like a project, silently
+  widening the session's write surface past anything the caller chose (the
+  #181 fail-open class through the restore path). The pin is now verified
+  before it is restored: a root whose directory is gone, or whose resolution no
+  longer lands on exactly the stored root, is **dropped** — logged, deleted
+  from the persisted store, and left for the normal attach ladder (client
+  roots, cwd hint) rather than attached at an ancestor. The same check covers
+  alias-spelled pins (never attached under either spelling, so no shadow pins)
+  and markerless synthetic roots (the `SynthesiseRoot` walk no longer climbs to
+  a `.git` that appeared above the pin). In the same stroke, `session_start`
+  results now echo the daemon-canonical root in `_meta`
+  (`dev.plumbkit/resolved-workspace`), and the `plumb serve` proxy commits that
+  spelling as the pin it replays on reconnect — closing the raw-spelling replay
+  channel that fed the drift.
+
 - **The command allow-list, the shell gate and the Xcode build server are now
   bound to the project config content you approved**, not to a per-workspace
   boolean. `[[command]]`, `[commands] allow_shell`/`deny_network` and `[xcode]`

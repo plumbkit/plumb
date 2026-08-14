@@ -18,9 +18,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -215,22 +218,112 @@ func (s *connSession) loadPin() (root string, source sessionstate.PinSource, ok 
 // attachWorkspace would stamp PinSourceRoots over a session_start row, quietly
 // demoting a deliberate pin to one that no longer outranks the client's roots —
 // the pin would then lose the very next reconnect.
+//
+// The pin is verified before it is restored (restoreRootIntact): a persisted
+// root whose directory was deleted — a removed git worktree is the standing
+// case — otherwise rehydrates to the nearest ANCESTOR that looks like a
+// project, silently widening the session's write surface past anything the
+// caller chose (the #181 fail-open class through the restore path).
 func (s *connSession) rehydratePin(ctx context.Context) {
 	root, source, ok := s.loadPin()
 	if !ok {
 		return
 	}
-	if _, _, err := s.pool.Detect(root); err != nil {
+	resolved, synthetic, intact := s.restoreRootIntact(root)
+	if !intact {
+		s.dropPin(root, source)
+		return
+	}
+	if synthetic {
 		// A persisted markerless (synthetic-root) pin: Detect finds no marker
 		// now either, so attachWorkspacePinFrom would defer to the first tool
 		// call and the deliberate pin would fall through to the weaker
 		// cwd-hint/seed rungs. Re-synthesise under the loaded origin instead —
 		// attachSynthetic is first-wins, preserving this function's idempotence.
-		s.attachSynthetic(ctx, s.pool.SynthesiseRoot(root), source, pinTriggerRestore)
+		s.attachSynthetic(ctx, resolved, source, pinTriggerRestore)
 	} else {
-		s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
+		s.attachWorkspacePinFrom(ctx, "file://"+resolved, source, pinTriggerRestore)
 	}
 	if s.workspace() != "" {
-		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root, "source", string(source))
+		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", resolved, "source", string(source))
 	}
+}
+
+// restoreRootIntact verifies a persisted or replayed pin root before it is
+// restored: the directory must still exist, and resolving it must land back on
+// EXACTLY the stored root — never on an ancestor the detect walk would climb
+// to, and never on a different canonical spelling. Both mismatches are dropped
+// rather than attached: the first widens the write surface (a deleted worktree
+// rehydrating to the enclosing repo), the second would pin the project under a
+// spelling the caller never held, shadowing the canonical pin.
+//
+// synthetic reports whether the root resolves markerless (no .plumb/marker/.git
+// anywhere up the chain), so the caller attaches it via attachSynthetic exactly
+// as the original pin did. The comparison is against the stored string, not its
+// canonicalisation: every pin plumb persists is already the canonical resolved
+// root, so an alias-spelled row is by definition one plumb did not write — drop
+// it and let the normal attach ladder re-pin canonically.
+func (s *connSession) restoreRootIntact(root string) (resolved string, synthetic, intact bool) {
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return "", false, false
+	}
+	if detected, _, derr := s.pool.Detect(root); derr == nil {
+		if detected != root {
+			return "", false, false
+		}
+		return detected, false, true
+	}
+	// Markerless pin: SynthesiseRoot walks up to the nearest .git, so it has the
+	// same widening shape as Detect's climb — only a root that synthesises to
+	// itself is restored.
+	if synth := s.pool.SynthesiseRoot(root); synth == root {
+		return synth, true, true
+	}
+	return "", false, false
+}
+
+// dropPin refuses to restore a pin whose root failed verification, deletes the
+// persisted row so the same drop is not re-attempted on every reconnect and
+// every unpinned tool call, and leaves the connection unattached — the normal
+// attach ladder (roots, cwd hint, tool-path seeding) still runs, and when
+// nothing lower resolves the session stays honestly unattached
+// (UnattachedWorkspaceError) instead of silently pinned to a wider root. The
+// drop is logged at Warn: a healthy rehydrate logs at Info, and this is not one.
+func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
+	s.log().Warn("daemon: persisted pin dropped — root no longer resolves to itself; refusing to widen to an ancestor",
+		"root", root, "source", string(source))
+	v := s.view()
+	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
+		return
+	}
+	// Delete only the row that names THIS root: a replayed proxy pin (rung 1)
+	// and the persisted row (rung 1b) record the same fact, but a stale replay
+	// must not delete a newer pin the daemon stored after the proxy learned its.
+	stored, _, _, ok, err := s.sessionState.LoadPin(v.proxySessionID)
+	if err != nil || !ok || stored != root {
+		return
+	}
+	if err := s.sessionState.DeletePin(v.proxySessionID); err != nil {
+		s.log().Debug("daemon: delete persisted pin failed", "err", err)
+	}
+}
+
+// toolResultMeta contributes `_meta` to successful tool results. Today that is
+// one fact: for a session_start that carried a workspace argument, the
+// CANONICAL root the daemon actually pinned (mcp.MetaResolvedWorkspaceKey), so
+// the serve proxy commits the resolved spelling instead of the caller's raw
+// one. That closes the raw-spelling replay channel: an alias-spelled pin could
+// shadow a project under two roots, and a replayed subdirectory re-resolved
+// against a fresh daemon whose state the proxy knows nothing about. The
+// workspace is read after the call, when onBeforeTool/repin has already
+// attached the resolved (canonical) root.
+func (s *connSession) toolResultMeta(_ context.Context, name string, args json.RawMessage) map[string]any {
+	if name != sessionStartTool || !workspaceArgPresent(args) {
+		return nil
+	}
+	if ws := s.workspace(); ws != "" {
+		return map[string]any{mcp.MetaResolvedWorkspaceKey: ws}
+	}
+	return nil
 }

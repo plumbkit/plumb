@@ -176,6 +176,31 @@ func TestLoadPinMissing(t *testing.T) {
 	}
 }
 
+func TestDeletePin(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
+		t.Fatalf("UpsertPin: %v", err)
+	}
+	if err := s.DeletePin("p"); err != nil {
+		t.Fatalf("DeletePin: %v", err)
+	}
+	if _, _, _, ok, err := s.LoadPin("p"); err != nil || ok {
+		t.Fatalf("LoadPin after DeletePin = (ok=%v, err=%v), want gone", ok, err)
+	}
+	// Deleting a missing row is a no-op, and the empty key is refused silently —
+	// both so a restore-path drop never has to pre-check.
+	if err := s.DeletePin("p"); err != nil {
+		t.Fatalf("DeletePin of a missing row: %v", err)
+	}
+	if err := s.DeletePin(""); err != nil {
+		t.Fatalf("DeletePin of an empty key: %v", err)
+	}
+	var nilStore *Store
+	if err := nilStore.DeletePin("p"); err != nil {
+		t.Fatalf("DeletePin on a nil store: %v", err)
+	}
+}
+
 func TestNameRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.SaveName("p", "swift-falcon"); err != nil {

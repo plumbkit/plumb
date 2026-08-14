@@ -52,6 +52,18 @@ const MetaWorkspaceKey = "dev.plumbkit/workspace"
 // MCP `_meta` convention.
 const MetaPinnedWorkspaceKey = "dev.plumbkit/pinned-workspace"
 
+// MetaResolvedWorkspaceKey is the tools/call result `_meta` key under which the
+// daemon echoes the CANONICAL workspace root it actually pinned for a
+// session_start(workspace=…) call — the resolved Detect/Synthesise root, not
+// the caller's raw spelling. The serve proxy commits this spelling as the pin
+// it replays after a restart (falling back to the raw argument against a daemon
+// that predates the key), so the replayed pin is always a resolved root: one
+// the restore path can verify verbatim, never an alias that would shadow the
+// same project under two spellings or a subdirectory that re-resolves against
+// state the proxy knows nothing about. Reverse-DNS namespaced per the MCP
+// `_meta` convention.
+const MetaResolvedWorkspaceKey = "dev.plumbkit/resolved-workspace"
+
 // MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
 // exempt a tool from MCP tool-search deferral: a tool advertised with
 // `_meta["anthropic/alwaysLoad"] = true` is loaded into the client's context at

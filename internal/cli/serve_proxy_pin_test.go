@@ -120,6 +120,46 @@ func TestObserveSessionStart_LaterRepinReplaces(t *testing.T) {
 	}
 }
 
+// okResultResolved answers a session_start the way a current daemon does: the
+// result _meta echoes the CANONICAL root it actually pinned.
+func okResultResolved(id, resolved string) []byte {
+	return []byte(`{"jsonrpc":"2.0","id":` + id + `,"result":{"content":[{"type":"text","text":"ok"}],` +
+		`"_meta":{"` + mcp.MetaResolvedWorkspaceKey + `":"` + resolved + `"}}}`)
+}
+
+func TestObserveSessionStart_CommitsCanonicalEcho(t *testing.T) {
+	// The caller spelled a subdirectory (or an alias); the daemon resolved and
+	// pinned the project root. The proxy must replay the daemon's spelling —
+	// the one the restore path can verify — not the raw argument.
+	p := newPinProxy()
+	p.observeClientRequest(sessionStartFrame("7", "/Users/me/proj/subdir"))
+	p.commitSessionStartPin(okResultResolved("7", "/Users/me/proj"))
+	if got := p.pinnedWorkspace(); got != "/Users/me/proj" {
+		t.Fatalf("pinnedWorkspace = %q, want the daemon-echoed canonical root /Users/me/proj", got)
+	}
+}
+
+func TestObserveSessionStart_RawSpellingStandsWithoutEcho(t *testing.T) {
+	// A daemon that predates the resolved-workspace key sends no _meta; the raw
+	// argument is committed exactly as before the key existed.
+	p := newPinProxy()
+	p.observeClientRequest(sessionStartFrame("7", "/Users/me/proj"))
+	p.commitSessionStartPin(okResult("7"))
+	if got := p.pinnedWorkspace(); got != "/Users/me/proj" {
+		t.Fatalf("pinnedWorkspace = %q, want the raw argument /Users/me/proj", got)
+	}
+}
+
+func TestObserveSessionStart_MalformedEchoFallsBackToRaw(t *testing.T) {
+	p := newPinProxy()
+	p.observeClientRequest(sessionStartFrame("7", "/Users/me/proj"))
+	p.commitSessionStartPin([]byte(`{"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"ok"}],` +
+		`"_meta":{"` + mcp.MetaResolvedWorkspaceKey + `":["not","a","string"]}}}`))
+	if got := p.pinnedWorkspace(); got != "/Users/me/proj" {
+		t.Fatalf("pinnedWorkspace = %q, want the raw argument on a malformed echo", got)
+	}
+}
+
 func TestPinnedWorkspaceMeta_InjectsAuthoritativeKey(t *testing.T) {
 	frame := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"keep":"me"}}}`)
 	out := injectInitMeta(frame, pinnedWorkspaceMeta("/Users/me/proj"))

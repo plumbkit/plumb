@@ -312,6 +312,23 @@ func (s *Store) LoadPin(proxySessionID string) (workspace, language string, sour
 	}
 }
 
+// DeletePin removes the pin recorded under proxySessionID. Used when a
+// persisted pin no longer verifies at restore time (its directory is gone, or
+// it now resolves to a different root): leaving the row would re-attempt the
+// same drop on every reconnect and every unpinned tool call. nil-safe; a no-op
+// when proxySessionID is empty or no row exists.
+func (s *Store) DeletePin(proxySessionID string) error {
+	if s == nil || proxySessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE proxy_session_id=?`, proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: delete pin: %w", err)
+	}
+	return nil
+}
+
 // SaveName records the session name under a proxy session ID, so a reconnect
 // after a daemon restart comes back under the same name. nil-safe; a no-op when
 // proxySessionID or name is empty.

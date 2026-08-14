@@ -311,6 +311,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		s.onBeforeTool(toolCtx, name, args)
 	}
 	srv.EnrichToolOutput = s.enrichToolOutput
+	// Echo the canonical pinned root back on a session_start(workspace=…) result,
+	// so the serve proxy commits the resolved spelling as its replay pin.
+	srv.ToolResultMeta = s.toolResultMeta
 	// Filters tools/list to the resolved profile (lean hides commodity tools;
 	// they stay callable by name). Resolved per list call, so it sees the client
 	// identity set synchronously during initialize.
