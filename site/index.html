@@ -324,7 +324,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
   <section class="hero wrap">
     <span class="k rv">The workspace layer for agent fleets</span>
     <h1 class="rv">One workspace. Every agent. <span class="grad">Zero collisions.</span></h1>
-    <p class="sub rv">Plumb gives AI coding agents <b>real IDE intelligence</b> from the language servers your editor trusts, plus the <b>write-safety to share a repository</b>: with each other, with your cron jobs, and with you.</p>
+    <p class="sub rv">Plumb gives AI coding agents <b>real IDE intelligence</b> from the language servers your editor trusts, plus the <b>write-safety and coordination to share a repository</b>: with each other, with your cron jobs, and with you.</p>
     <div class="cta rv">
       <a class="btn s" href="#quickstart">Get started</a>
       <a class="btn" href="https://github.com/plumbkit/plumb">Star on GitHub</a>
@@ -348,6 +348,19 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
       <div class="tev l ok"><div class="side"><div class="tm">14:02:16</div><div class="tt"><b>agent A</b>; re-reads, re-applies on top of B's change<span class="tag ok">landed clean</span></div></div></div>
     </div>
     <p class="tnote rv">Nothing corrupted, nothing silently overwritten, no human untangling. <b>Per-path locks, optimistic concurrency, atomic transactions, session isolation</b>; the substrate agent fleets are missing.</p>
+  </section>
+
+  <section class="blk wrap center" id="coordination">
+    <span class="k rv">Coordination · the layer above the locks</span>
+    <h2 class="rv">They don't just avoid each other.<br><span class="grad">They talk.</span></h2>
+    <p class="intro rv">The one daemon every agent shares also carries a <b>threaded agent-to-agent mailbox</b>; messages ride on ordinary tool results, so a working agent receives them without polling. That lets an agent do the rarest thing in multi-agent work: ask, instead of assume.</p>
+    <div class="tline rv">
+      <div class="tev l ok"><div class="side"><div class="tm">14:12:07</div><div class="tt"><b>agent A</b>; about to claim a path-handling fix is real · <code>leave_note</code> to the peer that owns the code: “measure what <code>resolve()</code> does on a missing path; don't take my word for it”<span class="tag ok">sent</span></div></div></div>
+      <div class="tev r ok"><div class="side"><div class="tm">14:12:09</div><div class="tt"><b class="b2">agent B</b>; the note arrives appended to its next tool result, mid-task · no polling, no interruption<span class="tag ok">delivered</span></div></div></div>
+      <div class="tev l ok"><div class="side"><div class="tm">14:13:31</div><div class="tt"><b class="b2">agent B</b>; probes the live behaviour, replies in the same thread with the measurement<span class="tag ok">measured</span></div></div></div>
+      <div class="tev r ok"><div class="side"><div class="tm">14:13:44</div><div class="tt"><b>agent A</b>; the measurement proves the fix changes real behaviour · it lands with evidence, not hope<span class="tag ok">landed with proof</span></div></div></div>
+    </div>
+    <p class="tnote rv">Underneath, the daemon keeps everyone honest: <b><code>workspace_sessions</code> reports what peers actually wrote</b> · facts the daemon itself witnessed; an agent's own declared intent is <b>labelled an unverified claim</b>; and a write touching a path a peer claimed draws an advisory hint at exactly that moment. Peer awareness and the same-workspace mailbox are on by default; intent broadcasts and durable knowledge handoff are one <code>[collab]</code> config key each.</p>
   </section>
 
   <section class="blk wrap center" id="guardrails">

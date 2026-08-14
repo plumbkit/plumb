@@ -14,4 +14,6 @@ If session_start reports the workspace as resolving or empty, the project has no
 
 Prefer symbol-aware tools (workspace_symbols, file_outline, get_definition, find_references) over read_file when you only need to understand structure. Read entire files only when you need to edit them.
 
-Check the diagnostics in the orientation packet and after every write — they show compile errors, type errors, and warnings from the language server.`
+Check the diagnostics in the orientation packet and after every write — they show compile errors, type errors, and warnings from the language server.
+
+You may not be working alone: session_start lists other agents active on this workspace, and workspace_sessions shows what they actually wrote — observed facts, not claims. Before editing a file a peer recently wrote, re-read it. Messages from peer agents arrive appended to your tool results; act on them when they appear, and reply with leave_note.`
