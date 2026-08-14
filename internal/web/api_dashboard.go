@@ -105,31 +105,37 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func activeConversationVolumes(sessions []session.Info, limit int) []conversationDTO {
+	var global *collab.Store
+	if collab.GlobalExists() {
+		global, _ = collab.OpenGlobal()
+		if global != nil {
+			defer global.Close()
+		}
+	}
+	return activeConversationVolumesWithGlobal(sessions, limit, global)
+}
+
+func activeConversationVolumesWithGlobal(
+	sessions []session.Info,
+	limit int,
+	global *collab.Store,
+) []conversationDTO {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	seen := make(map[string]bool)
+	now := time.Now()
+	seenWorkspace := make(map[string]bool)
+	seenCrossProject := make(map[string]bool)
 	var out []conversationDTO
 	for _, info := range sessions {
 		workspace := filepath.Clean(info.Folder)
-		if workspace == "." || seen[workspace] || !collab.Exists(workspace) {
+		if workspace == "." || seenWorkspace[workspace] {
 			continue
 		}
-		seen[workspace] = true
-		store, err := collab.Open(workspace)
-		if err != nil {
-			continue
-		}
-		summaries, queryErr := store.ConversationSummaries(ctx, time.Now(), limit)
-		_ = store.Close()
-		if queryErr != nil {
-			continue
-		}
-		for _, summary := range summaries {
-			out = append(out, conversationDTO{
-				ID: summary.ID, Workspace: filepath.Base(workspace),
-				Notes: summary.Notes, Pending: summary.Pending, LastAt: summary.LastAt,
-			})
-		}
+		seenWorkspace[workspace] = true
+		out = append(out, localConversationVolumes(ctx, workspace, now, limit)...)
+		out = append(out, crossProjectConversationVolumes(
+			ctx, global, workspace, now, limit, seenCrossProject,
+		)...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Notes != out[j].Notes {
@@ -139,6 +145,63 @@ func activeConversationVolumes(sessions []session.Info, limit int) []conversatio
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out
+}
+
+func localConversationVolumes(
+	ctx context.Context,
+	workspace string,
+	now time.Time,
+	limit int,
+) []conversationDTO {
+	if !collab.Exists(workspace) {
+		return nil
+	}
+	store, err := collab.Open(workspace)
+	if err != nil {
+		return nil
+	}
+	defer store.Close()
+	summaries, err := store.ConversationSummaries(ctx, now, limit)
+	if err != nil {
+		return nil
+	}
+	out := make([]conversationDTO, 0, len(summaries))
+	for _, summary := range summaries {
+		out = append(out, conversationDTO{
+			ID: summary.ID, Workspace: filepath.Base(workspace),
+			Notes: summary.Notes, Pending: summary.Pending, LastAt: summary.LastAt,
+		})
+	}
+	return out
+}
+
+func crossProjectConversationVolumes(
+	ctx context.Context,
+	global *collab.Store,
+	workspace string,
+	now time.Time,
+	limit int,
+	seen map[string]bool,
+) []conversationDTO {
+	if global == nil {
+		return nil
+	}
+	summaries, err := global.ConversationSummariesForWorkspace(ctx, workspace, now, limit)
+	if err != nil {
+		return nil
+	}
+	var out []conversationDTO
+	for _, summary := range summaries {
+		if seen[summary.ID] {
+			continue
+		}
+		seen[summary.ID] = true
+		out = append(out, conversationDTO{
+			ID: summary.ID, Workspace: "cross-project",
+			Notes: summary.Notes, Pending: summary.Pending, LastAt: summary.LastAt,
+		})
 	}
 	return out
 }

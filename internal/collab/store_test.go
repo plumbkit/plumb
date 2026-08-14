@@ -101,11 +101,11 @@ func TestLiveIntents_FiltersExpired(t *testing.T) {
 	}
 }
 
-// TestClaimNotes_DeliversEachMessageExactlyOnce pins the read watermark, which
+// TestClaimNotes_ClaimsEachMessageAtMostOnce pins the read watermark, which
 // replaced delete-on-delivery: a claimed message is not handed over a second
 // time — to the same session or to any other — but it stays in the table so the
 // conversation keeps a transcript and a countable number of exchanges.
-func TestClaimNotes_DeliversEachMessageExactlyOnce(t *testing.T) {
+func TestClaimNotes_ClaimsEachMessageAtMostOnce(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
@@ -413,32 +413,6 @@ func TestPutNote_GlobalStoreRefusesUnaddressableRows(t *testing.T) {
 		AuthorID: "c", Body: "x", Addressee: AddresseeNext, TTL: time.Hour, TargetWorkspace: "/proj/a",
 	}, now); err == nil {
 		t.Error(`"next" must be refused by the cross-project store`)
-	}
-}
-
-// TestConversationPeerWorkspace_PlacesAnOfflinePeer backs the routing fix: a
-// reply must still reach a peer that disconnected between turns, instead of
-// silently landing in the sender's own mailbox.
-func TestConversationPeerWorkspace_PlacesAnOfflinePeer(t *testing.T) {
-	g, err := OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = g.Close() })
-	ctx, now := context.Background(), time.Now()
-
-	conv, err := g.PutNote(ctx, NoteInput{
-		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
-		TTL: time.Hour, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
-	}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ws, ok := g.ConversationPeerWorkspace(ctx, conv, "bob"); !ok || ws != "/proj/b" {
-		t.Errorf("conversation should place bob at /proj/b; got %q ok=%v", ws, ok)
-	}
-	if _, ok := g.ConversationPeerWorkspace(ctx, conv, "nobody"); ok {
-		t.Error("an unknown peer must not be placed")
 	}
 }
 

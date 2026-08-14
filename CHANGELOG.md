@@ -78,18 +78,23 @@
   their human operator.** `leave_note` no longer echoes bodies or silently loses
   everything beyond the recipient's UTF-8 byte window: its receipt and the
   recipient marker report exact visible/total/missing byte counts and point to an
-  in-thread follow-up or a shared file path. The default window is now 4096 bytes.
+  in-thread follow-up or a shared file path. The default window is now 4096 bytes,
+  and that existing byte budget now bounds durable body storage as well as display;
+  additive schema metadata preserves the exact original redacted byte count.
   `max_exchanges` is retired (the legacy config key is ignored), so no volume
   limit can discard a note; live conversation volume instead appears in
   `workspace_sessions`, the TUI dashboard, and Web alongside the sender's recent
   pending/delivered state.
 
-  In-thread replies that omit `to` now resolve the one other participant and fail
-  closed when history is missing or ambiguous, instead of silently becoming a
-  note for `next`. Self-authored rows cannot be claimed by their author. Blocking
-  `check_messages` results report elapsed seconds and policy clamps, while
-  per-call delivery limits continue to leave the remainder pending and exactly
-  once. When peers are active, `session_start` always states the effective collab
+  In-thread replies now bind the one other active participant by stable session ID,
+  follow that participant across a rename, and fail closed for offline peers,
+  caller non-participation, ambiguous history, or reused display names instead of
+  silently becoming a note for `next`. Self-authored rows cannot be claimed by
+  their author. Blocking `check_messages` results report elapsed seconds and policy
+  clamps, while per-call limits leave the remainder pending. Claims are atomic and
+  at most once across server delivery paths; a post-claim transport failure can
+  still lose a note, so end-to-end exactly-once is not claimed. When peers are
+  active, `session_start` always states the effective collab
   policy even if detailed peer awareness is disabled.
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would
@@ -1869,16 +1874,17 @@
   truth: they reset on daemon restart, so a 30 s backstop still consults the
   store, and a missed bump costs latency, never a message.
 
-  **Read state replaced delete-on-delivery.** Schema v2 adds `conversation_id`,
-  `delivered_at`, `delivered_to` and `origin_workspace` by `ALTER TABLE` —
+  **Read state replaced delete-on-delivery.** Additive schema migrations add
+  `conversation_id`, `delivered_at`, stable `delivered_to_id`, workspace routing,
+  and exact original-byte metadata by `ALTER TABLE` —
   `collab.db` is not a rebuildable index, its rows are the only copy, so the
   migration is additive, driven by which columns actually exist rather than by
   the stamped version, and idempotent. A legacy v1 note survives and behaves like
-  an unread message: delivered once, then quiet. A claimed message stays until
-  its TTL, which is what gives a conversation a transcript and a countable number
-  of exchanges. `session_start`, `check_messages` and the tool-result block all
-  go through one `Inbox.Claim`, which is what makes "delivered exactly once" true
-  across all three rather than per path.
+  an unread message: claimed once, then quiet. A claimed message stays until its
+  TTL, which is what gives a conversation a transcript and a countable number of
+  exchanges. `session_start`, `check_messages` and the tool-result block all go
+  through one atomic `Inbox.Claim`, creating one at-most-once server-side claim
+  across all three. A post-claim transport failure remains an explicit loss mode.
 
   **Cross-project messaging is gated at DELIVERY, by the recipient.** A message
   to a session pinned elsewhere lands in a new daemon-level store beside
@@ -1931,8 +1937,8 @@
   the claim must match, and the store refuses a cross-project row that names no
   target or is addressed to `next`.
 
-  Guarded by store tests (v1→v2 migration preserving a legacy note and delivering
-  it exactly once, migration idempotency, claim-once across readers, oldest-first
+  Guarded by store tests (additive v1 migration preserving a legacy note and
+  claiming it at most once, migration idempotency, claim-once across readers, oldest-first
   ordering, conversation threading and counting), notifier tests (per-recipient
   generations, wake-on-bump, timeout, the snapshot/park race, concurrent
   waiters), tool tests (flag gating both directions, delivery quoting the

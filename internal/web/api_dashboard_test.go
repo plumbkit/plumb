@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -95,11 +96,35 @@ func TestActiveConversationVolumes_DeduplicatesWorkspacesAndReportsCounts(t *tes
 		t.Fatal(err)
 	}
 
-	got := activeConversationVolumes([]session.Info{{Folder: ws}, {Folder: ws}}, 10)
+	got := activeConversationVolumesWithGlobal([]session.Info{{Folder: ws}, {Folder: ws}}, 10, nil)
 	if len(got) != 1 {
 		t.Fatalf("conversation rows = %#v, want one deduplicated workspace row", got)
 	}
 	if got[0].ID != conv || got[0].Notes != 2 || got[0].Pending != 2 {
 		t.Fatalf("conversation row = %#v", got[0])
+	}
+}
+
+func TestActiveConversationVolumes_IncludesCrossProjectConversationOnce(t *testing.T) {
+	wsA, wsB := t.TempDir(), t.TempDir()
+	global, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = global.Close() })
+	conv, err := global.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "alice-id", Body: "cross", Addressee: "bob",
+		TTL: time.Hour, OriginWorkspace: wsA, TargetWorkspace: wsB,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := activeConversationVolumesWithGlobal(
+		[]session.Info{{Folder: wsA}, {Folder: wsB}}, 10, global,
+	)
+	if len(got) != 1 || got[0].ID != conv || got[0].Workspace != "cross-project" ||
+		got[0].Notes != 1 || got[0].Pending != 1 {
+		t.Fatalf("cross-project conversation rows = %#v", got)
 	}
 }

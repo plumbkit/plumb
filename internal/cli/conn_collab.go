@@ -101,6 +101,24 @@ func (s *connSession) peerWorkspace(name string) (string, bool) {
 	return "", false
 }
 
+// peerSessionByID resolves stable identity to the live session's current name
+// and workspace. Unlike peerWorkspace, it is safe across rename and name reuse.
+func (s *connSession) peerSessionByID(id string) (string, string, bool) {
+	if id == "" {
+		return "", "", false
+	}
+	all, err := session.List()
+	if err != nil {
+		return "", "", false
+	}
+	for _, p := range all {
+		if p.ID == id {
+			return p.Name, p.Folder, true
+		}
+	}
+	return "", "", false
+}
+
 // collabDeps bundles everything the mailbox tools need. Note the deliberate
 // asymmetry between the create and if-exists accessors: only a send may bring a
 // database into existence, so every read path is wired to the if-exists variant.
@@ -116,6 +134,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStoreIfExists: s.collabGlobalIfExists,
 		Notifier:            s.collabPool.notifier(),
 		PeerWorkspace:       s.peerWorkspace,
+		PeerSessionByID:     s.peerSessionByID,
 	}
 }
 
@@ -126,8 +145,8 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 // An unregistered session (session.Register failed, so sessID is empty) has no
 // address. Its name never entered the session directory, so no peer's
 // uniqueness check can see it and it may well duplicate a live session's name —
-// claiming that peer's messages, which are delivered exactly once and would
-// simply never arrive. Inbox.Claim treats an empty Self as "mailbox off".
+// claiming that peer's messages, which are claimed at most once and would then
+// simply never reach the intended recipient. Inbox.Claim treats an empty Self as "mailbox off".
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
 		Self:      s.addressableName(),

@@ -31,8 +31,15 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 	t.Cleanup(func() { _ = local.Close(); _ = global.Close() })
 
 	deps := CollabDeps{
-		Workspace:           func() string { return ws },
-		PeerWorkspace:       func(string) (string, bool) { return "", false },
+		Workspace:     func() string { return ws },
+		PeerWorkspace: func(string) (string, bool) { return "", false },
+		PeerSessionByID: func(id string) (string, string, bool) {
+			if name, ok := strings.CutPrefix(id, "id-"); ok {
+				return name, ws, true
+			}
+			name, ok := strings.CutPrefix(id, "sess-")
+			return name, ws, ok
+		},
 		SessionName:         func() string { return self },
 		SessionID:           "sess-" + self,
 		Policy:              func() CollabPolicy { return policy },
@@ -236,44 +243,79 @@ func TestCheckMessages_WokenWithNothingReadableDisclosesNothing(t *testing.T) {
 	}
 }
 
-// TestLeaveNote_OfflinePeerIsPlacedByConversation pins the routing fix. Routing
-// used to ask only "is a session with that name live right now"; a peer that
-// exited between turns of a cross-project conversation made the next reply fall
-// back to the SENDER's own mailbox — invisible to the recipient, reported as
-// sent, and with the exchange budget silently reset. The conversation itself
-// records where the peer was writing from, so it can still be placed.
-func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
+// TestLeaveNote_OfflineThreadParticipantFailsClosed pins stable-identity
+// routing: a disconnected participant cannot be replaced by a same-named live
+// session or a historical workspace guess.
+func TestLeaveNote_OfflineThreadParticipantFailsClosed(t *testing.T) {
 	deps, local, global := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	myWS := wsRootOf(deps)
-
-	// bob wrote to alice from another project, then disconnected.
 	conv := put(t, global, "bob", "alice", "question from my repo", "", "/proj/bob", myWS)
-	deps.PeerWorkspace = func(string) (string, bool) { return "", false } // bob is gone
+	if rows, err := global.ClaimNotesForSession(
+		context.Background(), "alice", deps.SessionID, myWS, time.Now(), 1,
+	); err != nil || len(rows) != 1 {
+		t.Fatalf("establish alice's participation: rows=%#v err=%v", rows, err)
+	}
+
+	// An attacker can now reuse bob's display name, but not bob's stable ID.
+	deps.PeerWorkspace = func(name string) (string, bool) {
+		if name == "bob" {
+			return "/proj/attacker", true
+		}
+		return "", false
+	}
+	deps.PeerSessionByID = func(string) (string, string, bool) { return "", "", false }
+
+	_, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"bob","body":"my answer","conversation_id":`+jsonStr(conv)+`}`))
+	if err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("offline stable participant was not refused: %v", err)
+	}
+	sent, err := global.RecentSentNotes(context.Background(), deps.SessionID, time.Now(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("refused reply created cross-project rows: %#v", sent)
+	}
+	if stray, err := local.PendingNotes(context.Background(), "bob", myWS, time.Now()); err != nil || len(stray) != 0 {
+		t.Fatalf("refused reply leaked into the local name mailbox: rows=%#v err=%v", stray, err)
+	}
+}
+
+func TestLeaveNote_ThreadReplyFollowsStableParticipantRename(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	ws := deps.Workspace()
+	conv := put(t, local, "bob", "alice", "question", "", "", "")
+	if rows, err := local.ClaimNotesForSession(
+		context.Background(), "alice", deps.SessionID, ws, time.Now(), 1,
+	); err != nil || len(rows) != 1 {
+		t.Fatalf("establish alice's participation: rows=%#v err=%v", rows, err)
+	}
+	deps.PeerSessionByID = func(id string) (string, string, bool) {
+		if id == "id-bob" {
+			return "robert", ws, true
+		}
+		return "", "", false
+	}
+	// A stale/new session named bob must not influence the bound route.
+	deps.PeerWorkspace = func(name string) (string, bool) {
+		if name == "bob" {
+			return "/proj/attacker", true
+		}
+		return ws, name == "robert"
+	}
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
-		json.RawMessage(`{"to":"bob","body":"my answer","conversation_id":`+jsonStr(conv)+`}`))
+		json.RawMessage(`{"body":"answer","conversation_id":`+jsonStr(conv)+`}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "cross-project") {
-		t.Errorf("the reply should still be routed cross-project; got %q", out)
+	if !strings.Contains(out, "session robert") {
+		t.Fatalf("reply did not follow the stable participant's rename: %q", out)
 	}
-
-	// It must be in the cross-project store addressed back to bob's workspace —
-	// NOT in alice's own mailbox where bob could never see it.
-	back, err := global.ClaimNotes(context.Background(), "bob", "/proj/bob", time.Now(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(back) != 1 || back[0].Body != "my answer" {
-		t.Fatalf("bob should be able to claim the reply in his workspace; got %v", back)
-	}
-	stray, err := local.ClaimNotes(context.Background(), "bob", myWS, time.Now(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stray) != 0 {
-		t.Errorf("the reply must not be filed in the sender's own mailbox; found %d", len(stray))
+	rows, err := local.ClaimNotesForSession(context.Background(), "robert", "id-bob", ws, time.Now(), 1)
+	if err != nil || len(rows) != 1 || rows[0].Body != "answer" {
+		t.Fatalf("renamed participant did not receive reply: rows=%#v err=%v", rows, err)
 	}
 }
 

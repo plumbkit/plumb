@@ -141,15 +141,23 @@ func (m *Model) refreshDashboardProject() {
 	m.dashProjectAxes = m.globalDB.SavingsAxes(pf)
 	m.dashProjectTokens = m.dashProjectAxes.Total()
 	m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
-	m.dashProjectConversations = nil
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	now := time.Now()
+	var localSummaries, globalSummaries []collab.ConversationSummary
 	if collab.Exists(m.dashProjectFolder) {
 		if store, err := collab.Open(m.dashProjectFolder); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-			m.dashProjectConversations, _ = store.ConversationSummaries(ctx, time.Now(), 5)
-			cancel()
+			localSummaries, _ = store.ConversationSummaries(ctx, now, 5)
 			_ = store.Close()
 		}
 	}
+	if collab.GlobalExists() {
+		if store, err := collab.OpenGlobal(); err == nil {
+			globalSummaries, _ = store.ConversationSummariesForWorkspace(ctx, m.dashProjectFolder, now, 5)
+			_ = store.Close()
+		}
+	}
+	m.dashProjectConversations = collab.MergeConversationSummaries(5, localSummaries, globalSummaries)
 }
 
 // renderDashboard renders the full-width Dashboard section (section 0).

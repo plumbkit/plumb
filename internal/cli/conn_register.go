@@ -182,7 +182,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			func() (bool, bool) { c := s.collabConfig(); return c.Intents, c.Mailbox },
 			s.collabStoreIfExists,
 			s.sessionName,
-		).WithGlobalCollab(s.collabGlobalIfExists))
+		).WithGlobalCollab(s.collabGlobalIfExists,
+		func() bool { return s.collabConfig().CrossProject }))
 	collabDeps := s.collabDeps()
 	srv.Register(tools.NewShareIntent(collabDeps))
 	srv.Register(tools.NewLeaveNote(collabDeps))

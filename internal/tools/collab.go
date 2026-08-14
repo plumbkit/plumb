@@ -34,8 +34,8 @@ type CollabPolicy struct {
 	// daemon-level cross-project store when its own project sets this, so one
 	// project can never push text into another's context uninvited.
 	CrossProject bool
-	// ChatBudgetBytes caps a single delivered message body. Separate from the
-	// hint budget: a message is content the agent must act on, not a pointer.
+	// ChatBudgetBytes caps one durably stored and delivered message body.
+	// Separate from the hint budget: a message is content the agent must act on, not a pointer.
 	ChatBudgetBytes int
 	// MaxWaitSeconds caps check_messages' blocking wait, keeping it under the
 	// client's own MCP call timeout.
@@ -103,6 +103,10 @@ type CollabDeps struct {
 	// same-project (the workspace store) or cross-project (the daemon-level one).
 	// May be nil, in which case every message is treated as same-project.
 	PeerWorkspace func(name string) (workspace string, found bool)
+	// PeerSessionByID resolves a stable session identity to its CURRENT display
+	// name and workspace. Threaded replies require it and refuse if the original
+	// participant is offline, preventing name reuse from retargeting a message.
+	PeerSessionByID func(id string) (name, workspace string, found bool)
 }
 
 // resolveTTL turns a minutes count into a duration, applying the policy default

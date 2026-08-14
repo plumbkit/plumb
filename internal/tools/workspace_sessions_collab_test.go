@@ -72,19 +72,23 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 			func() *collab.Store { return local },
 			func() string { return "alice" },
 		).
-		WithGlobalCollab(func() *collab.Store { return global })
+		WithGlobalCollab(func() *collab.Store { return global }, func() bool { return true })
 	out := tool.collabBlock(now.Add(2 * time.Second))
 	for _, want := range []string{
-		"notes for you", "answer",
+		"notes for you", "from bob — pending, 6 bytes, conversation " + conv,
 		"your recent notes (delivery state)",
 		conv + " → bob — pending",
 		deliveredConv + " → carol — delivered to carol",
 		crossConv + " → dan — delivered to dan",
 		"conversation volume", conv + " — 2 notes, 2 pending",
+		crossConv + " — 1 note, 0 pending",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("collab observability missing %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "answer") {
+		t.Fatalf("workspace_sessions duplicated a pending note body instead of metadata:\n%s", out)
 	}
 
 	globalOnly := NewWorkspaceSessions(func() string { return ws }, "sess-alice").
@@ -93,9 +97,15 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 			func() *collab.Store { return nil },
 			func() string { return "alice" },
 		).
-		WithGlobalCollab(func() *collab.Store { return global })
-	if out := globalOnly.collabBlock(now.Add(2 * time.Second)); !strings.Contains(out, crossConv+" → dan — delivered to dan") {
-		t.Fatalf("cross-project sent state disappeared without a local store:\n%s", out)
+		WithGlobalCollab(func() *collab.Store { return global }, func() bool { return true })
+	if out := globalOnly.collabBlock(now.Add(2 * time.Second)); !strings.Contains(out, crossConv+" → dan — delivered to dan") ||
+		!strings.Contains(out, crossConv+" — 1 note, 0 pending") {
+		t.Fatalf("cross-project state or volume disappeared without a local store:\n%s", out)
+	}
+
+	globalOnly.collabGlobalVolume = func() bool { return false }
+	if out := globalOnly.collabBlock(now.Add(2 * time.Second)); strings.Contains(out, crossConv+" — 1 note, 0 pending") {
+		t.Fatalf("cross-project volume bypassed recipient consent:\n%s", out)
 	}
 }
 

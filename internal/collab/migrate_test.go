@@ -56,11 +56,11 @@ func openV1WithNote(t *testing.T, body, addressee string) string {
 	return ws
 }
 
-// TestMigrate_V1NoteSurvivesAndDeliversOnce is the migration's real contract.
+// TestMigrate_V1NoteSurvivesAndClaimsAtMostOnce is the migration's real contract.
 // collab.db is not a rebuildable index — its rows are the only copy — so a note
 // written by the previous version must still be there afterwards, and must
-// behave like an unread message: delivered exactly once, then quiet.
-func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
+// behave like an unread message: claimed at most once, then quiet.
+func TestMigrate_V1NoteSurvivesAndClaimsAtMostOnce(t *testing.T) {
 	ws := openV1WithNote(t, "written before threading existed", "alice")
 
 	s, err := Open(ws)
@@ -72,22 +72,25 @@ func TestMigrate_V1NoteSurvivesAndDeliversOnce(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	got, err := s.ClaimNotes(ctx, "alice", "", now, 0)
+	got, err := s.ClaimNotesForSession(ctx, "alice", "sess-alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Body != "written before threading existed" {
 		t.Fatalf("legacy note lost in migration: %v", got)
 	}
-	if got[0].ConversationID != "" {
-		t.Errorf("a legacy row has no conversation; got %q", got[0].ConversationID)
+	if got[0].ConversationID != "" || got[0].OriginalBytes != 0 {
+		t.Errorf("legacy defaults changed: conversation=%q original_bytes=%d", got[0].ConversationID, got[0].OriginalBytes)
+	}
+	if got[0].DeliveredToID != "sess-alice" {
+		t.Errorf("stable recipient identity was not stamped by the claim: %q", got[0].DeliveredToID)
 	}
 	again, err := s.ClaimNotes(ctx, "alice", "", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(again) != 0 {
-		t.Error("a migrated legacy note must be delivered once, not on every read")
+		t.Error("a migrated legacy note must be claimed once, not on every read")
 	}
 }
 

@@ -55,10 +55,11 @@ type WorkspaceSessions struct {
 	// workspace's collab.db ONLY if it already exists (a listing never creates
 	// one); collabPolicy is the [collab] intents/mailbox snapshot; selfName is the
 	// caller's session name, used to select notes addressed to it.
-	collabStore       func() *collab.Store
-	collabGlobalStore func() *collab.Store
-	collabPolicy      func() (intents, mailbox bool)
-	selfName          func() string
+	collabStore        func() *collab.Store
+	collabGlobalStore  func() *collab.Store
+	collabGlobalVolume func() bool
+	collabPolicy       func() (intents, mailbox bool)
+	selfName           func() string
 }
 
 // NewWorkspaceSessions creates the workspace_sessions tool.
@@ -108,10 +109,13 @@ func (t *WorkspaceSessions) WithCollab(policy func() (intents, mailbox bool), st
 	return t
 }
 
-// WithGlobalCollab wires open-if-exists access to the daemon-level store for
-// showing this session's own cross-project sent-note delivery state.
-func (t *WorkspaceSessions) WithGlobalCollab(store func() *collab.Store) *WorkspaceSessions {
+// WithGlobalCollab wires open-if-exists access to the daemon-level store.
+// Sent-note state is always scoped by the caller's author ID. Conversation
+// volume is additionally gated by allowVolume, the recipient project's
+// cross_project consent, and filtered to the caller's workspace.
+func (t *WorkspaceSessions) WithGlobalCollab(store func() *collab.Store, allowVolume func() bool) *WorkspaceSessions {
 	t.collabGlobalStore = store
+	t.collabGlobalVolume = allowVolume
 	return t
 }
 

@@ -53,7 +53,8 @@ type Row struct {
 	Kind          Kind
 	AuthorSession string   // posting session's display name
 	AuthorID      string   // posting session's ID (intent replace + session-end cleanup)
-	Body          string   // redacted free text
+	Body          string   // redacted free text (stored delivery window for a note)
+	OriginalBytes int      // note only — redacted body size before its stored delivery window
 	PathGlobs     []string // intent only — the area being worked on; nil for a note
 	Addressee     string   // note only — a session name or AddresseeNext; "" for an intent
 	CreatedAt     time.Time
@@ -71,6 +72,9 @@ type Row struct {
 	// DeliveredTo is the display name of the session that claimed the note. For
 	// an AddresseeNext note this records who won the race.
 	DeliveredTo string
+	// DeliveredToID is the stable identity that won the atomic claim. It lets an
+	// in-thread reply prove the caller participated even after display-name reuse.
+	DeliveredToID string
 	// OriginWorkspace is the sender's workspace root, stamped only on a
 	// cross-project note so the recipient can see which project it came from.
 	// Empty for a same-project note.
@@ -103,6 +107,7 @@ type NoteInput struct {
 	AuthorSession string
 	AuthorID      string
 	Body          string
+	OriginalBytes int
 	Addressee     string
 	TTL           time.Duration
 

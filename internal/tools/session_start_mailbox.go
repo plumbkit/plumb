@@ -12,8 +12,9 @@ import (
 // only; plumb cannot push.
 //
 // It shares the Inbox claim with check_messages and the tool-result block, which
-// is what makes "delivered exactly once" hold across all three: the read
-// watermark lives in the store, and every reader goes through the same claim.
+// creates one at-most-once atomic claim across all three: the read watermark
+// lives in the store, and every reader goes through the same claim. A transport
+// failure after response construction is outside that server-side guarantee.
 // Messages are agent-authored, so they render as received messages, distinct
 // from the daemon-observed peer digest above them.
 

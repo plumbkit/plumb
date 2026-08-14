@@ -137,6 +137,26 @@ func TestMessageHint_DeliveredOnceAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestMessageHint_TruncatedDeliveryClaimedAtMostOnce(t *testing.T) {
+	ws := t.TempDir()
+	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 8})
+	body := "abc😀defghij"
+	seedMessage(t, s, ws, "bob", "alice", body)
+
+	first := s.enrichToolOutput(context.Background(), "git", json.RawMessage(`{}`), "On branch main\n")
+	for _, want := range []string{"abc😀d", "received 8 of 14 bytes", "remaining 6", "shared by path"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("piggybacked truncation marker missing %q: %q", want, first)
+		}
+	}
+	if strings.Contains(first, body) {
+		t.Errorf("piggybacked delivery exposed bytes beyond the configured window: %q", first)
+	}
+	if second := s.enrichToolOutput(context.Background(), "git", json.RawMessage(`{}`), "clean\n"); strings.Contains(second, "abc😀d") || strings.Contains(second, "received 8 of 14 bytes") {
+		t.Errorf("truncated note was delivered twice: %q", second)
+	}
+}
+
 // TestMessageHint_SilentForMailboxTools: each of these surfaces the same
 // messages itself — check_messages claims and renders, session_start renders its
 // "## Messages" section, workspace_sessions lists the unread ones — so
@@ -175,7 +195,7 @@ func TestMessageHint_DeliveredOnALeaveNoteResult(t *testing.T) {
 	if !strings.Contains(got, "Message sent to session carol.") {
 		t.Errorf("the tool's own result must survive enrichment; got %q", got)
 	}
-	// Still exactly once: the claim is shared, so the next call gets nothing.
+	// Still at most one server-side claim: the next call gets nothing.
 	if again := s.enrichToolOutput(context.Background(), "git", json.RawMessage(`{}`), "OUT"); strings.Contains(again, "the parser branch is yours") {
 		t.Errorf("the message was delivered twice; got %q", again)
 	}

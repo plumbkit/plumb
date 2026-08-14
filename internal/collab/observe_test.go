@@ -2,11 +2,12 @@ package collab
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestConversationPeer_ResolvesExactlyOneOtherParticipant(t *testing.T) {
+func TestConversationPeerParticipant_ResolvesExactlyOneOtherParticipant(t *testing.T) {
 	s, ws := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
@@ -24,9 +25,14 @@ func TestConversationPeer_ResolvesExactlyOneOtherParticipant(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peer, found, err := s.ConversationPeer(ctx, conv, "sess-alice", "alice", now.Add(2*time.Second))
-	if err != nil || !found || peer != "bob" {
-		t.Fatalf("peer=%q found=%v err=%v, want bob", peer, found, err)
+	peer, found, err := s.ConversationPeerParticipant(ctx, conv, "sess-alice", now.Add(2*time.Second))
+	if err != nil || !found || peer.ID != "sess-bob" || peer.Name != "bob" || peer.Workspace != ws {
+		t.Fatalf("peer=%#v found=%v err=%v, want stable bob in %s", peer, found, err, ws)
+	}
+	if peer, found, err := s.ConversationPeerParticipant(
+		ctx, conv, "sess-outsider", now.Add(2*time.Second),
+	); err != nil || found || peer.ID != "" {
+		t.Fatalf("non-participant resolved peer=%#v found=%v err=%v", peer, found, err)
 	}
 
 	if _, err := s.PutNote(ctx, NoteInput{
@@ -35,10 +41,10 @@ func TestConversationPeer_ResolvesExactlyOneOtherParticipant(t *testing.T) {
 	}, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if peer, found, err := s.ConversationPeer(
-		ctx, conv, "sess-alice", "alice", now.Add(3*time.Second),
-	); err != nil || found || peer != "" {
-		t.Fatalf("ambiguous conversation guessed peer=%q found=%v err=%v", peer, found, err)
+	if peer, found, err := s.ConversationPeerParticipant(
+		ctx, conv, "sess-alice", now.Add(3*time.Second),
+	); err != nil || found || peer.ID != "" {
+		t.Fatalf("ambiguous conversation guessed peer=%#v found=%v err=%v", peer, found, err)
 	}
 
 	// The workspace value is used below to make sure the store remains live; it
@@ -101,5 +107,46 @@ func TestConversationObservability_TracksLivePendingAndDelivered(t *testing.T) {
 	if len(summaries) != 1 || summaries[0].ID != conv ||
 		summaries[0].Notes != 2 || summaries[0].Pending != 1 {
 		t.Fatalf("summaries = %#v", summaries)
+	}
+}
+
+func TestConversationSummariesForWorkspace_ScopesGlobalVolume(t *testing.T) {
+	global, err := OpenGlobalAt(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = global.Close() })
+	ctx := context.Background()
+	now := time.Now()
+	conv, err := global.PutNote(ctx, NoteInput{
+		AuthorSession: "alice", AuthorID: "sess-alice", Body: "one", Addressee: "bob",
+		TTL: time.Hour, OriginWorkspace: "/workspace/a", TargetWorkspace: "/workspace/b",
+	}, now.Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := global.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "sess-bob", Body: "two", Addressee: "alice",
+		TTL: time.Hour, ConversationID: conv,
+		OriginWorkspace: "/workspace/b", TargetWorkspace: "/workspace/a",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := global.PutNote(ctx, NoteInput{
+		AuthorSession: "carol", AuthorID: "sess-carol", Body: "unrelated", Addressee: "dan",
+		TTL: time.Hour, OriginWorkspace: "/workspace/c", TargetWorkspace: "/workspace/d",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/a", now.Add(time.Second), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != conv || got[0].Notes != 2 || got[0].Pending != 2 {
+		t.Fatalf("workspace-scoped summaries = %#v", got)
+	}
+	if got, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/missing", now.Add(time.Second), 5); err != nil || len(got) != 0 {
+		t.Fatalf("unrelated workspace saw global conversations: %#v err=%v", got, err)
 	}
 }

@@ -31,17 +31,19 @@ func (*LeaveNote) Description() string {
 		"(whoever attaches to this workspace next). This is the send half of plumb's " +
 		"request/reply mailbox; check_messages is the receive half.\n\n" +
 		"CONVERSATIONS. Omit conversation_id to start one (the reply tells you the new " +
-		"id). Pass that id to reply in-thread; when to is omitted, plumb resolves the " +
-		"other participant and fails closed if the thread is ambiguous. Conversations " +
+		"id). Pass that id to reply in-thread; plumb binds the other active participant " +
+		"by stable session ID and fails closed for offline, foreign, or ambiguous threads. Conversations " +
 		"have no message-count ceiling. If an exchange grows long, write the substance " +
 		"to a file and send its path in a short note.\n\n" +
 		"DELIVERY is by polling — MCP is request/reply, so plumb cannot push. A note " +
 		"reaches the peer when it next makes any tool call, when it calls check_messages, or " +
-		"runs session_start. Each note is delivered exactly once. A peer idle on its " +
+		"runs session_start. Plumb claims each note at most once across those paths; a " +
+		"transport failure after claim can still lose it. A peer idle on its " +
 		"human makes no calls, so silence is not a refusal.\n\n" +
-		"BODIES are capped by [collab] chat_budget_bytes. The send receipt always gives " +
-		"the byte budget; if a note is cut, both parties are told exactly how many bytes " +
-		"were truncated and how to send the remainder.\n\n" +
+		"BODIES are stored and delivered under [collab] chat_budget_bytes. The send receipt says the note " +
+		"is queued (pending delivery) and gives the byte budget; workspace_sessions shows " +
+		"the later delivered transition. If a note is cut, both parties are told exactly " +
+		"how many bytes were truncated and how to send the remainder.\n\n" +
 		"CROSS-PROJECT. A note to a session in another workspace is delivered only if " +
 		"THAT project sets [collab] cross_project = true; otherwise it expires unread.\n\n" +
 		"Notes expire after [collab] intent_ttl_minutes. Requires [collab] mailbox = " +
@@ -110,7 +112,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	to, err := t.resolveAddressee(ctx, args.To, args.ConversationID)
+	to, boundWorkspace, err := t.resolveAddressee(ctx, args.To, args.ConversationID)
 	if err != nil {
 		return "", err
 	}
@@ -118,7 +120,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "Note NOT sent: the addressee resolves to this session. A note is never delivered to its own author.", nil
 	}
 	args.To = to
-	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
+	target, err := t.resolveTarget(args.To, ws, boundWorkspace)
 	if err != nil {
 		return "", err
 	}
@@ -141,33 +143,17 @@ type noteTarget struct {
 	peerUnknown bool
 }
 
-// resolveTarget decides which store a message belongs in.
-//
-// Routing cannot rest on "is a session with that name live right now": a peer
-// that exits between turns of a cross-project conversation would make the next
-// reply fall back to the sender's OWN mailbox, where the peer will never see it
-// while the sender is told it was sent. So an existing conversation is consulted
-// first — it records the workspace the peer was writing from — and only a
-// genuinely unplaceable name falls back to the local store, which the caller is
-// then told about explicitly.
-//
-// "next" is always same-project: "whoever attaches next" has no meaning across
-// projects, so it is never routed to the daemon-level store.
-func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (noteTarget, error) {
+// resolveTarget decides which store a message belongs in. A threaded reply
+// carries the live workspace resolved from stable identity; a fresh message may
+// still resolve a display name through the live session directory. "next" is
+// always same-project.
+func (t *LeaveNote) resolveTarget(to, ws, boundWorkspace string) (noteTarget, error) {
 	if to == collab.AddresseeNext {
 		return t.localTarget()
 	}
-	peerWS, found := "", false
-	if t.deps.PeerWorkspace != nil {
+	peerWS, found := boundWorkspace, boundWorkspace != ""
+	if !found && t.deps.PeerWorkspace != nil {
 		peerWS, found = t.deps.PeerWorkspace(to)
-	}
-	if !found && convID != "" {
-		// The peer is not connected, but this thread may remember where it lives.
-		if g := t.globalIfExists(); g != nil {
-			if w, ok := g.ConversationPeerWorkspace(ctx, convID, to); ok {
-				peerWS, found = w, true
-			}
-		}
 	}
 	if found && peerWS != "" && !sameWorkspace(peerWS, ws) {
 		if t.deps.GlobalStore == nil {
@@ -204,15 +190,57 @@ func (t *LeaveNote) globalIfExists() *collab.Store {
 	return t.deps.GlobalStoreIfExists()
 }
 
-// resolveAddressee turns an omitted in-thread target into the conversation's
-// one other participant. It never falls back to "next": a quoted conversation
-// is an explicit reply intent, so ambiguity is a refusal rather than a reroute.
-func (t *LeaveNote) resolveAddressee(ctx context.Context, to, conversationID string) (string, error) {
-	if to != "" {
-		return to, nil
+// resolveAddressee binds an in-thread reply to the other participant's stable
+// session ID, then resolves that ID to the live session's current name and
+// workspace. Offline, ambiguous, legacy, and non-participant threads fail closed
+// so name reuse can never retarget a reply.
+func (t *LeaveNote) resolveAddressee(
+	ctx context.Context,
+	to, conversationID string,
+) (string, string, error) {
+	if conversationID == "" {
+		return to, "", nil
 	}
-	peers := make(map[string]struct{})
-	stores := []*collab.Store{}
+	peer, err := t.conversationPeer(ctx, conversationID)
+	if err != nil {
+		return "", "", err
+	}
+	return t.liveConversationPeer(peer, to)
+}
+
+func (t *LeaveNote) conversationPeer(
+	ctx context.Context,
+	conversationID string,
+) (collab.ConversationParticipant, error) {
+	peers := make(map[string]collab.ConversationParticipant)
+	for _, store := range t.conversationStores() {
+		peer, found, err := store.ConversationPeerParticipant(
+			ctx, conversationID, t.deps.SessionID, time.Now())
+		if err != nil {
+			return collab.ConversationParticipant{},
+				fmt.Errorf("leave_note: resolve conversation peer: %w", err)
+		}
+		if !found {
+			continue
+		}
+		if prior, ok := peers[peer.ID]; ok && peer.Workspace == "" {
+			peer.Workspace = prior.Workspace
+		}
+		peers[peer.ID] = peer
+	}
+	if len(peers) != 1 {
+		return collab.ConversationParticipant{}, fmt.Errorf(
+			"leave_note: conversation_id %q does not prove this session has exactly one other stable participant",
+			conversationID)
+	}
+	for _, peer := range peers {
+		return peer, nil
+	}
+	return collab.ConversationParticipant{}, errors.New("leave_note: conversation peer resolution failed")
+}
+
+func (t *LeaveNote) conversationStores() []*collab.Store {
+	var stores []*collab.Store
 	if t.deps.StoreIfExists != nil {
 		if store := t.deps.StoreIfExists(); store != nil {
 			stores = append(stores, store)
@@ -221,24 +249,28 @@ func (t *LeaveNote) resolveAddressee(ctx context.Context, to, conversationID str
 	if store := t.globalIfExists(); store != nil {
 		stores = append(stores, store)
 	}
-	for _, store := range stores {
-		peer, found, err := store.ConversationPeer(
-			ctx, conversationID, t.deps.SessionID, t.deps.SessionName(), time.Now())
-		if err != nil {
-			return "", fmt.Errorf("leave_note: resolve conversation peer: %w", err)
-		}
-		if found {
-			peers[peer] = struct{}{}
-		}
+	return stores
+}
+
+func (t *LeaveNote) liveConversationPeer(
+	peer collab.ConversationParticipant,
+	requestedName string,
+) (string, string, error) {
+	if t.deps.PeerSessionByID == nil {
+		return "", "", errors.New("leave_note: stable peer lookup unavailable")
 	}
-	if len(peers) == 1 {
-		for peer := range peers {
-			return peer, nil
-		}
+	currentName, currentWorkspace, found := t.deps.PeerSessionByID(peer.ID)
+	if !found || currentName == "" || currentWorkspace == "" {
+		return "", "", fmt.Errorf(
+			"leave_note: conversation participant %q is not active; wait for it to reconnect before replying",
+			peer.Name)
 	}
-	return "", fmt.Errorf(
-		"leave_note: conversation_id %q does not identify exactly one other participant; pass to explicitly",
-		conversationID)
+	if requestedName != "" && requestedName != peer.Name && requestedName != currentName {
+		return "", "", fmt.Errorf(
+			"leave_note: to %q is not conversation participant %q (currently %q)",
+			requestedName, peer.Name, currentName)
+	}
+	return currentName, currentWorkspace, nil
 }
 
 // sameWorkspace compares two workspace roots the way the session registry
@@ -262,12 +294,14 @@ func sameWorkspace(a, b string) bool {
 
 func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPolicy, args leaveNoteArgs) (string, error) {
 	body, redacted := redactBody(args.Body)
+	window := noteBodyWindow(body, policy.ChatBudget())
 	ttl := resolveTTL(policy.IntentTTLMinutes, 0)
 	now := time.Now()
 	in := collab.NoteInput{
 		AuthorSession:   t.deps.SessionName(),
 		AuthorID:        t.deps.SessionID,
-		Body:            body,
+		Body:            window.body,
+		OriginalBytes:   window.total,
 		Addressee:       args.To,
 		TTL:             ttl,
 		ConversationID:  args.ConversationID,
@@ -302,18 +336,18 @@ func formatNoteResult(
 	var sb strings.Builder
 	dest := "session " + to
 	if to == collab.AddresseeNext {
-		dest = "the next session to attach (delivered once)"
+		dest = "the next session to attach (claimed at most once)"
 	}
 	window := noteBodyWindow(body, budget)
 	if window.delivered < window.total {
-		fmt.Fprintf(&sb, "Note delivered to %s: %d of %d bytes within the configured %d-byte "+
+		fmt.Fprintf(&sb, "Note queued for %s (pending delivery): %d of %d bytes within the configured %d-byte "+
 			"budget — %d bytes were TRUNCATED and the recipient did not receive them.\n",
 			dest, window.delivered, window.total, budget, window.total-window.delivered)
 		fmt.Fprintf(&sb, "  remedy:       send the remainder in a follow-up quoting conversation_id %s; "+
 			"resume the original UTF-8 body at byte offset %d. For longer content, write a file "+
 			"and send its path.\n", conv, window.delivered)
 	} else {
-		fmt.Fprintf(&sb, "Note delivered to %s: %d of %d budget bytes.\n", dest, window.delivered, budget)
+		fmt.Fprintf(&sb, "Note queued for %s (pending delivery): %d of %d budget bytes.\n", dest, window.delivered, budget)
 	}
 	fmt.Fprintf(&sb, "  conversation: %s  — quote this as conversation_id to stay in the thread\n", conv)
 	fmt.Fprintf(&sb, "  expires:      in %s\n", humaniseTTL(ttl))

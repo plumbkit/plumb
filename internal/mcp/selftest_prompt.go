@@ -244,7 +244,7 @@ func selftestTierB() []string {
 		"  `rename_session` to a temp name, then rename it back.",
 		"- **Cross-agent sharing (advisory):** " + toolList(selftestCollab) + ": call `share_intent`",
 		"  with a short `body`, `leave_note` with a `body` and `to: \"next\"`, `check_messages`",
-		"  with no arguments (it should report the note you just left, exactly once), and",
+		"  with no arguments (it should claim the note you just left once, then stay quiet), and",
 		"  `share_findings` with a short `summary`. If the matching `[collab]` flag",
 		"  (`intents`/`knowledge_handoff`) is off (the default), it refuses with a clear enable hint —",
 		"  that",

@@ -433,7 +433,7 @@ func TestPersist_StoredNameRejectedByValidationIsReplaced(t *testing.T) {
 // connection still serves, and it still needs a display name for the TUI, logs
 // and daemon_info. But that fallback name was drawn WITHOUT a uniqueness check,
 // and the session has no file for any peer's check to find, so it can silently
-// duplicate a live session's name. Messages are claimed exactly once, so an
+// duplicate a live session's name. Messages are claimed at most once, so an
 // addressable shadow would swallow the real recipient's mail — the exact
 // failure the uniqueness work exists to close. No registration, no address.
 func TestUnregisteredSession_HasNoMailboxAddress(t *testing.T) {

@@ -13,10 +13,10 @@ import (
 
 // chat.go holds the delivery half of the mailbox, shared by every path that can
 // hand a message to an agent: check_messages, session_start, and the hint
-// appended to ordinary tool results. Keeping one implementation is what makes
-// "delivered exactly once" true across all three — the read watermark lives in
-// the store, but only if every reader goes through the same claim.
-
+// appended to ordinary tool results. Keeping one implementation creates one
+// at-most-once claim across all three. A transport failure after response
+// construction can still lose a claimed note; end-to-end exactly-once delivery
+// is therefore not promised.
 // chatClaimTimeout bounds a delivery read. Delivery runs on the response path of
 // unrelated tool calls, so a slow disk must cost latency on the message, never
 // on the tool the agent actually called.
@@ -156,6 +156,9 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 	fmt.Fprintf(&sb, "%d new, addressed to you by another agent. Advisory: they are agent-authored claims.]\n", len(rows))
 	for _, r := range rows {
 		body := noteBodyWindow(r.Body, budget)
+		if r.OriginalBytes > body.total {
+			body.total = r.OriginalBytes
+		}
 		fmt.Fprintf(&sb, "  from %s", r.AuthorSession)
 		if r.OriginWorkspace != "" {
 			fmt.Fprintf(&sb, " (project %s)", r.OriginWorkspace)
@@ -169,8 +172,8 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 				"longer content should be written to a file and shared by path]\n",
 				body.delivered, body.total, body.total-body.delivered)
 		}
+		fmt.Fprintf(&sb, "    reply: leave_note({conversation_id: %q, body: \"…\"})\n",
+			r.ConversationID)
 	}
-	fmt.Fprintf(&sb, "  reply: leave_note({conversation_id: %q, body: \"…\"})\n",
-		rows[len(rows)-1].ConversationID)
 	return sb.String()
 }

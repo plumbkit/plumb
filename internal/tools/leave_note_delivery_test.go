@@ -17,6 +17,11 @@ func TestLeaveNote_LongConversationNeverRefused(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	tool := NewLeaveNote(deps)
 	conv := put(t, local, "bob", "alice", "opening question", "", "", "")
+	if rows, err := local.ClaimNotesForSession(
+		context.Background(), "alice", deps.SessionID, deps.Workspace(), time.Now(), 1,
+	); err != nil || len(rows) != 1 {
+		t.Fatalf("establish alice's participation: rows=%#v err=%v", rows, err)
+	}
 
 	var (
 		mu       sync.Mutex
@@ -59,7 +64,8 @@ func TestLeaveNote_ReportsExactTruncationToBothParties(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"8 of 14 bytes", "configured 8-byte budget", "6 bytes were TRUNCATED", "byte offset 8", "write a file",
+		"queued for session bob", "pending delivery", "8 of 14 bytes", "configured 8-byte budget",
+		"6 bytes were TRUNCATED", "byte offset 8", "write a file",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("sender receipt missing %q: %q", want, out)
@@ -67,6 +73,10 @@ func TestLeaveNote_ReportsExactTruncationToBothParties(t *testing.T) {
 	}
 	if strings.Contains(out, body) {
 		t.Errorf("sender receipt echoed the full body: %q", out)
+	}
+	pending, err := local.PendingNotesForSession(context.Background(), "bob", "sess-bob", deps.Workspace(), time.Now())
+	if err != nil || len(pending) != 1 || pending[0].Body != "abc😀d" || pending[0].OriginalBytes != len(body) {
+		t.Fatalf("durable note was not byte-bounded with exact original size: rows=%#v err=%v", pending, err)
 	}
 
 	rows, err := local.ClaimNotesForSession(context.Background(), "bob", "sess-bob", deps.Workspace(), time.Now(), 3)
@@ -84,9 +94,27 @@ func TestLeaveNote_ReportsExactTruncationToBothParties(t *testing.T) {
 	}
 }
 
+func TestRenderMessages_ProvidesReplyMetadataPerNote(t *testing.T) {
+	now := time.Now()
+	out := RenderMessages([]collab.Row{
+		{AuthorSession: "bob", Body: "one", OriginalBytes: 3, ConversationID: "conv-one", CreatedAt: now},
+		{AuthorSession: "carol", Body: "two", OriginalBytes: 3, ConversationID: "conv-two", CreatedAt: now},
+	}, 8, now)
+	for _, conv := range []string{"conv-one", "conv-two"} {
+		if strings.Count(out, "conversation_id: "+jsonStr(conv)) != 1 {
+			t.Fatalf("reply metadata for %s missing or duplicated: %q", conv, out)
+		}
+	}
+}
+
 func TestLeaveNote_InThreadOmittedTargetResolvesOtherPeer(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	conv := put(t, local, "bob", "alice", "question", "", "", "")
+	if rows, err := local.ClaimNotesForSession(
+		context.Background(), "alice", deps.SessionID, deps.Workspace(), time.Now(), 1,
+	); err != nil || len(rows) != 1 {
+		t.Fatalf("establish alice's participation: rows=%#v err=%v", rows, err)
+	}
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"body":"answer","conversation_id":`+jsonStr(conv)+`}`))
@@ -143,7 +171,7 @@ func TestLeaveNote_RemainderFollowUpDoesNotRedeliverOriginal(t *testing.T) {
 		Workspace: func() *collab.Store { return local },
 	}
 	original := inbox.Claim(context.Background())
-	if len(original) != 1 || original[0].Body != "abcdefgh" {
+	if len(original) != 1 || original[0].Body != "abcd" || original[0].OriginalBytes != 8 {
 		t.Fatalf("first claim = %#v", original)
 	}
 	_, err = tool.Execute(context.Background(), json.RawMessage(

@@ -37,11 +37,11 @@ func (*CheckMessages) Description() string {
 		"waiting. With a positive value it BLOCKS until a note arrives or the wait " +
 		"expires, handing your turn to a peer instead of polling. The wait is capped " +
 		"by [collab] max_wait_seconds; the result reports elapsed seconds and any clamp.\n\n" +
-		"Each note is delivered exactly ONCE, to whichever path sees it first — this " +
-		"tool, an ordinary tool result, or session_start. Re-calling will not redeliver " +
-		"it, so act on a note when you read it.\n\n" +
+		"Each note is atomically claimed at most once across this tool, ordinary tool " +
+		"results, and session_start. A transport failure after claim can still lose it; " +
+		"end-to-end exactly-once is not promised, so act on a note when you read it.\n\n" +
 		"Every note carries a conversation_id; quote it in leave_note to reply. An " +
-		"in-thread reply may omit to because plumb resolves the other participant. " +
+		"in-thread reply may omit to because plumb binds the other active participant by stable ID. " +
 		"Conversations have no message-count ceiling. If an exchange grows long, put " +
 		"the substance in a file and send its path in a short note.\n\n" +
 		"Requires [collab] mailbox = true. Cross-project notes are shown only when this " +
@@ -128,7 +128,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// certainly true and offers the race as a possibility.
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — each note is delivered exactly once.\n", nil
+		"first — the atomic claim is at most once across server delivery paths.\n", nil
 }
 
 func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {

@@ -41,25 +41,28 @@ CREATE INDEX IF NOT EXISTS idx_collab_expires ON collab_rows(expires_at);
 CREATE INDEX IF NOT EXISTS idx_collab_author  ON collab_rows(author_id);
 `
 
-// chatColumns are the schema-v2 additions that turn a one-way note into a
+// chatColumns are the additive schema changes that turn a one-way note into a
 // threaded, read-tracked message. They are applied by ALTER TABLE rather than
 // folded into the CREATE above so that an existing v1 collab.db — which is NOT a
 // rebuildable index; its rows are the only copy of the data — migrates in place
 // instead of being dropped and recreated. Adding a column with a NOT NULL
 // DEFAULT backfills every existing row, so a legacy note lands with an empty
-// conversation, a zero delivered_at (i.e. unread) and no origin workspace —
-// exactly the values a note written before threading existed should carry.
+// conversation, a zero delivered_at (i.e. unread), no workspace, and an
+// original_bytes value of zero — exactly the values a note written before
+// threading or byte accounting existed should carry.
 var chatColumns = []struct{ name, ddl string }{
 	{"conversation_id", `ALTER TABLE collab_rows ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''`},
 	{"delivered_at", `ALTER TABLE collab_rows ADD COLUMN delivered_at INTEGER NOT NULL DEFAULT 0`},
 	{"delivered_to", `ALTER TABLE collab_rows ADD COLUMN delivered_to TEXT NOT NULL DEFAULT ''`},
+	{"delivered_to_id", `ALTER TABLE collab_rows ADD COLUMN delivered_to_id TEXT NOT NULL DEFAULT ''`},
 	{"origin_workspace", `ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`},
 	{"target_workspace", `ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`},
+	{"original_bytes", `ALTER TABLE collab_rows ADD COLUMN original_bytes INTEGER NOT NULL DEFAULT 0`},
 }
 
-// chatIndexes accelerate the two hot chat queries: "what is unread for me" and
-// "how many exchanges has this conversation had". Created after the columns
-// exist, so they are separate from the base schema above.
+// chatIndexes accelerate the two hot chat queries: unread mail and conversation
+// volume. Created after the columns exist, so they are separate from the base
+// schema above.
 const chatIndexes = `
 CREATE INDEX IF NOT EXISTS idx_collab_inbox ON collab_rows(addressee, delivered_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
@@ -69,8 +72,10 @@ CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
 // user_version. Unlike topology.db, collab.db is NOT a rebuildable index — its
 // rows are the only copy of expiring advisory data — so a schema change must
 // migrate additively rather than dropping the table. v1 was the initial shape;
-// v2 adds the chat columns (see chatColumns), applied in place.
-const schemaVersion = 2
+// v2 adds threaded delivery; v3 records stable recipient identity and a note's
+// pre-window byte count so the existing byte budget can bound durable storage
+// without hiding the exact cut.
+const schemaVersion = 3
 
 // Store is the per-workspace collab.db handle.
 //
@@ -141,9 +146,9 @@ func initDB(db *sql.DB) error {
 	return sqlitex.StampVersion(db, schemaVersion)
 }
 
-// migrateChatColumns adds any schema-v2 chat column the table is missing. It is
-// driven by PRAGMA table_info rather than the stamped version so it is
-// idempotent and safe to run on every open, including on a v1 file that a
+// migrateChatColumns adds any chat column through schema v3 that the table is
+// missing. It is driven by PRAGMA table_info rather than the stamped version so
+// it is idempotent and safe to run on every open, including on a v1 file that a
 // crashed migration left half-way.
 func migrateChatColumns(db *sql.DB) error {
 	have, err := collabRowsColumns(db)
@@ -235,14 +240,15 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 // do not exist: a conversation is observable, but never severed by the store.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
                           addressee, created_at, expires_at, conversation_id, origin_workspace,
-                          target_workspace)
-	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`
+                          target_workspace, original_bytes)
+	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`
 
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
 // returns the conversation it belongs to — the caller's ConversationID when it
 // threads onto an existing exchange, otherwise a freshly minted one, which the
-// sender quotes to continue the thread. The body is stored verbatim (callers
-// redact first). TTL is clamped to minTTL.
+// sender quotes to continue the thread. Callers redact and apply the configured
+// byte window before storage; OriginalBytes preserves the exact redacted size.
+// TTL is clamped to minTTL.
 func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (string, error) {
 	if s == nil || s.db == nil {
 		return "", errors.New("collab: nil store")
@@ -256,6 +262,9 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		conv = newConversationID()
 	}
 	expires := now.Add(clampTTL(in.TTL))
+	if in.OriginalBytes <= 0 {
+		in.OriginalBytes = len(in.Body)
+	}
 	if s.IsGlobal() {
 		// The daemon-level store is shared by every project on the machine, so a
 		// row there must name the workspace allowed to claim it. Refusing here
@@ -271,7 +280,7 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	if _, err := s.db.ExecContext(ctx, insertNote,
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace); err != nil {
+		in.TargetWorkspace, in.OriginalBytes); err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
 	}
 	return conv, nil
@@ -396,7 +405,7 @@ func (s *Store) ClaimNotesForSession(
 			   AND (? = '' OR author_id <> ?)
 			 ORDER BY created_at ASC`
 	args := []any{
-		now.UnixNano(), sessionName, // SET delivered_at, delivered_to
+		now.UnixNano(), sessionName, sessionID, // SET delivered_at, delivered_to, delivered_to_id
 		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace,
 		sessionID, sessionID,
 	}
@@ -405,7 +414,7 @@ func (s *Store) ClaimNotesForSession(
 		args = append(args, limit)
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
+		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?, delivered_to_id = ?
 		 WHERE id IN (`+select_+`)
 		 RETURNING `+rowColumns, args...)
 	if err != nil {
@@ -413,28 +422,6 @@ func (s *Store) ClaimNotesForSession(
 	}
 	defer rows.Close()
 	return scanRows(rows)
-}
-
-// ConversationPeerWorkspace returns the workspace a named peer was writing from
-// within a conversation, so a reply can still be routed correctly after that
-// peer's session has gone away. Without it, routing would fall back to "is a
-// session with that name live right now", which silently misdelivers a
-// cross-project reply into the sender's own mailbox the moment the peer
-// disconnects between turns.
-func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, peerName string) (string, bool) {
-	if s == nil || s.db == nil || conversationID == "" || peerName == "" {
-		return "", false
-	}
-	var ws string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT origin_workspace FROM collab_rows
-		 WHERE kind = ? AND conversation_id = ? AND author_session = ? AND origin_workspace != ''
-		 ORDER BY created_at DESC LIMIT 1`,
-		string(KindNote), conversationID, peerName).Scan(&ws)
-	if err != nil || ws == "" {
-		return "", false
-	}
-	return ws, true
 }
 
 // ConversationCount returns how many UNEXPIRED notes a conversation holds.
@@ -510,8 +497,8 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // expects. Kept in one place so adding a column cannot desynchronise a query
 // from the scanner.
 const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
-	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
-	 target_workspace`
+	 created_at, expires_at, conversation_id, delivered_at, delivered_to, delivered_to_id,
+	 origin_workspace, target_workspace, original_bytes`
 
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	var out []Row
@@ -524,8 +511,8 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		)
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
 			&globs, &r.Addressee, &createdNs, &expNs,
-			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace,
-			&r.TargetWorkspace); err != nil {
+			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.DeliveredToID,
+			&r.OriginWorkspace, &r.TargetWorkspace, &r.OriginalBytes); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)
 		}
 		r.Kind = Kind(kind)

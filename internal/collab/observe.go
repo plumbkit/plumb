@@ -3,45 +3,78 @@ package collab
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
 
-// ConversationPeer resolves the one other participant in a conversation. It
-// fails closed when the thread is missing or has more than two participants;
-// callers can then require an explicit addressee instead of guessing.
-func (s *Store) ConversationPeer(
+// ConversationParticipant is one stable author in a mailbox thread.
+type ConversationParticipant struct {
+	ID        string
+	Name      string
+	Workspace string
+}
+
+// ConversationPeerParticipant resolves the one other stable participant in a
+// conversation and proves the caller authored or claimed at least one row. It
+// fails closed for legacy name-only rows, missing participation, or group
+// threads: display names are presentation, never identity.
+func (s *Store) ConversationPeerParticipant(
 	ctx context.Context,
-	conversationID, selfID, selfName string,
+	conversationID, selfID string,
 	now time.Time,
-) (string, bool, error) {
+) (ConversationParticipant, bool, error) {
+	if selfID == "" {
+		return ConversationParticipant{}, false, nil
+	}
 	rows, err := s.Conversation(ctx, conversationID, now)
 	if err != nil || len(rows) == 0 {
-		return "", false, err
+		return ConversationParticipant{}, false, err
 	}
-	peers := make(map[string]struct{})
-	add := func(name string) {
-		name = strings.TrimSpace(name)
-		if name != "" && name != AddresseeNext && name != selfName {
-			peers[name] = struct{}{}
-		}
+	peers, participated := collectConversationParticipants(rows, selfID, s.ws)
+	if !participated || len(peers) != 1 {
+		return ConversationParticipant{}, false, nil
 	}
-	for _, r := range rows {
-		own := (selfID != "" && r.AuthorID == selfID) || r.AuthorSession == selfName
-		if own {
-			add(r.Addressee)
-			add(r.DeliveredTo)
-			continue
-		}
-		add(r.AuthorSession)
-	}
-	if len(peers) != 1 {
-		return "", false, nil
-	}
-	for peer := range peers {
+	for _, peer := range peers {
 		return peer, true, nil
 	}
-	return "", false, nil
+	return ConversationParticipant{}, false, nil
+}
+
+func collectConversationParticipants(
+	rows []Row,
+	selfID, defaultWorkspace string,
+) (map[string]ConversationParticipant, bool) {
+	peers := make(map[string]ConversationParticipant)
+	participated := false
+	for _, r := range rows {
+		if r.AuthorID == selfID || r.DeliveredToID == selfID {
+			participated = true
+		}
+		addConversationParticipant(
+			peers, selfID, r.AuthorID, r.AuthorSession, r.OriginWorkspace, defaultWorkspace)
+		addConversationParticipant(
+			peers, selfID, r.DeliveredToID, r.DeliveredTo, r.TargetWorkspace, defaultWorkspace)
+	}
+	return peers, participated
+}
+
+func addConversationParticipant(
+	peers map[string]ConversationParticipant,
+	selfID, id, name, workspace, defaultWorkspace string,
+) {
+	id, name = strings.TrimSpace(id), strings.TrimSpace(name)
+	if id == "" || id == selfID || name == "" {
+		return
+	}
+	if workspace == "" {
+		workspace = defaultWorkspace
+	}
+	peer := ConversationParticipant{ID: id, Name: name, Workspace: workspace}
+	if prior, ok := peers[id]; ok && peer.Workspace == "" {
+		peer.Workspace = prior.Workspace
+	}
+	peers[id] = peer
 }
 
 // RecentSentNotes returns an author's live notes newest first. Delivered rows
@@ -88,6 +121,31 @@ func (s *Store) ConversationSummaries(
 	now time.Time,
 	limit int,
 ) ([]ConversationSummary, error) {
+	return s.conversationSummaries(ctx, now, limit, "")
+}
+
+// ConversationSummariesForWorkspace returns cross-project conversations in
+// which workspace is either endpoint. It is valid only for the daemon-level
+// store; the workspace predicate prevents one project's status surface from
+// observing unrelated conversations.
+func (s *Store) ConversationSummariesForWorkspace(
+	ctx context.Context,
+	workspace string,
+	now time.Time,
+	limit int,
+) ([]ConversationSummary, error) {
+	if workspace == "" || s == nil || !s.IsGlobal() {
+		return nil, nil
+	}
+	return s.conversationSummaries(ctx, now, limit, workspace)
+}
+
+func (s *Store) conversationSummaries(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+	workspace string,
+) ([]ConversationSummary, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -98,6 +156,16 @@ func (s *Store) ConversationSummaries(
 		 GROUP BY conversation_id
 		 ORDER BY COUNT(*) DESC, MAX(created_at) DESC`
 	args := []any{string(KindNote), now.UnixNano()}
+	if workspace != "" {
+		query = `SELECT conversation_id, COUNT(*),
+			        SUM(CASE WHEN delivered_at = 0 THEN 1 ELSE 0 END), MAX(created_at)
+			 FROM collab_rows
+			 WHERE kind = ? AND expires_at > ?
+			   AND (origin_workspace = ? OR target_workspace = ?)
+			 GROUP BY conversation_id
+			 ORDER BY COUNT(*) DESC, MAX(created_at) DESC`
+		args = append(args, workspace, workspace)
+	}
 	if limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, limit)
@@ -118,4 +186,37 @@ func (s *Store) ConversationSummaries(
 		out = append(out, summary)
 	}
 	return out, rows.Err()
+}
+
+// MergeConversationSummaries combines local and cross-project views without
+// turning volume into enforcement. A conversation ID seen in more than one view
+// is counted once per note source and sorted with the same busiest-first rule.
+func MergeConversationSummaries(limit int, groups ...[]ConversationSummary) []ConversationSummary {
+	byID := make(map[string]ConversationSummary)
+	for _, group := range groups {
+		for _, summary := range group {
+			merged := byID[summary.ID]
+			merged.ID = summary.ID
+			merged.Notes += summary.Notes
+			merged.Pending += summary.Pending
+			if summary.LastAt.After(merged.LastAt) {
+				merged.LastAt = summary.LastAt
+			}
+			byID[summary.ID] = merged
+		}
+	}
+	out := make([]ConversationSummary, 0, len(byID))
+	for _, summary := range byID {
+		out = append(out, summary)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Notes != out[j].Notes {
+			return out[i].Notes > out[j].Notes
+		}
+		return out[i].LastAt.After(out[j].LastAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }

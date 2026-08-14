@@ -66,11 +66,14 @@ func (t *WorkspaceSessions) writeMailboxStatus(
 		}
 	}
 	writeCollabSent(sb, t.recentSentNotes(ctx, store, global, now), now)
+	var localSummaries, globalSummaries []collab.ConversationSummary
 	if store != nil {
-		if summaries, err := store.ConversationSummaries(ctx, now, 5); err == nil {
-			writeConversationVolumes(sb, summaries, now)
-		}
+		localSummaries, _ = store.ConversationSummaries(ctx, now, 5)
 	}
+	if global != nil && t.collabGlobalVolume != nil && t.collabGlobalVolume() {
+		globalSummaries, _ = global.ConversationSummariesForWorkspace(ctx, t.workspace(), now, 5)
+	}
+	writeConversationVolumes(sb, collab.MergeConversationSummaries(5, localSummaries, globalSummaries), now)
 }
 
 func (t *WorkspaceSessions) recentSentNotes(
@@ -115,15 +118,20 @@ func writeCollabIntents(sb *strings.Builder, selfSessID string, intents []collab
 	}
 }
 
-// writeCollabNotes renders inbound notes without consuming them.
+// writeCollabNotes renders only inbound note metadata without consuming or
+// duplicating body content; check_messages is the canonical body-delivery surface.
 func writeCollabNotes(sb *strings.Builder, notes []collab.Row, now time.Time) {
 	if len(notes) == 0 {
 		return
 	}
-	sb.WriteString("\nnotes for you (from peers; delivered at session_start too):\n")
+	sb.WriteString("\nnotes for you (pending metadata; use check_messages to receive bodies):\n")
 	for _, r := range notes {
-		fmt.Fprintf(sb, "  from %s — %q  (%s ago)\n",
-			r.AuthorSession, textfmt.ClampBytes(r.Body, collabNoteBodyCap), humaniseAge(now.Sub(r.CreatedAt)))
+		bytes := r.OriginalBytes
+		if bytes <= 0 {
+			bytes = len(r.Body)
+		}
+		fmt.Fprintf(sb, "  from %s — pending, %d bytes, conversation %s  (%s ago)\n",
+			r.AuthorSession, bytes, r.ConversationID, humaniseAge(now.Sub(r.CreatedAt)))
 	}
 }
 
@@ -137,8 +145,12 @@ func writeCollabSent(sb *strings.Builder, notes []collab.Row, now time.Time) {
 		if !r.DeliveredAt.IsZero() {
 			state = "delivered to " + r.DeliveredTo
 		}
+		bytes := r.OriginalBytes
+		if bytes <= 0 {
+			bytes = len(r.Body)
+		}
 		fmt.Fprintf(sb, "  %s → %s — %s, %d bytes  (%s ago)\n",
-			r.ConversationID, r.Addressee, state, len(r.Body), humaniseAge(now.Sub(r.CreatedAt)))
+			r.ConversationID, r.Addressee, state, bytes, humaniseAge(now.Sub(r.CreatedAt)))
 	}
 }
 
@@ -148,7 +160,11 @@ func writeConversationVolumes(sb *strings.Builder, summaries []collab.Conversati
 	}
 	sb.WriteString("\nconversation volume (live notes; observational only):\n")
 	for _, summary := range summaries {
-		fmt.Fprintf(sb, "  %s — %d notes, %d pending  (last %s ago)\n",
-			summary.ID, summary.Notes, summary.Pending, humaniseAge(now.Sub(summary.LastAt)))
+		label := "notes"
+		if summary.Notes == 1 {
+			label = "note"
+		}
+		fmt.Fprintf(sb, "  %s — %d %s, %d pending  (last %s ago)\n",
+			summary.ID, summary.Notes, label, summary.Pending, humaniseAge(now.Sub(summary.LastAt)))
 	}
 }

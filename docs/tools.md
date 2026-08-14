@@ -210,21 +210,24 @@ this workspace next). `workspace_sessions` lists active display names to use as
 
 Omit `conversation_id` to start a conversation. Quote the returned id to reply
 in-thread; on an in-thread reply `to` may be omitted, in which case plumb resolves
-the one other participant or refuses if the history is missing or ambiguous. It
-never silently routes such a reply to `next`, and it never delivers a note to its
+the one other active participant by stable session ID (following a rename), or
+refuses if the peer is offline, the caller did not participate, or the history is
+missing or ambiguous. It never routes to `next`, a reused display name, or its
 own author. Conversations have **no message-count ceiling**: note volume is visible
 to humans in `workspace_sessions`, the TUI, and Web, but is never enforcement.
 
-A body is delivered on a UTF-8 boundary under `[collab] chat_budget_bytes`
-(default 4096). The send receipt always reports the byte budget. If content is
-cut, both sender and recipient see exact visible, total, and missing byte counts;
-send the remainder as a follow-up in the same conversation. For longer material,
-write it to a workspace file and send its path in a short note.
+A body is stored and delivered on a UTF-8 boundary under `[collab]
+chat_budget_bytes` (default 4096). The send receipt says the note is queued (pending delivery) and
+reports the byte budget; `workspace_sessions` shows its later delivered state.
+If content is cut, both sender and recipient see exact visible, total, and missing
+byte counts; send the remainder as a follow-up in the same conversation. For
+longer material, write it to a workspace file and send its path in a short note.
 
-Each note is delivered **exactly once**, to whichever path reads it first: the
-block appended to an ordinary tool result, `check_messages`, or the recipient's
-next `session_start`. Over-limit per-call rows remain pending for later calls;
-no display budget or query limit marks unseen content delivered. Sent delivery
+Each note is atomically **claimed at most once** across the block appended to an
+ordinary tool result, `check_messages`, and the recipient's next `session_start`.
+A transport failure after response construction can still lose a claimed note;
+end-to-end exactly-once delivery is not promised. Per-call overflow remains
+pending for later calls; no display budget or query limit claims unseen content. Sent delivery
 state and conversation volume remain observable until expiry.
 
 Addressing a session pinned to a **different workspace** is allowed, but delivery
