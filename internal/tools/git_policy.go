@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
@@ -62,6 +63,11 @@ type GitPolicy struct {
 	// git runs — so it must reach the tool through the same trust-gated [git]
 	// block as the tier switches, never through a second, ungated channel.
 	Env map[string]string
+	// WriteTimeout is [git] write_timeout: how long plumb waits for an
+	// index/ref-mutating git child (hooks included) before killing its process
+	// group and reporting the operation as plumb's own timeout. Zero means the
+	// compiled default — see gitChildSpec, which is where that is resolved.
+	WriteTimeout time.Duration
 }
 
 // GitPolicyFn resolves the current GitPolicy at call time. nil falls back to a

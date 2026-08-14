@@ -165,6 +165,10 @@ var registryData = []Field{
 		Key: "git.commit_trailer", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Stamp each plumb-mediated commit with a Plumb-Session: <session-name> trailer.",
 	},
+	{
+		Key: "git.write_timeout", Type: FieldDuration, ReloadTier: ReloadLive,
+		Description: "How long to wait for a commit/reset git child (hooks included) before killing it.",
+	},
 
 	// --- Session ---
 	{

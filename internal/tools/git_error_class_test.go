@@ -186,7 +186,7 @@ func TestBeginSerialisedGit_DrainRefusalClassified(t *testing.T) {
 	gitWriteDraining.Store(true)
 	t.Cleanup(func() { gitWriteDraining.Store(false) })
 
-	_, _, err := beginSerialisedGit(t.Context(), t.TempDir(), "commit", tierWrite)
+	_, _, err := beginSerialisedGit(t.Context(), t.TempDir(), "commit", tierWrite, testLockWait)
 	assertClassified(t, err, toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait, true)
 	if !errors.Is(err, errGitDraining) {
 		t.Error("the drain sentinel is no longer reachable through the classification")

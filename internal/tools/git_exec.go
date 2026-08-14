@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
@@ -103,23 +103,24 @@ func gitReadArgv(argv []string) []string {
 // wired, it runs right after the guard's pre-execution check — a refused op
 // never warns — and its advisory block leads the successful response.
 //
-// env (may be nil) is the child's environment, built from [git] env by
-// gitChildEnv. nil means inherit the daemon's environment, which is what an
-// unconfigured knob resolves to and what every git child got before it
-// existed. This is the ONE git child plumb spawns that runs the repository's
-// hooks or can open an editor, so it is the one whose environment is
-// configurable; the auxiliary read queries around it (ls-files, log -1,
-// rev-parse, diff --cached) are plumbing whose output plumb parses, and are
-// deliberately left inheriting.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, env []string) (string, error) {
+// child carries how the git child is RUN (git_child.go): its environment, built
+// from [git] env, and the [git] write_timeout bound. A nil Env means inherit
+// the daemon's environment, which is what an unconfigured knob resolves to and
+// what every git child got before it existed. This is the ONE git child plumb
+// spawns that runs the repository's hooks or can open an editor, so it is the
+// one whose environment is configurable; the auxiliary read queries around it
+// (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
+// parses, and are deliberately left inheriting.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
 	}
 	execCtx := ctx
+	writeTimeout := child.writeTimeout()
 	if tier != tierRead {
 		var cleanup func()
-		execCtx, cleanup, err = beginSerialisedGit(ctx, repoRoot, sub, tier)
+		execCtx, cleanup, err = beginSerialisedGit(ctx, repoRoot, sub, tier, writeTimeout)
 		if err != nil {
 			return "", err
 		}
@@ -138,7 +139,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(execCtx, "git", argv...)
 	cmd.Dir = repoRoot
-	cmd.Env = env
+	cmd.Env = child.Env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	mutating := tier == tierWrite || tier == tierDestructive
@@ -147,6 +148,17 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 		// a normal "no match" result, not a failure.
 		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
 			return postProcessGit(ctx, repoRoot, sub, stdout.String())
+		}
+		// A child plumb itself killed must not be reported as a refusal by git.
+		// execCtx is decoupled from ctx (context.WithoutCancel) for exactly the
+		// mutating tiers, so a DeadlineExceeded here can ONLY be the bound
+		// beginSerialisedGit applied — never the caller's deadline, and never a
+		// daemon shutdown. Without this branch a SIGKILLed child (ExitCode() ==
+		// -1) rendered as `git commit: exit code -1` under a remediation stating
+		// that no plumb setting changes the outcome, which inverts the truth: it
+		// was plumb's bound, and [git] write_timeout is the setting.
+		if mutating && errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			return "", gitWriteTimeoutError(repoRoot, sub, argv, writeTimeout, stdout.String(), stderr.String(), warning)
 		}
 		// warning is attached here too, not just on the success path below: a
 		// failure is exactly when a peer's claim ("rebasing ops main") is most
@@ -162,139 +174,6 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	return warning + processed, err
 }
 
-const (
-	// maxGitErrStreamBytes bounds each stream quoted in a failure response.
-	maxGitErrStreamBytes = 16 * 1024
-	// maxGitErrStdoutLines bounds the trailing stdout lines quoted on failure.
-	maxGitErrStdoutLines = 40
-)
-
-// gitCommandError builds the tool-facing error for a failed git subprocess.
-// warning (may be "") is the repo-intent advisory block computed before the
-// git child ran (git_intent_warn.go) — it leads the message on a failure just
-// as it leads the response on success, so a peer's live claim explaining the
-// failure (e.g. a rebase collision) is not silently dropped by the one path
-// where it matters most. After that, the exit code leads, then stderr and
-// stdout are each quoted under their own label (bounded). Previously whichever
-// stream was non-empty became the error string itself — so a failing
-// pre-commit hook that wrote only to stdout surfaced as `git commit: 0
-// issues. file-size: OK`, the hook's chatter standing in for the real cause.
-// Success-path output is unaffected; this runs only on a non-zero exit.
-func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr, warning string) error {
-	var b strings.Builder
-	b.WriteString(warning)
-	fmt.Fprintf(&b, "git %s: %s", sub, gitExitDescription(runErr))
-	truncated := false
-	if msg, cut := boundGitErrStream(stderr); msg != "" {
-		// The hint rewrites (index.lock, pathspec, submodule) all match git's
-		// own diagnostics, which git writes to stderr — enhancing this stream
-		// preserves their behaviour exactly.
-		fmt.Fprintf(&b, "\nstderr:\n%s", enhanceGitError(repoRoot, msg))
-		truncated = truncated || cut
-	}
-	if out, cut := tailGitErrStdout(stdout); out != "" {
-		fmt.Fprintf(&b, "\nstdout (last %d lines):\n%s", maxGitErrStdoutLines, out)
-		truncated = truncated || cut
-	}
-	if truncated {
-		b.WriteString("\n" + gitRerunNote(argv, repoRoot))
-	}
-	return toolerror.New(toolerror.KindGitCommandFailed, errors.New(b.String()),
-		toolerror.Remediation{
-			Class: toolerror.ClassInspectOutput,
-			Reason: "git itself declined the operation; the captured stderr/stdout above names the cause. " +
-				"plumb raised no objection, so no plumb setting or flag changes the outcome.",
-		},
-		gitFailureDetails(sub, runErr, truncated)...)
-}
-
-// gitFailureDetails carries the machine-readable half of a git failure: the
-// exit code, the subcommand, and whether the quoted streams were cut. All three
-// are low-cardinality by construction — the streams themselves stay in the
-// message, where a bounded quote is safe, and never in Details.
-func gitFailureDetails(sub string, runErr error, truncated bool) []toolerror.Option {
-	opts := []toolerror.Option{
-		toolerror.WithDetail("subcommand", sub),
-		toolerror.WithDetail("output_truncated", strconv.FormatBool(truncated)),
-	}
-	if code, ok := gitExitCode(runErr); ok {
-		opts = append(opts, toolerror.WithDetail("exit_code", strconv.Itoa(code)))
-	}
-	return opts
-}
-
-// gitExitCode reports the git child's exit code when it ran to completion, and
-// ok=false when there was none (a start failure or a cancellation).
-func gitExitCode(err error) (int, bool) {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		return ee.ExitCode(), true
-	}
-	return 0, false
-}
-
-// gitExitDescription describes how the git child ended: its exit code when it
-// ran to a non-zero exit, or the raw error when there is no exit code (a
-// start failure or context cancellation).
-func gitExitDescription(err error) string {
-	if code, ok := gitExitCode(err); ok {
-		return fmt.Sprintf("exit code %d", code)
-	}
-	if errors.Is(err, exec.ErrWaitDelay) {
-		return gitWaitDelayNote()
-	}
-	return err.Error()
-}
-
-// boundGitErrStream trims a captured stream and caps it at
-// maxGitErrStreamBytes, keeping the tail — the most recent output, where the
-// diagnosis lives. The second return reports whether truncation cut anything.
-func boundGitErrStream(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxGitErrStreamBytes {
-		return s, false
-	}
-	s = s[len(s)-maxGitErrStreamBytes:]
-	// Drop the partial first line so the quote starts on a line boundary.
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[i+1:]
-	}
-	return s, true
-}
-
-// tailGitErrStdout keeps the trailing lines of stdout for a failure report,
-// capped at maxGitErrStdoutLines lines on top of the shared byte cap.
-func tailGitErrStdout(s string) (string, bool) {
-	s, truncated := boundGitErrStream(s)
-	lines := strings.Split(s, "\n")
-	if len(lines) > maxGitErrStdoutLines {
-		lines = lines[len(lines)-maxGitErrStdoutLines:]
-		truncated = true
-	}
-	return strings.Join(lines, "\n"), truncated
-}
-
-// gitRerunNote points at the way to see the complete output of a failed
-// command whose quoted streams were truncated: run the same git invocation
-// directly in the repository.
-func gitRerunNote(argv []string, repoRoot string) string {
-	return fmt.Sprintf("… (output truncated — re-run `git %s` in %s for the complete output)",
-		quoteGitArgv(argv), repoRoot)
-}
-
-// quoteGitArgv renders an argv as a copy-pasteable command line, quoting any
-// argument that contains whitespace or a single quote.
-func quoteGitArgv(argv []string) string {
-	quoted := make([]string, len(argv))
-	for i, a := range argv {
-		if strings.ContainsAny(a, " \t'") {
-			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
-		}
-		quoted[i] = a
-	}
-	return strings.Join(quoted, " ")
-}
-
 // beginSerialisedGit prepares a non-read git op: it refuses new work while the
 // daemon is draining for shutdown, registers the op as in-flight, takes the
 // per-repo lock, and — for index/ref-mutating tiers — reaps any attributable
@@ -305,22 +184,37 @@ func quoteGitArgv(argv []string) string {
 // and drain-gate but keep request-context cancellation (a push can hang on auth
 // — it must stay interruptible) and write no owner sidecar (they do not create
 // index.lock).
-func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier) (context.Context, func(), error) {
+//
+// writeTimeout is the resolved [git] write_timeout, and it bounds BOTH halves:
+// the exec context for a mutating tier, and how long this call queues for the
+// per-repository lock. One number rather than two is deliberate — when the lock
+// wait was its own shorter constant, a legitimate holder taking longer than that
+// constant made every queued peer fail with "another git operation is in
+// progress" for a wait that was always going to be satisfiable. A peer should be
+// willing to wait exactly as long as a holder is permitted to run.
+func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier, writeTimeout time.Duration) (context.Context, func(), error) {
 	if gitWriteDrainActive() {
 		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, errGitDraining),
 			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait)
 	}
 	gitWriteInflight.Add(1)
-	release, err := lockRepo(ctx, repoRoot)
+	release, err := lockRepo(ctx, repoRoot, writeTimeout)
 	if err != nil {
 		gitWriteInflight.Done()
-		return nil, nil, fmt.Errorf("git %s: %w", sub, err)
+		// Classified on the same terms as the drain refusal above, and for the
+		// same reason: the queue in front of this call is plumb's own, git was
+		// never reached, and the remedy is to wait. Left bare this arrived as an
+		// unclassified internal error — no kind, no remediation — so "another git
+		// operation is in progress … timed out" reached the caller with no hint
+		// that retrying is exactly the right move.
+		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, err),
+			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait)
 	}
 	execCtx := ctx
 	cancel := func() {}
 	if tier == tierWrite || tier == tierDestructive {
 		reapStaleGitLock(repoRoot)
-		execCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), gitWriteGrace)
+		execCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	}
 	cleanup := func() {
 		cancel()

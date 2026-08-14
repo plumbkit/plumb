@@ -11,11 +11,17 @@ import (
 	"time"
 )
 
+// testLockWait is the lock-wait ceiling these tests pass where production
+// passes the resolved [git] write_timeout. It is long enough that no test here
+// is meant to reach it — a test that DOES want the timeout branch sets its own
+// short value (see TestLockRepo_TimeoutIsClassifiedRetryable).
+const testLockWait = time.Minute
+
 func TestLockRepo_SerialisesSameRepo(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	release, err := lockRepo(ctx, dir)
+	release, err := lockRepo(ctx, dir, testLockWait)
 	if err != nil {
 		t.Fatalf("first lockRepo: %v", err)
 	}
@@ -23,7 +29,7 @@ func TestLockRepo_SerialisesSameRepo(t *testing.T) {
 	// A second acquire of the same key must block until the first releases.
 	got := make(chan struct{})
 	go func() {
-		rel2, err := lockRepo(ctx, dir)
+		rel2, err := lockRepo(ctx, dir, testLockWait)
 		if err != nil {
 			t.Errorf("second lockRepo: %v", err)
 			close(got)
@@ -53,7 +59,7 @@ func TestLockRepo_DistinctReposDoNotSerialise(t *testing.T) {
 	ctx := context.Background()
 	a, b := t.TempDir(), t.TempDir()
 
-	relA, err := lockRepo(ctx, a)
+	relA, err := lockRepo(ctx, a, testLockWait)
 	if err != nil {
 		t.Fatalf("lock a: %v", err)
 	}
@@ -62,7 +68,7 @@ func TestLockRepo_DistinctReposDoNotSerialise(t *testing.T) {
 	// A different repo key must acquire immediately despite a being held.
 	done := make(chan struct{})
 	go func() {
-		relB, err := lockRepo(ctx, b)
+		relB, err := lockRepo(ctx, b, testLockWait)
 		if err == nil {
 			relB()
 		}
@@ -77,7 +83,7 @@ func TestLockRepo_DistinctReposDoNotSerialise(t *testing.T) {
 
 func TestLockRepo_ContextCancelledWhileWaiting(t *testing.T) {
 	dir := t.TempDir()
-	release, err := lockRepo(context.Background(), dir)
+	release, err := lockRepo(context.Background(), dir, testLockWait)
 	if err != nil {
 		t.Fatalf("first lockRepo: %v", err)
 	}
@@ -88,7 +94,7 @@ func TestLockRepo_ContextCancelledWhileWaiting(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	_, err = lockRepo(ctx, dir) // held by the first acquire; this must give up on cancel
+	_, err = lockRepo(ctx, dir, testLockWait) // held by the first acquire; this must give up on cancel
 	if err == nil {
 		t.Fatal("expected an error when the context is cancelled while waiting")
 	}
