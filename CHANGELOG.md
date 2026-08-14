@@ -398,9 +398,22 @@
   grants the tiers globally, a cloned repository asking for them too would
   otherwise be told its keys were "NOT in force" beneath a policy showing them
   on, with a `plumb trust` that would change nothing. Quiet, too, when the
-  project sets no `[git]` key and when the request is trusted. A
-  `.plumb/config.toml` that cannot be **parsed** gets its own notice, since it is
-  skipped whole and no `plumb trust` would help.
+  project sets no `[git]` key. A `.plumb/config.toml` that cannot be **parsed**
+  gets its own notice, since it is skipped whole and no `plumb trust` would help
+  — and that notice reports only what the *file* contributed (nothing), not what
+  the policy is, because a config that parsed at attach and was broken in place
+  afterwards leaves its already-applied values standing.
+
+  **Being trusted does not buy silence**, only a different explanation. Plumb
+  applies `PLUMB_GIT_*` *after* the project config, so an approved
+  `allow_push = true` plus `PLUMB_GIT_ALLOW_PUSH=0` still resolves to push off —
+  the original unexplained `Push/fetch/pull: off.`, reached from the other side.
+  A trusted key that is genuinely not in force therefore gets an `OVERRIDDEN`
+  notice naming the environment as the layer that beat the grant, since
+  recommending `plumb trust` there would send the reader to re-approve something
+  that is not the obstacle. The ordinary trusted session stays quiet because its
+  keys *are* in force, which the per-key comparison already establishes without a
+  blanket exemption.
 
   **The notice and the policy it describes are one snapshot**, captured together
   when the project config is applied. They have to be: `plumb trust` writes
@@ -408,9 +421,15 @@
   would have let the grant silence it while the cached policy stayed exactly as
   restrictive — leaving `Push/fetch/pull: off.` with no explanation and the git
   tool still refusing, which is the original bug reached by following the
-  notice's own advice. The remediation therefore says what is true: either fix
-  lands when the workspace is next attached (a new session, `plumb restart`, or a
-  re-pin), not mid-session.
+  notice's own advice. The remediation is therefore stated **per route**, because
+  the three land at different moments: `plumb trust` when the workspace is next
+  attached (a new session, `plumb restart`, or a re-pin), not mid-session; a
+  **global config** edit *immediately*, since the daemon watches that file and
+  re-applies it to live sessions; and a `PLUMB_GIT_*` variable only after the
+  **daemon** is restarted with it set, because it is read from the daemon
+  process's own environment — a new session or a re-pin against the running
+  daemon picks up nothing, and telling an agent otherwise walks it straight back
+  into the incident the notice exists to end.
 
   The trust boundary itself is unchanged; only its visibility is. An untrusted
   workspace still resolves the whole `[git]` table from the global config, now
@@ -1611,6 +1630,7 @@
   Guarded by the `pool_synthesise_root`, `pool_homeguard`, and `conn_homepin`
   test files, each route wired to its caller with issue-#182 and
   project-under-`$HOME` controls.
+
 - **Two agents on ONE project reached by different path spellings no longer
   disagree about where they are — workspace roots are canonicalised at
   acquisition** (issue #263). The root was stored exactly as reported, with no

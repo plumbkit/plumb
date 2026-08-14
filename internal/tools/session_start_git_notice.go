@@ -62,24 +62,26 @@ func gitPolicyField(key string) (string, bool) {
 // user who set the tiers globally and then cloned a repository that asks for
 // them too.
 //
-// An unrecognised field (a misspelling, or a [git] field added later and not
-// classified here) cannot be compared, so it is reported. Over-reporting costs a
-// line the reader can check; under-reporting is the silence this file exists to
-// end.
-func gitKeyInForce(field string, want any, p GitPolicy) bool {
+// known is false for a field this function cannot judge: a misspelling, or
+// a [git] field with no counterpart in the resolved policy at all (`env` is the
+// standing case — it reaches the git child's environment, never GitPolicy). The
+// two callers need that distinction to point in OPPOSITE directions, so it is
+// returned rather than folded into inForce — see droppedGitKeys and
+// overriddenGitKeys.
+func gitKeyInForce(field string, want any, p GitPolicy) (inForce, known bool) {
 	switch field {
 	case "allow_writes":
-		return boolIs(want, p.AllowWrites)
+		return boolIs(want, p.AllowWrites), true
 	case "allow_destructive":
-		return boolIs(want, p.AllowDestructive)
+		return boolIs(want, p.AllowDestructive), true
 	case "allow_push":
-		return boolIs(want, p.AllowPush)
+		return boolIs(want, p.AllowPush), true
 	case "commit_trailer":
-		return boolIs(want, p.CommitTrailer)
+		return boolIs(want, p.CommitTrailer), true
 	case "protected_branches":
-		return stringListIs(want, p.ProtectedBranches)
+		return stringListIs(want, p.ProtectedBranches), true
 	}
-	return false
+	return false, false
 }
 
 func boolIs(want any, have bool) bool {
@@ -104,13 +106,21 @@ func stringListIs(want any, have []string) bool {
 	return true
 }
 
-// droppedGitKeys narrows a project's capability request to the [git] keys whose
-// requested value is genuinely not what this session resolved.
+// droppedGitKeys narrows an UNTRUSTED project's capability request to the [git]
+// keys whose requested value is genuinely not what this session resolved.
+//
+// A field that cannot be compared is REPORTED here: the whole [git] table was
+// forced back, so it really was dropped, and over-reporting costs a line the
+// reader can check against the policy above. Under-reporting is the silence this
+// file exists to end.
 func droppedGitKeys(keys []ProjectGitKey, p GitPolicy) []string {
 	var out []string
 	for _, e := range keys {
 		field, ok := gitPolicyField(e.Key)
-		if !ok || gitKeyInForce(field, e.Value, p) {
+		if !ok {
+			continue
+		}
+		if inForce, _ := gitKeyInForce(field, e.Value, p); inForce {
 			continue
 		}
 		out = append(out, e.Key)
@@ -118,13 +128,62 @@ func droppedGitKeys(keys []ProjectGitKey, p GitPolicy) []string {
 	return out
 }
 
+// overriddenGitKeys narrows a TRUSTED project's [git] request to the keys whose
+// requested value is PROVABLY not what this session resolved.
+//
+// The asymmetry with droppedGitKeys is deliberate and runs the other way. A
+// trusted [git] table is applied whole, so a field this package cannot compare
+// is in force — `git.env` has no counterpart in GitPolicy at all — and naming it
+// would invent an override that does not exist. Only a recognised field that
+// genuinely differs is reported, because only that can be checked by the reader
+// against the policy printed above.
+func overriddenGitKeys(keys []ProjectGitKey, p GitPolicy) []string {
+	var out []string
+	for _, e := range keys {
+		field, ok := gitPolicyField(e.Key)
+		if !ok {
+			continue
+		}
+		inForce, known := gitKeyInForce(field, e.Value, p)
+		if !known || inForce {
+			continue
+		}
+		out = append(out, e.Key)
+	}
+	return out
+}
+
+// shellQuote renders a path for a command line an agent may copy verbatim.
+//
+// Go's %q is NOT a shell quote. It handles spaces, quotes and backslashes, but
+// leaves `$` untouched, so a workspace under a directory literally named `$WORK`
+// would be expanded by the shell into a different path — the same silently
+// wrong-target failure the space case fixed, reached by a rarer spelling. POSIX
+// single quotes suppress every expansion; the only character needing care inside
+// them is the single quote itself, spliced out and back with the standard POSIX
+// close-escape-reopen idiom.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // formatProjectGitNotice renders the ignored-project-[git] warning, or "" when
 // there is nothing to say.
 //
 // Silent in the quiet cases, which is most sessions: no [git] keys at all
-// (nothing was asked for), trusted (what was asked for is already in force, so
-// the policy printed above IS the project's), and every asked-for key already
-// matching the resolved policy.
+// (nothing was asked for), and every asked-for key already matching the resolved
+// policy — including the ordinary trusted session, where the grant is what put
+// them there.
+//
+// Trust is NOT a short-circuit, and that is the fix for the bug this notice was
+// written to end reappearing under a narrower stencil. LoadProjectWithPolicy
+// applies PLUMB_GIT_* AFTER forcing an untrusted [git] back to base, so env is
+// the highest layer either way: a trusted `allow_push = true` plus
+// PLUMB_GIT_ALLOW_PUSH=0 resolves to push OFF. Returning early on Trusted put
+// exactly that state back into the original silence — `Push/fetch/pull: off.`
+// against an approved `allow_push = true`, with nothing on screen to explain it.
+// It reads as reachable-but-harmless because the per-key comparison below
+// already keeps the trusted-AND-applied case quiet, which is the whole of what
+// the short-circuit was doing.
 //
 // Presence, not value, is what triggers it for a key that DOES differ. The keys
 // come from the project's raw TOML, so `allow_destructive = false` against an
@@ -135,7 +194,7 @@ func formatProjectGitNotice(ws string, st ProjectGitStatus, p GitPolicy) string 
 		return unreadableProjectConfigNotice(ws)
 	}
 	if st.Trusted {
-		return ""
+		return trustedGitOverrideNotice(ws, overriddenGitKeys(st.Keys, p))
 	}
 	dropped := droppedGitKeys(st.Keys, p)
 	if len(dropped) == 0 {
@@ -151,12 +210,55 @@ func formatProjectGitNotice(ws string, st ProjectGitStatus, p GitPolicy) string 
 		"so plumb takes the WHOLE [git] table from the global config until this project's request is approved. " +
 		"That runs in both directions: unapproved, a project can neither open the destructive or network tier, shorten the " +
 		"protected-branch list, nor turn writes or the commit trailer off.\n")
-	fmt.Fprintf(&sb, "To apply this project's request HERE: review it with `plumb config show --workspace %q`, then run "+
-		"`plumb trust %q` (it prompts; `--yes` grants it non-interactively). To set the policy everywhere: use the global "+
+	fmt.Fprintf(&sb, "To apply this project's request HERE: review it with `plumb config show --workspace %s`, then run "+
+		"`plumb trust %s` (it prompts; `--yes` grants it non-interactively). To set the policy everywhere: use the global "+
 		"config (`plumb config show` prints its path) or the PLUMB_GIT_* environment variables (PLUMB_GIT_ALLOW_WRITES, "+
-		"PLUMB_GIT_ALLOW_DESTRUCTIVE, PLUMB_GIT_ALLOW_PUSH, PLUMB_GIT_COMMIT_TRAILER).\n", ws, ws)
-	sb.WriteString("Either takes effect when this workspace is next attached (a new session, `plumb restart`, or a re-pin), " +
-		"NOT mid-session: the policy above and this notice are one snapshot, so both will keep saying this until then.\n")
+		"PLUMB_GIT_ALLOW_DESTRUCTIVE, PLUMB_GIT_ALLOW_PUSH, PLUMB_GIT_COMMIT_TRAILER).\n",
+		shellQuote(ws), shellQuote(ws))
+	sb.WriteString(gitRemediationTiming)
+	return sb.String()
+}
+
+// gitRemediationTiming states when each remediation above actually lands. The
+// three routes differ, and a single "not mid-session" for all of them is wrong
+// in BOTH directions: it under-promises the global config, which the daemon
+// watches and re-applies to live sessions, and it over-promises PLUMB_GIT_*,
+// which is read from the daemon PROCESS's environment — so an agent that
+// exports the variable, re-runs session_start and sees no change lands straight
+// back in the incident this notice exists to end.
+const gitRemediationTiming = "The three routes land at DIFFERENT moments. " +
+	"`plumb trust` writes a file nothing watches, so its grant reaches this session only when the workspace is next " +
+	"attached — a new session, `plumb restart`, or a re-pin — NOT mid-session; until then the policy above and this " +
+	"notice are one snapshot and will keep saying exactly this. " +
+	"Editing the GLOBAL config DOES take effect mid-session: the daemon watches that file and re-applies it to every " +
+	"live session (`plumb config reload` forces the same pass). " +
+	"A PLUMB_GIT_* variable is read from the DAEMON's environment, not yours, so exporting it and then starting a new " +
+	"session or re-pinning changes NOTHING — the daemon has to be restarted with the variable already set.\n"
+
+// trustedGitOverrideNotice covers the state the trust grant does not settle: the
+// request was approved and STILL is not what the session resolved.
+//
+// It is reachable because env is applied last (see formatProjectGitNotice), and
+// it needs its own wording because the untrusted notice's advice is actively
+// wrong here — `plumb trust` is already granted, so recommending it sends the
+// reader to re-approve something that is not the obstacle.
+func trustedGitOverrideNotice(ws string, overridden []string) string {
+	if len(overridden) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\nOVERRIDDEN — this project's [git] request is TRUSTED, yet %d [git] %s %s still NOT in force: %s.\n",
+		len(overridden),
+		textfmt.Plural(len(overridden), "key", "keys"),
+		textfmt.Plural(len(overridden), "is", "are"),
+		strings.Join(overridden, ", "))
+	sb.WriteString("`plumb trust` will NOT help — the grant is already given, and the policy above is what plumb resolved " +
+		"WITH it. A higher layer is winning: the PLUMB_GIT_* environment variables (PLUMB_GIT_ALLOW_WRITES, " +
+		"PLUMB_GIT_ALLOW_DESTRUCTIVE, PLUMB_GIT_ALLOW_PUSH, PLUMB_GIT_COMMIT_TRAILER) are applied AFTER the project " +
+		"config, so one set in the environment the DAEMON was started with beats your approved value.\n")
+	fmt.Fprintf(&sb, "Confirm with `plumb config show --workspace %s`, which prints each value's provenance. To let this "+
+		"project's value win, unset the variable and restart the daemon (`plumb restart`): it is read from the daemon's "+
+		"own environment, so a new session or a re-pin against the running daemon picks up nothing.\n", shellQuote(ws))
 	return sb.String()
 }
 
@@ -164,8 +266,20 @@ func formatProjectGitNotice(ws string, st ProjectGitStatus, p GitPolicy) string 
 // that cannot be parsed is skipped whole, so its [git] block is just as ignored
 // as an untrusted one — and with nothing said, the agent has even less to go on,
 // because there is no `plumb trust` to reach for.
+//
+// It states what the FILE contributed (nothing), not what the policy is, because
+// those are different questions. applyProjectConfig returns on a parse error
+// without reverting the session's git view, so a config that parsed at attach
+// and was broken in place afterwards leaves its already-applied values in force
+// under this notice. Claiming "the policy above is what plumb resolved without
+// it" would be false in exactly that case, which is the one a reader hits while
+// editing the file — the state where a wrong claim is most expensive.
 func unreadableProjectConfigNotice(ws string) string {
-	return fmt.Sprintf("\nIGNORED — this project's .plumb/config.toml could not be parsed, so NOTHING in it is being applied, "+
-		"[git] included: the policy above is what plumb resolved without it. Check the file, then see the parse error with "+
-		"`plumb config show --workspace %q`.\n", ws)
+	return fmt.Sprintf("\nIGNORED — this project's .plumb/config.toml could not be parsed, so it was skipped WHOLE: nothing "+
+		"it asks for, [git] included, was read from it. That does NOT mean the policy above is the global one. It is "+
+		"whatever this session last resolved successfully — the global config if no readable project config was ever "+
+		"applied here, but the values from an EARLIER readable version of this file if it parsed at attach and was broken "+
+		"afterwards, since a failed re-read leaves the session's resolved policy standing. Check the file, then see the "+
+		"parse error with `plumb config show --workspace %s`; `plumb restart` resolves the policy from scratch.\n",
+		shellQuote(ws))
 }

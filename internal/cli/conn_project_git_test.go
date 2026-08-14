@@ -148,6 +148,51 @@ func TestProjectGitStatus_AgreesWithTheResolvedPolicy(t *testing.T) {
 	})
 }
 
+// TestProjectGitStatus_TrustedButEnvOverridden proves the state the renderer's
+// trusted branch exists for is REACHABLE through the real config pipeline, not a
+// hypothetical the notice may as well stay silent about.
+//
+// LoadProjectWithPolicy applies PLUMB_GIT_* LAST — deliberately, so forcing an
+// untrusted [git] back to base cannot discard an override the user set for this
+// process — which means env outranks a trust grant just as it outranks the
+// project file. So `allow_push = true`, approved, plus PLUMB_GIT_ALLOW_PUSH=0
+// resolves to trusted=true AND allow_push=false: an agent seeing
+// `Push/fetch/pull: off.` beside a value it knows was approved, which is the
+// original unexplained-policy bug arrived at from the trusted side.
+//
+// A `if st.Trusted { return "" }` short-circuit in the renderer silences exactly
+// this. Deleting that line changed no test's output — the per-key comparison
+// already keeps the trusted-AND-applied case quiet — which is why the state went
+// unguarded. internal/tools asserts what gets RENDERED here; this asserts that
+// the daemon can actually produce it.
+func TestProjectGitStatus_TrustedButEnvOverridden(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	writeProjectConfig(t, ws, "[git]\nallow_push = true\n")
+	grantExecTrust(t, ws)
+
+	// Without the override, the grant is honoured — the control that makes the
+	// assertion below about the ENV and not about a broken trust grant.
+	granted := projectGitSession(t, ws)
+	if !granted.projectGitStatus().Trusted || !granted.gitPolicy().AllowPush {
+		t.Fatalf("precondition: the grant must be honoured, got trusted=%v allow_push=%v",
+			granted.projectGitStatus().Trusted, granted.gitPolicy().AllowPush)
+	}
+
+	t.Setenv("PLUMB_GIT_ALLOW_PUSH", "0")
+	s := projectGitSession(t, ws)
+	st := s.projectGitStatus()
+	if !st.Trusted {
+		t.Fatalf("the request is trusted for this exact content; got trusted=false")
+	}
+	if s.gitPolicy().AllowPush {
+		t.Fatal("PLUMB_GIT_ALLOW_PUSH=0 must beat the project value — it is applied after the project config")
+	}
+	if got := gitStatusKeys(st.Keys); !slices.Equal(got, []string{"git.allow_push"}) {
+		t.Errorf("keys = %v, want [git.allow_push] — the notice cannot name what it is not handed", got)
+	}
+}
+
 func gitStatusKeys(keys []tools.ProjectGitKey) []string {
 	out := make([]string, len(keys))
 	for i, k := range keys {
