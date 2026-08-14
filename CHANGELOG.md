@@ -1018,13 +1018,42 @@
     workspace. So `{path: "~/.zshrc", workspace: "/some/project"}` seeded
     `$HOME` while counting as a declaration of it, and the resulting pin was
     stamped `session_start` and persisted, returning on every later reconnect.
-  - **A root that *contains* the home directory is refused too**, unless
-    explicitly named. Guarding `$HOME` by identity alone left the rung above
-    it open: `/Users`, `/home` or `/` admits a workspace holding every home
-    directory on the machine, reachable with no declaration through a client
-    reporting such a folder in its roots. Ancestry is compared on resolved
-    paths, for the same reason identity is: a lexical prefix test loses to
-    symlink aliasing.
+  - **A root that *contains* a home directory needs an explicit declaration,
+    enforced where the session's root is set.** Guarding `$HOME` by identity
+    alone left the rung above it open: `/Users`, `/home` or `/` admits a
+    workspace holding every home directory on the machine, reachable with no
+    declaration through a client reporting such a folder in its roots. The
+    refusal lives at the one choke point every route passes through — the
+    three writers of the session's root (attach from client roots, synthetic
+    attach, re-pin/restore) all consult `undeclaredWideRootErr` before the
+    write — because that is where the pin's origin is in scope: only a
+    `session_start` `workspace` argument (live, or a persisted pin replayed
+    with that stored origin) pins such a directory, and every other origin
+    gets an error naming containment. Earlier rounds put this refusal in
+    *detection* instead, and that shape was wrong twice over: a `.plumb`
+    marker above `$HOME` — which plumb itself can mint from inside one
+    explicit pin — kept the exemption alive above the home directory, and a
+    repo that legitimately *contains* its own home directory (hermetic build
+    sandboxes with `HOME=$PWD/.home`, Bazel execroots, nix-shell, CI images
+    that repoint `HOME` into the checkout) became undetectable, silently
+    losing its language server. Detection is identity-guarded only, so such a
+    repo detects normally and an explicit pin of it keeps its real root *and*
+    its real language; auto-attaching it still requires the declaration, and
+    the refusal says why. `SynthesiseRoot` additionally refuses a wide *seed*
+    and stops its walk at any directory containing a home directory (a
+    markerless sibling of `$HOME` with a `.git` above no longer widens to
+    their common ancestor) — kept for the better error at the call that
+    caused it; the choke is the invariant behind it.
+
+    **Ancestry, like identity, is decided by filesystem identity** — the
+    candidate is `os.SameFile`-compared against every proper ancestor of each
+    home directory — never by comparing path strings. The first cut compared
+    resolved path strings, and review defeated it on a stock machine twice:
+    path resolution collapses *symlinks only*, so the macOS firmlink alias
+    (`/System/Volumes/Data/Users` is `/Users`, per `os.SameFile`) and a
+    case-variant spelling on the case-insensitive default volume both walked
+    past it. No alternative spelling defeats an identity comparison, which is
+    also why the fix is not a case-fold.
   - **A bare `~/.plumb` is residue, not intent.** `Detect` honoured a
     `.plumb` marker before any home guard, so the `~/.plumb` an earlier
     build's `auto_attach_persist` created kept resolving `$HOME` forever,
@@ -1040,7 +1069,9 @@
     **If an earlier build left one behind:** `touch ~/.plumb/context.md` keeps
     the directory's memories and topology index and silences the warning, or
     remove `~/.plumb` to discard it — which deletes those too.
-    `auto_attach_persist` now refuses to create `~/.plumb` at all.
+    `auto_attach_persist` now refuses to create a `.plumb` at *or above* a
+    home directory at all, so plumb can no longer mint the marker that would
+    make a later session resolve there without any declaration.
   - **The guard's identity is environment-resistant.** `$HOME` is matched by
     filesystem identity (`os.SameFile` — a mutation proved a string compare
     reopens the escape through symlinked/firmlinked spellings), and the
