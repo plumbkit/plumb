@@ -44,7 +44,8 @@ func (*TopologyStatus) Name() string                 { return "topology_status" 
 func (*TopologyStatus) InputSchema() json.RawMessage { return topologyStatusSchema }
 func (*TopologyStatus) Description() string {
 	return "Report the health and statistics of the topology index for this workspace: " +
-		"indexer state, indexed/skipped file counts, total nodes and edges, database size, " +
+		"indexer state, indexed/skipped file counts (with the recorded reason for each " +
+		"skipped file, most recent first), total nodes and edges, database size, " +
 		"last sync time, indexed languages, and the most recent indexing error if any. " +
 		"Returns a clear message when topology indexing is disabled."
 }

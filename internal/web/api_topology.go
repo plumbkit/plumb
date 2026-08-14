@@ -9,18 +9,25 @@ import (
 )
 
 type topologyDTO struct {
-	Workspace    string    `json:"workspace"`
-	Available    bool      `json:"available"`
-	IndexedFiles int       `json:"indexedFiles"`
-	SkippedFiles int       `json:"skippedFiles"`
-	EmptyFiles   int       `json:"emptyFiles"`
-	TotalNodes   int       `json:"totalNodes"`
-	TotalEdges   int       `json:"totalEdges"`
-	DBSizeBytes  int64     `json:"dbSizeBytes"`
-	LastSync     time.Time `json:"lastSync"`
-	IndexerState string    `json:"indexerState"`
-	Languages    []string  `json:"languages"`
-	LastError    string    `json:"lastError"`
+	Workspace    string         `json:"workspace"`
+	Available    bool           `json:"available"`
+	IndexedFiles int            `json:"indexedFiles"`
+	SkippedFiles int            `json:"skippedFiles"`
+	EmptyFiles   int            `json:"emptyFiles"`
+	TotalNodes   int            `json:"totalNodes"`
+	TotalEdges   int            `json:"totalEdges"`
+	DBSizeBytes  int64          `json:"dbSizeBytes"`
+	LastSync     time.Time      `json:"lastSync"`
+	IndexerState string         `json:"indexerState"`
+	Languages    []string       `json:"languages"`
+	LastError    string         `json:"lastError"`
+	FileErrors   []fileErrorDTO `json:"fileErrors"`
+}
+
+// fileErrorDTO is one skipped file and the reason the indexer recorded.
+type fileErrorDTO struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
 }
 
 // handleTopology returns the topology index status for the requested (or
@@ -54,6 +61,9 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	out.IndexerState = st.IndexerState
 	out.Languages = st.Languages
 	out.LastError = st.LastError
+	for _, fe := range st.FileErrors {
+		out.FileErrors = append(out.FileErrors, fileErrorDTO{Path: fe.Path, Message: fe.Message})
+	}
 	writeJSON(w, out)
 }
 

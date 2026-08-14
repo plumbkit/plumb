@@ -59,6 +59,11 @@ func StatusForWorkspace(ws string) (Status, error) {
 	return Report(db, ws, nil), nil
 }
 
+// maxStatusFileErrors bounds the sample of skipped-file reasons a Status
+// carries: enough to diagnose a pattern, small enough that Report stays cheap on
+// the TUI's poll and the web API's responses stay bounded.
+const maxStatusFileErrors = 20
+
 // countFiles splits the file census by what actually happened to each row.
 //
 // A non-empty content_hash is the marker that a file was genuinely parsed:
@@ -80,6 +85,30 @@ func countFiles(db *sql.DB, s *Status) {
         SELECT COUNT(*) FROM topology_files
         WHERE error_msg = '' AND content_hash = '' AND language = ''`).Scan(&s.UnrecognisedFiles)
 	s.UncoveredFiles = uncoveredCensus(db)
+	s.FileErrors = skippedFileErrors(db)
+}
+
+// skippedFileErrors returns the recorded reasons for skipped files, most
+// recently touched first, capped at maxStatusFileErrors. Until now error_msg
+// was write-only — recorded by recordFileError and read back only as a COUNT,
+// so a parse timeout, a malformed file and a panicking grammar were
+// indistinguishable at every surface.
+func skippedFileErrors(db *sql.DB) []FileError {
+	rows, err := db.Query(
+		`SELECT path, error_msg FROM topology_files WHERE error_msg != ''
+		 ORDER BY mtime_ns DESC, path LIMIT ?`, maxStatusFileErrors)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []FileError
+	for rows.Next() {
+		var fe FileError
+		if rows.Scan(&fe.Path, &fe.Message) == nil {
+			out = append(out, fe)
+		}
+	}
+	return out
 }
 
 // uncoveredCensus counts, per language, the files plumb recognised but has no
@@ -171,6 +200,12 @@ func FormatStatus(s Status, workspace string) string {
 	fmt.Fprintf(&sb, "  workspace:     %s\n", workspace)
 	fmt.Fprintf(&sb, "  indexed files: %d\n", s.IndexedFiles)
 	fmt.Fprintf(&sb, "  skipped files: %d\n", s.SkippedFiles)
+	for _, fe := range s.FileErrors {
+		fmt.Fprintf(&sb, "    %s: %s\n", fe.Path, fe.Message)
+	}
+	if rest := s.SkippedFiles - len(s.FileErrors); rest > 0 {
+		fmt.Fprintf(&sb, "    (and %d more)\n", rest)
+	}
 	fmt.Fprintf(&sb, "  total nodes:   %d\n", s.TotalNodes)
 	fmt.Fprintf(&sb, "  total edges:   %d\n", s.TotalEdges)
 	fmt.Fprintf(&sb, "  db size:       %s\n", textfmt.HumanBytes(s.DBSizeBytes))

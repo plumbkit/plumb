@@ -2,6 +2,7 @@ package topology
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -229,5 +230,105 @@ func TestFormatStatus_DBSizeUsesBinaryUnits(t *testing.T) {
 	out := FormatStatus(Status{DBSizeBytes: 2048}, "/ws")
 	if !strings.Contains(out, "2.0 KiB") {
 		t.Errorf("FormatStatus should render db size as 2.0 KiB; got:\n%s", out)
+	}
+}
+
+// insertErroredFile writes one skipped-file row with a caller-chosen mtime, so
+// the ordering contract of skippedFileErrors is exercisable.
+func insertErroredFile(t *testing.T, db *sql.DB, path, errMsg string, mtimeNs int64) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO topology_files(path, mtime_ns, error_msg) VALUES (?,?,?)`,
+		path, mtimeNs, errMsg); err != nil {
+		t.Fatalf("insert errored file %q: %v", path, err)
+	}
+}
+
+// TestReport_SurfacesFileErrors pins the read path that turns error_msg from a
+// write-only column into a diagnosis: a skipped file must say WHY, most
+// recently touched first.
+func TestReport_SurfacesFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "errors.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	insertTestFile(t, db, "ok.go")
+	insertErroredFile(t, db, "old.go", "parse stopped early: timeout", 100)
+	insertErroredFile(t, db, "new.go", "extractor panic: boom", 300)
+	insertErroredFile(t, db, "mid.go", "read: permission denied", 200)
+
+	s := Report(db, dir, nil)
+	if s.SkippedFiles != 3 {
+		t.Fatalf("SkippedFiles = %d, want 3", s.SkippedFiles)
+	}
+	if len(s.FileErrors) != 3 {
+		t.Fatalf("len(FileErrors) = %d, want 3", len(s.FileErrors))
+	}
+	wantOrder := []string{"new.go", "mid.go", "old.go"}
+	for i, want := range wantOrder {
+		if s.FileErrors[i].Path != want {
+			t.Errorf("FileErrors[%d].Path = %q, want %q (most recently touched first)", i, s.FileErrors[i].Path, want)
+		}
+	}
+	if s.FileErrors[0].Message != "extractor panic: boom" {
+		t.Errorf("FileErrors[0].Message = %q, want the recorded reason", s.FileErrors[0].Message)
+	}
+}
+
+// TestReport_FileErrorsCapped pins the bound: a pathological workspace with
+// hundreds of failures must not make Report (which runs on the TUI's poll)
+// carry hundreds of rows.
+func TestReport_FileErrorsCapped(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "capped.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	for i := range maxStatusFileErrors + 5 {
+		insertErroredFile(t, db, fmt.Sprintf("f%03d.go", i), "boom", int64(i))
+	}
+
+	s := Report(db, dir, nil)
+	if s.SkippedFiles != maxStatusFileErrors+5 {
+		t.Fatalf("SkippedFiles = %d, want %d", s.SkippedFiles, maxStatusFileErrors+5)
+	}
+	if len(s.FileErrors) != maxStatusFileErrors {
+		t.Errorf("len(FileErrors) = %d, want the %d-row cap", len(s.FileErrors), maxStatusFileErrors)
+	}
+}
+
+func TestFormatStatus_ListsSkippedReasons(t *testing.T) {
+	out := FormatStatus(Status{
+		IndexerState: "idle",
+		IndexedFiles: 10,
+		SkippedFiles: 25,
+		FileErrors: []FileError{
+			{Path: "a.go", Message: "parse stopped early: timeout"},
+			{Path: "b.py", Message: "extractor panic: boom"},
+		},
+	}, "/ws")
+	for _, want := range []string{
+		"skipped files: 25",
+		"a.go: parse stopped early: timeout",
+		"b.py: extractor panic: boom",
+		"(and 23 more)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FormatStatus output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A clean workspace must not grow noise: no skipped files, no reason lines,
+// no truncation note.
+func TestFormatStatus_OmitsSkippedReasonsWhenClean(t *testing.T) {
+	out := FormatStatus(Status{IndexerState: "idle", IndexedFiles: 10}, "/ws")
+	if strings.Contains(out, "(and ") {
+		t.Errorf("FormatStatus should omit the truncation note when nothing is skipped:\n%s", out)
 	}
 }

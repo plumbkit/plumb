@@ -580,6 +580,13 @@
   while the `[git.env]` and `git.env.X = …` spellings merge into it, so the same
   intent written two ways would reach the git child as two different
   environments.
+- **Skipped topology files now say WHY they were skipped.** `error_msg` was
+  write-only: recorded on every indexing failure and read back only as a
+  count, so a parse timeout, a malformed file and a panicking grammar were
+  indistinguishable at every surface. `topology_status` now lists each skipped
+  file with its recorded reason (bounded, most recently touched first), the
+  web API returns them as `fileErrors`, and `plumb doctor` names the first
+  reason when every file failed.
 
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's
