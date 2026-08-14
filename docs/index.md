@@ -27,7 +27,7 @@ New here? Start with the [README](../README.md), then
 - [**Architecture**](architecture.md) — layers, the daemon/proxy model, data flow, and persistence (with diagrams).
 - [**Topology**](topology.md) — the optional semantic index and the dual-engine (Topology + LSP) model.
 - [**Token Efficiency**](token-efficiency.md) — how plumb keeps assistant context lean.
-- [**Cross-agent sharing**](tools.md#cross-agent-sharing-collab) — how concurrent agents see the operations peers ran through plumb's write-capable tools (as the daemon recorded them), message each other, and hand off findings; gating and defaults in the [`[collab]` config section](configuration.md#collab--cross-agent-sharing).
+- [**Cross-agent sharing**](tools.md#cross-agent-sharing-collab) — how concurrent agents see the writes peers made (as the daemon recorded them — a failed or refused write is shown marked, never as a landed change), message each other, and hand off findings; gating and defaults in the [`[collab]` config section](configuration.md#collab--cross-agent-sharing).
 - [**Threat model**](threat-model.md) — assets, trust boundaries, abuse cases, and what plumb deliberately does *not* defend against.
 
 ## Contributing
