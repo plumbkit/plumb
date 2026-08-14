@@ -247,9 +247,15 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 		// the workspace. A row the caller genuinely created with
 		// session_start({workspace: "~"}) still restores — issue #182.
 		//
-		// Seeded from `resolved`, not the raw stored root: restoreRootIntact has
-		// already verified and resolved it, and re-synthesising from the raw value
-		// would discard that.
+		// The re-synthesis itself is the load-bearing step, not its argument:
+		// restoreRootIntact asked the home-directory question with explicit=true
+		// (it has no origin), which cannot refuse a $HOME row persisted by an
+		// earlier build from a weaker source — only THIS call, with the row's
+		// stored origin, can. Seeding it from `resolved` rather than the raw
+		// stored root is behaviourally neutral: restoreRootIntact keeps a
+		// markerless root only when it synthesises to ITSELF, so the two are
+		// equal by construction here — it just keeps the call honest about which
+		// spelling was verified.
 		synth := s.pool.SynthesiseRoot(resolved, source == sessionstate.PinSourceSessionStart)
 		if synth == "" {
 			s.log().Warn("daemon: not restoring persisted pin — it names the home directory and was not set by an explicit session_start", "root", resolved, "source", string(source))

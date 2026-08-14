@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 func TestRootsRotation_ReorderKeepsCurrentPin(t *testing.T) {
@@ -153,5 +154,31 @@ func TestRootsChanged_EmptyKeepsPin(t *testing.T) {
 	s.onRootsChanged(context.Background(), nil)
 	if got := s.workspace(); got != rootA {
 		t.Fatalf("empty roots change should keep the pin: got %q, want %q", got, rootA)
+	}
+}
+
+// TestResolveRootFolder_ReportedHomeResolvesEmpty pins resolveRootFolder's
+// explicit=false, which its doc comment carries but nothing tested: a
+// client-reported root is NOT a session_start declaration, so a reported
+// $HOME must resolve to "" — exactly as the re-pin itself would refuse it —
+// and therefore never count as "the pinned root is still reported". Flipping
+// the flag to true resolves $HOME to itself, which is how a reported home
+// directory would launder itself into still-reported status. The positive
+// control (a markerless directory outside home resolves to itself) separates
+// "the refusal returned empty" from "resolution is broken".
+func TestResolveRootFolder_ReportedHomeResolvesEmpty(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxyX")
+
+	if got := s.resolveRootFolder(home); got != "" {
+		t.Errorf("resolveRootFolder($HOME) = %q, want \"\" — a client-reported root is not a session_start declaration, so a reported home directory must resolve exactly as the re-pin itself would refuse it", got)
+	}
+
+	outside := freshTempDir(t)
+	if got, want := s.resolveRootFolder(outside), paths.Canonical(outside); got != want {
+		t.Errorf("resolveRootFolder(%q) = %q, want %q — a markerless directory that is not home still resolves, so the empty answer above is the refusal, not broken resolution", outside, got, want)
 	}
 }
