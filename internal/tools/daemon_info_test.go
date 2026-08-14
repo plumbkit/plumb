@@ -96,6 +96,78 @@ func TestDaemonInfo_UptimeSpansSuspend(t *testing.T) {
 	}
 }
 
+// TestDaemonInfo_ProtocolRow pins the protocol-negotiation rendering: a
+// mismatch names both revisions (the fleet-visibility signal), a match stays
+// quiet about the offer, and an unwired or pre-initialize tool omits the rows.
+func TestDaemonInfo_ProtocolRow(t *testing.T) {
+	newTool := func() *daemonInfo {
+		return NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now())
+	}
+	tests := []struct {
+		name   string
+		wire   func(*daemonInfo) *daemonInfo
+		want   []string
+		absent []string
+	}{
+		{
+			name: "wired with mismatch shows both revisions and caps",
+			wire: func(d *daemonInfo) *daemonInfo {
+				return d.WithProtocol(func() ProtocolStatus {
+					return ProtocolStatus{
+						Offered:      "2025-11-25",
+						Answered:     "2024-11-05",
+						Capabilities: []string{"elicitation", "roots.listChanged"},
+					}
+				})
+			},
+			want: []string{
+				"protocol:       2024-11-05 (client offered 2025-11-25)",
+				"client caps:    elicitation, roots.listChanged",
+			},
+		},
+		{
+			name: "wired with matching offer shows the answered revision only",
+			wire: func(d *daemonInfo) *daemonInfo {
+				return d.WithProtocol(func() ProtocolStatus {
+					return ProtocolStatus{Offered: "2024-11-05", Answered: "2024-11-05"}
+				})
+			},
+			want:   []string{"protocol:       2024-11-05"},
+			absent: []string{"client offered", "client caps:"},
+		},
+		{
+			name:   "unwired omits the protocol rows",
+			wire:   func(d *daemonInfo) *daemonInfo { return d },
+			absent: []string{"protocol:", "client caps:"},
+		},
+		{
+			name: "wired but unanswered (pre-initialize) omits the rows",
+			wire: func(d *daemonInfo) *daemonInfo {
+				return d.WithProtocol(func() ProtocolStatus { return ProtocolStatus{} })
+			},
+			absent: []string{"protocol:", "client caps:"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := tc.wire(newTool()).Execute(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("daemon_info output missing %q:\n%s", want, out)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(out, absent) {
+					t.Errorf("daemon_info output unexpectedly contains %q:\n%s", absent, out)
+				}
+			}
+		})
+	}
+}
+
 func TestFormatUptime(t *testing.T) {
 	tests := []struct {
 		up   time.Duration

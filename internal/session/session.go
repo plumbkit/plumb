@@ -84,8 +84,18 @@ type Info struct {
 	EndedAt       time.Time `json:"ended_at,omitempty"`
 	ClientName    string    `json:"client_name,omitempty"`
 	ClientVersion string    `json:"client_version,omitempty"`
-	Health        string    `json:"health,omitempty"`
-	HealthMessage string    `json:"health_message,omitempty"`
+	// ProtocolOffered is the MCP protocol revision the client offered at
+	// initialize; ProtocolAnswered is the revision plumb negotiated back. Both
+	// empty for a client that sent no protocolVersion (or a record that
+	// predates negotiation tracking).
+	ProtocolOffered  string `json:"protocol_offered,omitempty"`
+	ProtocolAnswered string `json:"protocol_answered,omitempty"`
+	// ClientCapabilities is the raw capabilities JSON the client advertised at
+	// initialize, retained so feature support can be inspected instead of
+	// assumed. Empty when the client advertised none.
+	ClientCapabilities string `json:"client_capabilities,omitempty"`
+	Health             string `json:"health,omitempty"`
+	HealthMessage      string `json:"health_message,omitempty"`
 	// Synthetic is true when the workspace root was inferred by the
 	// auto-attach fallback (git root or seed directory) rather than discovered
 	// via a standard project marker (.plumb/, go.mod, etc.).
@@ -349,6 +359,18 @@ func SetClient(id, clientName, clientVersion string) {
 	Patch(id, func(info *Info) {
 		info.ClientName = clientName
 		info.ClientVersion = clientVersion
+	})
+}
+
+// SetProtocol records the initialize-time protocol negotiation on the session
+// identified by id: the revision the client offered, the revision plumb
+// answered, and the client's advertised capabilities as raw JSON. No-ops
+// silently if the session file does not exist.
+func SetProtocol(id, offered, answered, capabilities string) {
+	Patch(id, func(info *Info) {
+		info.ProtocolOffered = offered
+		info.ProtocolAnswered = answered
+		info.ClientCapabilities = capabilities
 	})
 }
 

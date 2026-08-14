@@ -39,6 +39,15 @@ type LSPStatus struct {
 	Routed []string
 }
 
+// ProtocolStatus is a snapshot of the initialize-time MCP protocol
+// negotiation for this connection, surfaced by daemon_info. Zero while the
+// initialize exchange has not completed.
+type ProtocolStatus struct {
+	Offered      string   // protocol revision the client offered at initialize
+	Answered     string   // protocol revision plumb answered (the negotiated one)
+	Capabilities []string // flattened client capability keys, e.g. "roots.listChanged"
+}
+
 // daemonInfo returns session and daemon metadata to the calling agent.
 type daemonInfo struct {
 	sessID        string
@@ -50,6 +59,7 @@ type daemonInfo struct {
 	lspStatus     func() LSPStatus                                   // optional; nil when no LSP accessor is wired
 	toolProfile   func() (profile string, hidden int, reason string) // optional; nil when no tool-profile accessor is wired
 	pinProvenance func() PinProvenance                               // optional; nil when no provenance accessor is wired
+	protocol      func() ProtocolStatus                              // optional; nil when no protocol accessor is wired
 	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
 }
 
@@ -135,6 +145,15 @@ func (t *daemonInfo) WithPinProvenance(fn func() PinProvenance) *daemonInfo {
 	return t
 }
 
+// WithProtocol wires an accessor returning this connection's initialize-time
+// protocol negotiation snapshot. Nil-safe: when unset, or when the returned
+// value has no answered revision, daemon_info omits the protocol lines.
+// Returns the receiver for chaining.
+func (t *daemonInfo) WithProtocol(fn func() ProtocolStatus) *daemonInfo {
+	t.protocol = fn
+	return t
+}
+
 // NewDaemonInfo creates a tool that exposes session and daemon metadata.
 // sessID and sessName identify the current MCP connection; daemonVersion and
 // startedAt describe the daemon process itself.
@@ -164,6 +183,8 @@ func (t *daemonInfo) Description() string {
 		"session name (e.g. swift-falcon), session ID, daemon version, the source commit the binary " +
 		"was built from (with a dirty marker, or an explicit unknown), Go runtime, OS/arch, " +
 		"start timestamp, and uptime, " +
+		"plus the MCP protocol revision negotiated with this client (and, on a mismatch, " +
+		"the revision it offered and the capabilities it advertised), " +
 		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
 		"for a pending restart-bound change), and — when available — this connection's workspace-pin " +
 		"provenance (how, when, and from where the pin was last set). " +
@@ -225,6 +246,18 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	if t.purpose != nil {
 		if p := t.purpose(); p != "" {
 			out += "\npurpose:        " + p
+		}
+	}
+	if t.protocol != nil {
+		if ps := t.protocol(); ps.Answered != "" {
+			row := ps.Answered
+			if ps.Offered != "" && ps.Offered != ps.Answered {
+				row += " (client offered " + ps.Offered + ")"
+			}
+			out += "\nprotocol:       " + row
+			if len(ps.Capabilities) > 0 {
+				out += "\nclient caps:    " + strings.Join(ps.Capabilities, ", ")
+			}
 		}
 	}
 	if t.lspStatus != nil {

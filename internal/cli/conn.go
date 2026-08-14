@@ -17,6 +17,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -37,8 +38,7 @@ import (
 // copy-on-write under muMutate (see mutate). A loaded *sessionView is treated as
 // read-only — never mutate one in place.
 type sessionView struct {
-	acquiredRoot     string
-	acquiredLanguage string
+	acquiredRoot, acquiredLanguage string
 	// lsRefRoot is the workspace root for which this session holds a PINNED
 	// reference on the shared language-server pool entry (set on a successful
 	// attach / re-pin, "" when the session attached without LSP). Released on
@@ -50,10 +50,13 @@ type sessionView struct {
 	// Paired with lsRefRoot so the release on close / re-pin targets the exact
 	// (root, language) entry this session pinned, now that one root may host
 	// several language servers.
-	lsRefLang     string
-	clientName    string
-	clientVersion string
-	sessName      string
+	lsRefLang                 string
+	clientName, clientVersion string
+	// protocolOffered/protocolAnswered and clientCaps are the initialize-time
+	// MCP protocol negotiation snapshot (see onProtocolNegotiated).
+	protocolOffered, protocolAnswered string
+	clientCaps                        json.RawMessage
+	sessName                          string
 	// purpose is the optional human-readable session tag set via session_start's
 	// purpose arg. Descriptive only; stamped on this session's stats rows and
 	// surfaced by daemon_info. "" when unset.
@@ -163,14 +166,12 @@ type sessionView struct {
 	// pinVia / pinAt / pinPrev are pin-drift observability for issue #182: the
 	// label of the source that last set this connection's pin (see pinViaLabel),
 	// when it was set, and the root it replaced. pinOrigin is the structured
-	// origin behind the label — the sticky-pin guard keys on it instead of
-	// parsing the label. Stamped inside the attach / re-pin mutate, beside
-	// acquiredRoot, so they can never disagree with the pin they describe.
-	// Zero while unattached.
-	pinVia    string
-	pinAt     time.Time
-	pinPrev   string
-	pinOrigin sessionstate.PinSource
+	// origin behind the label — the sticky-pin guard keys on it, not the label.
+	// Stamped inside the attach / re-pin mutate beside acquiredRoot, so they can
+	// never disagree with the pin they describe. Zero while unattached.
+	pinVia, pinPrev string
+	pinAt           time.Time
+	pinOrigin       sessionstate.PinSource
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

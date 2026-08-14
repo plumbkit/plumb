@@ -71,6 +71,19 @@
 
 ### Added
 
+- **MCP protocol-version negotiation at `initialize`.** plumb answered every
+  handshake with a hardcoded `2024-11-05` without ever reading what the client
+  offered. The handshake now parses the client's offered `protocolVersion` and
+  `capabilities`, and answers by intersection with a supported-versions set
+  (currently just `2024-11-05`) — an offered revision plumb implements is
+  echoed back, anything else gets the newest supported revision, never a
+  parroted offer the client would then rely on. The negotiated revision and
+  the advertised capabilities are stored on the session record, surfaced by
+  `daemon_info` (a `protocol:` row naming both revisions on a mismatch, plus
+  the flattened client capability keys), and a version mismatch is logged once
+  per connection — the signal for when moving the supported set forward is
+  safe.
+
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's
   `initialize` request, and appending the reconnect note to tool results.

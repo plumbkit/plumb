@@ -4,12 +4,15 @@ package cli
 // shared write-budget binding.
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // applyProjectConfig loads <workspace>/.plumb/config.toml and applies it to
@@ -216,6 +219,64 @@ func (s *connSession) onClientInfo(name, version string) {
 	// Client identity may arrive before or after the workspace is pinned; bind
 	// here too so the shared budget links as soon as both are known.
 	s.bindWriteLimiterParent()
+}
+
+// onProtocolNegotiated records the initialize-time MCP protocol negotiation:
+// it stores the offered/answered revisions and the client-advertised
+// capabilities on the session view and persists them to the session record, so
+// daemon_info and the TUI can show them. It also logs once when the offered
+// revision differs from the answered one — the fleet-visibility signal for
+// when moving the supported set forward is safe. Fires exactly once per
+// connection, enforced by the once-guard in dispatchMessage.
+func (s *connSession) onProtocolNegotiated(offered, answered string, caps json.RawMessage) {
+	s.mutate(func(v *sessionView) {
+		v.protocolOffered = offered
+		v.protocolAnswered = answered
+		v.clientCaps = append(json.RawMessage(nil), caps...)
+	})
+	if offered != "" && offered != answered {
+		s.log().Info("daemon: client offered an MCP protocol revision plumb does not implement; answered with the newest supported",
+			"offered", offered, "answered", answered, "client", s.clientNameStr())
+	}
+	session.SetProtocol(s.sessID, offered, answered, string(caps))
+}
+
+// protocolStatus returns the initialize-time protocol negotiation snapshot for
+// daemon_info: the offered/answered revisions plus the flattened client
+// capability keys. Zero value before the initialize exchange completes.
+func (s *connSession) protocolStatus() tools.ProtocolStatus {
+	v := s.view()
+	return tools.ProtocolStatus{
+		Offered:      v.protocolOffered,
+		Answered:     v.protocolAnswered,
+		Capabilities: flattenCapabilityKeys(v.clientCaps),
+	}
+}
+
+// flattenCapabilityKeys renders client-advertised capabilities JSON as a sorted
+// list of dotted keys ("roots.listChanged"), one level deep — enough to see
+// what a client can do at a glance. Nil or malformed input yields nil.
+func flattenCapabilityKeys(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(top))
+	for k, v := range top {
+		var sub map[string]json.RawMessage
+		if err := json.Unmarshal(v, &sub); err == nil && len(sub) > 0 {
+			for sk := range sub {
+				keys = append(keys, k+"."+sk)
+			}
+			continue
+		}
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // onAllowDirs records the extra read-write roots the client granted at

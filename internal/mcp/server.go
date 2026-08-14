@@ -1,6 +1,6 @@
 // Package mcp implements a Model Context Protocol server over stdio.
 // Transport: newline-delimited JSON-RPC 2.0 (not LSP Content-Length framing).
-// Protocol version: 2024-11-05.
+// Protocol version: negotiated per connection from supportedProtocolVersions.
 package mcp
 
 import (
@@ -21,7 +21,23 @@ import (
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
-const protocolVersion = "2024-11-05"
+// supportedProtocolVersions lists the MCP protocol revisions this server
+// genuinely implements, newest first. The initialize handshake answers with the
+// client's offered revision when it is in this set and with the newest entry
+// otherwise — never with an offered revision plumb has not implemented, which
+// would be a false claim of support the client would then rely on.
+var supportedProtocolVersions = []string{"2024-11-05"}
+
+// negotiateProtocolVersion picks the revision to answer an initialize request
+// with: the client's offered revision when plumb implements it, else the newest
+// supported revision (per the spec the client then decides whether it can
+// proceed). An empty or unknown offer yields the newest supported revision.
+func negotiateProtocolVersion(offered string) string {
+	if slices.Contains(supportedProtocolVersions, offered) {
+		return offered
+	}
+	return supportedProtocolVersions[0]
+}
 
 const maxMessageBytes = 4 << 20 // 4 MiB per newline-delimited JSON-RPC message
 
@@ -164,6 +180,16 @@ type Server struct {
 	// OnClientInfo is called once during the initialize exchange with the
 	// client's self-reported name and version.
 	OnClientInfo func(ctx context.Context, name, version string)
+
+	// OnProtocolNegotiated is called once per connection during the initialize
+	// exchange — guarded by the same once as OnInit, so a client that re-sends
+	// initialize cannot double-record the negotiation — with the protocol
+	// revision the client offered, the revision plumb answered (see
+	// negotiateProtocolVersion), and the client-advertised capabilities as raw
+	// JSON (nil when absent). offered is "" when the client sent no
+	// protocolVersion. It runs after the initialize response is written,
+	// synchronously before OnInit.
+	OnProtocolNegotiated func(ctx context.Context, offered, answered string, capabilities json.RawMessage)
 
 	// OnAllowDirs is called once during the initialize exchange with the extra
 	// read-write roots the client transported in the initialize params'
@@ -403,9 +429,23 @@ func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce
 	}
 	ss.write(resp)
 
-	if peek.Method == "initialize" && resp.Error == nil && ss.s.OnInit != nil {
+	if peek.Method == "initialize" && resp.Error == nil {
 		initOnce.Do(func() {
-			go safeRun("OnInit", func() { ss.s.OnInit(ctx, ss.makeRequest, ss.notify) })
+			// The negotiation hook fires inside the once-guard so a client that
+			// re-sends initialize cannot double-record (or double-log) it.
+			// Synchronous, before OnInit. The parse is repeated here rather than
+			// plumbed out of handleInitialize: it is one unmarshal, and the
+			// negotiation is a pure function of the same params.
+			if ss.s.OnProtocolNegotiated != nil {
+				var initReq mcpRequest
+				if json.Unmarshal(data, &initReq) == nil {
+					offered, clientCaps := clientProtocolParams(initReq.Params)
+					ss.s.OnProtocolNegotiated(ctx, offered, negotiateProtocolVersion(offered), clientCaps)
+				}
+			}
+			if ss.s.OnInit != nil {
+				go safeRun("OnInit", func() { ss.s.OnInit(ctx, ss.makeRequest, ss.notify) })
+			}
 		})
 	}
 }

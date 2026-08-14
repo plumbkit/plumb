@@ -172,7 +172,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 			return p, hiddenToolCount(srv), reason
 		}).
-		WithPinProvenance(s.pinProvenance))
+		WithPinProvenance(s.pinProvenance).
+		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
 		WithTopology(topoFn).
@@ -275,6 +276,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnClientInfo = func(_ context.Context, name, version string) {
 		s.onClientInfo(name, version)
+	}
+	srv.OnProtocolNegotiated = func(_ context.Context, offered, answered string, caps json.RawMessage) {
+		s.onProtocolNegotiated(offered, answered, caps)
 	}
 	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
 		s.onAllowDirs(dirs)

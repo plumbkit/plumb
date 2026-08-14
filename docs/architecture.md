@@ -665,7 +665,9 @@ the stats DB is closed, and the socket / PID / lock files are removed.
 ### MCP (client ↔ plumb)
 
 Newline-delimited JSON-RPC 2.0 over stdio.  Each message is one UTF-8 line.
-No Content-Length header.  Protocol version: `2024-11-05`.
+No Content-Length header.  Protocol version: negotiated per connection at `initialize` —
+the client's offered revision when plumb implements it, otherwise the newest entry of the
+supported set (currently `2024-11-05`).
 
 Handled methods: `initialize`, `ping`, `tools/list`, `tools/call`.
 Notifications (no `id` field) are accepted and silently discarded.

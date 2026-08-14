@@ -13,6 +13,11 @@ import (
 
 func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpResponse {
 	s.fireInitParamHooks(ctx, req.Params)
+	// The OnProtocolNegotiated hook is NOT fired here: it fires under the
+	// per-connection once-guard in dispatchMessage, so a client re-sending
+	// initialize cannot double-record the negotiation.
+	offered, _ := clientProtocolParams(req.Params)
+	answered := negotiateProtocolVersion(offered)
 
 	type serverInfoWire struct {
 		Name    string `json:"name"`
@@ -24,15 +29,15 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		ServerInfo      serverInfoWire `json:"serverInfo"`
 		Instructions    string         `json:"instructions,omitempty"`
 	}
-	caps := map[string]any{"tools": map[string]any{"listChanged": true}}
+	serverCaps := map[string]any{"tools": map[string]any{"listChanged": true}}
 	if s.Resources != nil {
-		caps["resources"] = map[string]any{}
+		serverCaps["resources"] = map[string]any{}
 	}
 	s.promptMu.RLock()
 	hasPrompts := len(s.prompts) > 0
 	s.promptMu.RUnlock()
 	if hasPrompts {
-		caps["prompts"] = map[string]any{}
+		serverCaps["prompts"] = map[string]any{}
 	}
 	instructions := s.info.Instructions
 	switch instructions {
@@ -42,8 +47,8 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		instructions = ""
 	}
 	res := result{
-		ProtocolVersion: protocolVersion,
-		Capabilities:    caps,
+		ProtocolVersion: answered,
+		Capabilities:    serverCaps,
 		ServerInfo:      serverInfoWire{Name: s.info.Name, Version: s.info.Version},
 		Instructions:    instructions,
 	}
@@ -131,6 +136,34 @@ func (s *Server) snapshotTools() []toolSnapshot {
 		snaps = append(snaps, toolSnapshot{name: t.Name(), description: t.Description(), schema: schema})
 	}
 	return snaps
+}
+
+// clientProtocolParams extracts the protocol revision and capabilities the
+// client offered in its initialize params. Fail-safe like the other init-param
+// extractors: structurally malformed JSON yields "" / nil, and negotiation
+// then answers with the newest supported revision. A field with the wrong JSON
+// type (e.g. a numeric protocolVersion) zeroes only that field — the other is
+// still returned, since json.Unmarshal decodes past a type error.
+func clientProtocolParams(params json.RawMessage) (string, json.RawMessage) {
+	if params == nil {
+		return "", nil
+	}
+	var p struct {
+		ProtocolVersion string          `json:"protocolVersion"`
+		Capabilities    json.RawMessage `json:"capabilities"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return "", nil
+		}
+	}
+	// A "capabilities":null literal decodes to the RawMessage "null", not nil;
+	// normalise it to absent so the session record omits the field.
+	if bytes.Equal(p.Capabilities, []byte("null")) {
+		p.Capabilities = nil
+	}
+	return p.ProtocolVersion, p.Capabilities
 }
 
 // allowDirsFromParams extracts the extra read-write roots from the initialize

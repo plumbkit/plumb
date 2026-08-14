@@ -522,6 +522,46 @@ func TestSetPurposePersists(t *testing.T) {
 	}
 }
 
+func TestSetProtocol(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id, err := registerID(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	const caps = `{"roots":{"listChanged":true},"elicitation":{}}`
+	session.SetProtocol(id, "2025-11-25", "2024-11-05", caps)
+
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	got := sessions[0]
+	if got.ProtocolOffered != "2025-11-25" {
+		t.Errorf("ProtocolOffered = %q, want 2025-11-25", got.ProtocolOffered)
+	}
+	if got.ProtocolAnswered != "2024-11-05" {
+		t.Errorf("ProtocolAnswered = %q, want 2024-11-05", got.ProtocolAnswered)
+	}
+	if got.ClientCapabilities != caps {
+		t.Errorf("ClientCapabilities = %q, want %q", got.ClientCapabilities, caps)
+	}
+
+	// A SetProtocol against an unknown id must no-op rather than create a file.
+	session.SetProtocol("no-such-id", "x", "y", "z")
+	sessions, err = session.List()
+	if err != nil {
+		t.Fatalf("List after unknown-id SetProtocol: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unknown-id SetProtocol changed the session set: got %d sessions", len(sessions))
+	}
+}
+
 // registerID registers info and returns just the session ID — the shape these
 // tests want now that Register returns the completed record so its caller can
 // read back the name it was assigned.
