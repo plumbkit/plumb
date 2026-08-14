@@ -202,6 +202,57 @@
 
 ### Fixed
 
+- **A commit plumb itself timed out was reported as a refusal from git, under a
+  remediation stating that no plumb setting could change it.** An
+  index/ref-mutating git child runs under a cancellation-decoupled, bounded
+  context so a daemon shutdown mid-commit lets git finish and release
+  `.git/index.lock`. When that bound expired the child's process group was
+  killed — and a signalled child has `ExitCode() == -1`, so the reply rendered as
+  `git commit: exit code -1` carrying `git_command_failed` +
+  `inspect_output` and the sentence "git itself declined the operation … plumb
+  raised no objection, so no plumb setting or flag changes the outcome". Every
+  clause of that was false, in the direction that costs most: the caller goes
+  hunting for a defect in a change that has none.
+
+  `runGit` now tells the two apart. The exec context is decoupled from the
+  request context for precisely these tiers, so a `context.DeadlineExceeded` on
+  it can only be plumb's own bound — never the caller's deadline, never a
+  shutdown. That case is reported by `gitWriteTimeoutError`, which names plumb as
+  the cause and the elapsed bound as the reason (`git commit: plumb stopped
+  waiting after 10m0s and killed the git child`), still quotes the hook output
+  that shows what the time was spent on, and carries `client_timeout` +
+  `retry_after_wait` — retryable, with a remediation naming `[git]
+  write_timeout`, `PLUMB_GIT_WRITE_TIMEOUT`, and the advice to check the
+  repository state first, since git may have finished the work before the kill.
+  `Details` gains `write_timeout` and drops the meaningless `exit_code`.
+  Guarded end-to-end (`TestGit_WriteTimeoutIsReportedAsPlumbs`, bounded so a
+  regression fails in seconds), by a control that a hook inside the bound still
+  commits, and by unit coverage of the rendered message, class and details.
+
+- **The per-repository lock wait failed with no classification at all.**
+  `beginSerialisedGit` returned `lockRepo`'s timeout as a bare `fmt.Errorf`, so
+  "another git operation is in progress on this repository; timed out after …"
+  reached the caller with no kind and no remediation — and therefore no hint
+  that waiting and retrying is exactly the remedy. It is now
+  `daemon_transport` + `retry_after_wait`, the same shape as the drain refusal
+  beside it: both are plumb's own serialisation saying "not now", and both are
+  transient. The message is unchanged.
+
+- **A failing pre-commit hook that only lost a race for golangci-lint's shared
+  cache lock is no longer reported as a rejected change.** When a concurrent run
+  holds the lock, golangci-lint refuses to start, the hook exits non-zero, and
+  the failure was indistinguishable from a real lint failure — costing a
+  diagnosis every time on a machine running several agents. plumb already
+  captures the hook's output, so a failure whose output carries golangci-lint's
+  own literal words for that condition (`parallel golangci-lint is running`)
+  gains a note saying the hook failed *without completing a lint pass*, and is
+  classified `retry_after_wait` instead of `inspect_output`. The trigger is that
+  one literal string and nothing else, the note is **added** beside the real
+  output rather than replacing or suppressing any of it, and an ordinary lint
+  failure keeps the honest "git declined; read the output" classification
+  (`TestLintLockHint_OnlyOnTheLiteralMarker`,
+  `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
+
 - **A git child could park `cmd.Wait()` forever and wedge every later git op on
   the repository.** `runGit` captures output into `bytes.Buffer`s, so os/exec
   gives the child a pipe and waits for the copy to reach EOF — which never comes

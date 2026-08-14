@@ -246,6 +246,38 @@ and network calls additionally require `confirm: true` per call.
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
 | `env` | table | `{}` | — | Environment variables set on the git child process. See [The git child's environment](#the-git-childs-environment) below. |
+| `write_timeout` | duration | `"10m"` | — | How long plumb waits for an index/ref-mutating git child before killing it. See [When plumb stops waiting](#when-plumb-stops-waiting) below. |
+
+### When plumb stops waiting
+
+A write- or destructive-tier git child is decoupled from request and daemon
+cancellation, so that a shutdown mid-commit lets git finish rather than
+stranding a half-written index. Something still has to bound it, and
+`write_timeout` is that bound.
+
+The bound was previously a hardcoded two minutes, described in the source as
+"generous enough for a slow pre-commit hook". That is false on any machine where
+several agents share one toolchain: a hook running `golangci-lint` queues behind
+a peer's run on the same shared cache, and those waits have been observed to
+exceed ten minutes on plumb's own repository.
+
+**A wrong bound is expensive in both directions**, which is why this is a knob
+rather than a better constant. Too short kills a hook that was going to succeed.
+Too long leaves a wedged child holding the per-repo lock, so every other git
+operation on that repository queues behind it. There is deliberately **no value
+that disables the bound** — an unbounded child is the failure this exists to
+prevent.
+
+**When it fires, plumb says so.** A killed child exits signalled, which git
+reports as exit code `-1`; plumb used to render that as an ordinary git failure
+under a remediation stating that no plumb setting changes the outcome. That
+inverts the truth — plumb's own bound caused it, and this is the setting. The
+timeout is now reported as plumb's, names the elapsed bound, and points here.
+
+It is trust-gated for the same reason as the rest of `[git]`: shortening it is a
+denial of service on every commit, and lengthening it lets a hostile hook hold
+the repository lock. Neither is a choice a cloned repository's
+`.plumb/config.toml` should make unasked.
 
 ### The git child's environment
 
@@ -1132,6 +1164,7 @@ allow_push         = false                  # push, fetch, pull (also needs conf
 protected_branches = ["main", "master"]     # never force-pushable
 commit_trailer     = false                  # stamp commits with a Plumb-Session: <name> trailer
 env                = {}                     # extra env for the git child (hooks see it); trust-gated
+write_timeout      = "10m"                  # bound on a mutating git child before plumb kills it; trust-gated
 
 [quality]
 enabled               = false               # post-write offline analysers
