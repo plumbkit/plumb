@@ -152,7 +152,6 @@ var numberMetaTable = map[settingKey]struct {
 	skMemoryGeneratedKeep:        {10, "generated keep"},
 	skCollabHintBudgetBytes:      {128, "collab hint budget (B)"},
 	skCollabIntentTTLMin:         {30, "collab intent ttl (min)"},
-	skCollabMaxExchanges:         {1, "collab max exchanges"},
 	skCollabChatBudgetBytes:      {256, "collab chat budget (B)"},
 	skCollabMaxWaitSec:           {5, "collab max wait (s)"},
 }
@@ -234,8 +233,6 @@ func intFieldCollab(c *config.Config, key settingKey) *int {
 		return &c.Collab.HintBudgetBytes
 	case skCollabIntentTTLMin:
 		return &c.Collab.IntentTTLMinutes
-	case skCollabMaxExchanges:
-		return &c.Collab.MaxExchanges
 	case skCollabChatBudgetBytes:
 		return &c.Collab.ChatBudgetBytes
 	case skCollabMaxWaitSec:

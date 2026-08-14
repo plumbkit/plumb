@@ -144,8 +144,8 @@ func TestCheckMessages_WaitTimesOutAndExplains(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
 		t.Errorf("wait returned after %s — it did not actually block", elapsed)
 	}
-	if !strings.Contains(out, "No messages") {
-		t.Errorf("expected an empty result; got %q", out)
+	if !strings.Contains(out, "No notes") || !strings.Contains(out, "silence is not a refusal") {
+		t.Errorf("wait timeout must report an empty result without implying refusal; got %q", out)
 	}
 }
 
@@ -154,11 +154,17 @@ func TestCheckMessages_WaitTimesOutAndExplains(t *testing.T) {
 func TestCheckMessages_WaitIsCappedByPolicy(t *testing.T) {
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 1}, "alice")
 	start := time.Now()
-	if _, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":3600}`)); err != nil {
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":3600}`))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("wait ran for %s despite a 1s cap", elapsed)
+	}
+	if !strings.Contains(out, "waited 1s") ||
+		!strings.Contains(out, "Requested wait 3600s was clamped") ||
+		!strings.Contains(out, "max_wait_seconds=1s") {
+		t.Errorf("wait result must report seconds and the clamp: %q", out)
 	}
 }
 
@@ -225,7 +231,7 @@ func TestCheckMessages_WokenWithNothingReadableDisclosesNothing(t *testing.T) {
 	if strings.Contains(out, "a message arrived") {
 		t.Errorf("must not assert that a message exists for a session that could not read one; got %q", out)
 	}
-	if !strings.Contains(out, "No messages") {
+	if !strings.Contains(out, "No notes") {
 		t.Errorf("expected an empty result; got %q", out)
 	}
 }
@@ -289,38 +295,33 @@ func TestLeaveNote_UnplaceablePeerSaysSo(t *testing.T) {
 	}
 }
 
-// TestLeaveNote_ExchangeBudgetRefusesReply: the backstop against two agents
-// answering each other indefinitely. Opening a thread is always allowed; it is
-// the reply into a spent thread that is refused, with an instruction to involve
-// the human rather than to start a fresh thread.
-func TestLeaveNote_ExchangeBudgetRefusesReply(t *testing.T) {
-	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxExchanges: 3}, "alice")
+// TestCheckMessages_NeverClaimsSelfAuthoredNotes pins the final delivery guard:
+// an address collision may target this display name, but this session cannot
+// consume its own authored row.
+func TestCheckMessages_NeverClaimsSelfAuthoredNotes(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice",
+		AuthorID:      deps.SessionID,
+		Body:          "do not loop",
+		Addressee:     "alice",
+		TTL:           time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 
-	conv := put(t, local, "bob", "alice", "1", "", "", "")
-	put(t, local, "alice", "bob", "2", conv, "", "")
-	put(t, local, "bob", "alice", "3", conv, "", "")
-
-	out, err := NewLeaveNote(deps).Execute(context.Background(),
-		json.RawMessage(`{"to":"bob","body":"4","conversation_id":`+jsonStr(conv)+`}`))
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "limit") || !strings.Contains(out, "NOT sent") {
-		t.Errorf("expected a clear budget refusal; got %q", out)
+	if !strings.Contains(out, "No notes") || strings.Contains(out, "do not loop") {
+		t.Fatalf("self-authored note was delivered: %q", out)
 	}
-	if !strings.Contains(out, "human") {
-		t.Errorf("the refusal must point the agent at its human; got %q", out)
-	}
-	if n, err := local.ConversationCount(context.Background(), conv); err != nil || n != 3 {
-		t.Errorf("the refused reply must not be stored: count=%d err=%v", n, err)
-	}
-
-	// A NEW conversation is unaffected — the budget is per thread.
-	fresh, err := NewLeaveNote(deps).Execute(context.Background(), json.RawMessage(`{"to":"bob","body":"new topic"}`))
+	pending, err := local.PendingNotes(context.Background(), "alice", deps.Workspace(), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(fresh, "NOT sent") {
-		t.Errorf("a fresh conversation must not inherit a spent budget; got %q", fresh)
+	if len(pending) != 1 || pending[0].Body != "do not loop" {
+		t.Fatalf("self-authored note was consumed instead of left for another eligible session: %#v", pending)
 	}
 }

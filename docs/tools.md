@@ -204,51 +204,53 @@ strings, optional — workspace-relative globs for the area you are working on);
 intent_ttl_minutes`).
 
 ### `leave_note`
-Send a message to a named peer session, or to `next` (whoever attaches to this
-workspace next). The send half of the mailbox.
+Send a note to a named active peer session, or to `next` (whoever attaches to
+this workspace next). `workspace_sessions` lists active display names to use as
+`to`. This is the send half of the request/reply mailbox.
 
-Every message belongs to a **conversation**. Omit `conversation_id` to start one
-(the reply reports the new id); quote the id you were given to answer in thread.
-A **thread** is capped at `[collab] max_exchanges` messages — once spent,
-further replies are refused with an instruction to summarise for the human.
+Omit `conversation_id` to start a conversation. Quote the returned id to reply
+in-thread; on an in-thread reply `to` may be omitted, in which case plumb resolves
+the one other participant or refuses if the history is missing or ambiguous. It
+never silently routes such a reply to `next`, and it never delivers a note to its
+own author. Conversations have **no message-count ceiling**: note volume is visible
+to humans in `workspace_sessions`, the TUI, and Web, but is never enforcement.
 
-Be clear about what that cap is worth. plumb cannot observe a human turn, so it
-counts *total* messages in a thread, not consecutive agent replies; and starting
-a new `conversation_id` starts a fresh budget, which nothing prevents. It is a
-speed bump that makes continuing a deliberate act, not an enforced ceiling on
-how long two agents may talk.
+A body is delivered on a UTF-8 boundary under `[collab] chat_budget_bytes`
+(default 4096). The send receipt always reports the byte budget. If content is
+cut, both sender and recipient see exact visible, total, and missing byte counts;
+send the remainder as a follow-up in the same conversation. For longer material,
+write it to a workspace file and send its path in a short note.
 
-Each message is delivered **exactly once**, to whichever path reads it first:
-the block appended to an ordinary tool result, `check_messages`, or the
-recipient's next `session_start`. A delivered message stays in the store until
-its TTL, which is what gives a conversation its transcript and its exchange
-count.
+Each note is delivered **exactly once**, to whichever path reads it first: the
+block appended to an ordinary tool result, `check_messages`, or the recipient's
+next `session_start`. Over-limit per-call rows remain pending for later calls;
+no display budget or query limit marks unseen content delivered. Sent delivery
+state and conversation volume remain observable until expiry.
 
-Addressing a session pinned to a **different workspace** is allowed, but such a
-message is delivered only if *that* project sets `[collab] cross_project = true`;
-otherwise it expires unread. Cross-project messages are stored in a daemon-level
-database, never in the recipient's directory — no session ever writes into
-another project's workspace — and are labelled with the sending project when
-read. `next` is always same-project: "whoever attaches next" has no meaning
-across projects. Requires `[collab] mailbox = true`.
+Addressing a session pinned to a **different workspace** is allowed, but delivery
+requires *that* project to set `[collab] cross_project = true`; otherwise the note
+expires unread. Cross-project notes live in a daemon-level database and are
+labelled with their origin. `next` is always same-project. Requires
+`[collab] mailbox = true`.
 
-**Inputs:** `body` (string, required — the message); `to` (string, optional — a
-peer session name, or `next` (default)); `conversation_id` (string, optional —
-reply into an existing thread).
+**Inputs:** `body` (string, required — the note); `to` (string, optional — an
+active peer display name or `next`; defaults to `next` only for a new
+conversation); `conversation_id` (string, optional — reply in-thread).
 
 ### `check_messages`
-Read messages other agents have sent you, optionally waiting for one. The receive
-half of the mailbox, and what makes an actual back-and-forth possible.
+Read notes other agents sent you, optionally waiting for one. This is the receive
+half of the request/reply mailbox.
 
-With `wait_seconds` omitted or `0` it returns immediately with whatever is
-waiting. With a positive value it **blocks** until a message arrives or the wait
-expires, capped by `[collab] max_wait_seconds` (default 55 s, kept below the
-client's own MCP call timeout). That is how a session hands its turn to a peer
-after asking something, at a cost of one tool call per turn rather than one per
-poll. Requires `[collab] mailbox = true`.
+With `wait_seconds` omitted or `0`, it returns immediately. With a positive
+value it **blocks** until a note arrives or the wait expires, capped by
+`[collab] max_wait_seconds` (default 55 s). The response reports elapsed seconds
+and says explicitly when the requested wait was clamped. This is how a session
+hands its turn to a peer after asking something, instead of spin-polling. Silence
+is not a refusal: a peer waiting on its human makes no tool calls and may not have
+read the note. Requires `[collab] mailbox = true`.
 
-**Inputs:** `wait_seconds` (integer, optional — block up to this long; `0`
-default).
+**Inputs:** `wait_seconds` (integer, optional — block up to this many seconds;
+default `0`).
 
 ### `share_findings`
 Hand off what you have just learned as a durable, searchable memory *now*, instead

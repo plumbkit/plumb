@@ -239,6 +239,8 @@ func rawTables(raw map[string]any, want string) []map[string]any {
 // policyCollabFreeFields are the [collab] keys that are NOT gated on trust,
 // because none of them can open a channel: peer_awareness surfaces only what the
 // daemon already observed in THIS project, and the rest are sizes and expiries.
+// max_exchanges remains here only as an ignored legacy key, so an existing
+// project config does not start demanding trust after the limit's removal.
 //
 // Like policyLSPFreeFields this is an ALLOW-list, and for the same reason. The
 // gated set is the interesting one, but enumerating IT would mean a [collab] key

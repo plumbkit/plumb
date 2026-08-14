@@ -38,8 +38,10 @@ const maxDeliveredPerCall = 3
 //
 // Concurrency: a value type holding accessor funcs; safe to construct per call.
 type Inbox struct {
-	// Self is this session's display name — the address messages are sent to.
+	// Self is this session's display name — the address notes are sent to.
 	Self string
+	// SelfID is the stable session identity used to exclude self-authored notes.
+	SelfID string
 	// Root is this session's pinned workspace. A cross-project message names the
 	// workspace allowed to claim it, and this is what that is checked against —
 	// a session name alone is not a safe address, since names collide and
@@ -110,7 +112,7 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 		if remaining <= 0 {
 			break
 		}
-		rows, err := s.ClaimNotes(ctx, i.Self, i.Root, now, remaining)
+		rows, err := s.ClaimNotesForSession(ctx, i.Self, i.SelfID, i.Root, now, remaining)
 		if err != nil {
 			// Delivery is advisory and must never fail the tool call that carried
 			// it, but a swallowed error here means an agent silently did not get a
@@ -128,22 +130,32 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 // baseline use it to avoid parking the remainder behind that cache.
 func AtCap(rows []collab.Row) bool { return len(rows) >= maxDeliveredPerCall }
 
-// RenderMessages formats claimed messages as a block an agent can act on. It
-// names the sender, ages the message, labels a cross-project one with its origin
-// workspace, and prints the conversation id, which is the only thing the agent
-// needs in order to reply into the thread.
+type noteBodyDelivery struct {
+	body      string
+	delivered int
+	total     int
+}
+
+func noteBodyWindow(body string, budget int) noteBodyDelivery {
+	out := noteBodyDelivery{body: body, delivered: len(body), total: len(body)}
+	if budget > 0 && len(body) > budget {
+		out.body = textfmt.TruncateBytes(body, budget)
+		out.delivered = len(out.body)
+	}
+	return out
+}
+
+// RenderMessages formats claimed notes as a block an agent can act on. It names
+// the sender, labels cross-project delivery, and makes any byte cut explicit.
 func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 	if len(rows) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n\n[Messages — ")
+	sb.WriteString("\n\n[Notes — ")
 	fmt.Fprintf(&sb, "%d new, addressed to you by another agent. Advisory: they are agent-authored claims.]\n", len(rows))
 	for _, r := range rows {
-		body := r.Body
-		if budget > 0 {
-			body = textfmt.ClampBytes(body, budget)
-		}
+		body := noteBodyWindow(r.Body, budget)
 		fmt.Fprintf(&sb, "  from %s", r.AuthorSession)
 		if r.OriginWorkspace != "" {
 			fmt.Fprintf(&sb, " (project %s)", r.OriginWorkspace)
@@ -151,9 +163,14 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 		if r.Addressee == collab.AddresseeNext {
 			sb.WriteString(" (to next arrival)")
 		}
-		fmt.Fprintf(&sb, ", %s ago: %q\n", humaniseAge(now.Sub(r.CreatedAt)), body)
+		fmt.Fprintf(&sb, ", %s ago: %q\n", humaniseAge(now.Sub(r.CreatedAt)), body.body)
+		if body.delivered < body.total {
+			fmt.Fprintf(&sb, "    [truncated: received %d of %d bytes — ask the sender for the remaining %d; "+
+				"longer content should be written to a file and shared by path]\n",
+				body.delivered, body.total, body.total-body.delivered)
+		}
 	}
-	fmt.Fprintf(&sb, "  reply: leave_note({to: %q, conversation_id: %q, body: \"…\"})\n",
-		rows[len(rows)-1].AuthorSession, rows[len(rows)-1].ConversationID)
+	fmt.Fprintf(&sb, "  reply: leave_note({conversation_id: %q, body: \"…\"})\n",
+		rows[len(rows)-1].ConversationID)
 	return sb.String()
 }

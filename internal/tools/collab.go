@@ -34,10 +34,6 @@ type CollabPolicy struct {
 	// daemon-level cross-project store when its own project sets this, so one
 	// project can never push text into another's context uninvited.
 	CrossProject bool
-	// MaxExchanges caps how many notes one conversation may hold before further
-	// replies are refused — the backstop against two agents answering each other
-	// indefinitely with no human in the loop.
-	MaxExchanges int
 	// ChatBudgetBytes caps a single delivered message body. Separate from the
 	// hint budget: a message is content the agent must act on, not a pointer.
 	ChatBudgetBytes int
@@ -48,20 +44,11 @@ type CollabPolicy struct {
 
 // Defaults mirroring the compiled [collab] values, applied when a resolved
 // policy carries a non-positive number so a misconfiguration degrades to sane
-// behaviour rather than to zero (which would mean "refuse everything" or "never
-// wait").
+// behaviour rather than disabling delivery or waiting.
 const (
-	defaultMaxExchanges   = 10
-	defaultChatBudgetByte = 2048
+	defaultChatBudgetByte = 4096
 	defaultMaxWaitSeconds = 55
 )
-
-func (p CollabPolicy) maxExchanges() int {
-	if p.MaxExchanges > 0 {
-		return p.MaxExchanges
-	}
-	return defaultMaxExchanges
-}
 
 // ChatBudget is the per-message byte cap, falling back to the compiled default
 // when unset. Exported because the connection-side delivery path renders

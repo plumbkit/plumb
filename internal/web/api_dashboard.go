@@ -1,9 +1,13 @@
 package web
 
 import (
+	"context"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -12,14 +16,15 @@ import (
 // dashboardDTO is the dashboard snapshot the SPA renders: KPI cards, daemon
 // vitals, the activity calendar, top tools, and the token-savings split.
 type dashboardDTO struct {
-	UptimeSeconds float64       `json:"uptimeSeconds"`
-	StartedAt     time.Time     `json:"startedAt"`
-	Sessions      int           `json:"sessions"`
-	TotalCalls    int64         `json:"totalCalls"`
-	Metrics       metricsDTO    `json:"metrics"`
-	TopTools      []toolStatDTO `json:"topTools"`
-	Activity      activityDTO   `json:"activity"`
-	Savings       savingsDTO    `json:"savings"`
+	UptimeSeconds float64           `json:"uptimeSeconds"`
+	StartedAt     time.Time         `json:"startedAt"`
+	Sessions      int               `json:"sessions"`
+	TotalCalls    int64             `json:"totalCalls"`
+	Metrics       metricsDTO        `json:"metrics"`
+	TopTools      []toolStatDTO     `json:"topTools"`
+	Activity      activityDTO       `json:"activity"`
+	Savings       savingsDTO        `json:"savings"`
+	Conversations []conversationDTO `json:"conversations"`
 }
 
 type metricsDTO struct {
@@ -62,6 +67,14 @@ type savingsToolDTO struct {
 	Efficiency int64  `json:"efficiency"`
 }
 
+type conversationDTO struct {
+	ID        string    `json:"id"`
+	Workspace string    `json:"workspace"`
+	Notes     int       `json:"notes"`
+	Pending   int       `json:"pending"`
+	LastAt    time.Time `json:"lastAt"`
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	out := dashboardDTO{StartedAt: s.deps.StartedAt}
 	if !s.deps.StartedAt.IsZero() {
@@ -72,6 +85,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	if sessions, err := session.List(); err == nil {
 		out.Sessions = len(sessions)
+		out.Conversations = activeConversationVolumes(sessions, 10)
 	}
 
 	db, err := stats.SharedReadOnly()
@@ -88,6 +102,45 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, out)
+}
+
+func activeConversationVolumes(sessions []session.Info, limit int) []conversationDTO {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	seen := make(map[string]bool)
+	var out []conversationDTO
+	for _, info := range sessions {
+		workspace := filepath.Clean(info.Folder)
+		if workspace == "." || seen[workspace] || !collab.Exists(workspace) {
+			continue
+		}
+		seen[workspace] = true
+		store, err := collab.Open(workspace)
+		if err != nil {
+			continue
+		}
+		summaries, queryErr := store.ConversationSummaries(ctx, time.Now(), limit)
+		_ = store.Close()
+		if queryErr != nil {
+			continue
+		}
+		for _, summary := range summaries {
+			out = append(out, conversationDTO{
+				ID: summary.ID, Workspace: filepath.Base(workspace),
+				Notes: summary.Notes, Pending: summary.Pending, LastAt: summary.LastAt,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Notes != out[j].Notes {
+			return out[i].Notes > out[j].Notes
+		}
+		return out[i].LastAt.After(out[j].LastAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 func readMetricsDTO(path string) metricsDTO {

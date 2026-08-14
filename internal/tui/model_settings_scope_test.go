@@ -532,7 +532,7 @@ func TestIsCapabilityKey_CollabIsPerKeyNotPerSection(t *testing.T) {
 	}
 	for _, k := range []string{
 		"collab.peer_awareness", "collab.hint_budget_bytes",
-		"collab.max_exchanges", "collab.chat_budget_bytes", "collab.max_wait_seconds",
+		"collab.chat_budget_bytes", "collab.max_wait_seconds",
 		"collab.intent_ttl_minutes", "memory.max_hints",
 	} {
 		if isCapabilityKey(k) {

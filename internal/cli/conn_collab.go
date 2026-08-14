@@ -56,7 +56,6 @@ func (s *connSession) collabPolicy() tools.CollabPolicy {
 		KnowledgeHandoff: c.KnowledgeHandoff,
 		IntentTTLMinutes: c.IntentTTLMinutes,
 		CrossProject:     c.CrossProject,
-		MaxExchanges:     c.MaxExchanges,
 		ChatBudgetBytes:  c.ChatBudgetBytes,
 		MaxWaitSeconds:   c.MaxWaitSeconds,
 	}
@@ -132,6 +131,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
 		Self:      s.addressableName(),
+		SelfID:    s.sessID,
 		Root:      s.workspace(),
 		Policy:    s.collabPolicy(),
 		Workspace: s.collabStoreIfExists,

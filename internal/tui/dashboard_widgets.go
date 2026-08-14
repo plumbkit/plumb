@@ -402,6 +402,13 @@ func (m Model) dashProjectWidget(width int) []string {
 	for _, line := range tableLines {
 		content = append(content, "   "+line+"   ")
 	}
+	if len(m.dashProjectConversations) > 0 {
+		content = append(content, "", "   Notes by conversation   ")
+		for _, summary := range m.dashProjectConversations {
+			content = append(content, fmt.Sprintf("   %s  %d notes · %d pending   ",
+				summary.ID, summary.Notes, summary.Pending))
+		}
+	}
 
 	return dashBox(" Project: "+name+" ", inner, content)
 }

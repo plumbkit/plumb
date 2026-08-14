@@ -439,14 +439,9 @@ type CollabConfig struct {
 	// recipient's own repository — an untrusted surface a clone ships — could flip
 	// it unasked. A project may request it; the user grants it per workspace.
 	CrossProject bool `toml:"cross_project"`
-	// MaxExchanges caps how many messages one conversation may hold before further
-	// replies are refused — the backstop against two agents answering each other
-	// indefinitely with no human in the loop. plumb cannot observe a human turn, so
-	// it counts total messages in a thread, not consecutive replies. Default 10.
-	MaxExchanges int `toml:"max_exchanges"`
 	// ChatBudgetBytes caps a single delivered message body (UTF-8 boundary).
 	// Separate from HintBudgetBytes: a message is content to act on, not a pointer
-	// to look up. Default 2048.
+	// to look up. Default 4096.
 	ChatBudgetBytes int `toml:"chat_budget_bytes"`
 	// MaxWaitSeconds caps how long check_messages blocks waiting for a message,
 	// below the client's own MCP call timeout so a wait expires cleanly. Default 55.

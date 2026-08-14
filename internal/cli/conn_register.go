@@ -182,7 +182,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			func() (bool, bool) { c := s.collabConfig(); return c.Intents, c.Mailbox },
 			s.collabStoreIfExists,
 			s.sessionName,
-		))
+		).WithGlobalCollab(s.collabGlobalIfExists))
 	collabDeps := s.collabDeps()
 	srv.Register(tools.NewShareIntent(collabDeps))
 	srv.Register(tools.NewLeaveNote(collabDeps))
@@ -206,9 +206,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessID).
-		WithCollab(func() (bool, int) {
+		WithCollab(func() (bool, int, tools.CollabPolicy) {
 			c := s.collabConfig()
-			return c.PeerAwareness, c.HintBudgetBytes
+			return c.PeerAwareness, c.HintBudgetBytes, s.collabPolicy()
 		}).
 		WithMailbox(func() (bool, tools.Inbox) {
 			return s.collabConfig().Mailbox, s.inbox()

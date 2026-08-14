@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -139,6 +141,15 @@ func (m *Model) refreshDashboardProject() {
 	m.dashProjectAxes = m.globalDB.SavingsAxes(pf)
 	m.dashProjectTokens = m.dashProjectAxes.Total()
 	m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
+	m.dashProjectConversations = nil
+	if collab.Exists(m.dashProjectFolder) {
+		if store, err := collab.Open(m.dashProjectFolder); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			m.dashProjectConversations, _ = store.ConversationSummaries(ctx, time.Now(), 5)
+			cancel()
+			_ = store.Close()
+		}
+	}
 }
 
 // renderDashboard renders the full-width Dashboard section (section 0).
@@ -230,7 +241,7 @@ func (m Model) dashboardBodyLines(width int) []string {
 		lines = append(lines, failures...)
 	}
 
-	if m.dashProjectFolder != "" && m.dashProjectCalls > 0 {
+	if m.dashProjectFolder != "" && (m.dashProjectCalls > 0 || len(m.dashProjectConversations) > 0) {
 		lines = append(lines, "")
 		lines = append(lines, m.dashProjectWidget(width)...)
 	}

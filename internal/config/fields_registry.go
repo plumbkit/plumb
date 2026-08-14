@@ -240,12 +240,8 @@ var registryData = []Field{
 		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means they expire unread.",
 	},
 	{
-		Key: "collab.max_exchanges", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
-		Description: "Messages allowed in one conversation before replies are refused — the backstop against two agents talking indefinitely.",
-	},
-	{
 		Key: "collab.chat_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
-		Description: "Byte cap on a single delivered message body.",
+		Description: "Byte cap on one delivered note body; truncation is reported to both sender and recipient.",
 	},
 	{
 		Key: "collab.max_wait_seconds", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,

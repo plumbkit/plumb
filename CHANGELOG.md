@@ -74,6 +74,23 @@
   `WaitDelay`. When the delay does expire, the reply explains what happened and
   quotes git's own output rather than surfacing exec's bare "WaitDelay expired
   before I/O complete".
+- **Agent-to-agent notes are loss-aware, unbounded by message count, and visible to
+  their human operator.** `leave_note` no longer echoes bodies or silently loses
+  everything beyond the recipient's UTF-8 byte window: its receipt and the
+  recipient marker report exact visible/total/missing byte counts and point to an
+  in-thread follow-up or a shared file path. The default window is now 4096 bytes.
+  `max_exchanges` is retired (the legacy config key is ignored), so no volume
+  limit can discard a note; live conversation volume instead appears in
+  `workspace_sessions`, the TUI dashboard, and Web alongside the sender's recent
+  pending/delivered state.
+
+  In-thread replies that omit `to` now resolve the one other participant and fail
+  closed when history is missing or ambiguous, instead of silently becoming a
+  note for `next`. Self-authored rows cannot be claimed by their author. Blocking
+  `check_messages` results report elapsed seconds and policy clamps, while
+  per-call delivery limits continue to leave the remainder pending and exactly
+  once. When peers are active, `session_start` always states the effective collab
+  policy even if detailed peer awareness is disabled.
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON

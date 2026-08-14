@@ -12,7 +12,6 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
-	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // writeToolNames is the set of mutating MCP tool names used by the
@@ -56,9 +55,10 @@ type WorkspaceSessions struct {
 	// workspace's collab.db ONLY if it already exists (a listing never creates
 	// one); collabPolicy is the [collab] intents/mailbox snapshot; selfName is the
 	// caller's session name, used to select notes addressed to it.
-	collabStore  func() *collab.Store
-	collabPolicy func() (intents, mailbox bool)
-	selfName     func() string
+	collabStore       func() *collab.Store
+	collabGlobalStore func() *collab.Store
+	collabPolicy      func() (intents, mailbox bool)
+	selfName          func() string
 }
 
 // NewWorkspaceSessions creates the workspace_sessions tool.
@@ -108,6 +108,13 @@ func (t *WorkspaceSessions) WithCollab(policy func() (intents, mailbox bool), st
 	return t
 }
 
+// WithGlobalCollab wires open-if-exists access to the daemon-level store for
+// showing this session's own cross-project sent-note delivery state.
+func (t *WorkspaceSessions) WithGlobalCollab(store func() *collab.Store) *WorkspaceSessions {
+	t.collabGlobalStore = store
+	return t
+}
+
 func (*WorkspaceSessions) Name() string { return "workspace_sessions" }
 
 func (*WorkspaceSessions) Description() string {
@@ -127,6 +134,9 @@ func (*WorkspaceSessions) Description() string {
 		"commit is traceable to the session that authored it. " +
 		"When [collab] peer_awareness is on and the topology index has the file, each " +
 		"entry is annotated with its enclosing package/symbol (best-effort, source=topology).\n\n" +
+		"When the mailbox is on, the result also shows pending inbound notes, your " +
+		"recent sent-note delivery states, and live note volume by conversation. Use " +
+		"an active session's displayed name as leave_note.to.\n\n" +
 		"Use this before editing a file that another session may have recently " +
 		"modified: if it appears in recent_writes, re-read it first.\n\n" +
 		"Parameters:\n" +
@@ -236,83 +246,6 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 	return base + t.collabBlock(now)
 }
 
-// collabNoteBodyCap bounds a single rendered intent/note body in
-// workspace_sessions so one verbose claim cannot dominate the output (UTF-8
-// boundary). workspace_sessions is the dedicated read surface, not an injected
-// hint, so this is a display guard rather than the [collab] hint budget.
-const collabNoteBodyCap = 240
-
-// collabBlock renders the phase-2 sharing surface: every active session's live
-// intent (when [collab] intents is on) and the caller's pending notes (when
-// [collab] mailbox is on). Returns "" when the feature is off or collab.db does
-// not exist — a listing never creates one. Best-effort: a query error yields no
-// block rather than failing the tool.
-func (t *WorkspaceSessions) collabBlock(now time.Time) string {
-	if t.collabStore == nil || t.collabPolicy == nil {
-		return ""
-	}
-	intentsOn, mailboxOn := t.collabPolicy()
-	if !intentsOn && !mailboxOn {
-		return ""
-	}
-	store := t.collabStore()
-	if store == nil {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), wsSessionsTimeout)
-	defer cancel()
-
-	var sb strings.Builder
-	if intentsOn {
-		intents, err := store.LiveIntents(ctx, now)
-		if err == nil {
-			writeCollabIntents(&sb, t.selfSessID, intents, now)
-		}
-	}
-	if mailboxOn && t.selfName != nil {
-		if name := t.selfName(); name != "" {
-			notes, err := store.PendingNotes(ctx, name, t.workspace(), now)
-			if err == nil {
-				writeCollabNotes(&sb, notes, now)
-			}
-		}
-	}
-	return sb.String()
-}
-
-// writeCollabIntents renders each active session's live intent as an unverified
-// claim, distinct from the observed recent_writes above it.
-func writeCollabIntents(sb *strings.Builder, selfSessID string, intents []collab.Row, now time.Time) {
-	if len(intents) == 0 {
-		return
-	}
-	sb.WriteString("\npeer intents (claims, unverified — what agents SAY they are doing, not observed writes):\n")
-	for _, r := range intents {
-		who := r.AuthorSession
-		if r.AuthorID == selfSessID {
-			who += " (you)"
-		}
-		fmt.Fprintf(sb, "  %s — \"%s\"", who, textfmt.ClampBytes(r.Body, collabNoteBodyCap))
-		if len(r.PathGlobs) > 0 {
-			fmt.Fprintf(sb, " [%s]", strings.Join(r.PathGlobs, ", "))
-		}
-		fmt.Fprintf(sb, "  (declared %s ago)\n", humaniseAge(now.Sub(r.CreatedAt)))
-	}
-}
-
-// writeCollabNotes renders the notes addressed to the caller (pending; not
-// consumed here — session_start delivers and consumes).
-func writeCollabNotes(sb *strings.Builder, notes []collab.Row, now time.Time) {
-	if len(notes) == 0 {
-		return
-	}
-	sb.WriteString("\nnotes for you (from peers; delivered at session_start too):\n")
-	for _, r := range notes {
-		fmt.Fprintf(sb, "  from %s — \"%s\"  (%s ago)\n",
-			r.AuthorSession, textfmt.ClampBytes(r.Body, collabNoteBodyCap), humaniseAge(now.Sub(r.CreatedAt)))
-	}
-}
-
 // annotateWrites resolves a topology annotation (enclosing package/symbol) for
 // each recent write's file, keyed by the extracted absolute path. Returns nil
 // when peer_awareness is off or no topology store is live, so recent_writes fall
@@ -373,6 +306,7 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 		for _, p := range peers {
 			fmt.Fprintf(&sb, "  %s\n", peerLine(p, selfSessID, now))
 		}
+		sb.WriteString("  Address a peer with leave_note.to using its displayed session name above.\n")
 	}
 
 	// ── recent writes ──────────────────────────────────────────────────────

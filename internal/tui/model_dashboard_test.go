@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -382,6 +383,9 @@ func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
 		dashProjectTopTools: []stats.ToolStat{
 			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, TokensSaved: 4800, CapabilityTokens: 4800},
 		},
+		dashProjectConversations: []collab.ConversationSummary{
+			{ID: "c123", Notes: 14, Pending: 2},
+		},
 	}
 
 	lines := m.dashProjectWidget(90)
@@ -406,6 +410,11 @@ func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
 	}
 	callsHeaderEnd := strings.Index(plain[6], "Calls") + len("Calls")
 	callsValueEnd := strings.Index(plain[8], "12") + len("12")
+	joined := strings.Join(plain, "\n")
+	if !strings.Contains(joined, "Notes by conversation") ||
+		!strings.Contains(joined, "c123  14 notes · 2 pending") {
+		t.Fatalf("conversation volume missing from project widget:\n%s", joined)
+	}
 	if callsValueEnd != callsHeaderEnd {
 		t.Fatalf("project calls column is not right-aligned with header:\n%s\n%s", plain[6], plain[8])
 	}

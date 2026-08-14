@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/monitor"
@@ -153,32 +154,33 @@ type Model struct {
 	commandsDetailCursor int                    // 0..commandDetailFieldCount-1 index into the Detail fields
 
 	// Dashboard section (section 0).
-	dashLifetimeCalls       int64
-	dashLifetimeSessions    int64
-	dashLifetimeTokens      int64
-	dashLifetimeAxes        stats.AxisTotals
-	dashLifetimeFirstAt     time.Time
-	dashLifetimeTopTools    []stats.ToolStat
-	dashUptimeTopTools      []stats.ToolStat
-	dashUptimeFailures      []stats.FailureCount
-	dashLifetimeBuckets     []int64
-	dashDaemBuckets         []int64
-	dashChartWidth          int
-	dashCachedLifetimeCalls int64
-	dashCachedDaemCalls     int64
-	dashCachedChartWidth    int
-	dashLastBucketRefresh   time.Time
-	dashProjectFolder       string
-	dashProjectCalls        int64
-	dashProjectSessions     int64
-	dashProjectTokens       int64
-	dashProjectAxes         stats.AxisTotals
-	dashProjectTopTools     []stats.ToolStat
-	dashScroll              int
-	waitingForQuit          bool
-	quitMessageID           int
-	keys                    keymap
-	keyWarnings             []string
+	dashLifetimeCalls        int64
+	dashLifetimeSessions     int64
+	dashLifetimeTokens       int64
+	dashLifetimeAxes         stats.AxisTotals
+	dashLifetimeFirstAt      time.Time
+	dashLifetimeTopTools     []stats.ToolStat
+	dashUptimeTopTools       []stats.ToolStat
+	dashUptimeFailures       []stats.FailureCount
+	dashLifetimeBuckets      []int64
+	dashDaemBuckets          []int64
+	dashChartWidth           int
+	dashCachedLifetimeCalls  int64
+	dashCachedDaemCalls      int64
+	dashCachedChartWidth     int
+	dashLastBucketRefresh    time.Time
+	dashProjectFolder        string
+	dashProjectCalls         int64
+	dashProjectSessions      int64
+	dashProjectTokens        int64
+	dashProjectAxes          stats.AxisTotals
+	dashProjectTopTools      []stats.ToolStat
+	dashProjectConversations []collab.ConversationSummary
+	dashScroll               int
+	waitingForQuit           bool
+	quitMessageID            int
+	keys                     keymap
+	keyWarnings              []string
 }
 
 func NewModel(logPath, ctrlPath string) Model {

@@ -489,28 +489,30 @@ When `peer_awareness` is on it adds three signals:
   `[Peer: session … edited this file N min ago — consider file_status before
   editing.]` block when another currently-active session recently wrote that file.
   Recency window = `min(idle threshold, 30 min)`.
-- **`session_start` peer digest** — when peers are active at attach time, the
-  orientation packet gains a short "Active peers" block naming them and the areas
-  (directories/packages) they recently touched.
+- **`session_start` peer orientation** — when peers are active at attach time,
+  the packet always states the effective mailbox/intents/cross-project/findings
+  policy. With `peer_awareness` on it also names peers and recently touched areas.
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `peer_awareness` | bool | `true` | Turn the three tier-1 signals on. Set `false` (globally or per project, either direction) to fall back to bare, unannotated output. |
+| `peer_awareness` | bool | `true` | Turn the three detailed tier-1 signals on. Set `false` for bare, unannotated output; the effective collab policy still appears at `session_start` when a peer is active. |
 | `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and the git tool's repo-intent warning share it. Delivered message bodies use `chat_budget_bytes` instead. |
 | `intents` | bool | `false` | **Gated on `plumb trust`.** Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
-| `mailbox` | bool | `true` | **Gated on `plumb trust`.** Agent-to-agent messaging between sessions **on this workspace**: `leave_note`, `check_messages`, message delivery on tool results and at `session_start`, and unread listing in `workspace_sessions`. On by default — same-project agents are working on shared code and the bodies never leave the project. |
+| `mailbox` | bool | `true` | **Gated on `plumb trust`.** Agent-to-agent notes between sessions **on this workspace**: `leave_note`, `check_messages`, exactly-once delivery on tool results and at `session_start`, plus pending/sent delivery state and conversation volume in `workspace_sessions`. On by default. |
 | `cross_project` | bool | `false` | **Gated on `plumb trust`.** Opt-in: also **receive** messages from sessions pinned to a *different* workspace. Deliberately the recipient's decision, not the sender's — a session reads the daemon-level cross-project store only when its own project sets this, so another project can never inject text into this one's context uninvited. Sending across is always permitted; an un-opted-in recipient simply never reads it and the message expires unread. |
-| `max_exchanges` | int | `10` | Messages allowed in one **conversation** before further replies are refused. A speed bump against two agents answering each other indefinitely, not an enforced ceiling: plumb cannot observe a human turn, so it counts total messages in a thread rather than consecutive agent replies, and opening a new thread starts a fresh budget. `0` uses the default. |
-| `chat_budget_bytes` | int | `2048` | Byte cap (UTF-8 boundary) on a single delivered message body. Separate from `hint_budget_bytes` because a message is content the agent must act on, not a pointer to look up. `0` uses the default. |
-| `max_wait_seconds` | int | `55` | Ceiling on how long `check_messages` will block waiting for a message. Kept below the client's own MCP call timeout so a wait expires cleanly rather than surfacing as a tool timeout. `0` uses the default. |
+| `chat_budget_bytes` | int | `4096` | UTF-8-safe byte cap on a delivered note body. Sender and recipient both receive exact visible/total/missing counts plus a follow-up/file-path remedy; no cut is silent. `0` uses the default. |
+| `max_wait_seconds` | int | `55` | Ceiling on a blocking `check_messages` wait, kept below the MCP call timeout. The result reports elapsed seconds and explicitly says when the request was clamped. `0` uses the default. |
 | `knowledge_handoff` | bool | `false` | **Gated on `plumb trust`.** Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
 | `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
 
-A session holds at most **one live intent** — a new `share_intent` replaces it,
-and it is cleared when the session ends. A `next` note is consumed on first
-delivery; an addressed note persists until its TTL. Delivery is polling plus
-hint injection only — plumb cannot push to a peer. `share_findings` writes its
-memory as `finding-<timestamp>-<session>`, retention-shared with the idle
+`max_exchanges` is a retired legacy key: older config may retain it, but plumb
+ignores it and never severs a conversation by count. Volume is shown to humans in
+`workspace_sessions`, the TUI, and Web instead. A session holds at most **one live
+intent** — a new `share_intent` replaces it and session end clears it. A `next`
+note is consumed on first eligible delivery; an addressed note persists until
+its TTL. Delivery is polling plus hint injection only — plumb cannot push to a
+peer. `share_findings` writes its memory as `finding-<timestamp>-<session>`,
+retention-shared with the idle
 `episodic-*` summaries under `[memory] generated_memory_keep`, and it never
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
 agent supplies the text; no LLM summary.

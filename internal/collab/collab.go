@@ -117,11 +117,4 @@ type NoteInput struct {
 	// TargetWorkspace is the workspace the recipient must be pinned to. Required
 	// for a cross-project note; empty for a same-project one.
 	TargetWorkspace string
-	// MaxExchanges caps how many unexpired notes the conversation may hold.
-	// PutNote enforces it as part of the insert and refuses an over-budget note
-	// with ErrConversationFull; a non-positive value means uncapped. It lives on
-	// the input rather than on the Store because the cap comes from the sending
-	// connection's [collab] policy, and one Store serves every connection to a
-	// workspace.
-	MaxExchanges int
 }

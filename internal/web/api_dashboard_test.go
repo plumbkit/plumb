@@ -1,8 +1,12 @@
 package web
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -66,5 +70,36 @@ func TestSavingsBreakdown_FromPrecomputedRows(t *testing.T) {
 	}
 	if out.ByTool[1].Tool != "edit_file" {
 		t.Errorf("second savings row = %q, want edit_file", out.ByTool[1].Tool)
+	}
+}
+
+func TestActiveConversationVolumes_DeduplicatesWorkspacesAndReportsCounts(t *testing.T) {
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now()
+	conv, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "alice-id", Body: "one",
+		Addressee: "bob", TTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "bob-id", Body: "two",
+		Addressee: "alice", TTL: time.Hour, ConversationID: conv,
+	}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := activeConversationVolumes([]session.Info{{Folder: ws}, {Folder: ws}}, 10)
+	if len(got) != 1 {
+		t.Fatalf("conversation rows = %#v, want one deduplicated workspace row", got)
+	}
+	if got[0].ID != conv || got[0].Notes != 2 || got[0].Pending != 2 {
+		t.Fatalf("conversation row = %#v", got[0])
 	}
 }

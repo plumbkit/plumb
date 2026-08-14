@@ -99,7 +99,7 @@ type SessionStart struct {
 	lspDiagModeFn func() string                                                                     // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
 	purposeFn     func(purpose string)                                                              // may be nil; persists a validated session purpose tag
 	selfSessID    string                                                                            // this session's ID, excluded from the peer digest
-	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
+	collabFn      func() (peerAwareness bool, hintBudgetBytes int, policy CollabPolicy)             // may be nil; the resolved [collab] snapshot for peer orientation
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
 }
@@ -117,10 +117,10 @@ func (t *SessionStart) WithSelfSession(id string) *SessionStart {
 	return t
 }
 
-// WithCollab wires the resolved [collab] snapshot accessor (peer_awareness +
-// hint_budget_bytes) used to gate and bound the session_start peer digest.
-// Nil-safe: unset ⇒ the digest is omitted. Returns the receiver for chaining.
-func (t *SessionStart) WithCollab(fn func() (bool, int)) *SessionStart {
+// WithCollab wires the resolved [collab] snapshot used for peer orientation.
+// Peer awareness gates only the detailed digest; active peers always cause the
+// effective communication policy to be shown. Nil-safe: unset omits the block.
+func (t *SessionStart) WithCollab(fn func() (bool, int, CollabPolicy)) *SessionStart {
 	t.collabFn = fn
 	return t
 }

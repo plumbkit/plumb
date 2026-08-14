@@ -37,11 +37,8 @@ func TestCollab_Defaults(t *testing.T) {
 	if d.Collab.CrossProject {
 		t.Error("collab.cross_project should default to false — reaching another project is opt-in")
 	}
-	if d.Collab.MaxExchanges != 10 {
-		t.Errorf("collab.max_exchanges default = %d, want 10", d.Collab.MaxExchanges)
-	}
-	if d.Collab.ChatBudgetBytes != 2048 {
-		t.Errorf("collab.chat_budget_bytes default = %d, want 2048", d.Collab.ChatBudgetBytes)
+	if d.Collab.ChatBudgetBytes != 4096 {
+		t.Errorf("collab.chat_budget_bytes default = %d, want 4096", d.Collab.ChatBudgetBytes)
 	}
 	if d.Collab.MaxWaitSeconds != 55 {
 		t.Errorf("collab.max_wait_seconds default = %d, want 55", d.Collab.MaxWaitSeconds)
@@ -115,10 +112,9 @@ func TestLoadProject_CollabChannelSwitchesNeedTrust(t *testing.T) {
 	})
 }
 
-// TestLoadProject_CollabTuningStaysProjectOverridable is the other half of the
-// contract, and the reason the fix above is scoped to the switches alone: tuning
-// cannot OPEN anything. A project saying "smaller hints here" is a legitimate
-// per-project preference; one saying "open a cross-agent channel here" is not.
+// TestLoadProject_CollabTuningStaysProjectOverridable also pins that the retired
+// max_exchanges key is harmless when an older project config still contains it.
+// Tuning cannot OPEN anything; channel switches remain the trust boundary.
 func TestLoadProject_CollabTuningStaysProjectOverridable(t *testing.T) {
 	base := Defaults()
 	ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 30\nhint_budget_bytes = 256\n"+
@@ -134,7 +130,6 @@ func TestLoadProject_CollabTuningStaysProjectOverridable(t *testing.T) {
 	}{
 		{"intent_ttl_minutes", got.Collab.IntentTTLMinutes, 30},
 		{"hint_budget_bytes", got.Collab.HintBudgetBytes, 256},
-		{"max_exchanges", got.Collab.MaxExchanges, 3},
 		{"chat_budget_bytes", got.Collab.ChatBudgetBytes, 512},
 		{"max_wait_seconds", got.Collab.MaxWaitSeconds, 10},
 	} {
@@ -262,7 +257,8 @@ func TestCollabPolicySpec_GatesSwitchesAndFreesTuning(t *testing.T) {
 	}
 	for _, k := range []string{
 		"collab.peer_awareness", "collab.hint_budget_bytes", "collab.intent_ttl_minutes",
-		"collab.max_exchanges", "collab.chat_budget_bytes", "collab.max_wait_seconds",
+		"collab.max_exchanges", // ignored legacy key; must not create a new trust prompt
+		"collab.chat_budget_bytes", "collab.max_wait_seconds",
 	} {
 		if got[k] {
 			t.Errorf("%s must NOT need trust — it opens nothing, and demanding approval to tune a size is friction for no safety", k)

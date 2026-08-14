@@ -231,42 +231,18 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 	return tx.Commit()
 }
 
-// ErrConversationFull reports that a note was refused because its conversation
-// had already spent the exchange budget the caller asked to be held to. Callers
-// turn it into their own user-facing refusal; it is a policy outcome, not a
-// storage failure.
-var ErrConversationFull = errors.New("collab: conversation has reached its exchange limit")
-
-// insertNote writes the row through a SELECT rather than a VALUES list so the
-// exchange budget can be appended to the SAME statement as a WHERE clause.
+// insertNote is the single write path for notes. Message-count limits deliberately
+// do not exist: a conversation is observable, but never severed by the store.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
                           addressee, created_at, expires_at, conversation_id, origin_workspace,
                           target_workspace)
-	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?`
-
-// budgetGuard suppresses the insert when the thread has already spent its
-// budget. It counts only UNEXPIRED rows, so the budget reads the same whether or
-// not the reaper has run — pruning deletes exactly the rows this excludes, and
-// counting them would let a prune silently hand an exhausted thread a fresh
-// allowance.
-const budgetGuard = `
-	 WHERE (SELECT COUNT(*) FROM collab_rows
-	        WHERE kind = ? AND conversation_id = ? AND expires_at > ?) < ?`
+	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`
 
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
 // returns the conversation it belongs to — the caller's ConversationID when it
 // threads onto an existing exchange, otherwise a freshly minted one, which the
 // sender quotes to continue the thread. The body is stored verbatim (callers
 // redact first). TTL is clamped to minTTL.
-//
-// A positive in.MaxExchanges caps the conversation, and a note that would exceed
-// it is refused with ErrConversationFull. The cap is enforced HERE, in one
-// statement, because counting in the caller and then inserting is two steps: two
-// agents replying at the same instant both read one-below-the-limit and both
-// land, so the budget over-runs precisely when the exchange is running away.
-// SQLite's write lock serialises a single statement's count against its insert,
-// and a rule kept in the store cannot be forgotten by a future caller. A fresh
-// thread is never refused — its live count is zero.
 func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (string, error) {
 	if s == nil || s.db == nil {
 		return "", errors.New("collab: nil store")
@@ -292,33 +268,11 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 			return "", errors.New(`collab: "next" has no meaning across projects`)
 		}
 	}
-	stmt := insertNote
-	args := []any{
+	if _, err := s.db.ExecContext(ctx, insertNote,
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace,
-	}
-	capped := in.MaxExchanges > 0
-	if capped {
-		stmt += budgetGuard
-		args = append(args, string(KindNote), conv, now.UnixNano(), in.MaxExchanges)
-	}
-	res, err := s.db.ExecContext(ctx, stmt, args...)
-	if err != nil {
+		in.TargetWorkspace); err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
-	}
-	if capped {
-		// The guard is a WHERE clause, so a refusal is an insert that matched
-		// nothing rather than an error the driver reports. A RowsAffected error is
-		// surfaced rather than ignored: treating "cannot tell" as "accepted" would
-		// report a note as sent that may never have been written.
-		n, err := res.RowsAffected()
-		if err != nil {
-			return "", fmt.Errorf("collab: insert note: rows affected: %w", err)
-		}
-		if n == 0 {
-			return "", ErrConversationFull
-		}
 	}
 	return conv, nil
 }
@@ -355,11 +309,19 @@ func (s *Store) LiveIntents(ctx context.Context, now time.Time) ([]Row, error) {
 }
 
 // PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to
-// sessionName, newest first, without claiming them. Used by the listing path
-// (workspace_sessions), which reports what is waiting rather than handing it
-// over. It never returns "next" notes — those are claimed only by ClaimNotes,
-// so listing them would advertise a message the caller may lose the race for.
+// sessionName, newest first, without claiming them. It preserves the historical
+// name-only API for callers that do not have a session identity.
 func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string, now time.Time) ([]Row, error) {
+	return s.PendingNotesForSession(ctx, sessionName, "", workspace, now)
+}
+
+// PendingNotesForSession is PendingNotes with the recipient's stable session ID.
+// A session never sees a note it authored, including one addressed to "next".
+func (s *Store) PendingNotesForSession(
+	ctx context.Context,
+	sessionName, sessionID, workspace string,
+	now time.Time,
+) ([]Row, error) {
 	if s == nil || s.db == nil || sessionName == "" {
 		return nil, nil
 	}
@@ -368,8 +330,9 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 		 FROM collab_rows
 		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
 		   AND (target_workspace = '' OR target_workspace = ?)
+		   AND (? = '' OR author_id <> ?)
 		 ORDER BY created_at DESC`,
-		string(KindNote), sessionName, now.UnixNano(), workspace)
+		string(KindNote), sessionName, now.UnixNano(), workspace, sessionID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}
@@ -409,19 +372,33 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 // failed on essentially every concurrent burst. A single UPDATE takes the write
 // lock up front, so contention is handled by busy_timeout as normal.
 func (s *Store) ClaimNotes(ctx context.Context, sessionName, workspace string, now time.Time, limit int) ([]Row, error) {
+	return s.ClaimNotesForSession(ctx, sessionName, "", workspace, now, limit)
+}
+
+// ClaimNotesForSession is ClaimNotes with the recipient's stable session ID.
+// The author exclusion is part of the atomic UPDATE, so a self-addressed note is
+// left pending for another eligible peer rather than consumed by its sender.
+func (s *Store) ClaimNotesForSession(
+	ctx context.Context,
+	sessionName, sessionID, workspace string,
+	now time.Time,
+	limit int,
+) ([]Row, error) {
 	if s == nil || s.db == nil || sessionName == "" {
 		return nil, nil
 	}
 	// A cross-project row is claimable only by a session pinned to its target;
 	// a same-project row carries no target and is scoped by this database.
-	scope := `AND (target_workspace = '' OR target_workspace = ?)`
 	select_ := `SELECT id FROM collab_rows
 			 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-			   AND (addressee = ? OR addressee = ?) ` + scope + `
+			   AND (addressee = ? OR addressee = ?)
+			   AND (target_workspace = '' OR target_workspace = ?)
+			   AND (? = '' OR author_id <> ?)
 			 ORDER BY created_at ASC`
 	args := []any{
 		now.UnixNano(), sessionName, // SET delivered_at, delivered_to
 		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace,
+		sessionID, sessionID,
 	}
 	if limit > 0 {
 		select_ += ` LIMIT ?`
@@ -462,14 +439,8 @@ func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, p
 
 // ConversationCount returns how many UNEXPIRED notes a conversation holds.
 // Delivered rows count — an exchange that has been read still happened — but
-// expired ones do not, matching both the transcript Conversation renders and the
-// budget PutNote enforces.
-//
-// It is purely observational: the exchange budget is enforced inside PutNote's
-// guarded insert, not here, because counting and then inserting is two steps that
-// two simultaneous senders can interleave. It reads the wall clock rather than
-// taking a `now` because nothing depends on its answer being consistent with a
-// particular instant.
+// expired ones do not. It is purely observational: note volume is surfaced to
+// humans, never used to sever a conversation.
 func (s *Store) ConversationCount(ctx context.Context, conversationID string) (int, error) {
 	if s == nil || s.db == nil || conversationID == "" {
 		return 0, nil

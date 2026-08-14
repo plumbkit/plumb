@@ -222,7 +222,6 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// below the client's own call timeout at the point of use.
 	"collab.peer_awareness":     ClassPreference,
 	"collab.hint_budget_bytes":  ClassPreference,
-	"collab.max_exchanges":      ClassPreference,
 	"collab.chat_budget_bytes":  ClassPreference,
 	"collab.max_wait_seconds":   ClassPreference,
 	"collab.intent_ttl_minutes": ClassPreference,

@@ -28,27 +28,32 @@ const (
 	peerDigestAreas      = 3
 )
 
-// writeSessionPeers appends the "Active peers" digest when [collab] peer_awareness
-// is on and at least one other session is active on this workspace. Bounded by
-// the shared [collab] hint_budget_bytes (a peer digest is a peer signal like the
-// injected hint), enforced on a UTF-8 boundary.
+// writeSessionPeers orients a session whenever another peer is active. The
+// effective communication policy is always visible; peer_awareness gates only
+// the detailed digest, which remains bounded by hint_budget_bytes.
 func (t *SessionStart) writeSessionPeers(sb *strings.Builder, ws string) {
-	if t.collabFn == nil {
+	t.writeSessionPeersFor(sb, ws, t.activePeers(ws))
+}
+
+func (t *SessionStart) writeSessionPeersFor(sb *strings.Builder, ws string, peers []session.Info) {
+	if t.collabFn == nil || len(peers) == 0 {
 		return
 	}
-	enabled, budget := t.collabFn()
+	enabled, budget, policy := t.collabFn()
+	fmt.Fprintf(sb, "\n## Collab\n\ncollab: mailbox %s, intents %s, cross-project %s, findings %s\n",
+		policyState(policy.Mailbox), policyState(policy.Intents),
+		policyState(policy.CrossProject), policyState(policy.KnowledgeHandoff))
 	if !enabled {
 		return
 	}
-	peers := t.activePeers(ws)
-	if len(peers) == 0 {
-		return
+	sb.WriteString(textfmt.ClampBytes(t.formatPeerDigest(ws, peers), budget))
+}
+
+func policyState(on bool) string {
+	if on {
+		return "ON"
 	}
-	block := t.formatPeerDigest(ws, peers)
-	if block == "" {
-		return
-	}
-	sb.WriteString(textfmt.ClampBytes(block, budget))
+	return "OFF"
 }
 
 // activePeers returns the sessions active on ws right now, excluding this one.

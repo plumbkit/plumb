@@ -41,26 +41,31 @@ func TestFormatPeerDigest(t *testing.T) {
 	}
 }
 
-// TestWriteSessionPeers_Gating asserts the digest is omitted when the [collab]
-// accessor is unset or reports peer_awareness off — the disable-cleanly contract.
-func TestWriteSessionPeers_Gating(t *testing.T) {
+func TestWriteSessionPeers_PolicyAlwaysVisibleWhenPeerActive(t *testing.T) {
 	ws := t.TempDir()
+	peers := []session.Info{{ID: "peer", Name: "swift-falcon", Folder: ws}}
 
 	t.Run("nil collab accessor", func(t *testing.T) {
 		var st SessionStart
 		var sb strings.Builder
-		st.writeSessionPeers(&sb, ws)
+		st.writeSessionPeersFor(&sb, ws, peers)
 		if sb.Len() != 0 {
 			t.Errorf("no collab accessor must write nothing, got %q", sb.String())
 		}
 	})
 
-	t.Run("peer_awareness off", func(t *testing.T) {
-		st := SessionStart{collabFn: func() (bool, int) { return false, 512 }}
+	t.Run("peer awareness off still shows policy", func(t *testing.T) {
+		st := SessionStart{collabFn: func() (bool, int, CollabPolicy) {
+			return false, 512, CollabPolicy{Mailbox: true}
+		}}
 		var sb strings.Builder
-		st.writeSessionPeers(&sb, ws)
-		if sb.Len() != 0 {
-			t.Errorf("peer_awareness=false must write nothing, got %q", sb.String())
+		st.writeSessionPeersFor(&sb, ws, peers)
+		out := sb.String()
+		if !strings.Contains(out, "collab: mailbox ON, intents OFF, cross-project OFF, findings OFF") {
+			t.Errorf("active-peer policy missing: %q", out)
+		}
+		if strings.Contains(out, "## Active peers") {
+			t.Errorf("peer_awareness=false leaked the detailed digest: %q", out)
 		}
 	})
 }

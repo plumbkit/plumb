@@ -108,6 +108,37 @@
       <Chart option={activityCalendar(P, calendarDays(), calRange())} height="200px" />
     </Card>
 
+    <Card span2 title="Peer notes" badge="conversation volume" desc="live notes · observational only, never a limit">
+      {#if data.conversations?.length}
+        <div class="overflow-x-auto">
+          <table class="w-full text-[12.5px] border-collapse">
+            <thead>
+              <tr class="text-left" style="color:var(--faint)">
+                <th class="py-2 pr-3 font-medium">Workspace</th>
+                <th class="py-2 pr-3 font-medium">Conversation</th>
+                <th class="py-2 pr-3 font-medium text-right">Notes</th>
+                <th class="py-2 pr-3 font-medium text-right">Pending</th>
+                <th class="py-2 font-medium text-right">Last activity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each data.conversations as conversation}
+                <tr style="border-top:1px solid var(--rule)">
+                  <td class="py-2 pr-3" style="color:var(--text)">{conversation.workspace}</td>
+                  <td class="py-2 pr-3 font-mono text-[11.5px]" style="color:var(--soft)">{conversation.id}</td>
+                  <td class="py-2 pr-3 text-right" style="color:var(--text)">{num(conversation.notes)}</td>
+                  <td class="py-2 pr-3 text-right" style="color:var(--acc)">{num(conversation.pending)}</td>
+                  <td class="py-2 text-right" style="color:var(--faint)">{new Date(conversation.lastAt).toLocaleTimeString()}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <div class="text-[12px] py-8 text-center" style="color:var(--faint)">No live peer-note conversations.</div>
+      {/if}
+    </Card>
+
     <Card title="Top tools" badge="by calls" desc="busiest tools this daemon">
       {#if data.topTools?.length}
         <Chart option={topToolsBar(P, data.topTools)} height="320px" />

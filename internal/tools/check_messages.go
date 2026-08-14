@@ -14,11 +14,11 @@ import (
 // mailbox, and the reason two agents can hold a conversation rather than trade
 // one-way notes.
 //
-// Messages already ride along on ordinary tool results, which is enough for an
+// Notes already ride along on ordinary tool results, which is enough for an
 // agent that is busy working. It is not enough for turn-taking: after sending a
 // question you have nothing to do until the answer comes, and polling for it
 // burns a tool call per attempt. This tool lets a session hand its turn over —
-// parking server-side on the daemon's in-process notifier until a message
+// parking server-side on the daemon's in-process notifier until a note
 // arrives or the wait expires — so a back-and-forth costs one call per turn.
 //
 // Concurrency: Execute is safe for concurrent use; the wait holds no lock.
@@ -30,27 +30,24 @@ func NewCheckMessages(deps CollabDeps) *CheckMessages { return &CheckMessages{de
 func (*CheckMessages) Name() string { return "check_messages" }
 
 func (*CheckMessages) Description() string {
-	return "Read messages other agents have sent you, optionally waiting for one to " +
-		"arrive. The receive half of plumb's mailbox; leave_note is the send half.\n\n" +
+	return "Read notes other agents have sent you, optionally waiting for one to " +
+		"arrive. The receive half of plumb's request/reply mailbox; leave_note is the " +
+		"send half.\n\n" +
 		"With wait_seconds omitted or 0 it returns immediately with whatever is " +
-		"waiting. With a positive wait_seconds it BLOCKS until a message arrives or " +
-		"the wait expires — this is how you hand your turn to a peer after asking " +
-		"something, instead of polling. The wait is capped by [collab] " +
-		"max_wait_seconds, which is kept below the client's own call timeout.\n\n" +
-		"Each message is delivered exactly ONCE, to whichever path sees it first — " +
-		"this tool, the block appended to an ordinary tool result, or session_start. " +
-		"Re-calling will not redeliver it, so act on a message when you read it.\n\n" +
-		"Every message carries a conversation_id; quote it in leave_note to reply in " +
-		"thread. A THREAD is capped at [collab] max_exchanges. Note what that does and " +
-		"does not do: it bounds one conversation, and opening a new one starts a fresh " +
-		"budget. It is a speed bump that forces a deliberate act, not an enforced limit " +
-		"on how long two agents may talk \u2014 when a thread is spent, surface it to your " +
-		"human rather than routing around the cap.\n\n" +
-		"Requires [collab] mailbox = true. Messages from a session in another " +
-		"workspace are shown only when this project sets [collab] cross_project = " +
-		"true, and are labelled with the sending project.\n\n" +
+		"waiting. With a positive value it BLOCKS until a note arrives or the wait " +
+		"expires, handing your turn to a peer instead of polling. The wait is capped " +
+		"by [collab] max_wait_seconds; the result reports elapsed seconds and any clamp.\n\n" +
+		"Each note is delivered exactly ONCE, to whichever path sees it first — this " +
+		"tool, an ordinary tool result, or session_start. Re-calling will not redeliver " +
+		"it, so act on a note when you read it.\n\n" +
+		"Every note carries a conversation_id; quote it in leave_note to reply. An " +
+		"in-thread reply may omit to because plumb resolves the other participant. " +
+		"Conversations have no message-count ceiling. If an exchange grows long, put " +
+		"the substance in a file and send its path in a short note.\n\n" +
+		"Requires [collab] mailbox = true. Cross-project notes are shown only when this " +
+		"project sets [collab] cross_project = true, and name their source project.\n\n" +
 		"Parameters:\n" +
-		"  wait_seconds — block up to this long for a message (default 0, no wait)."
+		"  wait_seconds — block up to this many seconds for a note (default 0)."
 }
 
 func (*CheckMessages) InputSchema() json.RawMessage {
@@ -60,7 +57,7 @@ func (*CheckMessages) InputSchema() json.RawMessage {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Block up to this many seconds waiting for a message. 0 (default) returns immediately. Capped by [collab] max_wait_seconds."
+      "description": "Block up to this many seconds waiting for a note. 0 (default) returns immediately. Capped by [collab] max_wait_seconds; the result reports elapsed seconds and any clamp."
     }
   },
   "additionalProperties": false
@@ -81,7 +78,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	policy := t.deps.Policy()
 	if !policy.Mailbox {
 		return "check_messages is disabled — set [collab] mailbox = true (globally or in " +
-			"this workspace's .plumb/config.toml) to exchange messages with peers.", nil
+			"this workspace's .plumb/config.toml) to exchange notes with peers.", nil
 	}
 	self := t.deps.SessionName()
 	if self == "" {
@@ -89,6 +86,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 	inbox := Inbox{
 		Self:      self,
+		SelfID:    t.deps.SessionID,
 		Root:      t.deps.Workspace(),
 		Policy:    policy,
 		Workspace: t.deps.StoreIfExists,
@@ -100,22 +98,24 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(rows, policy), nil
 	}
-	wait := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
+	maxWait := policy.maxWaitSeconds()
+	wait, clamped := clampWait(args.WaitSeconds, maxWait)
 	if wait <= 0 {
 		return t.empty(policy), nil
 	}
 
-	// Snapshot the generations BEFORE waiting so a message written between the
-	// claim above and the park below still wakes us instead of being missed.
+	// Snapshot the generations BEFORE waiting so a note written between the claim
+	// above and the park below still wakes us instead of being missed.
 	keys := inbox.Keys()
 	since := t.deps.Notifier.Gens(keys)
+	started := time.Now()
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
-		return fmt.Sprintf("No messages (waited %s).", humaniseTTL(wait)), nil
+		return formatWaitTimeout(time.Since(started), args.WaitSeconds, maxWait, clamped), nil
 	}
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy), nil
+		return t.render(rows, policy) + waitClampNotice(args.WaitSeconds, maxWait, clamped), nil
 	}
 	// Woken but nothing to claim. The legitimate cause is a race inside THIS
 	// session: another delivery path (a tool-result block, or session_start) got
@@ -128,7 +128,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// certainly true and offers the race as a possibility.
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — each message is delivered exactly once.\n", nil
+		"first — each note is delivered exactly once.\n", nil
 }
 
 func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {
@@ -138,10 +138,10 @@ func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {
 
 // empty explains the one thing an agent will otherwise get wrong: silence is not
 // a reply. A peer idling on its human makes no tool calls and has not seen the
-// message yet.
+// note yet.
 func (t *CheckMessages) empty(policy CollabPolicy) string {
 	var sb strings.Builder
-	sb.WriteString("No messages.\n")
+	sb.WriteString("No notes.\n")
 	if !policy.CrossProject {
 		sb.WriteString("  (Only this workspace's sessions can reach you — [collab] cross_project is off.)\n")
 	}
@@ -150,13 +150,31 @@ func (t *CheckMessages) empty(policy CollabPolicy) string {
 	return sb.String()
 }
 
-// clampWait bounds a requested wait to [0, max] seconds.
-func clampWait(requested, maxSeconds int) time.Duration {
+// clampWait bounds a requested wait to [0, max] seconds and reports whether
+// the caller's value was reduced.
+func clampWait(requested, maxSeconds int) (time.Duration, bool) {
 	if requested <= 0 {
-		return 0
+		return 0, false
 	}
-	if requested > maxSeconds {
+	clamped := requested > maxSeconds
+	if clamped {
 		requested = maxSeconds
 	}
-	return time.Duration(requested) * time.Second
+	return time.Duration(requested) * time.Second, clamped
+}
+
+func formatWaitTimeout(elapsed time.Duration, requested, maxSeconds int, clamped bool) string {
+	seconds := int((elapsed + 500*time.Millisecond) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("No notes (waited %ds).%s\n  A peer idle waiting on its human makes no tool calls; silence is not a refusal.\n",
+		seconds, waitClampNotice(requested, maxSeconds, clamped))
+}
+
+func waitClampNotice(requested, maxSeconds int, clamped bool) string {
+	if !clamped {
+		return ""
+	}
+	return fmt.Sprintf(" Requested wait %ds was clamped to [collab] max_wait_seconds=%ds.", requested, maxSeconds)
 }

@@ -12,9 +12,9 @@ import (
 	"github.com/plumbkit/plumb/internal/collab"
 )
 
-// LeaveNote is the leave_note MCP tool: a session leaves a short message for a
+// LeaveNote is the leave_note MCP tool: a session leaves a short note for a
 // named peer session, or for "whoever attaches to this workspace next". It is a
-// minimal mailbox — notes only, no tasks, no threads, no arbitration. Gated on
+// request/reply mailbox, not a task or arbitration system. Gated on
 // [collab] mailbox; refused with a clear error when the flag is off.
 //
 // Concurrency: Execute is safe for concurrent use — persistence is deferred to
@@ -27,32 +27,29 @@ func NewLeaveNote(deps CollabDeps) *LeaveNote { return &LeaveNote{deps: deps} }
 func (*LeaveNote) Name() string { return "leave_note" }
 
 func (*LeaveNote) Description() string {
-	return "Send a message to another agent — a named peer session, or \"next\" " +
+	return "Send a note to another agent — a named active peer session, or \"next\" " +
 		"(whoever attaches to this workspace next). This is the send half of plumb's " +
-		"mailbox; check_messages is the receive half.\n\n" +
-		"CONVERSATIONS. Every message belongs to a thread. Omit conversation_id to " +
-		"start one (the reply tells you the new id); pass the conversation_id you " +
-		"were given to answer in the same thread. A thread is capped at [collab] " +
-		"max_exchanges messages — once spent, further replies are refused and you " +
-		"should summarise the exchange for your human rather than starting a fresh " +
-		"thread to keep talking.\n\n" +
-		"DELIVERY is by polling only — plumb cannot push. A message reaches the peer " +
-		"when it next makes any tool call (pending messages are appended to the " +
-		"result), when it calls check_messages, or at its next session_start. Each " +
-		"message is delivered exactly once. A peer that is idle waiting on its human " +
-		"makes no tool calls and will not see it until it does something — so do not " +
-		"assume silence means refusal.\n\n" +
-		"CROSS-PROJECT. Addressing a session pinned to a different workspace is " +
-		"allowed, but it is delivered only if THAT project sets [collab] " +
-		"cross_project = true; otherwise it expires unread. Such a message is " +
-		"labelled with your workspace when the peer reads it.\n\n" +
-		"Messages expire after [collab] intent_ttl_minutes. Requires [collab] " +
-		"mailbox = true; otherwise the call is refused. The body is secret-scrubbed " +
-		"before storage.\n\n" +
+		"request/reply mailbox; check_messages is the receive half.\n\n" +
+		"CONVERSATIONS. Omit conversation_id to start one (the reply tells you the new " +
+		"id). Pass that id to reply in-thread; when to is omitted, plumb resolves the " +
+		"other participant and fails closed if the thread is ambiguous. Conversations " +
+		"have no message-count ceiling. If an exchange grows long, write the substance " +
+		"to a file and send its path in a short note.\n\n" +
+		"DELIVERY is by polling — MCP is request/reply, so plumb cannot push. A note " +
+		"reaches the peer when it next makes any tool call, when it calls check_messages, or " +
+		"runs session_start. Each note is delivered exactly once. A peer idle on its " +
+		"human makes no calls, so silence is not a refusal.\n\n" +
+		"BODIES are capped by [collab] chat_budget_bytes. The send receipt always gives " +
+		"the byte budget; if a note is cut, both parties are told exactly how many bytes " +
+		"were truncated and how to send the remainder.\n\n" +
+		"CROSS-PROJECT. A note to a session in another workspace is delivered only if " +
+		"THAT project sets [collab] cross_project = true; otherwise it expires unread.\n\n" +
+		"Notes expire after [collab] intent_ttl_minutes. Requires [collab] mailbox = " +
+		"true. Bodies are secret-scrubbed before storage.\n\n" +
 		"Parameters:\n" +
-		"  body            — the message (required, free text).\n" +
-		"  to              — a peer session name, or \"next\" (default).\n" +
-		"  conversation_id — reply into an existing thread; omit to start one."
+		"  body            — the note (required, free text).\n" +
+		"  to              — an active peer name, or \"next\"; omit on an in-thread reply.\n" +
+		"  conversation_id — reply into an existing conversation; omit to start one."
 }
 
 func (*LeaveNote) InputSchema() json.RawMessage {
@@ -61,11 +58,11 @@ func (*LeaveNote) InputSchema() json.RawMessage {
   "properties": {
     "body": {
       "type": "string",
-      "description": "The message to send (free text)."
+      "description": "The note to send (free text)."
     },
     "to": {
       "type": "string",
-      "description": "A peer session name, or \"next\" (default) for whoever attaches to this workspace next. A name belonging to a session in another workspace is delivered only if that project allows cross-project messages."
+      "description": "An active peer display name, or \"next\" for whoever attaches to this workspace next. Defaults to next only when conversation_id is omitted; an in-thread omission resolves the other participant or refuses. Cross-project delivery requires the recipient project to opt in."
     },
     "conversation_id": {
       "type": "string",
@@ -92,10 +89,10 @@ func parseLeaveNoteArgs(raw json.RawMessage) (leaveNoteArgs, error) {
 		return a, errors.New("leave_note: body is required")
 	}
 	a.To = strings.TrimSpace(a.To)
-	if a.To == "" {
+	a.ConversationID = strings.TrimSpace(a.ConversationID)
+	if a.To == "" && a.ConversationID == "" {
 		a.To = collab.AddresseeNext
 	}
-	a.ConversationID = strings.TrimSpace(a.ConversationID)
 	return a, nil
 }
 
@@ -113,6 +110,14 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	to, err := t.resolveAddressee(ctx, args.To, args.ConversationID)
+	if err != nil {
+		return "", err
+	}
+	if to == t.deps.SessionName() {
+		return "Note NOT sent: the addressee resolves to this session. A note is never delivered to its own author.", nil
+	}
+	args.To = to
 	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
 	if err != nil {
 		return "", err
@@ -199,6 +204,43 @@ func (t *LeaveNote) globalIfExists() *collab.Store {
 	return t.deps.GlobalStoreIfExists()
 }
 
+// resolveAddressee turns an omitted in-thread target into the conversation's
+// one other participant. It never falls back to "next": a quoted conversation
+// is an explicit reply intent, so ambiguity is a refusal rather than a reroute.
+func (t *LeaveNote) resolveAddressee(ctx context.Context, to, conversationID string) (string, error) {
+	if to != "" {
+		return to, nil
+	}
+	peers := make(map[string]struct{})
+	stores := []*collab.Store{}
+	if t.deps.StoreIfExists != nil {
+		if store := t.deps.StoreIfExists(); store != nil {
+			stores = append(stores, store)
+		}
+	}
+	if store := t.globalIfExists(); store != nil {
+		stores = append(stores, store)
+	}
+	for _, store := range stores {
+		peer, found, err := store.ConversationPeer(
+			ctx, conversationID, t.deps.SessionID, t.deps.SessionName(), time.Now())
+		if err != nil {
+			return "", fmt.Errorf("leave_note: resolve conversation peer: %w", err)
+		}
+		if found {
+			peers[peer] = struct{}{}
+		}
+	}
+	if len(peers) == 1 {
+		for peer := range peers {
+			return peer, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"leave_note: conversation_id %q does not identify exactly one other participant; pass to explicitly",
+		conversationID)
+}
+
 // sameWorkspace compares two workspace roots the way the session registry
 // records them. An empty root on either side is not treated as a match — an
 // unknown workspace must not silently pass for "the same project".
@@ -222,7 +264,6 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	body, redacted := redactBody(args.Body)
 	ttl := resolveTTL(policy.IntentTTLMinutes, 0)
 	now := time.Now()
-	limit := policy.maxExchanges()
 	in := collab.NoteInput{
 		AuthorSession:   t.deps.SessionName(),
 		AuthorID:        t.deps.SessionID,
@@ -232,53 +273,48 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		ConversationID:  args.ConversationID,
 		OriginWorkspace: target.origin,
 		TargetWorkspace: target.peerWorkspace,
-		MaxExchanges:    limit,
 	}
-	// The exchange budget is the backstop against two agents answering each other
-	// forever, and the store applies it as part of the insert. Counting here first
-	// and then sending would let two simultaneous replies each pass a check the
-	// other then invalidates, so the runaway exchange the cap exists to stop is
-	// exactly the case that slips through it. Opening a new conversation is still
-	// always allowed — a fresh thread holds nothing.
 	conv, err := target.store.PutNote(ctx, in, now)
-	if errors.Is(err, collab.ErrConversationFull) {
-		return fmt.Sprintf(
-			"This conversation has reached its %d-message limit ([collab] max_exchanges), so the "+
-				"reply was NOT sent.\n\nThat limit exists to stop two agents talking to each other "+
-				"indefinitely without a human in the loop. Summarise the exchange and what you "+
-				"still need for your human rather than opening a fresh thread to continue it.",
-			limit), nil
-	}
 	if err != nil {
 		return "", fmt.Errorf("leave_note: %w", err)
 	}
 	// Wake the recipient's fast path. Best-effort and in-process: a missed bump
 	// costs delivery latency (the next periodic check still finds the row), never
-	// the message.
+	// the note.
 	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
-	return formatNoteResult(body, args.To, conv, ttl, redacted, target), nil
+	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget()), nil
 }
 
-// replyDeliveryLine names BOTH delivery paths, because they are not
-// alternatives an agent can infer from one another. Waiting server-side is the
-// only way to hand your turn to a peer rather than poll, and it needs a tool
-// call the agent must be told about; the passive path needs no action at all and
-// is what actually fires for an agent that just carries on working. Naming only
-// the active one left an agent believing a reply required a call it might never
-// make.
+// replyDeliveryLine names both delivery paths: server-side waiting and passive
+// delivery on the next successful tool result.
 func replyDeliveryLine() string {
 	return "  To wait for a reply, call check_messages with a wait_seconds value; " +
 		"otherwise it is appended to the result of your next tool call.\n"
 }
 
-func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget) string {
+func formatNoteResult(
+	body, to, conv string,
+	ttl time.Duration,
+	redacted bool,
+	target noteTarget,
+	budget int,
+) string {
 	var sb strings.Builder
 	dest := "session " + to
 	if to == collab.AddresseeNext {
 		dest = "the next session to attach (delivered once)"
 	}
-	fmt.Fprintf(&sb, "Message sent to %s (advisory; delivered by polling only).\n", dest)
-	fmt.Fprintf(&sb, "  message:      %s\n", body)
+	window := noteBodyWindow(body, budget)
+	if window.delivered < window.total {
+		fmt.Fprintf(&sb, "Note delivered to %s: %d of %d bytes within the configured %d-byte "+
+			"budget — %d bytes were TRUNCATED and the recipient did not receive them.\n",
+			dest, window.delivered, window.total, budget, window.total-window.delivered)
+		fmt.Fprintf(&sb, "  remedy:       send the remainder in a follow-up quoting conversation_id %s; "+
+			"resume the original UTF-8 body at byte offset %d. For longer content, write a file "+
+			"and send its path.\n", conv, window.delivered)
+	} else {
+		fmt.Fprintf(&sb, "Note delivered to %s: %d of %d budget bytes.\n", dest, window.delivered, budget)
+	}
 	fmt.Fprintf(&sb, "  conversation: %s  — quote this as conversation_id to stay in the thread\n", conv)
 	fmt.Fprintf(&sb, "  expires:      in %s\n", humaniseTTL(ttl))
 	if redacted {
@@ -290,7 +326,7 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 	}
 	if target.peerUnknown {
 		fmt.Fprintf(&sb, "  unplaced:       no session named %q is connected, and no conversation places it. "+
-			"The message was filed in THIS workspace's mailbox, so only a session called %q "+
+			"The note was filed in THIS workspace's mailbox, so only a session called %q "+
 			"attaching HERE will read it. If you meant an agent in another project, wait for "+
 			"it to attach and send again.\n", to, to)
 	}
