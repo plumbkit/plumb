@@ -39,6 +39,12 @@ var defaults = Config{
 		AllowPush:         false,
 		ProtectedBranches: []string{"main", "master"},
 		CommitTrailer:     false,
+		// Ten minutes, not the two this used to be: the bound has to cover a
+		// pre-commit hook that queues behind another agent's golangci-lint on the
+		// shared cache, which is the normal case on a multi-agent machine and
+		// routinely runs past two minutes. It is still a bound — a child that is
+		// genuinely wedged cannot hold the repository lock forever.
+		WriteTimeout: Duration{10 * time.Minute},
 	},
 	Quality: QualityConfig{
 		Enabled:            false,
