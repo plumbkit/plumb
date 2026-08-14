@@ -172,6 +172,24 @@ var CallRules = []CallRule{
 			"internal/tools.Execute":          "rename_file: a user-facing move of a real file, not a staged write",
 		},
 	},
+	{
+		// Added for issue #290. The canonical* PrimitiveRule above matches
+		// declarations by NAME, which is how lockPathKey — a sixth canonicaliser
+		// that disagreed with paths.Canonical on exactly the case the write lock
+		// exists for (a not-yet-created path under a symlinked parent) — sailed
+		// past the #273 sweep. A CallRule is the net under the name check:
+		// re-implementing "resolve this path" without calling it canonical
+		// cannot avoid calling the stdlib function that does the resolving.
+		Call: "filepath.EvalSymlinks",
+		Why:  "symlink resolution belongs to internal/paths. paths.Canonical is the tree's one \"same place?\" answer, and it covers precisely the case a bare call gets wrong: it resolves a NOT-YET-EXISTING path via its nearest live ancestor, while a bare EvalSymlinks leaves it unresolved, so two spellings of one place disagree the moment creation is involved (issue #290's lockPathKey). Canonical also degrades rather than failing, which is what most callers want; a caller that needs resolution to FAIL instead of degrade is the exception, and says why below",
+		Allowed: map[string]string{
+			"internal/paths.Canonical":                     "the shared implementation itself",
+			"internal/paths.canonicalMissing":              "Canonical's not-yet-existing-path branch, walking the ancestor chain and retrying at each level",
+			"internal/tools/txlog.logDirIsTheRealTxLogDir": "fail-closed identity gate of the #248 txlog arbitrary-write fix: an unresolvable workspace or log directory must return false, never compare cleaned spellings — Canonical's degrade-to-Clean is fail-open, the opposite of what this gate owes",
+			"internal/tools/txlog.replayTarget":            "fail-closed resolution of the #248 replay destination: WAL replay must REFUSE an unresolvable target rather than replay to a Cleaned spelling the log never recorded",
+			"internal/topology.symlinkEscapesWorkspace":    "an unresolvable link target must count as ESCAPING (fail closed) — Canonical's degrade would mint an inside-looking spelling for a link whose target cannot be read",
+		},
+	},
 }
 
 // DelegationRule pins a resource named by a string literal to a single

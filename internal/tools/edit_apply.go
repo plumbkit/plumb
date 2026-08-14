@@ -130,8 +130,8 @@ func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextE
 }
 
 // lockPaths locks every distinct path and returns the unlock funcs. Paths are
-// deduplicated and ordered by their canonical lock key (lockPathKey — abs,
-// symlink-resolved), not their raw spelling: two spellings of the same file
+// deduplicated and ordered by their canonical lock key (lockPathKey —
+// paths.Canonical), not their raw spelling: two spellings of the same file
 // (e.g. /tmp/x vs /private/tmp/x on macOS) map to one non-reentrant mutex, so
 // a raw-string dedup would self-deadlock on the second acquisition, and
 // canonical ordering keeps the acquisition order consistent across callers

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // wsFn returns a WorkspaceFn that always resolves to root.
@@ -193,6 +196,74 @@ func TestRenameFileSamePathAfterResolution(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "same path") {
 		t.Fatalf("expected same-path rejection after resolution, got %v", err)
+	}
+}
+
+// TestRenameFileTwoSpellingsOfOneFileRefused is the deadlock regression: from
+// and to are two spellings of ONE file (a symlinked parent). With the
+// same-place check comparing raw strings and the lock keyed canonically, the
+// call took one non-reentrant mutex twice and blocked forever — no
+// concurrency needed. The timeout turns a regression into a failure instead
+// of a hung suite.
+func TestRenameFileTwoSpellingsOfOneFileRefused(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(realDir, "f.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deps := WriteDeps{Boundary: testBoundaryGuard(dir), WorkspaceFn: wsFn(dir)}
+	raw := mustBoundaryJSON(t, map[string]string{
+		"from": filepath.Join(dir, "link", "f.txt"),
+		"to":   f,
+	})
+	done := make(chan error, 1)
+	go func() { _, err := NewRenameFile(deps).Execute(context.Background(), raw); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "same path") {
+			t.Fatalf("want a same-path refusal for two spellings of one file, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rename_file deadlocked on two spellings of one file — it took one non-reentrant mutex twice")
+	}
+}
+
+// TestCopyFileTwoSpellingsOfOneFileRefused is the copy_file half of the same
+// regression — see TestRenameFileTwoSpellingsOfOneFileRefused.
+func TestCopyFileTwoSpellingsOfOneFileRefused(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(realDir, "f.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deps := WriteDeps{Boundary: testBoundaryGuard(dir), WorkspaceFn: wsFn(dir)}
+	raw := mustBoundaryJSON(t, map[string]string{
+		"from": filepath.Join(dir, "link", "f.txt"),
+		"to":   f,
+	})
+	done := make(chan error, 1)
+	go func() { _, err := NewCopyFile(deps).Execute(context.Background(), raw); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "same path") {
+			t.Fatalf("want a same-path refusal for two spellings of one file, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("copy_file deadlocked on two spellings of one file — it took one non-reentrant mutex twice")
 	}
 }
 

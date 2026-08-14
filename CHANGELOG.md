@@ -54,6 +54,48 @@
   timeout — auto-remediation would degrade into silence while slowing every peer
   down. The replacement finding names the command instead.
 
+- **Two spellings of one not-yet-created file now take the same write lock.**
+  Every plumb write serialises on a per-path mutex keyed by `lockPathKey` — and
+  that key was a sixth path canonicaliser, disagreeing with `paths.Canonical` on
+  exactly the case the lock exists for. It resolved paths with a bare
+  `filepath.EvalSymlinks`, which cannot resolve a path that does not exist yet
+  and had no missing-ancestor walk, so `<base>/link/new.txt` and
+  `<base>/real/new.txt` (`link -> real`, `new.txt` about to be created) took two
+  different keys — two concurrent writers of one file holding two different
+  mutexes, serialising nothing. The same key also feeds the concurrent-change
+  write tracker, the undo store and edit_file's lock-ordering dedup, so the
+  divergence could consult the wrong record there too (issue #290).
+
+  `lockPathKey` now routes through `paths.Canonical`, which resolves a
+  not-yet-existing path via its nearest live ancestor, and the regression test
+  asserts the two spellings take one LOCK (a second acquisition blocks) rather
+  than merely one string — an equality-only assertion would pass for any
+  implementation that agrees with itself. The fix also stops anchoring relative
+  paths against the daemon's working directory: callers anchor at the workspace
+  before the boundary check, and the daemon's cwd belongs to whichever client
+  spawned the singleton (issue #181).
+
+  The key unification surfaced a deadlock it had been hiding. copy_file,
+  rename_file and transaction_apply acquired their path locks sorted by RAW
+  spelling and deduplicated by raw equality — fine while two spellings of one
+  file took two keys, but with the keys unified a single call naming one file
+  by two spellings would take one non-reentrant mutex twice and block
+  forever, and two concurrent calls could acquire one key set in opposite
+  orders. All three now refuse or deduplicate by canonical identity and lock
+  in canonical key order; regression tests pin each shape under a timeout so
+  a recurrence fails instead of hanging.
+
+  Shipping with the rule that stops a seventh canonicaliser. #285's
+  PrimitiveRule matches declarations NAMED `canonical*` — which is how
+  `lockPathKey` sailed past the #273 sweep — so a CallRule now pins
+  `filepath.EvalSymlinks` to internal/paths. The sweep it prompted folded
+  `internal/cli.resolvePath` into `paths.Canonical`,
+  `internal/topology.symlinkEscapesWorkspace` into `paths.WorkspaceRel`, and
+  `internal/tools.safeWrite` onto `paths.Canonical` outright (its
+  Lstat+EvalSymlinks pair was probed to behave identically under delegation).
+  txlog's fail-closed #248 gates stay allowlisted, each with the reason it
+  must fail rather than degrade.
+
 ## 0.16.6 (2026-08-14)
 
 ### Security

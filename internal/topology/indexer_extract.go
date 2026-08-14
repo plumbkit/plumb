@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // This file holds the indexer's per-file path: turning one changed file into
@@ -75,6 +75,14 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 // connection's multi-root path policy, and Intelligence may not import
 // Application. An unresolvable link is treated as escaping — it has no readable
 // target either way, so failing closed costs nothing.
+//
+// The target's inside/outside verdict delegates to paths.WorkspaceRel, which
+// canonicalises both sides when the raw spellings disagree — the macOS
+// /tmp → /private/tmp alias of the workspace root. The workspace root exists
+// by construction here (the indexer walks it), so Canonical resolves it
+// exactly as the hand-rolled EvalSymlinks did. The TARGET side stays a direct
+// EvalSymlinks: an unresolvable target must fail closed (escape), and
+// Canonical's degrade-to-Clean would instead invent an inside-looking spelling.
 func symlinkEscapesWorkspace(workspace, absPath string) bool {
 	fi, err := os.Lstat(absPath)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
@@ -84,15 +92,8 @@ func symlinkEscapesWorkspace(workspace, absPath string) bool {
 	if err != nil {
 		return true
 	}
-	root, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		root = filepath.Clean(workspace)
-	}
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return true
-	}
-	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	_, inside := paths.WorkspaceRel(workspace, target)
+	return !inside
 }
 
 // isStale returns true when either the mtime or the content hash differs from

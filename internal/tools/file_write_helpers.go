@@ -166,8 +166,9 @@ func strictModeEnabled() bool {
 }
 
 // lockPath returns a release function that unlocks the path. The lock key is
-// canonicalised through symlinks when possible so link paths and their real
-// targets serialise through the same mutex.
+// canonicalised through paths.Canonical, so link paths and their real targets
+// serialise through the same mutex — including for files that do not exist
+// yet, which is the case the lock exists for (see lockPathKey).
 //
 // The entry's lastUsedNs is stamped on every call (before blocking on Lock)
 // and again when the caller releases, so the LRU sweep never evicts an entry
@@ -189,15 +190,25 @@ func lockPath(path string) func() {
 	}
 }
 
+// lockPathKey is the key every per-path bookkeeping agrees on: the write lock
+// (pathLocks), the concurrent-change write tracker, the undo store, and
+// edit_apply's lock-ordering dedup. It routes through paths.Canonical — the
+// tree's one "same place?" answer (issue #273) — rather than open-coding a
+// resolution. Two properties matter:
+//
+//   - A not-yet-existing path resolves by its nearest LIVE ancestor (the
+//     missing-ancestor walk Canonical adds on top of EvalSymlinks). The
+//     creation case is exactly where a path does not exist yet, so two
+//     writers naming one file about to be created under a symlinked parent
+//     by two different spellings take ONE mutex, not two.
+//   - A relative path is cleaned, never anchored to the daemon's working
+//     directory. Callers anchor relative arguments at the WORKSPACE before
+//     the boundary check (resolvePath / WriteDeps.resolvePath), and the
+//     daemon's cwd belongs to whichever client happened to spawn the
+//     singleton (issue #181) — anchoring here would be a second, silent
+//     answer to a question the boundary already decided.
 func lockPathKey(path string) string {
-	path = paths.URIToPath(path)
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	return filepath.Clean(path)
+	return paths.Canonical(paths.URIToPath(path))
 }
 
 // writeResult is returned by safeWrite and carries metadata about the write
@@ -221,22 +232,24 @@ type writeResult struct {
 //
 // If path is a symlink, the link is resolved and the write goes to the target
 // of the link. This preserves the link rather than replacing it with a regular
-// file (which os.Rename would otherwise do).
+// file (which os.Rename would otherwise do). A link that resolves nowhere has
+// no target to write through: it keeps its spelling and the rename replaces it,
+// exactly as before the resolution was delegated.
 //
 // perm is the file mode to use if the target does not yet exist. If the target
 // already exists, its mode is preserved and perm is ignored.
 func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) {
 	var res writeResult
 
-	// If path is a symlink, resolve to the real target so we write through the
-	// link instead of replacing it. os.Lstat does not follow the link; we use
-	// it to detect the symlink, then resolve with EvalSymlinks.
-	if linfo, err := os.Lstat(path); err == nil && linfo.Mode()&os.ModeSymlink != 0 {
-		resolved, rerr := filepath.EvalSymlinks(path)
-		if rerr == nil {
-			path = resolved
-		}
-	}
+	// Write THROUGH a symlinked target rather than replacing the link. The
+	// resolution delegates to paths.Canonical — the tree's one "same place?"
+	// answer — which also matches lockPathKey, so the write lands where the
+	// write lock was taken. A not-yet-existing file under an aliased ancestor
+	// resolves that ancestor (the spelling changes; the on-disk result is what
+	// the kernel would have created anyway). A broken link degrades to its
+	// cleaned spelling and the rename replaces it, exactly as the old
+	// Lstat+EvalSymlinks pair did.
+	path = paths.Canonical(path)
 
 	// Snapshot the mtime before we touch anything.
 	if info, err := os.Stat(path); err == nil {
