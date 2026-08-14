@@ -12,7 +12,7 @@
 
 **IDE intelligence for agents — guardrails for unattended work, coordination for fleets.**
 
-Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. And because every agent on the machine shares that one daemon, plumb is also the coordination layer between them: peers see each other's writes, message each other, and hand off work instead of duplicating it. A single binary; nothing else to install.
+Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. And because every agent you run shares that one daemon, plumb is also the coordination layer between them: peers see the write operations others ran, message each other, and hand off work instead of duplicating it. A single binary; nothing else to install.
 
 ---
 
@@ -34,9 +34,9 @@ See it run: [`docs/demos/`](docs/demos/) — `two-agents-one-file.sh` (a stale w
 ![daemon-respawn.sh: the daemon is killed mid-session and the agent's next edit still succeeds](docs/assets/daemon-respawn.gif)
 
 ### 2. Multi-agent coordination
-One daemon serves every agent on the machine — which makes it the natural place for agents to *see and talk to* each other, not merely avoid each other's writes. Locks stop two agents corrupting a file; coordination stops them duplicating a task, rebasing onto a function signature a peer is mid-rewrite of, or shipping a change a peer's in-flight work is about to invalidate.
+One daemon serves every agent you run — which makes it the natural place for agents to *see and talk to* each other, not merely avoid each other's writes. Locks stop two agents corrupting a file; coordination stops them duplicating a task, rebasing onto a function signature a peer is mid-rewrite of, or shipping a change a peer's in-flight work is about to invalidate.
 
-- **Peer awareness** (on by default) — `workspace_sessions` names every active session and what it *actually wrote*, from writes the daemon itself observed. Facts, not another agent's say-so: an agent about to start a task can see that a peer already has it.
+- **Peer awareness** (on by default) — `workspace_sessions` names every active session and the write operations it ran, as the daemon recorded them. Recorded activity, not another agent's say-so: an agent about to start a task can see that a peer is already in those files. (It is a record of *calls*, so a refused write still appears — treat it as "a peer touched this", not "this landed".)
 - **An agent-to-agent mailbox** (on by default, same workspace) — `leave_note` / `check_messages` give sessions a threaded channel: hand a change to the peer already rewriting those files, or ask a peer to *measure* a behaviour instead of assuming it. Messages ride on ordinary tool results, so a working agent receives them without polling.
 - **Advisory intents** (opt-in: `[collab] intents`) — `share_intent` declares what an agent is working on; a peer whose write touches a claimed path gets a hint at the moment of the would-be collision. Intents are deliberately labelled as unverified claims, kept distinct from the observed-write facts, and never block anything.
 - **Durable findings** (opt-in: `[collab] knowledge_handoff`) — `share_findings` turns what an agent just learned into a searchable, secret-scrubbed project memory immediately, so the knowledge outlives the session that produced it.
