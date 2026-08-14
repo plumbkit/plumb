@@ -65,6 +65,7 @@ const (
 	skGitDestructive
 	skGitPush
 	skGitCommitTrailer
+	skGitWriteTimeout
 	skCacheTTL
 	skCacheMaxSize
 	skLSPTimeout
@@ -205,13 +206,14 @@ type settingItem struct {
 }
 
 var (
-	logLevelOptions     = []string{"debug", "info", "warn", "error"}
-	logFormatOptions    = []string{"text", "json"}
-	cacheTTLOptions     = []string{"1m", "5m", "10m", "30m", "1h"}
-	lspTimeoutOptions   = []string{"0s", "10s", "30s", "1m", "2m"}
-	xcodeTimeoutOptions = []string{"30s", "1m", "2m", "5m", "10m"}
-	pathStyleOptions    = []string{"compact", "truncate-middle", "full"}
-	qualityModeOptions  = []string{"background", "sync"}
+	logLevelOptions        = []string{"debug", "info", "warn", "error"}
+	logFormatOptions       = []string{"text", "json"}
+	cacheTTLOptions        = []string{"1m", "5m", "10m", "30m", "1h"}
+	lspTimeoutOptions      = []string{"0s", "10s", "30s", "1m", "2m"}
+	xcodeTimeoutOptions    = []string{"30s", "1m", "2m", "5m", "10m"}
+	gitWriteTimeoutOptions = []string{"1m", "2m", "5m", "10m", "20m"}
+	pathStyleOptions       = []string{"compact", "truncate-middle", "full"}
+	qualityModeOptions     = []string{"background", "sync"}
 )
 
 // durValue formats a duration as its matching preset string when one exists,
@@ -294,6 +296,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Git", label: "Git allow push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush)},
 		{group: "Git", label: "Git commit trailer", kind: settingToggle, key: skGitCommitTrailer, value: onOff(cfg.Git.CommitTrailer)},
 		{group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches},
+		{group: "Git", label: "Write timeout", kind: settingCycle, key: skGitWriteTimeout, value: durValue(cfg.Git.WriteTimeout, gitWriteTimeoutOptions), options: gitWriteTimeoutOptions},
 
 		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},
 		{group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes)},
