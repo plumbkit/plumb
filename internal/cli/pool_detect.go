@@ -54,9 +54,10 @@ const LanguageNone = "none"
 // ~/go.mod must not turn all of $HOME into a workspace, and nothing above the
 // home directory can legitimately be a project root either — so reaching
 // $HOME without a match is an error, not a rung. The one thing honoured AT
-// $HOME is a deliberate `.plumb/` marker (one carrying a context.md or
-// config.toml — see deliberatePlumbMarker): a user who ran `plumb init` in
-// their home directory has declared that intent. A bare `.plumb/` there is
+// $HOME is a deliberate `.plumb/` marker (one carrying a context.md — see
+// deliberatePlumbMarker, which does NOT accept config.toml, because plumb
+// writes that itself from three places): a user who ran `plumb init` in their
+// home directory has declared that intent. A bare `.plumb/` there is
 // treated as residue (the auto_attach_persist path of an earlier build could
 // materialise one) and ignored with a logged remediation, because honouring it
 // would silently re-open the whole-home workspace on every future session,

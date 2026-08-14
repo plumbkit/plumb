@@ -164,8 +164,19 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	}
 	// A `workspace` arg is a deliberate pin (session_start); an incidental
 	// file_path/path/uri is not. Only the former persists as the sticky target.
+	//
+	// The seed must BE the workspace argument, not merely accompany one.
+	// seedPathFromArgs prefers uri/file_path/path/root OVER workspace, and tools
+	// take both — relevant_memories and write_memory each accept a path AND a
+	// workspace — so `{path: X, workspace: Y}` seeded X while presence alone
+	// stamped it a deliberate declaration of X. That pinned a directory the
+	// caller never named, made it STICKY, and persisted it, so the caller's real
+	// session_start was then refused by the issue-#182 sticky guard and had to be
+	// retried with force. Round 3 fixed one of this boolean's two consumers and
+	// left this one; both now ask the same question.
+	seedPath := seedPathFromArgs(args)
 	origin := sessionstate.PinSourceUnknown
-	explicit := workspaceArgPresent(args)
+	explicit := seedIsWorkspaceArg(args, seedPath)
 	if explicit {
 		origin = sessionstate.PinSourceSessionStart
 	}
@@ -187,7 +198,6 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 			return
 		}
 	}
-	seedPath := seedPathFromArgs(args)
 	if seedPath == "" {
 		return
 	}
@@ -222,9 +232,9 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		// every later reconnect, in the default configuration. Found by review, and
 		// it is the same class this guard exists to close, one level up: the
 		// declaration has to be about the directory being named.
-		synthRoot := s.pool.SynthesiseRoot(startDir, seedIsWorkspaceArg(args, seedPath))
+		synthRoot := s.pool.SynthesiseRoot(startDir, explicit)
 		if synthRoot == "" {
-			s.log().Warn("daemon: refusing to synthesise the home directory as a workspace from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
+			s.log().Warn("daemon: refusing to synthesise a workspace at or above the home directory from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
 			return
 		}
 		s.attachSynthetic(toolCtx, synthRoot, origin, pinTriggerLive)

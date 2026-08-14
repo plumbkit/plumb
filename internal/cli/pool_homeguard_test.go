@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/paths"
+
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
@@ -187,11 +189,54 @@ func TestDetect_DeliberatePlumbAtHomeHonoured(t *testing.T) {
 	}
 }
 
-// TestSynthesiseRoot_RefusesADirectoryContainingHome closes the rung above the
-// identity guard. Refusing $HOME while accepting /Users (or /home, or /) admits
-// a workspace that CONTAINS the home directory and every credential in it —
-// wider than the boundary the guard exists to keep, and reachable with no
-// deliberate declaration through a client reporting such a folder in its roots.
+// TestSynthesiseRoot_RefusesAWideSeedForEveryCaller is round 4's finding, and
+// the reason the refusal is now a property of the RETURN rather than a check at
+// one caller.
+//
+// Round 3 put the containment refusal in repinWorkspaceFrom. Review then showed
+// the other two consumers of SynthesiseRoot still pinned the wide root: the
+// first-tool-call seeding path — find_files and search_in_files take a
+// DIRECTORY as `path`, so a call naming /Users seeds it directly — and
+// rehydratePin replaying a roots-origin row, which runs unconditionally in the
+// default configuration. Stopping the WALK could not fix either, because the
+// walk's fallback returns the seed, and here the seed IS the offending
+// directory.
+//
+// Asserting on SynthesiseRoot directly is deliberate: it is the one place all
+// three routes pass through, so this cannot be satisfied by fixing a fourth
+// caller and leaving a fifth.
+func TestSynthesiseRoot_RefusesAWideSeedForEveryCaller(t *testing.T) {
+	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	mustMkdir(t, filepath.Join(base, ".git")) // a marker that would otherwise win
+
+	pool := &workspacePool{}
+	for _, seed := range []string{base, home, "/"} {
+		if got := pool.SynthesiseRoot(seed, false); got != "" {
+			t.Errorf("SynthesiseRoot(%q, explicit=false) = %q, want \"\" — a seed at or "+
+				"above the home directory must be refused, not resolved", seed, got)
+		}
+	}
+
+	// Control 1: issue #182 — an explicitly named wide root still resolves.
+	if got := pool.SynthesiseRoot(base, true); got == "" {
+		t.Errorf("an EXPLICIT seed of %q was refused; #182 says an explicit pin always succeeds", base)
+	}
+	// Control 2: the ordinary case is untouched — a markerless dir under the home
+	// directory still synthesises to itself, which is where most projects live.
+	seed := filepath.Join(home, "scratch", "markerless")
+	mustMkdir(t, seed)
+	if got, want := pool.SynthesiseRoot(seed, false), paths.Canonical(seed); got != want {
+		t.Errorf("SynthesiseRoot(%q) = %q, want %q — the refusal must not break ordinary seeds", seed, got, want)
+	}
+}
+
+// TestRepin_NonExplicitRootContainingHomeIsRefused pins the refusal at the pin
+// itself, which reports the problem at the call that caused it rather than at
+// the next path-bearing tool.
 func TestRepin_NonExplicitRootContainingHomeIsRefused(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
