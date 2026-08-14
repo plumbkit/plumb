@@ -108,7 +108,14 @@ func (t *SessionStart) peerAreas(ws string) map[string][]string {
 		return nil
 	}
 	writes, err := db.RecentWritesByWorkspace(ws, writeToolNames, peerDigestWriteLimit)
-	if err != nil || len(writes) == 0 {
+	if err != nil {
+		return nil
+	}
+	// The digest presents its areas as observed writes (facts), so only calls
+	// that were actual writes AND landed may contribute — a refused edit, a
+	// read-tier git call, or a dry-run preview modified nothing.
+	writes = LandedWrites(writes)
+	if len(writes) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wsSessionsTimeout)

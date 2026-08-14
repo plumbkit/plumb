@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // TestApplyProjectConfig_SnapshotsCollab asserts the [collab] block is captured
@@ -111,6 +113,57 @@ func TestPeerHint_NoPathArg(t *testing.T) {
 	s := seedPeerWrite(t, ws, config.CollabConfig{PeerAwareness: true, HintBudgetBytes: 512}, 30, 3*time.Minute)
 	if got := s.peerHint([]byte(`{"query":"x"}`), ws); got != "" {
 		t.Errorf("no path arg must yield no hint, got %q", got)
+	}
+}
+
+// TestPeerWriteCache_RefreshOnlyLandedWrites drives refresh through the real
+// session registry and stats DB: the hint built from this cache claims
+// "session X edited this file" as an observed fact, so a refused edit and a
+// read-tier git call must not populate the cache — only the write that landed.
+func TestPeerWriteCache_RefreshOnlyLandedWrites(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+
+	reg, err := session.Register(session.Info{ID: "peer-lw", Name: "peer-lw", Folder: ws})
+	if err != nil {
+		t.Fatalf("register peer: %v", err)
+	}
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+	now := time.Now()
+	calls := []stats.Call{
+		{
+			SessionID: reg.ID, Workspace: ws, Tool: "edit_file", CalledAt: now,
+			Success: false, InputJSON: `{"file_path":"` + filepath.Join(ws, "refused.go") + `"}`,
+		},
+		{
+			SessionID: reg.ID, Workspace: ws, Tool: "git", CalledAt: now,
+			Success: true, InputJSON: `{"subcommand":"status"}`,
+		},
+		{
+			SessionID: reg.ID, Workspace: ws, Tool: "edit_file", CalledAt: now,
+			Success: true, InputJSON: `{"file_path":"` + filepath.Join(ws, "landed.go") + `"}`,
+		},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	c := &peerWriteCache{}
+	c.mu.Lock()
+	c.refresh(ws, "self", now)
+	c.mu.Unlock()
+
+	if _, ok := c.byAbsPath[filepath.Join(ws, "refused.go")]; ok {
+		t.Errorf("a refused write populated the peer-write cache: %v", c.byAbsPath)
+	}
+	if _, ok := c.byAbsPath[filepath.Join(ws, "landed.go")]; !ok {
+		t.Errorf("the landed write is missing from the peer-write cache: %v", c.byAbsPath)
 	}
 }
 

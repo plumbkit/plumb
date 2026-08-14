@@ -370,10 +370,18 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 	return out, rows.Err()
 }
 
-// RecentWritesByWorkspace returns the most recent mutating tool calls on a
-// workspace, newest-first, restricted to the given tool names. It backs the
-// workspace_sessions "recent writes" feed: an agent uses it to spot files a
-// co-worker session touched recently and re-read them before editing.
+// RecentWritesByWorkspace returns the most recent CALLS to the given write
+// tools on a workspace, newest-first. It backs the workspace_sessions "recent
+// writes" feed: an agent uses it to spot files a co-worker session touched
+// recently and re-read them before editing.
+//
+// Calls, not writes: rows come back regardless of success, and a matched tool
+// name does not mean the call mutated anything (`git` spans read subcommands;
+// several tools default to dry-run previews). Git subcommand semantics belong
+// to the tools package, so per-row refinement lives there — every consumer
+// runs the result through tools' isRecordedWrite-based filters (the feed marks
+// failures; tools.LandedWrites keeps only applied writes) rather than this
+// query guessing at tier or dry-run defaults in SQL.
 //
 // Only the small columns needed for the feed are selected (input_json carries
 // the file path); output_text is deliberately omitted EXCEPT for git rows,

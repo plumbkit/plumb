@@ -87,7 +87,10 @@ func (c *peerWriteCache) refresh(ws, selfID string, now time.Time) {
 	if err != nil {
 		return
 	}
-	for _, w := range writes {
+	// The hint claims "session X edited this file" as an observed fact, so only
+	// calls that were actual writes AND landed may fire it — a refused edit, a
+	// read-tier git call, or a dry-run preview modified nothing.
+	for _, w := range tools.LandedWrites(writes) {
 		name, ok := activePeers[w.SessionID]
 		if !ok {
 			continue // not an active peer (self, or a disconnected session)

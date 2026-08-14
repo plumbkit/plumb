@@ -21,7 +21,11 @@ import (
 //
 // The list deliberately excludes read-only tools (read_file, workspace_symbols, …)
 // and meta-tools (rename_session, session_start, daemon_info) — only ops that
-// change on-disk content are interesting for conflict-awareness.
+// change on-disk content are interesting for conflict-awareness. Two of the
+// listed tools still record read-only CALLS — `git` spans read subcommands and
+// the dry-run-defaulting tools record previews — so raw query results are
+// refined per-row by isRecordedWrite (workspace_sessions_feed.go) before any
+// consumer presents them as writes.
 var writeToolNames = []string{
 	"write_file",
 	"edit_file",
@@ -35,6 +39,7 @@ var writeToolNames = []string{
 	"insert_before_symbol",
 	"insert_after_symbol",
 	"safe_delete_symbol",
+	"move_symbol",
 	"git",
 }
 
@@ -129,9 +134,14 @@ func (*WorkspaceSessions) Description() string {
 		"true means you are the only active session — your view of the workspace is " +
 		"authoritative. Multiple entries mean concurrent agents are working here; " +
 		"treat any file a peer recently touched as potentially changed.\n\n" +
-		"**recent_writes** — the last N mutating operations (write_file, edit_file, " +
+		"**recent_writes** — the last N write operations (write_file, edit_file, " +
 		"rename_file, git commit, …) by all sessions on this workspace. " +
 		"The file path (when available), session name, operation, and age are shown. " +
+		"Only operations that could modify the workspace are listed: read-only git " +
+		"subcommands (status, log, diff, …) and dry-run previews never appear. A " +
+		"call that failed or was refused is kept but marked " +
+		"'[failed — no change applied]' — evidence the peer is working in that file " +
+		"even though nothing landed on disk. " +
 		"A successful git commit is attributed in full: its line carries the session " +
 		"name, the commit's short SHA and subject, and the repository, so a peer's " +
 		"commit is traceable to the session that authored it. " +
@@ -236,10 +246,15 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 	}
 
 	// ── 2. Recent writes from the stats DB (read-only connection) ──────────
+	// Over-fetch, then refine: the query matches CALLS to the write tools, and
+	// feedRecentWrites drops the rows that were not writes (read-tier git
+	// subcommands, dry-run previews), so extra rows are needed for the feed to
+	// still fill recentLimit entries after filtering.
 	var writes []stats.RecentCall
 	if db, dbErr := stats.SharedReadOnly(); dbErr == nil && db != nil {
-		writes, _ = db.RecentWritesByWorkspace(workspace, writeToolNames, recentLimit)
+		writes, _ = db.RecentWritesByWorkspace(workspace, writeToolNames, feedFetchLimit(recentLimit))
 	}
+	writes = feedRecentWrites(writes, recentLimit)
 
 	annotations := t.annotateWrites(workspace, writes)
 	base := formatWorkspaceSessions(workspace, t.selfSessID, peers, writes, annotations, now)
@@ -446,7 +461,7 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 		}
 		file := fileFromInputJSON(w.InputJSON)
 		if file == "" {
-			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)\n", w.SessionName, w.Tool, age)
+			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", w.SessionName, w.Tool, age, feedOutcomeMarker(w))
 			continue
 		}
 		abs := file
@@ -464,6 +479,7 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 		if a := annotations[abs]; a != "" {
 			fmt.Fprintf(sb, "  [%s]", a)
 		}
+		sb.WriteString(feedOutcomeMarker(w))
 		sb.WriteString("\n")
 	}
 }
@@ -497,6 +513,7 @@ func sessionLSP(p session.Info) string {
 // It handles the common shapes used by write/edit/rename/delete tools:
 //   - {"file_path": "…"}    — write_file, edit_file, delete_file
 //   - {"from": "…"}         — rename_file, copy_file
+//   - {"source_uri": "…"}   — move_symbol
 //   - {"operations": [{"file_path": "…"}]}  — transaction_apply
 //
 // Returns "" when no path can be extracted (JSON malformed, wrong shape, or
@@ -509,7 +526,7 @@ func fileFromInputJSON(raw string) string {
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return ""
 	}
-	for _, key := range []string{"file_path", "from", "path"} {
+	for _, key := range []string{"file_path", "from", "path", "source_uri"} {
 		if s, ok := jsonStringField(m, key); ok {
 			return s
 		}

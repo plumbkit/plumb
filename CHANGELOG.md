@@ -542,6 +542,33 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
+- **The recent-writes feed now shows writes, not write-tool calls.** The
+  `workspace_sessions` feed — and the two surfaces built on the same query, the
+  `session_start` peer digest and the connection-side peer hint — presented any
+  call to a write tool as a peer write: a refused `edit_file` (dirty-guard,
+  strict-mode) was indistinguishable from one that landed, every `git status` /
+  `log` / `diff` appeared as a "recent write" (contradicting the write-tool
+  list's own doc comment), and a dry-run preview from the default-dry-run tools
+  (`find_replace`, `rename_symbol`, the symbol editors) counted as an edit. Raw
+  rows are now refined per-row in one place (`internal/tools/`
+  `workspace_sessions_feed.go`): git rows are classified with the git tool's own
+  tier classifier (subcommand + args from the recorded input, so `branch --list`
+  reads while `branch <name>` writes — the feed can never disagree with the
+  policy gate), previews without an explicit `dry_run: false` are dropped, and a
+  failed or refused call is **kept but marked** `[failed — no change applied]`
+  in the feed — a refused write is still evidence a peer is working in that
+  file — while the peer digest and peer hint, which claim observed edits as
+  facts, take only landed writes (`tools.LandedWrites`). Non-commit git writes
+  are now labelled with their subcommand (`git add`, `git push`); commit
+  attribution is unchanged. The feed's limit applies after filtering (the query
+  over-fetches, bounded), so dropped read-only rows no longer consume feed
+  slots — previously a burst of `git status` calls could push a peer's real
+  edits out of all three windows. `move_symbol` — a two-file mutation — joins
+  the write-tool set (it never appeared at all), and its `source_uri` is now
+  extracted as the entry's file path. Existing stats rows degrade sensibly:
+  `success` and the recorded input have been present since the first schema, so
+  old rows classify identically, and an unparseable row is treated as
+  not-a-write rather than presented as one.
 
 ## 0.16.6 (2026-08-14)
 

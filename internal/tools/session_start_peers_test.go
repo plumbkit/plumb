@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func TestPeerArea_NilStore(t *testing.T) {
@@ -38,6 +39,50 @@ func TestFormatPeerDigest(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("digest missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestPeerAreas_OnlyLandedWrites drives peerAreas through the real stats
+// query: the digest presents areas as observed writes (facts), so a refused
+// edit and a read-tier git call must contribute nothing — only the area of
+// the write that landed may appear.
+func TestPeerAreas_OnlyLandedWrites(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+	now := time.Now()
+	calls := []stats.Call{
+		{
+			SessionID: "p1", Workspace: ws, Tool: "edit_file", CalledAt: now,
+			Success: false, InputJSON: `{"file_path":"` + ws + `/refuseddir/a.go"}`,
+		},
+		{
+			SessionID: "p1", Workspace: ws, Tool: "git", CalledAt: now,
+			Success: true, InputJSON: `{"subcommand":"status"}`,
+		},
+		{
+			SessionID: "p1", Workspace: ws, Tool: "edit_file", CalledAt: now,
+			Success: true, InputJSON: `{"file_path":"` + ws + `/landeddir/b.go"}`,
+		},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	var st SessionStart
+	areas := st.peerAreas(ws)
+	got := strings.Join(areas["p1"], ", ")
+	if strings.Contains(got, "refuseddir") {
+		t.Errorf("a refused write contributed an 'observed write' area: %q", got)
+	}
+	if !strings.Contains(got, "landeddir") {
+		t.Errorf("the landed write's area is missing: %q", got)
 	}
 }
 

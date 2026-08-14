@@ -23,6 +23,7 @@ func TestFileFromInputJSON(t *testing.T) {
 		{"from (rename/copy)", `{"from":"/ws/a.go","to":"/ws/b.go"}`, "/ws/a.go"},
 		{"path alias", `{"path":"/ws/p.go"}`, "/ws/p.go"},
 		{"transaction first op", `{"operations":[{"file_path":"/ws/t1.go"},{"file_path":"/ws/t2.go"}]}`, "/ws/t1.go"},
+		{"move_symbol source_uri", `{"source_uri":"/ws/m.go","name_path":"F","destination_uri":"/ws/n.go"}`, "/ws/m.go"},
 		{"git (no path)", `{"subcommand":"commit","message":"x"}`, ""},
 		{"empty", ``, ""},
 		{"malformed", `{not json`, ""},
@@ -65,10 +66,14 @@ func TestFormatWorkspaceSessions_MultiplePeersAndWrites(t *testing.T) {
 		{ID: "peer-2", Name: "brave-lake", Folder: "/ws", ClientName: "claude-code", LastSeenAt: now.Add(-40 * time.Minute)},
 	}
 	writes := []stats.RecentCall{
-		{Tool: "edit_file", SessionName: "brave-lake", CalledAt: now.Add(-30 * time.Second), InputJSON: `{"file_path":"/ws/internal/pool.go"}`},
-		{Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-2 * time.Minute), InputJSON: `{"subcommand":"commit"}`},
+		{Tool: "edit_file", SessionName: "brave-lake", CalledAt: now.Add(-30 * time.Second), Success: true, InputJSON: `{"file_path":"/ws/internal/pool.go"}`},
+		{Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-2 * time.Minute), Success: true, InputJSON: `{"subcommand":"commit"}`},
 	}
 	out := formatWorkspaceSessions("/ws", "self-1", peers, writes, nil, now)
+
+	if strings.Contains(out, "no change applied") {
+		t.Errorf("successful writes must not carry the failure marker:\n%s", out)
+	}
 
 	if !strings.Contains(out, "active sessions: 2 (including you)") {
 		t.Errorf("expected a count of 2 active sessions:\n%s", out)
@@ -227,8 +232,22 @@ func TestFormatWorkspaceSessions_CommitAttribution(t *testing.T) {
 	if strings.Contains(out, "blocked") {
 		t.Errorf("a failed commit must not render an attribution line:\n%s", out)
 	}
-	if got := strings.Count(out, "git commit"); got != 2 {
-		t.Errorf("expected exactly 2 attributed commits (failed commit and add stay bare), got %d:\n%s", got, out)
+	if got := strings.Count(out, "[repo:"); got != 2 {
+		t.Errorf("expected exactly 2 attributed commits, got %d:\n%s", got, out)
+	}
+	// The failed commit stays in the feed — evidence of peer activity — but is
+	// labelled with its subcommand and marked as not applied.
+	failed := ""
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "git commit") && !strings.Contains(line, "[repo:") {
+			failed = line
+		}
+	}
+	if failed == "" || !strings.Contains(failed, "failed — no change applied") {
+		t.Errorf("the failed commit must render marked as not applied, got %q in:\n%s", failed, out)
+	}
+	if !strings.Contains(out, "git add") {
+		t.Errorf("a non-commit git write should be labelled with its subcommand:\n%s", out)
 	}
 }
 
