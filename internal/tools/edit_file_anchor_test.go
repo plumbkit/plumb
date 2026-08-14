@@ -263,3 +263,151 @@ func TestBuildAnchorEdit_SpanIsUnique(t *testing.T) {
 		t.Errorf("anchors should be re-attached around new_string, got: %q", edit.NewStr)
 	}
 }
+
+// Characterisation of the 2026-08 field report: a start_anchor quoted without
+// its trailing newline, plus a new_string without a leading one, joins the
+// anchor's line onto the replacement — the documented character-precise
+// contract, not a span-math defect. The edit must succeed exactly as specified
+// AND carry the boundary-newline advisory so the caller catches the join
+// without reading the diff.
+func TestEditFileAnchor_BoundaryNewlineConsumed_StartSeam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	content := "// ProjectPolicyStatusFor resolves the trust state of a workspace's\n" +
+		"// old second line.\n" +
+		"func ProjectPolicyStatusFor() {}\n"
+	_ = os.WriteFile(path, []byte(content), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "// ProjectPolicyStatusFor resolves the trust state of a workspace's",
+		"end_anchor":   "func ProjectPolicyStatusFor() {}",
+		"new_string":   "// capability-granting project config.",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The contract: the span between the anchors (including its boundary
+	// newlines) is replaced verbatim, so the lines join. Do NOT "fix" this by
+	// inserting newlines — that would corrupt legitimate mid-line edits.
+	want := "// ProjectPolicyStatusFor resolves the trust state of a workspace's" +
+		"// capability-granting project config." +
+		"func ProjectPolicyStatusFor() {}\n"
+	if got, _ := os.ReadFile(path); string(got) != want {
+		t.Errorf("character-precise contract changed:\n got: %q\nwant: %q", got, want)
+	}
+	if !strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("expected boundary-newline advisory note, got: %q", out)
+	}
+}
+
+// The end seam alone: new_string restores the leading newline but drops the
+// trailing one, so only the end_anchor's line is joined — the note still fires.
+func TestEditFileAnchor_BoundaryNewlineConsumed_EndSeam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("BEGIN\nold body\nEND\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "BEGIN",
+		"end_anchor":   "END",
+		"new_string":   "\nnew body",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "BEGIN\nnew bodyEND\n" {
+		t.Errorf("unexpected content: %q", got)
+	}
+	if !strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("expected boundary-newline advisory note, got: %q", out)
+	}
+}
+
+// Deleting the interior with an empty new_string collapses "BEGIN\n...\nEND"
+// to "BEGINEND" — both boundary newlines gone, so the advisory fires.
+func TestEditFileAnchor_BoundaryNewlineConsumed_EmptyNewString(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("BEGIN\nbody\nEND\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "BEGIN",
+		"end_anchor":   "END",
+		"new_string":   "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "BEGINEND\n" {
+		t.Errorf("unexpected content: %q", got)
+	}
+	if !strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("expected boundary-newline advisory note, got: %q", out)
+	}
+}
+
+// Mid-line spans have no boundary newline, so legitimate inline edits must
+// never trigger the advisory — the guard against false positives.
+func TestEditFileAnchor_NoJoinNote_MidLineEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("<a>middle</b>\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "<a>",
+		"end_anchor":   "</b>",
+		"new_string":   "replaced",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("mid-line edit must not trigger the join advisory, got: %q", out)
+	}
+}
+
+// Whole-line replacement with the newlines carried in the anchors — the
+// documented shape — must stay note-free.
+func TestEditFileAnchor_NoJoinNote_NewlinesPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("BEGIN\nold body\nEND\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "BEGIN\n",
+		"end_anchor":   "\nEND",
+		"new_string":   "new body",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "BEGIN\nnew body\nEND\n" {
+		t.Errorf("unexpected content: %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("newline-preserving edit must not trigger the join advisory, got: %q", out)
+	}
+}
+
+// Inserting text mid-line (empty interior between adjacent anchors) is a
+// legitimate join-free operation — no advisory.
+func TestEditFileAnchor_NoJoinNote_MidLineInsertion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("alpha()beta\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "alpha(",
+		"end_anchor":   ")beta",
+		"new_string":   "x, y",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "alpha(x, y)beta\n" {
+		t.Errorf("unexpected content: %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("mid-line insertion must not trigger the join advisory, got: %q", out)
+	}
+}

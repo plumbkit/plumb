@@ -65,7 +65,62 @@ func buildAnchorEdit(content string, a editFileArgs) (strEdit, string, error) {
 	if a.IncludeAnchors {
 		replacement = newStr
 	}
-	return strEdit{OldStr: fullSpan, NewStr: replacement}, anchorGutterNote(startStripped, endStripped), nil
+	note := joinNotes(
+		anchorGutterNote(startStripped, endStripped),
+		seamJoinNote(a, start, end, content[startIdx+len(start):endIdx], newStr),
+	)
+	return strEdit{OldStr: fullSpan, NewStr: replacement}, note, nil
+}
+
+// seamJoinNote warns when the replacement REMOVES a line break that existed at
+// an anchor seam, so the anchor's line and the replacement run together.
+//
+// This is not a defect being papered over — the contract is character-precise
+// and quoting an anchor without its trailing newline is a legitimate way to
+// rewrite the tail of a line. But the same call shape is also the easy mistake:
+// copy a comment line as the start_anchor, forget its newline, and the edit
+// silently produces `...workspace's// capability-granting...`. That happened in
+// the field, and the only thing that caught it was the caller reading the
+// returned diff.
+//
+// So it advises, and never refuses. The condition is deliberately narrow: it
+// fires only when the ORIGINAL text had a newline at the seam and the new text
+// does not. A genuine mid-line edit had no newline there to lose, so it cannot
+// trigger this — which is the property that makes the check safe to add at all.
+//
+// include_anchors replaces the whole inclusive span, so the seams are outside
+// what the caller asked to control and there is nothing to advise about.
+func seamJoinNote(a editFileArgs, start, end, interior, newStr string) string {
+	if a.IncludeAnchors {
+		return ""
+	}
+	var seams []string
+	if hadNL := strings.HasSuffix(start, "\n") || strings.HasPrefix(interior, "\n"); hadNL &&
+		(!strings.HasSuffix(start, "\n") && !strings.HasPrefix(newStr, "\n")) {
+		seams = append(seams, "start_anchor")
+	}
+	if hadNL := strings.HasPrefix(end, "\n") || strings.HasSuffix(interior, "\n"); hadNL &&
+		(!strings.HasPrefix(end, "\n") && !strings.HasSuffix(newStr, "\n")) {
+		seams = append(seams, "end_anchor")
+	}
+	if len(seams) == 0 {
+		return ""
+	}
+	return "note: this edit joined previously separate lines at the " + strings.Join(seams, " and ") +
+		" seam — the newline that was there is gone, because the replaced span included it and " +
+		"new_string does not restore it. Intentional for a mid-line rewrite; if not, add the " +
+		"newline to new_string (or to the anchor) and re-run. Check the diff above."
+}
+
+// joinNotes concatenates the non-empty advisory notes with a newline.
+func joinNotes(notes ...string) string {
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // resolveAnchor normalises an anchor against content and counts its

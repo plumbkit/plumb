@@ -153,6 +153,16 @@ func (*EditFile) Description() string {
 		"EXACTLY ONCE and end_anchor must follow start_anchor; include_anchors=false (default) keeps the " +
 		"anchors and rewrites only the text between them, include_anchors=true replaces the whole inclusive " +
 		"span. Ideal for rewriting a block whose interior changes but whose stable boundary lines do not. " +
+		"BIG MULTI-LINE REPLACEMENT? Prefer RANGE mode. old_string and the anchors must be reproduced " +
+		"character-for-character inside a JSON string, so every quote, backslash and tab in the code you " +
+		"are matching has to be escaped, and that cost grows with the size of the region — a large enough " +
+		"edit can fail to serialise before it ever reaches plumb. Range mode needs NO old_string and no " +
+		"anchors: read the file, take the 1-based line numbers from the gutter, and send only new_string. " +
+		"Same atomicity and locking, a fraction of the escaping. " +
+		"ANCHOR MODE IS CHARACTER-PRECISE: it replaces exactly the span between the anchors, so an anchor " +
+		"quoted WITHOUT its trailing newline joins its line onto new_string. That is deliberate (it is how " +
+		"you rewrite the tail of a line), but it is also the easy mistake — the result carries an advisory " +
+		"note when an edit removes a line break that was there, and the returned diff shows it. " +
 		"CRLF is tolerated; edits apply sequentially in memory then write atomically and crash-durably " +
 		"(temp file fsynced + rename + parent-dir fsync) under " +
 		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
