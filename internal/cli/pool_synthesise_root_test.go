@@ -202,6 +202,27 @@ func TestSynthesiseRoot_GitBelowHomeStillWins(t *testing.T) {
 	}
 }
 
+// TestSynthesiseRoot_FilesystemRootFallsBackToSeed pins the filesystem-root
+// fallback: a seed OUTSIDE every home directory with no .git anywhere above it
+// ascends to "/" and returns the seed itself. The walk's only other stop is
+// the home-directory identity check, which by construction never fires for
+// such a seed — deleting the parent==d early return leaves the walk with no
+// termination and turns this test into a hang, which is how the assertion is
+// held.
+func TestSynthesiseRoot_FilesystemRootFallsBackToSeed(t *testing.T) {
+	home := freshTempDir(t) // see the GOTMPDIR note above
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	// A second freshTempDir: outside the fake home, and under no .git, so the
+	// ascent genuinely reaches the filesystem root finding nothing.
+	seed := freshTempDir(t)
+
+	got := (&workspacePool{}).SynthesiseRoot(seed, false)
+	if want := paths.Canonical(seed); got != want {
+		t.Errorf("SynthesiseRoot(%q) = %q, want the seed itself %q — a markerless seed outside every home directory falls back to the seed at the filesystem root", seed, got, want)
+	}
+}
+
 // TestPathPolicy_AdmitsItsOwnRoot is the invariant the regression violated: a
 // session must never be refused access to the workspace it is pinned to. Tools
 // that take no path argument check the workspace string itself, so a root the

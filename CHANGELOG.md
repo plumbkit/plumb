@@ -95,6 +95,22 @@
   Lstat+EvalSymlinks pair was probed to behave identically under delegation).
   txlog's fail-closed #248 gates stay allowlisted, each with the reason it
   must fail rather than degrade.
+- **Three assertions that survived a green test suite are now held.** The
+  mutation sweep that closed #288 left three survivors — claims where the
+  assertion could be deleted with the whole internal/cli suite staying green.
+  Two are now pinned by tests that turn red when flipped: SynthesiseRoot's
+  filesystem-root fallback — the walk's only termination for a seed outside
+  every home directory, without which the ascent spins forever — and
+  resolveRootFolder's explicit=false, the flag that makes a client-reported
+  $HOME resolve to "" (a reported home directory is not a declaration) instead
+  of resolving to itself. The third was a comment claiming rehydrate's
+  re-synthesis from the RESOLVED root was load-bearing when the two values are
+  equal by construction (restoreRootIntact keeps a markerless root only if it
+  synthesises to itself); it now says so, and names the step that genuinely is
+  load-bearing. pool_synthesise.go's two stale comments claiming an
+  identity-only check was containment ("at or above", "or one that CONTAINS
+  it") are rewritten to describe the code that ships, naming the containment
+  gap issue #306.
 
 ## 0.16.6 (2026-08-14)
 
