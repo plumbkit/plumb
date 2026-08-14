@@ -362,6 +362,12 @@
   The lesson is the pattern, not the count: every surface that derives its own
   mailbox address is a fresh chance to skip the gate, so the guard belongs at
   each of them rather than in one place they are all assumed to route through.
+
+- **Bump `nanoid` to 3.3.18** — GHSA-2v37-7h3g-55p8 (high: a custom generator
+  can loop indefinitely when size is zero), reachable via vite → postcss.
+  Build-time only: the dependency is `dev: true` in the lockfile, the rebuilt
+  bundle is byte-identical, and production dependencies audit clean.
+
 ### Changed
 
 - **`edit_file` now says when an anchor edit swallowed a line break, and points
@@ -592,6 +598,16 @@
   pattern narrowed to `skills/*/SKILL.md` to match — embedding the whole tree
   would have put ~8 KB of unreachable reference note in every user's binary.
 
+- **CI now audits the embedded web UI's npm tree** (the `npm-audit` job;
+  `make web-ui-audit` locally). govulncheck covers the Go module graph only,
+  so advisories against the Svelte SPA's dependencies — which ship embedded in
+  the binary via `internal/web/assets.go` — had no coverage. The tiers are
+  deliberate: production dependencies block at high severity (their code is
+  bundled into `dist/`), while dev/build-time findings are advisory-only
+  workflow warnings — so advisories against build-time-only dependencies
+  cannot turn the tree red with no code change. The small production tree
+  still blocks, by the same posture as govulncheck.
+
 ## 0.16.6 (2026-08-14)
 
 ### Security
@@ -694,12 +710,6 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
-### Security
-
-- **Bump `nanoid` to 3.3.18** — GHSA-2v37-7h3g-55p8 (high: a custom generator
-  can loop indefinitely when size is zero), reachable via vite → postcss.
-  Build-time only: the dependency is `dev: true` in the lockfile, the rebuilt
-  bundle is byte-identical, and production dependencies audit clean.
 
 ## 0.16.6 (2026-08-14)
 

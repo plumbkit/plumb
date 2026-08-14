@@ -66,6 +66,44 @@ jobs:
       - name: govulncheck
         run: make vuln
 
+  # ── npm advisories for the embedded web UI — govulncheck's blind spot. ──
+  # The Svelte SPA's dependency tree ships embedded in the binary
+  # (internal/web/assets.go), but govulncheck only sees the Go module graph.
+  # Same shape as the vuln job: a new advisory can fail this with no code
+  # change in the repo, so it runs on its own rather than inside verify.
+  #
+  # Two tiers, decided deliberately:
+  #   - PROD dependencies block at high: their code is bundled into dist/ and
+  #     ships embedded in the binary, so a known-bad version there is a
+  #     shipped vulnerability.
+  #   - DEV (build-time) dependencies are advisory-only. They execute on CI
+  #     and dev machines, so findings are real — but a blocking gate fed by a
+  #     third-party feed turns main red with no code change in this repo (the
+  #     2026-08-13 Go advisory batch did exactly that to govulncheck).
+  #     Findings surface as workflow warnings; dependabot carries the fix.
+  # The severity floor is high: moderate npm findings are numerous and rarely
+  # actionable — the same posture call-site reachability gives the Go side.
+  npm-audit:
+    name: npm audit (web ui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/web/ui/package-lock.json
+      # npm audit resolves the tree from package-lock.json — no npm ci needed.
+      - name: Prod dependencies block at high severity
+        working-directory: internal/web/ui
+        run: npm audit --omit=dev --audit-level=high
+      - name: Dev (build-time) findings are advisory-only
+        working-directory: internal/web/ui
+        run: |
+          if ! npm audit --audit-level=high; then
+            echo "::warning::full-tree npm audit reported high+ findings or errored — advisory-only by policy (see the npm-audit job comment); details in this step's log"
+          fi
+
   # ── Coverage floor. ubuntu only: internal/fsguard is Darwin-only and its
   #    statements are unreachable elsewhere, so the total is not comparable
   #    across OSes. Enforcing on one platform keeps the number meaningful. ──
