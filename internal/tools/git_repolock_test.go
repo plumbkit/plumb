@@ -103,6 +103,33 @@ func TestLockRepo_ContextCancelledWhileWaiting(t *testing.T) {
 	}
 }
 
+// TestLockRepo_HonoursTheCallersWait proves the ceiling is the value the caller
+// passed and not a constant of the lock's own. That is the whole point of
+// deriving it from [git] write_timeout: while it was a separate 2-minute
+// constant, a holder legitimately permitted to run for longer made every queued
+// peer fail a wait that was always going to be satisfiable.
+func TestLockRepo_HonoursTheCallersWait(t *testing.T) {
+	dir := t.TempDir()
+	release, err := lockRepo(context.Background(), dir, testLockWait)
+	if err != nil {
+		t.Fatalf("first lockRepo: %v", err)
+	}
+	defer release()
+
+	start := time.Now()
+	_, err = lockRepo(context.Background(), dir, 60*time.Millisecond)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected the wait to expire while the lock was held")
+	}
+	if !strings.Contains(err.Error(), "60ms") {
+		t.Errorf("the message must name the bound actually waited, got %q", err)
+	}
+	if elapsed > 30*time.Second {
+		t.Errorf("waited %s for a 60ms bound — the caller's value is being ignored", elapsed)
+	}
+}
+
 func TestSweepRepoLocks_EvictsIdleKeepsHeld(t *testing.T) {
 	idle := fmt.Sprintf("/tmp/plumb-test-idle-%d", time.Now().UnixNano())
 	held := fmt.Sprintf("/tmp/plumb-test-held-%d", time.Now().UnixNano())

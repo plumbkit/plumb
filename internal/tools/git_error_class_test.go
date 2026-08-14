@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
@@ -190,6 +191,33 @@ func TestBeginSerialisedGit_DrainRefusalClassified(t *testing.T) {
 	assertClassified(t, err, toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait, true)
 	if !errors.Is(err, errGitDraining) {
 		t.Error("the drain sentinel is no longer reachable through the classification")
+	}
+}
+
+// TestBeginSerialisedGit_LockWaitClassified covers the OTHER way a git op is
+// refused before git ever runs. The drain refusal above was classified from the
+// start; its neighbour — the per-repository lock wait expiring — was returned
+// as a bare fmt.Errorf, so "another git operation is in progress … timed out"
+// reached the caller with no kind and no remediation at all, and therefore no
+// hint that retrying is exactly the right move. Both are the daemon's own
+// serialisation saying "not now", and both are transient.
+func TestBeginSerialisedGit_LockWaitClassified(t *testing.T) {
+	dir := t.TempDir()
+	release, err := lockRepo(t.Context(), dir, testLockWait)
+	if err != nil {
+		t.Fatalf("holding the lock: %v", err)
+	}
+	defer release()
+
+	// A short bound so the test exercises the timeout branch in milliseconds
+	// rather than waiting out a production-sized wait.
+	_, cleanup, err := beginSerialisedGit(t.Context(), dir, "commit", tierWrite, 50*time.Millisecond)
+	if cleanup != nil {
+		cleanup()
+	}
+	assertClassified(t, err, toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait, true)
+	if !strings.Contains(err.Error(), "another git operation is in progress") {
+		t.Errorf("the classification must not have displaced the message, got %q", err)
 	}
 }
 
