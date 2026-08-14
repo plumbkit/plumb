@@ -11,7 +11,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -124,37 +123,47 @@ func sameDirAs(dir string, infos []os.FileInfo) bool {
 // The guard's own stated rationale is that a root at or above the home
 // directory can only ever be too wide, so it has to test ancestry too.
 //
-// Ancestry is decided on resolved paths, because the identity guard's whole
-// reason for using os.SameFile is that a string compare against $HOME loses to
-// symlink and firmlink aliasing; a lexical prefix test here would lose the same
-// way. Strict: dir being the home directory itself is sameDirAs's question, not
-// this one.
-// homes must come from homeDirPaths, and is passed in rather than recomputed:
-// detect() calls this once per directory as it walks, and an earlier version
-// re-derived the home paths inside — two os.Stat calls per candidate per
-// iteration plus a Canonical of each — which measured 4.8x on a 15-deep walk
-// (697us vs 146us). Hoisting it to one call per walk removes that.
+// Ancestry is decided the way identity is: by FILESYSTEM IDENTITY, never by
+// comparing path strings. dir is stat'd once and compared with os.SameFile
+// against every proper ancestor of each home directory, walking the home's
+// canonical path rung by rung up to and including the filesystem root (so "/"
+// is covered for free). An earlier version compared resolved path STRINGS
+// (filepath.Rel over paths.Canonical), and review defeated it twice on one
+// machine: EvalSymlinks collapses symlinks ONLY, so both a macOS firmlink alias
+// (/System/Volumes/Data/Users and /Users are provably one directory, per
+// os.SameFile) and a case variant on a case-insensitive volume spell the same
+// directory in a way the string test does not recognise — while os.SameFile
+// answers identity for ANY spelling. A case-fold would have fixed only the
+// case variant and left the firmlink one, which is why the fix is identity,
+// not more string normalisation.
 //
-// What remains is one paths.Canonical of the candidate per iteration, which
-// costs 468us on that same 15-deep synthetic walk against a 146us baseline.
-// That is accepted rather than optimised away, because the walk is not the hot
-// path it first appears to be: onBeforeTool returns before detection whenever
-// the session is already attached, so this runs while UNATTACHED — once per
-// attach, plus the rare re-pin. At a realistic depth the whole of Detect is
-// 136us. Canonicalising is not optional here: the ancestry test must run on
-// resolved paths or a symlinked spelling walks straight past it, which is the
-// same reason the identity guard uses os.SameFile rather than a string compare.
+// Strict: dir being the home directory itself is sameDirAs's question, not this
+// one (the walk starts at the home's PARENT). Fails open like sameDirAs — an
+// unstat-able dir or an empty home set returns false, so a broken environment
+// degrades to "guards inert", never to "every directory refused".
+//
+// homes must come from homeDirPaths, and is passed in rather than recomputed,
+// so callers that test every rung of a walk (SynthesiseRoot) derive the home
+// set once per walk instead of twice per iteration. Cost per call is one
+// os.Stat of dir plus one per home ancestor (a home path is a handful of rungs
+// deep), and every caller runs on attach or re-pin, not per tool call.
 func containsHomeDir(dir string, homes []string) bool {
 	if len(homes) == 0 || dir == "" {
 		return false
 	}
-	resolved := paths.Canonical(dir)
+	di, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
 	for _, home := range homes {
-		rel, err := filepath.Rel(resolved, home)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
+		for anc := filepath.Dir(filepath.Clean(home)); ; anc = filepath.Dir(anc) {
+			if ai, aerr := os.Stat(anc); aerr == nil && os.SameFile(di, ai) {
+				return true
+			}
+			if anc == filepath.Dir(anc) {
+				break
+			}
 		}
-		return true
 	}
 	return false
 }
@@ -164,9 +173,12 @@ func containsHomeDir(dir string, homes []string) bool {
 // same reason (the daemon inherits its spawner's environment, so $HOME alone
 // must not be trusted), and duplicates collapse.
 //
-// Canonicalised here, once, so the ancestry test is a pure string comparison:
-// it has to run on resolved paths, because a lexical prefix test would lose to
-// symlink aliasing exactly as a string compare against $HOME does.
+// Canonicalised here, once, so the ancestor chain containsHomeDir walks is the
+// home's REAL container chain — the directories that physically hold its files
+// — rather than the lexical parents of whatever spelling $HOME happens to use
+// (a symlinked $HOME's lexical parent holds only the link). The comparisons
+// themselves are os.SameFile, so canonicalisation is about walking the right
+// chain, not about making strings comparable.
 func homeDirPaths() []string {
 	var out []string
 	add := func(dir string) {
