@@ -65,9 +65,13 @@ var (
 	// selftestHarnessOnly names tools (and behaviours) that are unsafe or
 	// non-deterministic to drive against the live workspace, so the agent does
 	// not run git_init live; it creates a repo and is covered by the integration
-	// harness (cmd/smoke). Additional smoke tests cover tool-list parity, strict
-	// mode rejection, transaction rollback, and the allowed destructive reset tier.
-	selftestHarnessOnly = []string{"git_init"}
+	// harness (cmd/smoke). mutation_test is here for the same reason from the
+	// other direction: it deliberately mutates a REAL source file and runs the
+	// whole test suite per mutant, so a live self-test run would be minutes long
+	// and would leave the workspace mutated if it were interrupted. Additional
+	// smoke tests cover tool-list parity, strict mode rejection, transaction
+	// rollback, and the allowed destructive reset tier.
+	selftestHarnessOnly = []string{"git_init", "mutation_test"}
 )
 
 // selftestToolNames is the canonical flat list of every tool the self-test
@@ -274,9 +278,10 @@ func selftestDeferred() []string {
 		"These are unsafe or non-deterministic against a live workspace and are covered by",
 		"`cmd/smoke` instead — mark them SKIP(\"integration harness\"):",
 		"",
-		"- " + toolList(selftestHarnessOnly) + " creates a repository, which would leave a `.git`",
-		"  directory behind in the live workspace — do not call it; record SKIP(\"integration",
-		"  harness\") for it.",
+		"- " + toolList(selftestHarnessOnly) + ": `git_init` creates a repository, which would",
+		"  leave a `.git` directory behind in the live workspace, and `mutation_test` mutates a",
+		"  real source file and runs the whole suite per mutant. Do not call either; record",
+		"  SKIP(\"integration harness\") for both.",
 		"- Smoke tests also cover `transaction_apply` rollback on partial failure, strict-mode",
 		"  rejection, tool-list parity, and the allowed destructive `git reset` tier.",
 	}

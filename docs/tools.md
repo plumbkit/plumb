@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **58** structured tools to AI assistants. Every write tool is
+Plumb exposes **59** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -872,6 +872,39 @@ one shell-safe argument). A project-supplied command must be trusted first
 (`plumb trust`); defaults and global-config commands always run. Pairs with
 `topology_affected` (which says *which* tests to run) — the `plumb-testing`
 skill walks the whole post-edit loop.
+
+### `mutation_test`
+Verify that tests actually assert what they appear to: apply an explicit mutant,
+prove it still **compiles**, run a scoped test set, classify the result, and
+restore the file. **Inputs:** `mutants` (array, 1–20, each `{file_path,
+old_string, new_string, label?}` — an exact-once `str_replace` in the style of
+`edit_file`; it does **not** generate mutants), `test_task` (slot, default
+`test`), `test_target` (fills the stored test command's `{target}` — the way to
+scope the run; ask `topology_affected` what to name), `compile_task` (slot,
+default `build`), `timeout_seconds` (per step, default 600).
+
+**Three outcomes.** `killed` — the mutant compiled and a test failed, so the
+assertion is real. `survived` — the mutant compiled and every test still passed,
+so the assertions covering that line are **vacuous**; this is the finding that
+matters. `invalid` — the mutant did not apply, did not compile, or the run timed
+out; it proves nothing and is **never** reported as a kill. That last
+distinction is the tool's reason to exist: a mutant that does not compile, or a
+`sed` that silently matched nothing, makes the test command fail and a
+hand-rolled harness reads that failure as a kill.
+
+The compile gate cannot be disabled — a workspace with no `build` command
+configured is refused rather than served unverifiable verdicts. The gate always
+runs unscoped, because a whole-module compile catches breakage a package-scoped
+test never reaches.
+
+**Restoration is guaranteed** on every exit path (pass, fail, compile error,
+timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory,
+rewritten under the same per-path lock the write tools use, and verified by
+SHA-256 before the run reports clean. A file with **uncommitted changes is
+refused with no override** — a clean file is what makes `git checkout` a
+guaranteed recovery if the daemon dies mid-run. One run at a time per daemon; a
+second call is refused rather than queued, since concurrent runs would read each
+other's breakage as their own result.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

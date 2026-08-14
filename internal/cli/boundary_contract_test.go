@@ -48,6 +48,7 @@ var knownToolGuarding = map[string]string{
 	"NewGit":              "writedeps",
 	"NewGitInit":          "writedeps",
 	"NewTasks":            "writedeps",
+	"NewMutationTest":     "writedeps",
 	"NewFindReplace":      "writedeps",
 	"NewMoveSymbol":       "writedeps",
 	// Guarded at the proxy routing layer (setBoundaryGuard on sessionProxy/sessionInv)
