@@ -105,6 +105,10 @@ func skippedFileErrors(db *sql.DB) []FileError {
 	for rows.Next() {
 		var fe FileError
 		if rows.Scan(&fe.Path, &fe.Message) == nil {
+			// Panic messages are arbitrary %v text; flatten newlines so the
+			// line-oriented surfaces (FormatStatus, doctor, the web API)
+			// render one recorded reason per line.
+			fe.Message = strings.ReplaceAll(fe.Message, "\n", " ")
 			out = append(out, fe)
 		}
 	}
@@ -203,7 +207,9 @@ func FormatStatus(s Status, workspace string) string {
 	for _, fe := range s.FileErrors {
 		fmt.Fprintf(&sb, "    %s: %s\n", fe.Path, fe.Message)
 	}
-	if rest := s.SkippedFiles - len(s.FileErrors); rest > 0 {
+	// The note only makes sense alongside a non-empty sample: with no
+	// FileErrors at all, skipped files have no recorded reason to truncate.
+	if rest := s.SkippedFiles - len(s.FileErrors); rest > 0 && len(s.FileErrors) > 0 {
 		fmt.Fprintf(&sb, "    (and %d more)\n", rest)
 	}
 	fmt.Fprintf(&sb, "  total nodes:   %d\n", s.TotalNodes)

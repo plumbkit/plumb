@@ -332,3 +332,16 @@ func TestFormatStatus_OmitsSkippedReasonsWhenClean(t *testing.T) {
 		t.Errorf("FormatStatus should omit the truncation note when nothing is skipped:\n%s", out)
 	}
 }
+
+// The truncation note only makes sense next to a non-empty sample: skipped
+// files whose reasons were never recorded (or failed to scan) must not print
+// "(and N more)" as though a sample had been truncated.
+func TestFormatStatus_OmitsTruncationNoteWithoutSample(t *testing.T) {
+	out := FormatStatus(Status{IndexerState: "idle", IndexedFiles: 10, SkippedFiles: 3}, "/ws")
+	if strings.Contains(out, "(and ") {
+		t.Errorf("FormatStatus should omit the truncation note when no reasons were sampled:\n%s", out)
+	}
+	if !strings.Contains(out, "skipped files: 3") {
+		t.Errorf("FormatStatus should still report the skipped count:\n%s", out)
+	}
+}

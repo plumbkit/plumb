@@ -230,6 +230,15 @@
   message simply does not show up. That is now three readers (`ClaimNotes`,
   `PendingNotes`, `HasPendingNotes`) on one written-once identity rule rather
   than three copies kept in agreement by hand.
+
+- **A parse killed by its deadline is recorded as `timeout`, not `cancelled`.**
+  Since the parser pool landed, `extractWith`'s watcher goroutine raised the
+  cancellation flag the instant `ctx.Done()` fired, so a plain deadline expiry
+  could beat the parser's own timeout budget to the stop and be stored in
+  `topology_files.error_msg` as `cancelled` — indistinguishable from a genuine
+  cancel. The reason is now classified by the context: a stop whose context
+  died of its deadline records `timeout`; a genuine cancel stays `cancelled`.
+
 ### Security
 
 - **A workspace root that CONTAINS a home directory can no longer be pinned
@@ -346,6 +355,16 @@
   needs neither — read the file, take the 1-based line numbers, send only
   `new_string`. Same atomicity and locking, a fraction of the escaping.
 
+### Added
+
+- **Skipped topology files now say WHY they were skipped.** `error_msg` was
+  write-only: recorded on every indexing failure and read back only as a
+  count, so a parse timeout, a malformed file and a panicking grammar were
+  indistinguishable at every surface. `topology_status` now lists each skipped
+  file with its recorded reason (bounded, most recently touched first), the
+  web API returns them as `fileErrors`, and `plumb doctor` names the first
+  reason when every file failed.
+
 ## 0.16.6 (2026-08-14)
 
 ### Security
@@ -448,23 +467,6 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
-- **A parse killed by its deadline is recorded as `timeout`, not `cancelled`.**
-  Since the parser pool landed, `extractWith`'s watcher goroutine raised the
-  cancellation flag the instant `ctx.Done()` fired, so a plain deadline expiry
-  beat the parser's own timeout budget to the stop and was stored in
-  `topology_files.error_msg` as `cancelled` — indistinguishable from a genuine
-  cancel. The reason is now classified by the context: a stop whose context
-  died of its deadline records `timeout`; a genuine cancel stays `cancelled`.
-
-### Added
-
-- **Skipped topology files now say WHY they were skipped.** `error_msg` was
-  write-only: recorded on every indexing failure and read back only as a
-  count, so a parse timeout, a malformed file and a panicking grammar were
-  indistinguishable at every surface. `topology_status` now lists each skipped
-  file with its recorded reason (bounded, most recently touched first), the
-  web API returns them as `fileErrors`, and `plumb doctor` names the first
-  reason when every file failed.
 
 ## 0.16.6 (2026-08-14)
 
@@ -589,6 +591,7 @@
   while the `[git.env]` and `git.env.X = …` spellings merge into it, so the same
   intent written two ways would reach the git child as two different
   environments.
+
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's
   `initialize` request, and appending the reconnect note to tool results.
