@@ -95,12 +95,12 @@ func seamJoinNote(a editFileArgs, start, end, interior, newStr string) string {
 		return ""
 	}
 	var seams []string
-	if hadNL := strings.HasSuffix(start, "\n") || strings.HasPrefix(interior, "\n"); hadNL &&
-		(!strings.HasSuffix(start, "\n") && !strings.HasPrefix(newStr, "\n")) {
+	if hadNL := endsWithNewline(start) || startsWithNewline(interior); hadNL &&
+		!endsWithNewline(start) && !startsWithNewline(newStr) {
 		seams = append(seams, "start_anchor")
 	}
-	if hadNL := strings.HasPrefix(end, "\n") || strings.HasSuffix(interior, "\n"); hadNL &&
-		(!strings.HasPrefix(end, "\n") && !strings.HasSuffix(newStr, "\n")) {
+	if hadNL := startsWithNewline(end) || endsWithNewline(interior); hadNL &&
+		!startsWithNewline(end) && !endsWithNewline(newStr) {
 		seams = append(seams, "end_anchor")
 	}
 	if len(seams) == 0 {
@@ -111,6 +111,28 @@ func seamJoinNote(a editFileArgs, start, end, interior, newStr string) string {
 		"new_string does not restore it. Intentional for a mid-line rewrite; if not, add the " +
 		"newline to new_string (or to the anchor) and re-run. Check the diff above."
 }
+
+// startsWithNewline reports whether s begins with a line break in EITHER
+// convention, and endsWithNewline the same at the other end.
+//
+// These exist because the naive spelling is asymmetric in a way that silently
+// disabled half of seamJoinNote on CRLF files. `strings.HasSuffix(s, "\n")`
+// already matches "\r\n" — the run ends in \n either way — but
+// `strings.HasPrefix(s, "\n")` never does. matchLineEndings upgrades the anchors
+// and new_string to CRLF in a CRLF file, so every prefix check went dead while
+// every suffix check stayed live. The result was the worst possible combination:
+// a real join at the start seam produced NO note (the dangerous direction), the
+// exact field-report shape named the wrong seam, and the blessed
+// anchors-carry-their-own-newlines call shape produced a FALSE POSITIVE — which
+// is what trains callers to ignore notes.
+//
+// Found by an independent review that attacked the CRLF path the LF-only tests
+// never reached, in a mode whose own module header advertises CRLF tolerance.
+func startsWithNewline(s string) bool {
+	return strings.HasPrefix(s, "\n") || strings.HasPrefix(s, "\r\n")
+}
+
+func endsWithNewline(s string) bool { return strings.HasSuffix(s, "\n") }
 
 // joinNotes concatenates the non-empty advisory notes with a newline.
 func joinNotes(notes ...string) string {

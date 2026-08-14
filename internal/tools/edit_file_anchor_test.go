@@ -411,3 +411,122 @@ func TestEditFileAnchor_NoJoinNote_MidLineInsertion(t *testing.T) {
 		t.Errorf("mid-line insertion must not trigger the join advisory, got: %q", out)
 	}
 }
+
+// --- CRLF twins -----------------------------------------------------------
+//
+// The join note shipped LF-only, and an independent review found all three
+// possible failures on CRLF files at once: a real join produced NO note, the
+// field-report shape named the WRONG seam, and the blessed
+// anchors-carry-their-own-newlines shape produced a FALSE POSITIVE.
+//
+// One asymmetry caused all three. strings.HasSuffix(s, "\n") matches "\r\n"
+// because the run ends in \n either way, but strings.HasPrefix(s, "\n") never
+// does — and matchLineEndings upgrades anchors and new_string to CRLF in a CRLF
+// file. So every prefix check went dead while every suffix check stayed live.
+//
+// These are twins of the LF cases above rather than new scenarios, which is the
+// point: the note must behave identically under both conventions, in a mode
+// whose module header advertises CRLF tolerance.
+
+// Twin of BoundaryNewlineConsumed_StartSeam. Pre-fix this produced no note at
+// all — the dangerous direction, a swallowed line break reported as nothing.
+func TestEditFileAnchor_CRLF_StartSeamJoinIsReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("A\r\nB\r\nC\r\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "A",
+		"end_anchor":   "C",
+		"new_string":   "x\n",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "Ax\r\nC\r\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if !strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("a swallowed CRLF line break produced no note: %q", out)
+	}
+	if !strings.Contains(out, "start_anchor") {
+		t.Errorf("note names the wrong seam; want start_anchor: %q", out)
+	}
+	if strings.Contains(out, "end_anchor") {
+		t.Errorf("end seam kept its newline and must not be named: %q", out)
+	}
+}
+
+// The field-report shape on CRLF: both seams join, so both must be named.
+// Pre-fix this named only end_anchor, so a caller checking their start anchor
+// found nothing wrong and dismissed the note.
+func TestEditFileAnchor_CRLF_BothSeamsNamed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("A\r\nB\r\nC\r\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "A",
+		"end_anchor":   "C",
+		"new_string":   "x",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "AxC\r\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	for _, seam := range []string{"start_anchor", "end_anchor"} {
+		if !strings.Contains(out, seam) {
+			t.Errorf("both seams joined but %s is not named: %q", seam, out)
+		}
+	}
+}
+
+// Twin of NoJoinNote_NewlinesPreserved, and the false positive that matters
+// most: this is the documented-correct shape the other tests bless. A spurious
+// note on correct usage is what trains callers to ignore notes.
+func TestEditFileAnchor_CRLF_NoFalsePositiveWhenAnchorsCarryNewlines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("BEGIN\r\nbody\r\n\r\nEND\r\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "BEGIN\n",
+		"end_anchor":   "\nEND",
+		"new_string":   "new",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "BEGIN\r\nnew\r\nEND\r\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("false positive: every line is intact, nothing was joined: %q", out)
+	}
+}
+
+// A mid-line CRLF edit has no newline at either seam to lose, so the note must
+// stay silent — the property that makes the check safe to add at all, verified
+// under CRLF as well as LF.
+func TestEditFileAnchor_CRLF_NoJoinNoteMidLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("keep alpha OMEGA tail\r\nnext\r\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "keep ",
+		"end_anchor":   " OMEGA",
+		"new_string":   "beta",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "keep beta OMEGA tail\r\nnext\r\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("mid-line CRLF edit must not warn: %q", out)
+	}
+}
