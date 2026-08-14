@@ -69,8 +69,19 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 // would instead give up and leave the connection unattached, dropping through to
 // the roots rung and silently reinstating the very bug this ladder exists to
 // prevent — for every project without a .git or .plumb marker.
+//
+// The pin is verified first (restoreRootIntact): both a deleted root and one
+// whose resolution drifted (a subdirectory arg replayed raw by an older proxy,
+// an alias spelling, markers removed since the pin was taken) would otherwise
+// attach whatever ancestor the detect walk climbs to — silently WIDER than the
+// workspace the caller chose. A failed verification drops the pin instead and
+// lets the ladder fall through to its lower rungs.
 func (s *connSession) attachReplayedPin(ctx context.Context, root string, origin sessionstate.PinSource) {
 	if root == "" {
+		return
+	}
+	if _, _, intact := s.restoreRootIntact(root); !intact {
+		s.dropPin(root, origin)
 		return
 	}
 	if _, err := s.repinWorkspaceFrom(ctx, root, "", origin, pinTriggerRestore, false); err != nil {

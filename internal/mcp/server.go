@@ -154,6 +154,13 @@ type Server struct {
 	// cheap and must never block. Returning text unchanged is a no-op.
 	EnrichToolOutput func(ctx context.Context, name string, args json.RawMessage, text string) string
 
+	// ToolResultMeta, if set, contributes `_meta` entries to a SUCCESSFUL
+	// tools/call result (a failure carries its error envelope under
+	// MetaToolErrorKey instead). Called synchronously on the response path, so
+	// it must be cheap and must never block. A nil return leaves the result
+	// byte-identical to the pre-`_meta` payload.
+	ToolResultMeta func(ctx context.Context, name string, args json.RawMessage) map[string]any
+
 	// OnClientInfo is called once during the initialize exchange with the
 	// client's self-reported name and version.
 	OnClientInfo func(ctx context.Context, name, version string)

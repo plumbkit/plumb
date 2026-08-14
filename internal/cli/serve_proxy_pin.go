@@ -95,6 +95,13 @@ func sessionStartWorkspace(frame []byte) string {
 // workspace the live daemon refused would pin the fresh one to a path it would
 // have refused too.
 //
+// The daemon echoes the CANONICAL root it pinned in the result's _meta
+// (mcp.MetaResolvedWorkspaceKey); that spelling is committed in preference to
+// the caller's raw argument, so the replayed pin is always a resolved root the
+// restore path can verify — never an alias or a subdirectory that re-resolves
+// against state the proxy cannot see. A daemon that predates the key sends no
+// _meta; the raw argument stands as before.
+//
 // Runs on the daemon→client pump, which is single-threaded; the mutex guards
 // against the client pump writing p.pending concurrently.
 func (p *reconnectingProxy) commitSessionStartPin(frame []byte) {
@@ -107,9 +114,36 @@ func (p *reconnectingProxy) commitSessionStartPin(frame []byte) {
 	ws, waiting := p.pending[key]
 	delete(p.pending, key)
 	if waiting && toolCallSucceeded(frame) {
+		if resolved := resolvedWorkspaceMeta(frame); resolved != "" {
+			ws = resolved
+		}
 		p.pinned = ws
 	}
 	p.pinMu.Unlock()
+}
+
+// resolvedWorkspaceMeta extracts the canonical workspace root the daemon echoed
+// in a session_start result's _meta, or "" when absent (a daemon that predates
+// the key) or malformed. Fail-safe like toolCallSucceeded: anything it cannot
+// parse yields "", leaving the caller's raw spelling in place.
+func resolvedWorkspaceMeta(frame []byte) string {
+	var resp struct {
+		Result *struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &resp); err != nil || resp.Result == nil {
+		return ""
+	}
+	raw, ok := resp.Result.Meta[mcp.MetaResolvedWorkspaceKey]
+	if !ok {
+		return ""
+	}
+	var ws string
+	if err := json.Unmarshal(raw, &ws); err != nil {
+		return ""
+	}
+	return ws
 }
 
 // toolCallSucceeded reports whether a JSON-RPC response carries a tool result

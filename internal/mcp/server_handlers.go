@@ -344,10 +344,16 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			text = s.EnrichToolOutput(ctx, params.Name, params.Arguments, text)
 		})
 	}
-	return okResp(req.ID, callResult{
+	res := callResult{
 		Content: []content{{Type: "text", Text: text}},
 		IsError: false,
-	})
+	}
+	if s.ToolResultMeta != nil {
+		runHookSafely("ToolResultMeta", func() {
+			res.Meta = s.ToolResultMeta(ctx, params.Name, params.Arguments)
+		})
+	}
+	return okResp(req.ID, res)
 }
 
 // runHookSafely runs an observability/enrichment hook, recovering from a panic
