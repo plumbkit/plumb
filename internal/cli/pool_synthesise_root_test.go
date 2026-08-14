@@ -183,34 +183,6 @@ func TestSynthesiseRoot_HomeGuardIsByIdentityNotByString(t *testing.T) {
 	}
 }
 
-// TestSynthesiseRoot_WalkStopsAtDirContainingHome holds the IN-LOOP half of the
-// containment guard, which round 6 found surviving deletion untested. The
-// top-of-function refusal only judges the SEED; the walk needs its own stop,
-// because a markerless SIBLING of the home directory passes the seed check and
-// then ascends — and with a .git above the home directory's parent, the walk
-// would hand back a root that contains the home directory even though the seed
-// never did. Reaching a dir that contains a home directory falls back to the
-// seed, exactly as reaching $HOME itself does.
-func TestSynthesiseRoot_WalkStopsAtDirContainingHome(t *testing.T) {
-	base := freshTempDir(t)                   // see the GOTMPDIR note above
-	mustMkdir(t, filepath.Join(base, ".git")) // a repo above the home's parent
-	users := filepath.Join(base, "users")     // stands in for /Users
-	home := filepath.Join(users, "alice")
-	mustMkdir(t, home)
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	seed := filepath.Join(users, "work") // markerless SIBLING of the home directory
-	mustMkdir(t, seed)
-
-	got := (&workspacePool{}).SynthesiseRoot(seed, false)
-	if got == paths.Canonical(base) {
-		t.Fatalf("SynthesiseRoot(%q) = %q — the walk ascended through %q, which contains the home directory, and widened the root to it", seed, got, users)
-	}
-	if want := paths.Canonical(seed); got != want {
-		t.Errorf("SynthesiseRoot(%q) = %q, want the seed %q", seed, got, want)
-	}
-}
-
 // TestSynthesiseRoot_GitBelowHomeStillWins is the control: the guard is about
 // $HOME specifically, not about .git under it. An ordinary project checked out
 // inside the home directory — which is where most projects live — must still

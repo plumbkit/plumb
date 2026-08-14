@@ -5,7 +5,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,55 +18,6 @@ import (
 	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
-
-// undeclaredWideRootErr reports why root may not become this session's
-// workspace: a root that strictly CONTAINS a home directory puts every
-// credential file under that home inside the boundary, so it demands an
-// explicit declaration — and only a session_start workspace argument (live, or
-// a persisted pin replayed with that stored origin) is one. Returns nil for
-// every other root, and for an explicit origin.
-//
-// This is the CHOKE POINT for the containment invariant, on the same argument
-// buildPathPolicy makes for the relative-root invariant: exactly three paths
-// write v.acquiredRoot — attachWorkspacePinFrom, attachSynthetic, and
-// attachOrRepinTo — and each consults this before the write, so the invariant
-// holds however the root arrived (detection, client roots, a replayed pin, a
-// tool-path seed, a serve-proxy hint). Guarding individual detection and
-// synthesis sites was tried across five review rounds and every round found a
-// route the previous one missed; the sixth found the shape itself wrong,
-// because detect() has no notion of "declared" and so could only refuse for
-// everyone — which broke repos that legitimately CONTAIN a home directory
-// (hermetic build sandboxes with HOME=$PWD/.home, Bazel execroots, nix-shell,
-// CI images repointing HOME inside the checkout). Here the origin is in scope,
-// so the explicit escape and the refusal live in one place.
-//
-// Identity — root IS a home directory — is deliberately NOT tested here. That
-// boundary is owned by detect()'s walk termination with its deliberate-marker
-// exemption and by SynthesiseRoot's explicit gate, both of which admit $HOME
-// only deliberately; refusing it here would break the honoured `plumb init`
-// marker at $HOME for non-explicit origins. Strictly-above is different: a
-// marker above a home directory can be MINTED from inside one explicit pin
-// (git_init's init_plumb, plumb init), so no marker exempts it — only a live
-// declaration does, each time.
-//
-// SynthesiseRoot and repinWorkspaceFrom keep their own earlier refusals where
-// they produce a better message at the call that caused them; this guard is
-// the invariant those messages sit in front of.
-func undeclaredWideRootErr(root string, origin sessionstate.PinSource) error {
-	if origin == sessionstate.PinSourceSessionStart {
-		return nil
-	}
-	if !containsHomeDir(root, homeDirPaths()) {
-		return nil
-	}
-	return fmt.Errorf(
-		"%s contains the home directory, so pinning it would put every file under it — "+
-			"including credentials and SSH keys — inside the workspace boundary. Pin the "+
-			"project directory instead. If you genuinely mean it, name it in an explicit "+
-			"session_start workspace argument",
-		root,
-	)
-}
 
 // attachWorkspace resolves rootURI to a project root, acquires the shared
 // language server if needed, and updates the session record. This entry point
@@ -101,16 +51,6 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 	}
 	if projectRoot != folder {
 		folder = projectRoot
-	}
-	// The containment choke (see undeclaredWideRootErr). Detect succeeds at a
-	// directory above a home directory whenever one carries a marker — including
-	// one minted from inside an earlier explicit pin — so the refusal has to sit
-	// on the pin, where the origin is known, not in detection, which would have
-	// to refuse for declared and undeclared callers alike.
-	if err := undeclaredWideRootErr(folder, origin); err != nil {
-		s.log().Warn("daemon: refusing workspace attach — root contains a home directory and no explicit declaration was made",
-			"root", folder, "source", string(origin), "err", err)
-		return
 	}
 
 	s.mutate(func(v *sessionView) {
@@ -158,16 +98,6 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 // never persisted). trigger separates a live seed from rehydratePin's restore
 // of a persisted synthetic pin, so the provenance label reads restore:… .
 func (s *connSession) attachSynthetic(_ context.Context, root string, origin sessionstate.PinSource, trigger pinTrigger) {
-	// The containment choke (see undeclaredWideRootErr). SynthesiseRoot's own
-	// refusal already returns "" for a non-explicit wide seed, so in the current
-	// call graph this cannot fire — but this function WRITES v.acquiredRoot, and
-	// the invariant lives at the writers precisely so that a new or changed
-	// caller cannot reopen the hole by skipping a courtesy check upstream.
-	if err := undeclaredWideRootErr(root, origin); err != nil {
-		s.log().Warn("daemon: refusing synthetic workspace attach — root contains a home directory and no explicit declaration was made",
-			"root", root, "source", string(origin), "err", err)
-		return
-	}
 	s.mutate(func(v *sessionView) {
 		if v.acquiredRoot != "" {
 			return

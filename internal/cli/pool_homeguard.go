@@ -1,24 +1,28 @@
 package cli
 
-// pool_homeguard.go — the identity and ancestry machinery behind every
-// home-directory workspace guard. This file owns how "is this directory a home
-// directory?" (sameDirAs) and "does this directory contain one?"
-// (containsHomeDir) are decided. IDENTITY terminates the walks — Detect,
-// SynthesiseRoot, detectLanguageAt — so $HOME itself never becomes a root
-// without a deliberate marker or an explicit declaration; CONTAINMENT is
-// enforced where the session's root is set (undeclaredWideRootErr, the choke
-// consulted by every writer of v.acquiredRoot) plus SynthesiseRoot's own
-// refusals and materialisePlumbDir, so a root strictly above a home directory
-// needs an explicit session_start declaration every time.
+// pool_homeguard.go — the identity machinery behind every home-directory
+// workspace guard. This file owns one question: "is this directory a home
+// directory?" (sameDirAs, by os.SameFile). Identity terminates the walks —
+// Detect, SynthesiseRoot, detectLanguageAt — so $HOME itself never becomes a
+// workspace root without a deliberate marker or an explicit declaration.
+//
+// It deliberately does NOT answer "does this directory CONTAIN a home
+// directory?", which would refuse a root like /Users. That guard was built and
+// removed again: seven rounds of adversarial review defeated three successive
+// implementations, each on a different macOS path-aliasing shape — a lexical
+// ancestry test lost to the /System/Volumes/Data/Users firmlink, and the
+// os.SameFile ancestor walk that replaced it still missed /System/Volumes/Data
+// itself, which contains $HOME while sharing an inode with no ancestor of
+// canonical($HOME). Tracked separately rather than shipped defeated; see the
+// issue linked from the CHANGELOG. The identity guard here fixes the reported
+// defect (a dotfiles repo at $HOME capturing the whole home directory) and is
+// the part that survived every round.
 
 import (
 	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
-	"slices"
-
-	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // deliberatePlumbMarker reports whether the .plumb directory at dir carries
@@ -117,90 +121,4 @@ func sameDirAs(dir string, infos []os.FileInfo) bool {
 		}
 	}
 	return false
-}
-
-// containsHomeDir reports whether dir is a strict ANCESTOR of a home directory.
-//
-// sameDirAs answers identity, which leaves the rung above unguarded: refusing
-// $HOME while accepting /Users (or /home, or /) admits a workspace that
-// CONTAINS the home directory and every credential in it — wider than the
-// boundary the identity guard exists to keep, and reachable without any
-// deliberate declaration through a client reporting such a folder in its roots.
-// The guard's own stated rationale is that a root at or above the home
-// directory can only ever be too wide, so it has to test ancestry too.
-//
-// Ancestry is decided the way identity is: by FILESYSTEM IDENTITY, never by
-// comparing path strings. dir is stat'd once and compared with os.SameFile
-// against every proper ancestor of each home directory, walking the home's
-// canonical path rung by rung up to and including the filesystem root (so "/"
-// is covered for free). An earlier version compared resolved path STRINGS
-// (filepath.Rel over paths.Canonical), and review defeated it twice on one
-// machine: EvalSymlinks collapses symlinks ONLY, so both a macOS firmlink alias
-// (/System/Volumes/Data/Users and /Users are provably one directory, per
-// os.SameFile) and a case variant on a case-insensitive volume spell the same
-// directory in a way the string test does not recognise — while os.SameFile
-// answers identity for ANY spelling. A case-fold would have fixed only the
-// case variant and left the firmlink one, which is why the fix is identity,
-// not more string normalisation.
-//
-// Strict: dir being the home directory itself is sameDirAs's question, not this
-// one (the walk starts at the home's PARENT). Fails open like sameDirAs — an
-// unstat-able dir or an empty home set returns false, so a broken environment
-// degrades to "guards inert", never to "every directory refused".
-//
-// homes must come from homeDirPaths, and is passed in rather than recomputed,
-// so callers that test every rung of a walk (SynthesiseRoot) derive the home
-// set once per walk instead of twice per iteration. Cost per call is one
-// os.Stat of dir plus one per home ancestor (a home path is a handful of rungs
-// deep), and every caller runs on attach or re-pin, not per tool call.
-func containsHomeDir(dir string, homes []string) bool {
-	if len(homes) == 0 || dir == "" {
-		return false
-	}
-	di, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	for _, home := range homes {
-		for anc := filepath.Dir(filepath.Clean(home)); ; anc = filepath.Dir(anc) {
-			if ai, aerr := os.Stat(anc); aerr == nil && os.SameFile(di, ai) {
-				return true
-			}
-			if anc == filepath.Dir(anc) {
-				break
-			}
-		}
-	}
-	return false
-}
-
-// homeDirPaths returns the canonical home-directory paths, the string half of
-// what homeDirInfos returns by identity. Both sources are consulted for the
-// same reason (the daemon inherits its spawner's environment, so $HOME alone
-// must not be trusted), and duplicates collapse.
-//
-// Canonicalised here, once, so the ancestor chain containsHomeDir walks is the
-// home's REAL container chain — the directories that physically hold its files
-// — rather than the lexical parents of whatever spelling $HOME happens to use
-// (a symlinked $HOME's lexical parent holds only the link). The comparisons
-// themselves are os.SameFile, so canonicalisation is about walking the right
-// chain, not about making strings comparable.
-func homeDirPaths() []string {
-	var out []string
-	add := func(dir string) {
-		if dir == "" {
-			return
-		}
-		c := paths.Canonical(dir)
-		if !slices.Contains(out, c) {
-			out = append(out, c)
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		add(home)
-	}
-	if u, err := user.Current(); err == nil {
-		add(u.HomeDir)
-	}
-	return out
 }
