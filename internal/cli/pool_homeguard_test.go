@@ -13,10 +13,16 @@ package cli
 //     the guard protecting the real home directory.
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // TestSameDirAs_NoHomeFailsOpen pins the deliberate fail-open: when no home
@@ -249,5 +255,345 @@ func TestMaterialisePlumbDir_RefusesHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(proj, ".plumb")); err != nil {
 		t.Fatalf("materialisePlumbDir(%q) did not create the marker: %v", proj, err)
+	}
+}
+
+// TestHomeUnder_FixtureShapes pins homeUnder's probe semantics on fixtures:
+// containment is answered by identity, for every suffix of home's components,
+// regardless of how the candidate spells the route.
+func TestHomeUnder_FixtureShapes(t *testing.T) {
+	base := freshTempDir(t)
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	mustMkdir(t, filepath.Join(base, "a", "b"))
+	deep := filepath.Join(base, "a", "b", "home2")
+	mustMkdir(t, deep)
+	sibling := filepath.Join(base, "other")
+	mustMkdir(t, sibling)
+
+	for _, tc := range []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"direct container", base, true},
+		{"deep home", base, true},
+		{"identity", home, true},
+		{"identity with trailing slash", home + string(filepath.Separator), true},
+		{"sibling is not a container", sibling, false},
+		{"a directory under home is not a container", filepath.Join(home, "proj"), false},
+		{"unrelated directory", freshTempDir(t), false},
+		{"empty candidate", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			homeFor := home
+			if tc.name == "deep home" {
+				homeFor = deep
+			}
+			if got := homeUnder(tc.dir, homeFor); got != tc.want {
+				t.Errorf("homeUnder(%q, %q) = %v, want %v", tc.dir, homeFor, got, tc.want)
+			}
+		})
+	}
+	if homeUnder("", home) {
+		t.Error("homeUnder(\"\", home) = true; an empty candidate is never a container")
+	}
+	if homeUnder(base, "") {
+		t.Error("homeUnder(base, \"\") = true; an empty home disables the predicate")
+	}
+}
+
+// TestHomeUnder_SymlinkedSpellingOfContainer: a candidate reached THROUGH a
+// symlink is still a container — the kernel resolves the probe join, which is
+// the whole point of probing instead of walking.
+func TestHomeUnder_SymlinkedSpellingOfContainer(t *testing.T) {
+	base := freshTempDir(t)
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	alias := filepath.Join(freshTempDir(t), "base-alias")
+	if err := os.Symlink(base, alias); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	if !homeUnder(alias, home) {
+		t.Errorf("homeUnder(%q, %q) = false — a symlinked spelling of a container is still a container; the probe join is resolved by the kernel", alias, home)
+	}
+}
+
+// TestHomeUnder_SymlinkInsideCandidate_DocumentedLimit pins the KNOWN limit of
+// the shipped predicate: a symlink BELOW the candidate that reaches home under
+// a name of its own is not caught, because the probe set only enumerates
+// home's own component names (see homeUnder's doc comment and
+// docs/threat-model.md). If a future guard closes this limit, update this
+// test and the threat model together — silently changing either one is how
+// the claim and the code drift apart.
+func TestHomeUnder_SymlinkInsideCandidate_DocumentedLimit(t *testing.T) {
+	base := freshTempDir(t)
+	home := freshTempDir(t)
+	link := filepath.Join(base, "sneaky")
+	if err := os.Symlink(home, link); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	if homeUnder(base, home) {
+		t.Errorf("homeUnder caught a symlink-inside-the-candidate shape the shipped predicate documents as out of scope — update homeUnder's doc comment and docs/threat-model.md with the new coverage")
+	}
+}
+
+// TestHomeUnder_MacOSSystemVolumeAliases runs the exact shapes issue #306 was
+// defeated by, on a real macOS machine: /System/Volumes/Data CONTAINS $HOME
+// while sharing an inode with neither /Users nor /, and
+// /System/Volumes/Data/Users IS /Users (same inode) yet is not a lexical
+// ancestor of $HOME's spelling. No fixture can reproduce firmlinks; both are
+// probed live and skipped where the platform is absent.
+func TestHomeUnder_MacOSSystemVolumeAliases(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS firmlink shapes only")
+	}
+	if _, err := os.Stat("/System/Volumes/Data/Users"); err != nil {
+		t.Skipf("no system-volume alias to probe: %v", err)
+	}
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home to contain: %v", err)
+	}
+	if _, err := os.Stat(u.HomeDir); err != nil {
+		t.Skipf("home %q not stat-able: %v", u.HomeDir, err)
+	}
+
+	for _, dir := range []string{"/Users", "/", "/System/Volumes/Data", "/System/Volumes/Data/Users", filepath.Dir(u.HomeDir)} {
+		if !homeUnder(dir, u.HomeDir) {
+			t.Errorf("homeUnder(%q, %q) = false — a directory containing the home directory must be caught, whatever spelling names it (issue #306)", dir, u.HomeDir)
+		}
+	}
+	if homeUnder(freshTempDir(t), u.HomeDir) {
+		t.Error("homeUnder caught an ordinary temp directory — the predicate over-fires")
+	}
+}
+
+// TestUndeclaredWideRootErr_OriginCarveOut pins the guard's decision table:
+// refused for every weak origin, allowed for an explicit session_start (issue
+// #182's contract), and never firing for an innocent directory.
+func TestUndeclaredWideRootErr_OriginCarveOut(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+
+	for _, origin := range []sessionstate.PinSource{sessionstate.PinSourceRoots, sessionstate.PinSourceUnknown} {
+		if err := undeclaredWideRootErr(wide, origin); err == nil {
+			t.Errorf("undeclaredWideRootErr(%q, %s) = nil — a root containing the home directory %q must be refused without a declaration", wide, origin, u.HomeDir)
+		}
+	}
+	if err := undeclaredWideRootErr(u.HomeDir, sessionstate.PinSourceRoots); err == nil {
+		t.Errorf("undeclaredWideRootErr(%q, roots) = nil — the home directory itself must be refused without a declaration", u.HomeDir)
+	}
+	if err := undeclaredWideRootErr(wide, sessionstate.PinSourceSessionStart); err != nil {
+		t.Errorf("undeclaredWideRootErr(%q, session_start) = %v — an explicit declaration must succeed even for a wide root (issue #182)", wide, err)
+	}
+	proj := freshTempDir(t)
+	for _, origin := range []sessionstate.PinSource{sessionstate.PinSourceRoots, sessionstate.PinSourceUnknown, sessionstate.PinSourceSessionStart} {
+		if err := undeclaredWideRootErr(proj, origin); err != nil {
+			t.Errorf("undeclaredWideRootErr(%q, %s) = %v — an ordinary directory is never refused", proj, origin, err)
+		}
+	}
+}
+
+// TestAttachSynthetic_WideRootNeedsDeclaration exercises the guard through one
+// of the three root-setting writers: an incidental (undeclared) seed at a
+// directory containing the home directory must leave the session unattached.
+func TestAttachSynthetic_WideRootNeedsDeclaration(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxyX")
+
+	s.attachSynthetic(context.Background(), wide, sessionstate.PinSourceUnknown, pinTriggerLive)
+	if got := s.workspace(); got != "" {
+		t.Fatalf("attachSynthetic pinned %q without a declaration — a root containing the home directory must leave the session unattached (issue #306)", got)
+	}
+}
+
+// TestRepin_WideRootFromRootsRefusedKeepsPin exercises the re-pin writer: a
+// roots-driven re-pin to a wide root is refused and the existing pin survives.
+func TestRepin_WideRootFromRootsRefusedKeepsPin(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+	store, ss := newOriginStore(t)
+	rootA := freshTempDir(t)
+	mustGitDir(t, rootA)
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachWorkspace(context.Background(), "file://"+rootA)
+
+	if _, err := s.repinWorkspaceFrom(context.Background(), wide, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err == nil {
+		t.Fatalf("a roots-driven re-pin to %q succeeded — a root containing the home directory must be refused without a declaration (issue #306)", wide)
+	}
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("the refused re-pin moved the pin anyway: got %q, want %q", got, rootA)
+	}
+}
+
+// TestMaterialisePlumbDir_RefusesContainerOfHome is the containment half of
+// the residue guard: an auto_attach_persist .plumb minted at a CONTAINER of
+// the home directory would make Detect succeed there for every later session
+// with no declaration — the same standing-capture shape the identity refusal
+// blocks at $HOME itself.
+func TestMaterialisePlumbDir_RefusesContainerOfHome(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+	if _, err := os.Stat(filepath.Join(wide, ".plumb")); err == nil {
+		t.Skipf("%q already has a .plumb; refusing to test against it", wide)
+	}
+
+	if err := materialisePlumbDir(wide); err == nil {
+		// A bug here mints a real marker at a real wide directory — undo it
+		// before failing, or the test leaves the machine widened.
+		_ = os.RemoveAll(filepath.Join(wide, ".plumb"))
+		t.Fatalf("materialisePlumbDir(%q) succeeded — a container of the home directory must not become a workspace as a side effect (issue #306)", wide)
+	} else if !strings.Contains(err.Error(), "must not become a plumb workspace") {
+		// The refusal must be the GUARD's, not an incidental failure: on most
+		// machines the user cannot write to a wide system directory, so a bare
+		// EACCES would mask a missing guard while still returning an error —
+		// exactly how this test passed green under mutation once.
+		t.Fatalf("materialisePlumbDir(%q) failed, but not with the guard's refusal: %v", wide, err)
+	}
+	if _, err := os.Stat(filepath.Join(wide, ".plumb")); err == nil {
+		t.Fatalf("materialisePlumbDir(%q) created the marker despite refusing", wide)
+	}
+}
+
+// TestAttachWorkspace_HomeRootFromClientNeedsDeclaration pins the guard on the
+// THIRD writer — the client roots/list attach path (attachWorkspacePinFrom) —
+// which nothing else covered: deleting the guard there left the whole suite
+// green (found by adversarial review). A client reporting $HOME as a root is
+// not a declaration, even when $HOME carries a deliberate .plumb marker that
+// lets Detect succeed there.
+func TestAttachWorkspace_HomeRootFromClientNeedsDeclaration(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	// A DELIBERATE marker at home — enough for Detect to succeed there, so the
+	// attach reaches the root-setting writers at all.
+	mustMkdir(t, filepath.Join(home, ".plumb"))
+	mustWrite(t, filepath.Join(home, ".plumb", "context.md"), "# declared\n")
+
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachWorkspace(context.Background(), "file://"+home)
+	if got := s.workspace(); got != "" {
+		t.Fatalf("attachWorkspace pinned %q from a client-reported root — a reported home directory is not a declaration (issue #306)", got)
+	}
+}
+
+// TestContainment_KeysOnDBHomeNotEnvHOME pins the keying decision of
+// userDBHome: containment refuses a root by the OS user-database home, NOT by
+// the client-repointable $HOME. Flipping the key to os.UserHomeDir left every
+// shipped test green on a machine where the two agree (found by adversarial
+// review); this test makes them disagree. A hermetic sandbox's checkout
+// CONTAINS its repointed $HOME and must stay pinnable by a weak origin — the
+// exact shape that broke the guard's first placement in detect() — while the
+// decoy home itself and the real home's container stay refused.
+func TestContainment_KeysOnDBHomeNotEnvHOME(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+
+	candidate := freshTempDir(t) // the hermetic checkout
+	decoyHome := filepath.Join(candidate, ".home")
+	mustMkdir(t, decoyHome)
+	t.Setenv("HOME", decoyHome)
+	t.Setenv("USERPROFILE", decoyHome)
+
+	if err := undeclaredWideRootErr(candidate, sessionstate.PinSourceUnknown); err != nil {
+		t.Errorf("undeclaredWideRootErr(%q, unknown) = %v — a checkout containing only a REPOINTED $HOME must stay pinnable; containment keys on the user-database home (HOME=$PWD/.home sandboxes, Bazel execroots, nix-shell, CI images)", candidate, err)
+	}
+	if err := undeclaredWideRootErr(decoyHome, sessionstate.PinSourceUnknown); err == nil {
+		t.Error("undeclaredWideRootErr(decoy $HOME, unknown) = nil — the repointed $HOME is still a home directory by identity and must be refused")
+	}
+	if err := undeclaredWideRootErr(wide, sessionstate.PinSourceUnknown); err == nil {
+		t.Errorf("undeclaredWideRootErr(%q, unknown) = nil — repointing $HOME must not unguard the machine's real home container %q", wide, u.HomeDir)
+	}
+}
+
+// TestPolicyRebuild_SwappedRootLosesBoundary is the TOCTOU regression found by
+// adversarial review: the writers guard the directory at attach time, but the
+// pinned STRING is re-canonicalised on every policy rebuild (the config poll
+// alone runs every 30 seconds). Replacing the pinned directory with a symlink
+// to a home-containing one — no race needed, only write access to its parent —
+// must not widen the boundary on the next rebuild: the session loses its
+// policy entirely (fail closed) unless the pin was explicitly declared.
+func TestPolicyRebuild_SwappedRootLosesBoundary(t *testing.T) {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+	candidate := freshTempDir(t)
+
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachSynthetic(context.Background(), candidate, sessionstate.PinSourceUnknown, pinTriggerLive)
+	if got := s.workspace(); got != candidate {
+		t.Fatalf("setup: workspace = %q, want %q", got, candidate)
+	}
+	if s.boundaryPolicy() == nil {
+		t.Fatal("setup: the innocent candidate must have a policy before the swap")
+	}
+
+	// Swap the pinned directory for a symlink to a container of home.
+	if err := os.Remove(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wide, candidate); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(candidate) })
+
+	var rebuilt *tools.PathPolicy
+	s.mutate(func(v *sessionView) {
+		v.policy = s.buildPathPolicy(v)
+		rebuilt = v.policy
+	})
+	if rebuilt != nil {
+		t.Fatalf("a policy rebuild absorbed the swap: an undeclared session's boundary is now %q, which contains the home directory %q (issue #306)", wide, u.HomeDir)
+	}
+
+	// Control: the SAME root under a DECLARED pin keeps its boundary — the
+	// issue #182 carve-out applies to rebuilds too.
+	s.mutate(func(v *sessionView) {
+		v.pinOrigin = sessionstate.PinSourceSessionStart
+		v.policy = s.buildPathPolicy(v)
+		rebuilt = v.policy
+	})
+	if rebuilt == nil {
+		t.Fatal("a declared session_start pin must keep its boundary even when the root contains a home directory (issue #182)")
 	}
 }

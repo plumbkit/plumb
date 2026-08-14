@@ -46,15 +46,16 @@ func recoverWorkspaceTxlog(folder string, scan func(string)) {
 // standing workspace, `plumb init` there records the intent in a form the
 // residue guard honours (context.md).
 func materialisePlumbDir(root string) error {
-	// At OR above a home directory. Containment matters as much as identity here:
+	// At OR above a home directory — identity AND containment both matter here:
 	// review showed one explicit pin of a directory like /Users under
 	// auto_attach_persist minting a marker there, after which Detect SUCCEEDS at
 	// that directory for every later session with no declaration at all — turning
 	// a one-off exemption into a standing workspace holding every home directory
 	// on the machine. That is the same argument deliberatePlumbMarker makes for
-	// refusing config.toml, one rung up.
-	if sameDirAs(root, homeDirInfos()) {
-		return fmt.Errorf("refusing to create %s: a directory at or above the home directory must not become a plumb workspace as a side effect; run `plumb init` there if you genuinely mean it", filepath.Join(root, ".plumb"))
+	// refusing config.toml, one rung up. No origin carve-out: even a declared
+	// pin must not mint a PERMANENT marker at a wide root (issue #306).
+	if containsUserHome(root) {
+		return fmt.Errorf("refusing to create %s: a directory that is, or contains, a home directory must not become a plumb workspace as a side effect; run `plumb init` there if you genuinely mean it", filepath.Join(root, ".plumb"))
 	}
 	return os.MkdirAll(filepath.Join(root, ".plumb"), 0o755)
 }

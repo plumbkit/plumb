@@ -1,28 +1,45 @@
 package cli
 
-// pool_homeguard.go — the identity machinery behind every home-directory
-// workspace guard. This file owns one question: "is this directory a home
-// directory?" (sameDirAs, by os.SameFile). Identity terminates the walks —
-// Detect, SynthesiseRoot, detectLanguageAt — so $HOME itself never becomes a
-// workspace root without a deliberate marker or an explicit declaration.
+// pool_homeguard.go — the home-directory machinery behind the workspace
+// guards. This file owns two questions.
 //
-// It deliberately does NOT answer "does this directory CONTAIN a home
-// directory?", which would refuse a root like /Users. That guard was built and
-// removed again: seven rounds of adversarial review defeated three successive
-// implementations, each on a different macOS path-aliasing shape — a lexical
-// ancestry test lost to the /System/Volumes/Data/Users firmlink, and the
-// os.SameFile ancestor walk that replaced it still missed /System/Volumes/Data
-// itself, which contains $HOME while sharing an inode with no ancestor of
-// canonical($HOME). Tracked as issue #306 rather than shipped
-// defeated. The identity guard here fixes the reported
-// defect (a dotfiles repo at $HOME capturing the whole home directory) and is
-// the part that survived every round.
+// "Is this directory A home directory?" — sameDirAs, by os.SameFile identity.
+// Identity terminates the walks (Detect, SynthesiseRoot, detectLanguageAt),
+// so $HOME itself never becomes a workspace root without a deliberate marker
+// or an explicit declaration.
+//
+// "Does this directory CONTAIN a home directory?" — homeUnder. Three earlier
+// implementations of this guard were each defeated by a different macOS
+// path-aliasing shape (issue #306 records them all): a lexical ancestry test
+// lost to the /System/Volumes/Data/Users firmlink — that path IS /Users, same
+// inode, and every resolve-then-compare-strings verdict says otherwise — and
+// the os.SameFile ancestor walk that replaced it missed /System/Volumes/Data
+// itself, which contains $HOME while sharing an inode with NEITHER /Users nor
+// /. The predicate that ships probes in the other direction: for every suffix
+// of home's own components, join the candidate to that suffix and let the
+// KERNEL resolve the join (firmlinks, volume aliases and symlinks are
+// answered by path traversal), then compare the result to home by identity.
+// Any path to home ends in home's own component names — dentry names are
+// unique within a parent, and firmlinks duplicate subtrees under identical
+// names — so one of the probes lands. Known limits, stated rather than
+// claimed away: a SYMLINK below the candidate reaching home under a name of
+// its own, Linux bind mounts, and spellings that differ only in case.
+//
+// The refusal built on it (undeclaredWideRootErr) sits where the session's
+// root is SET and the pin's origin is in scope — never in detect(), which has
+// no notion of a declaration and broke hermetic sandboxes (HOME repointed
+// into the checkout) the last time containment was tried there.
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // deliberatePlumbMarker reports whether the .plumb directory at dir carries
@@ -121,4 +138,120 @@ func sameDirAs(dir string, infos []os.FileInfo) bool {
 		}
 	}
 	return false
+}
+
+// userDBHome returns the home directory recorded in the OS user database
+// (os/user.Current), or "" when there is none. Memoised — a process's uid
+// does not move while it runs.
+//
+// Deliberately NOT $HOME. The containment guard refuses UNDECLARED wide roots
+// like /Users or /home, and hermetic build sandboxes repoint $HOME INSIDE the
+// checkout (HOME=$PWD/.home; Bazel execroots, nix-shell and CI images do the
+// same thing). Keying containment on $HOME would refuse those checkouts on
+// every non-explicit attach — exactly the undetectable-workspace failure that
+// killed the guard's first placement in detect(). The user-database home is
+// the machine's real credential store; a repointed $HOME is a sandbox the
+// caller built. Falls open (and logs once, loudly) when the database has no
+// entry — the guard is inert rather than absolute on a broken machine, the
+// same trade homeDirInfos makes.
+var userDBHome = sync.OnceValue(func() string {
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		slog.Warn("workspace detection: no user-database home directory — the home-containment guard is disarmed for this process (the identity guard still runs)")
+		return ""
+	}
+	return u.HomeDir
+})
+
+// homeUnder reports whether dir CONTAINS the home directory: dir sits on some
+// kernel path that reaches home, whether or not dir is a LEXICAL ancestor of
+// home's spelling. "Directory C contains directory H" has no syscall; every
+// answer is either a string comparison (defeated by aliasing) or a walk from
+// one end (defeated by aliases reachable only from the other). This probes
+// instead of walking: for every suffix of home's components — including the
+// empty suffix, which covers dir BEING home — it joins dir to the suffix,
+// hands the join to the kernel to resolve, and compares the result to home by
+// identity (dev+inode), never by spelling.
+//
+// Why the probes suffice: any kernel path to home ends in home's own
+// component names — a directory's dentry name is unique within its parent, and
+// macOS firmlinks duplicate a subtree under IDENTICAL names on both sides —
+// so a container of home reaches it through a chain whose tail is one of
+// these suffixes, and the kernel's own traversal resolves firmlinks and
+// symlinked spellings of the container along the way. That is the shape
+// /System/Volumes/Data (suffix "Users/<name>") and /System/Volumes/Data/Users
+// (suffix "<name>") both present, and both are covered by
+// TestHomeUnder_MacOSSystemVolumeAliases on a real macOS machine.
+//
+// Known limits: a symlink BELOW dir reaching home under a name of its own
+// (the probe set only enumerates home's names), a Linux bind mount of home
+// under dir, and components differing only in case. A root so constructed is
+// a caller's own planting, not a wide system directory.
+func homeUnder(dir, home string) bool {
+	if dir == "" || home == "" {
+		return false
+	}
+	homeInfo, err := os.Stat(home)
+	if err != nil {
+		return false
+	}
+	comps := strings.Split(filepath.Clean(home), string(filepath.Separator))
+	for i := len(comps); i >= 1; i-- {
+		probe := dir
+		if i < len(comps) {
+			probe = filepath.Join(append([]string{dir}, comps[i:]...)...)
+		}
+		if info, err := os.Stat(probe); err == nil && os.SameFile(info, homeInfo) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsUserHome reports whether dir is, or CONTAINS, a home directory:
+// identity against every determinable home (the $HOME the daemon inherited
+// included), then containment against the machine's real one. The two halves
+// key differently on purpose — see homeDirInfos and userDBHome.
+func containsUserHome(dir string) bool {
+	if sameDirAs(dir, homeDirInfos()) {
+		return true
+	}
+	if home := userDBHome(); home != "" {
+		return homeUnder(dir, home)
+	}
+	return false
+}
+
+// undeclaredWideRootErr is the containment guard consulted by all three
+// writers of v.acquiredRoot (attachWorkspacePinFrom, attachSynthetic, and
+// attachOrRepinTo via repinWorkspaceFrom): a root that is or CONTAINS a home
+// directory may only be pinned by an explicit session_start declaration
+// (issue #182's contract — an explicit pin always succeeds — is the
+// carve-out). Every other origin is a weaker signal than "the caller named
+// this directory": a client-reported root, a rehydrated row, an incidental
+// tool path. Pinning /Users, /home, / or /System/Volumes/Data without a
+// declaration puts every home directory on the machine — every SSH key and
+// credential under them — inside the session's read-write boundary
+// (issue #306).
+//
+// The check lives HERE, at the root-setting choke point where the origin is
+// in scope, rather than in detect(): detection has no notion of a
+// declaration, so it could only refuse for everyone — and the last time
+// containment was tried there, hermetic sandboxes whose $HOME lives inside
+// the checkout became undetectable with nothing naming the cause. Detection
+// keeps answering "which project is this?" for everyone; this function decides who may PIN the answer.
+func undeclaredWideRootErr(root string, origin sessionstate.PinSource) error {
+	if origin == sessionstate.PinSourceSessionStart {
+		return nil
+	}
+	if sameDirAs(root, homeDirInfos()) {
+		return fmt.Errorf(
+			"root %s is a home directory and was not declared by an explicit session_start — pinning it would put every credential under it inside the boundary", root)
+	}
+	if home := userDBHome(); home != "" && homeUnder(root, home) {
+		return fmt.Errorf(
+			"root %s contains the home directory %s — pinning it would put every credential under that home inside the boundary. Call session_start({workspace: %q}) if you really mean it",
+			root, home, root)
+	}
+	return nil
 }

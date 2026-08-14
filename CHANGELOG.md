@@ -111,6 +111,44 @@
   identity-only check was containment ("at or above", "or one that CONTAINS
   it") are rewritten to describe the code that ships, naming the containment
   gap issue #306.
+### Security
+
+- **A workspace root that CONTAINS a home directory can no longer be pinned
+  without a declaration.** `/Users`, `/home`, `/`, and macOS's
+  `/System/Volumes/Data` each contain every home directory on the machine —
+  every SSH key and credential under them — and until now any of them could
+  become a session's read-write boundary with no declaration at all: a client
+  reporting the folder in roots/list, or a `find_files({path: "/Users"})`
+  under auto_attach, was enough (issue #306). The #288 identity guard closed
+  the rung below (a root that IS a home directory); this closes the rung
+  above it.
+
+  The refusal sits where the session's root is SET — all three writers of the
+  connection's acquired root, plus `materialisePlumbDir` (so
+  auto_attach_persist cannot mint a standing `.plumb` at a wide root) — and
+  every origin but an explicit `session_start` is refused. A declared pin of
+  a wide directory still succeeds: issue #182's contract is preserved.
+
+  Containment is answered by probing, not walking: each suffix of the home
+  path is joined to the candidate and handed to the kernel to resolve, then
+  compared to home by filesystem identity. That catches exactly the shapes
+  the three earlier, defeated implementations missed — `/System/Volumes/Data`
+  (contains $HOME while sharing an inode with no ancestor of it) and
+  `/System/Volumes/Data/Users` (which IS `/Users`, same inode) — and both are
+  asserted live on macOS hardware. The check keys on the OS user-database
+  home rather than `$HOME`, so hermetic build sandboxes whose `$HOME` lives
+  inside the checkout (HOME=$PWD/.home, Bazel execroots, nix-shell, CI
+  images) still attach: detection is left intact, and the last time
+  containment was enforced there, those workspaces became undetectable.
+  The guard is also re-asked on every path-policy rebuild, not only at
+  attach: the pinned root is re-canonicalised each rebuild (the config poll
+  alone runs every 30 seconds), and a directory swapped for a symlink to a
+  home-containing one between attach and a rebuild must not widen the
+  boundary — an undeclared session whose canonical root now contains a home
+  directory loses its policy entirely (fail closed, session marked blocked).
+  Known limits, documented in `docs/threat-model.md` and the code: a symlink
+  planted inside the root reaching home under a name of its own, Linux bind
+  mounts, and case-only spelling differences.
 
 ## 0.16.6 (2026-08-14)
 

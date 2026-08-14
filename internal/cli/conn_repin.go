@@ -99,9 +99,18 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		// home directory — SynthesiseRoot refuses it and the pin stays put.
 		root = s.pool.SynthesiseRoot(folder, origin == sessionstate.PinSourceSessionStart)
 		if root == "" {
-			return "", fmt.Errorf("refusing to pin %s as a workspace from a non-explicit source (%s): it is the home directory, or contains one, so pinning it would put every credential file under that home inside the boundary. Call session_start({workspace: %q}) if you really mean it", folder, pinSourceLabel(origin), folder)
+			return "", fmt.Errorf("refusing to pin %s as a workspace from a non-explicit source (%s): it is the home directory, so pinning it would put every credential file under it inside the boundary. Call session_start({workspace: %q}) if you really mean it", folder, pinSourceLabel(origin), folder)
 		}
 		language = LanguageNone
+	}
+	// Containment guard (issue #306): SynthesiseRoot above refuses a
+	// home-IDENTITY root for a non-explicit origin, but a root CONTAINING a
+	// home directory synthesises to itself — and a detected wide root (the
+	// non-synthetic branch) never passes through that check at all. Both are
+	// refused here, where the origin is in scope; an explicit session_start
+	// still succeeds (issue #182).
+	if err := undeclaredWideRootErr(root, origin); err != nil {
+		return "", err
 	}
 	// root is canonical here — both Detect and SynthesiseRoot resolve symlinks
 	// (issue #263) — which is what lets the sticky-pin guard below recognise a
