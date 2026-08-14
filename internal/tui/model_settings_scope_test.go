@@ -2,12 +2,15 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // TestTomlPath_ProjectVsGlobalOnly pins the single source of truth for which
@@ -460,6 +463,90 @@ func TestCollectSettingsScopes_GlobalFirst(t *testing.T) {
 	}
 	if scopes[1].folder != "/repo" {
 		t.Errorf("second scope folder = %q, want /repo", scopes[1].folder)
+	}
+}
+
+// TestCollectSettingsScopes_WorktreesCollapseOntoMainWorktree pins the grouping
+// rule of the scope column: a session living in a git linked worktree (the
+// .claude/worktrees/* checkouts a multi-agent session spawns) must not surface
+// as its own workspace — it collapses onto the repository's main worktree,
+// both when that main worktree is a plain repository (.git dir) and when it is
+// a submodule checkout (.git pointer file into .git/modules/...).
+func TestCollectSettingsScopes_WorktreesCollapseOntoMainWorktree(t *testing.T) {
+	tmp := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Plain repository at tmp/repo with a linked worktree at tmp/repo/wt.
+	repo := filepath.Join(tmp, "repo")
+	wtCommon := filepath.Join(repo, ".git")
+	write(filepath.Join(wtCommon, "worktrees", "wt", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(repo, "wt", ".git"), "gitdir: "+filepath.Join(wtCommon, "worktrees", "wt")+"\n")
+
+	// Submodule-style main worktree at tmp/super/plumb whose .git points into
+	// .git/modules/plumb, with a linked worktree inside it at
+	// tmp/super/plumb/.claude/worktrees/swt (the multi-agent layout).
+	super := filepath.Join(tmp, "super")
+	mod := filepath.Join(super, "plumb")
+	modCommon := filepath.Join(super, ".git", "modules", "plumb")
+	write(filepath.Join(modCommon, "worktrees", "swt", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(mod, ".git"), "gitdir: ../.git/modules/plumb\n")
+	write(filepath.Join(mod, ".claude", "worktrees", "swt", ".git"), "gitdir: "+filepath.Join(modCommon, "worktrees", "swt")+"\n")
+
+	m := &Model{
+		dashProjectFolder: repo,
+		sessions: []session.Info{
+			{Folder: repo}, // main worktree directly
+			{Folder: filepath.Join(repo, "wt")},
+			{Folder: filepath.Join(mod, ".claude", "worktrees", "swt")},
+			{Folder: tmp}, // a workspace that is no one's worktree
+		},
+	}
+	scopes := m.collectSettingsScopes()
+	folders := make([]string, 0, len(scopes)-1)
+	for _, sc := range scopes[1:] {
+		folders = append(folders, sc.folder)
+	}
+	// Sorted: tmp, then tmp/repo (wt collapsed onto it), then tmp/super/plumb
+	// (swt collapsed onto it).
+	want := []string{tmp, repo, mod}
+	if len(folders) != len(want) {
+		t.Fatalf("scope folders = %v, want %v", folders, want)
+	}
+	for i := range want {
+		if folders[i] != want[i] {
+			t.Fatalf("scope folder %d = %q, want %q (all: %v)", i, folders[i], want[i], folders)
+		}
+	}
+}
+
+// TestMainWorktreeOf_FailsOpen pins the fallbacks: folders that are not linked
+// worktrees — no .git, a .git directory, a submodule's MAIN worktree — pass
+// through unchanged instead of being dropped or rewritten.
+func TestMainWorktreeOf_FailsOpen(t *testing.T) {
+	tmp := t.TempDir()
+	plain := filepath.Join(tmp, "plain")
+	if err := os.MkdirAll(filepath.Join(plain, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(tmp, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: ../.git/modules/sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{tmp, plain, sub} {
+		if got := mainWorktreeOf(folder); got != folder {
+			t.Errorf("mainWorktreeOf(%q) = %q, want it unchanged", folder, got)
+		}
 	}
 }
 

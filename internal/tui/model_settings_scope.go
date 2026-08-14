@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -16,15 +19,82 @@ type settingScope struct {
 
 // collectSettingsScopes builds the scope column: Global first, then one entry
 // per active workspace (deduped sessions + the TUI launch dir, reusing the
-// Memory section's collector). Stable order so the cursor never jumps.
+// Memory section's collector), with git linked worktrees collapsed onto their
+// repository's main worktree — the throwaway worktrees a multi-agent session
+// spawns (.claude/worktrees/*) are checkout dirs of one repo, not separate
+// workspaces, and must not each get a scope row. Stable order so the cursor
+// never jumps.
 func (m *Model) collectSettingsScopes() []settingScope {
 	wss := m.collectMemoryWorkspaces()
-	scopes := make([]settingScope, 0, 1+len(wss))
-	scopes = append(scopes, settingScope{global: true, label: "Global"})
+	seen := make(map[string]bool, len(wss))
+	folders := make([]string, 0, len(wss))
 	for _, ws := range wss {
-		scopes = append(scopes, settingScope{folder: ws.Folder, label: ws.Label})
+		folder := mainWorktreeOf(ws.Folder)
+		if seen[folder] {
+			continue
+		}
+		seen[folder] = true
+		folders = append(folders, folder)
+	}
+	sort.Strings(folders)
+	scopes := make([]settingScope, 0, 1+len(folders))
+	scopes = append(scopes, settingScope{global: true, label: "Global"})
+	for _, f := range folders {
+		scopes = append(scopes, settingScope{folder: f, label: filepath.Base(f)})
 	}
 	return scopes
+}
+
+// mainWorktreeOf maps a workspace folder to the main worktree of its git
+// repository when the folder is a linked worktree (a `.claude/worktrees/*`
+// checkout or a `git worktree add`), and to the folder itself in every other
+// case. Pure filesystem layout — no git subprocess: a linked worktree's `.git`
+// is a file `gitdir: <common>/worktrees/<name>`, and the main worktree is the
+// nearest ancestor whose `.git` is (or points at) <common>. Any doubt — no
+// `.git` pointer, a target that is not a worktree admin dir, no matching
+// ancestor (a worktree checked out outside the repo tree) — leaves the folder
+// alone, so an unrecognised layout degrades to one-entry-per-folder.
+func mainWorktreeOf(folder string) string {
+	gitdir, ok := gitdirPointer(folder)
+	if !ok || filepath.Base(filepath.Dir(gitdir)) != "worktrees" {
+		return folder // plain repo, a submodule's main worktree, or no repo at all
+	}
+	common := filepath.Dir(filepath.Dir(gitdir))
+	for dir := folder; ; dir = filepath.Dir(dir) {
+		if target, ok := gitdirPointer(dir); ok && target == common {
+			return dir // submodule-style main worktree: .git points at the common dir
+		}
+		if filepath.Join(dir, ".git") == common {
+			return dir // plain repository: its .git directory is the common dir
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return folder // reached the filesystem root without a match
+		}
+	}
+}
+
+// gitdirPointer reads dir/.git when it is git's pointer FILE (a linked
+// worktree or a submodule checkout) and returns the resolved gitdir target.
+// The bool is false when .git is a directory (a repository's main worktree)
+// or missing, and when the file does not carry a parseable gitdir pointer.
+func gitdirPointer(dir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return "", false
+	}
+	s := strings.TrimSpace(string(data))
+	const prefix = "gitdir:"
+	if !strings.HasPrefix(s, prefix) {
+		return "", false
+	}
+	target := strings.TrimSpace(strings.TrimPrefix(s, prefix))
+	if target == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	return filepath.Clean(target), true
 }
 
 // currentScope returns the selected scope, defaulting to Global.
