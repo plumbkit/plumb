@@ -8,8 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // mutationtest_test.go covers mutation_test. The load-bearing cases are the two
@@ -361,6 +365,64 @@ func TestMutationTest_RestoresOnCancelledContext(t *testing.T) {
 	}
 }
 
+// ctxRecordingClient is an lsp.Client that records the context each
+// didChangeWatchedFiles notification arrives with. The embedded nil interface
+// satisfies the other 22 methods at compile time and panics if one is called,
+// which is the desired outcome — the write path must touch nothing else.
+type ctxRecordingClient struct {
+	lsp.Client
+	mu   sync.Mutex
+	errs []error
+}
+
+func (c *ctxRecordingClient) DidChangeWatchedFiles(ctx context.Context, _ protocol.DidChangeWatchedFilesParams) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.errs = append(c.errs, ctx.Err())
+	return nil
+}
+
+func (c *ctxRecordingClient) recorded() []error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]error(nil), c.errs...)
+}
+
+// TestMutationTest_RestoreNotificationOutlivesACancelledContext pins the
+// context.WithoutCancel in restore. Restoring the BYTES survives cancellation
+// for free (the write path takes no context), so the only thing WithoutCancel
+// buys is the notification that tells the language server the mutant is gone —
+// and without it, a cancelled request leaves the server believing the mutated
+// content is still on disk. That is invisible to a test with no LSP client
+// wired, which is exactly how it survived mutation until this test existed.
+func TestMutationTest_RestoreNotificationOutlivesACancelledContext(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	client := &ctxRecordingClient{}
+	env.tool.deps.Client = client
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	raw, err := json.Marshal(map[string]any{
+		"mutants": []map[string]any{{"file_path": env.file, "old_string": "42", "new_string": "43"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.tool.Execute(ctx, raw); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := client.recorded()
+	if len(got) < 2 {
+		t.Fatalf("want a notification for both the mutation and the restore, got %d", len(got))
+	}
+	// The LAST notification is the restore's, and it must carry a live context.
+	if last := got[len(got)-1]; last != nil {
+		t.Fatalf("the restore notification ran on a cancelled context (%v) — "+
+			"the language server is left believing the mutant is still on disk", last)
+	}
+}
+
 // --- safety preconditions ----------------------------------------------------
 
 func TestMutationTest_RefusesDirtyFile(t *testing.T) {
@@ -437,13 +499,47 @@ func TestMutationTest_RefusesWithoutACompileGate(t *testing.T) {
 	}
 }
 
+// TestMutationTest_RefusesConcurrentRun drives two real runs at once rather
+// than holding mutationRunLock from the test. Holding it here would make the
+// guard's REMOVAL surface as "unlock of unlocked mutex" — a process-level
+// fatal, not an assertion — which fails for the right reason by accident and
+// says nothing about what broke. Two genuine callers make the removal show up
+// as what it is: two runs proceeding where one had to be refused.
 func TestMutationTest_RefusesConcurrentRun(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
-	mutationRunLock.Lock()
-	defer mutationRunLock.Unlock()
-	_, err := env.run(t, "42", "43")
-	if err == nil || !strings.Contains(err.Error(), "already in progress") {
-		t.Fatalf("a second concurrent run must be refused; got %v", err)
+	// Hold the first run inside its test step long enough for the second to overlap.
+	env.installScript(t, env.testScript, "sleep 1; exit 0")
+	env.commitAll(t)
+
+	raw, err := json.Marshal(map[string]any{
+		"mutants": []map[string]any{{"file_path": env.file, "old_string": "42", "new_string": "43"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	start := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = env.tool.Execute(context.Background(), raw)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var refused int
+	for _, e := range errs {
+		if e != nil && strings.Contains(e.Error(), "already in progress") {
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("exactly one of two concurrent runs must be refused, got %d refusals (errs: %v, %v)", refused, errs[0], errs[1])
 	}
 }
 
