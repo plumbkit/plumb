@@ -326,6 +326,25 @@
   The lesson is the pattern, not the count: every surface that derives its own
   mailbox address is a fresh chance to skip the gate, so the guard belongs at
   each of them rather than in one place they are all assumed to route through.
+### Changed
+
+- **`edit_file` now says when an anchor edit swallowed a line break, and points
+  large multi-line edits at range mode.**
+
+  Anchor mode is character-precise: it replaces exactly the span between the two
+  anchors. Quoting a `start_anchor` without its trailing newline and a
+  `new_string` without a leading one therefore joins those lines — which is how
+  you deliberately rewrite the tail of a line, and also the easy mistake. The
+  span maths is unchanged (inserting a newline would corrupt every legitimate
+  mid-line edit); instead the result now carries an advisory note when an edit
+  removes a line break that was there. It never refuses, and it cannot fire on a
+  mid-line edit, because such an edit had no newline at the seam to lose.
+
+  The tool description also now leads big replacements to **range mode**.
+  `old_string` and anchors must be reproduced character-for-character inside a
+  JSON string, so escaping cost grows with the size of the region; range mode
+  needs neither — read the file, take the 1-based line numbers, send only
+  `new_string`. Same atomicity and locking, a fraction of the escaping.
 
 ## 0.16.6 (2026-08-14)
 
