@@ -90,7 +90,19 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 	d := filepath.Clean(start)
 	first := true
 	for {
-		atHome := sameDirAs(d, homeInfo)
+		// At OR above a home directory. Both are terminal, and containment has to
+		// be tested here rather than only at the synthesise fallback: a wide
+		// directory carrying a marker makes Detect SUCCEED, and the success path
+		// never reaches SynthesiseRoot's refusal. Review demonstrated that with a
+		// find_files({path: "/Users"}) call in the DEFAULT configuration — and
+		// plumb could mint the marker itself, since materialisePlumbDir guarded
+		// identity only.
+		//
+		// Refusing here does not weaken issue #182: repinWorkspaceFrom calls
+		// Detect first and falls back to SynthesiseRoot on failure, which honours
+		// an explicitly declared wide root. So an explicit pin still succeeds; only
+		// the routes with no declaration lose it, which is the whole distinction.
+		atHome := sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo)
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
 		// plumb workspace, and stats / project config should follow that
@@ -115,7 +127,7 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		// directory resolved $HOME's parent: a root strictly wider than the
 		// escape this guard exists to block.
 		if atHome {
-			return "", "", fmt.Errorf("no project root found between %s and the home directory (which is never ascended past)", start)
+			return "", "", fmt.Errorf("no project root found between %s and the home directory (which is never used as a workspace root, nor ascended past)", start)
 		}
 		// Next: first language whose STRONG root marker exists at d.
 		if lang := p.strongLangAt(d); lang != "" {

@@ -319,7 +319,9 @@ func TestDetect_ProjectUnderResidualHomeStillResolves(t *testing.T) {
 // attaches for the session only — a machine-created ~/.plumb outlives the pin
 // and would re-open the whole-home workspace for every later session.
 func TestMaterialisePlumbDir_RefusesHome(t *testing.T) {
-	home := freshTempDir(t)
+	base := freshTempDir(t) // stands in for /Users — CONTAINS the home directory
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
@@ -328,6 +330,18 @@ func TestMaterialisePlumbDir_RefusesHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".plumb")); err == nil {
 		t.Fatal("materialisePlumbDir($HOME) created ~/.plumb despite refusing")
+	}
+
+	// A directory CONTAINING the home directory, not just the home directory
+	// itself. Found as a surviving mutation: minting a marker at /Users makes
+	// detect() succeed there for every later session with no declaration at all,
+	// which turns one explicit pin into a standing workspace holding every home
+	// directory on the machine.
+	if err := materialisePlumbDir(base); err == nil {
+		t.Errorf("materialisePlumbDir(%q) succeeded; it contains the home directory %q", base, home)
+	}
+	if _, err := os.Stat(filepath.Join(base, ".plumb")); err == nil {
+		t.Errorf("materialisePlumbDir(%q) created the marker despite refusing", base)
 	}
 
 	// Control: an ordinary synthetic root still materialises.
