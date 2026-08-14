@@ -1,9 +1,15 @@
 package cli
 
-// pool_homeguard.go — the identity machinery behind every home-directory
-// workspace guard. Detect, SynthesiseRoot, detectLanguageAt, and the attach
-// paths all refuse to treat $HOME as (or ascend past it into) a workspace
-// root; this file owns how "is this directory the home directory?" is decided.
+// pool_homeguard.go — the identity and ancestry machinery behind every
+// home-directory workspace guard. This file owns how "is this directory a home
+// directory?" (sameDirAs) and "does this directory contain one?"
+// (containsHomeDir) are decided. IDENTITY terminates the walks — Detect,
+// SynthesiseRoot, detectLanguageAt — so $HOME itself never becomes a root
+// without a deliberate marker or an explicit declaration; CONTAINMENT is
+// enforced where the session's root is set (undeclaredWideRootErr, the choke
+// consulted by every writer of v.acquiredRoot) plus SynthesiseRoot's own
+// refusals and materialisePlumbDir, so a root strictly above a home directory
+// needs an explicit session_start declaration every time.
 
 import (
 	"log/slog"

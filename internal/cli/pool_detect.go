@@ -418,10 +418,15 @@ func (p *workspacePool) lspLanguageForRoot(dir string) string {
 // dir or any ancestor, or "". Used to resolve the adapter for an already-known
 // root. Weak markers are not consulted here (see weakLangAt / lspLanguageForRoot).
 //
-// The ancestor walk stops at $HOME, mirroring Detect's .git fallback guard: a
-// stray language marker in the home directory (e.g. a global ~/go.mod) must not
-// capture every .plumb workspace beneath it. $HOME and anything above it are
-// never a project root, so they are never consulted for the language.
+// The ancestor walk stops at $HOME by IDENTITY, mirroring Detect's .git
+// fallback guard: a stray language marker in the home directory (e.g. a global
+// ~/go.mod) must not capture every .plumb workspace beneath it. For a walk
+// starting beneath $HOME that also covers everything above it — the walk meets
+// $HOME first — but a walk starting elsewhere does consult directories that
+// contain a home directory. That is deliberate, not an oversight: this
+// function names a LANGUAGE for an already-fixed root, never the root or the
+// boundary, and testing containment here would return "" for a repo whose
+// sandbox $HOME lives inside it (the round-6 B3 regression class).
 func (p *workspacePool) detectLanguageAt(dir string) string {
 	homeInfo := homeDirInfos()
 	d := dir
