@@ -22,9 +22,9 @@ import (
 // mutationEnv is a disposable git repository with one source file, wired to a
 // tool whose compile and test commands are scripts the test controls.
 type mutationEnv struct {
-	root   string
-	file   string
-	tool   *MutationTest
+	root          string
+	file          string
+	tool          *MutationTest
 	compileScript string
 	testScript    string
 }
@@ -698,10 +698,14 @@ func TestFormatMutationReport_Shape(t *testing.T) {
 		timeout: time.Minute,
 	}
 	results := []mutationResult{
-		{spec: mutantSpec{Old: "a", New: "b", Label: "guard"}, display: "x.go", outcome: MutationKilled,
-			compile: stepOutcome{ran: true}, test: stepOutcome{ran: true, exitCode: 1, output: "FAIL"}},
-		{spec: mutantSpec{Old: "c", New: ""}, display: "y.go", outcome: MutationSurvived,
-			compile: stepOutcome{ran: true}, test: stepOutcome{ran: true}},
+		{
+			spec: mutantSpec{Old: "a", New: "b", Label: "guard"}, display: "x.go", outcome: MutationKilled,
+			compile: stepOutcome{ran: true}, test: stepOutcome{ran: true, exitCode: 1, output: "FAIL"},
+		},
+		{
+			spec: mutantSpec{Old: "c", New: ""}, display: "y.go", outcome: MutationSurvived,
+			compile: stepOutcome{ran: true}, test: stepOutcome{ran: true},
+		},
 		{spec: mutantSpec{Old: "d", New: "e"}, display: "z.go", outcome: MutationInvalid, reason: reasonNotApplied},
 	}
 	out := formatMutationReport(args, plan, []string{"z.go is not in a git repository"}, results)

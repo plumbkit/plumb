@@ -170,9 +170,10 @@ type mutationTestArgs struct {
 	TimeoutSecs int          `json:"timeout_seconds"`
 }
 
-// applyDefaults fills the unset slots. Kept separate from validate so the
-// defaults are stated in one readable place.
-func (a *mutationTestArgs) applyDefaults() {
+// withDefaults returns a copy with the unset slots filled. A value receiver
+// keeps every method on mutationTestArgs consistent (recvcheck), and the
+// defaults stay stated in one readable place.
+func (a mutationTestArgs) withDefaults() mutationTestArgs {
 	if a.TestTask == "" {
 		a.TestTask = "test"
 	}
@@ -182,6 +183,7 @@ func (a *mutationTestArgs) applyDefaults() {
 	if a.TimeoutSecs == 0 {
 		a.TimeoutSecs = int(defaultTaskTimeout / time.Second)
 	}
+	return a
 }
 
 func (a mutationTestArgs) validate() error {
@@ -266,8 +268,7 @@ func parseMutationTestArgs(raw json.RawMessage) (mutationTestArgs, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return a, fmt.Errorf("mutation_test: invalid arguments: %w", err)
 	}
-	a.applyDefaults()
-	return a, nil
+	return a.withDefaults(), nil
 }
 
 // resolvePlan resolves both stored commands up front. The compile command is
@@ -332,7 +333,7 @@ func (t *MutationTest) preflight(ctx context.Context, specs []mutantSpec) ([]mut
 		}
 		if inRepo, _ := gitCleanliness(ctx, tgt.path); !inRepo && !unprotected[tgt.display] {
 			unprotected[tgt.display] = true
-			warnings = append(warnings, fmt.Sprintf("%s is not in a git repository — if this daemon dies mid-run there is no `git checkout` to fall back on", tgt.display))
+			warnings = append(warnings, tgt.display+" is not in a git repository — if this daemon dies mid-run there is no `git checkout` to fall back on")
 		}
 		targets = append(targets, tgt)
 	}
