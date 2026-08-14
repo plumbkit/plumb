@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/sessionstate"
@@ -91,9 +92,8 @@ func TestOnBeforeTool_WorkspaceArgDoesNotLaunderAnIncidentalSeed(t *testing.T) {
 	}
 }
 
-// TestOnBeforeTool_WideRootWithAMarkerIsNotPinned is round 5's finding, and the
-// reason containment is tested in detect() rather than only at the synthesise
-// fallback.
+// TestOnBeforeTool_WideRootWithAMarkerIsNotPinned is round 5's finding, held
+// today by the containment choke at the root writers (undeclaredWideRootErr).
 //
 // SynthesiseRoot is reached only on Detect's FAILURE branch. When the wide
 // directory carries a marker Detect SUCCEEDS, and the success path never
@@ -101,7 +101,10 @@ func TestOnBeforeTool_WorkspaceArgDoesNotLaunderAnIncidentalSeed(t *testing.T) {
 // such a directory (both take a DIRECTORY as `path`) pinned it. That path is
 // not behind auto_attach, so it was reachable in the default configuration; and
 // plumb could mint the marker itself, because materialisePlumbDir guarded
-// identity only.
+// identity only. Round 5 refused this inside detect(); round 6 showed that
+// shape breaks legitimate repos containing a sandbox home directory, so the
+// refusal now lives where the pin is written, gated on the pin's origin —
+// detection succeeds here, and the PIN is what gets refused.
 func TestOnBeforeTool_WideRootWithAMarkerIsNotPinned(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	base := freshTempDir(t) // stands in for /Users
@@ -236,6 +239,162 @@ func TestRehydratePin_HomePinNeedsSessionStartOrigin(t *testing.T) {
 	explicit.rehydratePin(context.Background())
 	if got := explicit.workspace(); got != home {
 		t.Fatalf("a session_start-origin $HOME pin restored %q, want %q — the explicit contract must survive the guard", got, home)
+	}
+}
+
+// TestAttachWorkspace_ClientRootContainingHomeRefused holds the containment
+// choke on the CLIENT-ROOTS attach route: attachWorkspace (roots/list at
+// initialize, and onRootsChanged's first attach) records PinSourceRoots, which
+// is a report of where the client happens to be, not a declaration — so a
+// client reporting a marker-carrying directory that contains the home
+// directory must not pin it. Detect SUCCEEDS on such a directory (the marker
+// wins; detection is identity-guarded only), which is exactly why the refusal
+// has to sit on the pin write.
+func TestAttachWorkspace_ClientRootContainingHomeRefused(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := freshTempDir(t) // stands in for /Users
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	mustMkdir(t, filepath.Join(base, ".git")) // Detect succeeds here
+
+	s := autoAttachSession(t)
+	s.attachWorkspace(context.Background(), "file://"+base)
+	if got := s.workspace(); got != "" {
+		t.Fatalf("a client-reported root %q was pinned; it contains the home directory %q and nothing declared it", got, home)
+	}
+
+	// Control: an ordinary client-reported project still attaches through the
+	// same route, so the choke is about containment, not about roots attaches.
+	proj := filepath.Join(home, "proj")
+	mustMkdir(t, filepath.Join(proj, ".git"))
+	s2 := autoAttachSession(t)
+	s2.attachWorkspace(context.Background(), "file://"+proj)
+	if got := s2.workspace(); got != proj {
+		t.Errorf("control failed — client-reported project attached %q, want %q", got, proj)
+	}
+}
+
+// TestAttachSynthetic_WideRootRefusedAtTheWriter is the belt at the second
+// v.acquiredRoot writer. In the current call graph SynthesiseRoot already
+// returns "" for a non-explicit wide seed before attachSynthetic is reached,
+// so this exercises the direct call — the invariant lives at the writers so a
+// new or changed caller cannot reopen the hole by skipping a courtesy check
+// upstream, and this test is what notices if the writer's own guard is
+// removed on the strength of that upstream check.
+func TestAttachSynthetic_WideRootRefusedAtTheWriter(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := freshTempDir(t)
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	s := autoAttachSession(t)
+	s.attachSynthetic(context.Background(), base, sessionstate.PinSourceRoots, pinTriggerLive)
+	if got := s.workspace(); got != "" {
+		t.Fatalf("attachSynthetic pinned %q, which contains the home directory %q, from a non-explicit origin", got, home)
+	}
+
+	// The explicit origin still lands — issue #182's contract, at this writer.
+	s.attachSynthetic(context.Background(), base, sessionstate.PinSourceSessionStart, pinTriggerLive)
+	if got := s.workspace(); got != base {
+		t.Errorf("an explicit synthetic attach of %q did not land (got %q)", base, got)
+	}
+}
+
+// TestRehydratePin_WideRootPinNeedsSessionStartOrigin extends the $HOME replay
+// rule one rung up, through Detect's SUCCESS branch: a persisted pin naming a
+// marker-carrying directory that CONTAINS the home directory resolves through
+// attachWorkspacePinFrom (not the synthetic fallback), so the choke must hold
+// on the restore trigger too — a row an earlier build persisted from client
+// roots cannot ride the replay back into a whole-/Users workspace, while a
+// genuine session_start row still restores (issue #182).
+func TestRehydratePin_WideRootPinNeedsSessionStartOrigin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := freshTempDir(t)
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	mustMkdir(t, filepath.Join(base, ".git")) // Detect succeeds at the wide root
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	if err := ss.UpsertPin("proxyWideRoots", base, LanguageNone, sessionstate.PinSourceRoots); err != nil {
+		t.Fatalf("UpsertPin: %v", err)
+	}
+	weak := newPersistSession(t, store, ss, "proxyWideRoots")
+	weak.rehydratePin(context.Background())
+	if got := weak.workspace(); got != "" {
+		t.Fatalf("a roots-origin pin of %q was restored to %q; it contains the home directory %q", base, got, home)
+	}
+
+	if err := ss.UpsertPin("proxyWideExplicit", base, LanguageNone, sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("UpsertPin: %v", err)
+	}
+	explicit := newPersistSession(t, store, ss, "proxyWideExplicit")
+	explicit.rehydratePin(context.Background())
+	if got := explicit.workspace(); got != base {
+		t.Fatalf("a session_start-origin pin of %q restored %q; the explicit contract must survive the choke", base, got)
+	}
+}
+
+// TestRepin_SandboxHomeInsideRepoKeepsDetectionAndLanguage is round 6's
+// finding B3, the regression that forced containment out of detect(): a repo
+// whose $HOME is one of its own subdirectories (hermetic build sandboxes with
+// HOME=$PWD/.home, Bazel execroots, nix-shell, CI images repointing HOME
+// inside the checkout) is an ordinary project, and an explicit pin of it must
+// resolve through Detect — real root, real language — not fall through to a
+// synthetic LanguageNone root with no LSP and nothing naming containment as
+// the cause.
+//
+// The language server here is a warming stub (sleepCommand), so the assertion
+// is on the language the session ACQUIRED, not on a display label. The
+// non-explicit counterpart is refused by the choke — such a repo does contain
+// a home directory, so auto-attaching it still demands a declaration; the
+// error says so instead of silently degrading.
+func TestRepin_SandboxHomeInsideRepoKeepsDetectionAndLanguage(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	repo := freshTempDir(t)
+	mustWrite(t, filepath.Join(repo, "go.mod"), "module sandbox\n")
+	mustMkdir(t, filepath.Join(repo, ".git"))
+	sandboxHome := filepath.Join(repo, ".home")
+	mustMkdir(t, sandboxHome)
+	t.Setenv("HOME", sandboxHome)
+	t.Setenv("USERPROFILE", sandboxHome)
+
+	cmd, args := sleepCommand(t)
+	pool := warmingPool(context.Background(), cmd, args)
+	pool.startGrace = time.Millisecond
+	defer pool.close()
+	s := newConnSession(context.Background(), pool, nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	defer s.close()
+
+	root, err := s.repinWorkspaceFrom(context.Background(), repo, "", sessionstate.PinSourceSessionStart, pinTriggerLive, false)
+	if err != nil {
+		t.Fatalf("explicit pin of a repo containing its sandbox $HOME was refused: %v", err)
+	}
+	if root != repo {
+		t.Fatalf("explicit pin resolved %q, want the repo %q", root, repo)
+	}
+	var lang string
+	s.mutate(func(v *sessionView) { lang = v.acquiredLanguage })
+	if lang != "go" {
+		t.Errorf("acquired language = %q, want %q — the pin must keep Detect's real language, not degrade to a synthetic root", lang, "go")
+	}
+
+	// The non-explicit origin is refused BY THE CHOKE, with containment named:
+	// the repo really does contain a home directory, so only a declaration pins it.
+	s2 := newConnSession(context.Background(), pool, nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	defer s2.close()
+	if _, err := s2.repinWorkspaceFrom(context.Background(), repo, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err == nil {
+		t.Error("a non-explicit pin of a repo containing a home directory was accepted; want the containment refusal")
 	}
 }
 

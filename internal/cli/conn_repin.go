@@ -89,27 +89,6 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 			folder, folder,
 		)
 	}
-	// A root that CONTAINS the home directory is refused unless the caller
-	// declared it. sameDirAs guards the home directory itself; this guards the
-	// rung above, where /Users (or /home, or /) admits a workspace holding every
-	// home directory on the machine and every credential in them — strictly wider
-	// than the capture the identity guard exists to block, and reachable with no
-	// declaration at all through a client reporting such a folder in its roots.
-	//
-	// Only non-explicit origins are refused: an explicit session_start naming
-	// such a directory is a declaration, and issue #182's contract is that an
-	// explicit pin always succeeds. The refusal has to live at the pin, because
-	// SynthesiseRoot's fallback returns the SEED — which in this case is the
-	// offending directory itself, so stopping its walk there changes nothing.
-	if origin != sessionstate.PinSourceSessionStart && containsHomeDir(folder, homeDirPaths()) {
-		return "", fmt.Errorf(
-			"repin: %s contains the home directory, so pinning it would put every file under "+
-				"it — including credentials and SSH keys — inside the workspace boundary. "+
-				"Pin the project directory instead. If you genuinely mean it, name it in an "+
-				"explicit session_start workspace argument",
-			folder,
-		)
-	}
 	root, language, err := s.pool.Detect(folder)
 	synthetic := err != nil
 	if synthetic {
@@ -120,7 +99,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		// home directory — SynthesiseRoot refuses it and the pin stays put.
 		root = s.pool.SynthesiseRoot(folder, origin == sessionstate.PinSourceSessionStart)
 		if root == "" {
-			return "", fmt.Errorf("refusing to pin the home directory %s as a workspace from a non-explicit source (%s): call session_start({workspace: %q}) if you really mean to make your entire home directory the workspace", folder, pinSourceLabel(origin), folder)
+			return "", fmt.Errorf("refusing to pin %s as a workspace from a non-explicit source (%s): it is the home directory, or contains one, so pinning it would put every credential file under that home inside the boundary. Call session_start({workspace: %q}) if you really mean it", folder, pinSourceLabel(origin), folder)
 		}
 		language = LanguageNone
 	}
@@ -234,6 +213,17 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 					info.HealthMessage = ""
 				})
 			}
+			return
+		}
+		// The containment choke (see undeclaredWideRootErr), in-lane and on the
+		// RESOLVED root: the requested folder can be narrow while Detect resolves a
+		// marker-carrying ancestor above a home directory, so checking the request
+		// (as an earlier round did, pre-Detect) tests the wrong path. Below the
+		// no-op branch on purpose — a same-root request neither moves the pin nor
+		// needs refusing; above it, a roots notification re-reporting an
+		// explicitly-pinned wide root would have errored on a pin it wasn't moving.
+		if err := undeclaredWideRootErr(root, origin); err != nil {
+			refused = fmt.Errorf("repin: %w", err)
 			return
 		}
 		changed = true

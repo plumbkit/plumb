@@ -87,23 +87,26 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 // detect is Detect's marker walk, before canonicalisation.
 func (p *workspacePool) detect(start string) (root, language string, err error) {
 	homeInfo := homeDirInfos()
-	homePaths := homeDirPaths()
 	d := filepath.Clean(start)
 	first := true
 	for {
-		// At OR above a home directory. Both are terminal, and containment has to
-		// be tested here rather than only at the synthesise fallback: a wide
-		// directory carrying a marker makes Detect SUCCEED, and the success path
-		// never reaches SynthesiseRoot's refusal. Review demonstrated that with a
-		// find_files({path: "/Users"}) call in the DEFAULT configuration — and
-		// plumb could mint the marker itself, since materialisePlumbDir guarded
-		// identity only.
+		// IDENTITY only, deliberately. An earlier round widened this to "at or
+		// above a home directory" so that a marker-carrying wide directory could
+		// not make Detect succeed — and the next round showed that shape is wrong
+		// twice over. It applied the deliberate-marker exemption ABOVE $HOME (a
+		// context.md at /Users, mintable from inside one explicit pin, resolved
+		// /Users for every caller); and detect() has no notion of a DECLARED
+		// workspace, so it could only refuse for everyone — making a repo that
+		// legitimately contains its own home directory (HOME=$PWD/.home hermetic
+		// sandboxes, Bazel execroots, nix-shell, CI images) undetectable, which
+		// cost such workspaces their real language with nothing naming the cause.
 		//
-		// Refusing here does not weaken issue #182: repinWorkspaceFrom calls
-		// Detect first and falls back to SynthesiseRoot on failure, which honours
-		// an explicitly declared wide root. So an explicit pin still succeeds; only
-		// the routes with no declaration lose it, which is the whole distinction.
-		atHome := sameDirAs(d, homeInfo) || containsHomeDir(d, homePaths)
+		// Containment is instead refused where the session's root is SET and the
+		// pin's origin is in scope — undeclaredWideRootErr, consulted by all three
+		// writers of v.acquiredRoot — so a wide detection result still cannot be
+		// pinned without an explicit session_start declaration, while detection
+		// itself keeps answering "which project is this?" for everyone.
+		atHome := sameDirAs(d, homeInfo)
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
 		// plumb workspace, and stats / project config should follow that
