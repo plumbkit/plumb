@@ -1,11 +1,14 @@
 package golangcilint
 
 import (
+	"context"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/quality"
@@ -362,11 +365,93 @@ func TestAnalyse_RetriesWithoutPathModeOnOlderBinary(t *testing.T) {
 	if !slices.Contains(args, pathModeAbs) {
 		t.Errorf("first invocation did not try %s: %v", pathModeAbs, args)
 	}
-	// The retry must have happened: "run" appears once per invocation.
-	if n := strings.Count(strings.Join(args, "\n"), "run"); n < 2 {
+	// The retry must have happened: each invocation's argv starts with the
+	// literal arg "run", so count ARGS EQUAL TO "run", not a substring match
+	// — a substring count is inflated by any temp path containing the letters
+	// "run" (e.g. a TempDir under a path like .../TestAnalyse_Retries.../run123),
+	// which would let a single-invocation regression pass.
+	n := 0
+	for _, a := range args {
+		if a == "run" {
+			n++
+		}
+	}
+	if n < 2 {
 		t.Errorf("golangci-lint was invoked once, want a retry without %s: %v", pathModeAbs, args)
 	}
 }
+
+// The retry-recovered-an-old-binary log must fire exactly once per daemon
+// lifetime, not once per Analyse call — same one-shot contract, and for the
+// same reason, as logUnavailableOnce: the analyser runs on every Go write, so
+// an unconditional log line would flood the log and get ignored. Directly
+// resets the package-level oldBinaryOnce guard (this file is in-package, not
+// an external _test package) so the assertion is not at the mercy of test
+// execution order sharing the process-wide sync.Once with other tests.
+func TestAnalyse_OldBinaryLoggedOnce(t *testing.T) {
+	oldBinaryOnce = sync.Once{}
+	t.Cleanup(func() { oldBinaryOnce = sync.Once{} })
+
+	root := t.TempDir()
+	src := touch(t, root, filepath.Join("sub", "deep", "live.go"))
+
+	// Rejects --path-mode on every invocation, like an older binary.
+	body := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" >> \"$PLUMB_ARGS\"\n" +
+		"for a in \"$@\"; do\n" +
+		"  case \"$a\" in --path-mode*) echo 'unknown flag: --path-mode' >&2; exit 3;; esac\n" +
+		"done\n" +
+		"cat <<'PLUMBEOF'\n" + issuesJSON("sub/deep/live.go") + "\nPLUMBEOF\nexit 1\n"
+	fakeLinterScript(t, body)
+
+	var mu sync.Mutex
+	var records []string
+	h := &captureHandler{fn: func(msg string) {
+		mu.Lock()
+		records = append(records, msg)
+		mu.Unlock()
+	}}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	for i := range 3 {
+		if _, err := New().Analyse(t.Context(), []string{src}); err != nil {
+			t.Fatalf("Analyse call #%d: unexpected error: %v", i, err)
+		}
+	}
+
+	mu.Lock()
+	got := append([]string(nil), records...)
+	mu.Unlock()
+
+	count := 0
+	for _, m := range got {
+		if strings.Contains(m, "predates v2.1.0") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("old-binary log fired %d time(s) across 3 Analyse calls that all triggered the retry, "+
+			"want exactly 1: %v", count, got)
+	}
+}
+
+// captureHandler is a minimal slog.Handler that calls fn with the message of
+// every record; mirrors the equivalent helper in internal/config/store_test.go
+// and internal/cli/daemon_test.go (unexported in each, so duplicated here
+// rather than shared across packages).
+type captureHandler struct {
+	fn func(msg string)
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.fn(r.Message)
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
 // A run that fails with no output on BOTH attempts yields no findings rather
 // than an error — the write has already succeeded.
