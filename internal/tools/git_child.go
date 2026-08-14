@@ -44,8 +44,11 @@ func gitChildEnv(overrides map[string]string) []string {
 		return nil
 	}
 	env := os.Environ()
-	// Deterministic order, so two names differing only by case always resolve
-	// the same way instead of by map-iteration luck.
+	// Deterministic order. setGitEnvVar matches names case-SENSITIVELY, which is
+	// right on Linux and Darwin (both have case-sensitive environments) but not
+	// on Windows, where os/exec folds case when it deduplicates cmd.Env and keeps
+	// the LAST of the matching entries. Sorting the names is what makes that last
+	// one a defined choice rather than map-iteration luck.
 	names := make([]string, 0, len(overrides))
 	for k := range overrides {
 		names = append(names, k)
@@ -74,9 +77,15 @@ func setGitEnvVar(env []string, key, val string) []string {
 // pipes once the git child itself is gone. Matches RunArgv's (cmdexec.go).
 const gitChildWaitDelay = 5 * time.Second
 
-// boundGitChildWait applies the exec hygiene every git child needs, exactly as
+// boundGitChildWait applies the exec hygiene a git child needs, exactly as
 // RunArgv does for task commands (cmdexec.go): its own process group, a
-// group-kill on cancellation, and a WaitDelay.
+// group-kill on cancellation, and a WaitDelay. execGitCmd is the caller, so
+// every git child routed through that chokepoint gets it — which is the one
+// that runs the repository's hooks and can open an editor, i.e. the only one
+// with a realistic way to trigger the hazard below. The auxiliary read queries
+// spawned around it (git_ref_guard.go, git_exec.go's helpers, git.go,
+// git_init.go) run neither, and are left unbounded rather than plumbed for a
+// case that cannot arise.
 //
 // Without the WaitDelay, cmd.Wait() on a command whose Stdout/Stderr are
 // bytes.Buffers can block FOREVER — long past the context deadline, and past

@@ -122,6 +122,14 @@
   content, and the disclosure names the variables and their values. No allowlist
   of "safe" variable names is offered as a substitute for that boundary.
 
+  A project's entries compose with the global ones the way every other config
+  field does — the project's value wins for the names it sets, and a global
+  entry it does not mention survives. That is stated in code rather than left to
+  go-toml, which otherwise makes an inline `env = { … }` replace the global map
+  while the `[git.env]` and `git.env.X = …` spellings merge into it, so the same
+  intent written two ways would reach the git child as two different
+  environments.
+
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's
   `initialize` request, and appending the reconnect note to tool results.

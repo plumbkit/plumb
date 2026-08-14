@@ -214,6 +214,11 @@ func cloneConfig(cfg Config) Config {
 	out.Workspace.ExtraRoots = slices.Clone(cfg.Workspace.ExtraRoots)
 	out.Workspace.ReadRoots = slices.Clone(cfg.Workspace.ReadRoots)
 	out.Git.ProtectedBranches = slices.Clone(cfg.Git.ProtectedBranches)
+	// Not optional: LoadProjectWithPolicy unmarshals a project's .plumb/config.toml
+	// into cloneConfig(base), and go-toml MERGES a `[git.env]` sub-table or a
+	// `git.env.X` dotted key into whatever map is already there. Sharing base's map
+	// would let an untrusted project write straight into the daemon's live config,
+	// behind the trust gate — see TestLoadProject_GitEnvCannotPoisonBase.
 	out.Git.Env = maps.Clone(cfg.Git.Env)
 	if cfg.LSP != nil {
 		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))

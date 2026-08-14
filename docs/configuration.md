@@ -279,6 +279,14 @@ hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
 `log -1`, `rev-parse`, `diff --cached`) are plumbing whose output plumb parses,
 and deliberately keep inheriting.
 
+**A project's entries compose with your global ones**, the way every other
+setting in this file does: the project's value wins for the names it sets, and a
+global entry it does not mention survives. Any of the three TOML spellings gives
+the same result — `env = { X = "y" }` under `[git]`, a `[git.env]` sub-table, or
+a `git.env.X = "y"` dotted key. (TOML's own unmarshalling does not: an inline
+table replaces a map where the other two merge into it. plumb normalises that,
+so a project cannot drop one of your global entries by choosing a spelling.)
+
 > **This is a capability, not a preference, and it is gated as one.** A git
 > child's environment can name commands git will run — `GIT_SSH_COMMAND`,
 > `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND` and `GIT_PAGER` all do, and
