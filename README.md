@@ -10,15 +10,15 @@
 
 <br>
 
-**IDE intelligence for agents — with guardrails for unattended work.**
+**IDE intelligence for agents — guardrails for unattended work, coordination for fleets.**
 
-Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
+Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. And because every agent on the machine shares that one daemon, plumb is also the coordination layer between them: peers see each other's writes, message each other, and hand off work instead of duplicating it. A single binary; nothing else to install.
 
 ---
 
 ## Why Plumb
 
-LLM agents usually work by reading whole files into the context window — token-heavy, lossy at scale, blind to symbol semantics, and unsafe to let loose on a real repo. Plumb is built on three pillars, in priority order.
+LLM agents usually work by reading whole files into the context window — token-heavy, lossy at scale, blind to symbol semantics, and unsafe to let loose on a real repo. Plumb is built on four pillars, in priority order.
 
 ### 1. Reliability & write-safety
 Leaving an agent to edit a codebase for an hour is only viable if writes can't corrupt files and a crash can't wedge your session.
@@ -33,14 +33,24 @@ See it run: [`docs/demos/`](docs/demos/) — `two-agents-one-file.sh` (a stale w
 
 ![daemon-respawn.sh: the daemon is killed mid-session and the agent's next edit still succeeds](docs/assets/daemon-respawn.gif)
 
-### 2. Semantic intelligence
+### 2. Multi-agent coordination
+One daemon serves every agent on the machine — which makes it the natural place for agents to *see and talk to* each other, not merely avoid each other's writes. Locks stop two agents corrupting a file; coordination stops them duplicating a task, rebasing onto a function signature a peer is mid-rewrite of, or shipping a change a peer's in-flight work is about to invalidate.
+
+- **Peer awareness** (on by default) — `workspace_sessions` names every active session and what it *actually wrote*, from writes the daemon itself observed. Facts, not another agent's say-so: an agent about to start a task can see that a peer already has it.
+- **An agent-to-agent mailbox** (on by default, same workspace) — `leave_note` / `check_messages` give sessions a threaded channel: hand a change to the peer already rewriting those files, or ask a peer to *measure* a behaviour instead of assuming it. Messages ride on ordinary tool results, so a working agent receives them without polling.
+- **Advisory intents** (opt-in: `[collab] intents`) — `share_intent` declares what an agent is working on; a peer whose write touches a claimed path gets a hint at the moment of the would-be collision. Intents are deliberately labelled as unverified claims, kept distinct from the observed-write facts, and never block anything.
+- **Durable findings** (opt-in: `[collab] knowledge_handoff`) — `share_findings` turns what an agent just learned into a searchable, secret-scrubbed project memory immediately, so the knowledge outlives the session that produced it.
+
+Coordination is advisory by design — the write-safety above never depends on agents cooperating. Reference: [Cross-agent sharing](docs/tools.md#cross-agent-sharing-collab) in the tool docs and the [`[collab]` config section](docs/configuration.md#collab--cross-agent-sharing).
+
+### 3. Semantic intelligence
 The same primitives your editor has, exposed as structured tools:
 
 - **LSP-backed refactors** — `rename_symbol`, `replace_symbol_body`, `safe_delete_symbol` understand scope, types, and references.
 - **Real diagnostics inline** — actual `gopls`/`pyright` output is appended to every write, so the agent learns it broke the build immediately.
 - **Symbol search** — scoped to your code, no stdlib or dependency noise.
 
-### 3. Context efficiency & safety controls
+### 4. Context efficiency & safety controls
 - **Read only what you need** — symbols or line ranges, not 2,000-line files.
 - **Scoped access you control** — a per-connection path allowlist (read-only vs read-write roots) plus tiered git gating (destructive and network operations are off by default and need explicit confirmation). See [SECURITY.md](SECURITY.md).
 - **One-round-trip bootstrap** — `session_start` returns workspace, branch, recent commits, diagnostics, and project memory.
@@ -158,7 +168,7 @@ Plumb exposes **58 tools**. The ones you'll use constantly:
 
 `session_start` · `workspace_symbols` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
 
-The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional local **Topology** index (ranked search + blast-radius/route analysis, no language server needed), and durable per-project memory. Full API reference: [**docs/tools.md**](docs/tools.md).
+The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional local **Topology** index (ranked search + blast-radius/route analysis, no language server needed), durable per-project memory, and cross-agent coordination (peer sessions, an agent mailbox, opt-in intents and knowledge handoff). Full API reference: [**docs/tools.md**](docs/tools.md).
 
 ---
 
@@ -195,6 +205,7 @@ Plumb is pre-1.0. The core — write-safety, the resilient daemon, the topology 
 - [x] Concurrency-safe, atomic, transactional writes with rollback
 - [x] Crash-resilient reconnecting daemon
 - [x] Tree-sitter topology index + per-project memory
+- [x] Cross-agent coordination: peer awareness + agent mailbox (default on), intents + knowledge handoff (opt-in)
 - [x] Go and Python LSP adapters validated (real-binary)
 
 **Getting to 1.0.** Rather than jump from 0.9 straight to 1.0, Plumb ships a series of focused minor releases — **0.10 through 0.19** — each with one coherent theme. **0.19.x is the last 0.x release;** 1.0 follows it as a deliberate stability commitment. Native Windows support is intentionally a post-1.0 (1.1) item, not a 1.0 gate. The themed plan:

@@ -4,7 +4,10 @@ Plumb is an [MCP](https://modelcontextprotocol.io) server that gives AI
 assistants real IDE intelligence — go-to-definition, find-references, rename,
 diagnostics, atomic edits, and semantic refactors — backed by the same
 [LSP](https://microsoft.github.io/language-server-protocol/) language servers
-your editor uses, plus an optional SQLite/FTS5 topology index.
+your editor uses, plus an optional SQLite/FTS5 topology index — and, because
+every agent on a machine shares one plumb daemon, a coordination layer that
+lets several agents work one repository at once: peer awareness, an
+agent-to-agent mailbox, and opt-in intents and durable knowledge handoff.
 
 New here? Start with the [README](../README.md), then
 [Getting Started](getting-started.md).
@@ -24,6 +27,7 @@ New here? Start with the [README](../README.md), then
 - [**Architecture**](architecture.md) — layers, the daemon/proxy model, data flow, and persistence (with diagrams).
 - [**Topology**](topology.md) — the optional semantic index and the dual-engine (Topology + LSP) model.
 - [**Token Efficiency**](token-efficiency.md) — how plumb keeps assistant context lean.
+- [**Cross-agent sharing**](tools.md#cross-agent-sharing-collab) — how concurrent agents see each other's observed writes, message each other, and hand off findings; gating and defaults in the [`[collab]` config section](configuration.md#collab--cross-agent-sharing).
 - [**Threat model**](threat-model.md) — assets, trust boundaries, abuse cases, and what plumb deliberately does *not* defend against.
 
 ## Contributing
