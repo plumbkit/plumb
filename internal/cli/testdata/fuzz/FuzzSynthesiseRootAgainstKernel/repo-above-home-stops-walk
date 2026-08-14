@@ -1,0 +1,4 @@
+go test fuzz v1
+string("home/scratch/markerless")
+byte(0x01)
+bool(false)
