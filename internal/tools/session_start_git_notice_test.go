@@ -43,8 +43,8 @@ func TestFormatProjectGitNotice(t *testing.T) {
 				"git.allow_destructive, git.allow_push",
 				"untrusted input",
 				"cloning a repository ships one",
-				`plumb trust "/tmp/ws"`,
-				`plumb config show --workspace "/tmp/ws"`,
+				`plumb trust '/tmp/ws'`,
+				`plumb config show --workspace '/tmp/ws'`,
 				"PLUMB_GIT_ALLOW_DESTRUCTIVE",
 				"PLUMB_GIT_ALLOW_PUSH",
 			},
@@ -123,16 +123,29 @@ func TestFormatProjectGitNotice(t *testing.T) {
 			},
 		},
 		{
-			// B2. `plumb trust` is not watched by anything, so it cannot change this
-			// session; promising otherwise walks the reader into a silent notice with
-			// an unchanged policy.
-			name:   "the remediation does not promise an in-session effect",
+			// B2/B-1. The three routes land at DIFFERENT moments, and one sentence
+			// covering all of them was wrong in both directions. `plumb trust` is
+			// watched by nothing, so it cannot change this session; the GLOBAL config
+			// is watched, so it can; and PLUMB_GIT_* is read from the daemon PROCESS's
+			// environment, so it needs a daemon restart — strictly more than the "new
+			// session, or a re-pin" the old text offered as sufficient.
+			name:   "the remediation states the timing per route",
 			st:     ProjectGitStatus{Keys: gitKeys("git.allow_push", true)},
 			policy: closed,
 			wantContain: []string{
+				"--yes",
+				"`plumb trust` writes a file nothing watches",
 				"next attached",
 				"NOT mid-session",
-				"--yes",
+				"Editing the GLOBAL config DOES take effect mid-session",
+				"read from the DAEMON's environment",
+				"the daemon has to be restarted with the variable already set",
+			},
+			// The generalised claim: a blanket "NOT mid-session" covering every
+			// route, and an env remediation that offers a new session or a re-pin as
+			// enough. Both are false; neither may come back.
+			wantAbsent: []string{
+				"Either takes effect when this workspace is next attached",
 			},
 		},
 		{
@@ -149,11 +162,64 @@ func TestFormatProjectGitNotice(t *testing.T) {
 			wantEmpty: true,
 		},
 		{
-			// Trusted means the keys ARE in force, so the policy printed above is
-			// already the project's — a notice would report a working feature.
-			name:      "trusted git keys: silent",
+			// The ordinary trusted session: the grant is what put these values in
+			// force, so a notice would report a working feature. Note what makes it
+			// silent — the per-key comparison, not a Trusted exemption. That is the
+			// whole of what the removed short-circuit was doing, which is why deleting
+			// it changed no output anywhere and the state below went unguarded.
+			name:      "trusted git keys that ARE in force: silent",
 			st:        ProjectGitStatus{Keys: gitKeys("git.allow_push", true), Trusted: true},
 			policy:    GitPolicy{AllowWrites: true, AllowPush: true},
+			wantEmpty: true,
+		},
+		{
+			// B-3. Trust is granted and the key is STILL not in force, because
+			// LoadProjectWithPolicy applies PLUMB_GIT_* after the project config:
+			// `allow_push = true`, approved, plus PLUMB_GIT_ALLOW_PUSH=0 resolves to
+			// push off. A `if st.Trusted { return "" }` short-circuit silences exactly
+			// this — restoring the original bug (an unexplained `Push/fetch/pull:
+			// off.` against a value the agent knows was approved) from the other side.
+			// This case is what fails if that short-circuit comes back.
+			name:   "trusted but overridden: named, with the env as the cause",
+			st:     ProjectGitStatus{Keys: gitKeys("git.allow_push", true), Trusted: true},
+			policy: GitPolicy{AllowWrites: true, AllowPush: false},
+			wantContain: []string{
+				"OVERRIDDEN",
+				"TRUSTED",
+				"still NOT in force: git.allow_push",
+				"`plumb trust` will NOT help",
+				"PLUMB_GIT_ALLOW_PUSH",
+				"applied AFTER the project config",
+				"restart the daemon",
+			},
+			// The untrusted notice's advice is actively wrong here: the grant is
+			// already given, so recommending the command would send the reader to
+			// re-approve something that is not the obstacle.
+			wantAbsent: []string{`plumb trust '/tmp/ws'`, "IGNORED"},
+		},
+		{
+			// The asymmetry that keeps the trusted branch honest. A trusted [git]
+			// table is applied WHOLE, and `git.env` has no counterpart in GitPolicy to
+			// compare against — so reporting it would invent an override that does not
+			// exist. Untrusted, the same key IS reported (the case below), because
+			// there the whole table really was dropped.
+			name:      "trusted and uncomparable (git.env): silent, not invented",
+			st:        ProjectGitStatus{Keys: gitKeys("git.env", map[string]any{"GIT_SSH_COMMAND": "x"}), Trusted: true},
+			policy:    GitPolicy{AllowWrites: true},
+			wantEmpty: true,
+		},
+		{
+			name:        "untrusted and uncomparable (git.env): reported",
+			st:          ProjectGitStatus{Keys: gitKeys("git.env", map[string]any{"GIT_SSH_COMMAND": "x"})},
+			policy:      GitPolicy{AllowWrites: true},
+			wantContain: []string{"IGNORED", "git.env"},
+		},
+		{
+			// Same rule for a field nobody classified: untrusted it is reported (it
+			// was dropped), trusted it is not (it was applied).
+			name:      "trusted and unrecognised field: silent",
+			st:        ProjectGitStatus{Keys: gitKeys("git.allow_pushes", true), Trusted: true},
+			policy:    GitPolicy{AllowWrites: true},
 			wantEmpty: true,
 		},
 		{
@@ -173,16 +239,29 @@ func TestFormatProjectGitNotice(t *testing.T) {
 			wantEmpty: true,
 		},
 		{
-			// N3. An unparseable project config is skipped whole, so its [git] block
-			// is just as ignored — with no `plumb trust` to reach for.
-			name:   "an unparseable project config says so",
+			// N3/B-2. An unparseable project config is skipped whole, so its [git]
+			// block is just as ignored — with no `plumb trust` to reach for.
+			//
+			// What it must NOT claim is that the policy above was resolved without the
+			// file. applyProjectConfig returns on a parse error without reverting the
+			// session's git view, so a config that parsed at attach and was broken in
+			// place afterwards leaves its already-applied values in force underneath
+			// this very notice — the state a reader is in while editing the file, and
+			// so the one where the wrong claim costs most.
+			name:   "an unparseable project config says so, without claiming the policy is the global one",
 			st:     ProjectGitStatus{Unreadable: true},
 			policy: closed,
 			wantContain: []string{
 				"IGNORED",
 				"could not be parsed",
+				"skipped WHOLE",
+				"That does NOT mean the policy above is the global one",
+				"an EARLIER readable version of this file",
+				`plumb config show --workspace '/tmp/ws'`,
+			},
+			wantAbsent: []string{
 				"NOTHING in it is being applied",
-				`plumb config show --workspace "/tmp/ws"`,
+				"the policy above is what plumb resolved without it",
 			},
 		},
 	}
@@ -218,13 +297,53 @@ func TestFormatProjectGitNotice(t *testing.T) {
 func TestFormatProjectGitNotice_QuotesTheWorkspacePath(t *testing.T) {
 	const ws = "/Users/me/My Project"
 	got := formatProjectGitNotice(ws, ProjectGitStatus{Keys: gitKeys("git.allow_push", true)}, GitPolicy{AllowWrites: true})
-	for _, want := range []string{`plumb trust "/Users/me/My Project"`, `--workspace "/Users/me/My Project"`} {
+	for _, want := range []string{`plumb trust '/Users/me/My Project'`, `--workspace '/Users/me/My Project'`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("want %s in:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "plumb trust /Users/me/My Project") {
 		t.Errorf("the command must be quoted, or a space-bearing path is truncated:\n%s", got)
+	}
+}
+
+// TestShellQuote_SuppressesExpansion is the other half of that: Go's %q is not a
+// shell quote. It escapes quotes, backslashes and non-printables, but leaves `$`
+// and backticks alone, so a path under a directory literally named `$WORK` (or
+// one holding a command substitution) is rewritten by the shell before `plumb
+// trust` ever sees it — the same silent wrong-target as the unquoted-space case,
+// reached by a rarer spelling and with a worse tail.
+func TestShellQuote_SuppressesExpansion(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain", "/tmp/ws", `'/tmp/ws'`},
+		{"space", "/Users/me/My Project", `'/Users/me/My Project'`},
+		{"dollar", "/Users/me/$WORK/proj", `'/Users/me/$WORK/proj'`},
+		{"backtick", "/tmp/`id`", "'/tmp/`id`'"},
+		{"double quote", `/tmp/a"b`, `'/tmp/a"b'`},
+		{"single quote", "/tmp/it's", `'/tmp/it'\''s'`},
+		{"backslash", `/tmp/a\b`, `'/tmp/a\b'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shellQuote(tc.in); got != tc.want {
+				t.Errorf("shellQuote(%q) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	// The claim is behavioural, not textual: whatever the quoting, the shell must
+	// hand the command back exactly the path we put in. `printf %s` is the
+	// narrowest way to observe what an argument resolved to.
+	for _, ws := range []string{
+		"/Users/me/My Project", "/Users/me/$WORK/proj", "/tmp/`id`", "/tmp/it's", `/tmp/a\b`, `/tmp/a"b`, "/tmp/a b$x'y",
+	} {
+		out, err := exec.Command("/bin/sh", "-c", "printf %s "+shellQuote(ws)).Output()
+		if err != nil {
+			t.Fatalf("sh -c for %q: %v", ws, err)
+		}
+		if string(out) != ws {
+			t.Errorf("the shell resolved %s to %q, want %q — the notice would target the wrong directory",
+				shellQuote(ws), out, ws)
+		}
 	}
 }
 

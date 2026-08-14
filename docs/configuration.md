@@ -845,18 +845,45 @@ above it:
   destructive or network tier and shorten the protected-branch list, nor turn
   `allow_writes` or `commit_trailer` off. All four `PLUMB_GIT_*` variables are
   named for the same reason.
-- **The remediation does not promise an in-session effect.** The notice and the
-  policy above it are one snapshot, captured together when the project config was
-  applied. `plumb trust` writes `DataDir/trust.json`, which nothing watches, so
+- **The remediation is stated per route, because the three land at different
+  moments.** `plumb trust` writes `DataDir/trust.json`, which nothing watches, so
   the grant lands when the workspace is next attached — a new session, `plumb
   restart`, or a re-pin — and until then both the policy and the notice keep
-  saying exactly what they said before.
+  saying exactly what they said before (they are one snapshot, captured together
+  when the project config was applied). A **global config** edit, by contrast,
+  applies *mid-session*: the daemon watches that file and re-applies it to every
+  live session, and `plumb config reload` forces the same pass. A `PLUMB_GIT_*`
+  variable needs *more* than a new session, not less — it is read from the daemon
+  **process's** environment, so exporting it in your shell and re-running
+  `session_start`, or re-pinning, changes nothing until the daemon itself is
+  restarted with the variable set.
 
-The notice is silent when the project sets no `[git]` key, when the request is
-trusted (the policy printed above already *is* the project's), and when every
-requested value already matches. A `.plumb/config.toml` that **cannot be parsed**
-gets a different notice: it is skipped whole, so its `[git]` block is as ignored
-as an untrusted one — and there is no `plumb trust` that would help.
+The notice is silent when the project sets no `[git]` key and when every
+requested value already matches — which is the ordinary trusted session, since
+the grant is what put those values in force.
+
+Being trusted is not itself a reason for silence, and treating it as one
+reintroduces the bug from the other side. Plumb applies `PLUMB_GIT_*` *after* the
+project config (so that forcing an untrusted `[git]` back to base cannot discard
+an override you set for the process), which means the environment outranks a
+trust grant too: an approved `allow_push = true` plus `PLUMB_GIT_ALLOW_PUSH=0`
+resolves to push **off**. That is the same unexplained `Push/fetch/pull: off.`
+the notice exists to end, so it gets an `OVERRIDDEN` notice naming the
+environment as the layer that beat the grant — `plumb trust` is already given and
+recommending it would send the reader to re-approve something that is not the
+obstacle. A trusted `[git]` field with no counterpart in the resolved policy
+(`env`) is *not* reported there: the table was applied whole, so it is in force,
+and naming it would invent an override that does not exist.
+
+A `.plumb/config.toml` that **cannot be parsed** gets a third notice: it is
+skipped whole, so its `[git]` block is as ignored as an untrusted one — and there
+is no `plumb trust` that would help. That notice reports only what the *file*
+contributed (nothing); it deliberately does **not** claim the policy above was
+resolved without the file, because `applyProjectConfig` returns on a parse error
+without reverting the session's git view. A config that parsed at attach and was
+then broken in place leaves its already-applied values in force underneath the
+notice — precisely the state you are in while editing the file. `plumb restart`
+resolves the policy from scratch.
 
 | Field | Type | Effect |
 |---|---|---|
