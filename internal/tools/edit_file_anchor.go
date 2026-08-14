@@ -102,21 +102,46 @@ func seamJoinNote(a editFileArgs, start, end, interior, newStr string) string {
 	// legitimate shape (`start_anchor: "A"`, `end_anchor: "\nEND"`) and it fired
 	// a false positive, which is the failure that teaches callers to ignore notes.
 	var seams []string
-	if before, after := startsWithNewline(interior+end), startsWithNewline(newStr+end); //
-	(endsWithNewline(start) || before) && (!endsWithNewline(start) && !after) {
+	if brokeStartSeam(start, end, interior, newStr) {
 		seams = append(seams, "start_anchor")
 	}
-	if before, after := endsWithNewline(start+interior), endsWithNewline(start+newStr); //
-	(startsWithNewline(end) || before) && (!startsWithNewline(end) && !after) {
+	if brokeEndSeam(start, end, interior, newStr) {
 		seams = append(seams, "end_anchor")
 	}
 	if len(seams) == 0 {
 		return ""
 	}
 	return "note: this edit joined previously separate lines at the " + strings.Join(seams, " and ") +
-		" seam — the newline that was there is gone, because the replaced span included it and " +
-		"new_string does not restore it. Intentional for a mid-line rewrite; if not, add the " +
-		"newline to new_string (or to the anchor) and re-run. Check the diff above."
+		" seam — there was a line break at that boundary before the edit and there is not now, so " +
+		"the anchor's line and new_string run together. Intentional for a mid-line rewrite; if not, " +
+		"add the newline to new_string (or to the anchor) and re-run. Check the diff above."
+}
+
+// brokeStartSeam and brokeEndSeam each answer one question: was there a line
+// break at this seam before the edit, and is there not one now?
+//
+// Spelled as before/after rather than as one expanded boolean. The expanded form
+// is equivalent — the anchors do not change, so the anchor's own term is shared
+// and cancels — but it reads as though it carries a dead subterm, and a
+// condition a reader cannot falsify by inspection is where the last two defects
+// in this function lived.
+func brokeStartSeam(start, end, interior, newStr string) bool {
+	before := hasBreakAt(start, interior+end)
+	after := hasBreakAt(start, newStr+end)
+	return before && !after
+}
+
+func brokeEndSeam(start, end, interior, newStr string) bool {
+	before := hasBreakAt(start+interior, end)
+	after := hasBreakAt(start+newStr, end)
+	return before && !after
+}
+
+// hasBreakAt reports whether a line break sits at the boundary between left and
+// right. Checking both sides catches the CRLF straddle, where left ends "…\r"
+// and right begins "\n…".
+func hasBreakAt(left, right string) bool {
+	return endsWithNewline(left) || startsWithNewline(right)
 }
 
 // startsWithNewline reports whether s begins with a line break in EITHER
