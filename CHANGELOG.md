@@ -694,6 +694,12 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
+### Security
+
+- **Bump `nanoid` to 3.3.18** — GHSA-2v37-7h3g-55p8 (high: a custom generator
+  can loop indefinitely when size is zero), reachable via vite → postcss.
+  Build-time only: the dependency is `dev: true` in the lockfile, the rebuilt
+  bundle is byte-identical, and production dependencies audit clean.
 
 ## 0.16.6 (2026-08-14)
 
