@@ -530,3 +530,100 @@ func TestEditFileAnchor_CRLF_NoJoinNoteMidLine(t *testing.T) {
 		t.Errorf("mid-line CRLF edit must not warn: %q", out)
 	}
 }
+
+// --- empty new_string, seam newline supplied by the OTHER anchor ------------
+//
+// The join check originally inspected new_string alone. But the replacement is
+// start + newStr + end, so when new_string is EMPTY the character at a seam
+// comes from the other anchor — and the check reported a join that never
+// happened. Deleting an interior while one anchor carries the seam newline is a
+// legitimate shape, and a spurious note on legitimate usage is the failure that
+// teaches callers to ignore notes.
+//
+// Found by an independent review; convention-independent, so both twins.
+
+func TestEditFileAnchor_NoJoinNote_EmptyNewStringEndAnchorCarriesNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("A\nB\nEND\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "A",
+		"end_anchor":   "\nEND",
+		"new_string":   "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "A\nEND\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("false positive: A and END are still on separate lines: %q", out)
+	}
+}
+
+func TestEditFileAnchor_NoJoinNote_EmptyNewStringStartAnchorCarriesNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("START\nB\nC\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "START\n",
+		"end_anchor":   "C",
+		"new_string":   "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "START\nC\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("false positive: START and C are still on separate lines: %q", out)
+	}
+}
+
+func TestEditFileAnchor_CRLF_NoJoinNote_EmptyNewStringOtherAnchorCarriesNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("A\r\nB\r\nEND\r\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "A",
+		"end_anchor":   "\nEND",
+		"new_string":   "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "A\r\nEND\r\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("false positive on CRLF: A and END are still on separate lines: %q", out)
+	}
+}
+
+// The genuine deletion join must still be reported: neither anchor carries a
+// newline, so removing the interior really does run the two together.
+func TestEditFileAnchor_EmptyNewStringPlainAnchorsStillReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("A\nB\nC\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"file_path":    path,
+		"start_anchor": "A",
+		"end_anchor":   "C",
+		"new_string":   "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "AC\n" {
+		t.Fatalf("premise: unexpected content %q", got)
+	}
+	if !strings.Contains(out, "joined previously separate lines") {
+		t.Errorf("a real deletion join went unreported: %q", out)
+	}
+}

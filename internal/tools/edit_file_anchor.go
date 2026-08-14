@@ -94,13 +94,20 @@ func seamJoinNote(a editFileArgs, start, end, interior, newStr string) string {
 	if a.IncludeAnchors {
 		return ""
 	}
+	// Compare the COMPOSED seam before and after, rather than inspecting newStr
+	// alone. The replacement is start + newStr + end, so when newStr is empty the
+	// character at a seam comes from the OTHER anchor — and a check that only
+	// looked at newStr reported a join that never happened. Deleting an interior
+	// with `new_string: ""` while one anchor carries the seam newline is a
+	// legitimate shape (`start_anchor: "A"`, `end_anchor: "\nEND"`) and it fired
+	// a false positive, which is the failure that teaches callers to ignore notes.
 	var seams []string
-	if hadNL := endsWithNewline(start) || startsWithNewline(interior); hadNL &&
-		!endsWithNewline(start) && !startsWithNewline(newStr) {
+	if before, after := startsWithNewline(interior+end), startsWithNewline(newStr+end); //
+	(endsWithNewline(start) || before) && (!endsWithNewline(start) && !after) {
 		seams = append(seams, "start_anchor")
 	}
-	if hadNL := startsWithNewline(end) || endsWithNewline(interior); hadNL &&
-		!startsWithNewline(end) && !endsWithNewline(newStr) {
+	if before, after := endsWithNewline(start+interior), endsWithNewline(start+newStr); //
+	(startsWithNewline(end) || before) && (!startsWithNewline(end) && !after) {
 		seams = append(seams, "end_anchor")
 	}
 	if len(seams) == 0 {
