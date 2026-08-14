@@ -352,3 +352,23 @@ func (s *connSession) bindWriteLimiterParent() {
 	}
 	s.writeLimiter.SetParent(parent)
 }
+
+// gitPolicyFrom adapts the resolved [git] config into the tools package's
+// GitPolicy. It is the ONLY crossing between the two, and every field of [git]
+// must make it across: a field dropped here is silently inert, with the config,
+// `plumb config show` and the trust disclosure all still reporting it as set.
+// TestGitPolicyFrom_CarriesEveryGitField guards exactly that.
+//
+// Env in particular must not be reconstructed from anywhere else — it is a
+// capability (a git child's environment names commands git runs), and routing
+// it through [git] is what puts it behind the project-config trust gate.
+func gitPolicyFrom(c config.GitConfig) tools.GitPolicy {
+	return tools.GitPolicy{
+		AllowWrites:       c.AllowWrites,
+		AllowDestructive:  c.AllowDestructive,
+		AllowPush:         c.AllowPush,
+		ProtectedBranches: c.ProtectedBranches,
+		CommitTrailer:     c.CommitTrailer,
+		Env:               c.Env,
+	}
+}

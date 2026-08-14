@@ -102,7 +102,16 @@ func gitReadArgv(argv []string) []string {
 // (git_intent_warn.go): non-nil only for repo-state verbs with the warning
 // wired, it runs right after the guard's pre-execution check — a refused op
 // never warns — and its advisory block leads the successful response.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string) (string, error) {
+//
+// env (may be nil) is the child's environment, built from [git] env by
+// gitChildEnv. nil means inherit the daemon's environment, which is what an
+// unconfigured knob resolves to and what every git child got before it
+// existed. This is the ONE git child plumb spawns that runs the repository's
+// hooks or can open an editor, so it is the one whose environment is
+// configurable; the auxiliary read queries around it (ls-files, log -1,
+// rev-parse, diff --cached) are plumbing whose output plumb parses, and are
+// deliberately left inheriting.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, env []string) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -129,6 +138,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(execCtx, "git", argv...)
 	cmd.Dir = repoRoot
+	cmd.Env = env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	mutating := tier == tierWrite || tier == tierDestructive
@@ -230,6 +240,9 @@ func gitExitDescription(err error) string {
 	if code, ok := gitExitCode(err); ok {
 		return fmt.Sprintf("exit code %d", code)
 	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return gitWaitDelayNote()
+	}
 	return err.Error()
 }
 
@@ -317,10 +330,17 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier)
 	return execCtx, cleanup, nil
 }
 
-// execGitCmd starts cmd, stamps the owner sidecar with the git child's pid for a
-// mutating op (so a stranded index.lock is attributable to the actual lock
-// holder, not the daemon), and waits. Returns the child's run error.
+// execGitCmd applies the child-wait bound (boundGitChildWait — see the
+// unbounded-Wait hazard documented there), starts cmd, stamps the owner sidecar
+// with the git child's pid for a mutating op (so a stranded index.lock is
+// attributable to the actual lock holder, not the daemon), and waits. Returns
+// the child's run error.
+//
+// The hygiene is applied here rather than at the callsite so every git child
+// that goes through this chokepoint gets it, and so a test can exercise the
+// real function rather than a reconstruction of it.
 func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) error {
+	boundGitChildWait(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

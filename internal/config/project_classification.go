@@ -127,6 +127,11 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"git.allow_push":         ClassTrustGated,
 	"git.protected_branches": ClassTrustGated,
 	"git.commit_trailer":     ClassTrustGated,
+	// env is the environment of the git process that runs THIS repository's
+	// hooks, and several of its variables name a command git will run
+	// (GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_PROXY_COMMAND, GIT_PAGER), so an
+	// untrusted value here is arbitrary code execution as the user.
+	"git.env": ClassTrustGated,
 
 	// --- Session lifecycle. persist_state only makes this connection's own
 	// state more or less sticky, and writes to a plumb-owned fixed path.

