@@ -13,16 +13,10 @@ package cli
 //     the guard protecting the real home directory.
 
 import (
-	"context"
 	"os"
 	"os/user"
 	"path/filepath"
 	"testing"
-
-	"github.com/plumbkit/plumb/internal/paths"
-
-	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // TestSameDirAs_NoHomeFailsOpen pins the deliberate fail-open: when no home
@@ -112,106 +106,6 @@ func TestHomeDirInfos_RealHomeGuardedDespiteRepointedHOME(t *testing.T) {
 	}
 }
 
-// TestContainsHomeDir_StrictAncestryOnly pins the predicate's basic shape: an
-// ancestor of the home directory is contained; the home itself, its children,
-// its siblings, an empty dir argument and an empty home set are not. The
-// empty-set and stat-failure cases fail OPEN like sameDirAs — a broken
-// environment must degrade to inert guards, never to refusing every repo.
-func TestContainsHomeDir_StrictAncestryOnly(t *testing.T) {
-	base := freshTempDir(t) // stands in for /Users
-	home := filepath.Join(base, "users", "alice")
-	mustMkdir(t, home)
-	sibling := filepath.Join(base, "users", "bob")
-	mustMkdir(t, sibling)
-	child := filepath.Join(home, "Projects")
-	mustMkdir(t, child)
-	homes := []string{home}
-
-	for _, tc := range []struct {
-		name string
-		dir  string
-		want bool
-	}{
-		{"parent", filepath.Join(base, "users"), true},
-		{"grandparent", base, true},
-		{"filesystem root", "/", true},
-		{"home itself is identity's question", home, false},
-		{"child of home", child, false},
-		{"sibling of home", sibling, false},
-		{"empty dir", "", false},
-		{"unstat-able dir fails open", filepath.Join(base, "no-such-dir"), false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := containsHomeDir(tc.dir, homes); got != tc.want {
-				t.Errorf("containsHomeDir(%q, %q) = %v, want %v", tc.dir, homes, got, tc.want)
-			}
-		})
-	}
-	if containsHomeDir(filepath.Join(base, "users"), nil) {
-		t.Error("containsHomeDir with no homes must fail open (inert), not refuse")
-	}
-}
-
-// TestContainsHomeDir_CaseAliasedAncestor is one half of finding B1 on round 6
-// of PR #288's review: ancestry was decided with filepath.Rel over
-// paths.Canonical, and EvalSymlinks collapses SYMLINKS only — it does not fold
-// case on a case-insensitive volume. So a case-variant spelling of /Users
-// (provably the same directory, per os.SameFile) walked straight past all five
-// containment sites at once, and one find_files call could pin a workspace
-// containing every home directory. Ancestry is now decided the way identity
-// is, with os.SameFile per ancestor, which no alternative spelling defeats.
-//
-// Skips on a case-sensitive filesystem (Linux CI): the alias precondition
-// cannot be built there. The firmlink half is the darwin-gated test below.
-func TestContainsHomeDir_CaseAliasedAncestor(t *testing.T) {
-	base := freshTempDir(t)
-	parent := filepath.Join(base, "Users")
-	home := filepath.Join(parent, "alice")
-	mustMkdir(t, home)
-
-	alias := filepath.Join(base, "USERS")
-	pi, err := os.Stat(parent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ai, err := os.Stat(alias)
-	if err != nil || !os.SameFile(pi, ai) {
-		t.Skipf("filesystem is case-sensitive; the aliased spelling %q does not resolve to %q", alias, parent)
-	}
-
-	if !containsHomeDir(alias, []string{home}) {
-		t.Errorf("containsHomeDir(%q, [%q]) = false; %q IS the parent of the home directory "+
-			"(os.SameFile proves it) — a case-variant spelling must not defeat the ancestry test", alias, home, alias)
-	}
-}
-
-// TestContainsHomeDir_FirmlinkAliasedAncestor is the other half of finding B1:
-// the macOS firmlink alias. /System/Volumes/Data/Users and /Users are one
-// directory (os.SameFile), but EvalSymlinks resolves neither into the other —
-// firmlinks are not symlinks — so the lexical ancestry test returned false for
-// the alias and SynthesiseRoot handed back the wide root. Reproduced here
-// against the machine's real layout; skips where the layout is absent.
-func TestContainsHomeDir_FirmlinkAliasedAncestor(t *testing.T) {
-	const aliasUsers = "/System/Volumes/Data/Users"
-	ui, err := os.Stat("/Users")
-	if err != nil {
-		t.Skip("no /Users on this machine")
-	}
-	ai, err := os.Stat(aliasUsers)
-	if err != nil || !os.SameFile(ui, ai) {
-		t.Skipf("%s is not a firmlink alias of /Users here", aliasUsers)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || filepath.Dir(filepath.Clean(home)) != "/Users" {
-		t.Skipf("home %q is not directly under /Users", home)
-	}
-
-	if !containsHomeDir(aliasUsers, []string{home}) {
-		t.Errorf("containsHomeDir(%q, [%q]) = false; the firmlink alias IS /Users "+
-			"(os.SameFile proves it), so it strictly contains the home directory", aliasUsers, home)
-	}
-}
-
 // TestDetect_ResidualPlumbAtHomeIgnored is finding B2 on PR #288: detect
 // consulted the .plumb marker BEFORE any home guard, so the bare ~/.plumb an
 // earlier build's auto_attach_persist created kept resolving $HOME as the
@@ -289,123 +183,6 @@ func TestDetect_DeliberatePlumbAtHomeHonoured(t *testing.T) {
 	}
 }
 
-// TestSynthesiseRoot_RefusesAWideSeedForEveryCaller is round 4's finding, and
-// the reason the refusal is now a property of the RETURN rather than a check at
-// one caller.
-//
-// Round 3 put the containment refusal in repinWorkspaceFrom. Review then showed
-// the other two consumers of SynthesiseRoot still pinned the wide root: the
-// first-tool-call seeding path — find_files and search_in_files take a
-// DIRECTORY as `path`, so a call naming /Users seeds it directly — and
-// rehydratePin replaying a roots-origin row, which runs unconditionally in the
-// default configuration. Stopping the WALK could not fix either, because the
-// walk's fallback returns the seed, and here the seed IS the offending
-// directory.
-//
-// Asserting on SynthesiseRoot directly is deliberate: it is the one place all
-// three routes pass through, so this cannot be satisfied by fixing a fourth
-// caller and leaving a fifth.
-func TestSynthesiseRoot_RefusesAWideSeedForEveryCaller(t *testing.T) {
-	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
-	home := filepath.Join(base, "home")
-	mustMkdir(t, home)
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	mustMkdir(t, filepath.Join(base, ".git")) // a marker that would otherwise win
-
-	pool := &workspacePool{}
-	for _, seed := range []string{base, home, "/"} {
-		if got := pool.SynthesiseRoot(seed, false); got != "" {
-			t.Errorf("SynthesiseRoot(%q, explicit=false) = %q, want \"\" — a seed at or "+
-				"above the home directory must be refused, not resolved", seed, got)
-		}
-	}
-
-	// Control 1: issue #182 — an explicitly named wide root still resolves.
-	if got := pool.SynthesiseRoot(base, true); got == "" {
-		t.Errorf("an EXPLICIT seed of %q was refused; #182 says an explicit pin always succeeds", base)
-	}
-	// Control 2: the ordinary case is untouched — a markerless dir under the home
-	// directory still synthesises to itself, which is where most projects live.
-	seed := filepath.Join(home, "scratch", "markerless")
-	mustMkdir(t, seed)
-	if got, want := pool.SynthesiseRoot(seed, false), paths.Canonical(seed); got != want {
-		t.Errorf("SynthesiseRoot(%q) = %q, want %q — the refusal must not break ordinary seeds", seed, got, want)
-	}
-}
-
-// TestRepin_NonExplicitRootContainingHomeIsRefused pins the refusal at the pin
-// itself, which reports the problem at the call that caused it rather than at
-// the next path-bearing tool. Since round 6 the mechanism is the containment
-// choke inside attachOrRepinTo (undeclaredWideRootErr) on the RESOLVED root:
-// Detect succeeds at the marked wide directory, and the pin write refuses it.
-func TestRepin_NonExplicitRootContainingHomeIsRefused(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
-	home := filepath.Join(base, "home")
-	mustMkdir(t, home)
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	mustMkdir(t, filepath.Join(base, ".git")) // so Detect would otherwise resolve it
-
-	store := config.NewStore(config.Defaults())
-	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
-	defer s.close()
-
-	// PinSourceRoots: a client REPORTING this folder, not a caller declaring it.
-	if _, err := s.repinWorkspaceFrom(context.Background(), base, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err == nil {
-		t.Errorf("a non-explicit re-pin to %q was accepted; it contains the home directory %q, "+
-			"so every credential under it would be inside the boundary", base, home)
-	}
-
-	// Control 1: the same directory named EXPLICITLY still pins — issue #182 says
-	// an explicit pin always succeeds, and this refusal must not weaken that.
-	if _, err := s.repinWorkspaceFrom(context.Background(), base, "", sessionstate.PinSourceSessionStart, pinTriggerLive, true); err != nil {
-		t.Errorf("control failed — an EXPLICIT pin of %q was refused: %v", base, err)
-	}
-
-	// Control 2: an ordinary project, which contains no home directory, still
-	// pins from a non-explicit origin — so the refusal is about containment and
-	// not a re-pin that has stopped working.
-	proj := filepath.Join(home, "proj")
-	mustMkdir(t, filepath.Join(proj, ".git"))
-	if _, err := s.repinWorkspaceFrom(context.Background(), proj, "", sessionstate.PinSourceRoots, pinTriggerLive, true); err != nil {
-		t.Errorf("control failed — an ordinary project re-pin was refused: %v", err)
-	}
-}
-
-// TestDetect_RepoContainingSandboxHomeStillDetects is round 6's finding B3: a
-// repo whose $HOME is one of its own subdirectories — HOME=$PWD/.home hermetic
-// build sandboxes, Bazel execroots, nix-shell, CI images that repoint HOME
-// inside the checkout — is an ordinary project. Round 5 tested containment
-// inside detect(), which made such a repo undetectable: the explicit pin fell
-// through to SynthesiseRoot and came back a synthetic LanguageNone root, so
-// the workspace silently lost its LSP with nothing naming containment as the
-// cause. Detection is identity-guarded only; containment is the PIN's question
-// (undeclaredWideRootErr), where the caller's declaration is in scope.
-func TestDetect_RepoContainingSandboxHomeStillDetects(t *testing.T) {
-	repo := freshTempDir(t)
-	mustWrite(t, filepath.Join(repo, "go.mod"), "module sandbox\n")
-	mustMkdir(t, filepath.Join(repo, ".git"))
-	sandboxHome := filepath.Join(repo, ".home")
-	mustMkdir(t, sandboxHome)
-	t.Setenv("HOME", sandboxHome)
-	t.Setenv("USERPROFILE", sandboxHome)
-	sub := filepath.Join(repo, "internal")
-	mustMkdir(t, sub)
-
-	root, lang, err := detectTestPool().Detect(sub)
-	if err != nil {
-		t.Fatalf("Detect(%q): %v — a repo containing its own sandbox $HOME must stay detectable", sub, err)
-	}
-	if root != repo {
-		t.Errorf("root = %q, want the repo %q", root, repo)
-	}
-	if lang != "go" {
-		t.Errorf("language = %q, want %q — losing detection here is what silently cost such workspaces their LSP", lang, "go")
-	}
-}
-
 // TestDetect_ReachingHomeStopsTheWalk is detect's half of finding S4: the old
 // guard SKIPPED the home directory's markers but kept climbing, so a .git (or
 // any marker) ABOVE the home directory resolved $HOME's parent as the
@@ -453,9 +230,7 @@ func TestDetect_ProjectUnderResidualHomeStillResolves(t *testing.T) {
 // attaches for the session only — a machine-created ~/.plumb outlives the pin
 // and would re-open the whole-home workspace for every later session.
 func TestMaterialisePlumbDir_RefusesHome(t *testing.T) {
-	base := freshTempDir(t) // stands in for /Users — CONTAINS the home directory
-	home := filepath.Join(base, "home")
-	mustMkdir(t, home)
+	home := freshTempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
@@ -464,18 +239,6 @@ func TestMaterialisePlumbDir_RefusesHome(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".plumb")); err == nil {
 		t.Fatal("materialisePlumbDir($HOME) created ~/.plumb despite refusing")
-	}
-
-	// A directory CONTAINING the home directory, not just the home directory
-	// itself. Found as a surviving mutation: minting a marker at /Users makes
-	// detect() succeed there for every later session with no declaration at all,
-	// which turns one explicit pin into a standing workspace holding every home
-	// directory on the machine.
-	if err := materialisePlumbDir(base); err == nil {
-		t.Errorf("materialisePlumbDir(%q) succeeded; it contains the home directory %q", base, home)
-	}
-	if _, err := os.Stat(filepath.Join(base, ".plumb")); err == nil {
-		t.Errorf("materialisePlumbDir(%q) created the marker despite refusing", base)
 	}
 
 	// Control: an ordinary synthetic root still materialises.

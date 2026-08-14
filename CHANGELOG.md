@@ -969,15 +969,6 @@
   Codex, Gemini CLI and Kimi Code, contains neither, and the lean profile hides
   both — so the gate suppressed the hint only for clients that could in fact
   reach the tool, costing them `wait_seconds` for nothing.
-- **A dotfiles repo at `$HOME` no longer turns the whole home directory into the
-  workspace.** `Detect` skips its `.git` check at `$HOME` by filesystem identity,
-  so a dotfiles checkout there cannot capture every path beneath it.
-  `SynthesiseRoot` — the `[workspace] auto_attach` fallback — walked up to the
-  nearest `.git` with no such guard, so a tool call seeded anywhere under such a
-  repo synthesised the workspace to `$HOME` itself. The entire home directory
-  then became a single read-write root for the session, putting every SSH key,
-  browser profile and credential file under it inside the boundary, with nothing
-  in the tool call to announce that the workspace had widened.
 - **The home directory can no longer become the workspace root by accident —
   through a dotfiles repo, an incidental tool path, a persisted pin, or
   auto-attach residue.** `Detect` skipped its `.git` check at `$HOME`, but
@@ -1018,42 +1009,18 @@
     workspace. So `{path: "~/.zshrc", workspace: "/some/project"}` seeded
     `$HOME` while counting as a declaration of it, and the resulting pin was
     stamped `session_start` and persisted, returning on every later reconnect.
-  - **A root that *contains* a home directory needs an explicit declaration,
-    enforced where the session's root is set.** Guarding `$HOME` by identity
-    alone left the rung above it open: `/Users`, `/home` or `/` admits a
-    workspace holding every home directory on the machine, reachable with no
-    declaration through a client reporting such a folder in its roots. The
-    refusal lives at the one choke point every route passes through — the
-    three writers of the session's root (attach from client roots, synthetic
-    attach, re-pin/restore) all consult `undeclaredWideRootErr` before the
-    write — because that is where the pin's origin is in scope: only a
-    `session_start` `workspace` argument (live, or a persisted pin replayed
-    with that stored origin) pins such a directory, and every other origin
-    gets an error naming containment. Earlier rounds put this refusal in
-    *detection* instead, and that shape was wrong twice over: a `.plumb`
-    marker above `$HOME` — which plumb itself can mint from inside one
-    explicit pin — kept the exemption alive above the home directory, and a
-    repo that legitimately *contains* its own home directory (hermetic build
-    sandboxes with `HOME=$PWD/.home`, Bazel execroots, nix-shell, CI images
-    that repoint `HOME` into the checkout) became undetectable, silently
-    losing its language server. Detection is identity-guarded only, so such a
-    repo detects normally and an explicit pin of it keeps its real root *and*
-    its real language; auto-attaching it still requires the declaration, and
-    the refusal says why. `SynthesiseRoot` additionally refuses a wide *seed*
-    and stops its walk at any directory containing a home directory (a
-    markerless sibling of `$HOME` with a `.git` above no longer widens to
-    their common ancestor) — kept for the better error at the call that
-    caused it; the choke is the invariant behind it.
-
-    **Ancestry, like identity, is decided by filesystem identity** — the
-    candidate is `os.SameFile`-compared against every proper ancestor of each
-    home directory — never by comparing path strings. The first cut compared
-    resolved path strings, and review defeated it on a stock machine twice:
-    path resolution collapses *symlinks only*, so the macOS firmlink alias
-    (`/System/Volumes/Data/Users` is `/Users`, per `os.SameFile`) and a
-    case-variant spelling on the case-insensitive default volume both walked
-    past it. No alternative spelling defeats an identity comparison, which is
-    also why the fix is not a case-fold.
+  - **A root that *contains* a home directory — `/Users`, `/home`, `/` — is
+    NOT guarded, deliberately, and that limit is stated rather than left to be
+    discovered.** Guarding it was built three times and defeated three times by
+    macOS path aliasing: a lexical ancestry test misses the
+    `/System/Volumes/Data/Users` firmlink, and the `os.SameFile` ancestor walk
+    that replaced it still misses `/System/Volumes/Data` itself, which contains
+    `$HOME` while sharing an inode with no ancestor of the canonical `$HOME`.
+    Shipping a guard that the platform everyone runs on walks straight past
+    would be worse than not claiming one. The reported defect — a dotfiles repo
+    at `$HOME` capturing the whole home directory — is fixed here by the
+    identity guard, which survived every round; the containment class is
+    tracked as its own issue with the full evidence.
   - **A bare `~/.plumb` is residue, not intent.** `Detect` honoured a
     `.plumb` marker before any home guard, so the `~/.plumb` an earlier
     build's `auto_attach_persist` created kept resolving `$HOME` forever,

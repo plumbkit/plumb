@@ -215,17 +215,6 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			}
 			return
 		}
-		// The containment choke (see undeclaredWideRootErr), in-lane and on the
-		// RESOLVED root: the requested folder can be narrow while Detect resolves a
-		// marker-carrying ancestor above a home directory, so checking the request
-		// (as an earlier round did, pre-Detect) tests the wrong path. Below the
-		// no-op branch on purpose — a same-root request neither moves the pin nor
-		// needs refusing; above it, a roots notification re-reporting an
-		// explicitly-pinned wide root would have errored on a pin it wasn't moving.
-		if err := undeclaredWideRootErr(root, origin); err != nil {
-			refused = fmt.Errorf("repin: %w", err)
-			return
-		}
 		changed = true
 		// The pinned LS reference (if any) for the workspace we are leaving;
 		// released at the end once the new root is acquired, so the pool can reclaim

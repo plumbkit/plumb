@@ -53,7 +53,7 @@ func materialisePlumbDir(root string) error {
 	// a one-off exemption into a standing workspace holding every home directory
 	// on the machine. That is the same argument deliberatePlumbMarker makes for
 	// refusing config.toml, one rung up.
-	if infos := homeDirInfos(); sameDirAs(root, infos) || containsHomeDir(root, homeDirPaths()) {
+	if sameDirAs(root, homeDirInfos()) {
 		return fmt.Errorf("refusing to create %s: a directory at or above the home directory must not become a plumb workspace as a side effect; run `plumb init` there if you genuinely mean it", filepath.Join(root, ".plumb"))
 	}
 	return os.MkdirAll(filepath.Join(root, ".plumb"), 0o755)
