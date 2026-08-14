@@ -448,6 +448,23 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
+- **A parse killed by its deadline is recorded as `timeout`, not `cancelled`.**
+  Since the parser pool landed, `extractWith`'s watcher goroutine raised the
+  cancellation flag the instant `ctx.Done()` fired, so a plain deadline expiry
+  beat the parser's own timeout budget to the stop and was stored in
+  `topology_files.error_msg` as `cancelled` — indistinguishable from a genuine
+  cancel. The reason is now classified by the context: a stop whose context
+  died of its deadline records `timeout`; a genuine cancel stays `cancelled`.
+
+### Added
+
+- **Skipped topology files now say WHY they were skipped.** `error_msg` was
+  write-only: recorded on every indexing failure and read back only as a
+  count, so a parse timeout, a malformed file and a panicking grammar were
+  indistinguishable at every surface. `topology_status` now lists each skipped
+  file with its recorded reason (bounded, most recently touched first), the
+  web API returns them as `fileErrors`, and `plumb doctor` names the first
+  reason when every file failed.
 
 ## 0.16.6 (2026-08-14)
 
@@ -518,14 +535,6 @@
   `WaitDelay`. When the delay does expire, the reply explains what happened and
   quotes git's own output rather than surfacing exec's bare "WaitDelay expired
   before I/O complete".
-- **A parse killed by its deadline is recorded as `timeout`, not `cancelled`.**
-  Since the parser pool landed, `extractWith`'s watcher goroutine raised the
-  cancellation flag the instant `ctx.Done()` fired, so a plain deadline expiry
-  beat the parser's own timeout budget to the stop and was stored in
-  `topology_files.error_msg` as `cancelled` — indistinguishable from a genuine
-  cancel. The reason is now classified by the context: a stop whose context
-  died of its deadline records `timeout`; a genuine cancel stays `cancelled`.
-
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON
   key is last-wins, while the proxy's own router and the daemon both decode into
@@ -580,14 +589,6 @@
   while the `[git.env]` and `git.env.X = …` spellings merge into it, so the same
   intent written two ways would reach the git child as two different
   environments.
-- **Skipped topology files now say WHY they were skipped.** `error_msg` was
-  write-only: recorded on every indexing failure and read back only as a
-  count, so a parse timeout, a malformed file and a panicking grammar were
-  indistinguishable at every surface. `topology_status` now lists each skipped
-  file with its recorded reason (bounded, most recently touched first), the
-  web API returns them as `fileErrors`, and `plumb doctor` names the first
-  reason when every file failed.
-
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's
   `initialize` request, and appending the reconnect note to tool results.
