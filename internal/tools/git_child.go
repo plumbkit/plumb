@@ -14,6 +14,54 @@ import (
 // for it. Both were previously left at Go's defaults, and both defaults are
 // wrong for a long-lived daemon that runs a repository's own hooks.
 
+// gitChildSpec bundles the two settings that decide how the git child runs.
+// They travel together, as one value threaded through runGit, so a call site
+// cannot pick up the environment and silently miss the bound; both come from
+// the same trust-gated [git] block, and neither has a meaningful default a
+// caller should be inventing locally.
+//
+// Concurrency: immutable once built; safe to share.
+type gitChildSpec struct {
+	// Env is the child's environment as gitChildEnv built it. nil means inherit
+	// the daemon's, byte-for-byte the behaviour before the knob existed.
+	Env []string
+	// WriteTimeout is [git] write_timeout. ZERO means the compiled default, not
+	// "no bound": GitPolicy is constructed by hand in tests and by any consumer
+	// that does not care about this knob, and an unset field resolving to an
+	// unbounded child is the one outcome that must be unreachable — such a child
+	// holds the per-repository lock and a drain token for as long as it lives.
+	WriteTimeout time.Duration
+}
+
+// gitChildSpecFor adapts a resolved GitPolicy into the spec runGit needs.
+func gitChildSpecFor(p GitPolicy) gitChildSpec {
+	return gitChildSpec{Env: gitChildEnv(p.Env), WriteTimeout: p.WriteTimeout}
+}
+
+// writeTimeout resolves the bound actually applied, substituting the compiled
+// default for an unset (or nonsensical) value. See the field comment.
+func (s gitChildSpec) writeTimeout() time.Duration {
+	if s.WriteTimeout <= 0 {
+		return defaultGitWriteTimeout
+	}
+	return s.WriteTimeout
+}
+
+// defaultGitWriteTimeout is the compiled default for [git] write_timeout: the
+// bound on an index/ref-mutating git child once it is decoupled from request
+// and daemon cancellation, so a shutdown mid-commit lets git finish and release
+// .git/index.lock rather than being SIGKILLed holding it.
+//
+// It was 2 minutes, under a comment calling that "generous enough for a slow
+// pre-commit hook (go build + golangci-lint)". That claim does not survive a
+// machine running several agents: such a hook queues behind a peer's run on the
+// shared golangci-lint cache, and those waits have been measured well past two
+// minutes on plumb's own repository. Ten minutes covers the observed contention
+// with room to spare while still bounding a genuinely wedged child — and, since
+// the number is now a knob, a repository whose hooks need longer has an answer
+// that is not "plumb kills my commits".
+const defaultGitWriteTimeout = 10 * time.Minute
+
 // gitChildEnv builds the environment for the git child process from the
 // resolved [git] env overrides.
 //

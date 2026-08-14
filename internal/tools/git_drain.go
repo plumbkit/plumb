@@ -27,12 +27,6 @@ var gitWriteInflight sync.WaitGroup
 // draining for shutdown.
 var errGitDraining = errors.New("daemon is shutting down; git writes are paused — retry once it is back up")
 
-// gitWriteGrace bounds an index/ref-mutating git child once it is decoupled from
-// request/daemon cancellation. Generous enough for a slow pre-commit hook
-// (go build + golangci-lint), so a normal commit always finishes rather than
-// being SIGKILLed mid-write; a genuinely wedged child is still bounded.
-const gitWriteGrace = 2 * time.Minute
-
 // BeginGitWriteDrain marks the daemon as draining: no new serialised git op is
 // admitted. Idempotent; safe to call from the shutdown goroutine.
 func BeginGitWriteDrain() { gitWriteDraining.Store(true) }

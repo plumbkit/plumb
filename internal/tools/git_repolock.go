@@ -41,19 +41,24 @@ var repoLocks sync.Map // map[string]*repoLockEntry
 const (
 	repoLockSweepInterval = 5 * time.Minute
 	repoLockIdleExpiry    = 1 * time.Hour
-	// repoLockMaxWait bounds a queued git op so a wedged holder cannot pin a
-	// connection indefinitely when the caller's context carries no deadline. A
-	// legitimate holder is another git op (possibly a slow pre-commit hook), so
-	// the bound is generous.
-	repoLockMaxWait = 2 * time.Minute
 )
 
 // lockRepo acquires the per-repository serialisation lock for gitDir, waiting up
-// to repoLockMaxWait (or until ctx is done, whichever is sooner). It returns a
-// release closure on success, or an error when the wait is cut short — the
-// caller surfaces that as "another git operation is in progress" rather than
-// wedging. gitDir must be the resolved repository root (see findGitRoot).
-func lockRepo(ctx context.Context, gitDir string) (func(), error) {
+// to maxWait (or until ctx is done, whichever is sooner). It returns a release
+// closure on success, or an error when the wait is cut short — the caller
+// surfaces that as "another git operation is in progress" rather than wedging.
+// gitDir must be the resolved repository root (see findGitRoot).
+//
+// maxWait bounds a queued op so a wedged holder cannot pin a connection
+// indefinitely when the caller's context carries no deadline. It is the caller's
+// resolved [git] write_timeout rather than a constant of its own, because the
+// two numbers must not disagree: a legitimate holder is another git op permitted
+// to run for write_timeout, so a shorter lock wait fails a queued peer for a wait
+// that was always going to be satisfiable — reporting contention plumb created
+// as "another git operation is in progress". Waiting exactly as long as a holder
+// may run removes that mismatch by construction, and the wait stays a CEILING:
+// the caller's own context still cuts it short.
+func lockRepo(ctx context.Context, gitDir string, maxWait time.Duration) (func(), error) {
 	now := time.Now().UnixNano()
 	fresh := &repoLockEntry{free: make(chan struct{}, 1)}
 	fresh.free <- struct{}{} // one token: the lock starts free
@@ -63,7 +68,7 @@ func lockRepo(ctx context.Context, gitDir string) (func(), error) {
 	// Stamp before blocking so the sweep never evicts an entry being waited on.
 	e.lastUsedNs.Store(now)
 
-	timer := time.NewTimer(repoLockMaxWait)
+	timer := time.NewTimer(maxWait)
 	defer timer.Stop()
 	select {
 	case <-e.free:
@@ -74,7 +79,7 @@ func lockRepo(ctx context.Context, gitDir string) (func(), error) {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("another git operation is in progress on this repository; %w", ctx.Err())
 	case <-timer.C:
-		return nil, fmt.Errorf("another git operation is in progress on this repository; timed out after %s waiting for it to finish", repoLockMaxWait)
+		return nil, fmt.Errorf("another git operation is in progress on this repository; timed out after %s waiting for it to finish", maxWait)
 	}
 }
 

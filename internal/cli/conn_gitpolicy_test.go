@@ -3,6 +3,7 @@ package cli
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 )
@@ -22,6 +23,7 @@ func TestGitPolicyFrom_CarriesEveryGitField(t *testing.T) {
 		ProtectedBranches: []string{"main"},
 		CommitTrailer:     true,
 		Env:               map[string]string{"GOWORK": "off"},
+		WriteTimeout:      config.Duration{Duration: 7 * time.Minute},
 	}
 	// If GitConfig grows a field, this fails until the fixture above covers it,
 	// which is the prompt to decide whether it should cross into GitPolicy.
@@ -43,5 +45,11 @@ func TestGitPolicyFrom_CarriesEveryGitField(t *testing.T) {
 
 	if got.Env["GOWORK"] != "off" {
 		t.Errorf("Env = %v, want the configured git child environment", got.Env)
+	}
+	// Unwrapped, not merely non-zero: a config.Duration carrying the wrong number
+	// would still pass the zero-value sweep above, and the bound this feeds is
+	// what decides when plumb kills a commit mid-hook.
+	if got.WriteTimeout != 7*time.Minute {
+		t.Errorf("WriteTimeout = %s, want the configured 7m", got.WriteTimeout)
 	}
 }

@@ -370,5 +370,6 @@ func gitPolicyFrom(c config.GitConfig) tools.GitPolicy {
 		ProtectedBranches: c.ProtectedBranches,
 		CommitTrailer:     c.CommitTrailer,
 		Env:               c.Env,
+		WriteTimeout:      c.WriteTimeout.Duration,
 	}
 }

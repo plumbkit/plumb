@@ -132,6 +132,15 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// (GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_PROXY_COMMAND, GIT_PAGER), so an
 	// untrusted value here is arbitrary code execution as the user.
 	"git.env": ClassTrustGated,
+	// write_timeout is not a preference about waiting: it is a safety decision in
+	// both directions, which is why it is gated rather than honoured verbatim.
+	// Set LARGE, a wedged git child holds the per-repository serialisation lock
+	// and a shutdown-drain token against every OTHER session on the machine — a
+	// cross-session denial of service a cloned repository could arm by shipping a
+	// config file. Set SMALL, plumb SIGKILLs git mid-commit, which strands
+	// .git/index.lock and leaves a half-written index; a repository could make
+	// every commit in its own worktree fail that way.
+	"git.write_timeout": ClassTrustGated,
 
 	// --- Session lifecycle. persist_state only makes this connection's own
 	// state more or less sticky, and writes to a plumb-owned fixed path.
