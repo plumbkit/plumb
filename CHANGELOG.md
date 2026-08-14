@@ -7,6 +7,53 @@
      stamped heading, so a clean rebase is not evidence your entry is in
      the right section — check which heading it landed under. -->
 
+### Fixed
+
+- **Post-write lint findings that name files which do not exist are now called
+  what they are: a stale golangci-lint cache.** Delete a sibling git worktree and
+  the linter's shared cache keeps returning issues attributed to paths inside the
+  removed directory — recorded instances produced 29 and 9 phantom findings. The
+  cost is that it looks exactly like a genuine regression in the change you just
+  made, so the time goes into debugging files that are gone.
+
+  The golangci-lint analyser now stats each distinct finding path before
+  reporting. The signal is deliberately all-or-nothing: it fires only when
+  *every* finding names an absent path, because a mixed set proves the run did
+  make contact with the current tree, and announcing "stale cache, ignore
+  everything" while one finding is real would be worse than the bug. Only
+  "does not exist" counts as absent — a directory, or a path that cannot be
+  stat'd at all, counts as present, since a check that cannot see a file must
+  never claim the file is gone.
+
+  Making that safe required pinning down what golangci-lint's output paths are
+  actually relative to, and the answer is: it depends. `run.relative-path-mode`
+  selects between the working directory, the go.mod directory, the git root and
+  the config file's directory, and the default is itself conditional — `cfg` when
+  a config file is discovered, `wd` when none is — while `output.path-prefix`
+  prepends an arbitrary string on top. Measured against golangci-lint v2.12.2, a
+  run anchored in a file's own directory still reports `sub/deep/bad.go` whenever
+  a config file exists, which is the ordinary case (plumb's own repository has
+  one). Resolving output paths against any single fixed directory therefore
+  mis-stats real findings for perfectly ordinary projects, and a real finding
+  stat'd as missing is precisely how this check would suppress findings that
+  matter.
+
+  So the analyser stops guessing: it passes `--path-mode=abs` and stats absolute
+  paths only. A finding in a file that exists cannot then stat as missing, which
+  makes the safety a property of the construction rather than a list of layouts
+  someone remembered to handle. `--path-mode` arrived in golangci-lint v2.1.0, so
+  a run that fails outright is retried once without the flag; findings then come
+  back relative and the stale-cache check declines to judge them, leaving older
+  binaries exactly as they were, and logs once (not once per write) that the
+  check is inert for this binary. Findings are never displayed by path, so none
+  of this changes what an agent or user sees.
+
+  plumb reports rather than remediates: `golangci-lint cache clean` mutates state
+  shared by every concurrent agent and by the user's own terminal, and the re-run
+  it implies is a cold-cache lint pass, far beyond the post-write analyser
+  timeout — auto-remediation would degrade into silence while slowing every peer
+  down. The replacement finding names the command instead.
+
 ## 0.16.6 (2026-08-14)
 
 ### Security
@@ -76,50 +123,6 @@
   `WaitDelay`. When the delay does expire, the reply explains what happened and
   quotes git's own output rather than surfacing exec's bare "WaitDelay expired
   before I/O complete".
-- **Post-write lint findings that name files which do not exist are now called
-  what they are: a stale golangci-lint cache.** Delete a sibling git worktree and
-  the linter's shared cache keeps returning issues attributed to paths inside the
-  removed directory — recorded instances produced 29 and 9 phantom findings. The
-  cost is that it looks exactly like a genuine regression in the change you just
-  made, so the time goes into debugging files that are gone.
-
-  The golangci-lint analyser now stats each distinct finding path before
-  reporting. The signal is deliberately all-or-nothing: it fires only when
-  *every* finding names an absent path, because a mixed set proves the run did
-  make contact with the current tree, and announcing "stale cache, ignore
-  everything" while one finding is real would be worse than the bug. Only
-  "does not exist" counts as absent — a directory, or a path that cannot be
-  stat'd at all, counts as present, since a check that cannot see a file must
-  never claim the file is gone.
-
-  Making that safe required pinning down what golangci-lint's output paths are
-  actually relative to, and the answer is: it depends. `run.relative-path-mode`
-  selects between the working directory, the go.mod directory, the git root and
-  the config file's directory, and the default is itself conditional — `cfg` when
-  a config file is discovered, `wd` when none is — while `output.path-prefix`
-  prepends an arbitrary string on top. Measured against golangci-lint v2.12.2, a
-  run anchored in a file's own directory still reports `sub/deep/bad.go` whenever
-  a config file exists, which is the ordinary case (plumb's own repository has
-  one). Resolving output paths against any single fixed directory therefore
-  mis-stats real findings for perfectly ordinary projects, and a real finding
-  stat'd as missing is precisely how this check would suppress findings that
-  matter.
-
-  So the analyser stops guessing: it passes `--path-mode=abs` and stats absolute
-  paths only. A finding in a file that exists cannot then stat as missing, which
-  makes the safety a property of the construction rather than a list of layouts
-  someone remembered to handle. `--path-mode` arrived in golangci-lint v2.1.0, so
-  a run that fails outright is retried once without the flag; findings then come
-  back relative and the stale-cache check declines to judge them, leaving older
-  binaries exactly as they were. Findings are never displayed by path, so none of
-  this changes what an agent or user sees.
-
-  plumb reports rather than remediates: `golangci-lint cache clean` mutates state
-  shared by every concurrent agent and by the user's own terminal, and the re-run
-  it implies is a cold-cache lint pass, far beyond the post-write analyser
-  timeout — auto-remediation would degrade into silence while slowing every peer
-  down. The replacement finding names the command instead.
-
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON
   key is last-wins, while the proxy's own router and the daemon both decode into

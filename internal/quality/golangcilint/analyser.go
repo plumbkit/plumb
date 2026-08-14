@@ -89,8 +89,26 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 	// unknown flag before writing anything. Retry without it rather than lose
 	// every finding — the stale-cache check then declines to run, because the
 	// paths come back relative and pathPresent will not judge those.
+	//
+	// Deliberately NOT gated on stderr naming the unknown flag: that would
+	// only save a second run in the already-rare pre-v2.1.0 case, at the cost
+	// of matching golangci-lint's stderr wording — a maintenance burden that
+	// silently rots the day the message changes. The retry is also bounded
+	// regardless: both attempts share the single ctx deadline passed in by
+	// the caller (2s by default), so a common transient failure — e.g.
+	// golangci-lint's own "parallel golangci-lint is running" lock error —
+	// costs at most one extra run within that same budget, never a doubled
+	// timeout.
 	if len(stdout) == 0 && runErr != nil {
 		stdout, stderr, runErr = runLinter(ctx, bin, dir, files, false)
+		if len(stdout) > 0 {
+			// The retry succeeded only because the FIRST attempt rejected
+			// --path-mode, which means this binary predates v2.1.0 and the
+			// stale-cache check (pathModeAbs) is inert for it for the rest of
+			// the daemon's lifetime — a silently degraded feature is worse
+			// than a noisy one, so say so once.
+			logOldBinaryOnce(ctx)
+		}
 	}
 
 	// A successful run always writes a JSON document to stdout (even with zero
@@ -284,6 +302,20 @@ func logUnavailableOnce(ctx context.Context) {
 		slog.InfoContext(ctx, "quality: golangci-lint not found — post-write Go quality findings are disabled",
 			"searched", append([]string{"PATH"}, goToolBinDirs()...),
 			"hint", "install golangci-lint, or put its directory on the PATH the daemon inherits")
+	})
+}
+
+// oldBinaryOnce bounds the "predates v2.1.0" log to one line per daemon
+// lifetime, for the same reason as unavailableOnce: the retry it reports on
+// can happen on every Go write once a project sits behind an old binary, and
+// an unconditional log line would flood the log and get ignored.
+var oldBinaryOnce sync.Once
+
+func logOldBinaryOnce(ctx context.Context) {
+	oldBinaryOnce.Do(func() {
+		slog.InfoContext(ctx, "quality: golangci-lint rejected --path-mode and predates v2.1.0 — "+
+			"the stale-cache check is disabled for it, findings are otherwise unaffected",
+			"hint", "upgrade golangci-lint to v2.1.0 or later to re-enable the stale-cache check")
 	})
 }
 

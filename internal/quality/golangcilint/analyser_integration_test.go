@@ -134,6 +134,69 @@ func TestIntegration_BelowModuleRootFindingSurvives(t *testing.T) {
 	})
 }
 
+// TestIntegration_PathPrefixDoesNotSurviveAbsPathMode pins the interaction the
+// pathModeAbs doc comment relies on: golangci-lint v2.12.2 IGNORES
+// output.path-prefix once --path-mode=abs is set, so Analyse's findings carry
+// the real absolute source path rather than an absolute-looking but bogus one
+// (e.g. "/myprefix/…"). If a future golangci-lint ever applied the prefix on
+// top of abs mode instead, the emitted path would be absolute AND not exist on
+// disk, pathPresent would judge it missing, and EVERY real finding in any
+// project that sets path-prefix would be silently suppressed as a false
+// stale-cache signal — the exact catastrophe this analyser exists to prevent.
+// This test is the guard: it fails the day that interaction changes.
+func TestIntegration_PathPrefixDoesNotSurviveAbsPathMode(t *testing.T) {
+	if _, err := exec.LookPath("golangci-lint"); err != nil {
+		t.Skip("golangci-lint not on PATH")
+	}
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module lintcheck\n\ngo 1.21\n")
+	// A prefix that cannot coincide with any real path on disk: if it ever
+	// leaked into the reported filename, that filename could never exist.
+	writeFile(t, filepath.Join(dir, ".golangci.yml"), "version: \"2\"\noutput:\n  path-prefix: myprefix\n")
+	src := filepath.Join(dir, "sub", "deep", "bad.go")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, src, printfMismatch)
+
+	runDir := filepath.Dir(src)
+
+	t.Run("raw path-mode=abs output ignores path-prefix", func(t *testing.T) {
+		out := runLint(t, runDir, src, pathModeAbsFlag)
+		got := issueFilenames(t, out)
+		if len(got) == 0 {
+			t.Fatal("no issues from the real binary; expected the printf mismatch")
+		}
+		if got[0] != src {
+			t.Fatalf("path = %q, want the real absolute source path %q — output.path-prefix leaked into "+
+				"--path-mode=abs output; this is the interaction pathModeAbs's doc comment says was measured "+
+				"to NOT happen with golangci-lint v2.12.2", got[0], src)
+		}
+		t.Logf("measured: golangci-lint reported %q with output.path-prefix=myprefix set — unaffected", got[0])
+	})
+
+	t.Run("Analyse passes the real finding through", func(t *testing.T) {
+		findings, err := golangcilint.New().Analyse(context.Background(), []string{src})
+		if err != nil {
+			t.Fatalf("Analyse returned error: %v", err)
+		}
+		if len(findings) == 0 {
+			t.Fatal("expected at least one finding, got none")
+		}
+		for _, f := range findings {
+			if f.Code == golangcilint.StaleCacheCode {
+				t.Fatalf("a real finding was replaced by the stale-cache signal with output.path-prefix "+
+					"set — path-prefix leaked into the reported path and pathPresent judged it missing: %+v", findings)
+			}
+		}
+		if findings[0].File != src {
+			t.Errorf("File = %q, want the real absolute source path %q (path-prefix must not alter it under --path-mode=abs)",
+				findings[0].File, src)
+		}
+	})
+}
+
 // runLint invokes the real golangci-lint in dir and returns its stdout.
 func runLint(t *testing.T, dir, target string, extra ...string) []byte {
 	t.Helper()
