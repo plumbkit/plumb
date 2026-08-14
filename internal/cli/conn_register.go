@@ -139,6 +139,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			func() int { return s.collabConfig().HintBudgetBytes }))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
+	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewExecuteShellCommand(s.shellResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))

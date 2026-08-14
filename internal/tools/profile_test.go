@@ -86,6 +86,7 @@ func nonLeanToolSet() []describable {
 		NewTopologyRoutes(nil),
 		NewStructuralQuery(nil, nil),
 		NewWorkspaceSearch(nil, nil),
+		NewMutationTest(WriteDeps{}, nil),
 		NewRunCommand(nil),
 		NewExecuteShellCommand(nil),
 		NewShareIntent(CollabDeps{}),
