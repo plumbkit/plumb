@@ -140,7 +140,6 @@ func activeConversationVolumesWithGlobal(
 	defer cancel()
 	now := time.Now()
 	seenWorkspace := make(map[string]bool)
-	seenCrossProject := make(map[string]bool)
 	var out []conversationDTO
 	for _, info := range sessions {
 		workspace := filepath.Clean(info.Folder)
@@ -151,7 +150,7 @@ func activeConversationVolumesWithGlobal(
 		out = append(out, localConversationVolumes(ctx, workspace, now, limit)...)
 		if projectAllowsCrossProject(base, workspace) {
 			out = append(out, crossProjectConversationVolumes(
-				ctx, global, workspace, now, limit, seenCrossProject,
+				ctx, global, workspace, now, limit,
 			)...)
 		}
 	}
@@ -229,7 +228,6 @@ func crossProjectConversationVolumes(
 	workspace string,
 	now time.Time,
 	limit int,
-	seen map[string]bool,
 ) []conversationDTO {
 	if global == nil {
 		return nil
@@ -240,10 +238,6 @@ func crossProjectConversationVolumes(
 	}
 	var out []conversationDTO
 	for _, summary := range summaries {
-		if seen[summary.ID] {
-			continue
-		}
-		seen[summary.ID] = true
 		out = append(out, conversationDTO{
 			ID: summary.ID, Workspace: "cross-project",
 			Notes: summary.Notes, Pending: summary.Pending, LastAt: summary.LastAt,

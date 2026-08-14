@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -134,6 +135,16 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 			break
 		}
 	}
+	// Store claims are FIFO and source selection is deliberately fair rather than
+	// global FIFO. Sort the selected batch for chronological presentation; under
+	// backlogs, alternation still guarantees each eligible store a slot instead of
+	// letting one source starve the other.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
 	return out
 }
 

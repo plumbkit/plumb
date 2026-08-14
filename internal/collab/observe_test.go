@@ -139,12 +139,19 @@ func TestConversationSummariesForWorkspace_ScopesGlobalVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/a", now.Add(time.Second), 5)
+	gotA, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/a", now.Add(time.Second), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != conv || got[0].Notes != 2 || got[0].Pending != 2 {
-		t.Fatalf("workspace-scoped summaries = %#v", got)
+	if len(gotA) != 1 || gotA[0].ID != conv || gotA[0].Notes != 1 || gotA[0].Pending != 1 {
+		t.Fatalf("target-a summaries = %#v", gotA)
+	}
+	gotB, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/b", now.Add(time.Second), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotB) != 1 || gotB[0].ID != conv || gotB[0].Notes != 1 || gotB[0].Pending != 1 {
+		t.Fatalf("target-b summaries = %#v", gotB)
 	}
 	if got, err := global.ConversationSummariesForWorkspace(ctx, "/workspace/missing", now.Add(time.Second), 5); err != nil || len(got) != 0 {
 		t.Fatalf("unrelated workspace saw global conversations: %#v err=%v", got, err)

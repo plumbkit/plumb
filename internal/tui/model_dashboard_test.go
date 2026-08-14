@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -40,7 +41,7 @@ func TestProjectConversationSummaries_CrossProjectRequiresWorkspaceConsent(t *te
 	if projectAllowsCrossProject(base, ws) {
 		t.Fatal("default workspace unexpectedly opted into cross-project metadata")
 	}
-	if got := projectConversationSummaries(context.Background(), ws, now, 5, global, false); len(got) != 0 {
+	if got := projectConversationSummaries(context.Background(), ws, now, global, false); len(got) != 0 {
 		t.Fatalf("TUI exposed cross-project metadata without consent: %#v", got)
 	}
 
@@ -48,9 +49,31 @@ func TestProjectConversationSummaries_CrossProjectRequiresWorkspaceConsent(t *te
 	if !projectAllowsCrossProject(base, ws) {
 		t.Fatal("resolved workspace lost explicit cross-project consent")
 	}
-	got := projectConversationSummaries(context.Background(), ws, now, 5, global, true)
+	if got := projectConversationSummaries(context.Background(), "/other", now, global, true); len(got) != 0 {
+		t.Fatalf("sender workspace exposed recipient-scoped metadata: %#v", got)
+	}
+	got := projectConversationSummaries(context.Background(), ws, now, global, true)
 	if len(got) != 1 || got[0].ID != conv || got[0].Notes != 1 || got[0].Pending != 1 {
 		t.Fatalf("TUI omitted opted-in cross-project metadata: %#v", got)
+	}
+}
+
+func TestLiveProjectAllowsCrossProject_RefreshesAndFailsClosed(t *testing.T) {
+	ws := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Collab.CrossProject = true
+	load := func() (config.Config, error) { return cfg, nil }
+	if !liveProjectAllowsCrossProject(ws, load) {
+		t.Fatal("live consent loader lost enabled policy")
+	}
+	cfg.Collab.CrossProject = false
+	if liveProjectAllowsCrossProject(ws, load) {
+		t.Fatal("live consent loader retained revoked policy")
+	}
+	if liveProjectAllowsCrossProject(ws, func() (config.Config, error) {
+		return config.Config{}, errors.New("unreadable")
+	}) {
+		t.Fatal("unreadable live config did not fail closed")
 	}
 }
 

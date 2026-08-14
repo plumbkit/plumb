@@ -145,7 +145,11 @@ func (m *Model) refreshDashboardProject() {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	now := time.Now()
-	allowGlobal := projectAllowsCrossProject(m.settingsCfg, m.dashProjectFolder)
+	// Consent is live policy, not a settings-screen snapshot. Reload the global
+	// base on every dashboard refresh and fail closed before opening the global
+	// store; otherwise a long-running TUI could retain metadata after consent was
+	// revoked until the operator entered Settings or restarted it.
+	allowGlobal := liveProjectAllowsCrossProject(m.dashProjectFolder, config.Load)
 	var global *collab.Store
 	if allowGlobal && collab.GlobalExists() {
 		global, _ = collab.OpenGlobal()
@@ -154,8 +158,13 @@ func (m *Model) refreshDashboardProject() {
 		}
 	}
 	m.dashProjectConversations = projectConversationSummaries(
-		ctx, m.dashProjectFolder, now, 5, global, allowGlobal,
+		ctx, m.dashProjectFolder, now, global, allowGlobal,
 	)
+}
+
+func liveProjectAllowsCrossProject(workspace string, load func() (config.Config, error)) bool {
+	base, err := load()
+	return err == nil && projectAllowsCrossProject(base, workspace)
 }
 
 func projectAllowsCrossProject(base config.Config, workspace string) bool {
@@ -167,21 +176,20 @@ func projectConversationSummaries(
 	ctx context.Context,
 	workspace string,
 	now time.Time,
-	limit int,
 	global *collab.Store,
 	allowGlobal bool,
 ) []collab.ConversationSummary {
 	var localSummaries, globalSummaries []collab.ConversationSummary
 	if collab.Exists(workspace) {
 		if store, err := collab.Open(workspace); err == nil {
-			localSummaries, _ = store.ConversationSummaries(ctx, now, limit)
+			localSummaries, _ = store.ConversationSummaries(ctx, now, 5)
 			_ = store.Close()
 		}
 	}
 	if allowGlobal && global != nil {
-		globalSummaries, _ = global.ConversationSummariesForWorkspace(ctx, workspace, now, limit)
+		globalSummaries, _ = global.ConversationSummariesForWorkspace(ctx, workspace, now, 5)
 	}
-	return collab.MergeConversationSummaries(limit, localSummaries, globalSummaries)
+	return collab.MergeConversationSummaries(5, localSummaries, globalSummaries)
 }
 
 // renderDashboard renders the full-width Dashboard section (section 0).

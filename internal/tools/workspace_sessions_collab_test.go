@@ -52,6 +52,13 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 	); err != nil || len(rows) != 1 {
 		t.Fatalf("claim delivered note: rows=%#v err=%v", rows, err)
 	}
+	nextConv, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "carol", AuthorID: "sess-carol", Body: "next body must stay hidden",
+		Addressee: collab.AddresseeNext, TTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	crossConv, err := global.PutNote(context.Background(), collab.NoteInput{
 		AuthorSession: "alice", AuthorID: "sess-alice", Body: "cross",
@@ -76,19 +83,22 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 	out := tool.collabBlock(now.Add(2 * time.Second))
 	for _, want := range []string{
 		"notes for you", "from bob — pending, 6 bytes, conversation " + conv,
+		"from carol — pending, 26 bytes, conversation " + nextConv,
 		"your recent notes (delivery state)",
 		conv + " → bob — pending",
 		deliveredConv + " → carol — delivered to carol",
 		crossConv + " → dan — delivered to dan",
 		"conversation volume", conv + " — 2 notes, 2 pending",
-		crossConv + " — 1 note, 0 pending",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("collab observability missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "answer") {
+	if strings.Contains(out, "answer") || strings.Contains(out, "next body must stay hidden") {
 		t.Fatalf("workspace_sessions duplicated a pending note body instead of metadata:\n%s", out)
+	}
+	if strings.Contains(out, crossConv+" — 1 note") {
+		t.Fatalf("sender workspace exposed recipient-scoped cross-project volume:\n%s", out)
 	}
 
 	globalOnly := NewWorkspaceSessions(func() string { return ws }, "sess-alice").
@@ -99,8 +109,8 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 		).
 		WithGlobalCollab(func() *collab.Store { return global }, func() bool { return true })
 	if out := globalOnly.collabBlock(now.Add(2 * time.Second)); !strings.Contains(out, crossConv+" → dan — delivered to dan") ||
-		!strings.Contains(out, crossConv+" — 1 note, 0 pending") {
-		t.Fatalf("cross-project state or volume disappeared without a local store:\n%s", out)
+		strings.Contains(out, crossConv+" — 1 note") {
+		t.Fatalf("global-only sender state or recipient-scoped volume is wrong:\n%s", out)
 	}
 
 	globalOnly.collabGlobalVolume = func() bool { return false }

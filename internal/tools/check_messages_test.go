@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,27 +229,104 @@ func TestInboxKeys_NextIsScopedToWorkspace(t *testing.T) {
 	}
 }
 
-// TestCheckMessages_WokenWithNothingReadableDisclosesNothing: a wake-up is not
-// evidence that a message for THIS session exists — a name is a daemon-wide
-// notifier key, so a send to a same-named peer in a project this one cannot read
-// wakes it too. Claiming "a message arrived" would then be both false and a
-// disclosure of something the agent is not allowed to see.
-func TestCheckMessages_WokenWithNothingReadableDisclosesNothing(t *testing.T) {
-	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 5}, "alice")
+// TestCheckMessages_UnreadableWakeDoesNotEndWaitOrDisclose proves a name-key
+// bump outside this recipient's readable stores is neither a timing side channel
+// nor a reason to violate the requested block-until-note-or-expiry contract.
+func TestCheckMessages_UnreadableWakeDoesNotEndWaitOrDisclose(t *testing.T) {
+	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 1}, "alice")
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		deps.Notifier.Bump("alice") // woken, but nothing this session may read
 	}()
 
-	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":5}`))
+	start := time.Now()
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":1}`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
+		t.Fatalf("unreadable wake ended the wait after %s", elapsed)
 	}
 	if strings.Contains(out, "a message arrived") {
 		t.Errorf("must not assert that a message exists for a session that could not read one; got %q", out)
 	}
 	if !strings.Contains(out, "No notes") {
-		t.Errorf("expected an empty result; got %q", out)
+		t.Errorf("expected an empty timeout result; got %q", out)
+	}
+}
+
+// TestCheckMessages_BaselinesBeforeInitialClaim deterministically commits a note
+// while the first claim is resolving its store. A post-claim baseline would absorb
+// that bump and sleep through the pending row.
+func TestCheckMessages_BaselinesBeforeInitialClaim(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 2}, "alice")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	deps.StoreIfExists = func() *collab.Store {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return nil
+		}
+		return local
+	}
+	writeErr := make(chan error, 1)
+	go func() {
+		<-entered
+		_, err := local.PutNote(context.Background(), collab.NoteInput{
+			AuthorSession: "bob", AuthorID: "id-bob", Body: "committed in the claim gap",
+			Addressee: "alice", TargetID: deps.SessionID, TTL: time.Hour,
+		}, time.Now())
+		if err == nil {
+			deps.Notifier.Bump("alice", collab.NotifySessionKey(deps.SessionID))
+		}
+		writeErr <- err
+		close(release)
+	}()
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "committed in the claim gap") {
+		t.Fatalf("wait slept through a note committed during its initial claim: %q", out)
+	}
+}
+
+func TestCheckMessages_UnreadableWakeKeepsWaitingForReadableNote(t *testing.T) {
+	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 2}, "alice")
+	writeErr := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		deps.Notifier.Bump("alice") // irrelevant wake
+		time.Sleep(50 * time.Millisecond)
+		_, err := local.PutNote(context.Background(), collab.NoteInput{
+			AuthorSession: "bob", AuthorID: "id-bob", Body: "readable second wake",
+			Addressee: "alice", TargetID: deps.SessionID, TTL: time.Hour,
+		}, time.Now())
+		if err == nil {
+			deps.Notifier.Bump("alice", collab.NotifySessionKey(deps.SessionID))
+		}
+		writeErr <- err
+	}()
+
+	start := time.Now()
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 75*time.Millisecond {
+		t.Fatalf("irrelevant wake ended the wait after %s", elapsed)
+	}
+	if !strings.Contains(out, "readable second wake") {
+		t.Fatalf("wait did not continue to the readable note: %q", out)
 	}
 }
 
@@ -276,8 +354,9 @@ func TestLeaveNote_OfflineThreadParticipantFailsClosed(t *testing.T) {
 
 	_, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"to":"bob","body":"my answer","conversation_id":`+jsonStr(conv)+`}`))
-	if err == nil || !strings.Contains(err.Error(), "not active") {
-		t.Fatalf("offline stable participant was not refused: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not active") ||
+		!strings.Contains(err.Error(), "start a new conversation") {
+		t.Fatalf("offline stable participant was not refused with a viable remedy: %v", err)
 	}
 	sent, err := global.RecentSentNotes(context.Background(), deps.SessionID, time.Now(), 10)
 	if err != nil {

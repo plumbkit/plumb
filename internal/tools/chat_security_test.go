@@ -54,6 +54,21 @@ func TestInboxClaim_FairlyIncludesPermittedGlobalMail(t *testing.T) {
 	}
 }
 
+func TestInboxClaim_RendersSelectedMixedStoreBatchChronologically(t *testing.T) {
+	deps, local, global := chatTestDeps(t, CollabPolicy{Mailbox: true, CrossProject: true}, "alice")
+	put(t, global, "carol", "alice", "older-global", "", "/other", deps.Workspace())
+	time.Sleep(time.Millisecond)
+	put(t, local, "bob", "alice", "newer-local", "", "", "")
+
+	rows := (Inbox{
+		Self: "alice", SelfID: deps.SessionID, Root: deps.Workspace(),
+		Policy: deps.Policy(), Workspace: deps.StoreIfExists, Global: deps.GlobalStoreIfExists,
+	}).Claim(context.Background())
+	if len(rows) != 2 || rows[0].Body != "older-global" || rows[1].Body != "newer-local" {
+		t.Fatalf("selected mixed-store batch was not chronological: %#v", rows)
+	}
+}
+
 func TestLeaveNote_FreshActiveNamePersistsStableTarget(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	deps.PeerSessionByName = func(name string) (string, string, bool, bool) {
@@ -108,5 +123,25 @@ func TestLeaveNote_SplitStoreAmbiguityFailsClosed(t *testing.T) {
 		json.RawMessage(`{"body":"must not choose","conversation_id":`+jsonStr(conv)+`}`))
 	if err == nil || !strings.Contains(err.Error(), "exactly one other stable participant") {
 		t.Fatalf("split-store group thread did not fail closed: %v", err)
+	}
+}
+
+func TestLeaveNote_CrossProjectReceiptDoesNotExposePeerPath(t *testing.T) {
+	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	const privatePeerPath = "/Users/private-client/acquisition"
+	deps.PeerSessionByName = func(name string) (string, string, bool, bool) {
+		return "id-bob", privatePeerPath, name == "bob", false
+	}
+
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"bob","body":"cross-project hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, privatePeerPath) {
+		t.Fatalf("sender receipt exposed recipient workspace path: %q", out)
+	}
+	if !strings.Contains(out, "pinned to another project") {
+		t.Fatalf("cross-project receipt lost its consent guidance: %q", out)
 	}
 }

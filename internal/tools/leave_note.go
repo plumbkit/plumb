@@ -287,7 +287,7 @@ func (t *LeaveNote) liveConversationPeer(
 	currentName, currentWorkspace, found := t.deps.PeerSessionByID(peer.ID)
 	if !found || currentName == "" || currentWorkspace == "" {
 		return "", "", fmt.Errorf(
-			"leave_note: conversation participant %q is not active; wait for it to reconnect before replying",
+			"leave_note: conversation participant %q is not active; start a new conversation to the peer's current active session name instead of replying to this thread",
 			peer.Name)
 	}
 	if requestedName != "" && requestedName != peer.Name && requestedName != currentName {
@@ -390,8 +390,8 @@ func formatNoteResult(
 		sb.WriteString("  note:         a likely secret in the body was redacted before storage.\n")
 	}
 	if target.crossProject {
-		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s. It is delivered only if THAT "+
-			"project sets [collab] cross_project = true; otherwise it expires unread.\n", target.peerWorkspace)
+		sb.WriteString("  cross-project:  the recipient is pinned to another project. It is delivered only if THAT " +
+			"project sets [collab] cross_project = true; otherwise it expires unread.\n")
 	}
 	if target.peerUnknown {
 		fmt.Fprintf(&sb, "  unplaced:       no session named %q is connected, and no conversation places it. "+

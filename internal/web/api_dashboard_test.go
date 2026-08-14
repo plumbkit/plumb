@@ -130,6 +130,12 @@ func TestActiveConversationVolumes_IncludesCrossProjectConversationOnce(t *testi
 	}
 
 	base.Collab.CrossProject = true
+	if got := activeConversationVolumesWithGlobal([]session.Info{{Folder: wsA}}, 10, global, base); len(got) != 0 {
+		t.Fatalf("sender opt-in exposed recipient-scoped metadata: %#v", got)
+	}
+	if got := activeConversationVolumesWithGlobal([]session.Info{{Folder: wsB}}, 10, global, base); len(got) != 1 || got[0].ID != conv {
+		t.Fatalf("recipient opt-in did not expose inbound metadata: %#v", got)
+	}
 	got := activeConversationVolumesWithGlobal(sessions, 10, global, base)
 	if len(got) != 1 || got[0].ID != conv || got[0].Workspace != "cross-project" ||
 		got[0].Notes != 1 || got[0].Pending != 1 {
@@ -162,6 +168,12 @@ func TestActiveConversationVolumes_MergesThreadAcrossLocalAndGlobalStores(t *tes
 	}, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := global.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "bob-id", Body: "global reply", Addressee: "alice", TargetID: "alice-id",
+		TTL: time.Hour, ConversationID: conv, OriginWorkspace: wsB, TargetWorkspace: wsA,
+	}, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	base := config.Defaults()
 	base.Collab.CrossProject = true
@@ -169,7 +181,7 @@ func TestActiveConversationVolumes_MergesThreadAcrossLocalAndGlobalStores(t *tes
 		[]session.Info{{Folder: wsA}, {Folder: wsB}}, 10, global, base,
 	)
 	if len(got) != 1 || got[0].ID != conv || got[0].Workspace != "cross-project" ||
-		got[0].Notes != 2 || got[0].Pending != 2 {
+		got[0].Notes != 3 || got[0].Pending != 3 {
 		t.Fatalf("split conversation was not merged truthfully: %#v", got)
 	}
 }

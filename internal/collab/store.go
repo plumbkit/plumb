@@ -332,7 +332,9 @@ func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string,
 }
 
 // PendingNotesForSession is PendingNotes with the recipient's stable session ID.
-// A session never sees a note it authored, including one addressed to "next".
+// A registered session sees eligible "next" metadata without claiming it, but
+// never sees a note it authored. Name-only legacy callers cannot safely inspect
+// "next" because they have no stable identity for that author exclusion.
 func (s *Store) PendingNotesForSession(
 	ctx context.Context,
 	sessionName, sessionID, workspace string,
@@ -345,11 +347,13 @@ func (s *Store) PendingNotesForSession(
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
 		 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-		   AND ((target_id <> '' AND target_id = ?) OR (target_id = '' AND addressee = ?))
+		   AND ((target_id <> '' AND target_id = ?) OR
+		        (target_id = '' AND (addressee = ? OR (? <> '' AND addressee = ?))))
 		   AND (target_workspace = '' OR target_workspace = ?)
 		   AND (? = '' OR author_id <> ?)
 		 ORDER BY created_at DESC, id DESC`,
-		string(KindNote), now.UnixNano(), sessionID, sessionName, workspace, sessionID, sessionID)
+		string(KindNote), now.UnixNano(), sessionID, sessionName, sessionID, AddresseeNext,
+		workspace, sessionID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}

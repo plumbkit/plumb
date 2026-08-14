@@ -154,10 +154,10 @@ func (s *Store) ConversationSummaries(
 	return s.conversationSummaries(ctx, now, limit, "")
 }
 
-// ConversationSummariesForWorkspace returns cross-project conversations in
-// which workspace is either endpoint. It is valid only for the daemon-level
-// store; the workspace predicate prevents one project's status surface from
-// observing unrelated conversations.
+// ConversationSummariesForWorkspace returns the live cross-project notes whose
+// target is workspace. It is valid only for the daemon-level store. Target-only
+// scoping makes the recipient workspace's consent authoritative: a sender that
+// opted in cannot expose metadata about a recipient that did not.
 func (s *Store) ConversationSummariesForWorkspace(
 	ctx context.Context,
 	workspace string,
@@ -191,10 +191,10 @@ func (s *Store) conversationSummaries(
 			        SUM(CASE WHEN delivered_at = 0 THEN 1 ELSE 0 END), MAX(created_at)
 			 FROM collab_rows
 			 WHERE kind = ? AND expires_at > ?
-			   AND (origin_workspace = ? OR target_workspace = ?)
+			   AND target_workspace = ?
 			 GROUP BY conversation_id
 			 ORDER BY COUNT(*) DESC, MAX(created_at) DESC`
-		args = append(args, workspace, workspace)
+		args = append(args, workspace)
 	}
 	if limit > 0 {
 		query += ` LIMIT ?`

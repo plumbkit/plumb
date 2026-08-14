@@ -88,13 +88,17 @@
 
   Active-name and in-thread sends now persist the intended peer's stable session
   ID, follow that participant across a rename, and cannot be intercepted by a later
-  reuse of the display name. Duplicate live names, offline threaded peers, caller
+  reuse of the display name. Pre-v4 pending rows cannot be assigned an identity by
+  migration and retain the legacy name route only until their existing TTL expires.
+  Duplicate live names, offline threaded peers, caller
   non-participation, ambiguous split local/global history, and unregistered callers
   all fail closed instead of guessing or silently becoming a note for `next`.
-  Self-authored rows cannot be claimed by their author. Claims are deterministic
-  oldest-first (including timestamp ties), and fair local/global batching prevents
-  a busy local mailbox from starving permitted cross-project mail. Blocking
-  `check_messages` results report elapsed seconds and policy clamps, while per-call
+  Self-authored rows cannot be claimed by their author. Each store claims
+  deterministic oldest-first order (including timestamp ties); mailbox batches
+  alternate local/global sources fairly and render their selected notes
+  chronologically, so a busy local mailbox cannot starve permitted cross-project
+  mail. Blocking `check_messages` ignores wakes with nothing readable, reports
+  elapsed seconds and policy clamps, and closes the claim/baseline race. Per-call
   limits leave the remainder pending. Claims are atomic and at most once across
   server delivery paths; a post-claim transport failure can still lose a note, so
   end-to-end exactly-once is not claimed. Cross-project metadata follows the

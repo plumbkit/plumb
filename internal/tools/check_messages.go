@@ -93,8 +93,11 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 		Global:    t.deps.GlobalStoreIfExists,
 	}
 
-	// Claim first: something may already be waiting, in which case there is
-	// nothing to wait for.
+	// Snapshot before the first claim. If a note commits while that claim is
+	// checking SQLite, its bump remains newer than this baseline and the wait
+	// below re-checks the store instead of sleeping through it.
+	keys := inbox.Keys()
+	since := t.deps.Notifier.Gens(keys)
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(rows, policy), nil
 	}
@@ -104,31 +107,23 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 		return t.empty(policy), nil
 	}
 
-	// Snapshot the generations BEFORE waiting so a note written between the claim
-	// above and the park below still wakes us instead of being missed.
-	keys := inbox.Keys()
-	since := t.deps.Notifier.Gens(keys)
 	started := time.Now()
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
-		return formatWaitTimeout(time.Since(started), args.WaitSeconds, maxWait, clamped), nil
+	for {
+		if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
+			return formatWaitTimeout(time.Since(started), args.WaitSeconds, maxWait, clamped), nil
+		}
+		// Advance the baseline BEFORE claiming. A bump during or after this claim
+		// therefore stays newer and the next Wait observes it. A wake with no
+		// readable row can come from a same-named session outside this recipient's
+		// consent boundary, or from another delivery path winning the atomic claim;
+		// neither is a reason to disclose the wake or end the requested wait early.
+		since = t.deps.Notifier.Gens(keys)
+		if rows := inbox.Claim(ctx); len(rows) > 0 {
+			return t.render(rows, policy) + waitClampNotice(args.WaitSeconds, maxWait, clamped), nil
+		}
 	}
-	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy) + waitClampNotice(args.WaitSeconds, maxWait, clamped), nil
-	}
-	// Woken but nothing to claim. The legitimate cause is a race inside THIS
-	// session: another delivery path (a tool-result block, or session_start) got
-	// there first, which is the watermark doing its job. But a wake-up is not
-	// evidence that a message for us exists — a session name is a daemon-wide
-	// notifier key, so a send to a same-named peer in another project wakes us
-	// too, and one this project has not opted in to read is invisible here.
-	// Announcing an arrival would then be both false and a disclosure of
-	// something the agent may not read, so the reply states only what is
-	// certainly true and offers the race as a possibility.
-	return t.empty(policy) +
-		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — the atomic claim is at most once across server delivery paths.\n", nil
 }
 
 func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {
