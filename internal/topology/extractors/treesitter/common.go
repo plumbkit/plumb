@@ -176,7 +176,17 @@ func extractWith(
 	}
 	defer tree.Release()
 	if tree.ParseStoppedEarly() {
-		return nil, nil, fmt.Errorf("parse stopped early: %s", tree.ParseStopReason())
+		reason := tree.ParseStopReason()
+		// The watcher above raises the cancellation flag the instant ctx.Done()
+		// fires, so a plain deadline expiry comes back "cancelled" — the flag
+		// beats the parser's own timeout budget to the stop. Classify by the
+		// context instead: Done() closing implies Err() is already set, so a
+		// deadline that killed the parse reads as DeadlineExceeded here, while
+		// a genuine cancel stays "cancelled".
+		if reason == tsg.ParseStopCancelled && ctx.Err() == context.DeadlineExceeded {
+			reason = tsg.ParseStopTimeout
+		}
+		return nil, nil, fmt.Errorf("parse stopped early: %s", reason)
 	}
 	nodes, edges := walk(tree.RootNode())
 	return nodes, edges, nil

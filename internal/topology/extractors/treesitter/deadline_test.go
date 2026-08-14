@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,6 +96,30 @@ func TestExtractWith_MidParseDeadlineReturnsError(t *testing.T) {
 	}
 }
 
+func TestExtractWith_MidParseCancelReportsCancelled(t *testing.T) {
+	// The counter-case to the deadline above: a context genuinely cancelled
+	// mid-parse must still be recorded as "cancelled", not reclassified.
+	// Same oversized source, so the flag fires long before the parse ends.
+	var src strings.Builder
+	for i := range 50000 {
+		fmt.Fprintf(&src, "def f%d(x):\n    return x + %d\n\n", i, i)
+	}
+
+	ex := NewPython()
+	if _, _, err := ex.Extract(context.Background(), "warm.py", []byte("def w():\n    pass\n")); err != nil {
+		t.Fatalf("warm-up Extract: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	_, _, err := ex.Extract(ctx, "big.py", []byte(src.String()))
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("err = %v, want the reason \"cancelled\" — a genuine mid-parse cancel must not be reclassified", err)
+	}
+}
+
 func TestExtractWith_CancelledContextDoesNotParse(t *testing.T) {
 	// The other half of the dead-context contract. A cancelled context usually
 	// carries no deadline at all, so the budget check above cannot see it: the
@@ -161,5 +186,63 @@ func TestExtractWith_ExpiredBudgetOnUnmarkedContext(t *testing.T) {
 	}
 	if nodes != nil || edges != nil {
 		t.Error("expected no nodes/edges from an extract whose budget was already spent")
+	}
+}
+
+// markedLateCtx simulates the race the cancelled-for-timeout mislabel came
+// from: the context's timer has fired — Done closed, Err reports
+// DeadlineExceeded — while the deadline it reports still lies far ahead, so
+// the parser's own timeout budget cannot be what stops the parse; only the
+// cancellation flag can. A real context.WithTimeout produces this split only
+// when the watcher goroutine wins a sub-millisecond race against the parser's
+// poll loop (it lost 10/10 on an unloaded machine), so the classification
+// under test would otherwise have no deterministic regression guard.
+type markedLateCtx struct {
+	context.Context
+	done   chan struct{}
+	marked atomic.Int32
+}
+
+func (c *markedLateCtx) Deadline() (time.Time, bool) { return time.Now().Add(time.Hour), true }
+func (c *markedLateCtx) Done() <-chan struct{}       { return c.done }
+func (c *markedLateCtx) Err() error {
+	if c.marked.Load() != 0 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// TestExtractWith_DeadlineFlagStopRecordsTimeout pins the classification: when
+// the watcher's cancellation flag is what stopped the parse but the context
+// died of its deadline, the recorded reason must be "timeout", not the
+// "cancelled" the parser reports.
+func TestExtractWith_DeadlineFlagStopRecordsTimeout(t *testing.T) {
+	var src strings.Builder
+	for i := range 50000 {
+		fmt.Fprintf(&src, "def f%d(x):\n    return x + %d\n\n", i, i)
+	}
+
+	ex := NewPython()
+	if _, _, err := ex.Extract(context.Background(), "warm.py", []byte("def w():\n    pass\n")); err != nil {
+		t.Fatalf("warm-up Extract: %v", err)
+	}
+
+	ctx := &markedLateCtx{Context: context.Background(), done: make(chan struct{})}
+	// Mark before closing Done, matching the order context.WithTimeout's timer
+	// sets Err and then closes the channel.
+	time.AfterFunc(200*time.Millisecond, func() {
+		ctx.marked.Store(1)
+		close(ctx.done)
+	})
+
+	_, _, err := ex.Extract(ctx, "big.py", []byte(src.String()))
+	if err == nil {
+		t.Fatal("expected an early-stop error — the cancellation flag fired mid-parse")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("err = %q, want \"timeout\": a context that died of its deadline must not be recorded as cancelled", err)
+	}
+	if strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("err = %q: the flag stopped the parse, and the recording must still say timeout", err)
 	}
 }

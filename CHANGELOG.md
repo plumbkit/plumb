@@ -518,6 +518,14 @@
   `WaitDelay`. When the delay does expire, the reply explains what happened and
   quotes git's own output rather than surfacing exec's bare "WaitDelay expired
   before I/O complete".
+- **A parse killed by its deadline is recorded as `timeout`, not `cancelled`.**
+  Since the parser pool landed, `extractWith`'s watcher goroutine raised the
+  cancellation flag the instant `ctx.Done()` fired, so a plain deadline expiry
+  beat the parser's own timeout budget to the stop and was stored in
+  `topology_files.error_msg` as `cancelled` — indistinguishable from a genuine
+  cancel. The reason is now classified by the context: a stop whose context
+  died of its deadline records `timeout`; a genuine cancel stays `cancelled`.
+
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON
   key is last-wins, while the proxy's own router and the daemon both decode into
