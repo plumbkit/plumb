@@ -1010,16 +1010,37 @@
     that stored origin) may name `$HOME`; an incidental tool path, a
     client-reported root, and a weak-origin persisted pin are refused (issue
     #182's explicit-pin contract is preserved, and is tested).
+
+    The declaration must be about the directory being named. Keying on "a
+    `workspace` key is present" was not enough: the seed is chosen from
+    `uri`/`file_path`/`path`/`root` **before** `workspace`, and tools take
+    both — `relevant_memories` and `write_memory` each accept a path and a
+    workspace. So `{path: "~/.zshrc", workspace: "/some/project"}` seeded
+    `$HOME` while counting as a declaration of it, and the resulting pin was
+    stamped `session_start` and persisted, returning on every later reconnect.
+  - **A root that *contains* the home directory is refused too**, unless
+    explicitly named. Guarding `$HOME` by identity alone left the rung above
+    it open: `/Users`, `/home` or `/` admits a workspace holding every home
+    directory on the machine, reachable with no declaration through a client
+    reporting such a folder in its roots. Ancestry is compared on resolved
+    paths, for the same reason identity is: a lexical prefix test loses to
+    symlink aliasing.
   - **A bare `~/.plumb` is residue, not intent.** `Detect` honoured a
     `.plumb` marker before any home guard, so the `~/.plumb` an earlier
     build's `auto_attach_persist` created kept resolving `$HOME` forever,
     auto-attach off, making the rest of the fix inert. At `$HOME` (only), a
-    `.plumb` now needs evidence a human made it — a `context.md` (`plumb
-    init`) or `config.toml`; otherwise it is ignored with a logged
-    remediation. **If an earlier build left one behind: remove `~/.plumb`**,
-    or run `plumb init` in your home directory if you genuinely want it to be
-    a workspace. `auto_attach_persist` now refuses to create `~/.plumb` at
-    all.
+    `.plumb` now needs evidence a human made it: a **`context.md`**, written
+    by `plumb init` and by `git_init`'s `init_plumb`. `config.toml` is
+    deliberately *not* accepted — it is machine-written by
+    `config.SetProjectValue`, whose callers include the `agent_config` tool,
+    the web settings API, and (with no opt-in at all) any project-scoped save
+    in the TUI, so a user who once pinned `$HOME` and then changed one setting
+    would have minted their own permanent proof of intent. The test for that
+    list is not "does a human usually create it" but "can anything else".
+    **If an earlier build left one behind:** `touch ~/.plumb/context.md` keeps
+    the directory's memories and topology index and silences the warning, or
+    remove `~/.plumb` to discard it — which deletes those too.
+    `auto_attach_persist` now refuses to create `~/.plumb` at all.
   - **The guard's identity is environment-resistant.** `$HOME` is matched by
     filesystem identity (`os.SameFile` — a mutation proved a string compare
     reopens the escape through symlinked/firmlinked spellings), and the
