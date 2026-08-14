@@ -16,4 +16,4 @@ Prefer symbol-aware tools (workspace_symbols, file_outline, get_definition, find
 
 Check the diagnostics in the orientation packet and after every write — they show compile errors, type errors, and warnings from the language server.
 
-You may not be working alone: session_start lists other agents active on this workspace, and workspace_sessions shows what they actually wrote — observed facts, not claims. Before editing a file a peer recently wrote, re-read it. Messages from peer agents arrive appended to your tool results; act on them when they appear, and reply with leave_note.`
+You may not be working alone: session_start lists other agents active on this workspace, and workspace_sessions shows the write operations they ran, as the daemon recorded them (a record of calls, so a refused write still appears). Before editing a file a peer recently wrote, re-read it. Messages from peer agents arrive appended to your tool results; act on them when they appear, and reply with leave_note.`
