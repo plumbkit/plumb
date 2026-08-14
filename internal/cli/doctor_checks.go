@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -288,16 +287,12 @@ func expandRegisteredPath(p string) string {
 }
 
 // sameBinary reports whether two paths resolve to the same executable, comparing
-// after symlink resolution so a symlinked install matches its target.
+// after symlink resolution so a symlinked install matches its target. Delegates
+// to paths.Canonical — the tree's one "same place?" answer. All three call
+// sites stat the path first, so only Canonical's existing-path branch
+// (identical to this helper's old EvalSymlinks) is ever reached.
 func sameBinary(a, b string) bool {
-	return resolvePath(a) == resolvePath(b)
-}
-
-func resolvePath(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return filepath.Clean(p)
+	return paths.Canonical(a) == paths.Canonical(b)
 }
 
 // checkConfigs verifies global and project config files are parseable.

@@ -12,8 +12,8 @@ import (
 // creates one tracker per MCP connection so session A's writes don't leak into
 // session B's guard; it is never process-global.
 //
-// Paths are canonicalised through lockPathKey (file:// strip, abs, symlink
-// resolution, Clean) so a path and its symlink/relative spellings collapse to
+// Paths are canonicalised through lockPathKey (file:// strip, then
+// paths.Canonical) so a path and its symlink/relative spellings collapse to
 // the same key — matching the per-path write lock.
 //
 // Concurrency: all methods are safe for concurrent use.

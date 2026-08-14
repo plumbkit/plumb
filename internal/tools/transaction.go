@@ -70,7 +70,8 @@ var transactionApplySchema = json.RawMessage(`{
 
 // TransactionApply applies multi-file edits atomically:
 //
-//  1. Acquire per-path locks for every target in lexical order (deadlock-safe).
+//  1. Acquire per-path locks for every target ordered by canonical lock key
+//     (deadlock-safe across concurrent transactions spelling paths differently).
 //  2. Snapshot every target's content + mtime; validate every edit in memory.
 //     If any edit fails (old_string missing/ambiguous, expected_mtime mismatch),
 //     no writes happen.
@@ -149,7 +150,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 
-	// Acquire per-path locks in lexical order (deadlock-safe with parallel txs).
+	// Acquire per-path locks in canonical lock-key order (deadlock-safe with
+	// parallel txs naming one path set by different spellings).
 	unlocks := make([]func(), 0, len(paths))
 	for _, p := range paths {
 		unlocks = append(unlocks, lockPath(p))
@@ -207,7 +209,13 @@ func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
 	return nil
 }
 
-// txCanonicalPaths deduplicates and lexically sorts the operation paths.
+// txCanonicalPaths deduplicates and sorts the operation paths by their
+// canonical LOCK KEY, not their raw spelling. Two spellings of one path —
+// a symlinked parent, a platform alias, a path about to be created — are
+// one path for locking, dedup and ordering purposes: a raw dedup would
+// let both through and the two lockPath calls would take the same
+// non-reentrant mutex twice (self-deadlock), and a raw sort would let two
+// concurrent transactions acquire one key set in opposite orders (cycle).
 func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error) {
 	out := make([]string, 0, len(ops))
 	seen := make(map[string]struct{}, len(ops))
@@ -216,15 +224,20 @@ func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error)
 		if err := t.deps.checkBoundary(p); err != nil {
 			return nil, fmt.Errorf("transaction_apply: %w", err)
 		}
-		if _, dup := seen[p]; dup {
+		key := lockPathKey(p)
+		if _, dup := seen[key]; dup {
 			return nil, &editLogicErr{fmt.Errorf(
-				"transaction_apply: path %q appears in multiple operations — combine them into one operation with multiple edits", p,
+				"transaction_apply: path %q appears in multiple operations (possibly under a second spelling) — combine them into one operation with multiple edits", p,
 			)}
 		}
-		seen[p] = struct{}{}
+		seen[key] = struct{}{}
 		out = append(out, p)
 	}
-	sort.Strings(out)
+	key := make(map[string]string, len(out))
+	for _, p := range out {
+		key[p] = lockPathKey(p)
+	}
+	sort.Slice(out, func(i, j int) bool { return key[out[i]] < key[out[j]] })
 	return out, nil
 }
 

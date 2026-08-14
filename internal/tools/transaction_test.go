@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // initPlumbWorkspace creates a temp dir with a .plumb/ subdirectory so the
@@ -59,6 +62,43 @@ func TestTransaction_TwoFilesSucceed(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(b); string(got) != "hi B" {
 		t.Errorf("b: %q", got)
+	}
+}
+
+// TestTransactionTwoSpellingsOfOnePathRefused: two operations naming one file
+// by two spellings (a symlinked parent) must be refused as a duplicate, not
+// deadlock on one mutex taken twice — the shape the canonical dedup closed.
+// The timeout turns a regression into a failure instead of a hung suite.
+func TestTransactionTwoSpellingsOfOnePathRefused(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(realDir, "a.txt")
+	if err := os.WriteFile(f, []byte("v"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"operations": []map[string]any{
+		{"file_path": filepath.Join(dir, "link", "a.txt"), "edits": []map[string]any{{"old_string": "v", "new_string": "w"}}},
+		{"file_path": f, "edits": []map[string]any{{"old_string": "w", "new_string": "x"}}},
+	}}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := NewTransactionApply(WriteDeps{}).Execute(context.Background(), raw); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "multiple operations") {
+			t.Fatalf("want a duplicate-path refusal for two spellings of one file, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transaction_apply deadlocked on two spellings of one path — it took one non-reentrant mutex twice")
 	}
 }
 

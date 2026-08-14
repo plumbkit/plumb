@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // stubDiag is a thread-safe postWriteDiagSource for testing awaitDiagnosticsRefresh.
@@ -446,6 +447,64 @@ func TestLockPathKeyResolvesSymlinkTarget(t *testing.T) {
 
 	if got, want := lockPathKey(link), lockPathKey(target); got != want {
 		t.Fatalf("lockPathKey(link) = %q, want target key %q", got, want)
+	}
+}
+
+// TestLockPathKey_MissingFileTwoSpellings pins the case the write lock exists
+// for: a file about to be CREATED. A bare EvalSymlinks leaves a not-yet-
+// existing path unresolved (no missing-ancestor walk), so the two spellings
+// of one file under a symlinked parent used to take DIFFERENT keys — two
+// concurrent writers, one file, no serialisation (issue #290). The second
+// assertion pins the key to the resolved spelling itself, not merely to the
+// other spelling: an implementation that agreed with itself while leaving
+// both spellings unresolved would pass an equality-only check.
+func TestLockPathKey_MissingFileTwoSpellings(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(realDir, "new.txt") // does not exist yet
+	if got := lockPathKey(want); got != want {
+		t.Fatalf("lockPathKey(%q) = %q, want the same resolved spelling for a not-yet-created file", want, got)
+	}
+	if got := lockPathKey(filepath.Join(link, "new.txt")); got != want {
+		t.Fatalf("lockPathKey(%q) = %q, want %q — two spellings of one not-yet-created file must take the same key, and it must name the real location", filepath.Join(link, "new.txt"), got, want)
+	}
+}
+
+// TestLockPath_MissingFileTwoSpellingsSerialise proves the agreement is not
+// merely cosmetic: holding the write lock under one spelling BLOCKS an
+// acquisition under the other, because both name one mutex.
+func TestLockPath_MissingFileTwoSpellingsSerialise(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	unlock := lockPath(filepath.Join(link, "new.txt"))
+	defer unlock()
+	// Deterministic, no timing: the other spelling must map to the SAME lock
+	// entry — it exists in the table (one key, one slot) and its mutex is
+	// already held, so TryLock fails. A keyed-apart implementation never
+	// created an entry under the second spelling, so the Load misses.
+	v, ok := pathLocks.Load(lockPathKey(filepath.Join(realDir, "new.txt")))
+	if !ok {
+		t.Fatal("the second spelling mapped to a different lock key — no entry for it exists while the first spelling holds the lock, so two writers of one not-yet-created file would not be serialised")
+	}
+	if e := v.(*pathLockEntry); e.mu.TryLock() {
+		e.mu.Unlock()
+		t.Fatal("the second spelling's entry was not held by the first spelling's lock — the two spellings do not share one mutex")
 	}
 }
 

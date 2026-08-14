@@ -79,7 +79,13 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	from := t.deps.resolvePath(a.From)
 	to := t.deps.resolvePath(a.To)
-	if from == to {
+	// Same-place by canonical IDENTITY, not raw spelling: renaming a file onto
+	// itself under a second spelling is a no-op request that must be refused —
+	// left alone, lockPaths collapses both spellings into one lock and the call
+	// would proceed as a self-rename. Under the old keying (two spellings, two
+	// keys, raw-sorted double locking) this exact shape was a self-deadlock on
+	// one non-reentrant mutex, no concurrency needed.
+	if lockPathKey(from) == lockPathKey(to) {
 		return "", errors.New("rename_file: from and to are the same path")
 	}
 	if err := t.deps.checkBoundary(from); err != nil {
@@ -89,15 +95,11 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
 
-	// Lock both paths in lexical order to prevent deadlocks.
-	first, second := from, to
-	if first > second {
-		first, second = second, first
-	}
-	unlock1 := lockPath(first)
-	defer unlock1()
-	unlock2 := lockPath(second)
-	defer unlock2()
+	// Lock both paths ordered by canonical lock key, never raw spelling: two
+	// concurrent calls naming one path set by different spellings must acquire
+	// the same keys in the same order, or they cycle.
+	unlocks := lockPaths([]string{from, to})
+	defer unlockAll(unlocks)
 
 	if err := renameFilePreconditions(ctx, t.deps, from, to, a); err != nil {
 		return "", err
