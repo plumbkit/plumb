@@ -64,7 +64,20 @@ func (p *workspacePool) SynthesiseRoot(seedDir string, explicit bool) string {
 	// its own return for the same reason.
 	homeInfo := homeDirInfos()
 	d := filepath.Clean(seedDir)
-	if sameDirAs(d, homeInfo) {
+	// A seed AT or ABOVE a home directory is refused unless the caller declared
+	// it — and refusing is done by RETURNING "", so every caller inherits it.
+	//
+	// This was previously a check bolted onto one of the three callers, and
+	// review found the other two still pinning the wide root: the first-tool-call
+	// seeding path (find_files/search_in_files take a DIRECTORY as `path`, so a
+	// call naming /Users seeds it directly) and rehydratePin replaying a
+	// roots-origin row, which runs unconditionally in the default configuration.
+	// Stopping the WALK cannot fix that, because the walk's fallback returns the
+	// seed — and here the seed is the offending directory.
+	//
+	// Containment covers "/" for free, which the reordering below does not: a
+	// find_files({path: "/"}) seed reaches the containment branch first.
+	if sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo) {
 		if !explicit {
 			return ""
 		}
@@ -72,24 +85,24 @@ func (p *workspacePool) SynthesiseRoot(seedDir string, explicit bool) string {
 	}
 	for {
 		if sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo) {
-			// Reached $HOME, or a directory that CONTAINS it, ascending: stop.
-			// Never consult the .git there, never walk above it — a root at or
-			// above the home directory can only ever be wider than the boundary
-			// this guard exists to keep. Testing containment as well as identity
-			// is what closes the rung above: refusing $HOME while accepting
-			// /Users (or /home, or /) admits a workspace holding every home
-			// directory on the machine, which review found reachable through a
-			// client reporting such a folder in its roots.
+			// Reached a home directory, or one that CONTAINS it, ascending: stop
+			// and fall back to the seed. Never consult the .git there, never walk
+			// above it — a root at or above a home directory can only ever be
+			// wider than the boundary this guard exists to keep.
+			//
+			// Falling back to the seed is safe HERE, unlike at the top: the seed
+			// reached this loop only by passing the refusal above, so it is
+			// already known not to be at or above a home directory.
 			return paths.Canonical(filepath.Clean(seedDir))
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			// At the filesystem root. Fall back to the seed WITHOUT consulting
-			// /.git: returning "/" would be a workspace containing every home
-			// directory, the very thing the guard above refuses one rung lower.
-			// detect() has always had this ordering (its .git check is behind a
-			// d != filepath.Dir(d) test); this walk did not, and the asymmetry
-			// was reachable rather than theoretical.
+			// At the filesystem root, having found no marker: fall back to the
+			// seed. The .git check is deliberately below this test, matching
+			// detect(), so a /.git cannot make "/" the workspace — belt to the
+			// containment branch's braces, since "/" contains every home
+			// directory and is refused above on any machine where one is
+			// determinable at all.
 			return paths.Canonical(filepath.Clean(seedDir))
 		}
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
