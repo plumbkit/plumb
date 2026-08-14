@@ -272,7 +272,7 @@ func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
 }
 
 // TestLeaveNote_UnplaceablePeerSaysSo: when nothing can place the name, the
-// message is still filed locally — addressing a peer that has not attached yet
+// message is still filed locally — addressing a peer that is not connected
 // is legitimate — but the sender is told, so "sent" is never mistaken for
 // "delivered to the agent I meant".
 func TestLeaveNote_UnplaceablePeerSaysSo(t *testing.T) {
@@ -514,5 +514,61 @@ func TestCheckMessages_DeliversMailBoundToAnInheritedSession(t *testing.T) {
 	}
 	if strings.Contains(out, "sent before the daemon restarted") {
 		t.Fatalf("a session with no inheritance read a bound message; got %q", out)
+	}
+}
+
+// TestCheckMessages_ReceiptMergesStoresOldestFirst pins two bugs the first cut
+// of the receipt had. The display cap was applied PER STORE and the results
+// concatenated, so the list could hold twice the cap; and because each store
+// returns its own rows oldest-first, concatenating two of them is not sorted at
+// all — the "oldest" messages shown could be the newest in the mailbox, which is
+// the opposite of what the receipt is for.
+func TestCheckMessages_ReceiptMergesStoresOldestFirst(t *testing.T) {
+	deps, local, global := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
+	base := time.Now().Add(-2 * time.Hour)
+
+	send := func(s *collab.Store, to string, age time.Duration, target string) {
+		t.Helper()
+		in := collab.NoteInput{
+			AuthorSession: "alice", AuthorID: deps.SessionID, Body: "to " + to,
+			Addressee: to, TTL: 24 * time.Hour,
+		}
+		if target != "" {
+			in.OriginWorkspace, in.TargetWorkspace = wsRootOf(deps), target
+		}
+		if _, err := s.PutNote(context.Background(), in, base.Add(age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The single OLDEST message lives in the cross-project store, which is read
+	// second — so a concatenating receipt would push it below newer local ones.
+	send(global, "oldest-peer", 0, "/proj/theirs")
+	for i, name := range []string{"local-1", "local-2", "local-3", "local-4", "local-5", "local-6"} {
+		send(local, name, time.Duration(i+1)*time.Minute, "")
+	}
+
+	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lines := []string{}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "to ") {
+			lines = append(lines, strings.TrimSpace(l))
+		}
+	}
+	if len(lines) != maxReceiptRows {
+		t.Fatalf("receipt listed %d rows, want the display cap of %d:\n%s", len(lines), maxReceiptRows, out)
+	}
+	if !strings.HasPrefix(lines[0], "to oldest-peer") {
+		t.Errorf("the oldest message is not first — the two stores were concatenated, not merged.\n"+
+			"first line: %q", lines[0])
+	}
+	// The overflow count must not be presented as an exact total: each store was
+	// queried under its own cap, so the remainder is a floor, not a figure.
+	if !strings.Contains(out, "at least") {
+		t.Errorf("overflow should be reported as a lower bound; got %q", out)
 	}
 }
