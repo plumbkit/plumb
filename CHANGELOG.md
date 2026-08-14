@@ -1,11 +1,10 @@
 # Changelog
-
 ## 0.16.7 (unreleased)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
-     stamped heading, so a clean rebase is not evidence your entry is in
-     the right section — check which heading it landed under. -->
+     stamped heading, so a clean rebase is not evidence your entry is in the
+     right section — check which heading it landed under. -->
 
 ### Fixed
 
@@ -75,6 +74,17 @@
   directory and not its ancestor. Both were confirmed to fail against a write
   path mutated to fsync the grandparent and against one with the directory
   fsync removed.
+- **An explicit `$HOME` pin now says why no language server is attached
+  (#316).** `session_start({workspace: <home directory>})` succeeds (an
+  explicit pin always does) but language discovery is deliberately skipped for
+  a home root — a stray `~/.plumb` must not trigger a full-home descent — so
+  the session came back with no language and nothing naming the cause. The
+  session record's `DetectedLanguage` and the session_start identity block now
+  carry "LSP skipped: the workspace root is the home directory" (the note is
+  suppressed when a language IS attached, which an explicit `language`
+  override can still arrange). No scanning behaviour changed: the descent ban
+  stands.
+
 
 - **Post-write lint findings that name files which do not exist are now called
   what they are: a stale golangci-lint cache.** Delete a sibling git worktree and

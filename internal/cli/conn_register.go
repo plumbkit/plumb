@@ -220,6 +220,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return s.collabConfig().Mailbox, s.inbox()
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
+		WithLSPSkipNote(s.lspHomeSkipNote).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
 		WithLSPWarmup(s.lspWarming).
