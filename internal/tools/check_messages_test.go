@@ -31,8 +31,10 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 	t.Cleanup(func() { _ = local.Close(); _ = global.Close() })
 
 	deps := CollabDeps{
-		Workspace:     func() string { return ws },
-		PeerWorkspace: func(string) (string, bool) { return "", false },
+		Workspace: func() string { return ws },
+		PeerSessionByName: func(name string) (string, string, bool, bool) {
+			return "sess-" + name, ws, true, false
+		},
 		PeerSessionByID: func(id string) (string, string, bool) {
 			if name, ok := strings.CutPrefix(id, "id-"); ok {
 				return name, ws, true
@@ -57,8 +59,12 @@ func wsRootOf(d CollabDeps) string { return d.Workspace() }
 
 func put(t *testing.T, s *collab.Store, from, to, body, conv, origin, target string) string {
 	t.Helper()
+	targetID := ""
+	if to != "" && to != collab.AddresseeNext {
+		targetID = "sess-" + to
+	}
 	id, err := s.PutNote(context.Background(), collab.NoteInput{
-		AuthorSession: from, AuthorID: "id-" + from, Body: body, Addressee: to,
+		AuthorSession: from, AuthorID: "id-" + from, Body: body, Addressee: to, TargetID: targetID,
 		TTL: time.Hour, ConversationID: conv, OriginWorkspace: origin, TargetWorkspace: target,
 	}, time.Now())
 	if err != nil {
@@ -205,17 +211,20 @@ func TestCheckMessages_WaitWakesOnDelivery(t *testing.T) {
 // "nothing new" check and run a needless claim whenever anyone, anywhere, left a
 // note for the next arrival.
 func TestInboxKeys_NextIsScopedToWorkspace(t *testing.T) {
-	mine := Inbox{Self: "alice", Root: "/proj/mine"}.Keys()
-	theirs := Inbox{Self: "alice", Root: "/proj/theirs"}.Keys()
+	mine := Inbox{Self: "alice", SelfID: "id-alice", Root: "/proj/mine"}.Keys()
+	theirs := Inbox{Self: "alice", SelfID: "id-alice", Root: "/proj/theirs"}.Keys()
 
 	if mine[0] != "alice" {
 		t.Errorf("a session is still addressed by name across projects; got %q", mine[0])
 	}
-	if mine[1] == collab.AddresseeNext {
+	if mine[1] != collab.NotifySessionKey("id-alice") {
+		t.Errorf("stable-ID wake key missing: %q", mine)
+	}
+	if mine[2] == collab.AddresseeNext {
 		t.Error("the bare 'next' key is daemon-global — every project would share one wake-up")
 	}
-	if mine[1] == theirs[1] {
-		t.Errorf("two workspaces must not share the 'next' wake-up key; both are %q", mine[1])
+	if mine[2] == theirs[2] {
+		t.Errorf("two workspaces must not share the 'next' wake-up key; both are %q", mine[2])
 	}
 }
 
@@ -257,11 +266,11 @@ func TestLeaveNote_OfflineThreadParticipantFailsClosed(t *testing.T) {
 	}
 
 	// An attacker can now reuse bob's display name, but not bob's stable ID.
-	deps.PeerWorkspace = func(name string) (string, bool) {
+	deps.PeerSessionByName = func(name string) (string, string, bool, bool) {
 		if name == "bob" {
-			return "/proj/attacker", true
+			return "id-attacker", "/proj/attacker", true, false
 		}
-		return "", false
+		return "", "", false, false
 	}
 	deps.PeerSessionByID = func(string) (string, string, bool) { return "", "", false }
 
@@ -298,11 +307,11 @@ func TestLeaveNote_ThreadReplyFollowsStableParticipantRename(t *testing.T) {
 		return "", "", false
 	}
 	// A stale/new session named bob must not influence the bound route.
-	deps.PeerWorkspace = func(name string) (string, bool) {
+	deps.PeerSessionByName = func(name string) (string, string, bool, bool) {
 		if name == "bob" {
-			return "/proj/attacker", true
+			return "id-attacker", "/proj/attacker", true, false
 		}
-		return ws, name == "robert"
+		return "id-bob", ws, name == "robert", false
 	}
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
@@ -325,7 +334,9 @@ func TestLeaveNote_ThreadReplyFollowsStableParticipantRename(t *testing.T) {
 // "delivered to the agent I meant".
 func TestLeaveNote_UnplaceablePeerSaysSo(t *testing.T) {
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
-	deps.PeerWorkspace = func(string) (string, bool) { return "", false }
+	deps.PeerSessionByName = func(string) (string, string, bool, bool) {
+		return "", "", false, false
+	}
 
 	out, err := NewLeaveNote(deps).Execute(context.Background(),
 		json.RawMessage(`{"to":"ghost","body":"hello?"}`))

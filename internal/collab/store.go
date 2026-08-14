@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,24 +59,26 @@ var chatColumns = []struct{ name, ddl string }{
 	{"origin_workspace", `ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`},
 	{"target_workspace", `ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`},
 	{"original_bytes", `ALTER TABLE collab_rows ADD COLUMN original_bytes INTEGER NOT NULL DEFAULT 0`},
+	{"target_id", `ALTER TABLE collab_rows ADD COLUMN target_id TEXT NOT NULL DEFAULT ''`},
 }
 
 // chatIndexes accelerate the two hot chat queries: unread mail and conversation
 // volume. Created after the columns exist, so they are separate from the base
 // schema above.
 const chatIndexes = `
-CREATE INDEX IF NOT EXISTS idx_collab_inbox ON collab_rows(addressee, delivered_at, expires_at);
-CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_collab_inbox  ON collab_rows(addressee, delivered_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_collab_target ON collab_rows(target_id, delivered_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_collab_conv   ON collab_rows(conversation_id);
 `
 
 // schemaVersion is the current on-disk collab schema version, stamped in PRAGMA
 // user_version. Unlike topology.db, collab.db is NOT a rebuildable index — its
 // rows are the only copy of expiring advisory data — so a schema change must
 // migrate additively rather than dropping the table. v1 was the initial shape;
-// v2 adds threaded delivery; v3 records stable recipient identity and a note's
-// pre-window byte count so the existing byte budget can bound durable storage
-// without hiding the exact cut.
-const schemaVersion = 3
+// v2 adds threaded delivery; v3 records the claiming recipient identity and a
+// note's pre-window byte count; v4 records the intended stable recipient so a
+// rename or name reuse between send and claim cannot retarget queued mail.
+const schemaVersion = 4
 
 // Store is the per-workspace collab.db handle.
 //
@@ -239,9 +242,9 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 // insertNote is the single write path for notes. Message-count limits deliberately
 // do not exist: a conversation is observable, but never severed by the store.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
-                          addressee, created_at, expires_at, conversation_id, origin_workspace,
-                          target_workspace, original_bytes)
-	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`
+                          addressee, target_id, created_at, expires_at, conversation_id,
+                          origin_workspace, target_workspace, original_bytes)
+	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
 // returns the conversation it belongs to — the caller's ConversationID when it
@@ -276,11 +279,14 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		if addr == AddresseeNext {
 			return "", errors.New(`collab: "next" has no meaning across projects`)
 		}
+		if strings.TrimSpace(in.TargetID) == "" {
+			return "", errors.New("collab: a cross-project note requires a stable target session ID")
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, insertNote,
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
-		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace, in.OriginalBytes); err != nil {
+		addr, strings.TrimSpace(in.TargetID), now.UnixNano(), expires.UnixNano(), conv,
+		in.OriginWorkspace, in.TargetWorkspace, in.OriginalBytes); err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
 	}
 	return conv, nil
@@ -319,7 +325,8 @@ func (s *Store) LiveIntents(ctx context.Context, now time.Time) ([]Row, error) {
 
 // PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to
 // sessionName, newest first, without claiming them. It preserves the historical
-// name-only API for callers that do not have a session identity.
+// name-only API for legacy or explicitly unplaced rows; stable-target rows are
+// visible only through PendingNotesForSession.
 func (s *Store) PendingNotes(ctx context.Context, sessionName, workspace string, now time.Time) ([]Row, error) {
 	return s.PendingNotesForSession(ctx, sessionName, "", workspace, now)
 }
@@ -337,11 +344,12 @@ func (s *Store) PendingNotesForSession(
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
-		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
+		 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
+		   AND ((target_id <> '' AND target_id = ?) OR (target_id = '' AND addressee = ?))
 		   AND (target_workspace = '' OR target_workspace = ?)
 		   AND (? = '' OR author_id <> ?)
-		 ORDER BY created_at DESC`,
-		string(KindNote), sessionName, now.UnixNano(), workspace, sessionID, sessionID)
+		 ORDER BY created_at DESC, id DESC`,
+		string(KindNote), now.UnixNano(), sessionID, sessionName, workspace, sessionID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
 	}
@@ -360,12 +368,11 @@ func (s *Store) PendingNotesForSession(
 // atomic UPDATE matching only `delivered_at = 0`, two sessions racing for the
 // same "next" note cannot both win: the second one's UPDATE matches no rows.
 //
-// workspace is the caller's pinned workspace root, and is what makes a session
-// NAME safe to address by. A row carrying a target_workspace is claimable only
-// by a session pinned there; same-project rows carry none and are scoped by the
-// database they live in. Without this a session could claim another project's
-// cross-project mail just by adopting the right name — names come from a small
-// pool with no uniqueness check, and rename_session lets a session pick one.
+// Targeted rows are claimed by stable session ID, independent of the caller's
+// current display name. Legacy, `next`, and explicitly unplaced rows retain the
+// name path. workspace is the caller's pinned root: a cross-project row is
+// claimable only from its target workspace, while same-project rows are scoped by
+// the database they live in.
 //
 // limit caps how many are claimed (non-positive means no cap). The cap is
 // applied by the STATEMENT, not by the caller trimming the result: a claimed row
@@ -400,13 +407,14 @@ func (s *Store) ClaimNotesForSession(
 	// a same-project row carries no target and is scoped by this database.
 	select_ := `SELECT id FROM collab_rows
 			 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-			   AND (addressee = ? OR addressee = ?)
+			   AND ((target_id <> '' AND target_id = ?) OR
+			        (target_id = '' AND (addressee = ? OR addressee = ?)))
 			   AND (target_workspace = '' OR target_workspace = ?)
 			   AND (? = '' OR author_id <> ?)
-			 ORDER BY created_at ASC`
+			 ORDER BY created_at ASC, id ASC`
 	args := []any{
 		now.UnixNano(), sessionName, sessionID, // SET delivered_at, delivered_to, delivered_to_id
-		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace,
+		string(KindNote), now.UnixNano(), sessionID, sessionName, AddresseeNext, workspace,
 		sessionID, sessionID,
 	}
 	if limit > 0 {
@@ -421,7 +429,20 @@ func (s *Store) ClaimNotesForSession(
 		return nil, fmt.Errorf("collab: claim notes: %w", err)
 	}
 	defer rows.Close()
-	return scanRows(rows)
+	claimed, err := scanRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	// SQLite does not promise UPDATE ... RETURNING order. Re-establish the API's
+	// oldest-first contract after the atomic claim, with id as the deterministic
+	// tie-break for notes written at the same timestamp.
+	sort.Slice(claimed, func(i, j int) bool {
+		if claimed[i].CreatedAt.Equal(claimed[j].CreatedAt) {
+			return claimed[i].ID < claimed[j].ID
+		}
+		return claimed[i].CreatedAt.Before(claimed[j].CreatedAt)
+	})
+	return claimed, nil
 }
 
 // ConversationCount returns how many UNEXPIRED notes a conversation holds.
@@ -496,7 +517,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // rowColumns is the SELECT list every row query shares, in the order scanRows
 // expects. Kept in one place so adding a column cannot desynchronise a query
 // from the scanner.
-const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
+const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee, target_id,
 	 created_at, expires_at, conversation_id, delivered_at, delivered_to, delivered_to_id,
 	 origin_workspace, target_workspace, original_bytes`
 
@@ -510,7 +531,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 			deliveredNs      int64
 		)
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
-			&globs, &r.Addressee, &createdNs, &expNs,
+			&globs, &r.Addressee, &r.TargetID, &createdNs, &expNs,
 			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.DeliveredToID,
 			&r.OriginWorkspace, &r.TargetWorkspace, &r.OriginalBytes); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)

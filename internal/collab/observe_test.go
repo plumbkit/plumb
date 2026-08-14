@@ -13,14 +13,14 @@ func TestConversationPeerParticipant_ResolvesExactlyOneOtherParticipant(t *testi
 	now := time.Now()
 	conv, err := s.PutNote(ctx, NoteInput{
 		AuthorSession: "bob", AuthorID: "sess-bob", Body: "question",
-		Addressee: "alice", TTL: time.Hour,
+		Addressee: "alice", TargetID: "sess-alice", TTL: time.Hour,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.PutNote(ctx, NoteInput{
 		AuthorSession: "alice", AuthorID: "sess-alice", Body: "answer",
-		Addressee: "bob", TTL: time.Hour, ConversationID: conv,
+		Addressee: "bob", TargetID: "sess-bob", TTL: time.Hour, ConversationID: conv,
 	}, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestConversationPeerParticipant_ResolvesExactlyOneOtherParticipant(t *testi
 
 	if _, err := s.PutNote(ctx, NoteInput{
 		AuthorSession: "carol", AuthorID: "sess-carol", Body: "interjection",
-		Addressee: "alice", TTL: time.Hour, ConversationID: conv,
+		Addressee: "alice", TargetID: "sess-alice", TTL: time.Hour, ConversationID: conv,
 	}, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -119,21 +119,21 @@ func TestConversationSummariesForWorkspace_ScopesGlobalVolume(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	conv, err := global.PutNote(ctx, NoteInput{
-		AuthorSession: "alice", AuthorID: "sess-alice", Body: "one", Addressee: "bob",
+		AuthorSession: "alice", AuthorID: "sess-alice", Body: "one", Addressee: "bob", TargetID: "sess-bob",
 		TTL: time.Hour, OriginWorkspace: "/workspace/a", TargetWorkspace: "/workspace/b",
 	}, now.Add(-time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := global.PutNote(ctx, NoteInput{
-		AuthorSession: "bob", AuthorID: "sess-bob", Body: "two", Addressee: "alice",
+		AuthorSession: "bob", AuthorID: "sess-bob", Body: "two", Addressee: "alice", TargetID: "sess-alice",
 		TTL: time.Hour, ConversationID: conv,
 		OriginWorkspace: "/workspace/b", TargetWorkspace: "/workspace/a",
 	}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := global.PutNote(ctx, NoteInput{
-		AuthorSession: "carol", AuthorID: "sess-carol", Body: "unrelated", Addressee: "dan",
+		AuthorSession: "carol", AuthorID: "sess-carol", Body: "unrelated", Addressee: "dan", TargetID: "sess-dan",
 		TTL: time.Hour, OriginWorkspace: "/workspace/c", TargetWorkspace: "/workspace/d",
 	}, now); err != nil {
 		t.Fatal(err)

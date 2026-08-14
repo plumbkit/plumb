@@ -4,7 +4,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,10 +14,45 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
+
+func TestProjectConversationSummaries_CrossProjectRequiresWorkspaceConsent(t *testing.T) {
+	ws := t.TempDir()
+	global, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = global.Close() })
+	now := time.Now()
+	conv, err := global.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "sess-alice", Body: "cross", Addressee: "bob", TargetID: "sess-bob",
+		TTL: time.Hour, OriginWorkspace: "/other", TargetWorkspace: ws,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := config.Defaults()
+	if projectAllowsCrossProject(base, ws) {
+		t.Fatal("default workspace unexpectedly opted into cross-project metadata")
+	}
+	if got := projectConversationSummaries(context.Background(), ws, now, 5, global, false); len(got) != 0 {
+		t.Fatalf("TUI exposed cross-project metadata without consent: %#v", got)
+	}
+
+	base.Collab.CrossProject = true
+	if !projectAllowsCrossProject(base, ws) {
+		t.Fatal("resolved workspace lost explicit cross-project consent")
+	}
+	got := projectConversationSummaries(context.Background(), ws, now, 5, global, true)
+	if len(got) != 1 || got[0].ID != conv || got[0].Notes != 1 || got[0].Pending != 1 {
+		t.Fatalf("TUI omitted opted-in cross-project metadata: %#v", got)
+	}
+}
 
 func TestActivitySparklineAndCallFormatting(t *testing.T) {
 	got := activitySparkline([]int64{0, 1, 2, 4}, 4)

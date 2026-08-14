@@ -64,14 +64,13 @@ func NewNotifier() *Notifier {
 	return &Notifier{gen: make(map[string]uint64), waiters: make(map[string][]chan struct{})}
 }
 
-// NotifyKey derives the wake-up key an addressee is watched under. A session
-// NAME is a daemon-wide address — cross-project mail is delivered by name — so a
-// name is its own key. AddresseeNext is not: every workspace has a "next
-// arrival", so one shared key means a note left in ANY project wakes every
-// connection in the daemon, including sessions pinned to unrelated repositories,
-// each of which then runs a needless SQLite claim to discover the note was never
-// theirs. Scoping it to the workspace keeps that wake-up inside the project it
-// belongs to.
+// NotifyKey derives the legacy/name and next-recipient wake-up keys. A display
+// name remains a compatibility wake hint for unplaced and legacy mail; stable-ID
+// mail also uses NotifySessionKey so renames cannot strand it. AddresseeNext is
+// workspace-scoped: one shared key would make a note left in any project wake
+// every connection in the daemon, including sessions pinned to unrelated
+// repositories, each of which would then run a needless SQLite claim. Scoping
+// that hint keeps the wake-up inside the project it belongs to.
 //
 // This is the in-process signal only. The addressee STORED in collab.db stays
 // AddresseeNext — the key is not an address.
@@ -80,6 +79,15 @@ func NotifyKey(workspace, addressee string) string {
 		return addressee
 	}
 	return AddresseeNext + "\x00" + filepath.Clean(workspace)
+}
+
+// NotifySessionKey is the rename-safe wake-up key for mail bound to a stable
+// session identity. The prefix keeps opaque IDs disjoint from display names.
+func NotifySessionKey(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	return "session-id\x00" + sessionID
 }
 
 // Bump records that a message was written for each recipient key and wakes any

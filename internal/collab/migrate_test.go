@@ -79,8 +79,9 @@ func TestMigrate_V1NoteSurvivesAndClaimsAtMostOnce(t *testing.T) {
 	if len(got) != 1 || got[0].Body != "written before threading existed" {
 		t.Fatalf("legacy note lost in migration: %v", got)
 	}
-	if got[0].ConversationID != "" || got[0].OriginalBytes != 0 {
-		t.Errorf("legacy defaults changed: conversation=%q original_bytes=%d", got[0].ConversationID, got[0].OriginalBytes)
+	if got[0].ConversationID != "" || got[0].OriginalBytes != 0 || got[0].TargetID != "" {
+		t.Errorf("legacy defaults changed: conversation=%q original_bytes=%d target_id=%q",
+			got[0].ConversationID, got[0].OriginalBytes, got[0].TargetID)
 	}
 	if got[0].DeliveredToID != "sess-alice" {
 		t.Errorf("stable recipient identity was not stamped by the claim: %q", got[0].DeliveredToID)

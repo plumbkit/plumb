@@ -98,11 +98,11 @@ type CollabDeps struct {
 	// Notifier is the daemon-wide wake-up signal: bumped on send, watched by the
 	// piggyback fast path and by check_messages' blocking wait. May be nil.
 	Notifier *collab.Notifier
-	// PeerWorkspace reports the workspace a named peer session is pinned to, and
-	// whether such a session is currently known. It decides whether a message is
-	// same-project (the workspace store) or cross-project (the daemon-level one).
-	// May be nil, in which case every message is treated as same-project.
-	PeerWorkspace func(name string) (workspace string, found bool)
+	// PeerSessionByName resolves an active display name to stable identity and
+	// workspace. ambiguous is true when more than one live session has that name;
+	// callers must refuse instead of guessing. A missing name may still be filed as
+	// explicitly unplaced same-workspace mail for a peer that has not attached yet.
+	PeerSessionByName func(name string) (id, workspace string, found, ambiguous bool)
 	// PeerSessionByID resolves a stable session identity to its CURRENT display
 	// name and workspace. Threaded replies require it and refuse if the original
 	// participant is offline, preventing name reuse from retargeting a message.

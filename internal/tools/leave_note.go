@@ -112,15 +112,19 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	to, boundWorkspace, err := t.resolveAddressee(ctx, args.To, args.ConversationID)
+	self := t.deps.SessionName()
+	if self == "" || t.deps.SessionID == "" {
+		return "session is not registered and has no safe mailbox identity — reconnect before sending notes", nil
+	}
+	to, targetID, boundWorkspace, err := t.resolveAddressee(ctx, args.To, args.ConversationID)
 	if err != nil {
 		return "", err
 	}
-	if to == t.deps.SessionName() {
+	if targetID == t.deps.SessionID || (targetID == "" && to == self) {
 		return "Note NOT sent: the addressee resolves to this session. A note is never delivered to its own author.", nil
 	}
 	args.To = to
-	target, err := t.resolveTarget(args.To, ws, boundWorkspace)
+	target, err := t.resolveTarget(args.To, targetID, ws, boundWorkspace)
 	if err != nil {
 		return "", err
 	}
@@ -136,6 +140,7 @@ type noteTarget struct {
 	store         *collab.Store
 	crossProject  bool
 	peerWorkspace string
+	peerID        string // stable intended recipient; empty only for next/unplaced
 	origin        string // the sender's workspace; stamped only when crossProject
 	// peerUnknown records that no live session answers to this name and no
 	// conversation history placed it, so the message was filed in this
@@ -147,15 +152,15 @@ type noteTarget struct {
 // carries the live workspace resolved from stable identity; a fresh message may
 // still resolve a display name through the live session directory. "next" is
 // always same-project.
-func (t *LeaveNote) resolveTarget(to, ws, boundWorkspace string) (noteTarget, error) {
+func (t *LeaveNote) resolveTarget(to, targetID, ws, boundWorkspace string) (noteTarget, error) {
 	if to == collab.AddresseeNext {
 		return t.localTarget()
 	}
-	peerWS, found := boundWorkspace, boundWorkspace != ""
-	if !found && t.deps.PeerWorkspace != nil {
-		peerWS, found = t.deps.PeerWorkspace(to)
+	found := targetID != "" && boundWorkspace != ""
+	if (targetID == "") != (boundWorkspace == "") {
+		return noteTarget{}, errors.New("leave_note: incomplete stable peer route")
 	}
-	if found && peerWS != "" && !sameWorkspace(peerWS, ws) {
+	if found && !sameWorkspace(boundWorkspace, ws) {
 		if t.deps.GlobalStore == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
 		}
@@ -163,13 +168,16 @@ func (t *LeaveNote) resolveTarget(to, ws, boundWorkspace string) (noteTarget, er
 		if store == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
 		}
-		return noteTarget{store: store, crossProject: true, peerWorkspace: peerWS, origin: ws}, nil
+		return noteTarget{
+			store: store, crossProject: true, peerWorkspace: boundWorkspace, peerID: targetID, origin: ws,
+		}, nil
 	}
 	local, err := t.localTarget()
 	if err != nil {
 		return local, err
 	}
 	local.peerUnknown = !found
+	local.peerID = targetID
 	return local, nil
 }
 
@@ -197,15 +205,30 @@ func (t *LeaveNote) globalIfExists() *collab.Store {
 func (t *LeaveNote) resolveAddressee(
 	ctx context.Context,
 	to, conversationID string,
-) (string, string, error) {
+) (string, string, string, error) {
 	if conversationID == "" {
-		return to, "", nil
+		if to == collab.AddresseeNext || t.deps.PeerSessionByName == nil {
+			return to, "", "", nil
+		}
+		id, workspace, found, ambiguous := t.deps.PeerSessionByName(to)
+		if ambiguous {
+			return "", "", "", fmt.Errorf(
+				"leave_note: more than one active session is named %q; use a unique session name", to)
+		}
+		if !found {
+			return to, "", "", nil
+		}
+		if id == "" || workspace == "" {
+			return "", "", "", errors.New("leave_note: active peer has no stable route")
+		}
+		return to, id, workspace, nil
 	}
 	peer, err := t.conversationPeer(ctx, conversationID)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return t.liveConversationPeer(peer, to)
+	name, workspace, err := t.liveConversationPeer(peer, to)
+	return name, peer.ID, workspace, err
 }
 
 func (t *LeaveNote) conversationPeer(
@@ -213,22 +236,24 @@ func (t *LeaveNote) conversationPeer(
 	conversationID string,
 ) (collab.ConversationParticipant, error) {
 	peers := make(map[string]collab.ConversationParticipant)
+	participated, complete := false, true
 	for _, store := range t.conversationStores() {
-		peer, found, err := store.ConversationPeerParticipant(
+		storePeers, storeParticipation, storeComplete, err := store.ConversationParticipants(
 			ctx, conversationID, t.deps.SessionID, time.Now())
 		if err != nil {
 			return collab.ConversationParticipant{},
 				fmt.Errorf("leave_note: resolve conversation peer: %w", err)
 		}
-		if !found {
-			continue
+		participated = participated || storeParticipation
+		complete = complete && storeComplete
+		for _, peer := range storePeers {
+			if prior, ok := peers[peer.ID]; ok && peer.Workspace == "" {
+				peer.Workspace = prior.Workspace
+			}
+			peers[peer.ID] = peer
 		}
-		if prior, ok := peers[peer.ID]; ok && peer.Workspace == "" {
-			peer.Workspace = prior.Workspace
-		}
-		peers[peer.ID] = peer
 	}
-	if len(peers) != 1 {
+	if !participated || !complete || len(peers) != 1 {
 		return collab.ConversationParticipant{}, fmt.Errorf(
 			"leave_note: conversation_id %q does not prove this session has exactly one other stable participant",
 			conversationID)
@@ -303,6 +328,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		Body:            window.body,
 		OriginalBytes:   window.total,
 		Addressee:       args.To,
+		TargetID:        target.peerID,
 		TTL:             ttl,
 		ConversationID:  args.ConversationID,
 		OriginWorkspace: target.origin,
@@ -316,6 +342,9 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// costs delivery latency (the next periodic check still finds the row), never
 	// the note.
 	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
+	if target.peerID != "" {
+		t.deps.Notifier.Bump(collab.NotifySessionKey(target.peerID))
+	}
 	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget()), nil
 }
 
@@ -343,9 +372,15 @@ func formatNoteResult(
 		fmt.Fprintf(&sb, "Note queued for %s (pending delivery): %d of %d bytes within the configured %d-byte "+
 			"budget — %d bytes were TRUNCATED and the recipient did not receive them.\n",
 			dest, window.delivered, window.total, budget, window.total-window.delivered)
-		fmt.Fprintf(&sb, "  remedy:       send the remainder in a follow-up quoting conversation_id %s; "+
-			"resume the original UTF-8 body at byte offset %d. For longer content, write a file "+
-			"and send its path.\n", conv, window.delivered)
+		if redacted {
+			fmt.Fprintf(&sb, "  remedy:       redaction changed the stored representation, so there is no reliable "+
+				"byte offset into the submitted body. Send the substantive remainder in a follow-up "+
+				"quoting conversation_id %s. For longer content, write a safe file and send its path.\n", conv)
+		} else {
+			fmt.Fprintf(&sb, "  remedy:       send the remainder in a follow-up quoting conversation_id %s; "+
+				"resume the original UTF-8 body at byte offset %d. For longer content, write a file "+
+				"and send its path.\n", conv, window.delivered)
+		}
 	} else {
 		fmt.Fprintf(&sb, "Note queued for %s (pending delivery): %d of %d budget bytes.\n", dest, window.delivered, budget)
 	}

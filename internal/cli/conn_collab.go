@@ -80,25 +80,31 @@ func (s *connSession) collabGlobalIfExists() *collab.Store {
 	return s.collabPool.getGlobal()
 }
 
-// peerWorkspace reports which workspace a named peer session is pinned to. It
-// decides whether a message stays in this workspace's collab.db or crosses into
-// the daemon-level store. A name that matches no live session is reported as not
-// found, and the caller then treats the message as same-project — addressing a
-// peer that has not connected yet is a legitimate thing to do.
-func (s *connSession) peerWorkspace(name string) (string, bool) {
+// peerSessionByName resolves a display name to one live stable identity and
+// workspace. Names are not unique, so two matches are reported as ambiguous and
+// the send path refuses rather than binding queued mail to an arbitrary session.
+func (s *connSession) peerSessionByName(name string) (string, string, bool, bool) {
 	if name == "" {
-		return "", false
+		return "", "", false, false
 	}
 	all, err := session.List()
 	if err != nil {
-		return "", false
+		return "", "", false, false
 	}
-	for _, p := range all {
-		if p.Name == name {
-			return p.Folder, true
+	var found *session.Info
+	for idx := range all {
+		if all[idx].Name != name {
+			continue
 		}
+		if found != nil {
+			return "", "", false, true
+		}
+		found = &all[idx]
 	}
-	return "", false
+	if found == nil {
+		return "", "", false, false
+	}
+	return found.ID, found.Folder, true, false
 }
 
 // peerSessionByID resolves stable identity to the live session's current name
@@ -125,7 +131,7 @@ func (s *connSession) peerSessionByID(id string) (string, string, bool) {
 func (s *connSession) collabDeps() tools.CollabDeps {
 	return tools.CollabDeps{
 		Workspace:           s.workspace,
-		SessionName:         s.sessionName,
+		SessionName:         s.addressableName,
 		SessionID:           s.sessID,
 		Policy:              s.collabPolicy,
 		Store:               s.collabStoreCreate,
@@ -133,7 +139,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStore:         s.collabGlobalCreate,
 		GlobalStoreIfExists: s.collabGlobalIfExists,
 		Notifier:            s.collabPool.notifier(),
-		PeerWorkspace:       s.peerWorkspace,
+		PeerSessionByName:   s.peerSessionByName,
 		PeerSessionByID:     s.peerSessionByID,
 	}
 }

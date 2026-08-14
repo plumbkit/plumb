@@ -165,9 +165,9 @@ func TestClaimNotes_OrdersOldestFirst(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
-	for i, body := range []string{"first", "second", "third"} {
+	for _, body := range []string{"first", "second", "third"} {
 		if _, err := s.PutNote(ctx, NoteInput{AuthorID: "au", Body: body, Addressee: "alice", TTL: time.Hour},
-			now.Add(time.Duration(i)*time.Second)); err != nil {
+			now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -370,14 +370,14 @@ func TestClaimNotes_TargetWorkspaceScopesCrossProjectMail(t *testing.T) {
 	now := time.Now()
 
 	if _, err := g.PutNote(ctx, NoteInput{
-		AuthorSession: "carol", AuthorID: "c", Body: "secret", Addressee: "alice",
+		AuthorSession: "carol", AuthorID: "c", Body: "secret", Addressee: "alice", TargetID: "alice-id",
 		TTL: time.Hour, OriginWorkspace: "/proj/c", TargetWorkspace: "/proj/a",
 	}, now); err != nil {
 		t.Fatal(err)
 	}
 
 	// An impostor in another project, using the same session name.
-	got, err := g.ClaimNotes(ctx, "alice", "/proj/evil", now, 0)
+	got, err := g.ClaimNotesForSession(ctx, "alice", "evil-id", "/proj/evil", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestClaimNotes_TargetWorkspaceScopesCrossProjectMail(t *testing.T) {
 	}
 
 	// The real recipient still gets it.
-	got, err = g.ClaimNotes(ctx, "alice", "/proj/a", now, 0)
+	got, err = g.ClaimNotesForSession(ctx, "renamed-alice", "alice-id", "/proj/a", now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,13 @@ func TestPutNote_GlobalStoreRefusesUnaddressableRows(t *testing.T) {
 		t.Error("a cross-project note with no target workspace must be refused")
 	}
 	if _, err := g.PutNote(ctx, NoteInput{
-		AuthorID: "c", Body: "x", Addressee: AddresseeNext, TTL: time.Hour, TargetWorkspace: "/proj/a",
+		AuthorID: "c", Body: "x", Addressee: "alice", TTL: time.Hour, TargetWorkspace: "/proj/a",
+	}, now); err == nil {
+		t.Error("a cross-project note without a stable target ID must be refused")
+	}
+	if _, err := g.PutNote(ctx, NoteInput{
+		AuthorID: "c", Body: "x", Addressee: AddresseeNext, TTL: time.Hour,
+		TargetWorkspace: "/proj/a", TargetID: "alice-id",
 	}, now); err == nil {
 		t.Error(`"next" must be refused by the cross-project store`)
 	}

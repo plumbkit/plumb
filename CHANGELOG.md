@@ -86,16 +86,21 @@
   `workspace_sessions`, the TUI dashboard, and Web alongside the sender's recent
   pending/delivered state.
 
-  In-thread replies now bind the one other active participant by stable session ID,
-  follow that participant across a rename, and fail closed for offline peers,
-  caller non-participation, ambiguous history, or reused display names instead of
-  silently becoming a note for `next`. Self-authored rows cannot be claimed by
-  their author. Blocking `check_messages` results report elapsed seconds and policy
-  clamps, while per-call limits leave the remainder pending. Claims are atomic and
-  at most once across server delivery paths; a post-claim transport failure can
-  still lose a note, so end-to-end exactly-once is not claimed. When peers are
-  active, `session_start` always states the effective collab
-  policy even if detailed peer awareness is disabled.
+  Active-name and in-thread sends now persist the intended peer's stable session
+  ID, follow that participant across a rename, and cannot be intercepted by a later
+  reuse of the display name. Duplicate live names, offline threaded peers, caller
+  non-participation, ambiguous split local/global history, and unregistered callers
+  all fail closed instead of guessing or silently becoming a note for `next`.
+  Self-authored rows cannot be claimed by their author. Claims are deterministic
+  oldest-first (including timestamp ties), and fair local/global batching prevents
+  a busy local mailbox from starving permitted cross-project mail. Blocking
+  `check_messages` results report elapsed seconds and policy clamps, while per-call
+  limits leave the remainder pending. Claims are atomic and at most once across
+  server delivery paths; a post-claim transport failure can still lose a note, so
+  end-to-end exactly-once is not claimed. Cross-project metadata follows the
+  recipient's resolved consent in `workspace_sessions`, TUI, and Web; split-store
+  Web counts are merged. When peers are active, `session_start` always states the
+  effective collab policy even if detailed peer awareness is disabled.
 
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON

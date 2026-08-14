@@ -15,48 +15,78 @@ type ConversationParticipant struct {
 	Workspace string
 }
 
-// ConversationPeerParticipant resolves the one other stable participant in a
-// conversation and proves the caller authored or claimed at least one row. It
-// fails closed for legacy name-only rows, missing participation, or group
-// threads: display names are presentation, never identity.
+// ConversationParticipants returns every other stable participant visible in
+// this store, whether the caller authored or claimed any row here, and whether
+// every named participant is backed by stable identity. The caller unions these
+// snapshots across stores before deciding whether a thread has exactly one peer;
+// resolving per store would let an ambiguous global half be hidden by a singleton
+// local half.
+func (s *Store) ConversationParticipants(
+	ctx context.Context,
+	conversationID, selfID string,
+	now time.Time,
+) ([]ConversationParticipant, bool, bool, error) {
+	if selfID == "" {
+		return nil, false, false, nil
+	}
+	rows, err := s.Conversation(ctx, conversationID, now)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if len(rows) == 0 {
+		// Absence in one store is neutral when a thread may span local/global.
+		return nil, false, true, nil
+	}
+	peers, participated, complete := collectConversationParticipants(rows, selfID, s.ws)
+	out := make([]ConversationParticipant, 0, len(peers))
+	for _, peer := range peers {
+		out = append(out, peer)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, participated, complete, nil
+}
+
+// ConversationPeerParticipant is the single-store convenience wrapper retained
+// for callers that know a conversation cannot span stores.
 func (s *Store) ConversationPeerParticipant(
 	ctx context.Context,
 	conversationID, selfID string,
 	now time.Time,
 ) (ConversationParticipant, bool, error) {
-	if selfID == "" {
-		return ConversationParticipant{}, false, nil
-	}
-	rows, err := s.Conversation(ctx, conversationID, now)
-	if err != nil || len(rows) == 0 {
+	peers, participated, complete, err := s.ConversationParticipants(ctx, conversationID, selfID, now)
+	if err != nil || !participated || !complete || len(peers) != 1 {
 		return ConversationParticipant{}, false, err
 	}
-	peers, participated := collectConversationParticipants(rows, selfID, s.ws)
-	if !participated || len(peers) != 1 {
-		return ConversationParticipant{}, false, nil
-	}
-	for _, peer := range peers {
-		return peer, true, nil
-	}
-	return ConversationParticipant{}, false, nil
+	return peers[0], true, nil
 }
 
 func collectConversationParticipants(
 	rows []Row,
 	selfID, defaultWorkspace string,
-) (map[string]ConversationParticipant, bool) {
+) (map[string]ConversationParticipant, bool, bool) {
 	peers := make(map[string]ConversationParticipant)
-	participated := false
+	participated, complete := false, true
 	for _, r := range rows {
 		if r.AuthorID == selfID || r.DeliveredToID == selfID {
 			participated = true
 		}
+		if r.AuthorSession != "" && r.AuthorID == "" {
+			complete = false
+		}
+		if r.DeliveredTo != "" && r.DeliveredToID == "" {
+			complete = false
+		}
+		if r.Addressee != "" && r.TargetID == "" && r.DeliveredToID == "" {
+			complete = false
+		}
 		addConversationParticipant(
 			peers, selfID, r.AuthorID, r.AuthorSession, r.OriginWorkspace, defaultWorkspace)
 		addConversationParticipant(
+			peers, selfID, r.TargetID, r.Addressee, r.TargetWorkspace, defaultWorkspace)
+		addConversationParticipant(
 			peers, selfID, r.DeliveredToID, r.DeliveredTo, r.TargetWorkspace, defaultWorkspace)
 	}
-	return peers, participated
+	return peers, participated, complete
 }
 
 func addConversationParticipant(

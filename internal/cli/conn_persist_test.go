@@ -460,4 +460,7 @@ func TestUnregisteredSession_HasNoMailboxAddress(t *testing.T) {
 	if got := s.inbox().Self; got != "" {
 		t.Errorf("inbox Self = %q, want empty so Inbox.Claim treats the mailbox as off", got)
 	}
+	if got := s.collabDeps().SessionName(); got != "" {
+		t.Errorf("collab tool identity = %q, want empty for an unregistered session", got)
+	}
 }

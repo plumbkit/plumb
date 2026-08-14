@@ -56,24 +56,50 @@ func (t *WorkspaceSessions) writeMailboxStatus(
 	global *collab.Store,
 	now time.Time,
 ) {
-	if store != nil && t.selfName != nil {
-		if name := t.selfName(); name != "" {
-			if notes, err := store.PendingNotesForSession(
-				ctx, name, t.selfSessID, t.workspace(), now,
-			); err == nil {
-				writeCollabNotes(sb, notes, now)
-			}
-		}
+	allowGlobal := global != nil && t.collabGlobalVolume != nil && t.collabGlobalVolume()
+	name := ""
+	if t.selfName != nil {
+		name = t.selfName()
 	}
+	writeCollabNotes(sb, t.pendingMailboxNotes(ctx, name, store, global, now, allowGlobal), now)
 	writeCollabSent(sb, t.recentSentNotes(ctx, store, global, now), now)
 	var localSummaries, globalSummaries []collab.ConversationSummary
 	if store != nil {
 		localSummaries, _ = store.ConversationSummaries(ctx, now, 5)
 	}
-	if global != nil && t.collabGlobalVolume != nil && t.collabGlobalVolume() {
+	if allowGlobal {
 		globalSummaries, _ = global.ConversationSummariesForWorkspace(ctx, t.workspace(), now, 5)
 	}
 	writeConversationVolumes(sb, collab.MergeConversationSummaries(5, localSummaries, globalSummaries), now)
+}
+
+func (t *WorkspaceSessions) pendingMailboxNotes(
+	ctx context.Context,
+	name string,
+	store, global *collab.Store,
+	now time.Time,
+	allowGlobal bool,
+) []collab.Row {
+	if name == "" || t.selfSessID == "" {
+		return nil
+	}
+	var pending []collab.Row
+	if store != nil {
+		if rows, err := store.PendingNotesForSession(
+			ctx, name, t.selfSessID, t.workspace(), now,
+		); err == nil {
+			pending = append(pending, rows...)
+		}
+	}
+	if allowGlobal {
+		if rows, err := global.PendingNotesForSession(
+			ctx, name, t.selfSessID, t.workspace(), now,
+		); err == nil {
+			pending = append(pending, rows...)
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].CreatedAt.After(pending[j].CreatedAt) })
+	return pending
 }
 
 func (t *WorkspaceSessions) recentSentNotes(

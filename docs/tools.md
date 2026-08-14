@@ -206,7 +206,10 @@ intent_ttl_minutes`).
 ### `leave_note`
 Send a note to a named active peer session, or to `next` (whoever attaches to
 this workspace next). `workspace_sessions` lists active display names to use as
-`to`. This is the send half of the request/reply mailbox.
+`to`. An active-name send is durably bound to that peer's stable session ID, so a
+rename or later name reuse cannot retarget queued mail; duplicate live names are
+refused rather than guessed. A name that is not active may still be queued locally
+as explicitly unplaced mail. This is the send half of the request/reply mailbox.
 
 Omit `conversation_id` to start a conversation. Quote the returned id to reply
 in-thread; on an in-thread reply `to` may be omitted, in which case plumb resolves
@@ -220,8 +223,10 @@ A body is stored and delivered on a UTF-8 boundary under `[collab]
 chat_budget_bytes` (default 4096). The send receipt says the note is queued (pending delivery) and
 reports the byte budget; `workspace_sessions` shows its later delivered state.
 If content is cut, both sender and recipient see exact visible, total, and missing
-byte counts; send the remainder as a follow-up in the same conversation. For
-longer material, write it to a workspace file and send its path in a short note.
+byte counts for the redacted stored representation. When redaction changed the
+text, the receipt does not invent an offset into the submitted body; send the
+substantive remainder as a follow-up in the same conversation. For longer material,
+write it to a workspace file and send its path in a short note.
 
 Each note is atomically **claimed at most once** across the block appended to an
 ordinary tool result, `check_messages`, and the recipient's next `session_start`.

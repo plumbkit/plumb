@@ -81,8 +81,8 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 			"this workspace's .plumb/config.toml) to exchange notes with peers.", nil
 	}
 	self := t.deps.SessionName()
-	if self == "" {
-		return "workspace not yet attached — call session_start first", nil
+	if self == "" || t.deps.SessionID == "" {
+		return "session is not registered and has no safe mailbox identity — reconnect before reading notes", nil
 	}
 	inbox := Inbox{
 		Self:      self,

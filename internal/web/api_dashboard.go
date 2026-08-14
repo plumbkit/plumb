@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -85,7 +86,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	if sessions, err := session.List(); err == nil {
 		out.Sessions = len(sessions)
-		out.Conversations = activeConversationVolumes(sessions, 10)
+		out.Conversations = activeConversationVolumes(sessions, 10, s.deps.Store.Current())
 	}
 
 	db, err := stats.SharedReadOnly()
@@ -104,21 +105,36 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-func activeConversationVolumes(sessions []session.Info, limit int) []conversationDTO {
+func activeConversationVolumes(sessions []session.Info, limit int, base config.Config) []conversationDTO {
 	var global *collab.Store
-	if collab.GlobalExists() {
+	if anyWorkspaceAllowsCrossProject(sessions, base) && collab.GlobalExists() {
 		global, _ = collab.OpenGlobal()
 		if global != nil {
 			defer global.Close()
 		}
 	}
-	return activeConversationVolumesWithGlobal(sessions, limit, global)
+	return activeConversationVolumesWithGlobal(sessions, limit, global, base)
+}
+
+func anyWorkspaceAllowsCrossProject(sessions []session.Info, base config.Config) bool {
+	for _, info := range sessions {
+		if projectAllowsCrossProject(base, filepath.Clean(info.Folder)) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectAllowsCrossProject(base config.Config, workspace string) bool {
+	resolved, err := config.LoadProject(base, workspace)
+	return err == nil && resolved.Collab.CrossProject
 }
 
 func activeConversationVolumesWithGlobal(
 	sessions []session.Info,
 	limit int,
 	global *collab.Store,
+	base config.Config,
 ) []conversationDTO {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -133,10 +149,13 @@ func activeConversationVolumesWithGlobal(
 		}
 		seenWorkspace[workspace] = true
 		out = append(out, localConversationVolumes(ctx, workspace, now, limit)...)
-		out = append(out, crossProjectConversationVolumes(
-			ctx, global, workspace, now, limit, seenCrossProject,
-		)...)
+		if projectAllowsCrossProject(base, workspace) {
+			out = append(out, crossProjectConversationVolumes(
+				ctx, global, workspace, now, limit, seenCrossProject,
+			)...)
+		}
 	}
+	out = mergeConversationVolumes(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Notes != out[j].Notes {
 			return out[i].Notes > out[j].Notes
@@ -145,6 +164,33 @@ func activeConversationVolumesWithGlobal(
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out
+}
+
+func mergeConversationVolumes(rows []conversationDTO) []conversationDTO {
+	merged := make(map[string]conversationDTO, len(rows))
+	order := make([]string, 0, len(rows))
+	for _, row := range rows {
+		prior, ok := merged[row.ID]
+		if !ok {
+			merged[row.ID] = row
+			order = append(order, row.ID)
+			continue
+		}
+		prior.Notes += row.Notes
+		prior.Pending += row.Pending
+		if row.LastAt.After(prior.LastAt) {
+			prior.LastAt = row.LastAt
+		}
+		if prior.Workspace != row.Workspace {
+			prior.Workspace = "cross-project"
+		}
+		merged[row.ID] = prior
+	}
+	out := make([]conversationDTO, 0, len(order))
+	for _, id := range order {
+		out = append(out, merged[id])
 	}
 	return out
 }

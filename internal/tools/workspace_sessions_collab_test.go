@@ -55,7 +55,7 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 
 	crossConv, err := global.PutNote(context.Background(), collab.NoteInput{
 		AuthorSession: "alice", AuthorID: "sess-alice", Body: "cross",
-		Addressee: "dan", TTL: time.Hour, OriginWorkspace: ws, TargetWorkspace: "/other",
+		Addressee: "dan", TargetID: "sess-dan", TTL: time.Hour, OriginWorkspace: ws, TargetWorkspace: "/other",
 	}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +106,44 @@ func TestWorkspaceSessions_CollabShowsDeliveryStateAndVolume(t *testing.T) {
 	globalOnly.collabGlobalVolume = func() bool { return false }
 	if out := globalOnly.collabBlock(now.Add(2 * time.Second)); strings.Contains(out, crossConv+" — 1 note, 0 pending") {
 		t.Fatalf("cross-project volume bypassed recipient consent:\n%s", out)
+	}
+}
+
+func TestWorkspaceSessions_GlobalInboundMetadataRequiresRecipientConsent(t *testing.T) {
+	ws := t.TempDir()
+	global, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = global.Close() })
+	now := time.Now()
+	conv, err := global.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "sess-bob", Body: "global body must stay hidden",
+		Addressee: "alice", TargetID: "sess-alice", TTL: time.Hour, OriginWorkspace: "/other", TargetWorkspace: ws,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allow := true
+	tool := NewWorkspaceSessions(func() string { return ws }, "sess-alice").
+		WithCollab(
+			func() (bool, bool) { return false, true },
+			func() *collab.Store { return nil },
+			func() string { return "alice" },
+		).
+		WithGlobalCollab(func() *collab.Store { return global }, func() bool { return allow })
+	out := tool.collabBlock(now.Add(time.Second))
+	if !strings.Contains(out, "from bob — pending") || !strings.Contains(out, "conversation "+conv) {
+		t.Fatalf("opted-in recipient cannot see inbound global-note metadata:\n%s", out)
+	}
+	if strings.Contains(out, "global body must stay hidden") {
+		t.Fatalf("workspace_sessions exposed the global note body:\n%s", out)
+	}
+
+	allow = false
+	if out := tool.collabBlock(now.Add(time.Second)); strings.Contains(out, conv) || strings.Contains(out, "from bob — pending") {
+		t.Fatalf("cross-project inbound metadata bypassed recipient consent:\n%s", out)
 	}
 }
 

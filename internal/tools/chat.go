@@ -57,17 +57,18 @@ type Inbox struct {
 	Global func() *collab.Store
 }
 
-// Keys are the notifier keys this inbox is woken by: its own name, plus the
-// "next arrival" address of ITS OWN workspace. Cross-project messages are
-// addressed by name, so they share the name key and need no separate wake-up;
-// "next" has to be scoped, or a note left for the next arrival in any project in
-// the daemon would wake every session in every other project (see
-// collab.NotifyKey). Senders must derive the key the same way.
+// Keys are the notifier keys this inbox is woken by: its current display name,
+// stable identity, and the "next arrival" address of ITS OWN workspace. The ID
+// key keeps targeted mail wakeable across a rename; "next" is workspace-scoped.
 func (i Inbox) Keys() []string {
-	if i.Self == "" {
+	if i.Self == "" || i.SelfID == "" {
 		return nil
 	}
-	return []string{i.Self, collab.NotifyKey(i.Root, collab.AddresseeNext)}
+	return []string{
+		i.Self,
+		collab.NotifySessionKey(i.SelfID),
+		collab.NotifyKey(i.Root, collab.AddresseeNext),
+	}
 }
 
 // stores returns the stores to read, workspace first so a same-project message
@@ -95,7 +96,7 @@ func (i Inbox) stores() []*collab.Store {
 // waiting. Errors are swallowed: delivery is advisory and must never turn a
 // successful tool call into a failure.
 func (i Inbox) Claim(ctx context.Context) []collab.Row {
-	if !i.Policy.Mailbox || i.Self == "" {
+	if !i.Policy.Mailbox || i.Self == "" || i.SelfID == "" {
 		return nil
 	}
 	stores := i.stores()
@@ -107,20 +108,31 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 
 	now := time.Now()
 	var out []collab.Row
-	for _, s := range stores {
-		remaining := maxDeliveredPerCall - len(out)
-		if remaining <= 0 {
+	// Round-robin one atomic claim per store. A busy local mailbox cannot consume
+	// every slot and indefinitely starve permitted cross-project mail.
+	for len(out) < maxDeliveredPerCall {
+		progressed := false
+		for _, s := range stores {
+			rows, err := s.ClaimNotesForSession(ctx, i.Self, i.SelfID, i.Root, now, 1)
+			if err != nil {
+				// Delivery is advisory and must never fail the tool call that carried
+				// it, but a swallowed error here means an agent silently did not get a
+				// message — the one failure mode nobody would ever notice. Log it.
+				slog.Debug("collab: claim messages failed", "session", i.Self, "err", err)
+				continue
+			}
+			if len(rows) == 0 {
+				continue
+			}
+			out = append(out, rows[0])
+			progressed = true
+			if len(out) == maxDeliveredPerCall {
+				break
+			}
+		}
+		if !progressed {
 			break
 		}
-		rows, err := s.ClaimNotesForSession(ctx, i.Self, i.SelfID, i.Root, now, remaining)
-		if err != nil {
-			// Delivery is advisory and must never fail the tool call that carried
-			// it, but a swallowed error here means an agent silently did not get a
-			// message — the one failure mode nobody would ever notice. Log it.
-			slog.Debug("collab: claim messages failed", "session", i.Self, "err", err)
-			continue
-		}
-		out = append(out, rows...)
 	}
 	return out
 }

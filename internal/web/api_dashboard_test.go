@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -96,7 +97,9 @@ func TestActiveConversationVolumes_DeduplicatesWorkspacesAndReportsCounts(t *tes
 		t.Fatal(err)
 	}
 
-	got := activeConversationVolumesWithGlobal([]session.Info{{Folder: ws}, {Folder: ws}}, 10, nil)
+	got := activeConversationVolumesWithGlobal(
+		[]session.Info{{Folder: ws}, {Folder: ws}}, 10, nil, config.Defaults(),
+	)
 	if len(got) != 1 {
 		t.Fatalf("conversation rows = %#v, want one deduplicated workspace row", got)
 	}
@@ -113,18 +116,60 @@ func TestActiveConversationVolumes_IncludesCrossProjectConversationOnce(t *testi
 	}
 	t.Cleanup(func() { _ = global.Close() })
 	conv, err := global.PutNote(context.Background(), collab.NoteInput{
-		AuthorSession: "alice", AuthorID: "alice-id", Body: "cross", Addressee: "bob",
+		AuthorSession: "alice", AuthorID: "alice-id", Body: "cross", Addressee: "bob", TargetID: "bob-id",
 		TTL: time.Hour, OriginWorkspace: wsA, TargetWorkspace: wsB,
 	}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := activeConversationVolumesWithGlobal(
-		[]session.Info{{Folder: wsA}, {Folder: wsB}}, 10, global,
-	)
+	sessions := []session.Info{{Folder: wsA}, {Folder: wsB}}
+	base := config.Defaults()
+	if got := activeConversationVolumesWithGlobal(sessions, 10, global, base); len(got) != 0 {
+		t.Fatalf("cross-project conversation bypassed workspace consent: %#v", got)
+	}
+
+	base.Collab.CrossProject = true
+	got := activeConversationVolumesWithGlobal(sessions, 10, global, base)
 	if len(got) != 1 || got[0].ID != conv || got[0].Workspace != "cross-project" ||
 		got[0].Notes != 1 || got[0].Pending != 1 {
-		t.Fatalf("cross-project conversation rows = %#v", got)
+		t.Fatalf("opted-in cross-project conversation rows = %#v", got)
+	}
+}
+
+func TestActiveConversationVolumes_MergesThreadAcrossLocalAndGlobalStores(t *testing.T) {
+	wsA, wsB := t.TempDir(), t.TempDir()
+	local, err := collab.Open(wsA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = local.Close(); _ = global.Close() })
+	now := time.Now()
+	conv, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "alice-id", Body: "local", Addressee: "bob", TargetID: "bob-id",
+		TTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := global.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "alice-id", Body: "global", Addressee: "bob", TargetID: "bob-id",
+		TTL: time.Hour, ConversationID: conv, OriginWorkspace: wsA, TargetWorkspace: wsB,
+	}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	base := config.Defaults()
+	base.Collab.CrossProject = true
+	got := activeConversationVolumesWithGlobal(
+		[]session.Info{{Folder: wsA}, {Folder: wsB}}, 10, global, base,
+	)
+	if len(got) != 1 || got[0].ID != conv || got[0].Workspace != "cross-project" ||
+		got[0].Notes != 2 || got[0].Pending != 2 {
+		t.Fatalf("split conversation was not merged truthfully: %#v", got)
 	}
 }

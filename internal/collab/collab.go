@@ -57,6 +57,7 @@ type Row struct {
 	OriginalBytes int      // note only — redacted body size before its stored delivery window
 	PathGlobs     []string // intent only — the area being worked on; nil for a note
 	Addressee     string   // note only — a session name or AddresseeNext; "" for an intent
+	TargetID      string   // note only — stable intended recipient; empty for next/unplaced/legacy
 	CreatedAt     time.Time
 	ExpiresAt     time.Time
 
@@ -109,7 +110,11 @@ type NoteInput struct {
 	Body          string
 	OriginalBytes int
 	Addressee     string
-	TTL           time.Duration
+	// TargetID binds an active-name or threaded send to the intended stable
+	// session identity. Empty is reserved for AddresseeNext, an explicitly
+	// unplaced offline name, and legacy rows.
+	TargetID string
+	TTL      time.Duration
 
 	// ConversationID threads this note onto an existing conversation. Empty mints
 	// a fresh one, which PutNote returns so the caller can tell the sender what to

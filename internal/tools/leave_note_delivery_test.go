@@ -94,6 +94,28 @@ func TestLeaveNote_ReportsExactTruncationToBothParties(t *testing.T) {
 	}
 }
 
+func TestLeaveNote_RedactedTruncationDoesNotInventSubmittedBodyOffset(t *testing.T) {
+	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, ChatBudgetBytes: 16}, "alice")
+	body := "prefix AKIAIOSFODNN7EXAMPLE substantive remainder"
+	out, err := NewLeaveNote(deps).Execute(context.Background(), json.RawMessage(fmt.Sprintf(
+		`{"to":"bob","body":%s}`, jsonStr(body),
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"TRUNCATED", "redaction changed the stored representation", "no reliable byte offset",
+		"substantive remainder", "conversation_id", "safe file",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("redacted truncation receipt missing %q: %q", want, out)
+		}
+	}
+	if strings.Contains(out, "resume the original UTF-8 body at byte offset") {
+		t.Fatalf("redacted receipt invented an offset into the submitted body: %q", out)
+	}
+}
+
 func TestRenderMessages_ProvidesReplyMetadataPerNote(t *testing.T) {
 	now := time.Now()
 	out := RenderMessages([]collab.Row{
@@ -124,7 +146,7 @@ func TestLeaveNote_InThreadOmittedTargetResolvesOtherPeer(t *testing.T) {
 	if !strings.Contains(out, "session bob") {
 		t.Fatalf("thread reply did not resolve bob: %q", out)
 	}
-	rows, err := local.ClaimNotesForSession(context.Background(), "bob", "sess-bob", deps.Workspace(), time.Now(), 3)
+	rows, err := local.ClaimNotesForSession(context.Background(), "bob", "id-bob", deps.Workspace(), time.Now(), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
