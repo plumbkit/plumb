@@ -55,7 +55,9 @@ type Info struct {
 	// DetectedLanguage is the project language inferred from root markers,
 	// independent of whether an LSP adapter is attached. Language remains the
 	// attached LSP language and may be "none" when the adapter is disabled or
-	// unavailable.
+	// unavailable. For a workspace root that IS the home directory — where
+	// language discovery is deliberately skipped — it instead carries the
+	// skip note naming that cause (issue #316).
 	DetectedLanguage string `json:"detected_language,omitempty"`
 	Folder           string `json:"folder"`
 	Adapter          string `json:"adapter"`

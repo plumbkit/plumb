@@ -844,3 +844,34 @@ func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
 		t.Fatal("force: true must reach the repin callback on the unattached workspace+language path")
 	}
 }
+
+// TestSessionStart_LSPSkipNoteInIdentity pins issue #316's orientation half: a
+// home-directory pin comes back with no language and nothing naming why. When
+// the skip-note accessor is wired and returns a note, the identity block must
+// carry it verbatim — including alongside a "Language:" line, since a stray
+// root marker at $HOME must not read as "a server is attached". Unwired (or
+// empty) must render nothing, preserving legacy callers' packets.
+func TestSessionStart_LSPSkipNoteInIdentity(t *testing.T) {
+	ws := t.TempDir()
+	const note = "LSP skipped: the workspace root is the home directory"
+
+	tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+		WithLSPLanguage(func() string { return "" }).
+		WithLSPSkipNote(func() string { return note })
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, note) {
+		t.Errorf("orientation packet must name why no LSP is attached for a home pin\n%s", out)
+	}
+
+	tool2 := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil)
+	out2, err := tool2.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute (no accessor): %v", err)
+	}
+	if strings.Contains(out2, "LSP skipped") {
+		t.Errorf("orientation packet renders an LSP-skip note with no accessor wired\n%s", out2)
+	}
+}

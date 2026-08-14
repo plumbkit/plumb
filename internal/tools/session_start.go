@@ -89,6 +89,7 @@ type SessionStart struct {
 	gitPolicyFn   func() GitPolicy                                                                  // may be nil; git policy section skipped when nil
 	projectGitFn  func() ProjectGitStatus                                                           // may be nil; this session's captured view of the capability-granting keys its project config sets
 	lspLangFn     func() string                                                                     // may be nil; the LSP language attached to this session ("" when none)
+	lspSkipNoteFn func() string                                                                     // may be nil; names why no LSP is attached when the skip is deliberate (e.g. a home-directory workspace root)
 	lspLangsFn    func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn   func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
 	externalIDFn  func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
@@ -222,6 +223,17 @@ func (t *SessionStart) writeSessionEpisodic(sb *strings.Builder, ws string) {
 // source is wired (which it always is). Nil-safe. Returns the receiver.
 func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
 	t.lspLangFn = fn
+	return t
+}
+
+// WithLSPSkipNote wires an accessor naming why no language server is attached
+// when that skip is deliberate — today the home-directory workspace root, for
+// which language discovery is banned by design. The note renders as its own
+// identity-block line, so a successful pin stops coming back with a bare
+// "no language" and nothing naming the cause (issue #316). Nil-safe: unset or
+// returning "" ⇒ no line. Returns the receiver.
+func (t *SessionStart) WithLSPSkipNote(fn func() string) *SessionStart {
+	t.lspSkipNoteFn = fn
 	return t
 }
 

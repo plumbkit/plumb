@@ -132,7 +132,9 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = root
 			info.Language = LanguageNone
-			info.DetectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+			// detectedLabel, not detectAnyLanguageAt directly, so a home root
+			// records the LSP-skip note instead of silence (issue #316).
+			info.DetectedLanguage = detectedLabel(root, LanguageNone, nil, s.store.Current())
 			info.Adapter = ""
 			info.Synthetic = true
 			if cn != "" {
@@ -382,14 +384,48 @@ func (s *connSession) bindPrimary(v *sessionView, root, language string, e *pool
 	v.lsRefLang = language
 }
 
+// homeLSPSkipNote is the DetectedLanguage-style label recorded when a session's
+// workspace root IS the home directory: resolvePrimaryLSP skips all language
+// discovery there by design, and before this label that skip was invisible —
+// the pin succeeded (an explicit declaration, issue #182) with lang="none" and
+// nothing naming the cause (issue #316).
+const homeLSPSkipNote = "LSP skipped: the workspace root is the home directory"
+
+// lspHomeSkipNote returns the orientation note naming why no language server
+// is attached when the pinned workspace root IS the home directory —
+// resolvePrimaryLSP skips all discovery there by design (a stray ~/.plumb must
+// not trigger a full-home descent), and without this note the session_start
+// identity block reported no language with nothing naming the cause (#316).
+// Empty when a language IS attached (an explicit session_start language
+// override can still acquire one at a home root), when no workspace is pinned,
+// or when the root is not a home directory.
+func (s *connSession) lspHomeSkipNote() string {
+	if s.acquiredLanguageName() != "" {
+		return ""
+	}
+	ws := s.workspace()
+	if ws == "" || !sameDirAs(ws, homeDirInfos()) {
+		return ""
+	}
+	return homeLSPSkipNote
+}
+
 // detectedLabel computes the session's DetectedLanguage display string: the
 // comma-joined discovered languages for a monorepo root, else the primary
-// language, else a best-effort marker scan when nothing attached.
+// language, else the LSP-skip note for a home root, else a best-effort marker
+// scan when nothing attached.
 func detectedLabel(folder, language string, discovered []discoveredRoot, cfg config.Config) string {
 	switch {
 	case len(discovered) > 0:
 		return discoveredLabel(discovered)
 	case language == LanguageNone:
+		// Every detection walk stops at $HOME, so a home root would otherwise
+		// always label "" — silent about why no server is attached. detectAnyLanguageAt
+		// returns "" for a home folder by the same guard, so this branch changes
+		// nothing for any other root.
+		if sameDirAs(folder, homeDirInfos()) {
+			return homeLSPSkipNote
+		}
 		return detectAnyLanguageAt(folder, cfg)
 	default:
 		return language
