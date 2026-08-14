@@ -292,7 +292,16 @@ func (s *connSession) restoreRootIntact(root string) (resolved string, synthetic
 	// Markerless pin: SynthesiseRoot walks up to the nearest .git, so it has the
 	// same widening shape as Detect's climb — only a root that synthesises to
 	// itself is restored.
-	if synth := s.pool.SynthesiseRoot(root); synth == root {
+	//
+	// explicit=true here, and it changes nothing about what is restored: the
+	// result is kept only when it equals the stored root, so the home-directory
+	// refusal (which returns "") could only turn an intact pin into a dropped
+	// one. Whether a $HOME row may be restored at all is rehydratePin's decision,
+	// made from the row's STORED origin; this function answers the narrower
+	// question of whether the directory still resolves to itself, and asking the
+	// origin question twice — in a helper that does not have the origin — is how
+	// the last six review rounds each found the next gap.
+	if synth := s.pool.SynthesiseRoot(root, true); synth == root {
 		return synth, true, true
 	}
 	return "", false, false
