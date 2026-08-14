@@ -20,11 +20,18 @@ import (
 // reported — so there is no parallel store.
 
 // writeGitWriteEntry renders a git feed entry: the full attribution line for
-// a successful commit, the bare tool-only line otherwise.
+// a successful commit; otherwise a line labelled with the recorded subcommand
+// ("git add", "git push") — the feed filter only admits write-tier git rows,
+// so the subcommand is the operation — plus the no-change marker when the call
+// failed or was refused.
 func writeGitWriteEntry(sb *strings.Builder, w stats.RecentCall, workspace, age string) {
 	sha, subject, ok := gitCommitAttribution(w)
 	if !ok {
-		fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)\n", w.SessionName, w.Tool, age)
+		label := w.Tool
+		if sub := gitInputField(w.InputJSON, "subcommand"); sub != "" {
+			label += " " + sub
+		}
+		fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", w.SessionName, label, age, feedOutcomeMarker(w))
 		return
 	}
 	fmt.Fprintf(sb, "  %-20s  %-18s  %s %s  [repo: %s]  (%s ago)\n",

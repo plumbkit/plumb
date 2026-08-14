@@ -147,8 +147,13 @@ recent-write entries to return.
   authoritative.
 - `recent_writes` — the last N write/edit/rename/git/… operations by any
   session on this workspace, showing the session name, tool, relative file path,
-  and age. A successful git commit is attributed in full: its line carries the
-  session name, the commit's short SHA and subject, and the repository. If a
+  and age. Only operations that could modify the workspace are listed: read-only
+  git subcommands (`status`, `log`, `diff`, …) and dry-run previews never
+  appear, and a call that failed or was refused is kept but marked
+  `[failed — no change applied]` — evidence of peer activity, not a change to
+  re-read. A successful git commit is attributed in full: its line carries the
+  session name, the commit's short SHA and subject, and the repository; other
+  git writes are labelled with their subcommand (`git add`, `git push`). If a
   file you are about to edit appears here, re-read it first. When
   `[collab] peer_awareness` is on and the topology index has the file, each entry
   is annotated with its enclosing package/symbol (best-effort, `source=topology`).
