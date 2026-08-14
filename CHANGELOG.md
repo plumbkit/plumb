@@ -6,6 +6,47 @@
      stamped heading, so a clean rebase is not evidence your entry is in the
      right section — check which heading it landed under. -->
 
+### Added
+
+- **A fuzz target over workspace-root synthesis, the last of the six
+  attacker-influenced parsers named in the security programme without one.**
+  `SynthesiseRoot` decides how far up the tree a session's read-write boundary
+  extends when a directory has no marker — a wrong answer is not an error the
+  caller sees but a WIDER ROOT, which is the shape the dotfiles-at-`$HOME`
+  escape fixed in 0.16.6 had: every credential under the home directory inside
+  one workspace.
+
+  The target was deferred until the 0.16.6 rewrite of `SynthesiseRoot` landed,
+  so it fuzzes stable code rather than code in flight. Its fixture builds the
+  dangerous shapes directly — a dotfiles repo checked out at `$HOME`, a repo
+  above the home directory, a symlinked second spelling of `$HOME`, a project
+  `.git` below it that must still win — and every property is checked against
+  the filesystem rather than a second string implementation:
+
+  - a seed that IS a home directory — by identity, reached through a symlinked
+    spelling too — is refused unless the caller declared it explicit, and an
+    explicit declaration is honoured;
+  - a synthesised root is never the home directory by filesystem identity;
+  - the root is the canonical seed or an ancestor of it;
+  - the output is a canonical fixed point (`Clean` does not move it,
+    `EvalSymlinks` is a no-op on it);
+  - an independent kernel walk over the documented contract — stat `.git` at
+    each level, stop at the first home identity — stops at the same level
+    production stopped at.
+
+  The last property mirrors the contract and so cannot catch a defect the
+  contract itself carries; the four above it are independent oracles. One
+  limit is disclosed rather than hidden: the home guard compares by
+  identity, not containment, so a seed above the home directory that finds
+  its own `.git` still synthesises to that ancestor — current behaviour,
+  tracked as issue #306, not asserted here.
+
+  Mutation-verified against the pre-fix shapes: removing the home-seed
+  refusal, letting the walk climb past `$HOME`, reverting the identity
+  comparison to a string compare, and returning uncanonicalised spellings
+  are each caught by at least one property. Crashing payloads are retained
+  as a named corpus that runs under plain `make test`.
+
 ### Fixed
 
 - **The TUI Settings scope column no longer lists git linked worktrees as
