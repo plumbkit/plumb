@@ -710,6 +710,50 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
+### Added
+
+- **`mutation_test` — mutation-test your own assertions, with a mandatory
+  compile gate.** This repository already treats mutation-verified assertions
+  as a review requirement, but there was no tooling: every agent hand-rolled a
+  bash harness of patch → compile → test → restore. The new tool takes
+  **explicit** mutants (`file_path` plus an exact-once `old_string`/`new_string`
+  in the style of `edit_file` — it does not generate them) and, one at a time,
+  applies each, proves it still compiles, runs a scoped test set, classifies the
+  result, and restores the file.
+
+  **The false kill is the failure mode it exists to prevent.** A mutant that
+  never applied, or applied but did not compile, makes the test command fail —
+  and a hand-rolled harness reports that failure as a kill, "proving" an
+  assertion that was never exercised. So the verdicts are `killed` (compiled,
+  and a test failed), `survived` (compiled, and every test still passed — the
+  assertions are vacuous, the finding that matters), and `invalid` (did not
+  apply, did not compile, or timed out), and an `invalid` is **never** reported
+  as a kill. The compile gate cannot be switched off: a workspace with no build
+  command configured is refused outright rather than served verdicts nothing
+  stands behind, and the gate always runs unscoped because a whole-module
+  compile catches breakage a package-scoped test never reaches.
+
+  Commands are the stored, trust-gated `[tasks.<lang>]` slots `run_task`
+  already uses — there is no agent-supplied command line. `test_target` fills
+  the test command's `{target}` placeholder, which is how a run is scoped to
+  the affected package instead of a whole suite that takes minutes per mutant
+  (`topology_affected` says what to name).
+
+  **Restoration is guaranteed** on every exit path — pass, test failure,
+  compile failure, timeout, panic, context cancellation: the pre-mutation bytes
+  are snapshotted in memory, rewritten under the same per-path lock the write
+  tools hold, and verified by SHA-256 before the run reports clean. An
+  unverifiable restore is escalated with the file named, its recovery spelled
+  out, and the snapshot saved to a sidecar. A file with **uncommitted changes
+  is refused with no override** — a clean file is precisely what makes
+  `git checkout` a guaranteed recovery if the daemon dies mid-run, so the
+  refusal *is* the crash-recovery story rather than a nuisance. One run at a
+  time per daemon; a second call is refused rather than queued, because
+  concurrent runs would read each other's breakage as their own result.
+
+  Non-lean: unlike the write tools, mutation verification is a discretionary
+  review step, not work every session must do, so an agent that never sees the
+  tool does not thereby perform an unsafe write.
 
 ## 0.16.6 (2026-08-14)
 
