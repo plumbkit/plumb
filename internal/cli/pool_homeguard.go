@@ -13,8 +13,8 @@ package cli
 // ancestry test lost to the /System/Volumes/Data/Users firmlink, and the
 // os.SameFile ancestor walk that replaced it still missed /System/Volumes/Data
 // itself, which contains $HOME while sharing an inode with no ancestor of
-// canonical($HOME). Tracked separately rather than shipped defeated; see the
-// issue linked from the CHANGELOG. The identity guard here fixes the reported
+// canonical($HOME). Tracked as issue #306 rather than shipped
+// defeated. The identity guard here fixes the reported
 // defect (a dotfiles repo at $HOME capturing the whole home directory) and is
 // the part that survived every round.
 

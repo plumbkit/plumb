@@ -1020,7 +1020,8 @@
     would be worse than not claiming one. The reported defect — a dotfiles repo
     at `$HOME` capturing the whole home directory — is fixed here by the
     identity guard, which survived every round; the containment class is
-    tracked as its own issue with the full evidence.
+    tracked as issue #306 with the full evidence and every defeated
+    implementation.
   - **A bare `~/.plumb` is residue, not intent.** `Detect` honoured a
     `.plumb` marker before any home guard, so the `~/.plumb` an earlier
     build's `auto_attach_persist` created kept resolving `$HOME` forever,
