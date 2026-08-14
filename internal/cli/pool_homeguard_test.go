@@ -336,7 +336,9 @@ func TestSynthesiseRoot_RefusesAWideSeedForEveryCaller(t *testing.T) {
 
 // TestRepin_NonExplicitRootContainingHomeIsRefused pins the refusal at the pin
 // itself, which reports the problem at the call that caused it rather than at
-// the next path-bearing tool.
+// the next path-bearing tool. Since round 6 the mechanism is the containment
+// choke inside attachOrRepinTo (undeclaredWideRootErr) on the RESOLVED root:
+// Detect succeeds at the marked wide directory, and the pin write refuses it.
 func TestRepin_NonExplicitRootContainingHomeIsRefused(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	base := freshTempDir(t) // stands in for /Users — it CONTAINS the home directory
@@ -369,6 +371,38 @@ func TestRepin_NonExplicitRootContainingHomeIsRefused(t *testing.T) {
 	mustMkdir(t, filepath.Join(proj, ".git"))
 	if _, err := s.repinWorkspaceFrom(context.Background(), proj, "", sessionstate.PinSourceRoots, pinTriggerLive, true); err != nil {
 		t.Errorf("control failed — an ordinary project re-pin was refused: %v", err)
+	}
+}
+
+// TestDetect_RepoContainingSandboxHomeStillDetects is round 6's finding B3: a
+// repo whose $HOME is one of its own subdirectories — HOME=$PWD/.home hermetic
+// build sandboxes, Bazel execroots, nix-shell, CI images that repoint HOME
+// inside the checkout — is an ordinary project. Round 5 tested containment
+// inside detect(), which made such a repo undetectable: the explicit pin fell
+// through to SynthesiseRoot and came back a synthetic LanguageNone root, so
+// the workspace silently lost its LSP with nothing naming containment as the
+// cause. Detection is identity-guarded only; containment is the PIN's question
+// (undeclaredWideRootErr), where the caller's declaration is in scope.
+func TestDetect_RepoContainingSandboxHomeStillDetects(t *testing.T) {
+	repo := freshTempDir(t)
+	mustWrite(t, filepath.Join(repo, "go.mod"), "module sandbox\n")
+	mustMkdir(t, filepath.Join(repo, ".git"))
+	sandboxHome := filepath.Join(repo, ".home")
+	mustMkdir(t, sandboxHome)
+	t.Setenv("HOME", sandboxHome)
+	t.Setenv("USERPROFILE", sandboxHome)
+	sub := filepath.Join(repo, "internal")
+	mustMkdir(t, sub)
+
+	root, lang, err := detectTestPool().Detect(sub)
+	if err != nil {
+		t.Fatalf("Detect(%q): %v — a repo containing its own sandbox $HOME must stay detectable", sub, err)
+	}
+	if root != repo {
+		t.Errorf("root = %q, want the repo %q", root, repo)
+	}
+	if lang != "go" {
+		t.Errorf("language = %q, want %q — losing detection here is what silently cost such workspaces their LSP", lang, "go")
 	}
 }
 
