@@ -246,7 +246,7 @@ and network calls additionally require `confirm: true` per call.
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
 | `env` | table | `{}` | — | Environment variables set on the git child process. See [The git child's environment](#the-git-childs-environment) below. |
-| `write_timeout` | duration | `"10m"` | — | How long plumb waits for an index/ref-mutating git child before killing it. See [When plumb stops waiting](#when-plumb-stops-waiting) below. |
+| `write_timeout` | duration | `"10m"` | `PLUMB_GIT_WRITE_TIMEOUT` | How long plumb waits for an index/ref-mutating git child before killing it. See [When plumb stops waiting](#when-plumb-stops-waiting) below. |
 
 ### When plumb stops waiting
 
@@ -1099,6 +1099,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | `git.allow_destructive` |
 | `PLUMB_GIT_ALLOW_PUSH` | `git.allow_push` |
 | `PLUMB_GIT_COMMIT_TRAILER` | `git.commit_trailer` |
+| `PLUMB_GIT_WRITE_TIMEOUT` | `git.write_timeout` |
 | `PLUMB_AUTO_ATTACH` | `workspace.auto_attach` |
 | `PLUMB_AUTO_ATTACH_PERSIST` | `workspace.auto_attach_persist` |
 | `PLUMB_LSP_QUERY_TIMEOUT` | `lsp_query.timeout` |

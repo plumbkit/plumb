@@ -253,6 +253,58 @@
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
 
+## 0.16.6 (2026-08-14)
+
+### Security
+
+- **A deleted pinned workspace no longer rehydrates to the enclosing
+  repository after a daemon restart.** If a workspace pinned by an explicit
+  `session_start` disappeared before the daemon restarted — a removed git
+  worktree is the standing case — the restore path walked *up* the filesystem
+  and re-pinned the nearest ancestor that looked like a project, silently
+  widening the session's write surface past anything the caller chose (the
+  #181 fail-open class through the restore path). The pin is now verified
+  before it is restored: a root whose directory is gone, or whose resolution no
+  longer lands on exactly the stored root, is **dropped** — logged, deleted
+  from the persisted store, and left for the normal attach ladder (client
+  roots, cwd hint) rather than attached at an ancestor. The same check covers
+  alias-spelled pins (never attached under either spelling, so no shadow pins)
+  and markerless synthetic roots (the `SynthesiseRoot` walk no longer climbs to
+  a `.git` that appeared above the pin). In the same stroke, `session_start`
+  results now echo the daemon-canonical root in `_meta`
+  (`dev.plumbkit/resolved-workspace`), and the `plumb serve` proxy commits that
+  spelling as the pin it replays on reconnect — closing the raw-spelling replay
+  channel that fed the drift.
+
+- **The command allow-list, the shell gate and the Xcode build server are now
+  bound to the project config content you approved**, not to a per-workspace
+  boolean. `[[command]]`, `[commands] allow_shell`/`deny_network` and `[xcode]`
+  join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and `[collab]` in the trust hash, so
+  `plumb trust` discloses them with their values and any later edit invalidates
+  the grant until you approve it again. Closes threat-model known gap 8.
+
+  Two behaviours were live before this. Anything **added after** a grant
+  inherited it — a repository trusted for a benign `[git]` tweak could append a
+  `[[command]]` and have `run_command` execute it. And the coarse flag is set by
+  the TUI's Commands tab on **any** project-scope save, so saving one unrelated
+  setting in a freshly cloned repository blessed every `[[command]]` that
+  repository already shipped, plus `allow_shell`, plus `auto_build_server` —
+  which runs `xcodebuild`, and so that repository's own build.
+
+  The gate is now both grants together: the coarse flag still says you approved
+  execution in this workspace at all, and the hash says the request is the one
+  you approved. **A project that supplies none of these sections is unaffected**,
+  so commands from your own global config behave exactly as before. The decision
+  is resolved when the config is applied, from the same bytes as the config it
+  authorises, so a repository cannot run one set of commands while the file on
+  disk reads as something you once approved.
+
+  If you had trusted a workspace whose project config supplies any of these
+  sections, run `plumb trust` there once more — it will show you what it is
+  binding to before you approve it.
+
+### Fixed
+
 - **A git child could park `cmd.Wait()` forever and wedge every later git op on
   the repository.** `runGit` captures output into `bytes.Buffer`s, so os/exec
   gives the child a pipe and waits for the copy to reach EOF — which never comes
