@@ -191,7 +191,7 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := t.checkBoundary(a); err != nil {
 		return "", err
 	}
-	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand))
+	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand), gitChildEnv(policy.Env))
 }
 
 // commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
@@ -237,7 +237,7 @@ func (t *Git) commitTrailerToken(p GitPolicy, sub string) string {
 //
 // runGit serialises every non-read tier; a read (status/log/diff) must never
 // queue behind a slow commit.
-func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote, trailer string) (string, error) {
+func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote, trailer string, env []string) (string, error) {
 	argv, err := buildGitArgv(a, trailer)
 	if err != nil {
 		return "", err
@@ -257,7 +257,7 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		}
 	}
 	guard := t.armRefGuard(a, tier)
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier))
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), env)
 	if err != nil {
 		return "", err
 	}

@@ -245,6 +245,67 @@ and network calls additionally require `confirm: true` per call.
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
+| `env` | table | `{}` | — | Environment variables set on the git child process. See [The git child's environment](#the-git-childs-environment) below. |
+
+### The git child's environment
+
+The daemon is long-lived and its environment is whatever started it — a login
+shell, an editor, a launchd job. Everything it spawns inherits that verbatim,
+including the `git` process that runs **your repository's hooks**. When the
+inherited environment is wrong for the repository, the hook is what breaks:
+
+```toml
+[git]
+env = { GOWORK = "off" }
+```
+
+That example is the motivating one. Go discovers a workspace by walking *up*
+from the process's working directory, and plumb runs git with `cwd` set to the
+repository root — so a `go.work` above a git worktree or submodule silently
+swallows the module, and a pre-commit hook running `go build ./...` fails on
+every commit. Before this knob the only way out was to leave plumb and run
+`GOWORK=off git commit` in a shell.
+
+**It extends, it does not replace.** Entries are applied on top of the inherited
+environment, so `PATH` (git finding its own subcommands), `HOME` (`~/.gitconfig`,
+`known_hosts`) and `SSH_AUTH_SOCK` (authenticating a fetch or push) survive
+untouched. An entry whose name is already present replaces that value — that is
+the point, `GOWORK = "off"` has to beat an inherited `GOWORK`. There is no way to
+*unset* an inherited variable; setting a name to `""` sets it to the empty
+string. With no entries the child inherits exactly as it always did.
+
+It applies to the git process plumb runs on your behalf — the one that runs
+hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
+`log -1`, `rev-parse`, `diff --cached`) are plumbing whose output plumb parses,
+and deliberately keep inheriting.
+
+> **This is a capability, not a preference, and it is gated as one.** A git
+> child's environment can name commands git will run — `GIT_SSH_COMMAND`,
+> `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND` and `GIT_PAGER` all do, and
+> `GOFLAGS=-toolexec=…` reaches any `go` a hook invokes. It lives inside `[git]`
+> so it inherits that block's per-workspace trust boundary exactly: a cloned
+> repository's `.plumb/config.toml` cannot set it until you have approved that
+> exact content with `plumb trust`, and `plumb trust` discloses the variables and
+> their values. Note that no allowlist of "safe" variable names is offered as a
+> substitute — the dangerous set is open-ended and reaches into other tools'
+> variables entirely, so the trust boundary is the whole mechanism.
+
+**Editors.** `git rebase -i` and `git tag -a` invoke `GIT_EDITOR`
+unconditionally, and plumb passes it no terminal, so the editor blocks. plumb
+does not set `GIT_EDITOR` for you — that would silently accept a default commit
+message you never wrote. Set it yourself if you want those verbs to be
+non-interactive:
+
+```toml
+[git]
+env = { GIT_EDITOR = "true" }
+```
+
+Either way plumb no longer hangs on it: the child wait is bounded (5s past the
+child's exit), and cancellation kills the whole process group rather than the
+direct child alone. If a process the command started outlives git while still
+holding its output pipes, plumb stops waiting and says so — quoting git's own
+output, so you can see whether the operation completed.
 
 Ambiguous subcommands (`checkout`, `switch`, `restore`, `branch`, `tag`,
 `stash`) are classified by their arguments and biased towards the higher tier —
@@ -1062,6 +1123,7 @@ allow_destructive  = false                  # reset, clean, checkout… (also ne
 allow_push         = false                  # push, fetch, pull (also needs confirm:true)
 protected_branches = ["main", "master"]     # never force-pushable
 commit_trailer     = false                  # stamp commits with a Plumb-Session: <name> trailer
+env                = {}                     # extra env for the git child (hooks see it); trust-gated
 
 [quality]
 enabled               = false               # post-write offline analysers

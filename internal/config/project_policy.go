@@ -371,8 +371,17 @@ func forceCapabilityFieldsToBase(base Config, merged *Config) {
 	// repo shipping allow_destructive = true, allow_push = true and an empty
 	// protected_branches would therefore grant itself history destruction and
 	// arbitrary pushes to the user's remotes, using the user's credentials, the
-	// moment a session attaches. Forced back whole, never field by field.
+	// moment a session attaches. Forced back whole, never field by field —
+	// which is also what gives [git] env (the git child's environment, a
+	// code-execution channel in its own right) this boundary for free.
 	merged.Git = base.Git
+	// The assignment above shares base's map and the caller usually holds base in
+	// a live config store, so break the alias (mirroring forceLSPExecToBase).
+	// Cloning merged.Git.Env — which the line above has just made base's — rather
+	// than base.Git.Env is deliberate: it leaves this line incapable of forcing
+	// anything by itself, so a test asserting the env was forced back really
+	// tests the whole-block reset above.
+	merged.Git.Env = maps.Clone(merged.Git.Env)
 	// [collab]'s four switches each open a cross-agent CHANNEL: share_intent's
 	// agent-authored claims, the mailbox delivering a message to a peer or to
 	// whoever attaches next, cross-project delivery, and share_findings writing

@@ -54,6 +54,14 @@ type GitPolicy struct {
 	// `Plumb-Session: <session-name>` trailer ([git] commit_trailer, default
 	// off). Not a gate — an attribution opt-in.
 	CommitTrailer bool
+	// Env holds [git] env: variables set on the git child ON TOP of the
+	// daemon's inherited environment (gitChildEnv). Empty leaves the child
+	// inheriting verbatim. It rides in GitPolicy rather than beside it because
+	// a git child's environment IS a capability — GIT_SSH_COMMAND,
+	// GIT_EXTERNAL_DIFF, GIT_PROXY_COMMAND and GIT_PAGER each name a command
+	// git runs — so it must reach the tool through the same trust-gated [git]
+	// block as the tier switches, never through a second, ungated channel.
+	Env map[string]string
 }
 
 // GitPolicyFn resolves the current GitPolicy at call time. nil falls back to a

@@ -214,6 +214,7 @@ func cloneConfig(cfg Config) Config {
 	out.Workspace.ExtraRoots = slices.Clone(cfg.Workspace.ExtraRoots)
 	out.Workspace.ReadRoots = slices.Clone(cfg.Workspace.ReadRoots)
 	out.Git.ProtectedBranches = slices.Clone(cfg.Git.ProtectedBranches)
+	out.Git.Env = maps.Clone(cfg.Git.Env)
 	if cfg.LSP != nil {
 		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))
 		for name, lspCfg := range cfg.LSP {

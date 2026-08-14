@@ -57,6 +57,24 @@
 
 ### Fixed
 
+- **A git child could park `cmd.Wait()` forever and wedge every later git op on
+  the repository.** `runGit` captures output into `bytes.Buffer`s, so os/exec
+  gives the child a pipe and waits for the copy to reach EOF — which never comes
+  while any descendant still holds the write end. Cancelling the context does
+  not help: it kills the direct child, not what holds the pipe. Because the
+  mutating tiers release the per-repo lock and their in-flight token from a
+  deferred cleanup that never ran, one such call blocked every subsequent
+  non-read git op on that repository, from every session, and left the shutdown
+  drain unable to complete. Reachable via `git rebase -i` and `git tag -a`
+  (both invoke `GIT_EDITOR` unconditionally) and via any hook that backgrounds a
+  process without redirecting its output.
+
+  The git child now gets the same exec hygiene the task runner has had all
+  along: its own process group, a group-kill on cancellation, and a
+  `WaitDelay`. When the delay does expire, the reply explains what happened and
+  quotes git's own output rather than surfacing exec's bare "WaitDelay expired
+  before I/O complete".
+
 - **The serve proxy no longer rewrites a frame whose routing envelope would
   change.** `injectInitMeta` decodes the frame into a map, where a duplicate JSON
   key is last-wins, while the proxy's own router and the daemon both decode into
@@ -83,6 +101,26 @@
   the flattened client capability keys), and a version mismatch is logged once
   per connection — the signal for when moving the supported set forward is
   safe.
+- **`[git] env` — a configurable environment for the git child.** Until now
+  `cmd.Env` was never assigned, so git (and therefore *your repository's hooks*)
+  inherited whatever environment the daemon happened to start with, with no way
+  to correct it. The motivating case: Go discovers a workspace by walking up
+  from the process's working directory, which plumb sets to the repository root,
+  so a `go.work` above a git worktree or submodule swallows the module and a
+  pre-commit hook running `go build ./...` fails every commit — with no remedy
+  short of leaving plumb for a shell. Now `env = { GOWORK = "off" }`.
+
+  It **extends** the inherited environment rather than replacing it (git needs
+  `PATH`, `HOME` and `SSH_AUTH_SOCK` to work at all), and with no entries the
+  child inherits byte-for-byte as before.
+
+  A git child's environment is a code-execution channel — `GIT_SSH_COMMAND`,
+  `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND` and `GIT_PAGER` each name a command
+  git runs — so it is deliberately placed **inside `[git]`**, inheriting that
+  block's per-workspace trust boundary unchanged: a cloned repository's
+  `.plumb/config.toml` cannot set it until `plumb trust` approves that exact
+  content, and the disclosure names the variables and their values. No allowlist
+  of "safe" variable names is offered as a substitute for that boundary.
 
 - **Fuzz targets over the serve proxy's MCP framing**, the layer that rewrites
   JSON-RPC frames in flight — folding the allow-dirs grant into the client's

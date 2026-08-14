@@ -244,35 +244,6 @@ type EditsConfig struct {
 	PostWriteCrossFileSettleMs int `toml:"post_write_cross_file_settle_ms"`
 }
 
-// GitConfig controls the unified git tool's tiered allowlist. Read-only
-// subcommands always run. Write, destructive, and network tiers are gated by
-// these flags so the same tool can be flexible on trusted workspaces and
-// locked down elsewhere. All fields can be overridden per-project via
-// <workspace>/.plumb/config.toml and by environment variables.
-//
-// Concurrency: read-only after Load returns.
-type GitConfig struct {
-	// AllowWrites gates the safe-write tier (add, commit, switch, branch
-	// create, tag create, stash push/pop). Default true.
-	AllowWrites bool `toml:"allow_writes"`
-	// AllowDestructive gates the destructive tier (reset, clean, checkout,
-	// restore, rebase, revert, cherry-pick, branch/tag delete, stash
-	// drop/clear). Each call also requires confirm:true. Default false.
-	AllowDestructive bool `toml:"allow_destructive"`
-	// AllowPush gates the network tier (push, fetch, pull). Each call also
-	// requires confirm:true. Default false.
-	AllowPush bool `toml:"allow_push"`
-	// ProtectedBranches are branch names that may never be force-pushed, even
-	// when AllowPush is true and confirm is set. Default ["main", "master"].
-	ProtectedBranches []string `toml:"protected_branches"`
-	// CommitTrailer stamps every plumb-mediated commit with a
-	// `Plumb-Session: <session-name>` git trailer, so `git log` can attribute
-	// a commit to the agent session that authored it. Default false — trailer
-	// noise is opt-in. Session→commit attribution is always queryable via
-	// workspace_sessions regardless of this knob.
-	CommitTrailer bool `toml:"commit_trailer"`
-}
-
 // TopologyConfig controls the persistent semantic index.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type TopologyConfig struct {

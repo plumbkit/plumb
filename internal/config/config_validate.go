@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func validate(cfg Config) error {
@@ -38,6 +39,7 @@ func validate(cfg Config) error {
 		return errors.New("xcode.timeout must be positive")
 	}
 	for _, check := range []func() error{
+		func() error { return validateGit(cfg.Git) },
 		func() error { return validateQuality(cfg.Quality) },
 		func() error { return validateTopology(cfg.Topology) },
 		func() error { return validateSemantics(cfg.Semantics) },
@@ -72,6 +74,30 @@ func validateLSP(lsp map[string]LSPConfig) error {
 		case "", "auto", "push", "pull":
 		default:
 			return fmt.Errorf("lsp.%s.diagnostics must be auto, push, or pull; got %q", name, l.Diagnostics)
+		}
+	}
+	return nil
+}
+
+// validateGit rejects a [git] env entry whose NAME could not survive the trip
+// into a `KEY=VALUE` environment slice. An empty name, or one containing '='
+// or a NUL, does not produce the variable it appears to name: it either
+// corrupts the entry or splits it, so the value silently lands on a different
+// variable than the one written in the config. Reject it at load rather than
+// hand the child a malformed environment. Values are unrestricted — an
+// environment value may legitimately contain anything but NUL.
+func validateGit(g GitConfig) error {
+	for k := range g.Env {
+		switch {
+		case k == "":
+			return errors.New("git.env: an environment variable name must not be empty")
+		case strings.ContainsAny(k, "=\x00"):
+			return fmt.Errorf("git.env: environment variable name %q must not contain '=' or a NUL byte", k)
+		}
+	}
+	for k, v := range g.Env {
+		if strings.ContainsRune(v, 0) {
+			return fmt.Errorf("git.env.%s: an environment variable value must not contain a NUL byte", k)
 		}
 	}
 	return nil

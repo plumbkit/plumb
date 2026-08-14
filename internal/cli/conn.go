@@ -572,14 +572,7 @@ func (s *connSession) gitConfig() config.GitConfig {
 // the single source of truth shared by the git tool's gate and session_start's
 // policy report.
 func (s *connSession) gitPolicy() tools.GitPolicy {
-	c := s.gitConfig()
-	return tools.GitPolicy{
-		AllowWrites:       c.AllowWrites,
-		AllowDestructive:  c.AllowDestructive,
-		AllowPush:         c.AllowPush,
-		ProtectedBranches: c.ProtectedBranches,
-		CommitTrailer:     c.CommitTrailer,
-	}
+	return gitPolicyFrom(s.gitConfig())
 }
 
 // refuseHomeRoots reports whether the session refuses home-directory roots.

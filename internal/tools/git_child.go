@@ -1,0 +1,119 @@
+package tools
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strings"
+	"time"
+)
+
+// git_child.go holds how plumb RUNS the git child, as opposed to git_exec.go's
+// what it runs: the environment the child is given, and the bound on waiting
+// for it. Both were previously left at Go's defaults, and both defaults are
+// wrong for a long-lived daemon that runs a repository's own hooks.
+
+// gitChildEnv builds the environment for the git child process from the
+// resolved [git] env overrides.
+//
+// It EXTENDS the daemon's inherited environment rather than replacing it, and
+// that direction is not a convenience — it is the only one that works. git
+// needs PATH to find itself and its subcommands, HOME to read the user's
+// ~/.gitconfig and known_hosts, and SSH_AUTH_SOCK to authenticate a fetch or
+// push; a hook needs whatever toolchain the user's shell would have given it.
+// A replacing knob would make every entry a complete environment the user has
+// to reconstruct by hand, and getting it subtly wrong fails at the worst
+// moment — mid-push, against a remote. Extending also keeps the empty case
+// honest: with no overrides configured the child inherits exactly what it
+// inherited before this knob existed.
+//
+// Returns nil when there is nothing to override, so the caller leaves cmd.Env
+// nil and os/exec inherits the daemon's environment directly — byte-for-byte
+// the previous behaviour, not a reconstruction of it.
+//
+// An override REPLACES any inherited value of the same name; that is the point
+// (GOWORK=off has to beat an inherited GOWORK). Setting a name to the empty
+// string sets the variable to empty. There is deliberately no way to UNSET an
+// inherited variable: any sentinel meaning "unset" would collide with a
+// legitimate value, and no need for one has been demonstrated.
+//
+// Concurrency: pure apart from reading os.Environ(); safe for concurrent use.
+func gitChildEnv(overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	env := os.Environ()
+	// Deterministic order, so two names differing only by case always resolve
+	// the same way instead of by map-iteration luck.
+	names := make([]string, 0, len(overrides))
+	for k := range overrides {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		env = setGitEnvVar(env, k, overrides[k])
+	}
+	return env
+}
+
+// setGitEnvVar replaces the value of key in env if present, otherwise appends
+// "key=value". env is modified in place.
+func setGitEnvVar(env []string, key, val string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + val
+			return env
+		}
+	}
+	return append(env, prefix+val)
+}
+
+// gitChildWaitDelay bounds how long cmd.Wait may keep waiting on the output
+// pipes once the git child itself is gone. Matches RunArgv's (cmdexec.go).
+const gitChildWaitDelay = 5 * time.Second
+
+// boundGitChildWait applies the exec hygiene every git child needs, exactly as
+// RunArgv does for task commands (cmdexec.go): its own process group, a
+// group-kill on cancellation, and a WaitDelay.
+//
+// Without the WaitDelay, cmd.Wait() on a command whose Stdout/Stderr are
+// bytes.Buffers can block FOREVER — long past the context deadline, and past
+// the death of git itself. os/exec gives such a command an os.Pipe and copies
+// from it in a goroutine, and Wait waits for that copy to reach EOF; EOF comes
+// only when every holder of the write end closes it. Any descendant that
+// inherited it therefore pins Wait for its own lifetime. Cancelling the
+// context does not help: it SIGKILLs the direct child, which is not the
+// process holding the pipe.
+//
+// For plumb that is worse than a hung call. runGit's mutating tiers hold the
+// per-repo lock and a gitWriteInflight token, both released by
+// beginSerialisedGit's deferred cleanup — which never runs while Wait is
+// parked. One such call wedges EVERY later non-read git op on that repository,
+// from every session, and leaves the shutdown drain unable to complete. It is
+// reachable today: `git rebase -i` and `git tag -a` invoke GIT_EDITOR
+// unconditionally, and a pre-commit hook that backgrounds a process without
+// redirecting its output does the same thing accidentally.
+//
+// The residual cost is small and preferable: when the delay does expire on a
+// child that exited SUCCESSFULLY, Wait returns exec.ErrWaitDelay and plumb
+// reports the op as failed even though git did the work (gitExitDescription
+// explains that case). The alternative is the unbounded park above.
+func boundGitChildWait(cmd *exec.Cmd) {
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = gitChildWaitDelay
+}
+
+// gitWaitDelayNote explains an exec.ErrWaitDelay to the caller, which otherwise
+// surfaces as the bare, unactionable "exec: WaitDelay expired before I/O
+// complete". git ran; something it started outlived it while still holding the
+// output pipes, so plumb stopped waiting rather than park forever.
+func gitWaitDelayNote() string {
+	return fmt.Sprintf(
+		"a process started by this command outlived git while still holding its output pipes, so plumb stopped waiting after %s "+
+			"rather than block indefinitely. The git operation itself may well have completed — check the repository state before retrying. "+
+			"The usual cause is a hook that backgrounds a process without redirecting its output, or an editor the command opened",
+		gitChildWaitDelay)
+}

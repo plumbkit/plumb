@@ -53,6 +53,12 @@ func (e PolicyEntry) Warning(base Config) string {
 		}
 	case "git.protected_branches":
 		return droppedBranchWarning(base.Git.ProtectedBranches, e.Value)
+	case "git.env":
+		// Unconditional, and a name allowlist would be no substitute: the
+		// dangerous set is open-ended and reaches into other tools' variables
+		// (GOFLAGS=-toolexec=… reaches any `go` a hook invokes).
+		return "these environment variables are set on every git process plumb spawns, including the one that runs this repository's hooks; " +
+			"several of them (GIT_SSH_COMMAND, GIT_EXTERNAL_DIFF, GIT_PROXY_COMMAND, GIT_PAGER) name a command git will run"
 	}
 	if field, ok := strings.CutPrefix(key, "collab."); ok {
 		return collabFieldWarning(field, e.Value)
