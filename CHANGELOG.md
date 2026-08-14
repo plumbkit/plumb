@@ -139,6 +139,97 @@
   identity-only check was containment ("at or above", "or one that CONTAINS
   it") are rewritten to describe the code that ships, naming the containment
   gap issue #306.
+- **A daemon restart no longer strands a message bound to the session it ended.**
+  Binding a message to a recipient's session ID stopped a later holder of the
+  name reading it; the cost was that a restart, which re-registers the
+  reconnected connection under a fresh session ID, orphaned every bound message
+  that had not yet been read. `persist_state` exists precisely so a restart is
+  transparent to a connected agent, and this was the one thing it had stopped
+  covering.
+
+  The reconnecting session now also inherits its predecessor's plumb session ID
+  (`session_state.db` schema v4 records it beside the name), and the delivery
+  predicate accepts a *set* of identities rather than one.
+
+  **The grant is authorised by the proxy session ID, never by a name.** That ID
+  is 122 bits from `crypto/rand`, generated per `plumb serve`, replayed only
+  inside its own `initialize` handshake, and never written to a session file, a
+  log line, or any tool result — so presenting it is evidence of being the same
+  serve process, whereas being called `alice` is evidence of nothing. Inheriting
+  on the strength of a name would hand any session its predecessor's mailbox for
+  the cost of one `rename_session`, which is the hole the binding closed. It is
+  the same bearer token that already restores strict-mode read tracking and the
+  workspace pin, so this is not a new trust anchor.
+
+  The inheritance is narrow by construction. It never widens `next` (always
+  unbound, matched by the name arm), never crosses `target_workspace` (its own
+  AND term), and never touches the `check_messages` registration gate. All three
+  readers — claim, probe and listing — take the same identity set, so a session
+  is never shown mail it may not collect. The converse does not hold and is not
+  meant to: `PendingNotes` deliberately omits the `"next"` arm, because listing a
+  message the caller may lose the race for would advertise what it cannot have.
+
+  **The chain is bounded at one predecessor.** Each reconnect re-records its OWN
+  session ID, so the next inherits it and forgets the one before. A message
+  unread across two restarts expires rather than being inherited indefinitely by
+  a long-lived proxy.
+
+  A pre-v4 row carries no session ID, restores the name exactly as before, and
+  inherits nothing — an empty stored ID reads as "no predecessor", never as a
+  wildcard.
+
+- **`check_messages` now tells a sender which of its own messages nobody has
+  read.** The mailbox reported delivery from the recipient's side only, so a
+  sender could observe that it sent something and never that it landed. Delivery
+  is polling-only, which makes "no reply" ambiguous by construction — the peer
+  read it and has not answered, or never read it at all — and binding a message
+  to a session sharpened that, since a bound message now expires unread rather
+  than passing to whoever next takes the name. The receipt is the other half of
+  "silence is not a refusal": it turns a caveat the agent had to remember into a
+  fact it is told.
+
+  It rides `check_messages` rather than `workspace_sessions` because that is the
+  mailbox's own read surface, it already carries the deps (including the
+  daemon-level store), and it is where the ambiguity is already explained. It is
+  addressed by `author_id`, which has always been a session ID rather than a
+  name, so it needs none of the addressee machinery — a session asks only about
+  rows it wrote itself. That is also why it reads the cross-project store without
+  the recipient-side `cross_project` gate: that gate stops a project reading
+  ANOTHER project's messages, and these are the caller's own. It is the case
+  where the receipt earns most, since a cross-project message to a project that
+  never opted in expires unread by default.
+
+  `UnreadSentBy` is a pure `SELECT`. A receipt that claimed on the sender's
+  behalf would consume a message the recipient has not seen, turning
+  delivered-exactly-once into delivered-never; the tests pin that the recipient
+  can still claim after any number of receipt reads.
+- **The mailbox's response-path check now probes before it claims, removing the
+  last unconditional write from every tool call.** Message delivery is
+  piggybacked onto the result of any successful tool call. A notifier keeps that
+  free in the steady state, but its 30-second backstop deliberately consults the
+  store whether or not anything is waiting — and it did so with a full
+  `ClaimNotes`, an `UPDATE ... RETURNING` run to discover there was nothing to
+  update.
+
+  The cost is not the write. A zero-match claim writes **0 bytes** of WAL and
+  costs 7.6µs of execution. It is the claim's query PLAN — a `LIST SUBQUERY` plus
+  a temp B-tree built per execution to order a result set that turns out to be
+  empty — at **100-145µs**, all of it holding the writer lock. Cheap in
+  isolation; the problem is that it holds the lock roughly twenty times longer
+  than a bare write needs, which widens its own collision window. Measured
+  against a peer's `leave_note` holding that lock for 500µs: **p50 1.42ms, p99
+  7.07ms, max 18ms** — more than an entire `read_file`, spent answering "no".
+
+  `HasPendingNotes` answers the same question with an indexed `SELECT 1 ...
+  LIMIT 1` at **20-30µs**, taking no write lock at all, so it never queues behind
+  a peer's send. The claim now runs only once something is actually waiting.
+
+  The probe and the claim share one predicate (`claimable`), because they
+  must agree exactly: a probe broader than the claim promises mail that never
+  arrives, one narrower suppresses a delivery, and neither raises an error — the
+  message simply does not show up. That is now three readers (`ClaimNotes`,
+  `PendingNotes`, `HasPendingNotes`) on one written-once identity rule rather
+  than three copies kept in agreement by hand.
 ### Security
 
 - **A workspace root that CONTAINS a home directory can no longer be pinned
@@ -177,6 +268,64 @@
   Known limits, documented in `docs/threat-model.md` and the code: a symlink
   planted inside the root reaching home under a name of its own, Linux bind
   mounts, and case-only spelling differences.
+- **A message left for a peer could be read by whoever next took that peer's
+  name.** `collab_rows.addressee` held a session NAME, and `ClaimNotes` matched
+  on it alone. Names are drawn from a pool of a few thousand, an ended session
+  does not reserve its name, and `rename_session` lets any live session take a
+  free one — so a note whose recipient exited before reading it was handed, body
+  included, to the next holder of that name. Messages outlive sessions (a row
+  stays until its TTL), delivery is exactly-once, and the sender saw
+  `delivered_to = "alice"` — so the intended recipient never got it and nothing
+  in the exchange said so. Accidental collision was unlikely; deliberate
+  impersonation was one `rename_session` call and undetectable to the sender.
+
+  Schema **v3** adds `addressee_id`. `leave_note` resolves the addressee to a
+  live session at send time and stamps its stable ID; `ClaimNotes` and
+  `PendingNotes` now hand over a row only when it is unbound **or** bound to the
+  claiming session's own ID. `PendingNotes` had to move in step or
+  `workspace_sessions` would advertise — sender and body — a message the reader
+  could never claim.
+
+  **The binding is only ever stamped on a peer that is live and resolves to
+  exactly one session.** Addressing a peer that is not connected is
+  legitimate and stays name-only; so does `next`, which is a first-claimer race
+  by design and which `PutNote` therefore un-binds itself rather than trusting
+  callers; so does a peer placed from conversation history, since history proves
+  where a name *used to* be, not who holds it now. An ambiguous name resolves to
+  nothing rather than to a guess — binding to the wrong session would misdeliver
+  while reporting success. The trade is stated in the tool's reply: a bound
+  message **expires unread if its recipient never returns**, which is the right
+  failure for a private message.
+
+  Migration is additive and idempotent in the established shape — driven by which
+  columns exist rather than by the stamped version, and tolerant of a second
+  opener racing between the pragma read and the `ALTER`. `collab.db` is not a
+  rebuildable index; its rows are the only copy. Every pre-v3 row backfills to
+  `''` and keeps delivering by name, so nothing already in flight was stranded.
+
+- **Two mailbox surfaces addressed themselves by display name, skipping the
+  registration gate.** A session whose `session.Register` failed keeps a display
+  name for the TUI and logs, but that name was drawn without a uniqueness check
+  and sits in no file any peer's check can see — so it can shadow a live session.
+  The delivery paths that take their address from `connSession.inbox` (the
+  tool-result block, `session_start`) already withheld one; these two derived
+  their own and did not.
+
+  `check_messages` **claimed**, which is destructive: delivery is exactly-once,
+  so the shadow swallowed the real recipient's message. It now refuses with the
+  reason instead.
+
+  `workspace_sessions` **listed**, which consumes nothing — and is why it was
+  missed on the first pass and found later by an independent review. It is still
+  a disclosure: the block prints the sender and the body. `addressee_id` protects
+  bound rows here, so the residual was unbound ones — a pre-v3 note, or a note to
+  a peer that had not connected. It is now wired to `addressableName` and
+  additionally refuses to render the block without a session ID, so the tool does
+  not depend on its caller having passed the right accessor.
+
+  The lesson is the pattern, not the count: every surface that derives its own
+  mailbox address is a fresh chance to skip the gate, so the guard belongs at
+  each of them rather than in one place they are all assumed to route through.
 
 ## 0.16.6 (2026-08-14)
 
@@ -507,70 +656,6 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
-- **A daemon restart no longer strands a message bound to the session it ended.**
-  Binding a message to a recipient's session ID stopped a later holder of the
-  name reading it; the cost was that a restart, which re-registers the
-  reconnected connection under a fresh session ID, orphaned every bound message
-  that had not yet been read. `persist_state` exists precisely so a restart is
-  transparent to a connected agent, and this was the one thing it had stopped
-  covering.
-
-  The reconnecting session now also inherits its predecessor's plumb session ID
-  (`session_state.db` schema v4 records it beside the name), and the delivery
-  predicate accepts a *set* of identities rather than one.
-
-  **The grant is authorised by the proxy session ID, never by a name.** That ID
-  is 122 bits from `crypto/rand`, generated per `plumb serve`, replayed only
-  inside its own `initialize` handshake, and never written to a session file, a
-  log line, or any tool result — so presenting it is evidence of being the same
-  serve process, whereas being called `alice` is evidence of nothing. Inheriting
-  on the strength of a name would hand any session its predecessor's mailbox for
-  the cost of one `rename_session`, which is the hole the binding closed. It is
-  the same bearer token that already restores strict-mode read tracking and the
-  workspace pin, so this is not a new trust anchor.
-
-  The inheritance is narrow by construction. It never widens `next` (always
-  unbound, matched by the name arm), never crosses `target_workspace` (its own
-  AND term), and never touches the `check_messages` registration gate. All three
-  readers — claim, probe and listing — take the same identity set, so a session
-  is never shown mail it may not collect. The converse does not hold and is not
-  meant to: `PendingNotes` deliberately omits the `"next"` arm, because listing a
-  message the caller may lose the race for would advertise what it cannot have.
-
-  **The chain is bounded at one predecessor.** Each reconnect re-records its OWN
-  session ID, so the next inherits it and forgets the one before. A message
-  unread across two restarts expires rather than being inherited indefinitely by
-  a long-lived proxy.
-
-  A pre-v4 row carries no session ID, restores the name exactly as before, and
-  inherits nothing — an empty stored ID reads as "no predecessor", never as a
-  wildcard.
-
-- **`check_messages` now tells a sender which of its own messages nobody has
-  read.** The mailbox reported delivery from the recipient's side only, so a
-  sender could observe that it sent something and never that it landed. Delivery
-  is polling-only, which makes "no reply" ambiguous by construction — the peer
-  read it and has not answered, or never read it at all — and binding a message
-  to a session sharpened that, since a bound message now expires unread rather
-  than passing to whoever next takes the name. The receipt is the other half of
-  "silence is not a refusal": it turns a caveat the agent had to remember into a
-  fact it is told.
-
-  It rides `check_messages` rather than `workspace_sessions` because that is the
-  mailbox's own read surface, it already carries the deps (including the
-  daemon-level store), and it is where the ambiguity is already explained. It is
-  addressed by `author_id`, which has always been a session ID rather than a
-  name, so it needs none of the addressee machinery — a session asks only about
-  rows it wrote itself. That is also why it reads the cross-project store without
-  the recipient-side `cross_project` gate: that gate stops a project reading
-  ANOTHER project's messages, and these are the caller's own. It is the case
-  where the receipt earns most, since a cross-project message to a project that
-  never opted in expires unread by default.
-
-  `UnreadSentBy` is a pure `SELECT`. A receipt that claimed on the sender's
-  behalf would consume a message the recipient has not seen, turning
-  delivered-exactly-once into delivered-never; the tests pin that the recipient
-  can still claim after any number of receipt reads.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,
@@ -1215,33 +1300,6 @@
   existing `TestExtractReleasesArenaForReuse` and the deadline suite are
   unchanged and still green, and the Swift parity sweep holds its 6 drifted / 0
   extraction misses / 0 error mismatches baseline.
-- **The mailbox's response-path check now probes before it claims, removing the
-  last unconditional write from every tool call.** Message delivery is
-  piggybacked onto the result of any successful tool call. A notifier keeps that
-  free in the steady state, but its 30-second backstop deliberately consults the
-  store whether or not anything is waiting — and it did so with a full
-  `ClaimNotes`, an `UPDATE ... RETURNING` run to discover there was nothing to
-  update.
-
-  The cost is not the write. A zero-match claim writes **0 bytes** of WAL and
-  costs 7.6µs of execution. It is the claim's query PLAN — a `LIST SUBQUERY` plus
-  a temp B-tree built per execution to order a result set that turns out to be
-  empty — at **100-145µs**, all of it holding the writer lock. Cheap in
-  isolation; the problem is that it holds the lock roughly twenty times longer
-  than a bare write needs, which widens its own collision window. Measured
-  against a peer's `leave_note` holding that lock for 500µs: **p50 1.42ms, p99
-  7.07ms, max 18ms** — more than an entire `read_file`, spent answering "no".
-
-  `HasPendingNotes` answers the same question with an indexed `SELECT 1 ...
-  LIMIT 1` at **20-30µs**, taking no write lock at all, so it never queues behind
-  a peer's send. The claim now runs only once something is actually waiting.
-
-  The probe and the claim share one predicate (`claimable`), because they
-  must agree exactly: a probe broader than the claim promises mail that never
-  arrives, one narrower suppresses a delivery, and neither raises an error — the
-  message simply does not show up. That is now three readers (`ClaimNotes`,
-  `PendingNotes`, `HasPendingNotes`) on one written-once identity rule rather
-  than three copies kept in agreement by hand.
 
 ### Fixed
 
@@ -1615,68 +1673,6 @@
   so an un-canonicalised fixture made 54 unrelated pin assertions and every routing
   test fail for a reason that had nothing to do with what they test — the same
   mismatch as the bug, one layer down.
-
-
-### Security
-
-- **A message left for a peer could be read by whoever next took that peer's
-  name.** `collab_rows.addressee` held a session NAME, and `ClaimNotes` matched
-  on it alone. Names are drawn from a pool of a few thousand, an ended session
-  does not reserve its name, and `rename_session` lets any live session take a
-  free one — so a note whose recipient exited before reading it was handed, body
-  included, to the next holder of that name. Messages outlive sessions (a row
-  stays until its TTL), delivery is exactly-once, and the sender saw
-  `delivered_to = "alice"` — so the intended recipient never got it and nothing
-  in the exchange said so. Accidental collision was unlikely; deliberate
-  impersonation was one `rename_session` call and undetectable to the sender.
-
-  Schema **v3** adds `addressee_id`. `leave_note` resolves the addressee to a
-  live session at send time and stamps its stable ID; `ClaimNotes` and
-  `PendingNotes` now hand over a row only when it is unbound **or** bound to the
-  claiming session's own ID. `PendingNotes` had to move in step or
-  `workspace_sessions` would advertise — sender and body — a message the reader
-  could never claim.
-
-  **The binding is only ever stamped on a peer that is live and resolves to
-  exactly one session.** Addressing a peer that is not connected is
-  legitimate and stays name-only; so does `next`, which is a first-claimer race
-  by design and which `PutNote` therefore un-binds itself rather than trusting
-  callers; so does a peer placed from conversation history, since history proves
-  where a name *used to* be, not who holds it now. An ambiguous name resolves to
-  nothing rather than to a guess — binding to the wrong session would misdeliver
-  while reporting success. The trade is stated in the tool's reply: a bound
-  message **expires unread if its recipient never returns**, which is the right
-  failure for a private message.
-
-  Migration is additive and idempotent in the established shape — driven by which
-  columns exist rather than by the stamped version, and tolerant of a second
-  opener racing between the pragma read and the `ALTER`. `collab.db` is not a
-  rebuildable index; its rows are the only copy. Every pre-v3 row backfills to
-  `''` and keeps delivering by name, so nothing already in flight was stranded.
-
-- **Two mailbox surfaces addressed themselves by display name, skipping the
-  registration gate.** A session whose `session.Register` failed keeps a display
-  name for the TUI and logs, but that name was drawn without a uniqueness check
-  and sits in no file any peer's check can see — so it can shadow a live session.
-  The delivery paths that take their address from `connSession.inbox` (the
-  tool-result block, `session_start`) already withheld one; these two derived
-  their own and did not.
-
-  `check_messages` **claimed**, which is destructive: delivery is exactly-once,
-  so the shadow swallowed the real recipient's message. It now refuses with the
-  reason instead.
-
-  `workspace_sessions` **listed**, which consumes nothing — and is why it was
-  missed on the first pass and found later by an independent review. It is still
-  a disclosure: the block prints the sender and the body. `addressee_id` protects
-  bound rows here, so the residual was unbound ones — a pre-v3 note, or a note to
-  a peer that had not connected. It is now wired to `addressableName` and
-  additionally refuses to render the block without a session ID, so the tool does
-  not depend on its caller having passed the right accessor.
-
-  The lesson is the pattern, not the count: every surface that derives its own
-  mailbox address is a fresh chance to skip the gate, so the guard belongs at
-  each of them rather than in one place they are all assumed to route through.
 
 
 ## 0.16.5 (2026-08-12)
