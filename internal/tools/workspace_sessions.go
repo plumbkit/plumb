@@ -70,7 +70,6 @@ func NewWorkspaceSessions(workspace func() string, selfSessID string) *Workspace
 	return &WorkspaceSessions{workspace: workspace, selfSessID: selfSessID}
 }
 
-// WithBoundary wires the read boundary guard. Returns the receiver for chaining.
 // WithInheritedSessions wires the predecessor identities this session provably
 // continues. The listing must apply them for the same reason the claim does: a
 // session that inherited its predecessor's mailbox would otherwise be told it
@@ -80,6 +79,7 @@ func (t *WorkspaceSessions) WithInheritedSessions(fn func() []string) *Workspace
 	return t
 }
 
+// WithBoundary wires the read boundary guard. Returns the receiver for chaining.
 func (t *WorkspaceSessions) WithBoundary(fn func(string) error) *WorkspaceSessions {
 	t.boundaryCheck = fn
 	return t

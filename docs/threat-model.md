@@ -430,6 +430,17 @@ than reading a half-migrated database; transaction journals allow rollback of a
 partially applied multi-file edit; writes are atomic (temp file, fsync, rename,
 parent-directory fsync).
 
+**Downgrade is not uniformly handled, and one case has a security consequence.**
+`collab.initDB` stamps `user_version` unconditionally, so running an older plumb
+against a v3 `collab.db` re-stamps it to 2. That binary does not know
+`addressee_id` — the column survives, but nothing reads it — so while the older
+binary is in use a bound message is deliverable to whoever answers to the name,
+which is the impersonation this schema exists to prevent. The migration is
+column-driven, so a newer binary repairs the stamp and resumes enforcing it;
+the exposure lasts only as long as the downgrade. Contrast
+`sessionstate.stampVersion`, which refuses to stamp downward. The asymmetry is
+not deliberate, and the safe direction is the one `sessionstate` takes.
+
 ### A8 — Denial of service against the user's own session
 
 *A tool call hangs, a language server stalls, a lock is stranded.*
