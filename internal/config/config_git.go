@@ -47,4 +47,28 @@ type GitConfig struct {
 	// Being inside [git] is what gives it that boundary — see
 	// project_policy.go.
 	Env map[string]string `toml:"env"`
+	// WriteTimeout bounds an index/ref-mutating git child (the write and
+	// destructive tiers) once plumb has decoupled it from request and daemon
+	// cancellation. When it expires the child's process group is killed and the
+	// failure is reported as plumb's own timeout rather than as a refusal from
+	// git. Default 10 minutes; 0 means the compiled default, and there is
+	// deliberately no value that disables the bound (see below).
+	//
+	// The bound used to be a hardcoded 2 minutes described as "generous enough
+	// for a slow pre-commit hook". That is false on any machine where several
+	// agents share one toolchain: a hook running golangci-lint queues behind a
+	// peer's run on the same shared cache, and those waits have been observed to
+	// exceed ten minutes on plumb's own repository. A wrong bound is expensive
+	// in BOTH directions, which is why this is a knob rather than a better
+	// constant.
+	//
+	// It lives in [git] for the same reason Env does, and the reasoning is the
+	// same shape: this is a safety decision, not a preference. Too LARGE lets a
+	// wedged child hold the per-repository serialisation lock — and the shutdown
+	// drain — against every other session on the machine; too SMALL makes plumb
+	// SIGKILL git mid-commit, which is precisely what strands a
+	// .git/index.lock and leaves a half-written index behind. Neither is a
+	// choice a cloned repository's .plumb/config.toml should make unasked, and
+	// being inside [git] is what puts it behind `plumb trust`.
+	WriteTimeout Duration `toml:"write_timeout"`
 }

@@ -87,6 +87,14 @@ func validateLSP(lsp map[string]LSPConfig) error {
 // hand the child a malformed environment. Values are unrestricted — an
 // environment value may legitimately contain anything but NUL.
 func validateGit(g GitConfig) error {
+	// Negative is rejected; zero is not. Zero resolves to the compiled default at
+	// the point of use, which keeps a zero-value GitConfig (every test that builds
+	// one, and any consumer constructing a policy by hand) meaning "the default
+	// bound" rather than "no bound at all" — the one value that must never be
+	// reachable, since an unbounded child can hold the repository lock forever.
+	if g.WriteTimeout.Duration < 0 {
+		return fmt.Errorf("git.write_timeout must not be negative (got %s)", g.WriteTimeout.Duration)
+	}
 	for k := range g.Env {
 		switch {
 		case k == "":

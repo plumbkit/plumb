@@ -182,6 +182,9 @@ func applyGitEnv(cfg *Config) {
 	if v, ok := envBool("PLUMB_GIT_COMMIT_TRAILER"); ok {
 		cfg.Git.CommitTrailer = v
 	}
+	if d, ok := envDuration("PLUMB_GIT_WRITE_TIMEOUT"); ok {
+		cfg.Git.WriteTimeout = Duration{d}
+	}
 }
 
 // envBool reads key from the environment. ok is true when the variable is
