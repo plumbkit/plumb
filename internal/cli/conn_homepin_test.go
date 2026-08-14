@@ -91,6 +91,81 @@ func TestOnBeforeTool_WorkspaceArgDoesNotLaunderAnIncidentalSeed(t *testing.T) {
 	}
 }
 
+// TestOnBeforeTool_WideRootWithAMarkerIsNotPinned is round 5's finding, and the
+// reason containment is tested in detect() rather than only at the synthesise
+// fallback.
+//
+// SynthesiseRoot is reached only on Detect's FAILURE branch. When the wide
+// directory carries a marker Detect SUCCEEDS, and the success path never
+// consulted any containment guard — so a find_files or search_in_files naming
+// such a directory (both take a DIRECTORY as `path`) pinned it. That path is
+// not behind auto_attach, so it was reachable in the default configuration; and
+// plumb could mint the marker itself, because materialisePlumbDir guarded
+// identity only.
+func TestOnBeforeTool_WideRootWithAMarkerIsNotPinned(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := freshTempDir(t) // stands in for /Users
+	home := filepath.Join(base, "home")
+	mustMkdir(t, home)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	mustMkdir(t, filepath.Join(base, ".git")) // the marker that made Detect succeed
+
+	s := autoAttachSession(t)
+	s.onBeforeTool(context.Background(), "find_files", json.RawMessage(`{"path":"`+base+`"}`))
+
+	if got := s.workspace(); got != "" {
+		t.Fatalf("find_files({path: %q}) pinned %q, which contains the home directory %q; "+
+			"a marker must not make a wide directory a workspace", base, got, home)
+	}
+
+	// Control: an ordinary marked project under the home directory still attaches,
+	// which is where most projects live — so the refusal is about containment and
+	// not about markers.
+	proj := filepath.Join(home, "proj")
+	mustMkdir(t, filepath.Join(proj, ".git"))
+	s2 := autoAttachSession(t)
+	s2.onBeforeTool(context.Background(), "find_files", json.RawMessage(`{"path":"`+proj+`"}`))
+	if got := s2.workspace(); got == "" {
+		t.Errorf("control failed — an ordinary project at %q did not attach", proj)
+	}
+}
+
+// TestOnBeforeTool_LaunderedSeedIsNotStampedExplicit covers the OTHER consumer
+// of `explicit`, which round 5 found unpinned: reverting it alone was green
+// across the whole repository.
+//
+// `explicit` decides the pin ORIGIN as well as the SynthesiseRoot argument. When
+// it was `workspaceArgPresent`, `{path: X, workspace: Y}` pinned X — a directory
+// the caller never named — and stamped it PinSourceSessionStart, making it
+// sticky and persisted. The caller's genuine session_start was then refused by
+// the issue-#182 sticky guard until retried with force, and the previously
+// chosen workspace was never restored.
+//
+// Asserted on the ORIGIN, not just on which directory was pinned: the other test
+// exercises this boolean through the home directory only, so the origin half had
+// no coverage at all.
+func TestOnBeforeTool_LaunderedSeedIsNotStampedExplicit(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	victim := freshTempDir(t)
+	mustMkdir(t, filepath.Join(victim, ".git"))
+	mkTestFile(t, filepath.Join(victim, "a.go"), "package a\n")
+	declared := freshTempDir(t)
+	mustMkdir(t, filepath.Join(declared, ".git"))
+	s := autoAttachSession(t)
+
+	s.onBeforeTool(context.Background(), "relevant_memories",
+		json.RawMessage(`{"path":"`+filepath.Join(victim, "a.go")+`","workspace":"`+declared+`"}`))
+
+	var origin string
+	s.mutate(func(v *sessionView) { origin = v.pinVia })
+	if origin == string(sessionstate.PinSourceSessionStart) {
+		t.Errorf("a pin seeded from an incidental path was stamped %q — sticky and persisted — "+
+			"while the caller declared %q; only a seed that IS the workspace argument is explicit",
+			origin, declared)
+	}
+}
+
 // TestOnBeforeTool_ExplicitHomeWorkspaceStillAttaches is the issue #182
 // control: session_start({workspace: "<home>"}) is a genuine declaration and
 // must still succeed — only non-explicit seeds are refused.
