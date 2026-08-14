@@ -101,7 +101,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// explicit pin always succeeds. The refusal has to live at the pin, because
 	// SynthesiseRoot's fallback returns the SEED — which in this case is the
 	// offending directory itself, so stopping its walk there changes nothing.
-	if origin != sessionstate.PinSourceSessionStart && containsHomeDir(folder, homeDirInfos()) {
+	if origin != sessionstate.PinSourceSessionStart && containsHomeDir(folder, homeDirPaths()) {
 		return "", fmt.Errorf(
 			"repin: %s contains the home directory, so pinning it would put every file under "+
 				"it — including credentials and SSH keys — inside the workspace boundary. "+

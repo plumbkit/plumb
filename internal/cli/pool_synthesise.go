@@ -63,6 +63,7 @@ func (p *workspacePool) SynthesiseRoot(seedDir string, explicit bool) string {
 	// is no second file for it to be confused with, and Detect has always Cleaned
 	// its own return for the same reason.
 	homeInfo := homeDirInfos()
+	homePaths := homeDirPaths()
 	d := filepath.Clean(seedDir)
 	// A seed AT or ABOVE a home directory is refused unless the caller declared
 	// it — and refusing is done by RETURNING "", so every caller inherits it.
@@ -77,14 +78,14 @@ func (p *workspacePool) SynthesiseRoot(seedDir string, explicit bool) string {
 	//
 	// Containment covers "/" for free, which the reordering below does not: a
 	// find_files({path: "/"}) seed reaches the containment branch first.
-	if sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo) {
+	if sameDirAs(d, homeInfo) || containsHomeDir(d, homePaths) {
 		if !explicit {
 			return ""
 		}
 		return paths.Canonical(d)
 	}
 	for {
-		if sameDirAs(d, homeInfo) || containsHomeDir(d, homeInfo) {
+		if sameDirAs(d, homeInfo) || containsHomeDir(d, homePaths) {
 			// Reached a home directory, or one that CONTAINS it, ascending: stop
 			// and fall back to the seed. Never consult the .git there, never walk
 			// above it — a root at or above a home directory can only ever be
