@@ -303,3 +303,46 @@ func TestUnsetProjectValue_RemovesTheSettingFromEveryFoldVariantTable(t *testing
 		t.Errorf("edits.strict still present after unset — a sibling fold variant survived; file:\n%s", data)
 	}
 }
+
+// TestFoldLookup_PrefersTheExactSpelling pins the one line that makes the
+// common case deterministic. Removing it survived the fold tests that shipped
+// with #319 — they only ever build maps with a single variant, so nothing
+// noticed which one was preferred.
+func TestFoldLookup_PrefersTheExactSpelling(t *testing.T) {
+	m := map[string]any{
+		"GIT": map[string]any{"a": 1},
+		"git": map[string]any{"b": 2},
+		"Git": map[string]any{"c": 3},
+	}
+	key, ok := foldLookup(m, "git")
+	if !ok {
+		t.Fatal("foldLookup found no variant")
+	}
+	if key != "git" {
+		t.Errorf("foldLookup = %q, want the exact spelling \"git\"", key)
+	}
+}
+
+// TestSetProjectValue_LeavesAnArrayOfTablesIntact guards the trap folding
+// introduced: `[[command]]` decodes to []any, so once the lookup matches case
+// it FINDS a `[[COMMAND]]` array where it wants a table. Overwriting it would
+// turn a stray extra table into "the project's whole command allow-list was
+// deleted by a settings write". No live caller reaches this today — the web
+// path validates the key through config.Lookup and the TUI only writes the
+// `command` leaf — so this pins the behaviour for the next one.
+func TestSetProjectValue_LeavesAnArrayOfTablesIntact(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[[COMMAND]]\nname = \"lint\"\nexec = [\"true\"]\n")
+
+	if err := SetProjectValue(ws, []string{"command", "name"}, "clobbered"); err != nil {
+		t.Fatalf("SetProjectValue: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ws, ".plumb", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !contains(string(data), "exec") {
+		t.Errorf("the [[COMMAND]] array was destroyed by a sparse write; file:\n%s", data)
+	}
+}
