@@ -35,6 +35,19 @@ they reach the tree.
 > hook runs), not a standalone `gofumpt` binary — the two can pin different
 > versions and disagree.
 
+**Why the CHANGELOG placement guard is not in `verify`.** A rebase replays a
+`CHANGELOG.md` addition under whatever heading happens to sit at that offset, and
+it never conflicts, so the entry lands silently in an already-released section —
+this has needed a by-hand fix four times. `scripts/check-changelog-placement.sh`
+catches it by diffing against the merge-base, which means it needs a base ref, and
+a working tree has not got one. `make verify` and the pre-commit hook have to keep
+working offline and in a shallow clone, so the guard runs instead as a step in
+CI's `verify` job, with the base SHA taken from the pull-request event. Run it by
+hand with `make check-changelog-placement` (defaults to `origin/main`); its
+regression suite is `make check-changelog-placement-test`. The whole-file half of
+the pair — no version number in two headings — is `make check-changelog`, and that
+one *is* in `verify` and the hook.
+
 **Why `make lint-cross` exists.** golangci-lint only analyses files matching the
 current `GOOS`, so a Linux `make lint` never sees `sandbox_darwin*.go` /
 `process_darwin*.go` and a macOS run never sees the `_linux` files. This is not

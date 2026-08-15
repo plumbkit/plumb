@@ -48,6 +48,23 @@ jobs:
       - name: make verify
         run: make verify
 
+      # The CHANGELOG placement guard lives here rather than in `make verify` because
+      # it is the only guard that needs a base ref, and a working tree does not have
+      # one — see the header of scripts/check-changelog-placement.sh. It is a STEP in
+      # this job, not a job of its own, on purpose: `verify (ubuntu-latest)` and
+      # `verify (macos-latest)` are already required checks, so a step here blocks a
+      # merge, whereas a new job would need a branch-protection change to do anything.
+      # Running on both legs also exercises the awk under GNU and BSD.
+      - name: CHANGELOG placement guard — self-test
+        run: make check-changelog-placement-test
+
+      # base.sha comes straight from the event payload, so there is no guessing at
+      # whether origin/main is fetched; the object is present because this job checks
+      # out with fetch-depth: 0 above. Skipped on push, where there is no base branch.
+      - name: CHANGELOG placement guard
+        if: github.event_name == 'pull_request'
+        run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }}
+
       # go.mod/go.sum tidiness is asserted inside `make verify` (tidy-check) on
       # both OSes — drift is invisible locally (the build keeps working) but
       # breaks a fresh clone, so it gates here rather than relying on memory.
