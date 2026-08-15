@@ -63,3 +63,40 @@ func TestAgentApplyBatch_EmptyBatch(t *testing.T) {
 		t.Error("expected an error for an empty batch")
 	}
 }
+
+// TestAgentApplyBatch_RecordsPriorValueFromFoldVariantTable pins the fourth
+// walker of the raw map (#319): priorProjectValues reads through getNested,
+// which was still exact-match after lookupNested/setNested/deleteNested were
+// folded. setNested writes THROUGH the `[TASKS.go]` table, so an exact-match
+// miss recorded "no previous value" for a write that in fact overwrote one
+// — losing the prior value the provenance sidecar exists to display on revert.
+func TestAgentApplyBatch_RecordsPriorValueFromFoldVariantTable(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[TASKS.go]\nlint = \"old-linter\"\n")
+
+	changed, err := AgentApplyBatch(Defaults(), ws,
+		map[string]any{"tasks.go.lint": "new-linter"},
+		ProvenanceEntry{Source: "agent", SessionID: "s1"})
+	if err != nil {
+		t.Fatalf("AgentApplyBatch: %v", err)
+	}
+	if len(changed) != 1 {
+		t.Fatalf("changed = %v, want 1 key", changed)
+	}
+
+	prov, err := LoadProvenance(ws)
+	if err != nil {
+		t.Fatalf("LoadProvenance: %v", err)
+	}
+	entry, ok := prov["tasks.go.lint"]
+	if !ok {
+		t.Fatal("no provenance entry for tasks.go.lint")
+	}
+	if entry.Previous == nil {
+		data, _ := os.ReadFile(ws + "/.plumb/config.toml")
+		t.Fatalf("provenance recorded NO previous value, but [TASKS.go] held one; file now:\n%s", data)
+	}
+	if *entry.Previous != "old-linter" {
+		t.Errorf("previous = %q, want \"old-linter\"", *entry.Previous)
+	}
+}

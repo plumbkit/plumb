@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // TestSetProjectValue_CreatesSparseFile verifies a first override creates
@@ -209,5 +211,95 @@ func TestUnsetProjectValue_RemovesFoldVariant(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, ".plumb", "config.toml")); !os.IsNotExist(err) {
 		t.Errorf("project config file survives unsetting its only key: %v", err)
+	}
+}
+
+// A config file can hold SEVERAL fold variants of one setting — TOML keys are
+// case-sensitive, and plumb's own pre-#319 sparse writer produced exactly that
+// by growing a second table beside an existing one. go-toml decodes them all
+// into a single field, so the helpers must agree on one of them, deterministically.
+
+// TestFoldLookup_PicksOneVariantDeterministically pins the choice against Go's
+// randomised map iteration: ranging the map directly returned a different key
+// run to run, which made a sparse write land in a different table each time.
+func TestFoldLookup_PicksOneVariantDeterministically(t *testing.T) {
+	seen := map[string]int{}
+	for range 2000 {
+		m := map[string]any{
+			"GIT": map[string]any{"allow_writes": true},
+			"Git": map[string]any{"allow_writes": false},
+		}
+		key, ok := foldLookup(m, "git")
+		if !ok {
+			t.Fatal("foldLookup found no variant of \"git\"")
+		}
+		seen[key]++
+	}
+	if len(seen) != 1 {
+		t.Errorf("foldLookup picked %d different keys across runs (%v), want a single stable choice", len(seen), seen)
+	}
+}
+
+// TestSetProjectValue_CollapsesDuplicateFoldVariantTables is the load-bearing
+// one: two variants both decode into the same field and the LAST in document
+// order wins, so writing into one while the other survives stores a value the
+// decoder then discards. Asserted by decoding the bytes on disk — the property
+// under test is what the DECODER sees, independent of the trust tier above it.
+func TestSetProjectValue_CollapsesDuplicateFoldVariantTables(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[EDITS]\nstrict = true\n\n[edits]\nstrict = true\n")
+
+	if err := SetProjectValue(ws, []string{"edits", "strict"}, false); err != nil {
+		t.Fatalf("SetProjectValue: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(ws, ".plumb", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	var got Config
+	if err := toml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decoding written config: %v", err)
+	}
+	if got.Edits.Strict {
+		t.Errorf("edits.strict decoded as true after writing false — a surviving fold variant overrode the write; file:\n%s", data)
+	}
+
+	raw, err := LoadProjectRaw(ws)
+	if err != nil {
+		t.Fatalf("LoadProjectRaw: %v", err)
+	}
+	if n := len(foldKeys(raw, "edits")); n != 1 {
+		t.Errorf("%d fold variants of [edits] survived the write, want exactly 1; file:\n%s", n, data)
+	}
+}
+
+// TestUnsetProjectValue_RemovesTheSettingFromEveryFoldVariantTable covers the
+// half a leaf-only fold-delete misses: deleteNested must descend through every
+// variant of an intermediate segment, or unsetting via `[git]` leaves `[GIT]`
+// still holding the key and the setting stays in force.
+func TestUnsetProjectValue_RemovesTheSettingFromEveryFoldVariantTable(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[EDITS]\nstrict = true\n\n[edits]\nstrict = true\n")
+
+	present, err := ProjectValuePresent(ws, []string{"edits", "strict"})
+	if err != nil {
+		t.Fatalf("ProjectValuePresent: %v", err)
+	}
+	if !present {
+		t.Fatal("edits.strict absent before the unset — fixture is wrong")
+	}
+
+	if err := UnsetProjectValue(ws, []string{"edits", "strict"}); err != nil {
+		t.Fatalf("UnsetProjectValue: %v", err)
+	}
+
+	present, err = ProjectValuePresent(ws, []string{"edits", "strict"})
+	if err != nil {
+		t.Fatalf("ProjectValuePresent: %v", err)
+	}
+	if present {
+		data, _ := os.ReadFile(filepath.Join(ws, ".plumb", "config.toml"))
+		t.Errorf("edits.strict still present after unset — a sibling fold variant survived; file:\n%s", data)
 	}
 }
