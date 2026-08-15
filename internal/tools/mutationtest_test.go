@@ -513,13 +513,25 @@ func TestGitCleanliness(t *testing.T) {
 		t.Skip("git not on PATH")
 	}
 	// Outside a repository: no safety net, and NOT reported dirty.
-	loose := filepath.Join(t.TempDir(), "loose.txt")
-	if err := os.WriteFile(loose, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if inRepo, dirty := gitCleanliness(context.Background(), loose); inRepo || dirty {
-		t.Errorf("a file outside a repo: inRepo=%v dirty=%v, want false/false", inRepo, dirty)
-	}
+	//
+	// The precondition is ESTABLISHED, not assumed. `make test` runs with
+	// GOTMPDIR inside the checkout, and `go test` hands that to the test binary
+	// as TMPDIR — so on CI t.TempDir() sits inside plumb's OWN repository and the
+	// "loose" file has a .git above it after all. Assuming otherwise is why this
+	// passed on a developer's machine (temp dir under /tmp) and failed on the
+	// runner. Capping git's upward search one level above the directory makes the
+	// case true wherever the temp dir happens to live.
+	t.Run("outside a repository", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+		loose := filepath.Join(dir, "loose.txt")
+		if err := os.WriteFile(loose, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if inRepo, dirty := gitCleanliness(context.Background(), loose); inRepo || dirty {
+			t.Errorf("a file outside a repo: inRepo=%v dirty=%v, want false/false", inRepo, dirty)
+		}
+	})
 
 	env := newMutationEnv(t, "committed\n")
 	if inRepo, dirty := gitCleanliness(context.Background(), env.file); !inRepo || dirty {
