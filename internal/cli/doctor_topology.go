@@ -93,12 +93,16 @@ func topologyIndexHealth(st topology.Status) checkResult {
 			fix:    "re-run once the first index completes; if it stays empty, check daemon.log",
 		}
 	case st.IndexedFiles == 0:
+		detail := fmt.Sprintf("no files indexed yet (%d skipped)", st.SkippedFiles)
+		if len(st.FileErrors) > 0 {
+			detail += fmt.Sprintf(" — first: %s: %s", st.FileErrors[0].Path, st.FileErrors[0].Message)
+		}
 		return checkResult{
 			name:   "topology",
 			ok:     true,
 			warn:   true,
-			detail: fmt.Sprintf("no files indexed yet (%d skipped)", st.SkippedFiles),
-			fix:    "check daemon.log for extractor errors",
+			detail: detail,
+			fix:    "query topology_status for the recorded per-file reasons (or check daemon.log)",
 		}
 	case st.TotalNodes == 0:
 		return checkResult{
@@ -113,6 +117,9 @@ func topologyIndexHealth(st topology.Status) checkResult {
 			st.IndexedFiles, st.TotalNodes, st.TotalEdges, textfmt.HumanBytes(st.DBSizeBytes))
 		if len(st.Languages) > 0 {
 			detail += "  [" + strings.Join(st.Languages, ", ") + "]"
+		}
+		if st.SkippedFiles > 0 {
+			detail += fmt.Sprintf("  (%d skipped — reasons via topology_status)", st.SkippedFiles)
 		}
 		return checkResult{name: "topology", ok: true, detail: detail}
 	}

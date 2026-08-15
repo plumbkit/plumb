@@ -155,6 +155,15 @@ type Neighbourhood struct {
 	Truncated bool
 }
 
+// FileError is one file that failed to index and the reason recorded at the
+// time (parse timeout, extractor panic, unreadable file, …). Status carries a
+// bounded sample so a skipped file says WHY it was skipped rather than only
+// incrementing a counter.
+type FileError struct {
+	Path    string
+	Message string
+}
+
 // Status is a snapshot of the topology index health.
 //
 // The three file counts are disjoint by construction: IndexedFiles were parsed,
@@ -179,6 +188,9 @@ type Status struct {
 	IndexerState      string
 	Languages         []string
 	LastError         string
+	// FileErrors is a bounded sample (most recently touched first) of the
+	// files counted by SkippedFiles, capped at maxStatusFileErrors.
+	FileErrors []FileError
 }
 
 type opKind int

@@ -84,6 +84,23 @@ func TestTopologyIndexHealth(t *testing.T) {
 			detailSub: "no files indexed",
 		},
 		{
+			name: "all files skipped — first recorded reason surfaced",
+			st: topology.Status{
+				SkippedFiles: 3,
+				FileErrors:   []topology.FileError{{Path: "bad.go", Message: "parse stopped early: timeout"}},
+			},
+			wantOK:    true,
+			wantWarn:  true,
+			detailSub: "bad.go: parse stopped early: timeout",
+		},
+		{
+			name:      "healthy but some files skipped — count surfaced",
+			st:        topology.Status{IndexedFiles: 5, TotalNodes: 42, TotalEdges: 10, SkippedFiles: 2},
+			wantOK:    true,
+			wantWarn:  false,
+			detailSub: "2 skipped",
+		},
+		{
 			name:      "indexed but no symbols",
 			st:        topology.Status{IndexedFiles: 5},
 			wantOK:    true,

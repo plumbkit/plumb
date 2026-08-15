@@ -9,18 +9,25 @@ import (
 )
 
 type topologyDTO struct {
-	Workspace    string    `json:"workspace"`
-	Available    bool      `json:"available"`
-	IndexedFiles int       `json:"indexedFiles"`
-	SkippedFiles int       `json:"skippedFiles"`
-	EmptyFiles   int       `json:"emptyFiles"`
-	TotalNodes   int       `json:"totalNodes"`
-	TotalEdges   int       `json:"totalEdges"`
-	DBSizeBytes  int64     `json:"dbSizeBytes"`
-	LastSync     time.Time `json:"lastSync"`
-	IndexerState string    `json:"indexerState"`
-	Languages    []string  `json:"languages"`
-	LastError    string    `json:"lastError"`
+	Workspace    string         `json:"workspace"`
+	Available    bool           `json:"available"`
+	IndexedFiles int            `json:"indexedFiles"`
+	SkippedFiles int            `json:"skippedFiles"`
+	EmptyFiles   int            `json:"emptyFiles"`
+	TotalNodes   int            `json:"totalNodes"`
+	TotalEdges   int            `json:"totalEdges"`
+	DBSizeBytes  int64          `json:"dbSizeBytes"`
+	LastSync     time.Time      `json:"lastSync"`
+	IndexerState string         `json:"indexerState"`
+	Languages    []string       `json:"languages"`
+	LastError    string         `json:"lastError"`
+	FileErrors   []fileErrorDTO `json:"fileErrors"`
+}
+
+// fileErrorDTO is one skipped file and the reason the indexer recorded.
+type fileErrorDTO struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
 }
 
 // handleTopology returns the topology index status for the requested (or
@@ -43,18 +50,30 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, out) // no index yet
 		return
 	}
-	out.Available = true
-	out.IndexedFiles = st.IndexedFiles
-	out.SkippedFiles = st.SkippedFiles
-	out.EmptyFiles = st.EmptyFiles
-	out.TotalNodes = st.TotalNodes
-	out.TotalEdges = st.TotalEdges
-	out.DBSizeBytes = st.DBSizeBytes
-	out.LastSync = st.LastSync
-	out.IndexerState = st.IndexerState
-	out.Languages = st.Languages
-	out.LastError = st.LastError
-	writeJSON(w, out)
+	writeJSON(w, topologyDTOFromStatus(ws, st))
+}
+
+// topologyDTOFromStatus maps a topology.Status into the wire DTO. Kept pure so
+// the JSON shape is testable without standing up a database or a server.
+func topologyDTOFromStatus(ws string, st topology.Status) topologyDTO {
+	out := topologyDTO{
+		Workspace:    ws,
+		Available:    true,
+		IndexedFiles: st.IndexedFiles,
+		SkippedFiles: st.SkippedFiles,
+		EmptyFiles:   st.EmptyFiles,
+		TotalNodes:   st.TotalNodes,
+		TotalEdges:   st.TotalEdges,
+		DBSizeBytes:  st.DBSizeBytes,
+		LastSync:     st.LastSync,
+		IndexerState: st.IndexerState,
+		Languages:    st.Languages,
+		LastError:    st.LastError,
+	}
+	for _, fe := range st.FileErrors {
+		out.FileErrors = append(out.FileErrors, fileErrorDTO{Path: fe.Path, Message: fe.Message})
+	}
+	return out
 }
 
 // resolveWorkspace picks the workspace to report on: the explicit query value —
