@@ -532,3 +532,126 @@ func TestAddresseeMatch_InterpolatesNoData(t *testing.T) {
 		t.Fatalf("hostile identity claimed %v", bodies(got))
 	}
 }
+
+// TestHasPendingNotes_CachedStatementsDoNotBlurIdentitySets is the regression
+// test for the probe's prepared-statement cache.
+//
+// The probe's SQL is NOT one fixed statement. claimable embeds addresseeMatch,
+// which emits one placeholder per identity the claimant holds, so a session that
+// inherited a predecessor's mailbox probes with a different statement from one
+// that did not. A cache that assumed a single statement would bind whichever
+// shape it met first and then run a later claimant's arguments through it — and
+// the dangerous direction is silent: a heir's two identities fed to the
+// one-identity statement, or the reverse, is exactly the identity blurring
+// addressee_id exists to prevent.
+//
+// Both orders are exercised because the bug is order-dependent: caching the
+// heir's shape first and the plain session's second fails differently from the
+// other way round, and a cache keyed on the first caller would pass one of them
+// by luck.
+func TestHasPendingNotes_CachedStatementsDoNotBlurIdentitySets(t *testing.T) {
+	plain := Claimant{Name: "alice", ID: "sess-alice-2"}
+	heir := Claimant{Name: "alice", ID: "sess-alice-2", InheritedIDs: []string{"sess-alice-1"}}
+
+	// The note is bound to the PREDECESSOR: readable by the heir, and by nobody
+	// else — which is the whole distinction the two statement shapes carry.
+	cases := []struct {
+		name  string
+		first Claimant
+		want  [2]bool // probe result for {first, second}
+		then  Claimant
+	}{
+		{"plain probes first", plain, [2]bool{false, true}, heir},
+		{"heir probes first", heir, [2]bool{true, false}, plain},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTestStore(t)
+			ctx, now := context.Background(), time.Now()
+			mustPut(t, s, NoteInput{
+				AuthorID:    "id-bob",
+				Body:        "for the session you continue",
+				Addressee:   "alice",
+				AddresseeID: "sess-alice-1",
+				TTL:         time.Hour,
+			}, now)
+
+			gotFirst, err := s.HasPendingNotes(ctx, tc.first, now)
+			if err != nil {
+				t.Fatalf("probe (first): %v", err)
+			}
+			gotSecond, err := s.HasPendingNotes(ctx, tc.then, now)
+			if err != nil {
+				t.Fatalf("probe (second, after the first shape was cached): %v", err)
+			}
+
+			if gotFirst != tc.want[0] || gotSecond != tc.want[1] {
+				t.Errorf("probes = {%v, %v}, want {%v, %v} — the cache is serving one "+
+					"claimant's statement to another identity set",
+					gotFirst, gotSecond, tc.want[0], tc.want[1])
+			}
+
+			// Both shapes must be present: one entry means they collided, which
+			// is the defect above even when the answers happen to look right.
+			s.probeMu.Lock()
+			n := len(s.probeStmts)
+			s.probeMu.Unlock()
+			if n != 2 {
+				t.Errorf("cached probe statements = %d, want 2 (one per identity-count shape)", n)
+			}
+
+			// The probe guards the claim, so pin the agreement rather than trust
+			// the probe alone.
+			claimed, err := s.ClaimNotes(ctx, heir, now, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(claimed) != 1 {
+				t.Errorf("the heir claimed %d notes, want 1", len(claimed))
+			}
+		})
+	}
+}
+
+// TestStore_CloseReleasesCachedProbeStatements pins the lifecycle half of the
+// cache. A *sql.Stmt is re-prepared lazily on each pooled connection it is used
+// from, so a cached one holds a driver statement per connection for as long as
+// the Store lives; a Store that dropped its handle without closing them would
+// have turned an optimisation into a leak.
+//
+// The statement is deliberately USED, not merely prepared — an unused statement
+// has not yet been materialised on any connection, so closing it would prove
+// nothing about the case that leaks.
+func TestStore_CloseReleasesCachedProbeStatements(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	me := Claimant{Name: "alice", ID: "sess-alice"}
+
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "hello", Addressee: "alice", TTL: time.Hour}, now)
+
+	for i := range 2 {
+		if ok, err := s.HasPendingNotes(ctx, me, now); err != nil || !ok {
+			t.Fatalf("probe %d = %v (err %v), want true", i, ok, err)
+		}
+	}
+
+	// Twice through the same shape must reuse one statement, not prepare two —
+	// otherwise the cache is a leak with extra steps.
+	s.probeMu.Lock()
+	n := len(s.probeStmts)
+	s.probeMu.Unlock()
+	if n != 1 {
+		t.Fatalf("cached probe statements after two identical probes = %d, want 1", n)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close with a cached, used statement: %v", err)
+	}
+	s.probeMu.Lock()
+	left := len(s.probeStmts)
+	s.probeMu.Unlock()
+	if left != 0 {
+		t.Errorf("cached probe statements after Close = %d, want 0", left)
+	}
+}

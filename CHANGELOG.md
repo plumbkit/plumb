@@ -382,6 +382,26 @@
 
 ### Changed
 
+- **The mailbox's pending-notes probe is prepared once instead of parsed on
+  every tool call — ~25.8µs down to ~5.8µs.**
+
+  `HasPendingNotes` is the indexed check that lets the response-path delivery
+  backstop skip a full claim (and its write lock) when nothing is waiting, so it
+  runs on every tool call that reaches that path. Almost all of its cost was
+  SQLite parsing the same statement again each time, not executing it; the
+  statement is now prepared on first use and reused. Measured with
+  `BenchmarkMailProbe_Idle` (`v2-probe`), the production probe now matches the
+  hand-prepared variant it was benchmarked against.
+
+  The cache is keyed by statement text rather than being a single statement,
+  because the probe's SQL is not fixed: a claimant carries one placeholder per
+  identity it holds — its own session ID plus any inherited predecessor — so a
+  session that reclaimed a predecessor's mailbox after a daemon restart probes
+  with a different statement from one that did not. Keying by text keeps those
+  two shapes distinct instead of running one claimant's arguments through the
+  other's statement. `Store.Close` closes every cached statement, since
+  database/sql re-prepares each one per pooled connection.
+
 - **`edit_file` now says when an anchor edit swallowed a line break, and points
   large multi-line edits at range mode.**
 
