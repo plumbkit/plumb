@@ -267,30 +267,23 @@ func trustedGitOverrideNotice(ws string, overridden []string) string {
 // as an untrusted one — and with nothing said, the agent has even less to go on,
 // because there is no `plumb trust` to reach for.
 //
-// It states what the FILE contributed (nothing), not what the policy is, because
-// those are different questions. applyProjectConfig returns on a parse error
-// without reverting the session's git view, so a config that parsed at attach
-// and was broken in place afterwards leaves its already-applied values in force
-// under this notice. Claiming "the policy above is what plumb resolved without
-// it" would be false in exactly that case, which is the one a reader hits while
-// editing the file — the state where a wrong claim is most expensive.
+// It states what the FILE contributed (nothing) AND what the policy therefore
+// is, which it can only do because applyProjectConfig now reverts to the global
+// config on a parse failure rather than leaving the last successful load
+// standing.
 //
-// The carryover is not limited to THIS file's earlier values, and the notice must
-// not imply that it is. The same early return runs on a RE-PIN, so a session that
-// arrives from a trusted workspace is still holding THAT workspace's granted
-// tiers — a repository inheriting an elevation nobody granted it, by shipping a
-// broken config rather than a bold one (PLAN-309; the fail-open is in
-// applyProjectConfig, not here). Naming only the same-file case would describe
-// the standing policy as at worst the reader's own, in the one state where it is
-// at worst someone else's.
+// This notice previously said the opposite — that the policy was "whatever this
+// session last resolved successfully", possibly another workspace's trusted
+// grant — and that was accurate while the carryover existed (PLAN-309). It is
+// now false, and saying it would be false in the direction that matters: a
+// reader told the tier might not be theirs will go looking for an elevation that
+// is no longer possible. internal/cli's TestProjectGitStatus_RePinDropsThePreviousGrant
+// pins the behaviour this sentence depends on.
 func unreadableProjectConfigNotice(ws string) string {
 	return fmt.Sprintf("\nIGNORED — this project's .plumb/config.toml could not be parsed, so it was skipped WHOLE: nothing "+
-		"it asks for, [git] included, was read from it. That does NOT mean the policy above is the global one. It is "+
-		"whatever this session last resolved successfully, because a failed load leaves that standing rather than "+
-		"reverting it: the global config if no readable project config was ever applied on this connection; the values "+
-		"from an EARLIER readable version of THIS file if it parsed at attach and was broken afterwards; or, if this "+
-		"session was re-pinned here from another workspace, THAT workspace's values — its trusted [git] grant included, "+
-		"which this repository was never given. Check the file, then see the "+
-		"parse error with `plumb config show --workspace %s`; `plumb restart` resolves the policy from scratch.\n",
+		"it asks for, [git] included, was read from it. The policy above is the GLOBAL one: a config that cannot be "+
+		"read is treated as no config at all, so nothing from an earlier readable version of this file, and nothing "+
+		"from a workspace this session was previously pinned to, is still standing. Fix the file and it applies on the "+
+		"next watcher pass — see the parse error with `plumb config show --workspace %s`.\n",
 		shellQuote(ws))
 }

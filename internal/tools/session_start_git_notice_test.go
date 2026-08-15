@@ -242,32 +242,30 @@ func TestFormatProjectGitNotice(t *testing.T) {
 			// N3/B-2. An unparseable project config is skipped whole, so its [git]
 			// block is just as ignored — with no `plumb trust` to reach for.
 			//
-			// What it must NOT claim is that the policy above was resolved without the
-			// file. applyProjectConfig returns on a parse error without reverting the
-			// session's git view, so a config that parsed at attach and was broken in
-			// place afterwards leaves its already-applied values in force underneath
-			// this very notice — the state a reader is in while editing the file, and
-			// so the one where the wrong claim costs most.
-			name:   "an unparseable project config says so, without claiming the policy is the global one",
+			// It may now also say what the policy IS, because a failed load reverts to
+			// the global config instead of leaving the last successful one standing
+			// (PLAN-309). The wantAbsent list is the load-bearing half: the notice used
+			// to describe a carryover — possibly another workspace's trusted grant —
+			// and repeating that now would send a reader hunting an elevation that can
+			// no longer happen. internal/cli's TestProjectGitStatus_RePinDropsThePreviousGrant
+			// pins the behaviour these strings depend on.
+			name:   "an unparseable project config says so, and that the policy is the global one",
 			st:     ProjectGitStatus{Unreadable: true},
 			policy: closed,
 			wantContain: []string{
 				"IGNORED",
 				"could not be parsed",
 				"skipped WHOLE",
-				"That does NOT mean the policy above is the global one",
-				"an EARLIER readable version of THIS file",
-				// The provenance that is NOT this reader's own file, and the only one
-				// where the standing policy is an elevation this repository was never
-				// granted. Pinned by TestProjectGitStatus_RePinCarriesTheGrant, which
-				// fails when PLAN-309 removes the carryover and this clause with it.
-				"re-pinned here from another workspace",
-				"trusted [git] grant included",
+				"The policy above is the GLOBAL one",
+				"treated as no config at all",
+				"previously pinned to",
 				`plumb config show --workspace '/tmp/ws'`,
 			},
 			wantAbsent: []string{
 				"NOTHING in it is being applied",
-				"the policy above is what plumb resolved without it",
+				"That does NOT mean the policy above is the global one",
+				"re-pinned here from another workspace",
+				"trusted [git] grant included",
 			},
 		},
 	}
