@@ -102,34 +102,56 @@ const benchMaxSamples = 100_000
 // only within a factor of four.
 const benchP99MinSamples = 1000
 
-// pendingProbe is the v2 candidate: the cheapest read that answers "is anything
-// waiting for me", with the same predicates ClaimNotes matches on so it can
-// never say no to a note the claim would have handed over.
-const pendingProbe = `SELECT 1 FROM collab_rows
-	 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-	   AND (addressee = ? OR addressee = ?)
-	   AND (target_workspace = '' OR target_workspace = ?)
-	 LIMIT 1`
+// benchClaimant is the identity every probe here claims as. It carries no
+// session ID, which is the unbound case: the benchmark's rows are seeded
+// straight into the table with no addressee_id, exactly like a note to a peer
+// that was not live when it was sent.
+//
+// The placeholder count the prepared statements are built with follows from
+// that: one identity means one "?" in the addressee_id IN list, fixed for the
+// life of the cached statement.
+func benchClaimant(sessionName, workspace string) Claimant {
+	return Claimant{Name: sessionName, Workspace: workspace}
+}
 
-// preparedClaim re-declares the statement ClaimNotes builds for a positive
-// limit, so it can be driven through a cached *sql.Stmt. The production store
-// has no statement cache to borrow, and this is the option nobody had costed.
-// It must stay byte-identical in effect to ClaimNotes' own statement;
-// TestMailprobePreparedClaim_MirrorsClaimNotes is what enforces that.
-const preparedClaim = `UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
+// pendingProbeSQL is the v2 candidate: the cheapest read that answers "is
+// anything waiting for me". preparedClaimSQL re-declares the statement
+// ClaimNotes builds for a positive limit, so it can be driven through a cached
+// *sql.Stmt — the production store has no statement cache to borrow, and that
+// is the option nobody had costed.
+//
+// Both are BUILT from the production predicate rather than copied from it. A
+// benchmark that compares a different query to the production one is worse than
+// no benchmark, and a hand-copied WHERE clause drifts the moment the delivery
+// rule changes — as it did when addressee_id arrived. Generating them means the
+// text cannot fall behind; TestMailprobePreparedClaim_MirrorsClaimNotes still
+// checks the result, since agreeing on SQL is not the same as agreeing on rows.
+func pendingProbeSQL() string {
+	where, _ := claimable(benchClaimant("", ""), time.Time{})
+	return `SELECT 1 FROM collab_rows WHERE ` + where + ` LIMIT 1`
+}
+
+func preparedClaimSQL() string {
+	where, _ := claimable(benchClaimant("", ""), time.Time{})
+	return `UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
 			 WHERE id IN (SELECT id FROM collab_rows
-				 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
-				   AND (addressee = ? OR addressee = ?) AND (target_workspace = '' OR target_workspace = ?)
+				 WHERE ` + where + `
 				 ORDER BY created_at ASC LIMIT ?)
 			 RETURNING ` + rowColumns
+}
 
-// preparedClaimArgs builds the bind list preparedClaim expects, in ClaimNotes'
-// order: the SET pair first, then the subquery's predicates.
+// pendingProbeArgs and preparedClaimArgs build the bind lists those statements
+// expect, in ClaimNotes' order: for the claim, the SET pair first, then the
+// subquery's predicates, then the limit.
+func pendingProbeArgs(sessionName, workspace string, now time.Time) []any {
+	_, args := claimable(benchClaimant(sessionName, workspace), now)
+	return args
+}
+
 func preparedClaimArgs(sessionName, workspace string, now time.Time, limit int) []any {
-	return []any{
-		now.UnixNano(), sessionName,
-		string(KindNote), now.UnixNano(), sessionName, AddresseeNext, workspace, limit,
-	}
+	_, whereArgs := claimable(benchClaimant(sessionName, workspace), now)
+	args := append([]any{now.UnixNano(), sessionName}, whereArgs...)
+	return append(args, limit)
 }
 
 // probe is one session's hot-path check plus the peer activity that sets the
@@ -213,8 +235,8 @@ func newBenchEnv(b *testing.B, prepared bool) *benchEnv {
 
 	e := &benchEnv{s: s, ws: ws, n: NewNotifier(), preparedOK: prepared}
 	if prepared {
-		e.claimStmt = mustPrepare(b, s, preparedClaim)
-		e.probeStmt = mustPrepare(b, s, pendingProbe)
+		e.claimStmt = mustPrepare(b, s, preparedClaimSQL())
+		e.probeStmt = mustPrepare(b, s, pendingProbeSQL())
 	}
 	return e
 }
@@ -268,7 +290,7 @@ func newNakedProbe(e *benchEnv, id int) probe {
 	ctx := context.Background()
 	name := benchSessionName(id)
 	return probe{call: func() {
-		_, _ = e.s.ClaimNotes(ctx, name, e.ws, time.Now(), benchClaimLimit)
+		_, _ = e.s.ClaimNotes(ctx, benchClaimant(name, e.ws), time.Now(), benchClaimLimit)
 	}}
 }
 
@@ -291,13 +313,14 @@ func newProbeThenClaim(e *benchEnv, id int) probe {
 	name := benchSessionName(id)
 	return probe{call: func() {
 		now := time.Now()
-		var one int
-		err := e.s.db.QueryRowContext(ctx, pendingProbe,
-			string(KindNote), now.UnixNano(), name, AddresseeNext, e.ws).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
+		who := benchClaimant(name, e.ws)
+		// Through the production probe, not a copy of it: this variant is what
+		// shipped, so measuring anything else would flatter or slander it.
+		waiting, err := e.s.HasPendingNotes(ctx, who, now)
+		if err != nil || !waiting {
 			return
 		}
-		_, _ = e.s.ClaimNotes(ctx, name, e.ws, now, benchClaimLimit)
+		_, _ = e.s.ClaimNotes(ctx, who, now, benchClaimLimit)
 	}}
 }
 
@@ -307,8 +330,7 @@ func newProbeThenClaimPrepared(e *benchEnv, id int) probe {
 	return probe{call: func() {
 		now := time.Now()
 		var one int
-		err := e.probeStmt.QueryRowContext(ctx,
-			string(KindNote), now.UnixNano(), name, AddresseeNext, e.ws).Scan(&one)
+		err := e.probeStmt.QueryRowContext(ctx, pendingProbeArgs(name, e.ws, now)...).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			return
 		}
@@ -332,7 +354,7 @@ func newNotifierProbe(e *benchEnv, id int) probe {
 		if !g.due(keys, e.n.Gens(keys), now) {
 			return // provably nothing new since the last look: no query
 		}
-		_, _ = e.s.ClaimNotes(ctx, name, e.ws, now, benchClaimLimit)
+		_, _ = e.s.ClaimNotes(ctx, benchClaimant(name, e.ws), now, benchClaimLimit)
 	}}
 }
 
@@ -660,7 +682,7 @@ func TestMailprobePreparedClaim_MirrorsClaimNotes(t *testing.T) {
 	now := time.Now().Add(time.Minute)
 	a, bStore := seed(t), seed(t)
 
-	want, err := a.ClaimNotes(ctx, me, a.ws, now, benchClaimLimit)
+	want, err := a.ClaimNotes(ctx, benchClaimant(me, a.ws), now, benchClaimLimit)
 	if err != nil {
 		t.Fatalf("ClaimNotes: %v", err)
 	}
@@ -668,7 +690,7 @@ func TestMailprobePreparedClaim_MirrorsClaimNotes(t *testing.T) {
 		t.Fatal("ClaimNotes claimed nothing; the fixture is not exercising the statement")
 	}
 
-	st, err := bStore.db.PrepareContext(ctx, preparedClaim)
+	st, err := bStore.db.PrepareContext(ctx, preparedClaimSQL())
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
