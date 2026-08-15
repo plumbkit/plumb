@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -231,6 +231,23 @@ check-brief:
 # second heading without ever conflicting. See scripts/check-changelog-headings.sh.
 check-changelog:
 	./scripts/check-changelog-headings.sh
+
+# check-changelog-placement is check-changelog's diff-shape complement: it fails when
+# a change ADDS lines under any heading other than the one that was unreleased at the
+# merge-base. Deliberately NOT in `verify` and not in the pre-commit hook — unlike
+# every other guard here it needs a base ref, which a working tree does not have, and
+# `verify` has to stay hermetic (offline, correct in a fresh or shallow clone). CI's
+# verify job runs it as a step with the exact base SHA from the pull_request event;
+# this target is for running it by hand against origin/main. See the script header.
+check-changelog-placement:
+	./scripts/check-changelog-placement.sh
+
+# The guard's own regression suite: ten real commits from this repository's history
+# (four that shipped a misplaced entry, six that only look misplaced) plus four
+# synthetic cases for the rules no real commit exercises. CI-only, for the same
+# reason — it replays historical SHAs, so it needs full history.
+check-changelog-placement-test:
+	./scripts/check-changelog-placement-test.sh
 
 # cover measures statement coverage and fails below the floor in
 # scripts/check-coverage.sh. Not in `verify` — it re-runs the whole suite with

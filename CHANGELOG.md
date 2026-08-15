@@ -4,7 +4,8 @@
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
      stamped heading, so a clean rebase is not evidence your entry is in the
-     right section — check which heading it landed under. -->
+     right section — check which heading it landed under. CI checks it for you
+     now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
 ### Added
 
@@ -690,6 +691,24 @@
   in PR #325). `make check-changelog` (`scripts/check-changelog-headings.sh`)
   fails when any version number appears in more than one heading; wired into
   `verify` and the pre-commit hook alongside the file-size and brief guards.
+- **CI now catches an entry added under the wrong CHANGELOG.md heading.** The
+  duplicate-heading guard above is a whole-file invariant, so it sees a rebase
+  that replays an addition as a *second* heading but not one that files an entry
+  under an existing released section — the shape that actually bit PR #320,
+  #292 and #310, none of which created a duplicate.
+  `scripts/check-changelog-placement.sh` closes that half: it diffs against the
+  merge-base and fails when an added line lands under any heading other than the
+  one that was unreleased at the base. Only *added* lines count, so editing or
+  deleting inside a released section stays free. It is deliberately **not** in
+  `make verify` or the pre-commit hook — alone among the guards it needs a base
+  ref, which a working tree has not got, and `verify` has to stay hermetic; CI's
+  verify job runs it with the exact base SHA from the pull_request event.
+  `make check-changelog-placement` runs it by hand against `origin/main`. Its
+  own regression suite (`make check-changelog-placement-test`) replays ten real
+  commits from this repository — four that shipped a misplaced entry, six that
+  merely look misplaced, including the `chore(release)` shape and PR #325's
+  dedupe — plus four synthetic cases covering the rules no real commit
+  exercises.
 - **Skipped topology files now say WHY they were skipped.** `error_msg` was
   write-only: recorded on every indexing failure and read back only as a
   count, so a parse timeout, a malformed file and a panicking grammar were
