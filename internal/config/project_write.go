@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -115,20 +116,39 @@ func UnsetProjectValue(workspace string, path []string) error {
 	return writeTOMLAtomic(cfgPath, m)
 }
 
+// foldKeys returns every key in m matching want case-insensitively, in a
+// DETERMINISTIC order: the exact spelling first, then the rest sorted. TOML
+// keys are case-sensitive, so one file can legitimately hold several variants
+// of one setting (and plumb's own pre-#319 sparse writer produced exactly that
+// by growing a second table); go-toml decodes them all into one struct field,
+// with the last in document order winning. Ranging a map directly here would
+// pick a variant at random on every call — Go randomises map iteration — so a
+// write could land in a different table run to run.
+func foldKeys(m map[string]any, want string) []string {
+	var rest []string
+	for k := range m {
+		if k == want || !strings.EqualFold(k, want) {
+			continue
+		}
+		rest = append(rest, k)
+	}
+	sort.Strings(rest)
+	if _, ok := m[want]; ok {
+		return append([]string{want}, rest...)
+	}
+	return rest
+}
+
 // foldLookup returns the key in m that matches want case-insensitively — the
 // way go-toml/v2 binds a TOML key to a struct field, so `TASKS` and `tasks`
 // are the same setting — preferring the exact spelling when both appear.
 // ok is false when no fold variant exists.
 func foldLookup(m map[string]any, want string) (key string, ok bool) {
-	if _, ok := m[want]; ok {
-		return want, true
+	keys := foldKeys(m, want)
+	if len(keys) == 0 {
+		return "", false
 	}
-	for k := range m {
-		if strings.EqualFold(k, want) {
-			return k, true
-		}
-	}
-	return "", false
+	return keys[0], true
 }
 
 // foldDelete removes every key in m that matches want case-insensitively. The
@@ -136,12 +156,76 @@ func foldLookup(m map[string]any, want string) (key string, ok bool) {
 // keys are case-sensitive), and both decode into the same merged value — so
 // "unset this setting" must remove both or lookup would still find it.
 func foldDelete(m map[string]any, want string) {
-	delete(m, want)
-	for k := range m {
-		if strings.EqualFold(k, want) {
-			delete(m, k)
-		}
+	for _, k := range foldKeys(m, want) {
+		delete(m, k)
 	}
+}
+
+// foldCollapse merges every fold variant of want in m down to a single key and
+// returns it, so that after a sparse write exactly one spelling of the setting
+// survives. Without it a write can be silently overridden: two variants both
+// decode into one field and the LAST one wins, so updating `[GIT]` in a file
+// that also says `[git]` would store a value the decoder then discards.
+//
+// Precedence follows that same last-wins rule, applied to the order plumb will
+// re-marshal the file in (go-toml sorts map keys), so the surviving value is
+// the one the decoder would have chosen. Tables are merged recursively; a
+// scalar variant alongside a table is dropped in favour of the winner.
+func foldCollapse(m map[string]any, want string) string {
+	keys := foldKeys(m, want)
+	if len(keys) == 0 {
+		return want
+	}
+	canonical := keys[0]
+	if len(keys) == 1 {
+		return canonical
+	}
+	// Merge in marshal order so the last-wins decode is reproduced, then store
+	// the result under the canonical spelling and drop the other variants.
+	ordered := append([]string(nil), keys...)
+	sort.Strings(ordered)
+	merged := m[ordered[0]]
+	for _, k := range ordered[1:] {
+		merged = foldMergeValue(merged, m[k])
+	}
+	for _, k := range keys {
+		delete(m, k)
+	}
+	m[canonical] = merged
+	return canonical
+}
+
+// foldMergeValue merges next over prev with the same semantics go-toml applies
+// to two fold variants: two tables merge key-by-key (next winning, and its own
+// duplicate keys collapsed in turn), anything else is replaced outright.
+func foldMergeValue(prev, next any) any {
+	prevTable, prevOK := prev.(map[string]any)
+	nextTable, nextOK := next.(map[string]any)
+	if !prevOK || !nextOK {
+		return next
+	}
+	for k, v := range nextTable {
+		if existing, ok := prevTable[k]; ok {
+			prevTable[k] = foldMergeValue(existing, v)
+			continue
+		}
+		prevTable[k] = v
+	}
+	for _, k := range tableKeys(prevTable) {
+		foldCollapse(prevTable, k)
+	}
+	return prevTable
+}
+
+// tableKeys returns m's keys in sorted order, so a collapse pass over a table
+// does not itself depend on map iteration order.
+func tableKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // lookupNested reports whether path resolves to a present leaf in m. Keys are
@@ -149,19 +233,23 @@ func foldDelete(m map[string]any, want string) {
 // into the typed Config: a fold-variant spelling is present in the effective
 // config, so it must be present here too.
 func lookupNested(m map[string]any, path []string) bool {
-	for _, k := range path[:len(path)-1] {
-		key, ok := foldLookup(m, k)
-		if !ok {
-			return false
-		}
+	if len(path) == 1 {
+		_, ok := foldLookup(m, path[0])
+		return ok
+	}
+	// Every fold variant of this segment is a place the setting can live, and
+	// the decoder merges them all — so presence means present under ANY of
+	// them, not just the one foldLookup happens to prefer.
+	for _, key := range foldKeys(m, path[0]) {
 		next, ok := m[key].(map[string]any)
 		if !ok {
-			return false
+			continue
 		}
-		m = next
+		if lookupNested(next, path[1:]) {
+			return true
+		}
 	}
-	_, ok := foldLookup(m, path[len(path)-1])
-	return ok
+	return false
 }
 
 // setNested sets value at path within m, creating intermediate tables. A
@@ -171,10 +259,7 @@ func lookupNested(m map[string]any, path []string) bool {
 // Config.Git.
 func setNested(m map[string]any, path []string, value any) {
 	for _, k := range path[:len(path)-1] {
-		key, ok := foldLookup(m, k)
-		if !ok {
-			key = k
-		}
+		key := foldCollapse(m, k)
 		next, ok := m[key].(map[string]any)
 		if !ok {
 			next = map[string]any{}
@@ -182,10 +267,8 @@ func setNested(m map[string]any, path []string, value any) {
 		}
 		m = next
 	}
-	key, ok := foldLookup(m, path[len(path)-1])
-	if !ok {
-		key = path[len(path)-1]
-	}
+	leaf := path[len(path)-1]
+	key := foldCollapse(m, leaf)
 	m[key] = value
 }
 
@@ -197,16 +280,17 @@ func deleteNested(m map[string]any, path []string) {
 		foldDelete(m, path[0])
 		return
 	}
-	key, ok := foldLookup(m, path[0])
-	if !ok {
-		return
-	}
-	child, ok := m[key].(map[string]any)
-	if !ok {
-		return
-	}
-	deleteNested(child, path[1:])
-	if len(child) == 0 {
-		delete(m, key)
+	// Descend through EVERY fold variant of this segment: the setting decodes
+	// out of all of them, so removing it from only the preferred spelling
+	// would leave `[GIT]` holding a key the user just unset via `[git]`.
+	for _, key := range foldKeys(m, path[0]) {
+		child, ok := m[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		deleteNested(child, path[1:])
+		if len(child) == 0 {
+			delete(m, key)
+		}
 	}
 }

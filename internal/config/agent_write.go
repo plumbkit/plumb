@@ -93,17 +93,32 @@ func priorProjectValues(raw map[string]any, keys []string) map[string]string {
 	return out
 }
 
-// getNested returns the value at path within m, if present.
+// getNested returns the value at path within m, if present. Keys are matched
+// case-insensitively, for the same reason lookupNested is (#319): go-toml
+// decodes a fold-variant spelling into the same field, so a `[TASKS.go]` table
+// holds a real prior value. An exact-match miss here is not cosmetic — this
+// feeds priorProjectValues, which stamps the agent-write provenance record
+// with what the key USED to be, and setNested writes through that same fold
+// variant. Missing it would record "no previous value" for a write that in
+// fact overwrote one, and cost `plumb config unset` its one-step revert.
 func getNested(m map[string]any, path []string) (any, bool) {
-	for _, k := range path[:len(path)-1] {
-		next, ok := m[k].(map[string]any)
+	if len(path) == 1 {
+		key, ok := foldLookup(m, path[0])
 		if !ok {
 			return nil, false
 		}
-		m = next
+		return m[key], true
 	}
-	v, ok := m[path[len(path)-1]]
-	return v, ok
+	for _, key := range foldKeys(m, path[0]) {
+		next, ok := m[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if v, ok := getNested(next, path[1:]); ok {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 func sortedKeys(m map[string]any) []string {
