@@ -71,6 +71,11 @@ const (
 	reasonCompileFailed  = "the mutant does not compile"
 	reasonCompileTimeout = "the compile step timed out"
 	reasonTestTimeout    = "the test step timed out"
+	// The two unrunnable reasons are separate from a non-zero exit on purpose:
+	// a command that never started proves nothing about the mutant, and in the
+	// TEST slot a bare non-zero exit would otherwise read as a kill.
+	reasonCompileUnrunnable = "the compile command could not be started"
+	reasonTestUnrunnable    = "the test command could not be started"
 )
 
 const (
@@ -152,6 +157,7 @@ func (*MutationTest) Description() string {
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
 		"Restoration is guaranteed on every exit path (pass, fail, compile error, timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory, rewritten under the same per-path lock, and verified by SHA-256 before the run is reported clean. " +
 		"It REFUSES to touch a file with uncommitted changes (untracked included), with no override — a clean file means `git checkout` can always recover it if the daemon dies mid-run, and that is the recovery story. " +
+		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant would be reported killed for a reason that has nothing to do with it. " +
 		"One mutation run at a time per daemon; a second call is refused rather than queued."
 }
 
@@ -255,6 +261,9 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	if err := t.baseline(ctx, plan); err != nil {
+		return "", err
+	}
 	results, restoreErr := t.runAll(ctx, targets, plan)
 	report := formatMutationReport(args, plan, warnings, results)
 	if restoreErr != nil {
@@ -301,6 +310,39 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 		target:  a.TestTarget,
 		timeout: time.Duration(a.TimeoutSecs) * time.Second,
 	}, nil
+}
+
+// baseline runs the compile and test commands on the UNMUTATED tree and refuses
+// the whole run unless both pass.
+//
+// Without it, `killed` does not mean what the tool says it means. A kill is
+// "the suite passed before this change and fails after it", and only the second
+// half was ever checked — so a suite that was ALREADY red (a peer's edit
+// elsewhere in the tree, a pre-existing failure, an environment the tests need
+// and cannot find) reports EVERY mutant killed, certifying assertions that were
+// never exercised. That is the tool's own stated failure mode, arrived at from
+// the workspace instead of from the mutant, and it is the likeliest one in
+// practice: the dirty-file refusal covers the file being mutated, nothing else
+// in the tree.
+//
+// It costs one extra compile+test cycle per RUN (not per mutant), which is the
+// cheapest part of any run that has something to say. Refusing rather than
+// warning matches how the tool treats its other two preconditions — a dirty
+// file and a missing compile gate — because a verdict nothing stands behind is
+// worse than no verdict.
+func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) error {
+	if compile := t.runStep(ctx, plan.compile, plan.timeout); compile.failed() {
+		return fmt.Errorf("mutation_test: the workspace does not pass its compile gate (%s) BEFORE any mutant was applied, "+
+			"so no mutant's compilation could be attributed to the mutant. Nothing was mutated. Fix the build first:\n%s",
+			plan.compile.Slot, excerpt(compile.output))
+	}
+	if test := t.runStep(ctx, plan.test, plan.timeout); test.failed() {
+		return fmt.Errorf("mutation_test: the test command (%s) ALREADY fails before any mutant was applied, so every mutant "+
+			"would be reported killed for a reason that has nothing to do with it — the false kill this tool exists to prevent. "+
+			"Nothing was mutated. Get the suite green first, or scope the run with test_target to a package that passes:\n%s",
+			plan.test.Slot, excerpt(test.output))
+	}
+	return nil
 }
 
 // mutationTarget is one preflighted mutant: the resolved path plus the
