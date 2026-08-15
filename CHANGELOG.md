@@ -9,6 +9,18 @@
 
 ### Fixed
 
+- **The TUI Settings scope column no longer lists git linked worktrees as
+  separate workspaces.** Every live session's folder became a scope row, so a
+  multi-agent session's throwaway `.claude/worktrees/*` checkouts each got
+  their own entry beside the repository they belong to. Each folder is now
+  resolved through git's linked-worktree layout — a `.git` pointer file into
+  `<common>/worktrees/<name>` — to the nearest ancestor whose `.git` is or
+  points at the common dir, which is the repository's main worktree; this
+  covers both plain repositories and submodule checkouts (`./plumb` inside
+  plumb-ops is one). Pure filesystem resolution, no git subprocess, and it
+  fails open: an unrecognised layout keeps one entry per folder rather than
+  dropping or rewriting a workspace.
+
 - **The recent-writes feed now shows writes, not write-tool calls.** The
   `workspace_sessions` feed — and the two surfaces built on the same query, the
   `session_start` peer digest and the connection-side peer hint — presented any
