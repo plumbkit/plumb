@@ -195,6 +195,43 @@ func foldCollapse(m map[string]any, want string) string {
 	return canonical
 }
 
+// foldCollapseTable is foldCollapse restricted to variants that actually hold a
+// TABLE, for the intermediate segments of a write — the only ones that need to
+// be descended into. A variant holding something else (most importantly an
+// array of tables: `[[command]]` decodes to []any, not map[string]any) is left
+// strictly alone and its spelling is not reused, so a sparse write of
+// `command.name` cannot overwrite a project's whole command allow-list with an
+// empty table. Such a file is already incoherent — `command` cannot be both an
+// array and a table — and the caller's own spelling is where the new table
+// goes, matching what the pre-#319 code did: adding a key beats deleting one
+// the user never asked us to touch.
+func foldCollapseTable(m map[string]any, want string) string {
+	var tables []string
+	for _, k := range foldKeys(m, want) {
+		if _, ok := m[k].(map[string]any); ok {
+			tables = append(tables, k)
+		}
+	}
+	switch len(tables) {
+	case 0:
+		return want
+	case 1:
+		return tables[0]
+	}
+	canonical := tables[0]
+	ordered := append([]string(nil), tables...)
+	sort.Strings(ordered)
+	merged := m[ordered[0]]
+	for _, k := range ordered[1:] {
+		merged = foldMergeValue(merged, m[k])
+	}
+	for _, k := range tables {
+		delete(m, k)
+	}
+	m[canonical] = merged
+	return canonical
+}
+
 // foldMergeValue merges next over prev with the same semantics go-toml applies
 // to two fold variants: two tables merge key-by-key (next winning, and its own
 // duplicate keys collapsed in turn), anything else is replaced outright.
@@ -259,7 +296,7 @@ func lookupNested(m map[string]any, path []string) bool {
 // Config.Git.
 func setNested(m map[string]any, path []string, value any) {
 	for _, k := range path[:len(path)-1] {
-		key := foldCollapse(m, k)
+		key := foldCollapseTable(m, k)
 		next, ok := m[key].(map[string]any)
 		if !ok {
 			next = map[string]any{}
