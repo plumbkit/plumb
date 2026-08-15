@@ -179,6 +179,28 @@
   an array under its EXACT spelling still clobbers it, which needs `setNested` to
   refuse rather than overwrite and is tracked separately. No caller reaches
   either shape today.
+- **`mutation_test`'s baseline refusal now names which of the three causes it
+  hit, instead of always blaming the workspace.** The baseline asked
+  `stepOutcome.failed()` — timed out, could not start, or exited non-zero — and
+  then asserted one cause regardless: a test command that TIMED OUT, and one
+  that could not be STARTED at all, were both reported as "the test command
+  ALREADY fails before any mutant was applied … Get the suite green first".
+  Both are false, and the advice fixes neither — a command that never ran has
+  shown nothing about the suite, and one that never returned has shown nothing
+  about its colour. The per-mutant `classify` had always split these correctly;
+  only the per-run baseline collapsed them, so the split now lives in one
+  shared place and the two cannot drift apart again. Two smaller wrongs in the
+  same message went with it: the refusal never said WHERE it ran — task
+  commands run from the workspace ROOT, which need not be buildable (a
+  repository whose root holds only a `go.work`, with the module in a
+  subdirectory, fails `go build ./...` instantly while the tree compiles
+  perfectly), so it now names the argv and the directory; and it recommended
+  `test_target` unconditionally even though the shipped `[tasks.go].test`
+  default has no `{target}` placeholder and the resolver refuses a target a
+  command cannot hold, so that advice is now offered only when the stored
+  command can actually accept one. The `test_target` schema and the tool
+  description say the same thing rather than presenting scoping as always
+  available.
 
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a
