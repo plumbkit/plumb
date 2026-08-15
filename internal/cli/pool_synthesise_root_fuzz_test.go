@@ -64,6 +64,7 @@ func FuzzSynthesiseRootAgainstKernel(f *testing.F) {
 	f.Add("home/scratch/markerless", byte(gitAtBase), false)
 	f.Add("home/proj/internal/deep", byte(gitAtHome|gitAtProj), false)
 	f.Add("repo/a/b", byte(gitAtRepo), false)
+	f.Add("repo", byte(gitAtRepo|gitAtBase), false) // .git AT the seed: a walk that skips the seed's own level must diverge
 	f.Add("aside/deep/..", byte(gitAtProj|asideLink), false)
 	f.Add("home", byte(gitAtHome), false)
 	f.Add("home-alias", byte(gitAtHome|homeAlias), false)
