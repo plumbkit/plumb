@@ -24,6 +24,14 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}
+	// Rendered independently of lang: a home root can also carry a stray
+	// root marker (/~/go.mod), and the identity line must not let that marker
+	// read as "a server is attached" while the skip goes unexplained (#316).
+	if t.lspSkipNoteFn != nil {
+		if note := t.lspSkipNoteFn(); note != "" {
+			fmt.Fprintf(sb, "%s\n", note)
+		}
+	}
 	if branch := gitBranch(ws); branch != "" {
 		fmt.Fprintf(sb, "Branch:   %s\n", branch)
 	}

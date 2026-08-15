@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
@@ -33,6 +34,13 @@ const minTTL = time.Minute
 type Store struct {
 	db *sql.DB
 	ws string
+
+	// probeMu guards probeStmts, which caches the prepared form of the
+	// HasPendingNotes probe. See probeStmt in mailbox.go for why the cache is
+	// keyed by SQL text rather than being a single statement, and Close for the
+	// lifecycle that keeps it from outliving the store.
+	probeMu    sync.Mutex
+	probeStmts map[string]*sql.Stmt
 }
 
 // DBPath returns the canonical collab.db path for a workspace.
@@ -76,11 +84,31 @@ func Open(workspace string) (*Store, error) {
 	return &Store{db: db, ws: workspace}, nil
 }
 
-// Close releases the database handle.
+// Close releases the database handle, closing any cached prepared statements
+// first.
+//
+// The statements must be closed explicitly rather than left to the handle.
+// database/sql prepares a *sql.Stmt lazily on EACH pooled connection it is used
+// from, so one cached statement holds a driver statement per connection in the
+// pool for as long as the Store lives. Dropping the Store without closing them
+// is how that becomes a leak rather than an optimisation — the point of caching
+// the probe at all (see probeStmt) is bounded reuse, not unbounded retention.
+//
+// A statement that fails to close is logged and the rest still close: the
+// handle's own Close is what actually frees the file, and skipping it because a
+// statement complained would trade a small leak for a large one.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.probeMu.Lock()
+	for query, stmt := range s.probeStmts {
+		if err := stmt.Close(); err != nil {
+			slog.Warn("collab: close cached probe statement", "err", err, "query", query)
+		}
+	}
+	s.probeStmts = nil
+	s.probeMu.Unlock()
 	return s.db.Close()
 }
 
