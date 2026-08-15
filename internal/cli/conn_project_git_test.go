@@ -284,24 +284,21 @@ func TestProjectGitStatus_UnparseableConfig(t *testing.T) {
 	}
 }
 
-// TestProjectGitStatus_RePinCarriesTheGrant pins the state the unreadable notice
-// describes, and is the tripwire that stops the notice outliving it.
+// TestProjectGitStatus_RePinDropsThePreviousGrant is PLAN-309, through the real
+// trust store rather than a hand-built view.
 //
-// applyProjectConfig returns on a parse error WITHOUT reverting v.git, and the
-// same early return runs on a re-pin. So a session pinned to a trusted workspace
-// and re-pinned into one whose config will not parse arrives holding the first
-// workspace's granted tiers: an elevation the second repository was never given,
-// obtained by shipping a broken config rather than a bold one. That is PLAN-309
-// (pre-existing on main, priority 1) and the fail-open is in applyProjectConfig,
-// not in the notice.
+// This test used to assert the OPPOSITE — it was the deliberate tripwire that
+// held the unreadable notice honest while the carryover existed, and it fired
+// when the fix landed. The fix and the notice moved together, as it demanded.
 //
-// This test asserts the CURRENT behaviour so the notice may honestly name it.
-// When PLAN-309 lands, this test fails — and the clause "re-pinned here from
-// another workspace, THAT workspace's values" must be deleted from
-// unreadableProjectConfigNotice in the same change, or the notice starts lying in
-// the opposite direction. The assertion in internal/tools names this test for
-// that reason.
-func TestProjectGitStatus_RePinCarriesTheGrant(t *testing.T) {
+// The defect: applyProjectConfig returned on a parse error without reverting
+// v.git, and the same early return runs on a re-pin. A session pinned to a
+// trusted workspace and re-pinned into one whose config will not parse arrived
+// holding the FIRST workspace's granted tiers — an elevation the second
+// repository was never given, obtained by shipping a broken config rather than a
+// bold one. The trust gate exists because a cloned repository ships a config;
+// this handed the network tier to one that ships a broken config instead.
+func TestProjectGitStatus_RePinDropsThePreviousGrant(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	trusted := t.TempDir()
@@ -324,11 +321,12 @@ func TestProjectGitStatus_RePinCarriesTheGrant(t *testing.T) {
 	if !s.projectGitStatus().Unreadable {
 		t.Fatalf("the re-pinned workspace's config must report as unparseable, got %+v", s.projectGitStatus())
 	}
-	if !s.gitPolicy().AllowPush {
-		t.Fatal("PLAN-309 appears fixed: the re-pin no longer carries the previous workspace's grant. " +
-			"Good — now delete the 're-pinned here from another workspace' clause from " +
-			"unreadableProjectConfigNotice (internal/tools/session_start_git_notice.go) and its assertions in " +
-			"TestFormatProjectGitNotice, which this test exists to keep honest.")
+	if s.gitPolicy().AllowPush {
+		t.Error("allow_push survived the re-pin: this repository inherited the network tier from a workspace " +
+			"it has nothing to do with, by shipping TOML that does not parse")
+	}
+	if s.projectGitStatus().Trusted {
+		t.Error("the previous workspace's trust flag followed the session into an untrusted one")
 	}
 }
 

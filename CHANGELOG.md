@@ -356,6 +356,32 @@
 
 ### Security
 
+- **A project config plumb cannot read now means "no project config", not "the
+  previous project's config".** Both an unparseable `.plumb/config.toml` and a
+  deleted one left whatever was last applied in force. On a re-pin, what was
+  last applied belongs to a DIFFERENT workspace: a session pinned to a trusted
+  project and then re-pinned into another carried that project's `allow_push`
+  and `allow_destructive` into it, so a repository could inherit a git tier it
+  was never granted simply by shipping malformed TOML.
+
+  That inverts the trust gate. The gate exists because a cloned repository
+  ships a `.plumb/config.toml`; this handed the destructive or network tier to
+  one that ships a *broken* one, with no `plumb trust` against it anywhere.
+  Deleting the file had the same effect from the other direction — removing it
+  preserved every override it had granted, including `[collab] cross_project`
+  consent to receive another project's mail, so the way to keep an elevated
+  policy was to delete the file that justified it.
+
+  Both cases now resolve to the **global** config, and the whole view is
+  reverted rather than just `[git]`. `session_start` still says the config was
+  unreadable, so the skip is visible rather than merely silent. A transient
+  stat failure is not treated as a deletion — a permissions blip must not flap
+  the session's policy — and a config that reappears is applied normally.
+
+  Bounded by needing a session already pinned to a trusted workspace with
+  elevated tiers, so it is not remotely triggerable; but it was a fail-open on
+  a control whose entire design is fail-closed.
+
 - **Agent-to-agent message bodies no longer reach the stats database.**
   `leave_note`, `share_intent` and `share_findings` had their arguments
   recorded verbatim as telemetry, and `check_messages` and `session_start`

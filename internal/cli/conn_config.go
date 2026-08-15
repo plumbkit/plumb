@@ -17,20 +17,30 @@ import (
 
 // applyProjectConfig loads <workspace>/.plumb/config.toml and applies it to
 // the live session (rate limit, strict mode, walk config).
+//
+// A config that will not parse resolves to the GLOBAL config, and is applied.
+// It used to return here instead, which read as "change nothing" but meant
+// "keep whatever was applied last" — and on a re-pin what was applied last
+// belongs to the PREVIOUS workspace. A session pinned to a trusted project and
+// then re-pinned into another carried that project's allow_push and
+// allow_destructive into it, so a repository could inherit a git tier it was
+// never granted by shipping malformed TOML. That inverts the trust gate: the
+// gate exists because a cloned repository ships a .plumb/config.toml, and this
+// handed the destructive tier to one that ships a BROKEN one, with no
+// `plumb trust` against it anywhere.
+//
+// LoadProjectWithPolicy already returns the base config on error, so falling
+// through applies the global config in full — not just [git], but every block
+// the previous project could have set.
 func (s *connSession) applyProjectConfig(workspace string) {
 	if workspace == "" {
 		return
 	}
 	base := s.store.Current()
 	projectCfg, policy, err := config.LoadProjectWithPolicy(base, workspace)
-	if err != nil {
+	unreadable := err != nil
+	if unreadable {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
-		// Record the skip. An unparseable project config is ignored WHOLE — its
-		// [git] block as thoroughly as an untrusted one — and saying nothing here
-		// leaves the agent with less to go on than the untrusted case, since there
-		// is not even a `plumb trust` to reach for.
-		s.mutate(func(v *sessionView) { v.projectGit = tools.ProjectGitStatus{Unreadable: true} })
-		return
 	}
 	s.logProjectPolicy(workspace, policy)
 	// Resolved here, from the same load as projectCfg, and stored in the view: the
@@ -51,6 +61,13 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// still refusing, which is the very bug the notice exists to prevent, reached
 	// by obeying it.
 	projectGit := projectGitStatusOf(policy)
+	if unreadable {
+		// Record the skip. An unparseable project config is ignored WHOLE — its
+		// [git] block as thoroughly as an untrusted one — and saying nothing here
+		// leaves the agent with less to go on than the untrusted case, since there
+		// is not even a `plumb trust` to reach for.
+		projectGit = tools.ProjectGitStatus{Unreadable: true}
+	}
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -241,6 +258,35 @@ func (s *connSession) checkAndReloadConfig() {
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	info, err := os.Stat(configPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// A transient stat failure (a permissions blip, a busy filesystem) is not
+			// evidence the file is gone, and revoking on it would flap the session's
+			// policy for a reason that has nothing to do with the project.
+			return
+		}
+		// The file was DELETED. Revoking matters as much here as on a parse
+		// failure: without it, removing .plumb/config.toml leaves every override it
+		// had granted — including [collab] cross_project consent and the git tier —
+		// in force for the life of the session, so the way to keep an elevated
+		// policy is to delete the file that justified it.
+		//
+		// Revoke once and then stay quiet: applyProjectConfig cannot stamp a
+		// mtime for a file that is not there, so lastCfgMtime is cleared here and a
+		// zero value marks "nothing applied", which every later poll reads as
+		// already handled. A file that reappears has a non-zero mtime, which does
+		// not equal the zero value, so it reloads normally.
+		hadProjectConfig := false
+		s.mutate(func(v *sessionView) {
+			hadProjectConfig = !v.lastCfgMtime.IsZero()
+			if hadProjectConfig {
+				v.lastCfgMtime = time.Time{}
+			}
+		})
+		if !hadProjectConfig {
+			return
+		}
+		s.applyProjectConfig(workspace)
+		s.log().Info("daemon: project config removed; reverted to global", "workspace", workspace)
 		return
 	}
 	mtime := info.ModTime()
