@@ -321,7 +321,7 @@ func (e *mutationEnv) baselineRefusal(t *testing.T, args map[string]any) string 
 // learned NOTHING about the workspace, and must not claim otherwise.
 func TestBaseline_UnstartableCommandIsNotReportedAsARedSuite(t *testing.T) {
 	for _, tc := range []struct {
-		slot   string
+		slot       string
 		mustNotSay string
 	}{
 		{"build", "Fix the build first"},
@@ -391,14 +391,23 @@ func TestBaseline_GenuinelyRedSuiteStillSaysSo(t *testing.T) {
 // tree compiles perfectly — and the old text read "the workspace does not pass
 // its compile gate … Fix the build first". Naming the cwd and the argv is what
 // turns that from a wrong diagnosis into a solvable one.
+//
+// The directory assertion is deliberately NOT a bare Contains(msg, env.root).
+// The fixture's script path lives inside env.root, so the argv alone satisfies
+// that — a mutation run proved it: deleting the directory from the message left
+// the bare check passing. It has to assert the cwd is named AS the cwd.
 func TestBaseline_NamesTheDirectoryItRanIn(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
 	env.installScript(t, env.compileScript, "exit 1")
 	env.commitAll(t)
 
 	msg := env.baselineRefusal(t, nil)
-	if !strings.Contains(msg, env.root) {
-		t.Errorf("the refusal must name the directory the command ran in (%s); got:\n%s", env.root, msg)
+	if !strings.Contains(msg, "in "+env.root+" ") {
+		t.Errorf("the refusal must name the directory the command ran IN (%s), not merely mention the path "+
+			"inside an argv; got:\n%s", env.root, msg)
+	}
+	if !strings.Contains(msg, "WORKSPACE ROOT") {
+		t.Errorf("the refusal must explain WHY that directory is the cwd, or naming it teaches nothing; got:\n%s", msg)
 	}
 	if !strings.Contains(msg, env.compileScript) {
 		t.Errorf("the refusal must name the argv it ran; got:\n%s", msg)
