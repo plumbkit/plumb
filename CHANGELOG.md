@@ -143,6 +143,34 @@
   every fold variant) all agree with the decoder. The settings screens'
   "overridden vs inherited" annotation is now accurate for fold spellings too.
 
+  A file can hold SEVERAL variants of one setting — TOML keys are case-sensitive,
+  and plumb's own pre-fix sparse writer manufactured exactly that by growing a
+  second table beside an existing one — so all four walkers of the raw map agree
+  on which one wins, deterministically:
+
+  - **A settings write is no longer silently discarded.** Two variants decode
+    into one field and the LAST in document order wins, so writing into one
+    while the other survived stored a value the decoder then threw away: the
+    screen said "saved" and the effective config never changed. A write now
+    collapses the variants to a single spelling first.
+  - **"Reset to inherited" no longer leaves the setting in force.** The unset
+    walked into one variant of an intermediate table, so unsetting via `[edits]`
+    left `[EDITS]` still holding the key. On a `[TASKS.<lang>]` command that
+    meant the benign spelling was removed and the other one survived.
+  - **The choice of variant is deterministic.** The lookup ranged the map, and
+    Go randomises map iteration, so the write target — and the presence answer
+    behind the "overridden" annotation — differed run to run.
+  - **Agent-write provenance records the real prior value.** `getNested`, the
+    fourth walker, was still exact-match, so an agent write over a `[TASKS.go]`
+    table recorded "no previous value" while the write overwrote one, costing
+    `plumb config unset` its one-step revert.
+
+  A sparse write also no longer reuses a fold-variant key holding an array of
+  tables: `[[command]]` decodes to `[]any`, so a case-insensitive match would
+  find it where a table was wanted and overwrite a project's whole command
+  allow-list with an empty table. No caller reaches that today; it is pinned so
+  none does.
+
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a
   multi-agent session's throwaway `.claude/worktrees/*` checkouts each got
