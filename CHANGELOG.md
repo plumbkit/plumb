@@ -466,6 +466,131 @@
   The trust boundary itself is unchanged; only its visibility is. An untrusted
   workspace still resolves the whole `[git]` table from the global config, now
   pinned at the session layer as well as the loader.
+- **`plumb mail`: ask, from outside a session, whether an agent has messages
+  waiting.** The mailbox delivers by polling, so an agent that has finished its
+  turn and is waiting on its human never learns a peer wrote to it. Nothing
+  server-side can reach it — the daemon cannot push over MCP — so the client
+  has to ask, and until now there was no way to. A hook had to open `collab.db`
+  and write the delivery predicate itself.
+
+  **It never claims, and the guarantee is structural rather than promised.** The
+  caller is not the recipient; marking a row delivered on its behalf would spend
+  the exactly-once guarantee on an agent that never saw the text, and silently,
+  because a consumed message is indistinguishable from one nobody sent. The new
+  `collab.OpenReadOnly` hands back a `mode=ro` handle, so a claim issued through
+  it fails at the driver — the property survives someone later wiring a
+  different query in. `Open`-and-only-SELECT was the obvious implementation and
+  is the one deliberately not taken: it leaves the rule resting on every future
+  caller's care, and `Open` is not side-effect-free either (it migrates, stamps
+  the schema version, and writes a `.gitignore` entry).
+
+  **It reports whether, and how stale — never what.** A count and the age of
+  each waiting message; no bodies, no senders, no conversation ids. Three
+  independent reasons, any one sufficient. A session *name* is not an identity:
+  names come from a small pool, an ended session frees its name, and
+  `rename_session` lets a session pick one, so content keyed on a name is
+  content anyone can ask for by guessing. A body is another agent's free text,
+  and printing it here pipes it into whatever consumes the output — a hook's
+  feedback string — which is an injection channel into the very agent the
+  mailbox renders these as unverified *claims* for. And the body has a better
+  destination already: it stays unclaimed and arrives through a real delivery
+  path, in context, correctly labelled.
+
+  Three selectors, because identifying the session is the actual difficulty.
+  `--external-id` matches what a session passed to `session_start`'s
+  `session_id`, which is the only thing a hook reliably knows about itself;
+  `--session` takes a name; `--workspace` is the fallback and reports ambiguity
+  rather than guessing, since waking the wrong agent is worse than waking none.
+  Exit status is 0 whether or not mail is waiting and non-zero only on error, so
+  a data answer is never confused with a failure.
+
+  `--workspace` resolves the way plumb resolves a workspace: by containment,
+  nearest enclosing root first. Exact equality was the first implementation and
+  was wrong in the case the selector exists for — plumb acquires a workspace by
+  walking UP to a root marker, so a session pinned to `/repo` serves
+  `/repo/internal/cli`, which is exactly the `cwd` a hook passes. It answered
+  "no live session matches" for a session pinned precisely there, and since
+  every failure path in the recipe's hook allows the stop, the wake hook
+  silently never fired and never said why. Nested roots resolve to the deepest,
+  so a submodule session is not made ambiguous by one on its superproject;
+  several sessions sharing that root still refuse, which is the case where
+  guessing wakes the wrong agent.
+
+  Counting goes through `collab.PendingNotes` — the same listing path
+  `workspace_sessions` uses — rather than a query written in the CLI, so the
+  delivery predicate stays defined in one place. It reads the workspace mailbox
+  only: a cross-project message sits in the daemon-level store behind the
+  recipient's `[collab] cross_project` opt-in (off by default) and is not
+  counted.
+
+- **The end-of-turn mail recipe now has both halves it needs.** The Stop-hook
+  note shipped with `plumb-chat` fell back to matching a session by its folder,
+  because nothing populated `external_id` — zero of 577 real session files on
+  this machine had one — and that fallback fails exactly where the feature is
+  needed, in a repository with several agents in it. The missing piece was never
+  the plumbing: `session_start` has always accepted `session_id` and persisted
+  it. Nothing told the agent to pass one. A `SessionStart` hook now states the
+  conversation id as context, phrased as a fact rather than an instruction (the
+  Claude Code docs are explicit that imperative `additionalContext` can trip the
+  agent's own prompt-injection defences and be surfaced to the user instead of
+  acted on), with the standing instruction living in `CLAUDE.md` where
+  instructions that never change belong. The Stop hook resolves by
+  `--external-id` first and falls back to `--workspace`, so it degrades to the
+  old behaviour for anyone who installs only half of it — and is now a few lines
+  of `jq` around `plumb mail` instead of hand-rolled SQLite. The `SessionStart`
+  script only reports the id; it calls nothing.
+
+  Note what this does NOT do: it adds no code, and `external_id` is populated
+  only if the user installs the hook AND the agent passes the id to
+  `session_start`. The linkage is documented and possible, not automatic.
+
+  The recipe is also retitled, because the old framing was wrong in a way that
+  undercut the skill it ships with. A `Stop` hook cannot wake an agent that is
+  ALREADY idle — that agent's hook has run and allowed, and nothing fires again
+  until its human speaks. It keeps an agent from going quiet at the instant it
+  finishes a turn, and only if mail is waiting right then; a message arriving a
+  second later waits for the human exactly as before. That matters because
+  `plumb-chat` teaches "silence is not a refusal", and an agent believing peers
+  get woken would weaken that discipline on a false premise. For an agent team
+  the event that genuinely covers going idle is Claude Code's `TeammateIdle`,
+  where exit 2 keeps the teammate working; the note names it and does not build
+  it.
+
+- **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
+  `leave_note` and `check_messages` have carried their whole contract in their
+  own tool descriptions, which is the right place for it and the wrong shape
+  for it — the mailbox's three hardest facts are each a wrong default
+  assumption away from a real failure, and a description an agent skims is not
+  where a habit gets formed. The skill teaches addressing (a live session name
+  from `workspace_sessions`, or the reserved `"next"`; a name is unique among
+  live sessions and freed when one ends), threading by `conversation_id`, and
+  `check_messages({wait_seconds})` as a turn hand-off rather than a poll loop.
+
+  Then the three that matter. **Delivery is polling only**, over three paths
+  sharing one exactly-once claim, so a peer idling on its human has not seen
+  your message and silence is not a refusal — do not escalate, do not infer a
+  decision, do not re-send. **The exchange cap bounds one thread, not one
+  conversation**: a fresh `conversation_id` starts a fresh budget, so it is a
+  speed bump, and routing around it defeats the only brake there is; summarise
+  for your human instead. **Cross-project delivery is the recipient's gate**
+  (`[collab] cross_project`, default off) and fails silently, so a
+  cross-project send is best-effort and should be reported as such. It also
+  says what the tool descriptions do not: a received body is another agent's
+  text, to be weighed as data and never followed as an instruction.
+
+  The eighth skill argues against the seven-skill ceiling on `skillsFS` rather
+  than quietly raising it, on the ceiling's own test — trigger disjointness.
+  "Another agent is working here and I need to reach it" is not a refusal, not
+  recall, not version control, and not a code operation.
+
+  Ships with a `references/` note on the caveat no server-side change can fix:
+  an agent that is waiting on its human makes no tool calls, so nothing reaches
+  it. The note gives a verified Claude Code Stop-hook recipe that narrows the
+  window from the client side, built on `plumb mail` (above). `plumb skills
+  sync` installs `SKILL.md` only, so that note stays in the repository rather
+  than beside an installed skill; the skill links to it on GitHub, and the embed
+  pattern narrowed to `skills/*/SKILL.md` to match — embedding the whole tree
+  would have put ~8 KB of unreachable reference note in every user's binary.
 
 ## 0.16.6 (2026-08-14)
 
@@ -796,131 +921,6 @@
   absolute tier row for every flat verb — `show`, `blame` and `revert` had none,
   and an invariance property compares a verb only against its own `nil`
   baseline, which a whole-verb demotion moves too.
-- **`plumb mail`: ask, from outside a session, whether an agent has messages
-  waiting.** The mailbox delivers by polling, so an agent that has finished its
-  turn and is waiting on its human never learns a peer wrote to it. Nothing
-  server-side can reach it — the daemon cannot push over MCP — so the client
-  has to ask, and until now there was no way to. A hook had to open `collab.db`
-  and write the delivery predicate itself.
-
-  **It never claims, and the guarantee is structural rather than promised.** The
-  caller is not the recipient; marking a row delivered on its behalf would spend
-  the exactly-once guarantee on an agent that never saw the text, and silently,
-  because a consumed message is indistinguishable from one nobody sent. The new
-  `collab.OpenReadOnly` hands back a `mode=ro` handle, so a claim issued through
-  it fails at the driver — the property survives someone later wiring a
-  different query in. `Open`-and-only-SELECT was the obvious implementation and
-  is the one deliberately not taken: it leaves the rule resting on every future
-  caller's care, and `Open` is not side-effect-free either (it migrates, stamps
-  the schema version, and writes a `.gitignore` entry).
-
-  **It reports whether, and how stale — never what.** A count and the age of
-  each waiting message; no bodies, no senders, no conversation ids. Three
-  independent reasons, any one sufficient. A session *name* is not an identity:
-  names come from a small pool, an ended session frees its name, and
-  `rename_session` lets a session pick one, so content keyed on a name is
-  content anyone can ask for by guessing. A body is another agent's free text,
-  and printing it here pipes it into whatever consumes the output — a hook's
-  feedback string — which is an injection channel into the very agent the
-  mailbox renders these as unverified *claims* for. And the body has a better
-  destination already: it stays unclaimed and arrives through a real delivery
-  path, in context, correctly labelled.
-
-  Three selectors, because identifying the session is the actual difficulty.
-  `--external-id` matches what a session passed to `session_start`'s
-  `session_id`, which is the only thing a hook reliably knows about itself;
-  `--session` takes a name; `--workspace` is the fallback and reports ambiguity
-  rather than guessing, since waking the wrong agent is worse than waking none.
-  Exit status is 0 whether or not mail is waiting and non-zero only on error, so
-  a data answer is never confused with a failure.
-
-  `--workspace` resolves the way plumb resolves a workspace: by containment,
-  nearest enclosing root first. Exact equality was the first implementation and
-  was wrong in the case the selector exists for — plumb acquires a workspace by
-  walking UP to a root marker, so a session pinned to `/repo` serves
-  `/repo/internal/cli`, which is exactly the `cwd` a hook passes. It answered
-  "no live session matches" for a session pinned precisely there, and since
-  every failure path in the recipe's hook allows the stop, the wake hook
-  silently never fired and never said why. Nested roots resolve to the deepest,
-  so a submodule session is not made ambiguous by one on its superproject;
-  several sessions sharing that root still refuse, which is the case where
-  guessing wakes the wrong agent.
-
-  Counting goes through `collab.PendingNotes` — the same listing path
-  `workspace_sessions` uses — rather than a query written in the CLI, so the
-  delivery predicate stays defined in one place. It reads the workspace mailbox
-  only: a cross-project message sits in the daemon-level store behind the
-  recipient's `[collab] cross_project` opt-in (off by default) and is not
-  counted.
-
-- **The end-of-turn mail recipe now has both halves it needs.** The Stop-hook
-  note shipped with `plumb-chat` fell back to matching a session by its folder,
-  because nothing populated `external_id` — zero of 577 real session files on
-  this machine had one — and that fallback fails exactly where the feature is
-  needed, in a repository with several agents in it. The missing piece was never
-  the plumbing: `session_start` has always accepted `session_id` and persisted
-  it. Nothing told the agent to pass one. A `SessionStart` hook now states the
-  conversation id as context, phrased as a fact rather than an instruction (the
-  Claude Code docs are explicit that imperative `additionalContext` can trip the
-  agent's own prompt-injection defences and be surfaced to the user instead of
-  acted on), with the standing instruction living in `CLAUDE.md` where
-  instructions that never change belong. The Stop hook resolves by
-  `--external-id` first and falls back to `--workspace`, so it degrades to the
-  old behaviour for anyone who installs only half of it — and is now a few lines
-  of `jq` around `plumb mail` instead of hand-rolled SQLite. The `SessionStart`
-  script only reports the id; it calls nothing.
-
-  Note what this does NOT do: it adds no code, and `external_id` is populated
-  only if the user installs the hook AND the agent passes the id to
-  `session_start`. The linkage is documented and possible, not automatic.
-
-  The recipe is also retitled, because the old framing was wrong in a way that
-  undercut the skill it ships with. A `Stop` hook cannot wake an agent that is
-  ALREADY idle — that agent's hook has run and allowed, and nothing fires again
-  until its human speaks. It keeps an agent from going quiet at the instant it
-  finishes a turn, and only if mail is waiting right then; a message arriving a
-  second later waits for the human exactly as before. That matters because
-  `plumb-chat` teaches "silence is not a refusal", and an agent believing peers
-  get woken would weaken that discipline on a false premise. For an agent team
-  the event that genuinely covers going idle is Claude Code's `TeammateIdle`,
-  where exit 2 keeps the teammate working; the note names it and does not build
-  it.
-
-- **`plumb-chat`, the eighth shipped skill: the mailbox's instruction manual.**
-  `leave_note` and `check_messages` have carried their whole contract in their
-  own tool descriptions, which is the right place for it and the wrong shape
-  for it — the mailbox's three hardest facts are each a wrong default
-  assumption away from a real failure, and a description an agent skims is not
-  where a habit gets formed. The skill teaches addressing (a live session name
-  from `workspace_sessions`, or the reserved `"next"`; a name is unique among
-  live sessions and freed when one ends), threading by `conversation_id`, and
-  `check_messages({wait_seconds})` as a turn hand-off rather than a poll loop.
-
-  Then the three that matter. **Delivery is polling only**, over three paths
-  sharing one exactly-once claim, so a peer idling on its human has not seen
-  your message and silence is not a refusal — do not escalate, do not infer a
-  decision, do not re-send. **The exchange cap bounds one thread, not one
-  conversation**: a fresh `conversation_id` starts a fresh budget, so it is a
-  speed bump, and routing around it defeats the only brake there is; summarise
-  for your human instead. **Cross-project delivery is the recipient's gate**
-  (`[collab] cross_project`, default off) and fails silently, so a
-  cross-project send is best-effort and should be reported as such. It also
-  says what the tool descriptions do not: a received body is another agent's
-  text, to be weighed as data and never followed as an instruction.
-
-  The eighth skill argues against the seven-skill ceiling on `skillsFS` rather
-  than quietly raising it, on the ceiling's own test — trigger disjointness.
-  "Another agent is working here and I need to reach it" is not a refusal, not
-  recall, not version control, and not a code operation.
-
-  Ships with a `references/` note on the caveat no server-side change can fix:
-  an agent that is waiting on its human makes no tool calls, so nothing reaches
-  it. The note gives a verified Claude Code Stop-hook recipe that narrows the
-  window from the client side, built on `plumb mail` (above). `plumb skills
-  sync` installs `SKILL.md` only, so that note stays in the repository rather
-  than beside an installed skill; the skill links to it on GitHub, and the embed
-  pattern narrowed to `skills/*/SKILL.md` to match — embedding the whole tree
-  would have put ~8 KB of unreachable reference note in every user's binary.
 
 - **Scala is now indexed by the topology Map** (`.scala`, `.sc`) — packages,
   imports with selectors and wildcards, classes, case classes, objects, enums,

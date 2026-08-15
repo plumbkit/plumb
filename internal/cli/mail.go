@@ -135,7 +135,7 @@ func runMail(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	ages, err := mailWaiting(info.Folder, info.Name)
+	ages, err := mailWaiting(collab.Claimant{Name: info.Name, ID: info.ID, Workspace: info.Folder})
 	if err != nil {
 		return err
 	}
@@ -304,14 +304,23 @@ func mailNames(matches []session.Info) []string {
 // An absent collab.db is not an error. It is created lazily on first use, so a
 // workspace whose sessions have never exchanged a message simply has no mailbox
 // and nothing is waiting.
-func mailWaiting(workspace, name string) ([]int, error) {
+//
+// The claimant carries the session's ID, not just its name, because a note bound
+// to a live recipient is matched on that ID. A probe built with an empty ID sees
+// unbound rows only — it would report "no mail" for exactly the messages the
+// binding protects, and silently, since no mail is the ordinary answer. The one
+// identity it cannot supply is an inherited predecessor ID: that grant lives in
+// the daemon's session state, keyed on the serve proxy's own secret, and is not
+// reachable from a session file. So a note bound to a session a restart ended is
+// counted by check_messages inside the session, not by this probe.
+func mailWaiting(who collab.Claimant) ([]int, error) {
 	// Never nil: ages_seconds is a JSON array in the contract, and a nil slice
 	// marshals as null. `jq '.ages_seconds | length'` errors on null, so a
 	// consumer would break on precisely the common case — no mail at all.
-	if workspace == "" || !collab.Exists(workspace) {
+	if who.Workspace == "" || !collab.Exists(who.Workspace) {
 		return []int{}, nil
 	}
-	store, err := collab.OpenReadOnly(workspace)
+	store, err := collab.OpenReadOnly(who.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("opening the mailbox: %w", err)
 	}
@@ -321,7 +330,7 @@ func mailWaiting(workspace, name string) ([]int, error) {
 	defer cancel()
 
 	now := time.Now()
-	rows, err := store.PendingNotes(ctx, name, workspace, now)
+	rows, err := store.PendingNotes(ctx, who, now)
 	if err != nil {
 		return nil, fmt.Errorf("reading the mailbox: %w", err)
 	}
