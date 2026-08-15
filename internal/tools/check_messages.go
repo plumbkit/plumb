@@ -139,10 +139,11 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(rows, policy)
 	}
-	wait := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
+	wait, clamped := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
 	if wait <= 0 {
 		return t.empty(policy)
 	}
+	notice := waitClampNotice(args.WaitSeconds, policy.maxWaitSeconds(), clamped)
 
 	// Snapshot the generations BEFORE waiting so a message written between the
 	// claim above and the park below still wakes us instead of being missed.
@@ -151,7 +152,7 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
-		return fmt.Sprintf("No messages (waited %s).", humaniseTTL(wait))
+		return fmt.Sprintf("No messages (waited %s).%s", humaniseAge(wait), notice)
 	}
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(rows, policy)
@@ -167,7 +168,7 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	// certainly true and offers the race as a possibility.
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — each message is delivered exactly once.\n"
+		"first — each message is delivered exactly once.\n" + notice
 }
 
 // inheritedIDs are the predecessor identities this session may also read for,
@@ -299,13 +300,28 @@ func (t *CheckMessages) empty(policy CollabPolicy) string {
 	return sb.String()
 }
 
-// clampWait bounds a requested wait to [0, max] seconds.
-func clampWait(requested, maxSeconds int) time.Duration {
+// clampWait bounds a requested wait to [0, max] seconds, and reports whether it
+// had to. The caller needs the second value: a caller that asks for 300s and is
+// silently given 55 builds its turn-handoff around a number that was never in
+// force, and the only evidence it gets back is an elapsed time that looks like
+// the call returned early.
+func clampWait(requested, maxSeconds int) (wait time.Duration, clamped bool) {
 	if requested <= 0 {
-		return 0
+		return 0, false
 	}
 	if requested > maxSeconds {
-		requested = maxSeconds
+		return time.Duration(maxSeconds) * time.Second, true
 	}
-	return time.Duration(requested) * time.Second
+	return time.Duration(requested) * time.Second, false
+}
+
+// waitClampNotice states that a requested wait was reduced, and names the knob.
+// Empty when nothing was clamped, so the common case stays silent.
+func waitClampNotice(requested, maxSeconds int, clamped bool) string {
+	if !clamped {
+		return ""
+	}
+	return fmt.Sprintf("  Your requested wait of %ds was clamped to %ds — the ceiling is "+
+		"[collab] max_wait_seconds, kept below the client's own call timeout so the wait "+
+		"cannot outlive the request carrying it.\n", requested, maxSeconds)
 }

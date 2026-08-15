@@ -136,6 +136,9 @@ func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	if refusal := unregisteredSessionRefusal("share_findings", t.deps.SessionName()); refusal != "" {
+		return refusal, nil
+	}
 	return t.run(ws, args)
 }
 

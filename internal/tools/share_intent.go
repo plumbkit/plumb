@@ -104,6 +104,9 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
+	if refusal := unregisteredSessionRefusal("share_intent", t.deps.SessionName()); refusal != "" {
+		return refusal, nil
+	}
 	store := t.deps.Store()
 	if store == nil {
 		return "", errors.New("share_intent: cross-agent store unavailable for this workspace")
