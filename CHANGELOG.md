@@ -49,6 +49,31 @@
 
 ### Fixed
 
+- **A note is no longer delivered back to the session that wrote it.** The
+  delivery predicate matched `addressee = ? OR addressee = 'next'` with no
+  author exclusion, so a session that left a `to: "next"` note claimed it back
+  on its own next tool call. Because delivery is exactly-once, the author did
+  not merely see a useless copy — it CONSUMED the message, so the peer it was
+  written for could never receive it, while the sender had been told the send
+  succeeded. Nothing visible to either agent revealed the loss.
+
+  The exclusion is keyed on session identity, not name (a later session that
+  happens to draw the author's name is a legitimate recipient), covers inherited
+  predecessor IDs so a restart cannot reopen the loop, and deliberately still
+  delivers rows with no recorded author — a note that cannot be proven
+  self-authored stays deliverable. It lives in the predicate the cheap probe and
+  the claim share, so the two cannot disagree about what is deliverable.
+
+- **An in-thread reply that names no recipient now reaches the thread's other
+  participant, or is refused.** Passing a `conversation_id` without a `to` was
+  silently re-addressed to `"next"` — whoever attached to the workspace next —
+  even though quoting a conversation id is an unambiguous statement of intent to
+  reply in that thread. Combined with the loopback above, the sender's own
+  session was frequently the one that took it. `leave_note` now resolves the
+  other participant from the thread, and where that has no answer (no other
+  participant, or several) it refuses and names the ambiguity rather than
+  guessing. A refused send stores nothing. Naming `to` explicitly is unchanged.
+
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a
   multi-agent session's throwaway `.claude/worktrees/*` checkouts each got

@@ -99,15 +99,49 @@ func addresseeMatch(who Claimant) (string, []any) {
 	return `AND (addressee_id = '' OR addressee_id IN (` + strings.Join(marks, ", ") + `))`, args
 }
 
+// notAuthoredBy builds the sender-exclusion half of the delivery predicate,
+// together with its arguments, for the same reason addresseeMatch does: the
+// placeholder count varies with the claimant's identity list, and a separate SQL
+// constant would eventually disagree with it.
+//
+// Without this a session that writes a to:"next" note claims it back on its own
+// next tool call. That is not merely useless — delivery is exactly-once, so the
+// author CONSUMES the message and the peer it was written for can never receive
+// it, while the sender was told the send succeeded. Nothing in the exchange
+// reveals the loss.
+//
+// The empty arm is load-bearing. author_id is empty on rows written before senders
+// were attributed, and a claimant may itself hold no ID; a bare author_id != ?
+// would then read as "author_id is not empty" and suppress every legacy row for
+// exactly the sessions least able to notice. A row with no recorded author
+// cannot be proven self-authored, so it stays deliverable.
+//
+// Inherited IDs are excluded too. A restarted session that inherited its
+// predecessor's mailbox is the same logical agent as the session that wrote the
+// note, so handing it back would recreate the loop across a restart.
+func notAuthoredBy(who Claimant) (string, []any) {
+	ids := who.identities()
+	marks := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		marks[i], args[i] = "?", id
+	}
+	return `AND (author_id = '' OR author_id NOT IN (` + strings.Join(marks, ", ") + `))`, args
+}
+
 // claimable is the FULL predicate for "a note this claimant may be handed":
-// unexpired, unclaimed, addressed to it or to "next", identity-matched, and
-// within its workspace scope. ClaimNotes and HasPendingNotes share it verbatim.
+// unexpired, unclaimed, addressed to it or to "next", identity-matched, not
+// written by it, and within its workspace scope. ClaimNotes and HasPendingNotes
+// share it verbatim.
 //
 // They must, because HasPendingNotes exists to decide whether ClaimNotes is
 // worth running. A probe that is broader than the claim reports mail that does
 // not arrive; one that is narrower suppresses a claim that would have delivered.
 // Either way the bug is invisible — the message simply does not show up — so the
-// rule is written once rather than kept in agreement by hand.
+// rule is written once rather than kept in agreement by hand. The author
+// exclusion belongs HERE and not in ClaimNotes for that reason: put it only on
+// the claim and the probe announces mail the claim then refuses to hand over,
+// which is a spin loop rather than a fix.
 //
 // Note what the identity clause does NOT touch. "next" is matched by the
 // addressee arm and always carries an empty addressee_id, so no number of
@@ -115,10 +149,13 @@ func addresseeMatch(who Claimant) (string, []any) {
 // never reaches another project's mail. Both remain exactly as strict as before.
 func claimable(who Claimant, now time.Time) (string, []any) {
 	idSQL, idArgs := addresseeMatch(who)
+	authorSQL, authorArgs := notAuthoredBy(who)
 	where := `kind = ? AND delivered_at = 0 AND expires_at > ?
 			   AND (addressee = ? OR addressee = ?) ` + idSQL + `
+			   ` + authorSQL + `
 			   AND (target_workspace = '' OR target_workspace = ?)`
 	args := append([]any{string(KindNote), now.UnixNano(), who.Name, AddresseeNext}, idArgs...)
+	args = append(args, authorArgs...)
 	return where, append(args, who.Workspace)
 }
 
