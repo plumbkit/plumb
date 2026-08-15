@@ -256,7 +256,13 @@ func TestFormatProjectGitNotice(t *testing.T) {
 				"could not be parsed",
 				"skipped WHOLE",
 				"That does NOT mean the policy above is the global one",
-				"an EARLIER readable version of this file",
+				"an EARLIER readable version of THIS file",
+				// The provenance that is NOT this reader's own file, and the only one
+				// where the standing policy is an elevation this repository was never
+				// granted. Pinned by TestProjectGitStatus_RePinCarriesTheGrant, which
+				// fails when PLAN-309 removes the carryover and this clause with it.
+				"re-pinned here from another workspace",
+				"trusted [git] grant included",
 				`plumb config show --workspace '/tmp/ws'`,
 			},
 			wantAbsent: []string{

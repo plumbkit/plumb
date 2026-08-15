@@ -274,12 +274,23 @@ func trustedGitOverrideNotice(ws string, overridden []string) string {
 // under this notice. Claiming "the policy above is what plumb resolved without
 // it" would be false in exactly that case, which is the one a reader hits while
 // editing the file — the state where a wrong claim is most expensive.
+//
+// The carryover is not limited to THIS file's earlier values, and the notice must
+// not imply that it is. The same early return runs on a RE-PIN, so a session that
+// arrives from a trusted workspace is still holding THAT workspace's granted
+// tiers — a repository inheriting an elevation nobody granted it, by shipping a
+// broken config rather than a bold one (PLAN-309; the fail-open is in
+// applyProjectConfig, not here). Naming only the same-file case would describe
+// the standing policy as at worst the reader's own, in the one state where it is
+// at worst someone else's.
 func unreadableProjectConfigNotice(ws string) string {
 	return fmt.Sprintf("\nIGNORED — this project's .plumb/config.toml could not be parsed, so it was skipped WHOLE: nothing "+
 		"it asks for, [git] included, was read from it. That does NOT mean the policy above is the global one. It is "+
-		"whatever this session last resolved successfully — the global config if no readable project config was ever "+
-		"applied here, but the values from an EARLIER readable version of this file if it parsed at attach and was broken "+
-		"afterwards, since a failed re-read leaves the session's resolved policy standing. Check the file, then see the "+
+		"whatever this session last resolved successfully, because a failed load leaves that standing rather than "+
+		"reverting it: the global config if no readable project config was ever applied on this connection; the values "+
+		"from an EARLIER readable version of THIS file if it parsed at attach and was broken afterwards; or, if this "+
+		"session was re-pinned here from another workspace, THAT workspace's values — its trusted [git] grant included, "+
+		"which this repository was never given. Check the file, then see the "+
 		"parse error with `plumb config show --workspace %s`; `plumb restart` resolves the policy from scratch.\n",
 		shellQuote(ws))
 }

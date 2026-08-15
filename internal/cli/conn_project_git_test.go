@@ -284,6 +284,54 @@ func TestProjectGitStatus_UnparseableConfig(t *testing.T) {
 	}
 }
 
+// TestProjectGitStatus_RePinCarriesTheGrant pins the state the unreadable notice
+// describes, and is the tripwire that stops the notice outliving it.
+//
+// applyProjectConfig returns on a parse error WITHOUT reverting v.git, and the
+// same early return runs on a re-pin. So a session pinned to a trusted workspace
+// and re-pinned into one whose config will not parse arrives holding the first
+// workspace's granted tiers: an elevation the second repository was never given,
+// obtained by shipping a broken config rather than a bold one. That is PLAN-309
+// (pre-existing on main, priority 1) and the fail-open is in applyProjectConfig,
+// not in the notice.
+//
+// This test asserts the CURRENT behaviour so the notice may honestly name it.
+// When PLAN-309 lands, this test fails — and the clause "re-pinned here from
+// another workspace, THAT workspace's values" must be deleted from
+// unreadableProjectConfigNotice in the same change, or the notice starts lying in
+// the opposite direction. The assertion in internal/tools names this test for
+// that reason.
+func TestProjectGitStatus_RePinCarriesTheGrant(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	trusted := t.TempDir()
+	writeProjectConfig(t, trusted, "[git]\nallow_push = true\n")
+	grantExecTrust(t, trusted)
+
+	s := projectGitSession(t, trusted)
+	if !s.projectGitStatus().Trusted || !s.gitPolicy().AllowPush {
+		t.Fatalf("precondition: the grant must be in force before the re-pin, got trusted=%v allow_push=%v",
+			s.projectGitStatus().Trusted, s.gitPolicy().AllowPush)
+	}
+
+	// Re-pin into a workspace whose config cannot be parsed. Nobody trusted this
+	// one, and it asks for nothing that could be honoured.
+	broken := t.TempDir()
+	writeProjectConfig(t, broken, "[git\nallow_push = true\n")
+	s.mutate(func(v *sessionView) { v.acquiredRoot = broken })
+	s.applyProjectConfig(broken)
+
+	if !s.projectGitStatus().Unreadable {
+		t.Fatalf("the re-pinned workspace's config must report as unparseable, got %+v", s.projectGitStatus())
+	}
+	if !s.gitPolicy().AllowPush {
+		t.Fatal("PLAN-309 appears fixed: the re-pin no longer carries the previous workspace's grant. " +
+			"Good — now delete the 're-pinned here from another workspace' clause from " +
+			"unreadableProjectConfigNotice (internal/tools/session_start_git_notice.go) and its assertions in " +
+			"TestFormatProjectGitNotice, which this test exists to keep honest.")
+	}
+}
+
 // TestProjectGitStatus_NoProjectConfig keeps the common case quiet.
 func TestProjectGitStatus_NoProjectConfig(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
