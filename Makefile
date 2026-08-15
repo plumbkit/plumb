@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -241,6 +241,16 @@ cover-report:
 # and the tool's own version is not part of the build.
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# web-ui-audit is vuln's npm counterpart for the embedded SPA. Two tiers, the
+# same split CI's npm-audit job enforces: prod dependencies block at high
+# (their code ships bundled in dist/), dev/build-time findings print but do
+# not fail — advisories against build-time-only dependencies must not turn the
+# tree red with no code change; the small prod tree still blocks, by the same
+# posture as govulncheck. Reads the lockfile, so no npm ci first.
+web-ui-audit:
+	cd internal/web/ui && npm audit --omit=dev --audit-level=high
+	-cd internal/web/ui && npm audit --audit-level=high
 
 # tidy-check asserts go.mod/go.sum are already tidy. Note that `go mod tidy`
 # mutates in place: on failure the tidied files are left in the working tree —
