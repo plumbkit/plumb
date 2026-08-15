@@ -402,6 +402,14 @@
 
 ### Added
 
+- **`make verify` now catches a duplicate CHANGELOG.md version heading.** A
+  rebase can replay an addition as a bare new `## <version> (date)` heading
+  rather than a conflicting insertion under the existing one, since git sees
+  it as a pure addition and never conflicts — this landed uncaught at least
+  four times (PR #320, #292, #293, and a duplicate `## 0.16.6` heading fixed
+  in PR #325). `make check-changelog` (`scripts/check-changelog-headings.sh`)
+  fails when any version number appears in more than one heading; wired into
+  `verify` and the pre-commit hook alongside the file-size and brief guards.
 - **Skipped topology files now say WHY they were skipped.** `error_msg` was
   write-only: recorded on every indexing failure and read back only as a
   count, so a parse timeout, a malformed file and a panicking grammar were

@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -226,6 +226,12 @@ check-size:
 check-brief:
 	./scripts/check-agents-brief.sh
 
+# check-changelog fails if CHANGELOG.md has the same version number in more
+# than one '## <version>' heading — a rebase can replay an addition as a
+# second heading without ever conflicting. See scripts/check-changelog-headings.sh.
+check-changelog:
+	./scripts/check-changelog-headings.sh
+
 # cover measures statement coverage and fails below the floor in
 # scripts/check-coverage.sh. Not in `verify` — it re-runs the whole suite with
 # instrumentation, so it would roughly double the local edit loop; CI runs it on
@@ -330,11 +336,11 @@ blog:
 	python3 scripts/build-blog.py
 
 # verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) + the file-size and brief
-# guards + go.mod tidiness. Coverage (`make cover`) and vulnerabilities (`make
-# vuln`) are deliberately NOT here — the first doubles the suite runtime, the
-# second needs the network; CI runs both on every push.
-verify: build test lint build-integration build-clients check-size check-brief tidy-check
+# integration-tag compile pass (build-integration) + the file-size, brief and
+# changelog guards + go.mod tidiness. Coverage (`make cover`) and
+# vulnerabilities (`make vuln`) are deliberately NOT here — the first doubles
+# the suite runtime, the second needs the network; CI runs both on every push.
+verify: build test lint build-integration build-clients check-size check-brief check-changelog tidy-check
 
 # hooks is an alias for install-hooks — the ops-root Makefile uses `hooks-ops`
 # for its own hook, and the asymmetry is a recurring stumble.
