@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,9 +14,17 @@ import (
 	"github.com/plumbkit/plumb/internal/session"
 )
 
-// putTestNote writes one note addressed to `to` in workspace's collab.db,
-// creating the store on first use, and returns the conversation it landed in.
+// putTestNote writes one unbound note addressed to `to` in workspace's
+// collab.db, creating the store on first use, and returns the conversation it
+// landed in.
 func putTestNote(t *testing.T, workspace, from, to, body string) string {
+	t.Helper()
+	return putBoundTestNote(t, workspace, from, to, "", body)
+}
+
+// putBoundTestNote is putTestNote with the note bound to one session ID, which
+// is how every note to a live peer is stored.
+func putBoundTestNote(t *testing.T, workspace, from, to, toID, body string) string {
 	t.Helper()
 	store, err := collab.Open(workspace)
 	if err != nil {
@@ -27,6 +36,7 @@ func putTestNote(t *testing.T, workspace, from, to, body string) string {
 		AuthorID:      "id-" + from,
 		Body:          body,
 		Addressee:     to,
+		AddresseeID:   toID,
 		TTL:           time.Hour,
 	}, time.Now())
 	if err != nil {
@@ -53,7 +63,7 @@ func TestMailWaiting_NeverClaims(t *testing.T) {
 	putTestNote(t, ws, "peer-two", "peer-one", "the rate limiter is yours")
 
 	for i := 1; i <= 3; i++ {
-		ages, err := mailWaiting(ws, "peer-one")
+		ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 		if err != nil {
 			t.Fatalf("probe %d: %v", i, err)
 		}
@@ -70,7 +80,7 @@ func TestMailWaiting_NeverClaims(t *testing.T) {
 		t.Fatalf("reopening collab store: %v", err)
 	}
 	defer store.Close()
-	rows, err := store.ClaimNotes(context.Background(), "peer-one", ws, time.Now(), 0)
+	rows, err := store.ClaimNotes(context.Background(), collab.Claimant{Name: "peer-one", Workspace: ws}, time.Now(), 0)
 	if err != nil {
 		t.Fatalf("claiming: %v", err)
 	}
@@ -83,7 +93,7 @@ func TestMailWaiting_NeverClaims(t *testing.T) {
 	}
 
 	// And once genuinely delivered, the probe agrees it is gone.
-	ages, err := mailWaiting(ws, "peer-one")
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 	if err != nil {
 		t.Fatalf("probe after claim: %v", err)
 	}
@@ -106,7 +116,8 @@ func TestMailWaiting_ReadOnlyHandleCannotWrite(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, err := store.ClaimNotes(context.Background(), "peer-one", ws, time.Now(), 0); err == nil {
+	claimant := collab.Claimant{Name: "peer-one", Workspace: ws}
+	if _, err := store.ClaimNotes(context.Background(), claimant, time.Now(), 0); err == nil {
 		t.Fatal("ClaimNotes succeeded through the read-only handle — mode=ro is not in force, so " +
 			"nothing but caller discipline stops `plumb mail` consuming a message")
 	}
@@ -116,7 +127,7 @@ func TestMailWaiting_ReadOnlyHandleCannotWrite(t *testing.T) {
 // workspace whose sessions never exchanged a message has none. That is "no
 // mail", not a failure — a hook must not be broken by the common case.
 func TestMailWaiting_NoMailboxIsNotAnError(t *testing.T) {
-	ages, err := mailWaiting(t.TempDir(), "peer-one")
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("workspace with no collab.db: %v", err)
 	}
@@ -133,13 +144,56 @@ func TestMailWaiting_ExcludesOtherAddressees(t *testing.T) {
 	putTestNote(t, ws, "peer-two", "someone-else", "not for peer-one")
 	putTestNote(t, ws, "peer-two", collab.AddresseeNext, "for whoever arrives")
 
-	ages, err := mailWaiting(ws, "peer-one")
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 	if len(ages) != 0 {
 		t.Errorf("got %d waiting for peer-one, want 0 — a note to another session, or to %q, is "+
 			"not this session's mail", len(ages), collab.AddresseeNext)
+	}
+}
+
+// TestMailWaiting_CountsMailBoundToTheSession is the regression test for the
+// claimant this probe passes. A note bound to a live recipient carries that
+// session's ID in addressee_id, and the delivery predicate hands over a row
+// only when it is unbound OR bound to one of the claimant's own identities. A
+// probe built with an empty ID therefore matches unbound rows alone — it would
+// report zero for precisely the mail the binding exists to protect, and it
+// would do so silently, since "no mail" is the ordinary answer.
+func TestMailWaiting_CountsMailBoundToTheSession(t *testing.T) {
+	ws := t.TempDir()
+	store, err := collab.Open(ws)
+	if err != nil {
+		t.Fatalf("opening collab store: %v", err)
+	}
+	if _, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "peer-two", AuthorID: "id-peer-two",
+		Body:      "bound to this session",
+		Addressee: "peer-one", AddresseeID: "sess-peer-one",
+		TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatalf("putting bound note: %v", err)
+	}
+	store.Close()
+
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "sess-peer-one", Workspace: ws})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 1 {
+		t.Fatalf("got %d waiting, want 1 — the probe must carry the session ID, or every bound "+
+			"message reads as no mail at all", len(ages))
+	}
+
+	// The other half of the boundary: the binding still excludes a different
+	// session answering to the same name.
+	ages, err = mailWaiting(collab.Claimant{Name: "peer-one", ID: "sess-someone-else", Workspace: ws})
+	if err != nil {
+		t.Fatalf("probe as another session: %v", err)
+	}
+	if len(ages) != 0 {
+		t.Errorf("got %d waiting for a session that merely holds the name, want 0", len(ages))
 	}
 }
 
@@ -163,7 +217,7 @@ func TestMailWaiting_AgesOldestFirst(t *testing.T) {
 		}
 	}
 
-	ages, err := mailWaiting(ws, "peer-one")
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -184,7 +238,7 @@ func TestMailWaiting_AgesOldestFirst(t *testing.T) {
 // almost every invocation.
 func TestMailReport_EmptyAgesMarshalAsArray(t *testing.T) {
 	for _, ws := range []string{"", t.TempDir()} {
-		ages, err := mailWaiting(ws, "peer-one")
+		ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 		if err != nil {
 			t.Fatalf("mailWaiting(%q): %v", ws, err)
 		}
@@ -364,7 +418,9 @@ func TestRunMail_ResolvesByExternalID(t *testing.T) {
 		t.Fatalf("registering session: %v", err)
 	}
 	session.SetExternalID(info.ID, "cc-session-1")
-	putTestNote(t, ws, "swift-falcon", "quiet-mesa", "ratelimit is yours")
+	// Bound to the session that is about to ask — the case a claimant carrying
+	// only the name would report as no mail at all.
+	putBoundTestNote(t, ws, "swift-falcon", "quiet-mesa", info.ID, "ratelimit is yours")
 
 	mailFlagExternalID = "cc-session-1"
 	got, err := resolveMailSession()
@@ -374,13 +430,44 @@ func TestRunMail_ResolvesByExternalID(t *testing.T) {
 	if got.Name != "quiet-mesa" {
 		t.Fatalf("resolved %q, want quiet-mesa", got.Name)
 	}
-	ages, err := mailWaiting(got.Folder, got.Name)
+	// Through runMail itself, so the claimant it builds is under test and not
+	// just the function it hands one to.
+	var report mailReport
+	if err := json.Unmarshal(captureMailJSON(t), &report); err != nil {
+		t.Fatalf("decoding the report: %v", err)
+	}
+	if report.Count != 1 {
+		t.Fatalf("count = %d, want 1 — runMail must address the mailbox with the session's ID as "+
+			"well as its name, or a message bound to this very session reads as none", report.Count)
+	}
+	if report.Session != "quiet-mesa" || report.Workspace != ws {
+		t.Errorf("report identified %q in %q, want quiet-mesa in %q", report.Session, report.Workspace, ws)
+	}
+}
+
+// captureMailJSON runs `plumb mail --json` and returns what it printed.
+func captureMailJSON(t *testing.T) []byte {
+	t.Helper()
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("probe: %v", err)
+		t.Fatalf("pipe: %v", err)
 	}
-	if len(ages) != 1 {
-		t.Fatalf("got %d waiting, want 1", len(ages))
+	stdout := os.Stdout
+	os.Stdout = w
+	mailFlagJSON = true
+	defer func() { os.Stdout = stdout }()
+
+	runErr := runMail(nil, nil)
+	w.Close()
+	out, readErr := io.ReadAll(r)
+	r.Close()
+	if runErr != nil {
+		t.Fatalf("runMail: %v", runErr)
 	}
+	if readErr != nil {
+		t.Fatalf("reading captured stdout: %v", readErr)
+	}
+	return out
 }
 
 // TestResolveMailSession_UnknownIsAnError: a selector matching nothing is a
