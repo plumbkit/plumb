@@ -401,8 +401,13 @@
   project sets no `[git]` key. A `.plumb/config.toml` that cannot be **parsed**
   gets its own notice, since it is skipped whole and no `plumb trust` would help
   — and that notice reports only what the *file* contributed (nothing), not what
-  the policy is, because a config that parsed at attach and was broken in place
-  afterwards leaves its already-applied values standing.
+  the policy is, because a failed load leaves the session's resolved policy
+  standing rather than reverting it. It names all three provenances that policy
+  can have, including the one that is not the reader's own: a session re-pinned
+  in from a **trusted** workspace is still holding that workspace's granted
+  tiers, so a repository can be sitting under an elevation it was never given.
+  The carryover itself is pre-existing and tracked separately; what changes here
+  is that the notice stops implying the standing policy is at worst your own.
 
   **Being trusted does not buy silence**, only a different explanation. Plumb
   applies `PLUMB_GIT_*` *after* the project config, so an approved
