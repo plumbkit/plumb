@@ -331,6 +331,23 @@
 
 ### Security
 
+- **Agent-to-agent message bodies no longer reach the stats database.**
+  `leave_note`, `share_intent` and `share_findings` had their arguments
+  recorded verbatim as telemetry, and `check_messages` and `session_start`
+  recorded the delivered note in their output. Those bodies already have
+  purpose-built storage in `internal/collab` — a byte budget, a TTL, and
+  expiry-driven pruning — and the stats database has none of it and is never
+  pruned, so the second copy silently outlived every guarantee the first was
+  given. Bodies are now stripped before the row is written; byte counts,
+  timings, savings and the routing metadata that makes a row queryable (`to`,
+  `conversation_id`, `paths`, `wait_seconds`) are all preserved, and every
+  other tool is untouched — notably `git`, whose output `workspace_sessions`
+  reads back for commit attribution.
+
+  Stats schema **v17** scrubs the rows earlier builds already wrote. It is the
+  first migration that deletes data, deliberately: leaving those bodies in
+  place would keep honouring an expiry the copy never had.
+
 - **A workspace root that CONTAINS a home directory can no longer be pinned
   without a declaration.** `/Users`, `/home`, `/`, and macOS's
   `/System/Volumes/Data` each contain every home directory on the machine —

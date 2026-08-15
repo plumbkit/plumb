@@ -124,6 +124,20 @@ var migrations = []migration{
 	{from: 13, to: 14, addColumn: "error_kind", sql: `ALTER TABLE tool_calls ADD COLUMN error_kind            TEXT NOT NULL DEFAULT ''`},
 	{from: 14, to: 15, addColumn: "error_retryable", sql: `ALTER TABLE tool_calls ADD COLUMN error_retryable       INTEGER NOT NULL DEFAULT 0`},
 	{from: 15, to: 16, addColumn: "remediation_class", sql: `ALTER TABLE tool_calls ADD COLUMN remediation_class     TEXT NOT NULL DEFAULT ''`},
+	// v17 scrubs collaboration bodies out of rows recorded before plumb stopped
+	// storing them. Unlike every migration above it this one DESTROYS data, and
+	// deliberately: these bodies were written to collab with a byte budget and a
+	// TTL, and the copy here has neither, so leaving them would keep honouring an
+	// expiry the second copy never had. Only the two body-bearing columns are
+	// touched — timings, sizes, savings and error classification survive, so the
+	// rows stay useful as telemetry.
+	{from: 16, to: 17, sql: `UPDATE tool_calls
+SET input_json = CASE
+        WHEN tool IN ('leave_note', 'share_intent', 'share_findings') THEN '{}'
+        ELSE input_json
+    END,
+    output_text = ''
+WHERE tool IN ('leave_note', 'share_intent', 'share_findings', 'check_messages', 'session_start')`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -131,13 +145,13 @@ var migrations = []migration{
 var ErrReadOnlySchemaUpgradeRequired = errors.New("stats schema upgrade required")
 
 // migrate applies all pending forward migrations from currentVersion up to
-// targetVersion. ADD COLUMN steps are skipped when the column already exists,
+// SchemaVersion. ADD COLUMN steps are skipped when the column already exists,
 // which keeps the path idempotent in two cases: (a) an unstamped database
 // created by a build that defined the column in the baseline schema; (b)
 // re-running migrate after a partial earlier run.
-func migrate(db *sql.DB, currentVersion, targetVersion int) error {
+func migrate(db *sql.DB, currentVersion int) error {
 	for _, m := range migrations {
-		if m.from < currentVersion || m.to > targetVersion {
+		if m.from < currentVersion || m.to > SchemaVersion {
 			continue
 		}
 		if m.addColumn != "" {
@@ -214,7 +228,8 @@ func DBPathFor() string {
 //	14 — added error_kind column (failure telemetry)
 //	15 — added error_retryable column (failure telemetry)
 //	16 — added remediation_class column (failure telemetry)
-const SchemaVersion = 16
+//	17 — scrubbed historical collaboration bodies from tool-call telemetry
+const SchemaVersion = 17
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -240,7 +255,7 @@ func Open() (*DB, error) {
 		return nil, err
 	}
 	if currentVersion < SchemaVersion {
-		if err := migrate(db, currentVersion, SchemaVersion); err != nil {
+		if err := migrate(db, currentVersion); err != nil {
 			db.Close()
 			return nil, err
 		}

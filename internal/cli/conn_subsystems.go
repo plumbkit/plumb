@@ -259,10 +259,61 @@ func withFailure(c stats.Call, failure *toolerror.Error) stats.Call {
 	return c
 }
 
+const collaborationStatsOutputOmitted = "[collaboration content omitted from stats]"
+
+// statsToolData strips collaboration bodies before they reach telemetry.
+//
+// Those bodies already have purpose-built storage in collab: a byte budget, a
+// TTL, and expiry-driven pruning. The stats database has none of that — it is
+// never pruned — so a second raw copy there would outlive every guarantee the
+// first copy was given, and would do so silently. Message CONTENT is the one
+// thing telemetry has no use for: raw byte counts stay on the Call, and the
+// routing metadata that makes a row queryable (to, conversation_id, paths,
+// waits) is preserved.
+//
+// leave_note/share_intent/share_findings are stripped on the way IN. The two
+// mailbox readers carry no body in their arguments, but their output delivers
+// one, so for them only the output is dropped. Everything else is untouched —
+// notably git, whose output_text workspace_sessions reads back for commit
+// attribution.
+func statsToolData(toolName string, args json.RawMessage, output string) (string, string) {
+	var sensitiveFields []string
+	switch toolName {
+	case "leave_note", "share_intent":
+		sensitiveFields = []string{"body"}
+	case "share_findings":
+		sensitiveFields = []string{"summary", "description"}
+	case "check_messages", "session_start":
+		// No body in the arguments; the delivered body is in the output.
+	default:
+		return string(args), output
+	}
+
+	safeOutput := ""
+	if output != "" {
+		safeOutput = collaborationStatsOutputOmitted
+	}
+	// Unparseable args are dropped rather than stored: this runs on the recording
+	// path for a tool known to carry a body, and a blob that did not parse is the
+	// case where we can least prove what is in it.
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(args, &fields); err != nil {
+		return "{}", safeOutput
+	}
+	for _, field := range sensitiveFields {
+		delete(fields, field)
+	}
+	safeArgs, err := json.Marshal(fields)
+	if err != nil {
+		return "{}", safeOutput
+	}
+	return string(safeArgs), safeOutput
+}
+
 // onAfterTool records a completed tool call in the stats store and refreshes
 // the session's last-seen timestamp so idle detection stays accurate. Savings are
 // scored here, at write time: this is the single point where the tool name,
-// client identity, raw args and output all co-exist.
+// client identity, raw sizes and body-free collaboration telemetry all co-exist.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 	session.Touch(s.sessID)
 	v := s.view()
@@ -279,6 +330,8 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	// Score savings under the counterfactual model. Failed calls (output cleared
 	// upstream) score 0 by construction inside Score.
 	saved := clientcaps.Score(toolName, clientName, len(output), baselineBytesFrom(output), batchSizeFor(toolName, args), !isError)
+	// Scored above from the real output, so redaction costs no savings accuracy.
+	inputJSON, outputText := statsToolData(toolName, args, output)
 	s.statsStore.Record(root, withFailure(stats.Call{
 		SessionID:           s.sessID,
 		SessionName:         sessionName,
@@ -289,8 +342,8 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		OutputBytes:         len(output),
 		Success:             !isError,
 		ErrorMsg:            errMsg,
-		InputJSON:           string(args),
-		OutputText:          output,
+		InputJSON:           inputJSON,
+		OutputText:          outputText,
 		ClientName:          clientName,
 		ClientVersion:       clientVersion,
 		TokensSaved:         saved.Total(),
