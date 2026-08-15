@@ -29,12 +29,25 @@ import (
 const mutationRestoreSuffix = ".plumb-mutation-backup"
 
 // stepOutcome is the bounded result of one compile or test invocation.
+//
+// startErr is kept SEPARATE from a non-zero exitCode, and the distinction is
+// load-bearing rather than cosmetic. "The test binary is not on PATH" and "the
+// tests ran and failed" are the same exit code to a caller that only looks at a
+// number, and collapsing them is precisely the false kill this tool exists to
+// prevent — reached from the tooling side instead of the mutant side.
 type stepOutcome struct {
 	ran      bool
 	exitCode int
 	timedOut bool
+	startErr bool
 	elapsed  time.Duration
 	output   string
+}
+
+// failed reports whether this step did anything other than succeed, by any
+// route. Used to decide whether a later step is worth running at all.
+func (s stepOutcome) failed() bool {
+	return s.timedOut || s.startErr || s.exitCode != 0
 }
 
 // mutationResult is one mutant's classified verdict.
@@ -91,20 +104,38 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	defer func() { restoreErr = t.restore(ctx, tgt) }()
 	t.announce(ctx, tgt.path)
 
-	res.classify(t.runStep(ctx, plan.compile, plan.timeout), t.runStep(ctx, plan.test, plan.timeout))
+	// Sequenced, not evaluated as two arguments: a mutant that does not compile
+	// has nothing to learn from running the suite against a tree that will not
+	// build, and doing so burns a full test timeout per broken mutant.
+	compile := t.runStep(ctx, plan.compile, plan.timeout)
+	var test stepOutcome
+	if !compile.failed() {
+		test = t.runStep(ctx, plan.test, plan.timeout)
+	}
+	res.classify(compile, test)
 	return res, nil
 }
 
 // classify turns the two step outcomes into a verdict. It is the whole point of
 // the tool, so it is one small readable function with no side effects.
 //
-// A test failure is a kill ONLY when the compile gate passed. Every other shape
-// — a mutant that did not compile, a compile that timed out, a test run that
-// timed out — is invalid, because none of them distinguishes "the assertion
-// caught the change" from "the toolchain never got far enough to try".
+// A test failure is a kill ONLY when the compile gate passed AND the test
+// command actually ran. Every other shape — a mutant that did not compile, a
+// compile that timed out, a test run that timed out, or a command that could
+// not be started at all — is invalid, because none of them distinguishes "the
+// assertion caught the change" from "the toolchain never got far enough to try".
+//
+// The startErr cases are not hypothetical bookkeeping. A test command whose
+// binary is missing exits non-zero in every sense a naive check can see, so
+// without this branch a workspace with (say) an uninstalled test runner reports
+// EVERY mutant killed — the tool certifying assertions it never executed, which
+// is the exact failure it was built to stop.
 func (r *mutationResult) classify(compile, test stepOutcome) {
 	r.compile = compile
 	switch {
+	case compile.startErr:
+		r.outcome, r.reason = MutationInvalid, reasonCompileUnrunnable
+		return
 	case compile.timedOut:
 		r.outcome, r.reason = MutationInvalid, reasonCompileTimeout
 		return
@@ -114,6 +145,8 @@ func (r *mutationResult) classify(compile, test stepOutcome) {
 	}
 	r.test = test
 	switch {
+	case test.startErr:
+		r.outcome, r.reason = MutationInvalid, reasonTestUnrunnable
 	case test.timedOut:
 		r.outcome, r.reason = MutationInvalid, reasonTestTimeout
 	case test.exitCode != 0:
@@ -142,8 +175,9 @@ func mutateContent(content string, spec mutantSpec) (mutated, reason string) {
 
 // runStep executes every argv of a resolved task command in sequence, stopping
 // at the first non-zero exit. A command that cannot be started at all (argv[0]
-// not on PATH) is reported as a non-zero step rather than aborting the run, so
-// it lands in the invalid bucket instead of masquerading as a kill.
+// not on PATH, or any other failure to launch) sets startErr, which classify
+// turns into an invalid verdict for either step — the flag exists because a
+// bare non-zero exitCode would read as a kill in the test slot.
 func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout time.Duration) stepOutcome {
 	var out stepOutcome
 	out.ran = true
@@ -155,6 +189,7 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	for _, argv := range cmd.Steps {
 		res, err := RunArgv(ctx, ws, argv, timeout)
 		if err != nil {
+			out.startErr = true
 			out.exitCode = -1
 			out.output = err.Error()
 			break

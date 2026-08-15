@@ -887,15 +887,26 @@ default `build`), `timeout_seconds` (per step, default 600).
 assertion is real. `survived` — the mutant compiled and every test still passed,
 so the assertions covering that line are **vacuous**; this is the finding that
 matters. `invalid` — the mutant did not apply, did not compile, or the run timed
-out; it proves nothing and is **never** reported as a kill. That last
-distinction is the tool's reason to exist: a mutant that does not compile, or a
-`sed` that silently matched nothing, makes the test command fail and a
-hand-rolled harness reads that failure as a kill.
+out, or a command could not be started; it proves nothing and is **never**
+reported as a kill. That last distinction is the tool's reason to exist: a
+mutant that does not compile, a `sed` that silently matched nothing, or a test
+runner that is not installed all make the test command fail, and a hand-rolled
+harness reads any of those failures as a kill.
 
 The compile gate cannot be disabled — a workspace with no `build` command
 configured is refused rather than served unverifiable verdicts. The gate always
 runs unscoped, because a whole-module compile catches breakage a package-scoped
 test never reaches.
+
+**The workspace must be green before the run starts.** A kill means "passed
+before this change, failed after it", so both halves have to be checked: the
+compile and test commands are run once on the **unmutated** tree, and the whole
+run is refused if either fails. Otherwise a suite that was already red — a
+peer's edit elsewhere in the tree, a pre-existing failure, a missing test
+dependency — reports every mutant `killed` for a reason that has nothing to do
+with any mutant. The dirty-file refusal below does not cover this: it guards the
+file being mutated, not the rest of the workspace. The cost is one extra
+compile+test cycle per run, not per mutant; scope it with `test_target`.
 
 **Restoration is guaranteed** on every exit path (pass, fail, compile error,
 timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory,

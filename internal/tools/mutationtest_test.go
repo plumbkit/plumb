@@ -8,12 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/plumbkit/plumb/internal/lsp"
-	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // mutationtest_test.go covers mutation_test. The load-bearing cases are the two
@@ -82,6 +78,19 @@ func (e *mutationEnv) installScript(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil { //nolint:gosec // G306: a test fixture script must be executable
 		t.Fatal(err)
 	}
+}
+
+// failsOnlyWhenMutated installs a script that exits non-zero ONLY when the
+// target file contains needle — that is, only once the mutant is on disk.
+//
+// Fixtures that fail unconditionally are refused by the baseline, and rightly:
+// a command that fails before anything was mutated cannot tell "the mutant did
+// it" from "it was always broken", which is the one distinction the tool sells.
+// Writing them this way keeps the fixture honest about what a kill means.
+func (e *mutationEnv) failsOnlyWhenMutated(t *testing.T, script, needle, msg string) {
+	t.Helper()
+	e.installScript(t, script,
+		fmt.Sprintf(`grep -q '%s' "$(dirname "$0")/target.txt" && { echo '%s'; exit 1; }; exit 0`, needle, msg))
 }
 
 func gitInit(t *testing.T, root string) {
@@ -227,12 +236,13 @@ func TestMutationTest_KilledMutant(t *testing.T) {
 // old_string matches nothing, so nothing was tested.
 func TestMutationTest_UnappliedMutantIsInvalid(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
-	// The test command fails unconditionally — a harness reading only the exit
-	// code would report a kill for a mutant that was never applied.
-	env.installScript(t, env.testScript, "exit 1")
+	// The test command would fail the moment the mutation landed — so a harness
+	// reading only the exit code would report a kill for a mutant that was never
+	// applied. It never lands, so nothing runs and nothing may be claimed.
+	env.failsOnlyWhenMutated(t, env.testScript, "zzz", "FAIL: TestAnswer")
 	env.commitAll(t)
 
-	out, err := env.run(t, "no-such-text", "x")
+	out, err := env.run(t, "no-such-text", "zzz")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -261,288 +271,8 @@ func TestMutationTest_AmbiguousMutantIsInvalid(t *testing.T) {
 	}
 }
 
-// --- the restore guarantee ---------------------------------------------------
-
-func TestMutationTest_RestoresOnEveryOutcome(t *testing.T) {
-	const original = "answer = 42\n"
-	cases := []struct {
-		name           string
-		compile, tests string
-	}{
-		{"tests pass (survived)", "exit 0", "exit 0"},
-		{"tests fail (killed)", "exit 0", "exit 1"},
-		{"compile fails (invalid)", "exit 3", "exit 0"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			env := newMutationEnv(t, original)
-			env.installScript(t, env.compileScript, tc.compile)
-			env.installScript(t, env.testScript, tc.tests)
-			env.commitAll(t)
-
-			if _, err := env.run(t, "42", "999"); err != nil {
-				t.Fatalf("run: %v", err)
-			}
-			if got := env.content(t); got != original {
-				t.Fatalf("file not restored: got %q, want %q", got, original)
-			}
-		})
-	}
-}
-
-// TestMutationTest_RestoresWhenTheStepCommandCannotStart covers the error path
-// through RunArgv: the mutant is on disk when the command fails to launch.
-func TestMutationTest_RestoresWhenTheStepCommandCannotStart(t *testing.T) {
-	const original = "answer = 42\n"
-	env := newMutationEnv(t, original)
-	env.tool = NewMutationTest(
-		WriteDeps{WorkspaceFn: func() string { return env.root }},
-		func(slot, _ string) (TaskCommand, error) {
-			return TaskCommand{Slot: slot, Steps: [][]string{{"/nonexistent/plumb-mutation-binary"}}, Provenance: "default"}, nil
-		})
-
-	out, err := env.run(t, "42", "43")
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if got := env.content(t); got != original {
-		t.Fatalf("file not restored after an unstartable command: got %q", got)
-	}
-	if strings.Contains(out, "[1] KILLED") {
-		t.Errorf("a command that could not start must not read as a kill; got:\n%s", out)
-	}
-}
-
-// TestMutationTest_RestoresOnPanic proves the deferred restore survives a panic
-// unwinding through runOne — the exit path a plain post-run cleanup would miss.
-func TestMutationTest_RestoresOnPanic(t *testing.T) {
-	const original = "answer = 42\n"
-	env := newMutationEnv(t, original)
-	// Panic only once the mutant is genuinely on disk. Gating it on the file's
-	// content is what stops this test passing vacuously: WorkspaceFn is first
-	// consulted during preflight, long before anything is written, so an
-	// unconditional panic would "prove" a restore that never had to happen.
-	env.tool.deps.WorkspaceFn = func() string {
-		if b, err := os.ReadFile(env.file); err == nil && string(b) != original {
-			panic("boom")
-		}
-		return env.root
-	}
-
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("expected the panic to propagate")
-			}
-		}()
-		_, _ = env.run(t, "42", "43")
-	}()
-
-	if got := env.content(t); got != original {
-		t.Fatalf("file not restored after a panic: got %q, want %q", got, original)
-	}
-}
-
-// TestMutationTest_RestoresOnCancelledContext pins that restoration is not
-// cancellable: the request's context is already dead when the restore runs.
-func TestMutationTest_RestoresOnCancelledContext(t *testing.T) {
-	const original = "answer = 42\n"
-	env := newMutationEnv(t, original)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	raw, err := json.Marshal(map[string]any{
-		"mutants": []map[string]any{{"file_path": env.file, "old_string": "42", "new_string": "43"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := env.tool.Execute(ctx, raw); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if got := env.content(t); got != original {
-		t.Fatalf("file not restored under a cancelled context: got %q, want %q", got, original)
-	}
-}
-
-// ctxRecordingClient is an lsp.Client that records the context each
-// didChangeWatchedFiles notification arrives with. The embedded nil interface
-// satisfies the other 22 methods at compile time and panics if one is called,
-// which is the desired outcome — the write path must touch nothing else.
-type ctxRecordingClient struct {
-	lsp.Client
-	mu   sync.Mutex
-	errs []error
-}
-
-func (c *ctxRecordingClient) DidChangeWatchedFiles(ctx context.Context, _ protocol.DidChangeWatchedFilesParams) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.errs = append(c.errs, ctx.Err())
-	return nil
-}
-
-func (c *ctxRecordingClient) recorded() []error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]error(nil), c.errs...)
-}
-
-// TestMutationTest_RestoreNotificationOutlivesACancelledContext pins the
-// context.WithoutCancel in restore. Restoring the BYTES survives cancellation
-// for free (the write path takes no context), so the only thing WithoutCancel
-// buys is the notification that tells the language server the mutant is gone —
-// and without it, a cancelled request leaves the server believing the mutated
-// content is still on disk. That is invisible to a test with no LSP client
-// wired, which is exactly how it survived mutation until this test existed.
-func TestMutationTest_RestoreNotificationOutlivesACancelledContext(t *testing.T) {
-	env := newMutationEnv(t, "answer = 42\n")
-	client := &ctxRecordingClient{}
-	env.tool.deps.Client = client
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	raw, err := json.Marshal(map[string]any{
-		"mutants": []map[string]any{{"file_path": env.file, "old_string": "42", "new_string": "43"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := env.tool.Execute(ctx, raw); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-
-	got := client.recorded()
-	if len(got) < 2 {
-		t.Fatalf("want a notification for both the mutation and the restore, got %d", len(got))
-	}
-	// The LAST notification is the restore's, and it must carry a live context.
-	if last := got[len(got)-1]; last != nil {
-		t.Fatalf("the restore notification ran on a cancelled context (%v) — "+
-			"the language server is left believing the mutant is still on disk", last)
-	}
-}
-
-// --- safety preconditions ----------------------------------------------------
-
-func TestMutationTest_RefusesDirtyFile(t *testing.T) {
-	env := newMutationEnv(t, "answer = 42\n")
-	if err := os.WriteFile(env.file, []byte("answer = 42\nlocal edit\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := env.run(t, "42", "43")
-	if err == nil {
-		t.Fatal("expected a refusal for a file with uncommitted changes")
-	}
-	if !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Errorf("refusal should name the dirty file; got %v", err)
-	}
-	// The refusal must be all-or-nothing: the working copy is untouched.
-	if got := env.content(t); got != "answer = 42\nlocal edit\n" {
-		t.Errorf("a refused run must not touch the file; got %q", got)
-	}
-}
-
-// TestMutationTest_RefusesDirtyFileBeforeMutatingAnyOther pins the
-// all-or-nothing preflight: one dirty file in a batch stops the whole run, so a
-// clean sibling is never left mutated by a request that was going to be refused.
-func TestMutationTest_RefusesDirtyFileBeforeMutatingAnyOther(t *testing.T) {
-	env := newMutationEnv(t, "answer = 42\n")
-	clean := filepath.Join(env.root, "clean.txt")
-	if err := os.WriteFile(clean, []byte("value = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	env.commitAll(t)
-	if err := os.WriteFile(env.file, []byte("answer = 42\ndirty\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := env.runArgs(t, map[string]any{"mutants": []map[string]any{
-		{"file_path": clean, "old_string": "1", "new_string": "2"},
-		{"file_path": env.file, "old_string": "42", "new_string": "43"},
-	}})
-	if err == nil {
-		t.Fatal("expected the batch to be refused")
-	}
-	b, readErr := os.ReadFile(clean)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if string(b) != "value = 1\n" {
-		t.Errorf("the clean sibling must not have been mutated by a refused batch; got %q", b)
-	}
-}
-
-// TestMutationTest_RefusesWithoutACompileGate pins that a workspace with no
-// build command is refused outright rather than served verdicts no compile
-// check stands behind.
-func TestMutationTest_RefusesWithoutACompileGate(t *testing.T) {
-	env := newMutationEnv(t, "answer = 42\n")
-	env.tool = NewMutationTest(
-		WriteDeps{WorkspaceFn: func() string { return env.root }},
-		func(slot, _ string) (TaskCommand, error) {
-			if slot == "build" {
-				return TaskCommand{Slot: slot, Provenance: "default"}, nil // no steps
-			}
-			return TaskCommand{Slot: slot, Steps: [][]string{{"/bin/sh", env.testScript}}, Provenance: "default"}, nil
-		})
-
-	_, err := env.run(t, "42", "43")
-	if err == nil {
-		t.Fatal("expected a refusal when no compile command is configured")
-	}
-	if !strings.Contains(err.Error(), "cannot be proven") {
-		t.Errorf("refusal should explain the missing compile proof; got %v", err)
-	}
-	if got := env.content(t); got != "answer = 42\n" {
-		t.Errorf("a refused run must not touch the file; got %q", got)
-	}
-}
-
-// TestMutationTest_RefusesConcurrentRun drives two real runs at once rather
-// than holding mutationRunLock from the test. Holding it here would make the
-// guard's REMOVAL surface as "unlock of unlocked mutex" — a process-level
-// fatal, not an assertion — which fails for the right reason by accident and
-// says nothing about what broke. Two genuine callers make the removal show up
-// as what it is: two runs proceeding where one had to be refused.
-func TestMutationTest_RefusesConcurrentRun(t *testing.T) {
-	env := newMutationEnv(t, "answer = 42\n")
-	// Hold the first run inside its test step long enough for the second to overlap.
-	env.installScript(t, env.testScript, "sleep 1; exit 0")
-	env.commitAll(t)
-
-	raw, err := json.Marshal(map[string]any{
-		"mutants": []map[string]any{{"file_path": env.file, "old_string": "42", "new_string": "43"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	start := make(chan struct{})
-	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			_, errs[i] = env.tool.Execute(context.Background(), raw)
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	var refused int
-	for _, e := range errs {
-		if e != nil && strings.Contains(e.Error(), "already in progress") {
-			refused++
-		}
-	}
-	if refused != 1 {
-		t.Fatalf("exactly one of two concurrent runs must be refused, got %d refusals (errs: %v, %v)", refused, errs[0], errs[1])
-	}
-}
-
+// The restore guarantee and the safety preconditions live in
+// mutationtest_safety_test.go, which shares this file's harness.
 // --- argument validation -----------------------------------------------------
 
 func TestMutationTest_ArgValidation(t *testing.T) {
@@ -639,6 +369,11 @@ func TestClassify(t *testing.T) {
 		{"does not compile", stepOutcome{ran: true, exitCode: 2}, stepOutcome{ran: true, exitCode: 1}, MutationInvalid, reasonCompileFailed},
 		{"compile timed out", stepOutcome{ran: true, exitCode: -1, timedOut: true}, ok, MutationInvalid, reasonCompileTimeout},
 		{"tests timed out", ok, stepOutcome{ran: true, exitCode: -1, timedOut: true}, MutationInvalid, reasonTestTimeout},
+		// The two that read as an ordinary failure to anything counting only exit
+		// codes. The TEST one is the dangerous half: without its own branch a
+		// command that never launched is indistinguishable from a caught mutant.
+		{"compile could not start", stepOutcome{ran: true, exitCode: -1, startErr: true}, ok, MutationInvalid, reasonCompileUnrunnable},
+		{"tests could not start", ok, stepOutcome{ran: true, exitCode: -1, startErr: true}, MutationInvalid, reasonTestUnrunnable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -665,6 +400,28 @@ func TestClassify_TestFailureAfterAFailedCompileIsNeverAKill(t *testing.T) {
 	}
 	if r.outcome != MutationInvalid {
 		t.Fatalf("outcome = %q, want invalid", r.outcome)
+	}
+}
+
+// TestClassify_AnUnstartableTestCommandIsNeverAKill states the other half of
+// the same rule on its own, because it is the one that was wrong.
+//
+// A command that could not be launched sets a non-zero exit code like any other
+// failure, so classify's test switch called it a kill. A workspace whose test
+// runner is simply not installed therefore reported EVERY mutant killed — the
+// tool certifying assertions it never ran, which is exactly what it exists to
+// prevent, reached from the tooling side rather than the mutant side.
+func TestClassify_AnUnstartableTestCommandIsNeverAKill(t *testing.T) {
+	var r mutationResult
+	r.classify(
+		stepOutcome{ran: true, exitCode: 0},
+		stepOutcome{ran: true, exitCode: -1, startErr: true},
+	)
+	if r.outcome == MutationKilled {
+		t.Fatal("a test command that never STARTED must never be classified killed")
+	}
+	if r.outcome != MutationInvalid || r.reason != reasonTestUnrunnable {
+		t.Fatalf("outcome = %q reason = %q, want invalid/%s", r.outcome, r.reason, reasonTestUnrunnable)
 	}
 }
 

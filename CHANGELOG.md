@@ -630,6 +630,17 @@
   stands behind, and the gate always runs unscoped because a whole-module
   compile catches breakage a package-scoped test never reaches.
 
+  **Both halves of a kill are checked, not just the second.** "Killed" claims
+  the suite passed before the change and failed after it, so the compile and
+  test commands are run once on the **unmutated** tree first and the whole run
+  is refused unless both pass. Without that, a suite which was already red — a
+  peer's edit elsewhere in the tree, a pre-existing failure, a test runner that
+  is not installed — reports every mutant killed for a reason that has nothing
+  to do with any mutant, which is the same false kill arrived at from the
+  workspace instead of from the mutant. For the same reason a command that
+  cannot be *started* is classified `invalid` rather than by its exit code,
+  which in the test slot would otherwise read as a kill.
+
   Commands are the stored, trust-gated `[tasks.<lang>]` slots `run_task`
   already uses — there is no agent-supplied command line. `test_target` fills
   the test command's `{target}` placeholder, which is how a run is scoped to
