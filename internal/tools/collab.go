@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
@@ -55,6 +56,28 @@ const (
 	defaultChatBudgetByte = 2048
 	defaultMaxWaitSeconds = 55
 )
+
+// unregisteredSessionRefusal refuses a broadcast from a session with no name,
+// returning a message for the agent, or "" when the session is registered.
+//
+// The name is the author label AND the address peers reply to. A session that
+// has not registered has neither, so what it writes is an unattributable row
+// that outlives the call: share_intent's claim appears in every peer's
+// workspace_sessions with a blank author, and share_findings writes a memory
+// into the project that nobody can trace or ask about. Both persist past the
+// session that made them, which is why this refuses rather than writing an
+// anonymous row and hoping the name arrives later.
+//
+// Refusing is cheap for a caller that is simply early: session_start registers
+// the session, and the refusal says so.
+func unregisteredSessionRefusal(tool, sessionName string) string {
+	if strings.TrimSpace(sessionName) != "" {
+		return ""
+	}
+	return tool + " needs a registered session: this connection has no session name yet, and the name is " +
+		"both the author label peers see and the address they reply to. Writing without one would leave an " +
+		"unattributable record that outlives this call. Call session_start first."
+}
 
 func (p CollabPolicy) maxExchanges() int {
 	if p.MaxExchanges > 0 {

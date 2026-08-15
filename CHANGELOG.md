@@ -49,6 +49,22 @@
 
 ### Fixed
 
+- **`check_messages` now reports its wait in seconds, and says when it was
+  clamped.** Elapsed time was rendered in whole minutes, so a full 55-second
+  block and an instant return both printed `waited 0 min` — the output could
+  not distinguish the blocking API working from it not working at all, which is
+  why two sessions independently reported the wait as broken when it was not.
+  A requested wait above `[collab] max_wait_seconds` was also reduced silently,
+  so a caller asking for 300s built its turn-handoff around a number that was
+  never in force; the reply now names both figures and the knob.
+
+- **`share_intent` and `share_findings` refuse a session that has not
+  registered.** Both read the session name unguarded, so a call arriving before
+  `session_start` wrote an unattributable record that outlives it: an intent
+  every peer sees with a blank author, or a project memory nobody can trace or
+  ask about. The refusal names `session_start` as the remedy, and nothing is
+  stored.
+
 - **A note is no longer delivered back to the session that wrote it.** The
   delivery predicate matched `addressee = ? OR addressee = 'next'` with no
   author exclusion, so a session that left a `to: "next"` note claimed it back
