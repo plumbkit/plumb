@@ -476,13 +476,15 @@ func TestMigrateAddsSavingsColumns(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer raw.Close()
-	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+	// input_json and output_text arrived at v2/v3, so a real v8 database has
+	// them; the seed must too, or the v17 scrub has no columns to update.
+	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER, input_json TEXT NOT NULL DEFAULT '', output_text TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("seed v8 tool_calls: %v", err)
 	}
 	if _, err := raw.Exec(`INSERT INTO tool_calls (tool, called_at) VALUES ('read_file', 1)`); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
-	if err := migrate(raw, 8, SchemaVersion); err != nil {
+	if err := migrate(raw, 8); err != nil {
 		t.Fatalf("migrate 8→%d: %v", SchemaVersion, err)
 	}
 	for _, col := range []string{"tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
@@ -731,10 +733,12 @@ func TestEpisodicSchemaParity(t *testing.T) {
 		t.Fatalf("open migrated: %v", err)
 	}
 	defer migrated.Close()
-	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+	// input_json and output_text arrived at v2/v3, so a real v7 database has
+	// them; the seed must too, or the v17 scrub has no columns to update.
+	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER, input_json TEXT NOT NULL DEFAULT '', output_text TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("seed v7 schema: %v", err)
 	}
-	if err := migrate(migrated, 7, SchemaVersion); err != nil {
+	if err := migrate(migrated, 7); err != nil {
 		t.Fatalf("migrate 7→%d: %v", SchemaVersion, err)
 	}
 
