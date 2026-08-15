@@ -273,6 +273,168 @@ func TestMutationTest_AmbiguousMutantIsInvalid(t *testing.T) {
 
 // The restore guarantee and the safety preconditions live in
 // mutationtest_safety_test.go, which shares this file's harness.
+
+// --- the baseline refusal names WHICH cause it hit ----------------------------
+//
+// The baseline used to call stepOutcome.failed() — timedOut || startErr ||
+// exitCode != 0 — and then assert ONE cause: "the test command ALREADY fails
+// … Get the suite green first". So a command that timed out, and a command that
+// could not be started at all, were both reported as a red suite with advice
+// that fixes neither. classify() had always split these per mutant; only the
+// per-run baseline collapsed them.
+//
+// These tests pin the split from the outside, through Execute, because that is
+// where the agent reads the text.
+
+// useArgv repoints the resolver at a fixed argv for one slot, so a test can
+// stage a command that cannot start or never returns.
+func (e *mutationEnv) useArgv(slot string, argv []string) {
+	prev := e.tool.resolve
+	e.tool.resolve = func(s, target string) (TaskCommand, error) {
+		if s == slot {
+			return TaskCommand{Slot: s, Steps: [][]string{argv}, Provenance: "default"}, nil
+		}
+		return prev(s, target)
+	}
+}
+
+// baselineRefusal runs one mutant and requires the run to be REFUSED, returning
+// the refusal text. A baseline failure must never produce a report.
+func (e *mutationEnv) baselineRefusal(t *testing.T, args map[string]any) string {
+	t.Helper()
+	if args == nil {
+		args = map[string]any{}
+	}
+	args["mutants"] = []map[string]any{{"file_path": e.file, "old_string": "42", "new_string": "43"}}
+	out, err := e.runArgs(t, args)
+	if err == nil {
+		t.Fatalf("the run must be refused at the baseline; got a report:\n%s", out)
+	}
+	if got := e.content(t); !strings.Contains(got, "42") {
+		t.Fatalf("the file was mutated despite a baseline refusal: %q", got)
+	}
+	return err.Error()
+}
+
+// TestBaseline_UnstartableCommandIsNotReportedAsARedSuite is the defect this
+// change fixes. argv[0] does not exist, so plumb never ran anything — it has
+// learned NOTHING about the workspace, and must not claim otherwise.
+func TestBaseline_UnstartableCommandIsNotReportedAsARedSuite(t *testing.T) {
+	for _, tc := range []struct {
+		slot   string
+		mustNotSay string
+	}{
+		{"build", "Fix the build first"},
+		{"test", "Get the suite green first"},
+	} {
+		t.Run(tc.slot, func(t *testing.T) {
+			env := newMutationEnv(t, "answer = 42\n")
+			env.useArgv(tc.slot, []string{filepath.Join(env.root, "no-such-binary")})
+
+			msg := env.baselineRefusal(t, nil)
+			if !strings.Contains(msg, "could NOT BE STARTED") {
+				t.Errorf("the refusal must say the command could not be started; got:\n%s", msg)
+			}
+			if strings.Contains(msg, tc.mustNotSay) {
+				t.Errorf("a command that never ran must not be diagnosed as %q — that is a false diagnosis "+
+					"with unactionable advice; got:\n%s", tc.mustNotSay, msg)
+			}
+			if strings.Contains(msg, "ALREADY fails") {
+				t.Errorf("a command that never ran did not 'already fail'; got:\n%s", msg)
+			}
+		})
+	}
+}
+
+// TestBaseline_TimeoutIsNotReportedAsARedSuite covers the other collapsed cause.
+// The command ran and never returned, so the suite's colour is still unknown;
+// the actionable knob is timeout_seconds, not the code.
+func TestBaseline_TimeoutIsNotReportedAsARedSuite(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	env.installScript(t, env.testScript, "sleep 30")
+	env.commitAll(t)
+
+	msg := env.baselineRefusal(t, map[string]any{"timeout_seconds": 1})
+	if !strings.Contains(msg, "TIMED OUT") {
+		t.Errorf("the refusal must say the command timed out; got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "timeout_seconds") {
+		t.Errorf("the refusal must name the knob that fixes it (timeout_seconds); got:\n%s", msg)
+	}
+	if strings.Contains(msg, "ALREADY fails") || strings.Contains(msg, "Get the suite green first") {
+		t.Errorf("a timeout returned no verdict, so the suite was not shown to be red; got:\n%s", msg)
+	}
+}
+
+// TestBaseline_GenuinelyRedSuiteStillSaysSo is the control. Without it, a fix
+// that simply deleted the red-suite wording would pass every test above.
+func TestBaseline_GenuinelyRedSuiteStillSaysSo(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	env.installScript(t, env.testScript, "echo 'FAIL: pre-existing'; exit 1")
+	env.commitAll(t)
+
+	msg := env.baselineRefusal(t, nil)
+	for _, want := range []string{"ALREADY fails", "Get the suite green first", "FAIL: pre-existing"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("a genuinely red suite must still be named as one (%q); got:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "could NOT BE STARTED") || strings.Contains(msg, "TIMED OUT") {
+		t.Errorf("a red suite must not be reported as a tooling or budget failure; got:\n%s", msg)
+	}
+}
+
+// TestBaseline_NamesTheDirectoryItRanIn pins the other half of the false
+// diagnosis. Task commands run from the WORKSPACE ROOT, which need not be a
+// buildable directory: in a repository whose root holds only a go.work, with the
+// module in a subdirectory, `go build ./...` exits 1 in milliseconds while the
+// tree compiles perfectly — and the old text read "the workspace does not pass
+// its compile gate … Fix the build first". Naming the cwd and the argv is what
+// turns that from a wrong diagnosis into a solvable one.
+func TestBaseline_NamesTheDirectoryItRanIn(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	env.installScript(t, env.compileScript, "exit 1")
+	env.commitAll(t)
+
+	msg := env.baselineRefusal(t, nil)
+	if !strings.Contains(msg, env.root) {
+		t.Errorf("the refusal must name the directory the command ran in (%s); got:\n%s", env.root, msg)
+	}
+	if !strings.Contains(msg, env.compileScript) {
+		t.Errorf("the refusal must name the argv it ran; got:\n%s", msg)
+	}
+}
+
+// TestBaseline_RecommendsTestTargetOnlyWhenTheCommandTakesOne guards the second
+// unactionable instruction in the same message.
+//
+// The shipped [tasks.go].test default is `go test ./...` — no {target} — and the
+// resolver REFUSES a target a command has no placeholder for. So "or scope the
+// run with test_target" was advice that errors out on a default install.
+func TestBaseline_RecommendsTestTargetOnlyWhenTheCommandTakesOne(t *testing.T) {
+	const advice = "scope the run with test_target"
+
+	t.Run("no placeholder: stays silent", func(t *testing.T) {
+		env := newMutationEnv(t, "answer = 42\n")
+		env.installScript(t, env.testScript, "exit 1")
+		env.commitAll(t)
+		if msg := env.baselineRefusal(t, nil); strings.Contains(msg, advice) {
+			t.Errorf("the stored command has no {target}, so a target would be REFUSED — "+
+				"recommending one is advice the reader cannot follow; got:\n%s", msg)
+		}
+	})
+
+	t.Run("placeholder present: offers it", func(t *testing.T) {
+		env := newMutationEnv(t, "answer = 42\n")
+		env.installScript(t, env.testScript, "exit 1")
+		env.commitAll(t)
+		env.useArgv("test", []string{"/bin/sh", env.testScript, taskTargetToken})
+		if msg := env.baselineRefusal(t, nil); !strings.Contains(msg, advice) {
+			t.Errorf("a command holding {target} CAN be scoped, so the advice belongs here; got:\n%s", msg)
+		}
+	})
+}
+
 // --- argument validation -----------------------------------------------------
 
 func TestMutationTest_ArgValidation(t *testing.T) {

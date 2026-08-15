@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -128,7 +129,7 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "test_target": {
       "type": "string",
-      "description": "Optional value for the test command's {target} placeholder — THE way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). One shell-safe argument ([A-Za-z0-9._/:@-]); refused if the stored test command has no {target} token."
+      "description": "Optional value for the test command's {target} placeholder — the way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). ONLY usable when the stored test command actually contains a {target} token: it is refused outright otherwise, and the shipped defaults (Go's is 'go test ./...') do NOT have one, so on an unmodified config the whole suite runs per mutant and scoping means editing [tasks.<lang>].test first. One shell-safe argument ([A-Za-z0-9._/:@-])."
     },
     "compile_task": {
       "type": "string",
@@ -153,7 +154,7 @@ func (*MutationTest) Description() string {
 	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
 		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
 		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, or did not compile, or the tests timed out — it proves nothing and is NEVER reported as a kill; that false kill is the whole reason the compile gate exists). " +
-		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — otherwise the whole suite runs per mutant. " +
+		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — but only if the stored command HAS that placeholder; the shipped defaults do not, so out of the box the whole suite runs per mutant. " +
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
 		"Restoration is guaranteed on every exit path (pass, fail, compile error, timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory, rewritten under the same per-path lock, and verified by SHA-256 before the run is reported clean. " +
 		"It REFUSES to touch a file with uncommitted changes (untracked included), with no override — a clean file means `git checkout` can always recover it if the daemon dies mid-run, and that is the recovery story. " +
@@ -330,19 +331,93 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 // warning matches how the tool treats its other two preconditions — a dirty
 // file and a missing compile gate — because a verdict nothing stands behind is
 // worse than no verdict.
+//
+// The refusal names WHICH of the three causes it hit (see stepFailure). It used
+// to assert the workspace was red whatever happened, so a command that timed out
+// or could not be started at all was reported as "the test command ALREADY
+// fails … Get the suite green first" — a false diagnosis with unactionable
+// advice attached, which is this tool's own defect class reached from the
+// diagnostics side rather than the verdict side.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) error {
 	if compile := t.runStep(ctx, plan.compile, plan.timeout); compile.failed() {
-		return fmt.Errorf("mutation_test: the workspace does not pass its compile gate (%s) BEFORE any mutant was applied, "+
-			"so no mutant's compilation could be attributed to the mutant. Nothing was mutated. Fix the build first:\n%s",
-			plan.compile.Slot, excerpt(compile.output))
+		return t.baselineError(plan, plan.compile, compile, "compile gate")
 	}
 	if test := t.runStep(ctx, plan.test, plan.timeout); test.failed() {
-		return fmt.Errorf("mutation_test: the test command (%s) ALREADY fails before any mutant was applied, so every mutant "+
-			"would be reported killed for a reason that has nothing to do with it — the false kill this tool exists to prevent. "+
-			"Nothing was mutated. Get the suite green first, or scope the run with test_target to a package that passes:\n%s",
-			plan.test.Slot, excerpt(test.output))
+		return t.baselineError(plan, plan.test, test, "test command")
 	}
 	return nil
+}
+
+// baselineError explains ONE failed baseline step, in the terms of what actually
+// went wrong. Every branch ends "Nothing was mutated", because none of them got
+// far enough to touch a file.
+func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out stepOutcome, role string) error {
+	where := t.runDirNote(cmd)
+	switch out.failure() {
+	case stepUnrunnable:
+		// The command never launched, so it says NOTHING about this workspace —
+		// telling the reader to fix a build or a suite would send them to repair
+		// something that was never shown to be broken.
+		return fmt.Errorf("mutation_test: the %s (%s) could NOT BE STARTED, so it never ran and proves nothing about this "+
+			"workspace — the build and the suite may both be fine. Nothing was mutated. This is a tooling problem, not a code "+
+			"problem: check that the command exists on the daemon's PATH and that [tasks.<lang>].%s is right.%s\n%s",
+			role, cmd.Slot, cmd.Slot, where, excerpt(out.output))
+	case stepTimedOut:
+		return fmt.Errorf("mutation_test: the %s (%s) TIMED OUT after %s, so it never returned a verdict — this says nothing "+
+			"about whether the workspace is green. Nothing was mutated. Raise timeout_seconds (max %d) if the command "+
+			"legitimately needs longer%s.%s\n%s",
+			role, cmd.Slot, plan.timeout, maxMutationStepSeconds, scopeAdvice(plan), where, excerpt(out.output))
+	case stepExited, stepOK:
+	}
+	if role == "compile gate" {
+		return fmt.Errorf("mutation_test: the workspace does not pass its compile gate (%s) BEFORE any mutant was applied, "+
+			"so no mutant's compilation could be attributed to the mutant. Nothing was mutated. Fix the build first.%s\n%s",
+			cmd.Slot, where, excerpt(out.output))
+	}
+	return fmt.Errorf("mutation_test: the test command (%s) ALREADY fails before any mutant was applied, so every mutant "+
+		"would be reported killed for a reason that has nothing to do with it — the false kill this tool exists to prevent. "+
+		"Nothing was mutated. Get the suite green first%s.%s\n%s",
+		cmd.Slot, scopeAdvice(plan), where, excerpt(out.output))
+}
+
+// runDirNote names the argv and the directory it ran in.
+//
+// The directory is the load-bearing half. Task commands run from the WORKSPACE
+// ROOT, which is not always a buildable directory — a repository whose root only
+// holds a go.work, with the module in a subdirectory, fails `go build ./...`
+// instantly while the tree itself compiles perfectly. Without the cwd on screen
+// that reads as "your build is broken", and the reader goes looking for a
+// compile error that does not exist.
+func (t *MutationTest) runDirNote(cmd TaskCommand) string {
+	if len(cmd.Steps) == 0 {
+		return ""
+	}
+	dir := ""
+	if t.deps.WorkspaceFn != nil {
+		dir = t.deps.WorkspaceFn()
+	}
+	if dir == "" {
+		return fmt.Sprintf(" It ran `%s`.", strings.Join(cmd.Steps[0], " "))
+	}
+	return fmt.Sprintf(" It ran `%s` in %s — task commands run from the WORKSPACE ROOT, "+
+		"which is not always the directory the command expects.", strings.Join(cmd.Steps[0], " "), dir)
+}
+
+// scopeAdvice recommends test_target ONLY when the resolved test command can
+// actually accept one.
+//
+// The shipped [tasks.go].test default is `go test ./...`, which has no {target}
+// placeholder, and the resolver REFUSES a target a command cannot hold. So the
+// old unconditional "or scope the run with test_target to a package that passes"
+// was advice the reader could not follow on a default install — a second
+// unactionable instruction inside the same message.
+func scopeAdvice(plan mutationPlan) string {
+	for _, argv := range plan.test.Steps {
+		if slices.Contains(argv, taskTargetToken) {
+			return ", or scope the run with test_target to a package that passes"
+		}
+	}
+	return ""
 }
 
 // mutationTarget is one preflighted mutant: the resolved path plus the
