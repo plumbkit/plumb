@@ -72,13 +72,11 @@ func memoriesDirSig(ws string) int64 {
 // makes next: sending on to the next peer. In a fan-out that repeats
 // indefinitely, and the reply is never rendered at all.
 //
-// One honest caveat, pre-existing and not introduced here: ClaimNotes matches
-// `addressee = ? OR addressee = 'next'` with no author exclusion, so a session
-// that writes a to:"next" note claims it back itself. Enriching leave_note does
-// not create that — on main the sender already destroyed its own "next" note on
-// its next ordinary tool call — but it does move the symptom into the same
-// response. The fix belongs in ClaimNotes (exclude the authoring session), not
-// in this set.
+// Enriching it is only safe because the delivery predicate excludes the author:
+// see notAuthoredBy in internal/collab/mailbox.go. Without that, a session that
+// wrote a to:"next" note claimed it back on its very next tool call — and
+// appending messages to leave_note would have made that call the send itself,
+// handing an agent its own message inside the receipt for it.
 var mailboxSilentTools = map[string]bool{
 	"check_messages": true, "session_start": true, "workspace_sessions": true,
 }

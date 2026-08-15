@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,7 +33,9 @@ func (*LeaveNote) Description() string {
 		"mailbox; check_messages is the receive half.\n\n" +
 		"CONVERSATIONS. Every message belongs to a thread. Omit conversation_id to " +
 		"start one (the reply tells you the new id); pass the conversation_id you " +
-		"were given to answer in the same thread. A thread is capped at [collab] " +
+		"were given to answer in the same thread — in which case you may omit `to` " +
+		"and the reply goes to that thread's other participant, or is refused if the " +
+		"thread has none or has several. A thread is capped at [collab] " +
 		"max_exchanges messages — once spent, further replies are refused and you " +
 		"should summarise the exchange for your human rather than starting a fresh " +
 		"thread to keep talking.\n\n" +
@@ -59,7 +62,8 @@ func (*LeaveNote) Description() string {
 		"before storage.\n\n" +
 		"Parameters:\n" +
 		"  body            — the message (required, free text).\n" +
-		"  to              — a peer session name, or \"next\" (default).\n" +
+		"  to              — a peer session name, or \"next\". Omitting it means \"next\" " +
+		"when starting a thread, and \"the other participant\" when replying into one.\n" +
 		"  conversation_id — reply into an existing thread; omit to start one."
 }
 
@@ -73,7 +77,7 @@ func (*LeaveNote) InputSchema() json.RawMessage {
     },
     "to": {
       "type": "string",
-      "description": "A peer session name, or \"next\" (default) for whoever attaches to this workspace next. A name belonging to a session in another workspace is delivered only if that project allows cross-project messages."
+      "description": "A peer session name, or \"next\" for whoever attaches to this workspace next. Omitting it defaults to \"next\" when you are starting a thread; when you pass a conversation_id it instead resolves to that thread's other participant, and the send is refused if the thread has no other participant or more than one. A name belonging to a session in another workspace is delivered only if that project allows cross-project messages."
     },
     "conversation_id": {
       "type": "string",
@@ -100,10 +104,15 @@ func parseLeaveNoteArgs(raw json.RawMessage) (leaveNoteArgs, error) {
 		return a, errors.New("leave_note: body is required")
 	}
 	a.To = strings.TrimSpace(a.To)
-	if a.To == "" {
+	a.ConversationID = strings.TrimSpace(a.ConversationID)
+	// An omitted addressee means "next" ONLY when the caller is opening a new
+	// thread. Quoting a conversation_id is an unambiguous statement of intent to
+	// reply in that thread, and defaulting it to "next" contradicts that — so the
+	// in-thread case is left empty here and resolved against the thread itself in
+	// Execute, where the store is reachable.
+	if a.To == "" && a.ConversationID == "" {
 		a.To = collab.AddresseeNext
 	}
-	a.ConversationID = strings.TrimSpace(a.ConversationID)
 	return a, nil
 }
 
@@ -120,6 +129,13 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	ws := t.deps.Workspace()
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
+	}
+	if args.To == "" {
+		to, refusal := t.resolveThreadAddressee(ctx, args.ConversationID)
+		if refusal != "" {
+			return refusal, nil
+		}
+		args.To = to
 	}
 	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
 	if err != nil {
@@ -205,6 +221,70 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 	local.peerUnknown = !found
 	local.addresseeID = peer.ID
 	return local, nil
+}
+
+// resolveThreadAddressee answers "who am I replying to?" for a note that quotes
+// a conversation_id but names no addressee. It returns either the addressee to
+// use, or a refusal to show the caller — never a silent fallback.
+//
+// Falling back to "next" here is what this replaces, and it failed in both
+// directions at once: the reply went to whoever attached next instead of the
+// peer being answered, and since "next" matches any claimant, the author's own
+// session was frequently the one that took it. The sender saw a success line
+// naming a delivery that never happened.
+//
+// Refusing is the right failure. A reply the caller believes is addressed is
+// worse than a reply the caller is told it must address, because only the second
+// one is visible.
+func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (to, refusal string) {
+	self := t.deps.SessionName()
+	seen := map[string]bool{}
+	var others []string
+
+	note := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || name == collab.AddresseeNext || name == self || seen[name] {
+			return
+		}
+		seen[name] = true
+		others = append(others, name)
+	}
+
+	// A cross-project thread lives in the daemon-level store, a same-project one
+	// in the workspace's own, and the caller does not say which. Read both rather
+	// than guess; the global store is consulted only if it already exists, so this
+	// never brings it into being.
+	now := time.Now()
+	for _, store := range []*collab.Store{t.deps.Store(), t.globalIfExists()} {
+		if store == nil {
+			continue
+		}
+		rows, err := store.Conversation(ctx, convID, now)
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			note(r.AuthorSession)
+			note(r.Addressee)
+		}
+	}
+
+	switch len(others) {
+	case 1:
+		return others[0], ""
+	case 0:
+		return "", fmt.Sprintf(
+			"Not sent: conversation %s has no other participant on record, so there is "+
+				"nobody to reply to.\n\nThe thread may have expired ([collab] intent_ttl_minutes "+
+				"prunes it), or the id may be wrong. Name the recipient explicitly with `to`, "+
+				"or start a new thread by omitting conversation_id.", convID)
+	default:
+		slices.Sort(others)
+		return "", fmt.Sprintf(
+			"Not sent: conversation %s has %d other participants (%s), so \"reply to the "+
+				"other one\" is ambiguous.\n\nName the recipient explicitly with `to`.",
+			convID, len(others), strings.Join(others, ", "))
+	}
 }
 
 func (t *LeaveNote) localTarget() (noteTarget, error) {
