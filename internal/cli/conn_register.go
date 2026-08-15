@@ -139,6 +139,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			func() int { return s.collabConfig().HintBudgetBytes }))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
+	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewExecuteShellCommand(s.shellResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
@@ -219,6 +220,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return s.collabConfig().Mailbox, s.inbox()
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
+		WithLSPSkipNote(s.lspHomeSkipNote).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
 		WithLSPWarmup(s.lspWarming).

@@ -1,13 +1,24 @@
 # Changelog
-
 ## 0.16.7 (unreleased)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
-     stamped heading, so a clean rebase is not evidence your entry is in
-     the right section — check which heading it landed under. -->
+     stamped heading, so a clean rebase is not evidence your entry is in the
+     right section — check which heading it landed under. -->
 
 ### Fixed
+
+- **The TUI Settings scope column no longer lists git linked worktrees as
+  separate workspaces.** Every live session's folder became a scope row, so a
+  multi-agent session's throwaway `.claude/worktrees/*` checkouts each got
+  their own entry beside the repository they belong to. Each folder is now
+  resolved through git's linked-worktree layout — a `.git` pointer file into
+  `<common>/worktrees/<name>` — to the nearest ancestor whose `.git` is or
+  points at the common dir, which is the repository's main worktree; this
+  covers both plain repositories and submodule checkouts (`./plumb` inside
+  plumb-ops is one). Pure filesystem resolution, no git subprocess, and it
+  fails open: an unrecognised layout keeps one entry per folder rather than
+  dropping or rewriting a workspace.
 
 - **The recent-writes feed now shows writes, not write-tool calls.** The
   `workspace_sessions` feed — and the two surfaces built on the same query, the
@@ -63,6 +74,17 @@
   directory and not its ancestor. Both were confirmed to fail against a write
   path mutated to fsync the grandparent and against one with the directory
   fsync removed.
+- **An explicit `$HOME` pin now says why no language server is attached
+  (#316).** `session_start({workspace: <home directory>})` succeeds (an
+  explicit pin always does) but language discovery is deliberately skipped for
+  a home root — a stray `~/.plumb` must not trigger a full-home descent — so
+  the session came back with no language and nothing naming the cause. The
+  session record's `DetectedLanguage` and the session_start identity block now
+  carry "LSP skipped: the workspace root is the home directory" (the note is
+  suppressed when a language IS attached, which an explicit `language`
+  override can still arrange). No scanning behaviour changed: the descent ban
+  stands.
+
 
 - **Post-write lint findings that name files which do not exist are now called
   what they are: a stale golangci-lint cache.** Delete a sibling git worktree and
@@ -370,6 +392,26 @@
 
 ### Changed
 
+- **The mailbox's pending-notes probe is prepared once instead of parsed on
+  every tool call — ~25.8µs down to ~5.8µs.**
+
+  `HasPendingNotes` is the indexed check that lets the response-path delivery
+  backstop skip a full claim (and its write lock) when nothing is waiting, so it
+  runs on every tool call that reaches that path. Almost all of its cost was
+  SQLite parsing the same statement again each time, not executing it; the
+  statement is now prepared on first use and reused. Measured with
+  `BenchmarkMailProbe_Idle` (`v2-probe`), the production probe now matches the
+  hand-prepared variant it was benchmarked against.
+
+  The cache is keyed by statement text rather than being a single statement,
+  because the probe's SQL is not fixed: a claimant carries one placeholder per
+  identity it holds — its own session ID plus any inherited predecessor — so a
+  session that reclaimed a predecessor's mailbox after a daemon restart probes
+  with a different statement from one that did not. Keying by text keeps those
+  two shapes distinct instead of running one claimant's arguments through the
+  other's statement. `Store.Close` closes every cached statement, since
+  database/sql re-prepares each one per pooled connection.
+
 - **`edit_file` now says when an anchor edit swallowed a line break, and points
   large multi-line edits at range mode.**
 
@@ -390,6 +432,14 @@
 
 ### Added
 
+- **`make verify` now catches a duplicate CHANGELOG.md version heading.** A
+  rebase can replay an addition as a bare new `## <version> (date)` heading
+  rather than a conflicting insertion under the existing one, since git sees
+  it as a pure addition and never conflicts — this landed uncaught at least
+  four times (PR #320, #292, #293, and a duplicate `## 0.16.6` heading fixed
+  in PR #325). `make check-changelog` (`scripts/check-changelog-headings.sh`)
+  fails when any version number appears in more than one heading; wired into
+  `verify` and the pre-commit hook alongside the file-size and brief guards.
 - **Skipped topology files now say WHY they were skipped.** `error_msg` was
   write-only: recorded on every indexing failure and read back only as a
   count, so a parse timeout, a malformed file and a panicking grammar were
@@ -607,6 +657,61 @@
   workflow warnings — so advisories against build-time-only dependencies
   cannot turn the tree red with no code change. The small production tree
   still blocks, by the same posture as govulncheck.
+### Added
+
+- **`mutation_test` — mutation-test your own assertions, with a mandatory
+  compile gate.** This repository already treats mutation-verified assertions
+  as a review requirement, but there was no tooling: every agent hand-rolled a
+  bash harness of patch → compile → test → restore. The new tool takes
+  **explicit** mutants (`file_path` plus an exact-once `old_string`/`new_string`
+  in the style of `edit_file` — it does not generate them) and, one at a time,
+  applies each, proves it still compiles, runs a scoped test set, classifies the
+  result, and restores the file.
+
+  **The false kill is the failure mode it exists to prevent.** A mutant that
+  never applied, or applied but did not compile, makes the test command fail —
+  and a hand-rolled harness reports that failure as a kill, "proving" an
+  assertion that was never exercised. So the verdicts are `killed` (compiled,
+  and a test failed), `survived` (compiled, and every test still passed — the
+  assertions are vacuous, the finding that matters), and `invalid` (did not
+  apply, did not compile, or timed out), and an `invalid` is **never** reported
+  as a kill. The compile gate cannot be switched off: a workspace with no build
+  command configured is refused outright rather than served verdicts nothing
+  stands behind, and the gate always runs unscoped because a whole-module
+  compile catches breakage a package-scoped test never reaches.
+
+  **Both halves of a kill are checked, not just the second.** "Killed" claims
+  the suite passed before the change and failed after it, so the compile and
+  test commands are run once on the **unmutated** tree first and the whole run
+  is refused unless both pass. Without that, a suite which was already red — a
+  peer's edit elsewhere in the tree, a pre-existing failure, a test runner that
+  is not installed — reports every mutant killed for a reason that has nothing
+  to do with any mutant, which is the same false kill arrived at from the
+  workspace instead of from the mutant. For the same reason a command that
+  cannot be *started* is classified `invalid` rather than by its exit code,
+  which in the test slot would otherwise read as a kill.
+
+  Commands are the stored, trust-gated `[tasks.<lang>]` slots `run_task`
+  already uses — there is no agent-supplied command line. `test_target` fills
+  the test command's `{target}` placeholder, which is how a run is scoped to
+  the affected package instead of a whole suite that takes minutes per mutant
+  (`topology_affected` says what to name).
+
+  **Restoration is guaranteed** on every exit path — pass, test failure,
+  compile failure, timeout, panic, context cancellation: the pre-mutation bytes
+  are snapshotted in memory, rewritten under the same per-path lock the write
+  tools hold, and verified by SHA-256 before the run reports clean. An
+  unverifiable restore is escalated with the file named, its recovery spelled
+  out, and the snapshot saved to a sidecar. A file with **uncommitted changes
+  is refused with no override** — a clean file is precisely what makes
+  `git checkout` a guaranteed recovery if the daemon dies mid-run, so the
+  refusal *is* the crash-recovery story rather than a nuisance. One run at a
+  time per daemon; a second call is refused rather than queued, because
+  concurrent runs would read each other's breakage as their own result.
+
+  Non-lean: unlike the write tools, mutation verification is a discretionary
+  review step, not work every session must do, so an agent that never sees the
+  tool does not thereby perform an unsafe write.
 
 ## 0.16.6 (2026-08-14)
 
@@ -710,58 +815,6 @@
   failure keeps the honest "git declined; read the output" classification
   (`TestLintLockHint_OnlyOnTheLiteralMarker`,
   `TestGitCommandError_OrdinaryFailureKeepsInspectOutput`).
-
-## 0.16.6 (2026-08-14)
-
-### Security
-
-- **A deleted pinned workspace no longer rehydrates to the enclosing
-  repository after a daemon restart.** If a workspace pinned by an explicit
-  `session_start` disappeared before the daemon restarted — a removed git
-  worktree is the standing case — the restore path walked *up* the filesystem
-  and re-pinned the nearest ancestor that looked like a project, silently
-  widening the session's write surface past anything the caller chose (the
-  #181 fail-open class through the restore path). The pin is now verified
-  before it is restored: a root whose directory is gone, or whose resolution no
-  longer lands on exactly the stored root, is **dropped** — logged, deleted
-  from the persisted store, and left for the normal attach ladder (client
-  roots, cwd hint) rather than attached at an ancestor. The same check covers
-  alias-spelled pins (never attached under either spelling, so no shadow pins)
-  and markerless synthetic roots (the `SynthesiseRoot` walk no longer climbs to
-  a `.git` that appeared above the pin). In the same stroke, `session_start`
-  results now echo the daemon-canonical root in `_meta`
-  (`dev.plumbkit/resolved-workspace`), and the `plumb serve` proxy commits that
-  spelling as the pin it replays on reconnect — closing the raw-spelling replay
-  channel that fed the drift.
-
-- **The command allow-list, the shell gate and the Xcode build server are now
-  bound to the project config content you approved**, not to a per-workspace
-  boolean. `[[command]]`, `[commands] allow_shell`/`deny_network` and `[xcode]`
-  join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and `[collab]` in the trust hash, so
-  `plumb trust` discloses them with their values and any later edit invalidates
-  the grant until you approve it again. Closes threat-model known gap 8.
-
-  Two behaviours were live before this. Anything **added after** a grant
-  inherited it — a repository trusted for a benign `[git]` tweak could append a
-  `[[command]]` and have `run_command` execute it. And the coarse flag is set by
-  the TUI's Commands tab on **any** project-scope save, so saving one unrelated
-  setting in a freshly cloned repository blessed every `[[command]]` that
-  repository already shipped, plus `allow_shell`, plus `auto_build_server` —
-  which runs `xcodebuild`, and so that repository's own build.
-
-  The gate is now both grants together: the coarse flag still says you approved
-  execution in this workspace at all, and the hash says the request is the one
-  you approved. **A project that supplies none of these sections is unaffected**,
-  so commands from your own global config behave exactly as before. The decision
-  is resolved when the config is applied, from the same bytes as the config it
-  authorises, so a repository cannot run one set of commands while the file on
-  disk reads as something you once approved.
-
-  If you had trusted a workspace whose project config supplies any of these
-  sections, run `plumb trust` there once more — it will show you what it is
-  binding to before you approve it.
-
-### Fixed
 
 - **A git child could park `cmd.Wait()` forever and wedge every later git op on
   the repository.** `runGit` captures output into `bytes.Buffer`s, so os/exec

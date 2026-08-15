@@ -37,3 +37,5 @@ fi
 scripts/check-file-size.sh
 # Enforce the AGENTS.md brief budget (200 lines / 32 KiB).
 scripts/check-agents-brief.sh
+# Reject a duplicate CHANGELOG.md version heading.
+scripts/check-changelog-headings.sh

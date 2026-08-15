@@ -141,9 +141,18 @@ func (s *Store) HasPendingNotes(ctx context.Context, who Claimant, now time.Time
 		return false, nil
 	}
 	where, args := claimable(who, now)
+	query := `SELECT 1 FROM collab_rows WHERE ` + where + ` LIMIT 1`
+
 	var one int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM collab_rows WHERE `+where+` LIMIT 1`, args...).Scan(&one)
+	var err error
+	if stmt, prepErr := s.probeStmt(ctx, query); prepErr == nil {
+		err = stmt.QueryRowContext(ctx, args...).Scan(&one)
+	} else {
+		// Preparing is an optimisation, so failing to prepare must not fail the
+		// probe. Nothing is swallowed by falling through: whatever broke the
+		// prepare breaks this query too, and its error is the one returned.
+		err = s.db.QueryRowContext(ctx, query, args...).Scan(&one)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -151,6 +160,52 @@ func (s *Store) HasPendingNotes(ctx context.Context, who Claimant, now time.Time
 		return false, fmt.Errorf("collab: probe notes: %w", err)
 	}
 	return true, nil
+}
+
+// probeStmt returns the prepared form of one probe statement, preparing it on
+// first use and reusing it thereafter.
+//
+// Preparing is most of the probe's cost. Measured on the mailbox benchmark
+// (BenchmarkMailProbe_Idle, variants v2-probe and v2p-probe-prepared, single
+// session): ~25.8µs unprepared against ~5.8µs prepared, the same statement
+// either way. Since the probe runs on every tool call that reaches the response
+// path, that is ~20µs of pure parse work per call, repeated forever.
+//
+// THE CACHE IS KEYED BY SQL TEXT, and cannot be a single statement, because the
+// probe's text is not fixed. claimable embeds addresseeMatch, which emits one
+// placeholder per identity the claimant holds — its own ID plus any inherited
+// predecessor IDs — so a session that inherited a predecessor's mailbox probes
+// with a different statement from one that did not. Caching a single statement
+// would bind the first shape seen and then feed a later claimant's argument list
+// to it: at best an argument-count error, at worst the wrong identity set
+// silently in force, which is the hole addressee_id exists to close. Keying by
+// the text makes the two shapes distinct entries rather than a collision.
+//
+// The map is bounded by the number of distinct identity counts a workspace's
+// sessions present — one, or two where a restart granted an inheritance — not by
+// the number of sessions or claimants.
+//
+// Close releases every entry; see Store.Close for why leaving them to the handle
+// is not good enough.
+func (s *Store) probeStmt(ctx context.Context, query string) (*sql.Stmt, error) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	if stmt, ok := s.probeStmts[query]; ok {
+		return stmt, nil
+	}
+	// Preparing under the lock rather than racing and discarding a loser: this
+	// runs at most once per statement shape per store, so the contention is a
+	// one-off, and the alternative prepares the same statement twice on the very
+	// first concurrent probe.
+	stmt, err := s.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if s.probeStmts == nil {
+		s.probeStmts = make(map[string]*sql.Stmt, 2)
+	}
+	s.probeStmts[query] = stmt
+	return stmt, nil
 }
 
 // PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to the
