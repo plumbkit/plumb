@@ -47,7 +47,48 @@ type stepOutcome struct {
 // failed reports whether this step did anything other than succeed, by any
 // route. Used to decide whether a later step is worth running at all.
 func (s stepOutcome) failed() bool {
-	return s.timedOut || s.startErr || s.exitCode != 0
+	return s.failure() != stepOK
+}
+
+// stepFailure names WHY a step did not succeed. The three causes are not
+// interchangeable and must never be collapsed into "it failed":
+//
+//	"the tests ran and something is red"      → the workspace has a problem
+//	"the command never started"               → the TOOLING has a problem
+//	"the command ran out of time"             → the BUDGET has a problem
+//
+// Each needs a different thing done about it, so a message that asserts the
+// first when the truth is the second or third sends the reader to fix something
+// that was never broken. That is the same false-attribution defect the compile
+// gate exists to prevent, arrived at from the diagnostics side.
+//
+// Shared by classify (per mutant) and baseline (per run) so the two cannot
+// drift: classify already split these correctly while baseline collapsed them,
+// which is exactly the divergence one enum in one place makes impossible.
+type stepFailure int
+
+const (
+	stepOK stepFailure = iota
+	stepUnrunnable
+	stepTimedOut
+	stepExited
+)
+
+// failure classifies this outcome. The ORDER is load-bearing and matches the
+// order the fields are set in runStep: a command that could not be started also
+// carries exitCode -1, and a timeout carries one too, so testing exitCode first
+// would swallow both of the causes that are not about the workspace.
+func (s stepOutcome) failure() stepFailure {
+	switch {
+	case s.startErr:
+		return stepUnrunnable
+	case s.timedOut:
+		return stepTimedOut
+	case s.exitCode != 0:
+		return stepExited
+	default:
+		return stepOK
+	}
 }
 
 // mutationResult is one mutant's classified verdict.
@@ -132,26 +173,27 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 // is the exact failure it was built to stop.
 func (r *mutationResult) classify(compile, test stepOutcome) {
 	r.compile = compile
-	switch {
-	case compile.startErr:
+	switch compile.failure() {
+	case stepUnrunnable:
 		r.outcome, r.reason = MutationInvalid, reasonCompileUnrunnable
 		return
-	case compile.timedOut:
+	case stepTimedOut:
 		r.outcome, r.reason = MutationInvalid, reasonCompileTimeout
 		return
-	case compile.exitCode != 0:
+	case stepExited:
 		r.outcome, r.reason = MutationInvalid, reasonCompileFailed
 		return
+	case stepOK:
 	}
 	r.test = test
-	switch {
-	case test.startErr:
+	switch test.failure() {
+	case stepUnrunnable:
 		r.outcome, r.reason = MutationInvalid, reasonTestUnrunnable
-	case test.timedOut:
+	case stepTimedOut:
 		r.outcome, r.reason = MutationInvalid, reasonTestTimeout
-	case test.exitCode != 0:
+	case stepExited:
 		r.outcome = MutationKilled
-	default:
+	case stepOK:
 		r.outcome = MutationSurvived
 	}
 }
