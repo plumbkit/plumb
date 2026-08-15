@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -45,22 +46,20 @@ func LoadProjectRaw(workspace string) (map[string]any, error) {
 
 // ProjectValuePresent reports whether the dotted key path is explicitly set in
 // the workspace's project config (i.e. it is an override, not inherited).
+// Keys are matched case-insensitively (lookupNested → foldLookup), mirroring
+// how go-toml/v2 binds a TOML key to a struct field, so a project supplying
+// `[[COMMAND]]` or `[TASKS.go]` reports present under the lowercase path —
+// the exact-match miss here was the mechanism of two arbitrary-code-execution
+// bypasses (run_command, run_task), closed by deriving provenance from the
+// trust spec instead (issue #319 folded the lookup itself; the spec remains
+// the provenance source).
 //
-// NEVER USE THIS TO DECIDE WHETHER A SECURITY GATE APPLIES. It matches keys
-// EXACTLY, via lookupNested, while go-toml/v2 binds a TOML key to a struct field
-// case-INSENSITIVELY. So a project supplying `[[COMMAND]]` or `[TASKS.go]` has
-// its value decoded into the merged Config and honoured by the consumer, while
-// this function reports absent — and a caller using it as "is this
-// project-supplied, so does the trust gate apply?" skips the gate entirely.
-//
-// That was not hypothetical: it was the mechanism of two live arbitrary-code-
-// execution bypasses, one in run_command and one in run_task, both closed by
-// deriving provenance from the trust spec instead (ProjectPolicyStatus.Asked,
-// ProjectTaskCommands — both case-insensitive, both built with rawTables).
-//
-// It remains correct for what it is FOR: the TUI and web settings screens'
-// "overridden vs inherited" annotation, where a fold variant showing as
-// inherited is a cosmetic inaccuracy rather than a bypass.
+// STILL never use this to decide whether a security gate applies: the trust
+// spec (ProjectPolicyStatus.Asked, ProjectTaskCommands) is computed from the
+// same bytes as the loaded config at apply time, so it cannot disagree with
+// what actually loaded — a presence check re-reads the file and can. It
+// remains the right tool for the TUI and web settings screens' "overridden
+// vs inherited" annotation.
 func ProjectValuePresent(workspace string, path []string) (bool, error) {
 	m, err := LoadProjectRaw(workspace)
 	if err != nil {
@@ -116,44 +115,98 @@ func UnsetProjectValue(workspace string, path []string) error {
 	return writeTOMLAtomic(cfgPath, m)
 }
 
-// lookupNested reports whether path resolves to a present leaf in m.
+// foldLookup returns the key in m that matches want case-insensitively — the
+// way go-toml/v2 binds a TOML key to a struct field, so `TASKS` and `tasks`
+// are the same setting — preferring the exact spelling when both appear.
+// ok is false when no fold variant exists.
+func foldLookup(m map[string]any, want string) (key string, ok bool) {
+	if _, ok := m[want]; ok {
+		return want, true
+	}
+	for k := range m {
+		if strings.EqualFold(k, want) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// foldDelete removes every key in m that matches want case-insensitively. The
+// raw map can hold two fold variants of one setting as distinct keys (TOML
+// keys are case-sensitive), and both decode into the same merged value — so
+// "unset this setting" must remove both or lookup would still find it.
+func foldDelete(m map[string]any, want string) {
+	delete(m, want)
+	for k := range m {
+		if strings.EqualFold(k, want) {
+			delete(m, k)
+		}
+	}
+}
+
+// lookupNested reports whether path resolves to a present leaf in m. Keys are
+// matched case-insensitively, mirroring how go-toml/v2 decodes the same file
+// into the typed Config: a fold-variant spelling is present in the effective
+// config, so it must be present here too.
 func lookupNested(m map[string]any, path []string) bool {
 	for _, k := range path[:len(path)-1] {
-		next, ok := m[k].(map[string]any)
+		key, ok := foldLookup(m, k)
+		if !ok {
+			return false
+		}
+		next, ok := m[key].(map[string]any)
 		if !ok {
 			return false
 		}
 		m = next
 	}
-	_, ok := m[path[len(path)-1]]
+	_, ok := foldLookup(m, path[len(path)-1])
 	return ok
 }
 
-// setNested sets value at path within m, creating intermediate tables.
+// setNested sets value at path within m, creating intermediate tables. A
+// fold-variant spelling of any path segment is written THROUGH (the existing
+// key is updated in place) rather than duplicated — writing `git.allow_writes`
+// into a file that says [GIT] must not leave two tables that both decode into
+// Config.Git.
 func setNested(m map[string]any, path []string, value any) {
 	for _, k := range path[:len(path)-1] {
-		next, ok := m[k].(map[string]any)
+		key, ok := foldLookup(m, k)
+		if !ok {
+			key = k
+		}
+		next, ok := m[key].(map[string]any)
 		if !ok {
 			next = map[string]any{}
-			m[k] = next
+			m[key] = next
 		}
 		m = next
 	}
-	m[path[len(path)-1]] = value
+	key, ok := foldLookup(m, path[len(path)-1])
+	if !ok {
+		key = path[len(path)-1]
+	}
+	m[key] = value
 }
 
-// deleteNested removes path from m and prunes any table it leaves empty.
+// deleteNested removes path from m and prunes any table it leaves empty. Keys
+// are matched case-insensitively, so unsetting a lowercase path removes a
+// fold-variant spelling of the same setting.
 func deleteNested(m map[string]any, path []string) {
 	if len(path) == 1 {
-		delete(m, path[0])
+		foldDelete(m, path[0])
 		return
 	}
-	child, ok := m[path[0]].(map[string]any)
+	key, ok := foldLookup(m, path[0])
+	if !ok {
+		return
+	}
+	child, ok := m[key].(map[string]any)
 	if !ok {
 		return
 	}
 	deleteNested(child, path[1:])
 	if len(child) == 0 {
-		delete(m, path[0])
+		delete(m, key)
 	}
 }

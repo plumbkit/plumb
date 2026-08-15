@@ -118,3 +118,96 @@ func contains(s, sub string) bool {
 		return false
 	}())
 }
+
+// writeRawProjectConfig writes body verbatim as the workspace's project
+// config, bypassing SetProjectValue — the fold tests need spellings the
+// sparse writer would normalise away.
+func writeRawProjectConfig(t *testing.T, ws, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProjectValuePresent_FoldVariantSpelling pins the read half of the #319
+// fold: go-toml/v2 binds `[TASKS.go]` into Config.Tasks and `[[COMMAND]]` into
+// Config.Commands case-insensitively, so a presence check under the lowercase
+// path must see them — the exact-match miss was the mechanism of the run_task
+// and run_command trust-gate bypasses.
+func TestProjectValuePresent_FoldVariantSpelling(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[TASKS.go]\ntest = \"go test ./...\"\n\n[[COMMAND]]\nname = \"lint\"\n")
+
+	for _, tc := range []struct {
+		path []string
+		want bool
+		desc string
+	}{
+		{[]string{"tasks", "go", "test"}, true, "[TASKS.go] leaf under lowercase path"},
+		{[]string{"tasks", "go"}, true, "[TASKS.go] table under lowercase path"},
+		{[]string{"command"}, true, "[[COMMAND]] array under lowercase path"},
+		{[]string{"tasks", "rust", "test"}, false, "absent key stays absent"},
+		{[]string{"git"}, false, "absent table stays absent"},
+	} {
+		got, err := ProjectValuePresent(ws, tc.path)
+		if err != nil {
+			t.Fatalf("ProjectValuePresent(%v): %v", tc.path, err)
+		}
+		if got != tc.want {
+			t.Errorf("ProjectValuePresent(%v) = %v, want %v (%s)", tc.path, got, tc.want, tc.desc)
+		}
+	}
+}
+
+// TestSetProjectValue_WritesThroughFoldVariant pins the write half: setting
+// git.allow_writes in a file that spells the table [GIT] must update the
+// EXISTING table, not grow a second one — two fold variants both decode into
+// Config.Git, and which one wins is last-wins in the map, not a decision the
+// writer is entitled to make for the user.
+func TestSetProjectValue_WritesThroughFoldVariant(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[GIT]\nallow_writes = true\n")
+
+	if err := SetProjectValue(ws, []string{"git", "allow_writes"}, false); err != nil {
+		t.Fatalf("SetProjectValue: %v", err)
+	}
+	raw, err := LoadProjectRaw(ws)
+	if err != nil {
+		t.Fatalf("LoadProjectRaw: %v", err)
+	}
+	gitTable, ok := raw["GIT"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw config = %#v, want the [GIT] table preserved", raw)
+	}
+	if got := gitTable["allow_writes"]; got != false {
+		t.Errorf("allow_writes in [GIT] = %v, want false (written through the fold variant)", got)
+	}
+	if _, dup := raw["git"]; dup {
+		t.Errorf("raw config grew a second, fold-duplicate [git] table: %#v", raw)
+	}
+}
+
+// TestUnsetProjectValue_RemovesFoldVariant pins the unset half: unsetting the
+// lowercase path must remove a fold-variant spelling — leaving it would keep
+// reporting present (and keep decoding) after the user asked for inherit.
+func TestUnsetProjectValue_RemovesFoldVariant(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[TASKS.go]\ntest = \"go test ./...\"\n")
+
+	if err := UnsetProjectValue(ws, []string{"tasks"}); err != nil {
+		t.Fatalf("UnsetProjectValue: %v", err)
+	}
+	present, err := ProjectValuePresent(ws, []string{"tasks", "go", "test"})
+	if err != nil {
+		t.Fatalf("ProjectValuePresent: %v", err)
+	}
+	if present {
+		t.Error("ProjectValuePresent(tasks.go.test) still true after unsetting [TASKS.go]")
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".plumb", "config.toml")); !os.IsNotExist(err) {
+		t.Errorf("project config file survives unsetting its only key: %v", err)
+	}
+}

@@ -129,6 +129,19 @@
   other participant from the thread, and where that has no answer (no other
   participant, or several) it refuses and names the ambiguity rather than
   guessing. A refused send stores nothing. Naming `to` explicitly is unchanged.
+- **Project-config sparse reads, writes and unsets now fold key case, matching
+  what go-toml actually decodes (#319).** `ProjectValuePresent` walked the raw
+  TOML map with exact key lookups while go-toml/v2 binds a table name to a
+  struct field case-insensitively — so a project supplying `[TASKS.go]` or
+  `[[COMMAND]]` had the value honoured in the effective config and reported
+  ABSENT under the lowercase path. That mismatch was the mechanism of the two
+  trust-gate bypasses closed earlier (`run_command`, `run_task`); their
+  provenance now comes from the trust spec, and this closes the underlying
+  lookup so the class has no bottom left: presence, sparse writes (`setNested`
+  writes THROUGH a fold-variant spelling instead of growing a duplicate table
+  that both decode into the same field) and unsets (`deleteNested` removes
+  every fold variant) all agree with the decoder. The settings screens'
+  "overridden vs inherited" annotation is now accurate for fold spellings too.
 
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a
