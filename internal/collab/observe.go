@@ -115,24 +115,42 @@ func (s *Store) conversationSummaries(
 	return out, rows.Err()
 }
 
-// ConversationWorkspaces returns the distinct non-empty origin/target
-// workspaces that have appeared in a conversation's unexpired rows in this
-// store. Read-only; discloses no message body or participant identity, only
-// which projects were involved — the minimum needed to evaluate daemon-wide
-// display consent.
+// ConversationWorkspaces returns the distinct origin/target workspaces that
+// have appeared in a conversation's unexpired rows. Read-only; discloses no
+// message body or participant identity, only which projects were involved —
+// the minimum needed to evaluate daemon-wide display consent.
+//
+// An UNSTAMPED workspace is reported as an empty string rather than filtered
+// away, and that is the whole point of the method. Every row in the global
+// store is cross-project by construction — PutNote refuses one without a
+// target workspace — so each row always has a sender somewhere, and an empty
+// origin_workspace can only ever mean "this participant could not be placed",
+// never "this row has no sender". Dropping it would silently downgrade an
+// unresolvable participant to a non-participant, and a conversation would then
+// be displayed on the strength of the participants that DID resolve: exactly
+// the "any one consents" rule FilterDaemonWideConversations exists to refuse.
+// Reporting "" instead pushes the decision through the caller's own allow
+// func, which fails closed on a workspace it cannot resolve (see
+// config.TargetAllowsCrossProject).
+//
+// Only meaningful on the global store, and it returns nothing on any other —
+// the workspace columns are stamped only on cross-project rows, so a project's
+// own collab.db would report every conversation as one unplaceable
+// participant. Mirrors ConversationSummariesForWorkspace's contract.
 func (s *Store) ConversationWorkspaces(ctx context.Context, convID string, now time.Time) ([]string, error) {
-	if s == nil || s.db == nil || convID == "" {
+	if s == nil || s.db == nil || convID == "" || !s.IsGlobal() {
 		return nil, nil
 	}
 	// UNION (not UNION ALL) dedupes origin and target across both halves of the
 	// query, so a conversation with several notes between the same two
-	// workspaces still reports exactly two.
+	// workspaces still reports exactly two — and several rows that all failed to
+	// stamp an origin collapse to a single "".
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT origin_workspace FROM collab_rows
-		  WHERE kind = ? AND conversation_id = ? AND expires_at > ? AND origin_workspace != ''
+		  WHERE kind = ? AND conversation_id = ? AND expires_at > ?
 		 UNION
 		 SELECT target_workspace FROM collab_rows
-		  WHERE kind = ? AND conversation_id = ? AND expires_at > ? AND target_workspace != ''`,
+		  WHERE kind = ? AND conversation_id = ? AND expires_at > ?`,
 		string(KindNote), convID, now.UnixNano(),
 		string(KindNote), convID, now.UnixNano())
 	if err != nil {
@@ -166,10 +184,14 @@ const daemonWideOverfetch = 4
 // project B's traffic without B's consent; "none at all" would make the
 // feature pointless. Only unanimous consent satisfies both projects at once.
 //
-// A conversation whose participants cannot be determined (ConversationWorkspaces
-// errors, or returns no known workspace) is excluded rather than shown — fail
-// closed, the same posture ConversationSummariesForWorkspace's callers already
-// take on error.
+// Fail closed on every shape of "cannot determine consent", which is three
+// distinct cases and not just the obvious one: ConversationWorkspaces errors,
+// or it returns no participant at all, or it returns a participant that could
+// not be placed in a workspace (an empty origin — reported as "" precisely so
+// it reaches allow, which refuses it). The last is the one that matters: a
+// partially-resolvable conversation must be refused like an unresolvable one,
+// because "show it if the participants we could place all consent" IS the
+// any-one-consents rule, arrived at sideways.
 //
 // limit caps the RETURNED count; the underlying query over-fetches by
 // daemonWideOverfetch so filtering does not silently under-fill the view.

@@ -326,33 +326,101 @@ func TestFilterDaemonWideConversations_RequiresUnanimousConsent(t *testing.T) {
 	}
 }
 
-// TestFilterDaemonWideConversations_KnownParticipantPasses is the positive
-// control for the fail-closed "no known participants" guard: a row with only a
-// target workspace stamped (origin never required by PutNote) still resolves
-// one known participant and is shown when that workspace consents. The
-// negative case — zero known participants — has no way to arise through
-// PutNote's own invariant (a global-store row is refused without a target
-// workspace), so it is covered directly at TestConversationWorkspaces_
-// UnknownConversationIsEmpty; this pins that FilterDaemonWideConversations
-// still finds and includes the ordinary case around that guard.
-func TestFilterDaemonWideConversations_KnownParticipantPasses(t *testing.T) {
+// TestFilterDaemonWideConversations_UnplaceableParticipantIsRefused is the
+// sharp edge of the unanimous rule: consent from the participants that COULD
+// be placed is not consent from the ones that could not.
+//
+// PutNote requires a target workspace on a global-store row but never an
+// origin, and leave_note's cross-project branch stamps origin with the
+// SENDER's workspace — which is "" for a session whose workspace never
+// resolved, and sameWorkspace("", x) is deliberately false, so that branch is
+// exactly what such a session takes. The resulting row names one project and
+// leaves the other unplaceable. Displaying it because the placeable half
+// consented would be the any-one-consents rule under another name.
+func TestFilterDaemonWideConversations_UnplaceableParticipantIsRefused(t *testing.T) {
 	g := openTestGlobalStore(t)
 	ctx, now := context.Background(), time.Now()
 
-	if _, err := g.PutNote(ctx, NoteInput{
+	unplaceable, err := g.PutNote(ctx, NoteInput{
 		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
 		TTL: time.Hour, TargetWorkspace: "/proj/only-target",
-	}, now); err != nil {
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fully-placed, fully-consenting conversation as the positive control, so
+	// this cannot pass by the filter simply returning nothing.
+	placed, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "carol", AuthorID: "c", Body: "hi", Addressee: "dave",
+		TTL: time.Hour, OriginWorkspace: "/proj/only-target", TargetWorkspace: "/proj/other",
+	}, now)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	allow := func(ws string) bool { return ws == "/proj/only-target" }
+	allow := func(ws string) bool { return ws == "/proj/only-target" || ws == "/proj/other" }
 	got, err := g.FilterDaemonWideConversations(ctx, now, 0, allow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected the one known-participant conversation to pass, got %d: %+v", len(got), got)
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	if slices.Contains(ids, unplaceable) {
+		t.Errorf("a conversation with an UNPLACEABLE participant was shown on the placeable half's consent alone: %v", ids)
+	}
+	if !slices.Contains(ids, placed) {
+		t.Errorf("the fully-placed, fully-consenting conversation must still appear: %v", ids)
+	}
+}
+
+// TestConversationWorkspaces_ReportsAnUnplaceableParticipant pins the
+// mechanism the refusal above rests on: the unstamped origin surfaces as "" so
+// it reaches the caller's allow func, instead of being filtered away and
+// leaving the conversation looking wholly placed.
+func TestConversationWorkspaces_ReportsAnUnplaceableParticipant(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	conv, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, TargetWorkspace: "/proj/only-target",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := g.ConversationWorkspaces(ctx, conv, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	if want := []string{"", "/proj/only-target"}; !slices.Equal(got, want) {
+		t.Errorf("workspaces = %q, want %q — the unplaceable participant must be reported, not dropped", got, want)
+	}
+}
+
+// TestConversationWorkspaces_OnlyRunsOnGlobalStore: a workspace's own collab.db
+// stamps neither column, so answering there would report every conversation as
+// a single unplaceable participant. Refuse instead, as
+// ConversationSummariesForWorkspace does.
+func TestConversationWorkspaces_OnlyRunsOnGlobalStore(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	conv, err := s.PutNote(ctx, NoteInput{
+		AuthorSession: "alice", AuthorID: "a", Body: "hi", Addressee: "bob", TTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ConversationWorkspaces(ctx, conv, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("a non-global store answered a cross-project consent question: %q", got)
 	}
 }
 
