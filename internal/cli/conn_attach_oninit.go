@@ -9,8 +9,10 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
@@ -67,12 +69,15 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// then anchor somewhere the caller did not name. It is pinned by
 	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached (no hint set) and by
 	// the cwd-hint tests beside it.
+	var refusedReplay string
 	if replayed := s.view().replayedPin; replayed != "" {
 		if err := undeclaredWideRootErr(replayed, sessionstate.PinSourceUnknown); err != nil {
-			// Info, not Warn: on a legitimately declared wide root with the row
-			// present this fires on every restart and rung 1b then restores the
+			// Info, not Warn, HERE: on a legitimately declared wide root with the
+			// row present this fires on every restart and rung 1b then restores the
 			// same directory, so a scary "refused" would cry wolf at an operator
-			// watching a working session.
+			// watching a working session. The claim is judged once the ladder has
+			// finished, below, where the two cases CAN be told apart.
+			refusedReplay = replayed
 			s.log().Info("daemon: replayed _meta pin not honoured over the unauthenticated proxy channel; trying the persisted pin (issue #318)",
 				"root", replayed, "reason", err)
 		} else {
@@ -112,6 +117,36 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 		// persisted as the sticky pin), then first-tool-call path seeding.
 		s.attachFromHint(ctx)
 	}
+	s.reportUnbackedReplay(refusedReplay)
+}
+
+// reportUnbackedReplay raises the alarm for a refused wide replayed pin that
+// NOTHING else corroborated.
+//
+// The refusal itself cannot tell a forged claim from a legitimate one, which is
+// why it only logs at Info — a caller who really did declare a wide workspace
+// hits it on every restart. But once the ladder has finished, the two are
+// distinguishable: a genuine declaration left a session_start row behind, so
+// rung 1b restores the SAME root, and the claim is corroborated by a fact this
+// daemon's database recorded on an accepted call. A claim that arrived over the
+// unauthenticated channel and is backed by nothing at all is the shape a forged
+// `_meta` key produces, and an operator should see it.
+//
+// Comparison is canonical, not textual: the proxy replays the workspace ARGUMENT
+// it observed, while the persisted row holds the resolved root, so two spellings
+// of one directory would otherwise read as "uncorroborated" and cry the wolf
+// this function exists to avoid.
+func (s *connSession) reportUnbackedReplay(refused string) {
+	if refused == "" {
+		return
+	}
+	if ws := s.workspace(); ws != "" && paths.Canonical(ws) == paths.Canonical(refused) {
+		return // a persisted declaration vouched for it
+	}
+	s.log().Warn("daemon: a client claimed a home-containing workspace over the unauthenticated initialize _meta channel, and nothing corroborates it — no persisted session_start pin names that root (issue #318)",
+		"claimed", refused, "attached", s.workspace())
+	s.markBoundaryViolation(fmt.Sprintf(
+		"a client claimed the home-containing workspace %s over the initialize _meta channel with no session_start behind it; the claim was refused (issue #318)", refused))
 }
 
 // attachReplayedPin attaches a workspace restored from a persisted pin, keeping
