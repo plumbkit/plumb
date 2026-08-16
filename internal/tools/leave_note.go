@@ -411,7 +411,12 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 
 // writeDeliveredBody reports the send-time truth about what the recipient
 // will actually see, using the same clamp RenderMessages applies on delivery
-// so the two never disagree about what fits.
+// so the two agree about what fits. They agree exactly for a same-project
+// send, which is every send the mailbox makes by default; a cross-project one
+// is rendered under the RECIPIENT project's chat_budget_bytes, so a peer
+// configured tighter than us can still cut a message this reply called whole.
+// Warning against our own budget is the honest half of that — it is the only
+// one we can read — and it is strictly better than the previous silence.
 //
 // Under budget: the body is echoed (there is nothing yet to hide) alongside
 // the byte count, so a sender learns the shape of the limit before losing
@@ -426,7 +431,7 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 // conversation_id, or write the full text to a file and share its path
 // (PLAN-301 D1, and the card's standing "notes are pointers" position).
 func writeDeliveredBody(sb *strings.Builder, body, conv string, budget int) {
-	clamped, marker := clampWithTruncationMarker(body, budget)
+	_, marker, kept := clampWithTruncationMarker(body, budget)
 	if marker == "" {
 		fmt.Fprintf(sb, "  message:      %s\n", body)
 		if budget > 0 {
@@ -435,9 +440,10 @@ func writeDeliveredBody(sb *strings.Builder, body, conv string, budget int) {
 		return
 	}
 	fmt.Fprintf(sb, "  message:      TRUNCATED for delivery — only %d of %d bytes will reach the recipient "+
-		"(the %d-byte [collab] chat_budget_bytes limit). The full text is withheld from this reply so it "+
-		"cannot be mistaken for confirmed delivery.\n", len(clamped), len(body), budget)
-	fmt.Fprintf(sb, "  remedy:       resend the remaining %d bytes in a follow-up leave_note quoting "+
-		"conversation_id %q, or write the full text to a file and share its path instead.\n",
-		len(body)-len(clamped), conv)
+		"(the %d-byte [collab] chat_budget_bytes limit, part of which the trim marker itself spends). The "+
+		"full text is withheld from this reply so it cannot be mistaken for confirmed delivery.\n",
+		kept, len(body), budget)
+	fmt.Fprintf(sb, "  remedy:       resend the remaining %d bytes (everything from byte %d on) in a follow-up "+
+		"leave_note quoting conversation_id %q, or write the full text to a file and share its path instead.\n",
+		len(body)-kept, kept, conv)
 }
