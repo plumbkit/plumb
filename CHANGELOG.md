@@ -216,10 +216,46 @@
   Reaching this needs a language server to emit two spellings in a single
   `WorkspaceEdit`, which none is known to do — the guard is a canary, not a fix
   for observed breakage. Guarded by
+- **A `WorkspaceEdit` that names one file twice is now refused instead of
+  silently losing or duplicating edits.** Two shapes, one defect (issue #314):
+
+  *Two spellings of one file* (through a symlinked parent, say) became two
+  targets, because the edits were grouped by raw URI string. Both were prepared
+  from the same pre-edit bytes and both were written in turn, so the second
+  write discarded the first — a lost update inside an apply whose contract is
+  that it lands atomically, reported to the caller as success. It never
+  deadlocked or errored because `lockPaths` already collapses the pair to one
+  mutex, which is exactly what made it silent.
+
+  *The same spelling in both `changes` and `documentChanges`* was merged into
+  one edit list, so a server emitting its edits under both forms for capability
+  compatibility had each edit applied **twice**. That is not idempotent —
+  `applyTextEdits` threads the buffer through its loop, so the second
+  application of a length-changing edit lands on already-rewritten bytes:
+  replacing `foo` with `X` once gives `X bar`, twice gives `Xar`. Silent
+  corruption, also reported as success.
+
+  Both are now refused, mirroring `transaction_apply`'s `txCanonicalPaths`.
+  Merging the lists — the alternative the issue offered — is precisely what
+  produces the second case. An entry carrying no edits is exempt, since it can
+  neither lose nor duplicate anything; that is the compatibility shape servers
+  actually emit. The refusal also fires in `rename_symbol`'s dry run, so the
+  preview no longer promises a change the apply will reject.
+
+  Known gap, unchanged and shared with `transaction_apply`: two spellings
+  differing only in **case** on a case-insensitive filesystem are one file but
+  two lock keys, so they are still neither refused nor collapsed — a property of
+  `paths.Canonical`, which deliberately does not case-fold.
+
+  Reaching any of this needs a language server to name one file twice in a
+  single `WorkspaceEdit`, which none is known to do — the guard is a canary, not
+  a fix for observed breakage. Guarded by
   `TestApplyWorkspaceEdit_RefusesTwoSpellingsOfOneFile`,
+  `_RefusesOneSpellingInBothForms`,
   `TestWorkspaceEditTargets_DuplicateErrorIsDeterministic`,
+  `_RefusesNonAdjacentDuplicate`, `_BareMentionStillMerges`,
   `_RefusesAcrossChangesAndDocumentChanges`, and
-  `_DistinctFilesUnderOneSymlinkAreKept` (issue #314).
+  `_DistinctFilesUnderOneSymlinkAreKept`.
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second
