@@ -7,10 +7,14 @@ import (
 )
 
 // Deciding a language from FILE EVIDENCE, as opposed to from the marker walk in
-// pool_detect.go. Two callers want the same underlying count and read it
-// differently: extLangAt as a last resort when no marker named a language at
-// all, and strongLangAt's tie-break when several markers named different ones
-// for the same directory.
+// pool_detect.go. Two callers want the same KIND of evidence — a bounded count
+// of source files beneath a directory — and read it differently: extLangAt as a
+// last resort when no marker named a language at all, and strongLangAt's
+// tie-break when several markers named different ones for the same directory.
+// They walk with DIFFERENT budgets: the sniff's is a shallow guess over the
+// first files it meets; the tie-break's is far larger and prunes known
+// non-source directories, because it must survive the very trees a contested
+// JVM project ships.
 
 // extScanDepth / extScanMaxFiles bound the content sniff so it can never stall
 // detection on a large tree: it descends at most this many levels below the root
@@ -31,13 +35,31 @@ const (
 	// but build scripts.
 	//
 	// EXACTLY six, with no spare level, because depth is not free: every level
-	// is more directories whose entries are charged against extScanMaxFiles. A
-	// seventh bought nothing any test could show and cost a real project —
-	// src/main/resources/static/css/fonts/ sits at six, so a seventh descends
-	// into the asset directory below it and can spend the whole budget there
-	// before reaching src/main/kotlin. Deeper is not safer; it is a wider
+	// is more directories whose entries are charged against the walk's file
+	// budget. A seventh bought nothing any test could show and cost a real
+	// project — src/main/resources/static/css/fonts/ sits at six, so a seventh
+	// descends into the asset directory below it and can spend the whole budget
+	// there before reaching src/main/kotlin. Deeper is not safer; it is a wider
 	// surface for the cap to be hit on the wrong files.
 	tieScanDepth = 6
+	// tieScanMaxFiles is the tie-break's OWN file budget, deliberately far
+	// larger than extScanMaxFiles. Sharing the sniff's 2000 was the bug: the
+	// tie-break exists for JVM projects, and they bury arbitrarily large
+	// non-source trees — src/main/resources full of property files — in the very
+	// directories it walks. The walk is a LIFO over sorted listings, so
+	// resources pops before kotlin, and one big resources tree exhausted the
+	// budget before a source file was reached; the truncated count was then
+	// discarded and the tie fell back to the language order — java for a
+	// pure-Kotlin project, above a size threshold.
+	//
+	// Ten times the sniff's budget is cheap: ties are rare (strongLangAt scans
+	// only when several markers claim one directory) and a 20k-file walk takes
+	// a few milliseconds. The budget stays FINITE — it is the work bound on a
+	// hostile tree, not a target — and a walk that still hits it reports
+	// truncation, which strongLangAt degrades to the deterministic order on.
+	// Both sides are pinned: the repro tree sits comfortably under it, and a
+	// tree over it must still truncate and fall back.
+	tieScanMaxFiles = 20000
 )
 
 // extLangAt is the last-resort content sniff for a resolved LanguageNone root:
@@ -68,41 +90,89 @@ func (p *workspacePool) extLangAt(dir string) string {
 
 // sniffCounts counts source files per ACTIVE language in a bounded shallow scan
 // of dir, descending at most maxDepth levels and examining at most
-// extScanMaxFiles files. Shared by the last-resort language sniff (extLangAt)
-// and the contested-root-marker tie-break (strongLangAt), which want the same
-// evidence at different depths. Defensive throughout — any read error skips that
-// entry rather than failing, so detection never crashes on an odd filesystem.
+// extScanMaxFiles files. This is the LAST-RESORT SNIFF's walk (extLangAt): a
+// coarse guess over the first files the scan meets, whose alternative is
+// LanguageNone. The contested-marker tie-break wants the same evidence under a
+// looser budget and with known non-source directories pruned — that walk is
+// tieBreakCounts; both delegate to walkLangCounts. Defensive throughout — any
+// read error skips that entry rather than failing, so detection never crashes
+// on an odd filesystem.
+func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (counts map[string]int, truncated bool) {
+	return p.walkLangCounts(dir, maxDepth, extScanMaxFiles, ignore, nil)
+}
+
+// tieBreakCounts is the contested-marker tie-break's walk: the same count as
+// sniffCounts, but under tieScanDepth / tieScanMaxFiles and pruning the
+// directory names tieSkipDir recognises. Both relaxations belong to THIS path
+// alone: the tie-break exists for JVM projects, which bury large non-source
+// trees (src/main/resources, Android assets/res) in exactly the directories
+// the walk examines, and under the sniff's 2000-file budget one such tree
+// exhausted the scan before a source file was reached — truncation, discarded
+// counts, and a pure-Kotlin project falling back to java above a size
+// threshold. extLangAt's pinned semantics are untouched: it keeps the tight
+// budget and no pruning.
+//
+// ignore names the contested root markers, which must not be counted ANYWHERE
+// in the walk; walkLangCounts says why that reaches the whole subtree.
+func (p *workspacePool) tieBreakCounts(dir string, ignore []string) (counts map[string]int, truncated bool) {
+	return p.walkLangCounts(dir, tieScanDepth, tieScanMaxFiles, ignore, tieSkipDir)
+}
+
+// tieSkipDir reports whether a directory name is pruned from the tie-break
+// walk: the conventional non-source containers of the ecosystems the tie-break
+// decides between. src/main/resources holds property and asset files by the
+// thousand in a JVM project; Android mirrors the shape with assets/ and res/.
+// None of them holds sources the tied candidates contest, and they are exactly
+// the trees large enough to starve the walk's budget before it reaches a
+// source directory. Pruning stays a tie-break-only mercy: the last-resort
+// sniff counts what is actually there, coarsely, and its truncation behaviour
+// is pinned as-is.
+func tieSkipDir(name string) bool {
+	switch name {
+	case "resources", "assets", "res":
+		return true
+	}
+	return false
+}
+
+// walkLangCounts is the shared bounded walk behind sniffCounts and
+// tieBreakCounts: it counts source files per ACTIVE language beneath dir,
+// descending at most maxDepth levels, examining at most maxFiles files, and
+// pruning any directory skipDir names (nil prunes nothing).
 //
 // ignore names files that must not be counted ANYWHERE in the walk — the
-// contested root markers, for the tie-break; nil for the plain sniff. It has to
-// reach the whole subtree, not just dir, because a build script is a source file
-// of one of the languages it is contested between and the standard Gradle
+// contested root markers, for the tie-break; nil for the plain sniff. It has
+// to reach the whole subtree, not just dir, because a build script is a source
+// file of one of the languages it is contested between and the standard Gradle
 // MULTI-project ships one per module: a root with `settings.gradle.kts`,
 // `build.gradle.kts` and `app/build.gradle.kts` reads as three Kotlin files
-// before a line of anyone's code is counted, and modules outvote sources as the
-// project grows. Discounting only the markers sitting directly in dir left every
-// nested one voting, which handed Java multi-projects to Kotlin — the very bug
-// this tie-break exists to fix, pointed the other way.
+// before a line of anyone's code is counted, and modules outvote sources as
+// the project grows. Discounting only the markers sitting directly in dir left
+// every nested one voting, which handed Java multi-projects to Kotlin — the
+// very bug the tie-break exists to fix, pointed the other way.
 //
-// The counted files all live BENEATH dir, and that is an invariant rather than a
-// happy accident: a symlink is skipped outright, so the walk neither descends
+// The counted files all live BENEATH dir, and that is an invariant rather than
+// a happy accident: a symlink is skipped outright, so the walk neither descends
 // through one nor counts one. Both halves matter. A symlinked DIRECTORY was
-// already never descended, because DirEntry.IsDir is false for a link — but only
-// incidentally, and the property this walk needs should not rest on a detail of
-// how ReadDir reports dirent types. A symlinked FILE was counted, by its name
-// alone, so `src/main/kotlin/A.kt` pointing anywhere on the filesystem added a
-// Kotlin file to a project that contains none.
+// already never descended, because DirEntry.IsDir is false for a link — but
+// only incidentally, and the property this walk needs should not rest on a
+// detail of how ReadDir reports dirent types. A symlinked FILE was counted, by
+// its name alone, so `src/main/kotlin/A.kt` pointing anywhere on the
+// filesystem added a Kotlin file to a project that contains none.
 //
 // Skipping rather than resolving is the deliberate half. Resolving a link and
-// re-checking that the target is still under dir names a DIFFERENT file from the
-// one a later read would open, which is the defect shape of #264 — the check and
-// the syscall must name the same file. There is nothing to gain by resolving
-// here: the count is a heuristic about what a project holds, and a link's target
-// is by definition not part of the tree being measured.
-func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (counts map[string]int, truncated bool) {
+// re-checking that the target is still under dir names a DIFFERENT file from
+// the one a later read would open, which is the defect shape of #264 — the
+// check and the syscall must name the same file. There is nothing to gain by
+// resolving here: the count is a heuristic about what a project holds, and a
+// link's target is by definition not part of the tree being measured.
+func (p *workspacePool) walkLangCounts(dir string, maxDepth, maxFiles int, ignore []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
 	counts = map[string]int{}
 	if len(p.langsSnapshot()) == 0 {
 		return counts, false
+	}
+	if skipDir == nil {
+		skipDir = func(string) bool { return false }
 	}
 	type item struct {
 		dir   string
@@ -110,7 +180,7 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (
 	}
 	scanned := 0
 	stack := []item{{dir: dir, depth: 0}}
-	for len(stack) > 0 && scanned < extScanMaxFiles {
+	for len(stack) > 0 && scanned < maxFiles {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		entries, err := os.ReadDir(it.dir)
@@ -118,35 +188,49 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (
 			continue
 		}
 		for _, de := range entries {
-			// Neither descended nor counted — see the invariant on sniffCounts.
+			// Neither descended nor counted — see the invariant above.
 			if de.Type()&os.ModeSymlink != 0 {
 				continue
 			}
 			if de.IsDir() {
+				// Pruned outright — neither descended nor charged against the
+				// budget. See tieSkipDir.
+				if skipDir(de.Name()) {
+					continue
+				}
 				if it.depth < maxDepth && !skipChildDir(de.Name()) {
 					stack = append(stack, item{dir: filepath.Join(it.dir, de.Name()), depth: it.depth + 1})
 				}
 				continue
 			}
-			if scanned >= extScanMaxFiles {
+			if scanned >= maxFiles {
 				break
 			}
 			scanned++
-			if matchesAnyMarker(de.Name(), ignore) {
-				continue
-			}
-			if lang := p.fileLanguage(de.Name()); lang != "" {
-				counts[lang]++
-			}
+			p.countSniffedFile(de.Name(), ignore, counts)
 		}
 	}
 	// Hitting the cap means the counts describe a PREFIX of the tree in walk
 	// order, not the tree. Reported rather than swallowed because the caller
 	// cannot otherwise tell that from a complete count, and for the tie-break
 	// the difference decides the answer. Conservative: a tree of exactly
-	// extScanMaxFiles files reports truncated with nothing actually missed,
-	// which costs only a fall back to the deterministic order.
-	return counts, scanned >= extScanMaxFiles
+	// maxFiles files reports truncated with nothing actually missed, which
+	// costs only a fall back to the deterministic order.
+	return counts, scanned >= maxFiles
+}
+
+// countSniffedFile charges one examined FILE against the walk's tally: an
+// ignored marker is dropped — see walkLangCounts for why the markers are
+// ignored wherever they sit — and any other file votes for the ACTIVE language
+// that owns its extension. Extracted from walkLangCounts to keep the walk's
+// cyclomatic headroom; it is the walk's innermost step, not a second policy.
+func (p *workspacePool) countSniffedFile(name string, ignore []string, counts map[string]int) {
+	if matchesAnyMarker(name, ignore) {
+		return
+	}
+	if lang := p.fileLanguage(name); lang != "" {
+		counts[lang]++
+	}
 }
 
 // bestSniffedLang picks the dominant language from a sniff count map with a

@@ -215,13 +215,14 @@ func (p *workspacePool) strongLangAt(dir string) string {
 	// internal/cli suite green (verified by mutation), which is exactly why it is
 	// worth keeping AND worth labelling: strongLangAt runs at every level of
 	// Detect's ascent and once per child in discoverChildLanguages, so without it
-	// every ordinary single-claim directory would pay a depth-5, 2000-file walk
-	// for an answer already known. Nothing test-pins it, because the cost it
-	// avoids is invisible through the return value.
+	// every ordinary single-claim directory would pay a full tie-break walk —
+	// tieScanDepth levels, up to tieScanMaxFiles files — for an answer already
+	// known. Nothing test-pins it, because the cost it avoids is invisible
+	// through the return value.
 	if len(matched) == 1 {
 		return names[0]
 	}
-	counts, truncated := p.sniffCounts(dir, tieScanDepth, contestedMarkerPatterns(matched))
+	counts, truncated := p.tieBreakCounts(dir, contestedMarkerPatterns(matched))
 	// A truncated count is not weaker evidence, it is evidence about the wrong
 	// thing: the walk stopped at a file cap, so the counts describe whichever
 	// prefix of the tree it happened to reach first — and the order is a LIFO
