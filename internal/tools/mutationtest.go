@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -153,12 +152,12 @@ func (*MutationTest) InputSchema() json.RawMessage { return mutationTestSchema }
 func (*MutationTest) Description() string {
 	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
 		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
-		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, or did not compile, or the tests timed out — it proves nothing and is NEVER reported as a kill; that false kill is the whole reason the compile gate exists). " +
+		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, did not compile, could not be started, or the tests timed out — it proves nothing and is NEVER reported as a kill; that false kill is the whole reason the compile gate exists). " +
 		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — but only if the stored command HAS that placeholder; the shipped defaults do not, so out of the box the whole suite runs per mutant. " +
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
 		"Restoration is guaranteed on every exit path (pass, fail, compile error, timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory, rewritten under the same per-path lock, and verified by SHA-256 before the run is reported clean. " +
 		"It REFUSES to touch a file with uncommitted changes (untracked included), with no override — a clean file means `git checkout` can always recover it if the daemon dies mid-run, and that is the recovery story. " +
-		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant would be reported killed for a reason that has nothing to do with it. " +
+		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant would be reported killed for a reason that has nothing to do with it. The refusal names which of three things happened — the suite is red, the command timed out, or it could not be started at all — because only the first is about your code, and the other two prove nothing about the workspace. " +
 		"One mutation run at a time per daemon; a second call is refused rather than queued."
 }
 
@@ -340,19 +339,37 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 // diagnostics side rather than the verdict side.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) error {
 	if compile := t.runStep(ctx, plan.compile, plan.timeout); compile.failed() {
-		return t.baselineError(plan, plan.compile, compile, "compile gate")
+		return t.baselineError(plan, plan.compile, compile, roleCompile)
 	}
 	if test := t.runStep(ctx, plan.test, plan.timeout); test.failed() {
-		return t.baselineError(plan, plan.test, test, "test command")
+		return t.baselineError(plan, plan.test, test, roleTest)
 	}
 	return nil
 }
 
+// baselineRole is which half of the baseline failed. It is a type rather than a
+// bare string because baselineError BRANCHES on it: a typo in a literal at one
+// of the two call sites would compile and silently route a compile-gate failure
+// into the red-suite text.
+type baselineRole string
+
+const (
+	roleCompile baselineRole = "compile gate"
+	roleTest    baselineRole = "test command"
+)
+
 // baselineError explains ONE failed baseline step, in the terms of what actually
 // went wrong. Every branch ends "Nothing was mutated", because none of them got
 // far enough to touch a file.
-func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out stepOutcome, role string) error {
-	where := t.runDirNote(cmd)
+//
+// None of them offers test_target either. A resolved command can never hold the
+// {target} placeholder — substituteTarget replaces it when a target was given
+// and refuses the command outright when one was not — so scoping advice keyed on
+// the resolved argv could never fire, and the compile gate resolves without a
+// target by construction, so scoping the test command would not shorten it
+// anyway.
+func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out stepOutcome, role baselineRole) error {
+	where := t.runDirNote(cmd, out.step)
 	switch out.failure() {
 	case stepUnrunnable:
 		// The command never launched, so it says NOTHING about this workspace —
@@ -360,27 +377,39 @@ func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out ste
 		// something that was never shown to be broken.
 		return fmt.Errorf("mutation_test: the %s (%s) could NOT BE STARTED, so it never ran and proves nothing about this "+
 			"workspace — the build and the suite may both be fine. Nothing was mutated. This is a tooling problem, not a code "+
-			"problem: check that the command exists on the daemon's PATH and that [tasks.<lang>].%s is right.%s\n%s",
-			role, cmd.Slot, cmd.Slot, where, excerpt(out.output))
+			"problem: check that the command exists on the daemon's PATH and that %s is right.%s\n%s",
+			role, cmd.Slot, slotSource(cmd.Slot), where, excerpt(out.output))
 	case stepTimedOut:
 		return fmt.Errorf("mutation_test: the %s (%s) TIMED OUT after %s, so it never returned a verdict — this says nothing "+
 			"about whether the workspace is green. Nothing was mutated. Raise timeout_seconds (max %d) if the command "+
-			"legitimately needs longer%s.%s\n%s",
-			role, cmd.Slot, plan.timeout, maxMutationStepSeconds, scopeAdvice(plan), where, excerpt(out.output))
+			"legitimately needs longer.%s\n%s",
+			role, cmd.Slot, plan.timeout, maxMutationStepSeconds, where, excerpt(out.output))
 	case stepExited, stepOK:
 	}
-	if role == "compile gate" {
+	if role == roleCompile {
 		return fmt.Errorf("mutation_test: the workspace does not pass its compile gate (%s) BEFORE any mutant was applied, "+
 			"so no mutant's compilation could be attributed to the mutant. Nothing was mutated. Fix the build first.%s\n%s",
 			cmd.Slot, where, excerpt(out.output))
 	}
 	return fmt.Errorf("mutation_test: the test command (%s) ALREADY fails before any mutant was applied, so every mutant "+
 		"would be reported killed for a reason that has nothing to do with it — the false kill this tool exists to prevent. "+
-		"Nothing was mutated. Get the suite green first%s.%s\n%s",
-		cmd.Slot, scopeAdvice(plan), where, excerpt(out.output))
+		"Nothing was mutated. Get the suite green first.%s\n%s",
+		cmd.Slot, where, excerpt(out.output))
 }
 
-// runDirNote names the argv and the directory it ran in.
+// slotSource names the config key that actually holds a slot's command. verify
+// stores none of its own — it is synthesised from build then test — so pointing
+// the reader at [tasks.<lang>].verify sends them to a key the runner never reads.
+func slotSource(slot string) string {
+	if slot == "verify" {
+		return "[tasks.<lang>].build and .test, which verify is built from"
+	}
+	return "[tasks.<lang>]." + slot
+}
+
+// runDirNote names the argv that FAILED — the step runStep stopped on — and the
+// directory it ran in. A composite command runs several argvs, and naming the
+// first one beside output produced by the second contradicts itself on screen.
 //
 // The directory is the load-bearing half. Task commands run from the WORKSPACE
 // ROOT, which is not always a buildable directory — a repository whose root only
@@ -388,36 +417,23 @@ func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out ste
 // instantly while the tree itself compiles perfectly. Without the cwd on screen
 // that reads as "your build is broken", and the reader goes looking for a
 // compile error that does not exist.
-func (t *MutationTest) runDirNote(cmd TaskCommand) string {
+func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 	if len(cmd.Steps) == 0 {
 		return ""
 	}
+	if step < 0 || step >= len(cmd.Steps) {
+		step = 0
+	}
+	argv := strings.Join(cmd.Steps[step], " ")
 	dir := ""
 	if t.deps.WorkspaceFn != nil {
 		dir = t.deps.WorkspaceFn()
 	}
 	if dir == "" {
-		return fmt.Sprintf(" It ran `%s`.", strings.Join(cmd.Steps[0], " "))
+		return fmt.Sprintf(" It ran `%s`.", argv)
 	}
 	return fmt.Sprintf(" It ran `%s` in %s — task commands run from the WORKSPACE ROOT, "+
-		"which is not always the directory the command expects.", strings.Join(cmd.Steps[0], " "), dir)
-}
-
-// scopeAdvice recommends test_target ONLY when the resolved test command can
-// actually accept one.
-//
-// The shipped [tasks.go].test default is `go test ./...`, which has no {target}
-// placeholder, and the resolver REFUSES a target a command cannot hold. So the
-// old unconditional "or scope the run with test_target to a package that passes"
-// was advice the reader could not follow on a default install — a second
-// unactionable instruction inside the same message.
-func scopeAdvice(plan mutationPlan) string {
-	for _, argv := range plan.test.Steps {
-		if slices.Contains(argv, taskTargetToken) {
-			return ", or scope the run with test_target to a package that passes"
-		}
-	}
-	return ""
+		"which is not always the directory the command expects.", argv, dir)
 }
 
 // mutationTarget is one preflighted mutant: the resolved path plus the

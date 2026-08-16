@@ -414,34 +414,72 @@ func TestBaseline_NamesTheDirectoryItRanIn(t *testing.T) {
 	}
 }
 
-// TestBaseline_RecommendsTestTargetOnlyWhenTheCommandTakesOne guards the second
-// unactionable instruction in the same message.
+// TestBaseline_OffersNoScopeAdviceItCannotHonour guards the second unactionable
+// instruction that shared the message.
 //
-// The shipped [tasks.go].test default is `go test ./...` — no {target} — and the
-// resolver REFUSES a target a command has no placeholder for. So "or scope the
-// run with test_target" was advice that errors out on a default install.
-func TestBaseline_RecommendsTestTargetOnlyWhenTheCommandTakesOne(t *testing.T) {
+// "or scope the run with test_target" cannot be followed: the resolver either
+// substitutes {target} away or refuses the command for lacking a placeholder, so
+// by the time baseline runs there is no command a target could still be applied
+// to. The advice therefore belongs in no branch, including the timeout one,
+// where it used to appear even for the compile gate — which resolves without a
+// target by construction.
+func TestBaseline_OffersNoScopeAdviceItCannotHonour(t *testing.T) {
 	const advice = "scope the run with test_target"
 
-	t.Run("no placeholder: stays silent", func(t *testing.T) {
+	t.Run("red suite", func(t *testing.T) {
 		env := newMutationEnv(t, "answer = 42\n")
 		env.installScript(t, env.testScript, "exit 1")
 		env.commitAll(t)
 		if msg := env.baselineRefusal(t, nil); strings.Contains(msg, advice) {
-			t.Errorf("the stored command has no {target}, so a target would be REFUSED — "+
-				"recommending one is advice the reader cannot follow; got:\n%s", msg)
+			t.Errorf("a resolved command cannot hold {target}, so this is advice the reader cannot follow; got:\n%s", msg)
 		}
 	})
 
-	t.Run("placeholder present: offers it", func(t *testing.T) {
+	t.Run("compile gate timed out", func(t *testing.T) {
 		env := newMutationEnv(t, "answer = 42\n")
-		env.installScript(t, env.testScript, "exit 1")
+		env.installScript(t, env.compileScript, "sleep 30")
 		env.commitAll(t)
-		env.useArgv("test", []string{"/bin/sh", env.testScript, taskTargetToken})
-		if msg := env.baselineRefusal(t, nil); !strings.Contains(msg, advice) {
-			t.Errorf("a command holding {target} CAN be scoped, so the advice belongs here; got:\n%s", msg)
+		msg := env.baselineRefusal(t, map[string]any{"timeout_seconds": 1})
+		if !strings.Contains(msg, "TIMED OUT") {
+			t.Fatalf("wanted the timeout branch; got:\n%s", msg)
+		}
+		if strings.Contains(msg, advice) {
+			t.Errorf("the compile gate resolves WITHOUT a target, so scoping the test command cannot help it; got:\n%s", msg)
 		}
 	})
+}
+
+// TestBaseline_NamesTheStepThatFailed covers a composite command (verify = build
+// then test): runStep stops at the first argv that fails, so the diagnostic must
+// name THAT argv. Naming Steps[0] beside output the second step produced puts two
+// contradictory facts in one message, and sends the reader to a command that
+// passed.
+func TestBaseline_NamesTheStepThatFailed(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	firstScript := filepath.Join(env.root, "first.sh")
+	secondScript := filepath.Join(env.root, "second.sh")
+	env.installScript(t, firstScript, "exit 0")
+	env.installScript(t, secondScript, "echo 'the SECOND step is what failed'; exit 1")
+	env.commitAll(t)
+
+	prev := env.tool.resolve
+	env.tool.resolve = func(slot, target string) (TaskCommand, error) {
+		if slot == "test" {
+			return TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{
+				{"/bin/sh", firstScript},
+				{"/bin/sh", secondScript},
+			}}, nil
+		}
+		return prev(slot, target)
+	}
+
+	msg := env.baselineRefusal(t, nil)
+	if !strings.Contains(msg, secondScript) {
+		t.Errorf("the message must name the argv that failed (%s); got:\n%s", secondScript, msg)
+	}
+	if strings.Contains(msg, firstScript) {
+		t.Errorf("it named %s, which PASSED — the reader would go and debug a working command; got:\n%s", firstScript, msg)
+	}
 }
 
 // --- argument validation -----------------------------------------------------
