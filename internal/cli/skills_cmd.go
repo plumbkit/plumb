@@ -23,7 +23,7 @@ var skillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "Show the status of plumb's embedded skills per client",
 	Long: `Show, for every client with a verified skills directory (claude-code,
-codex, kimi-code), whether each embedded skill is installed, missing, or stale
+codex, kimi-code, zcode), whether each embedded skill is installed, missing, or stale
 relative to the copy compiled into this binary. Read-only.
 
 ` + "`plumb skills sync [client]`" + ` installs or refreshes the skills: every

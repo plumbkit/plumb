@@ -177,6 +177,17 @@
   config surface for one argument. Written inline the default cannot drift from
   its placeholder, and a bare `{target}` keeps its strict contract in both
   directions, so **no existing configuration changes behaviour**.
+- **`plumb setup zcode` registers plumb in ZCode (Z.ai's desktop client).**
+  ZCode stores MCP servers one level deeper than every other JSON client —
+  `mcp.servers` in `~/.zcode/cli/config.json` — under a strict schema: an
+  unknown key silently drops the server, and an argv-array `command` crashes
+  its Settings → MCP page, so the entry is exactly `type`/`command`/`args`
+  with a plain-string command, and there is no `--lean` (the allowlist key
+  would make ZCode drop plumb entirely). The config file only appears once
+  something is configured there, so `plumb setup --all` detects ZCode via
+  `~/.zcode` and creates it fresh. ZCode also reads `SKILL.md` directory
+  bundles from `~/.zcode/skills/` (verified against the app's own bundled
+  configuration guide), so it joins the `plumb skills sync` clients.
 
 - **`workspace_sessions` now shows what you have sent and how busy each
   conversation is.** Two new sections, both observational: *your recent notes*

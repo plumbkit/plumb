@@ -88,6 +88,10 @@ var extraSetupTargets = []setupTarget{
 	{use: "crush", name: "Crush", pathFn: CrushConfigPath, intoFn: setupCrushInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
 	{use: "goose", name: "Goose", pathFn: GooseConfigPath, intoFn: setupGooseInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd")},
 	{use: "hermes", name: "Hermes", pathFn: HermesConfigPath, intoFn: setupHermesInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
+	// ZCode nests its servers under mcp.servers in ~/.zcode/cli/config.json and
+	// enforces a strict server schema — setup_zcode.go holds the entry shape and
+	// the reasons there is no --lean here.
+	{use: "zcode", name: "ZCode", pathFn: ZCodeConfigPath, installedFn: zcodeInstalled, intoFn: setupZCodeInto, extractFn: zcodeCommandExtractor, skillsDirFn: zcodeSkillsDir},
 }
 
 // The four original setup targets, named so that both the bespoke commands in
