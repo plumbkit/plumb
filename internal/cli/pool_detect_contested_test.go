@@ -329,13 +329,13 @@ func TestStrongLangAt_TruncatedScanIsNotEvidence(t *testing.T) {
 	// Sorts between app/ and web/, and is large enough to exhaust the cap.
 	// "docs" pops after "web" and before "app", which is what stops the Java
 	// sources being reached at all.
-	manyFiles(t, dir, "docs", "page", ".png", extScanMaxFiles+1000)
+	manyFiles(t, dir, "docs", "page", ".png", tieScanMaxFiles+1000)
 
 	if got := contestedPool(t).strongLangAt(dir); got != "java" {
 		t.Fatalf("strongLangAt = %q, want java — the project is 200 .java to 3 .kt, "+
 			"and a scan that stopped at the %d-file cap must fall back to the "+
 			"language order rather than trust the prefix it managed to see",
-			got, extScanMaxFiles)
+			got, tieScanMaxFiles)
 	}
 }
 
@@ -344,7 +344,7 @@ func TestStrongLangAt_TruncatedScanIsNotEvidence(t *testing.T) {
 // side, and an earlier revision of this branch set the constant one level
 // deeper on the reasoning that a spare level was free. It is not free: every
 // level is more directories charged against the same file cap.
-// src/main/resources/static/css/fonts/ sits exactly at the boundary, so one
+// src/main/web/static/css/fonts/ sits exactly at the boundary, so one
 // level more descends into the asset directory beneath it and can spend the
 // whole budget there before reaching src/main/kotlin — turning a pure-Kotlin
 // project back into a jdtls one, which is the bug this file exists to prevent.
@@ -353,12 +353,32 @@ func TestStrongLangAt_DepthDoesNotReachAssetTrees(t *testing.T) {
 	writeFiles(t, dir,
 		"settings.gradle.kts", "build.gradle.kts",
 		"src/main/kotlin/App.kt", "src/main/kotlin/Greeter.kt")
-	manyFiles(t, dir, "src/main/resources/static/css/fonts/files", "f", ".woff", extScanMaxFiles+500)
+	manyFiles(t, dir, "src/main/web/static/css/fonts/files", "f", ".woff", tieScanMaxFiles+500)
 
 	if got := contestedPool(t).strongLangAt(dir); got != "kotlin" {
 		t.Fatalf("strongLangAt = %q, want kotlin — a pure-Kotlin project whose "+
 			"assets sit one level below the scan depth must still be decided by "+
 			"its sources", got)
+	}
+}
+
+// TestStrongLangAt_LargeResourcesTreeDoesNotStarveTheScan is the PLAN-340 pin: a
+// large src/main/resources tree must not spend the tie-break's file budget before
+// the walk reaches src/main/kotlin. Before skipTieBreakDir + tieScanMaxFiles, the
+// 2500 resources files exhausted the shared 2000-file cap and the truncated scan
+// fell back to the deterministic order (java). skipTieBreakDir now prunes
+// resources, so the project's actual sources decide it.
+func TestStrongLangAt_LargeResourcesTreeDoesNotStarveTheScan(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "settings.gradle.kts", "build.gradle.kts")
+	for i := range 20 {
+		writeFiles(t, dir, fmt.Sprintf("src/main/kotlin/com/example/F%02d.kt", i))
+	}
+	manyFiles(t, dir, "src/main/resources", "m", ".properties", 2500)
+
+	if got := contestedPool(t).strongLangAt(dir); got != "kotlin" {
+		t.Fatalf("strongLangAt = %q, want kotlin — a 2500-file resources tree must not "+
+			"starve the tie-break scan before it reaches src/main/kotlin", got)
 	}
 }
 
@@ -410,7 +430,7 @@ func TestExtLangAt_StillAnswersFromATruncatedScan(t *testing.T) {
 	writeFiles(t, dir, "a.py", "b.py", "c.py")
 	manyFiles(t, dir, "assets", "blob", ".bin", extScanMaxFiles+500)
 
-	counts, truncated := contestedPool(t, "python").sniffCounts(dir, extScanDepth, nil)
+	counts, truncated := contestedPool(t, "python").sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
 	if !truncated {
 		t.Fatalf("precondition: scan was not truncated (counts=%v) — the fixture no "+
 			"longer exceeds the %d-file cap, so this test proves nothing", counts, extScanMaxFiles)
