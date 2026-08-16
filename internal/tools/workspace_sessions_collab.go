@@ -60,7 +60,7 @@ func writeCollabSent(sb *strings.Builder, sent []collab.Row, now time.Time) {
 		}
 		fmt.Fprintf(sb, "  (%s ago)\n", humaniseAge(now.Sub(r.CreatedAt)))
 	}
-	sb.WriteString("  \"pending\" means nobody has claimed it yet — delivery is polling-only, " +
+	sb.WriteString("  \"pending\" means nobody has claimed it yet — plumb does not push, " +
 		"so a peer idle on its human has not seen it. It is not a refusal.\n")
 }
 

@@ -64,12 +64,20 @@ func TestMailboxPairIsReachableTogether(t *testing.T) {
 // TestLeaveNote_DescriptionNamesTheReceiveHalf covers the other place the name
 // ships — the text in tools/list, which every client reads. It must be a fixed
 // string: Description is called under mcp.Server.mu.RLock (see snapshotTools).
+//
+// The two checks are deliberately different claims, and both are needed. The
+// first pins the pairing sentence ("there is a receive half, and it is called
+// this"); the second pins the DELIVERY enumeration, where check_messages
+// appears as one of the three paths a message travels. Collapsing the second to
+// a bare "check_messages" would make it vacuous — the first substring already
+// contains that token, so it would pass on the pairing sentence alone while the
+// delivery paragraph silently lost the name.
 func TestLeaveNote_DescriptionNamesTheReceiveHalf(t *testing.T) {
 	got := NewLeaveNote(CollabDeps{}).Description()
 	if !strings.Contains(got, "check_messages is the receive half") {
 		t.Errorf("description must name the receive half; got %q", got)
 	}
-	if !strings.Contains(got, "when it calls check_messages") {
+	if !strings.Contains(got, "check_messages, or session_start") {
 		t.Errorf("description must name check_messages as a peer's delivery path; got %q", got)
 	}
 }

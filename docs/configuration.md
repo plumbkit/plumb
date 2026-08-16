@@ -541,7 +541,8 @@ When `peer_awareness` is on it adds three signals:
 A session holds at most **one live intent** — a new `share_intent` replaces it,
 and it is cleared when the session ends. A `next` note is consumed on first
 delivery; an addressed note persists until its TTL. Delivery is polling plus
-hint injection only — plumb cannot push to a peer. `share_findings` writes its
+hint injection only — plumb does not push to a peer (a property of plumb, not of
+MCP: it wires no server→client wake path for any client it supports today). `share_findings` writes its
 memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 `episodic-*` summaries under `[memory] generated_memory_keep`, and it never
 displaces a user-authored memory in a capped hint slot. Rule-based only — the

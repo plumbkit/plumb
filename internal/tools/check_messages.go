@@ -34,33 +34,32 @@ func (*CheckMessages) Name() string { return "check_messages" }
 func (*CheckMessages) Description() string {
 	return "Read messages other agents have sent you, optionally waiting for one to " +
 		"arrive. The receive half of plumb's mailbox; leave_note is the send half.\n\n" +
-		"With wait_seconds omitted or 0 it returns immediately with whatever is " +
-		"waiting. With a positive wait_seconds it BLOCKS until a message arrives or " +
-		"the wait expires — this is how you hand your turn to a peer after asking " +
-		"something, instead of polling. The wait is capped by [collab] " +
-		"max_wait_seconds, which is kept below the client's own call timeout.\n\n" +
+		"Omit wait_seconds (or 0) to return immediately with whatever is waiting. A " +
+		"positive wait_seconds BLOCKS until a message arrives or the wait expires — " +
+		"this is how you hand your turn to a peer after asking something, instead of " +
+		"polling. It is capped by [collab] max_wait_seconds, kept below the client's " +
+		"own call timeout.\n\n" +
 		"Each message is delivered exactly ONCE, to whichever path sees it first — " +
-		"this tool, the block appended to an ordinary tool result, or session_start. " +
+		"this tool, the block appended to any tool result, or session_start. " +
 		"Re-calling will not redeliver it, so act on a message when you read it.\n\n" +
 		"Every message carries a conversation_id; quote it in leave_note to reply in " +
-		"thread. A THREAD is capped at [collab] max_exchanges. Note what that does and " +
-		"does not do: it bounds one conversation, and opening a new one starts a fresh " +
-		"budget. It is a speed bump that forces a deliberate act, not an enforced limit " +
-		"on how long two agents may talk \u2014 when a thread is spent, surface it to your " +
-		"human rather than routing around the cap.\n\n" +
-		"Messages are addressed to a SESSION, not to a name: one written to you while " +
-		"you were connected is readable only by this session, so a later session that " +
-		"takes your name after you disconnect cannot read your mail (and you cannot " +
-		"read your predecessor's).\n\n" +
+		"thread. A THREAD is capped at [collab] max_exchanges — it bounds one " +
+		"conversation, and a new one starts a fresh budget, so it is a speed bump, " +
+		"not an enforced limit on how long two agents may talk. When a thread is " +
+		"spent, surface it to your human rather than routing around the cap.\n\n" +
+		"Messages are addressed to a SESSION, not a name: one written while you were " +
+		"connected is readable only by this session, so a later session taking your " +
+		"name cannot read your mail (nor you your predecessor's).\n\n" +
 		"IT ALSO REPORTS YOUR OWN UNREAD MAIL. Any message you sent that nobody has " +
-		"read yet is listed back to you, with its age. That is the one thing you " +
-		"cannot otherwise observe: delivery is polling-only, so \"no reply\" means " +
-		"either the peer read it and has not answered or never read it at all, and " +
-		"only this distinguishes them. Listing is a read — it never consumes the " +
-		"message on the recipient's behalf.\n\n" +
+		"read yet is listed back, with its age — the one thing you cannot otherwise " +
+		"observe: plumb does not push, so \"no reply\" means either the peer read it " +
+		"and has not answered or never read it, and only this tells them apart. " +
+		"Listing is a read; it never consumes the message on the recipient's " +
+		"behalf.\n\n" +
 		"Requires [collab] mailbox = true. Messages from a session in another " +
 		"workspace are shown only when this project sets [collab] cross_project = " +
-		"true, and are labelled with the sending project.\n\n" +
+		"true, and are labelled with the sending project. Etiquette: the plumb-chat " +
+		"skill.\n\n" +
 		"Parameters:\n" +
 		"  wait_seconds — block up to this long for a message (default 0, no wait)."
 }

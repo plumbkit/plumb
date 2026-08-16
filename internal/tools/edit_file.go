@@ -149,32 +149,22 @@ func (*EditFile) Description() string {
 		"(2) range: start_line/end_line (1-based) replace that line span with new_string; start_line: -1 " +
 		"appends at end of file, end_line: -1 runs through the last line (the clean way to delete a block " +
 		"or append, no anchor needed). " +
-		"Anchor mode replaces the span BETWEEN two unique anchors with new_string — each anchor must match " +
-		"EXACTLY ONCE and end_anchor must follow start_anchor; include_anchors=false (default) keeps the " +
-		"anchors and rewrites only the text between them, include_anchors=true replaces the whole inclusive " +
-		"span. Ideal for rewriting a block whose interior changes but whose stable boundary lines do not. " +
-		"BIG MULTI-LINE REPLACEMENT? Prefer RANGE mode. old_string and the anchors must be reproduced " +
-		"character-for-character inside a JSON string, so every quote, backslash and tab in the code you " +
-		"are matching has to be escaped, and that cost grows with the size of the region — a large enough " +
-		"edit can fail to serialise before it ever reaches plumb. Range mode needs NO old_string and no " +
-		"anchors: read the file, take the 1-based line numbers from the gutter, and send only new_string. " +
-		"Same atomicity and locking, a fraction of the escaping. " +
-		"ANCHOR MODE IS CHARACTER-PRECISE: it replaces exactly the span between the anchors, so an anchor " +
-		"quoted WITHOUT its trailing newline joins its line onto new_string. That is deliberate (it is how " +
-		"you rewrite the tail of a line), but it is also the easy mistake — the result carries an advisory " +
-		"note when an edit removes a line break that was there, and the returned diff shows it. " +
-		"CRLF is tolerated; edits apply sequentially in memory then write atomically and crash-durably " +
-		"(temp file fsynced + rename + parent-dir fsync) under " +
-		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
-		"since you read it. For a SOLE agent doing a burst of sequential edits to one file, OMITTING " +
-		"expected_mtime is the blessed fast path: the EXACTLY-ONCE old_string match is itself the safety " +
-		"check, so you need not thread the fresh mtime each edit returns through the next one (reach for " +
-		"expected_mtime/expected_sha only when a concurrent writer may touch the file). If the call fails " +
-		"with a transport/connection error, the atomic temp+rename guarantees the file is either fully " +
-		"updated or untouched — never partially written; re-read to see which. Replacing, inserting " +
-		"around, or deleting an entire named declaration? Prefer replace_symbol_body / " +
-		"insert_before_symbol / insert_after_symbol / safe_delete_symbol — addressed by name_path, " +
-		"no coordinates to compute."
+		"BIG MULTI-LINE REPLACEMENT? Prefer RANGE mode. old_string and anchors are matched " +
+		"character-for-character inside a JSON string, so every quote, backslash and tab must be " +
+		"escaped, and a large enough edit can fail to serialise before it reaches plumb. Range mode needs " +
+		"neither: take the 1-based gutter line numbers and send only new_string. " +
+		"Anchor mode replaces the span BETWEEN two unique anchors — each must match EXACTLY ONCE, " +
+		"end_anchor after start_anchor; include_anchors=true replaces the whole inclusive span instead. " +
+		"It is CHARACTER-PRECISE: an anchor quoted WITHOUT its trailing newline joins its line onto " +
+		"new_string — deliberate, and the easy mistake; the response flags a removed line break. " +
+		"CRLF is tolerated; edits apply sequentially in memory, then write atomically and crash-durably " +
+		"(fsync + rename + parent-dir fsync) under a per-path lock — so a transport failure leaves the " +
+		"file fully updated or untouched, never partial. " +
+		"Pass expected_mtime (from a read_file header) when a concurrent writer may touch the file; a " +
+		"SOLE agent editing one file in a burst may OMIT it, since the EXACTLY-ONCE match is itself the " +
+		"check. " +
+		"Rewriting or deleting a whole named declaration? Prefer replace_symbol_body / " +
+		"insert_before_symbol / insert_after_symbol / safe_delete_symbol — addressed by name_path."
 }
 
 type strEdit struct {

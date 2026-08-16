@@ -185,8 +185,11 @@ lazily on first use, expiring per `[collab] intent_ttl_minutes` and pruned on th
 daemon session-reaper tick; `share_findings` instead writes a durable generated
 memory.
 
-**Delivery is by polling only — plumb cannot push to another agent.** That single
-constraint shapes the mailbox. Messages are appended to the result of *any*
+**Delivery is by polling only — plumb does not push to another agent.** That single
+constraint shapes the mailbox. It is a property of plumb, not of MCP: some clients
+do expose a server→client path that reaches a session between turns, and plumb
+wires none of them, so "polling only" holds for every client plumb supports today
+rather than being a limit of the transport. Messages are appended to the result of *any*
 successful tool call, so an agent that is working receives them without asking;
 `check_messages` blocks server-side so an agent that is *waiting* can hand its
 turn over instead of spin-polling. An agent idling on its human makes no tool
@@ -271,7 +274,7 @@ poll. Requires `[collab] mailbox = true`.
 
 It also reports **your own unread mail**: every message you sent that nobody has
 read yet, with its age, appended to whatever else it returns. That is the one
-fact a sender cannot otherwise observe — delivery is polling-only, so "no reply"
+fact a sender cannot otherwise observe — plumb does not push, so "no reply"
 means either the peer read it and has not answered or never read it at all, and
 only this separates the two. It matters more since messages became bound to a
 session, because a bound message expires unread rather than passing to a

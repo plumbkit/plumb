@@ -192,6 +192,40 @@ func TestLeanProfileBudget(t *testing.T) {
 	}
 }
 
+// maxDescriptionChars is the per-tool description ceiling. Clients truncate a
+// long description before the model ever sees it — Claude Code cuts near 2,000
+// characters and appends "… [truncated]" — so every character past the cap is
+// authored, shipped, and then discarded, and the discarded part is always the
+// TAIL: the parameter notes and caveats that tend to sit at the end.
+//
+// The exact client constant is not published. It is bracketed by measurement
+// against a real tools/list captured from `plumb serve`: workspace_sessions at
+// 1,777 characters arrives intact, move_symbol at 2,077 arrives truncated. 2,000
+// is the value inside that bracket, and the cap is a ratchet rather than a spec —
+// under it a description is known to survive.
+//
+// When a description outgrows this, MOVE the material, do not delete it: the
+// shipped skills (internal/cli/skills/) and docs/tools.md are the places
+// doctrine belongs, and unlike a description they are not silently clipped.
+const maxDescriptionChars = 2000
+
+// TestToolDescription_Budget pins every advertised description under the client
+// truncation cap.
+//
+// Nothing asserted this before, which is exactly why it recurred silently: six
+// descriptions had drifted past the cap — including edit_file and git, both
+// BootstrapTools that every agent receives on every task — and the only symptom
+// was text quietly missing from the model's context. A build that never fails
+// cannot tell you the tool description you just wrote is not being read.
+func TestToolDescription_Budget(t *testing.T) {
+	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
+		if n := len([]rune(tl.Description())); n > maxDescriptionChars {
+			t.Errorf("%s description is %d chars, over the %d-char client truncation cap by %d — a client will clip the tail before the model sees it; move the overflow into the tool's skill (internal/cli/skills/) or docs/tools.md rather than deleting it",
+				tl.Name(), n, maxDescriptionChars, n-maxDescriptionChars)
+		}
+	}
+}
+
 // TestLeanProfileNote_Budget guards the lean ProfileNote sentence — including
 // the folded-in reason clause — against runaway growth: it must stay well
 // under the session_start orientation budget even at a 3-digit hidden count

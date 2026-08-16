@@ -69,6 +69,49 @@
 
 ### Fixed
 
+- **Six tool descriptions were being silently truncated before any model read
+  them — all six are now under the cap, and a test keeps them there.** Clients
+  clip a long MCP tool description and append `… [truncated]`; Claude Code cuts
+  near 2,000 characters. Measured against a real `tools/list` captured from
+  `plumb serve`, six descriptions were over it: `edit_file` (2,909), `git`
+  (2,186), `mutation_test` (2,121), `check_messages` (2,087), `move_symbol`
+  (2,077) and `leave_note` (2,399). The clipped part is always the TAIL — the
+  parameter notes and caveats that sit at the end — so `edit_file` was losing
+  its crash-durability paragraph and both mailbox tools their entire
+  `Parameters:` section.
+
+  `edit_file` and `git` matter most: both are `BootstrapTools`, advertised to
+  every client on every task whatever the resolved profile, so this was not a
+  niche cost. Each description was tightened rather than gutted — every
+  operative fact is kept, and the collab pair's doctrine moves to the
+  `plumb-chat` skill, which is where it was already written and which nothing
+  truncates. All six now sit at 1,900–1,970 characters.
+
+  The recurrence is the real defect: nothing in the tree asserted a
+  description-length ceiling, so a growing description had no failing build to
+  announce it. `TestToolDescription_Budget` (`internal/tools/profile_test.go`)
+  now measures every advertised description over `leanToolSet` +
+  `nonLeanToolSet` — the same construction `TestFullToolSet_Count` already pins
+  to the real registration — and fails over 2,000 runes with the overflow and
+  the instruction to MOVE the text, not delete it. The exact client constant is
+  unpublished; 2,000 sits inside the measured bracket (`workspace_sessions` at
+  1,777 arrives intact, `move_symbol` at 2,077 arrives truncated), so the cap is
+  a ratchet rather than a spec.
+
+- **"plumb cannot push" is qualified: it is a fact about plumb, not about MCP.**
+  The mailbox asserted the absolute across eleven files — tool descriptions,
+  package comments, `docs/tools.md`, `docs/configuration.md` and the
+  `plumb-chat` skill. (`AGENTS.md` was checked and left alone: its mailbox line
+  already said "delivery is polling only", which is a behavioural fact and
+  stays true.) It is not true of the transport: some clients do
+  expose a server→client path that reaches a session between turns. Plumb wires
+  none of them, so the operative constraint is unchanged — delivery is polling
+  only for every client plumb supports today — but it is now stated as a
+  property of plumb rather than an impossibility, so a reader is not misled
+  into believing a wake path could not exist. The wording shifts from "plumb
+  cannot push" to "plumb does not push", with the reason spelled out in
+  `plumb-chat` §4 and `docs/tools.md`, which have no character budget.
+
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second
   block and an instant return both printed `waited 0 min` — the output could

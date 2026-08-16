@@ -276,7 +276,7 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 
 // UnreadSentBy returns the unexpired notes AUTHORED by authorID that nobody has
 // claimed yet, oldest first — the sender's own outbox, and the only way a sender
-// can learn that a message did not land. Delivery is polling-only and a
+// can learn that a message did not land. plumb does not push and a
 // recipient may never return, so "sent" and "read" are genuinely different
 // facts; without this the sender can observe only the first.
 //

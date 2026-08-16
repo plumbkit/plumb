@@ -9,7 +9,8 @@ import (
 // session_start_mailbox.go delivers waiting messages in the orientation packet
 // ([collab] mailbox): notes addressed to this session by name, and notes left
 // for "next" (whoever attaches to this workspace next). Delivery is polling
-// only; plumb cannot push.
+// only; plumb does not push — a fact about plumb, which wires no server→client
+// wake path, not about MCP, where some clients offer one.
 //
 // It shares the Inbox claim with check_messages and the tool-result block, which
 // is what makes "delivered exactly once" hold across all three: the read

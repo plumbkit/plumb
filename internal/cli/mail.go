@@ -23,10 +23,11 @@ import (
 //
 // It exists for ONE caller shape: a client-side hook, at the moment an agent
 // finishes its turn, deciding whether to keep that turn going. Plumb's mailbox
-// delivers by polling, and an agent idling on its human makes no tool calls, so
-// nothing plumb does server-side reaches it. Only the client can, and the client
-// needs a way to ask from outside any session. Before this, a hook had to open
-// collab.db and write the delivery predicate itself.
+// delivers by polling — it wires no server→client wake path — and an agent idling
+// on its human makes no tool calls, so nothing plumb does server-side reaches it.
+// Only the client can, and the client needs a way to ask from outside any
+// session. Before this, a hook had to open collab.db and write the delivery
+// predicate itself.
 //
 // It narrows that window; it does not close it. An agent already sitting idle
 // has had its end-of-turn hook run and allow, and nothing fires again until its

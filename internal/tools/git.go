@@ -117,22 +117,22 @@ func (t *Git) Description() string {
 		"stash drop) need allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) need allow_push AND confirm:true; force-pushing a protected branch " +
 		"(via -f/--force or a +refspec) and using an ad-hoc URL/remote (incl. any <transport>:: helper) on any network " +
-		"subcommand are always refused — and a force push must name its destination branch (a bare -f or +HEAD that " +
-		"relies on the current branch is refused, since it may target a protected branch). " +
+		"subcommand are always refused — and a force push must name its destination branch, since a bare -f or +HEAD " +
+		"may target a protected one. " +
 		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
 		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
 		"worktree); every other subcommand uses args. " +
-		"Cross-session guard: plumb tracks the HEAD+branch each session last observed per repo; before a write/destructive " +
-		"op, if a DIFFERENT plumb session moved it since this session's last observation, the op is refused unless " +
-		"re-run with confirm:true, and the response names the peer session and the old→new refs (movement by this " +
-		"session, an external tool, or an unknown mover adds no friction). " +
+		"Cross-session guard: before a write/destructive op, if a DIFFERENT plumb session moved this repo's " +
+		"HEAD/branch since this session last observed it, the op is refused unless re-run with confirm:true, and the " +
+		"response names the peer session and the old→new refs (movement by this session, an external tool, or an " +
+		"unknown mover adds no friction). " +
 		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright. " +
-		"Attribution: with [git] commit_trailer = true (default off) every plumb-mediated commit is stamped with a " +
-		"Plumb-Session: <session-name> trailer; regardless of that knob, workspace_sessions lists recent commits per " +
-		"session (short SHA, subject, repository) from its recent-writes feed. " +
-		"Peer intents: with [collab] intents = true, a repo-state op (any destructive-tier op, plus commit/switch/checkout) " +
-		"also surfaces live peer share_intent claims covering this repository as an advisory warning naming the peer and " +
-		"the claim — informational only: it never blocks the op and never requires confirm."
+		"Attribution: with [git] commit_trailer = true (default off) every plumb commit is stamped with a " +
+		"Plumb-Session: <session-name> trailer; either way, workspace_sessions lists recent commits per " +
+		"session (short SHA, subject, repository). " +
+		"Peer intents: with [collab] intents = true, a repo-state op (any destructive-tier op, plus " +
+		"commit/switch/checkout) also surfaces live peer share_intent claims covering this repository — advisory " +
+		"only: never blocks the op, never requires confirm."
 }
 
 type gitToolArgs struct {
