@@ -249,13 +249,14 @@ strength of the proxy session ID `plumb serve` replays in its handshake — neve
 for merely answering to the name. One predecessor is carried, so a message
 unread across two restarts expires instead.
 
-Addressing a session pinned to a **different workspace** is allowed, but such a
-message is delivered only if *that* project sets `[collab] cross_project = true`;
-otherwise it expires unread. Cross-project messages are stored in a daemon-level
-database, never in the recipient's directory — no session ever writes into
-another project's workspace — and are labelled with the sending project when
-read. `next` is always same-project: "whoever attaches next" has no meaning
-across projects. Requires `[collab] mailbox = true`.
+Addressing a session pinned to a **different workspace** is refused up front
+unless *that* project has already set `[collab] cross_project = true` — the
+send fails with a clear reason rather than being accepted only to sit
+unclaimed until it expires. Once confirmed, cross-project messages are stored
+in a daemon-level database, never in the recipient's directory — no session
+ever writes into another project's workspace — and are labelled with the
+sending project when read. `next` is always same-project: "whoever attaches
+next" has no meaning across projects. Requires `[collab] mailbox = true`.
 
 **Inputs:** `body` (string, required — the message); `to` (string, optional — a
 peer session name, or `next` (default)); `conversation_id` (string, optional —

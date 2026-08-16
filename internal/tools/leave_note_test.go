@@ -211,13 +211,13 @@ func TestLeaveNote_RefusesCrossProjectWhenTargetHasNotOptedIn(t *testing.T) {
 				return globalStore
 			}
 
-			_, err := NewLeaveNote(deps).Execute(context.Background(),
+			out, err := NewLeaveNote(deps).Execute(context.Background(),
 				json.RawMessage(`{"to":"bob","body":"ping"}`))
-			if err == nil {
-				t.Fatal("expected a refusal error, got success")
+			if err != nil {
+				t.Fatalf("a policy refusal should be an ordinary reply, not a tool error: %v", err)
 			}
-			if !strings.Contains(err.Error(), "cross_project") {
-				t.Errorf("expected the refusal to name cross_project as the reason; got %q", err.Error())
+			if !strings.Contains(out, "Not sent") || !strings.Contains(out, "cross_project") {
+				t.Errorf("expected the refusal to name cross_project as the reason; got %q", out)
 			}
 			if globalCreated {
 				t.Error("the cross-project store must never be touched when consent cannot be confirmed")

@@ -48,8 +48,8 @@ func (*LeaveNote) Description() string {
 		"would go to whoever next answers to the name. The trade: a bound message " +
 		"expires unread if its recipient never returns. A peer that is NOT CONNECTED " +
 		"stores no binding and is delivered by name, as is \"next\".\n\n" +
-		"CROSS-PROJECT sends are allowed but delivered only if THAT project sets " +
-		"[collab] cross_project = true; otherwise they expire unread.\n\n" +
+		"CROSS-PROJECT sends are refused up front unless THAT project has already set " +
+		"[collab] cross_project = true — never silently accepted only to sit unclaimed.\n\n" +
 		"Messages expire after [collab] intent_ttl_minutes. Requires [collab] " +
 		"mailbox = true. The body is secret-scrubbed before storage.\n\n" +
 		"Parameters:\n" +
@@ -131,10 +131,25 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
 	if err != nil {
+		var refusal *refusalError
+		if errors.As(err, &refusal) {
+			return refusal.msg, nil
+		}
 		return "", err
 	}
 	return t.run(ctx, target, policy, args)
 }
+
+// refusalError marks a resolveTarget failure as a POLICY refusal — an
+// explanation the caller should see as an ordinary reply, not an MCP tool
+// error, matching every other "not sent, here is why" case in this file
+// (resolveThreadAddressee's refusal, the exchange-budget refusal in run).
+// Distinct from the sibling infrastructure errors in resolveTarget (an
+// unavailable store), which stay hard errors: those are the daemon's problem,
+// not an outcome the caller's own choices could have avoided.
+type refusalError struct{ msg string }
+
+func (e *refusalError) Error() string { return e.msg }
 
 // noteTarget is where a message will be stored and why. A same-project message
 // goes to the workspace's own collab.db; one addressed to a session pinned
@@ -195,10 +210,13 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 	}
 	if found && peer.Workspace != "" && !sameWorkspace(peer.Workspace, ws) {
 		if t.deps.TargetAllowsCrossProject == nil || !t.deps.TargetAllowsCrossProject(peer.Workspace) {
-			return noteTarget{}, errors.New("leave_note: not sent — the recipient's project has not enabled " +
-				"[collab] cross_project, so it will never read messages from other projects. This note would " +
-				"sit unclaimed until it expires, and you would not otherwise be told. Ask that project to set " +
-				"cross_project = true, or address a peer in your own workspace instead")
+			return noteTarget{}, &refusalError{"Not sent: the recipient's project has not enabled " +
+				"[collab] cross_project, or its project config could not be confirmed — either way it will never " +
+				"read messages from other projects, and this note would sit unclaimed until it expires with you " +
+				"never told. cross_project is a trust-gated setting: a value in that project's own " +
+				".plumb/config.toml only takes effect after `plumb trust` runs there, so whoever administers it " +
+				"needs to either set cross_project = true in their GLOBAL config, or set it in-project and trust " +
+				"it. Otherwise, address a peer in your own workspace instead."}
 		}
 		if t.deps.GlobalStore == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
@@ -394,8 +412,8 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 			"later session that takes the name.\n", to)
 	}
 	if target.crossProject {
-		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s. It is delivered only if THAT "+
-			"project sets [collab] cross_project = true; otherwise it expires unread.\n", target.peerWorkspace)
+		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s, which has confirmed [collab] "+
+			"cross_project = true and will read this.\n", target.peerWorkspace)
 	}
 	if target.peerUnknown {
 		fmt.Fprintf(&sb, "  unplaced:       no session named %q is connected, and no conversation places it. "+

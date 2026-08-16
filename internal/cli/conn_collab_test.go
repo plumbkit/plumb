@@ -172,6 +172,34 @@ func writeLiveSessionFile(t *testing.T, info session.Info) {
 	}
 }
 
+// TestTargetAllowsCrossProject_NoProjectConfigRefuses is PLAN-334's real-wiring
+// half: a target workspace with no .plumb/config.toml at all must resolve to
+// the compiled default (cross_project = false), not error out ambiguously.
+func TestTargetAllowsCrossProject_NoProjectConfigRefuses(t *testing.T) {
+	s := newIntentTestSession(t, t.TempDir(), config.CollabConfig{})
+	target := t.TempDir() // never written to — no .plumb/ at all
+	if s.targetAllowsCrossProject(target) {
+		t.Error("a target with no project config must not be treated as opted in")
+	}
+}
+
+// TestTargetAllowsCrossProject_UntrustedOptInIsIgnored is the trust-gating half
+// finding 8 flagged as unverified: cross_project is a trust-gated key, so a
+// project that merely WRITES cross_project = true into its own
+// .plumb/config.toml — without that project ever being trusted — must not
+// count as consent. Real XDG paths are sandboxed to a temp dir, so "never
+// trusted" is simply the untouched default state, exactly as a fresh clone of
+// an unknown repository would be.
+func TestTargetAllowsCrossProject_UntrustedOptInIsIgnored(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s := newIntentTestSession(t, t.TempDir(), config.CollabConfig{})
+	target := t.TempDir()
+	writeProjectConfig(t, target, "[collab]\ncross_project = true\n")
+	if s.targetAllowsCrossProject(target) {
+		t.Error("an untrusted project's own cross_project = true must be ignored, not honoured")
+	}
+}
+
 // TestResolvePeer_BindsOneLiveSessionAndRefusesToGuess. Resolving a name is what
 // decides both where a message is stored and which session it is bound to, so it
 // must report the peer's ID when exactly one live session answers — and report
