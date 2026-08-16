@@ -10,7 +10,10 @@ package cli
 // precedence chain (highest wins, every rung first-wins-idempotent):
 //
 //	explicit session_start workspace arg — live, or replayed by the proxy in
-//	  _meta[mcp.MetaPinnedWorkspaceKey] after a daemon restart
+//	  _meta[mcp.MetaPinnedWorkspaceKey] after a daemon restart. The replayed
+//	  form keeps this RANK but not the full authority: the daemon cannot
+//	  authenticate the _meta channel, so it does not carry #306's home
+//	  containment exemption at attach or on a policy rebuild (issue #318).
 //	→ persisted pin whose source is session_start (this proxy session)
 //	→ client roots/list
 //	→ persisted pin whose source is roots, or a legacy row with no source

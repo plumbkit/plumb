@@ -149,7 +149,14 @@ other MCP client that simply set the key (issue #318). Since 0.16.7 that
 channel therefore keeps its RANK in the attach ladder — it still outranks the
 client's `roots/list`, which is the restart regression it exists to fix — but
 it is asked the containment question as an unprivileged origin, so it cannot
-pin a home directory or a container of one. A client shipping
+pin a home directory or a container of one. The **live re-check** described
+above asks the same question of it on every policy rebuild, not only at attach:
+an accepted replayed pin is marked as an unauthenticated claim, and
+`policyRootRefused` withholds the exemption from it exactly as it does from a
+`roots` origin. That half matters more than it looks — the holder of this
+channel names the root, so it is the party best placed to pass a clean
+directory through the attach check and then swap it for a symlink to a home
+container. A client shipping
 `_meta[dev.plumbkit/pinned-workspace] = "/Users"` is refused and the ladder
 falls through to its lower rungs; a wide root a caller really did declare is
 restored from the persisted pin instead, whose `session_start` origin was
@@ -162,15 +169,22 @@ first connect, and — the case that bites in the DEFAULT configuration — once
 the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
 startup prune, which runs with no live exemption, deletes it. When the row is
 gone, every lower rung refuses the wide root too, because `roots` and the cwd
-hint are weaker origins than the declaration that is now missing: the
-connection comes back **unattached** and the caller must declare the workspace
-again. That is fail-safe — never wider, never a different repository — but a
-dotfiles session pinned at `$HOME` does feel it.
+hint are weaker origins than the declaration that is now missing, so the caller
+must declare the workspace again. The boundary is never **wider** — but the
+connection is not necessarily unattached either: the ladder's last rung is the
+serve proxy's cwd hint, which can resolve an unrelated project, and a relative
+path would then anchor somewhere the caller never named (the #182 failure
+class). A dotfiles session pinned at `$HOME` feels this.
 
-One stale-data caveat: a database written before 0.16.7 may already hold a wide
-root stamped `session_start` that was minted from exactly this unauthenticated
-key, and nothing retroactively invalidates those rows — the TTL prune ages them
-out rather than the guard rejecting them.
+One stale-data caveat, and it is not self-healing. A database written before
+0.16.7 may already hold a wide root stamped `session_start` that was minted from
+exactly this unauthenticated key, and nothing retroactively invalidates those
+rows. The TTL prune does **not** reliably age them out: restoring a pin
+re-persists it, refreshing `updated_at`, so a session that keeps reconnecting
+keeps its forged row alive indefinitely. The residual window is bounded by the
+lifetime of the `plumb serve` process that forged it, not by
+`persist_state_ttl_minutes`. Deleting the session-state database, or re-pinning
+deliberately, is what clears it.
 
 This is a guard on the guard's own premise, not a privilege boundary. Whoever
 can set initialize `_meta` is running the client host and could call

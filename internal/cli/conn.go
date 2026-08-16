@@ -182,6 +182,20 @@ type sessionView struct {
 	pinVia, pinPrev string
 	pinAt           time.Time
 	pinOrigin       sessionstate.PinSource
+
+	// pinUnverifiedReplay marks a pin that arrived over the serve proxy's
+	// initialize _meta channel, which the daemon cannot authenticate (issue
+	// #318). Such a pin records PinSourceSessionStart — deliberately, so rank,
+	// stickiness and what gets persisted are unchanged — but that origin is ALSO
+	// what the live containment re-check keys on, and the re-check is the half of
+	// #306's guard that exists for the swap attack a client mounting this channel
+	// is best placed to run: it names the root, so it can replace that directory
+	// with a symlink to a home container after attach. This flag is how
+	// policyRootRefused tells the two apart without demoting the origin.
+	//
+	// Cleared by recordPinProvenance, which every pin write runs through, so it
+	// describes the CURRENT pin and a later deliberate session_start clears it.
+	pinUnverifiedReplay bool
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

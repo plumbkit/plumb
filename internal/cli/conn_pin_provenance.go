@@ -54,6 +54,11 @@ func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTri
 	v.pinAt = time.Now()
 	v.pinPrev = prevRoot
 	v.pinOrigin = origin
+	// Every pin write runs through here, so clearing by default is what keeps
+	// the unauthenticated-replay mark describing the CURRENT pin: rung 1 of the
+	// attach ladder re-sets it immediately after its attach, and any later pin —
+	// a deliberate session_start above all — drops it (issue #318).
+	v.pinUnverifiedReplay = false
 }
 
 // pinExplicitlyHeld reports whether the connection's current pin was set by an

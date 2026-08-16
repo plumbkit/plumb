@@ -285,17 +285,33 @@
   project root is unaffected; only a home directory or a container of one is
   refused, and the ladder then falls through to its lower rungs.
 
+  The **live** containment re-check withholds the exemption from this channel
+  too, not only the attach-time check. That half is the one that matters most
+  here: the holder of the channel names the root, so it is the party best placed
+  to pass a clean directory through the attach check and then replace it with a
+  symlink to a home container, which the next policy rebuild (the config poll
+  runs every 30s) would otherwise absorb. An accepted replayed pin is marked as
+  an unauthenticated claim so `policyRootRefused` treats it like a `roots`
+  origin, without demoting the pin's recorded origin. A live `session_start`
+  re-pin clears the mark.
+
   **Behaviour change worth reading if you deliberately pin `$HOME`.** A wide
   root you really did declare still comes back when the persisted pin row is
   there. When it is not — `[session] persist_state` off, a first connect, or the
   row aged past `[session] persist_state_ttl_minutes` (default 1440) and swept
   by the startup prune, which is the case that bites in the default
-  configuration — every lower rung refuses that root too, so the connection
-  comes back **unattached** and you must call `session_start` again. It is
-  fail-safe (never wider, never a different repository), but it is not free.
+  configuration — every lower rung refuses that root too, so you must call
+  `session_start` again. The boundary is never **wider**, but the connection is
+  not necessarily unattached either: the ladder's last rung is the serve cwd
+  hint, which can resolve an unrelated project, and a relative path would then
+  anchor somewhere you never named.
+
   A database written before this release may also still hold a wide root stamped
-  `session_start` that came from the forged key; nothing invalidates those rows
-  retroactively, the TTL prune ages them out.
+  `session_start` that came from the forged key, and nothing invalidates those
+  rows retroactively. Do not count on the TTL prune to clear them: restoring a
+  pin re-persists it and refreshes `updated_at`, so a session that keeps
+  reconnecting keeps its row alive indefinitely. Re-pinning deliberately, or
+  clearing the session-state database, is what removes one.
 
   This closes no privilege escalation — whoever can set initialize `_meta` runs
   the client host and could call `session_start` directly (B1 does not
@@ -304,6 +320,8 @@
   `docs/threat-model.md` now states what the daemon can and cannot verify about
   a declaration, and what the fallback costs. Guarded by
   `TestOnInit_ReplayedMetaPinCannotClaimHomeContainment`,
+  `TestOnInit_ReplayedMetaPinLosesExemptionOnPolicyRebuild`,
+  `TestOnInit_LiveRepinClearsTheUnverifiedReplayMark`,
   `TestOnInit_DeclaredWideRootStillRestoresFromDatabase`,
   `TestOnInit_UndeclaredFallbackLeavesWideRootUnattached`, and
   `TestOnInit_ReplayedMetaPinKeepsRankForOrdinaryRoots` (issue #318).
