@@ -90,16 +90,23 @@ const daemonWideConversationsFetchLimit = 8
 
 // targetAllowsCrossProject reports whether the named workspace — which is NOT
 // necessarily this connection's own pinned workspace — has opted in to
-// [collab] cross_project. It is the recipient-consent check
-// workspace_sessions_collab.go's crossProjectOn performs for a session's own
-// workspace, generalised to an ARBITRARY other workspace: a daemon-wide
-// display (see daemonWideConversations) has no single recipient to ask, so it
-// must resolve this per participating workspace rather than off the cached
-// per-connection config snapshot.
+// [collab] cross_project, with no live connection to that project required.
+// It serves two callers with the same question:
+//
+//   - leave_note's RECIPIENT consent check (via collabDeps), which refuses a
+//     cross-project send the addressee would never read;
+//   - the daemon-wide dashboards (see daemonWideConversations), which have no
+//     single recipient to ask and so must resolve the opt-in per participating
+//     workspace rather than off the cached per-connection config snapshot.
 //
 // Thin wrapper: config.TargetAllowsCrossProject does the actual LoadProject +
 // `plumb trust` resolution (an untrusted project's own config.toml cannot
-// grant itself the channel), and fails closed on any error.
+// grant itself the channel), and fails closed on every shape of "cannot
+// determine consent" — an unresolvable workspace, or a config that will not
+// load. Consent must be affirmatively readable; the alternative is a send
+// accepted and reported successful while the recipient silently never reads
+// it, or a conversation displayed on the strength of participants nobody
+// could place.
 func (s *connSession) targetAllowsCrossProject(workspace string) bool {
 	return config.TargetAllowsCrossProject(s.store.Current(), workspace)
 }
@@ -152,21 +159,6 @@ func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 		return tools.PeerSession{}, false
 	}
 	return found, true
-}
-
-// targetAllowsCrossProject reports whether the project pinned at workspace has
-// opted in to [collab] cross_project — the RECIPIENT's consent, resolved from
-// just its path via the same LoadProject every session's own attach path uses,
-// with no live connection to that project required. A config that will not
-// load is treated as NOT opted in: consent must be affirmatively readable, the
-// alternative being a send that is accepted and reported successful while the
-// recipient project silently never reads it.
-func (s *connSession) targetAllowsCrossProject(workspace string) bool {
-	cfg, err := config.LoadProject(s.store.Current(), workspace)
-	if err != nil {
-		return false
-	}
-	return cfg.Collab.CrossProject
 }
 
 // collabDeps bundles everything the mailbox tools need. Note the deliberate
