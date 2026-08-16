@@ -1,6 +1,11 @@
 package tui
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
+)
 
 func (m Model) dashAlertsWidget(width int) []string {
 	inner := width - 2
@@ -74,6 +79,26 @@ func (m Model) dashboardDaemonVersionAlert() string {
 	return ""
 }
 
+// blockedAlert renders the one-line alert for a session marked blocked.
+//
+// It prefers the session's own HealthMessage, because "blocked" now covers
+// causes with different remedies: a boundary violation, a refused sticky re-pin
+// (issue #182), and a refused wide workspace claim (issue #318). The old fixed
+// string prescribed "start a new MCP connection" for all of them, which for the
+// #318 case is advice that LOOPS — a fresh connection replays the same pin and
+// is refused again. Every writer of the mark supplies a message naming its own
+// remedy; the fixed string is kept only for a mark that somehow carries none.
+func blockedAlert(healthMessage string) string {
+	if msg := strings.TrimSpace(healthMessage); msg != "" {
+		return textfmt.Ellipsis(msg, maxBlockedAlertRunes)
+	}
+	return "Workspace blocked; see the session detail for why"
+}
+
+// maxBlockedAlertRunes keeps a health message from overrunning the single-line
+// alert row; the untruncated text is in the session detail pane.
+const maxBlockedAlertRunes = 160
+
 func (m Model) dashboardWorkspaceStateAlert() string {
 	for _, s := range m.sessions {
 		if s.Synthetic {
@@ -82,7 +107,7 @@ func (m Model) dashboardWorkspaceStateAlert() string {
 	}
 	for _, s := range m.sessions {
 		if s.Health == "blocked" {
-			return "Workspace boundary violation blocked; start a new MCP connection"
+			return blockedAlert(s.HealthMessage)
 		}
 	}
 	for _, s := range m.sessions {

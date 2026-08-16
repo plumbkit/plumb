@@ -55,11 +55,16 @@ func (s *Store) SweepWidePinsOnce(isWide func(root string) bool) ([]string, erro
 	// declares AFTER upgrading — which is a workspace this release never had any
 	// business touching.
 
-	// Deletes AND the flag land in one transaction, so "exactly once" holds even
-	// if the process dies mid-sweep. Statement-at-a-time would leave a window
-	// where some rows are gone and the flag is unset: the next start would sweep
-	// again and could take a wide root the caller re-declared in between — the one
-	// way this could fire twice on a legitimately declared workspace.
+	// Deletes AND the flag land in one transaction, so the database is never left
+	// half-swept: either every wide row is gone and the flag is set, or nothing
+	// changed and the next start retries.
+	//
+	// Note this is belt-and-braces rather than a fix for a reachable race: the
+	// daemon runs the sweep before it accepts any connection, so between a crash
+	// mid-sweep and the next start there is no client able to re-declare a
+	// workspace. The transaction earns its place by making the "exactly once"
+	// claim true by construction instead of by that argument, which a later
+	// change to the startup order could quietly invalidate.
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("sessionstate: begin wide sweep: %w", err)
