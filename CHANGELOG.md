@@ -28,12 +28,7 @@
   declined. `session_start` again is the remedy in all four (in the drift
   sub-case it pins the resolved root rather than the spelling asked for), so
   the message states what happened and what to do rather than guessing at
-  intent — and the dashboard alert now shows the session's own message instead
-  of a fixed "start a new MCP connection", which for this cause is advice that
-  loops. That last change applies to **every** cause of a blocked session, not
-  just this one: a boundary violation and a refused sticky re-pin now show their
-  own text and remedy too, untruncated and with terminal escapes stripped (the
-  message embeds a client-supplied path, and this box is always on screen). The
+  intent. The
   mark clears on the next explicit `session_start`, as the sticky-pin refusal's
   does; a bare `session_start({})` does not clear it, and every reconnect
   re-raises it until the workspace is re-declared.
@@ -72,11 +67,15 @@
   `TestSweepLegacyWidePins_NilStore`,
   `TestSweepWidePinsOnce_RemovesWideRowsAndSparesOthers`, `_DoesNotRunTwice`,
   `_DisarmsEvenWithNothingToRemove`, `_DropsTheSweptWorkspacesReads`,
-  `_FlagSurvivesReopen`, `_NilSafe`,
-  `TestBlockedAlert_CarriesEachCausesRemedyInFull`, `_StripsTerminalEscapes`,
-  `_FallsBackWithoutAMessage`, and
-  `TestDashboardWorkspaceStateAlert_UsesTheSessionsBlockedMessage`
-  (issue #318).
+  `_FlagSurvivesReopen`, and `_NilSafe` (issue #318).
+
+  Not fixed here: the TUI dashboard alert still prints a fixed "start a new MCP
+  connection" for every blocked session, which for this cause is advice that
+  loops. Three attempts at that one-line change each introduced a different
+  defect — a truncation that ate the remedy, then a frame-corrupting lack of
+  one, then an escape-strip in the wrong layer — so it is filed with that
+  evidence rather than patched a fourth time. The session detail pane shows the
+  full message today.
 
 - **`plumb config show` now prints a provenance row for every `[git]` field, so
   the check `session_start` prescribes can actually be followed.** The rows came
