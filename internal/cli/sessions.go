@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/plumbkit/plumb/internal/tui"
 )
 
-var sessionsFlagAll bool
+var (
+	sessionsFlagAll  bool
+	sessionsFlagJSON bool
+)
 
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions",
@@ -21,17 +25,30 @@ var sessionsCmd = &cobra.Command{
 
 func init() {
 	sessionsCmd.Flags().BoolVar(&sessionsFlagAll, "all", false, "include sessions without a resolved workspace")
+	sessionsCmd.Flags().BoolVar(&sessionsFlagJSON, "json", false, "emit a JSON array instead of a table")
 }
 
 func runSessions(_ *cobra.Command, _ []string) error {
-	PrintLogo()
-
 	all, err := session.List()
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
 
 	sessions, hidden := filterSessions(all, sessionsFlagAll)
+
+	if sessionsFlagJSON {
+		if sessions == nil {
+			sessions = []session.Info{}
+		}
+		out, err := json.Marshal(sessions)
+		if err != nil {
+			return fmt.Errorf("marshalling sessions: %w", err)
+		}
+		fmt.Println(string(out))
+		return nil
+	}
+
+	PrintLogo()
 	if err := renderSessions(sessions, hidden); err != nil {
 		return err
 	}
