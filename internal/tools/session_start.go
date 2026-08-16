@@ -383,12 +383,19 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
+	// linked reports whether the caller passed a non-empty session_id, the
+	// external id that makes this session addressable by name from plumb mail
+	// and the peer wake hook. It is derived from the raw input regardless of
+	// whether an externalIDFn is wired; the accessor is consulted only when it
+	// is non-nil.
 	var inheritedName string
-	if t.externalIDFn != nil {
-		var a struct {
-			SessionID string `json:"session_id"`
-		}
-		if err := json.Unmarshal(raw, &a); err == nil && a.SessionID != "" {
+	linked := false
+	var a struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(raw, &a); err == nil && a.SessionID != "" {
+		linked = true
+		if t.externalIDFn != nil {
 			inheritedName = t.externalIDFn(a.SessionID)
 		}
 	}
@@ -411,7 +418,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom)
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked)
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	if t.xcodeHintFn != nil {
 		if hint := t.xcodeHintFn(""); hint != "" {
