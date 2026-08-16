@@ -551,7 +551,11 @@ func renameFileDiffs(we *protocol.WorkspaceEdit, files []string) string {
 }
 
 // groupEditsByPath collects every TextEdit in we keyed by filesystem path,
-// merging the Changes and DocumentChanges forms (matching applyWorkspaceEdit).
+// merging the Changes and DocumentChanges forms. This is the DIFF-RENDERING
+// path and deliberately still merges: applyWorkspaceEdit refuses a file named
+// twice by two entries that both carry edits (issue #314), so by the time a
+// diff is rendered the only duplicate that survives is a bare mention, which
+// merges to the same result either way.
 func groupEditsByPath(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
 	byPath := make(map[string][]protocol.TextEdit)
 	for uri, edits := range we.Changes {

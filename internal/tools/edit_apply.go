@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -155,28 +156,41 @@ func workspaceEditTargets(we *protocol.WorkspaceEdit) ([]workspaceEditTarget, er
 		idx, dup := byKey[key]
 		if !dup {
 			byKey[key] = len(targets)
-			targets = append(targets, workspaceEditTarget{path: p, edits: e.edits})
+			// Clone: applyTextEdits sorts its argument IN PLACE, and these slices are
+			// the caller's WorkspaceEdit. The merge this replaced always allocated,
+			// so aliasing here would quietly break applyTextEdits' documented
+			// "callers pass a freshly-built slice" contract.
+			targets = append(targets, workspaceEditTarget{path: p, edits: slices.Clone(e.edits)})
 			continue
 		}
-		if len(e.edits) == 0 {
-			continue // a bare mention changes nothing
-		}
-		if len(targets[idx].edits) == 0 {
-			targets[idx].edits = e.edits // the earlier mention was the bare one
-			continue
+		// The bare-mention carve-out is deliberately narrow: it applies only when
+		// both mentions use the SAME spelling. Two SPELLINGS of one file are the
+		// defect this guard exists for, and a bare second mention does not make the
+		// pair benign — it just makes it harmless today, while leaving the target
+		// carrying one spelling and rename_symbol's file list counting both, which
+		// breaks the invariant collectRenameTargets documents.
+		if targets[idx].path == p {
+			if len(e.edits) == 0 {
+				continue // a bare mention changes nothing
+			}
+			if len(targets[idx].edits) == 0 {
+				targets[idx].edits = slices.Clone(e.edits) // the earlier mention was bare
+				continue
+			}
 		}
 		named := fmt.Sprintf("under two paths (%q and %q)", targets[idx].path, p)
 		if targets[idx].path == p {
 			named = fmt.Sprintf("twice (%q)", p)
 		}
 		return nil, &editLogicErr{fmt.Errorf(
-			"workspace edit names the same file %s and both carry edits, so one set would silently overwrite the other or the same edit would be applied twice — plumb cannot apply that atomically. Re-run once the language server has settled, or apply the edits to that file with edit_file",
+			"workspace edit names the same file %s, so one set of edits would silently overwrite the other or the same edit would be applied twice — plumb cannot apply that atomically. This is a property of what the language server sent, so retrying will not change it: apply the edits to that file with edit_file instead",
 			named,
 		)}
 	}
-	// Not redundant with the entry ordering below: on Windows URIToPath rewrites
-	// separators and strips the leading slash, and a non-file:// URI is returned
-	// verbatim, so sorted URIs do not imply sorted paths there.
+	// NOT redundant with the sorted URIs in workspaceEditEntries: that sorts the
+	// Changes map only, and DocumentChanges entries follow it in the order the
+	// server sent them. An edit set using BOTH forms therefore arrives unsorted on
+	// every platform, not just where URIToPath rewrites separators (Windows).
 	sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
 	return targets, nil
 }

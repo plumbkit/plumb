@@ -237,10 +237,18 @@
 
   Both are now refused, mirroring `transaction_apply`'s `txCanonicalPaths`.
   Merging the lists — the alternative the issue offered — is precisely what
-  produces the second case. An entry carrying no edits is exempt, since it can
-  neither lose nor duplicate anything; that is the compatibility shape servers
-  actually emit. The refusal also fires in `rename_symbol`'s dry run, so the
-  preview no longer promises a change the apply will reject.
+  produces the second case. An entry carrying no edits is exempt (only under the
+  same spelling), since it can neither lose nor duplicate anything; that is the
+  compatibility shape servers actually emit. The refusal also fires in
+  `rename_symbol`'s dry run, so the preview no longer promises a change the
+  apply will reject.
+
+  **One shape that previously applied correctly is now refused**: two entries
+  carrying *different* edits for one file, split across the two forms. plumb
+  cannot distinguish that from the duplicate-emission case, and guessing wrong
+  corrupts the file, so it refuses rather than merging. plumb advertises no
+  `workspace.workspaceEdit.documentChanges` client capability, so per spec
+  servers reply with `changes` and this shape should not occur in practice.
 
   Known gap, unchanged and shared with `transaction_apply`: two spellings
   differing only in **case** on a case-insensitive filesystem are one file but
@@ -254,8 +262,10 @@
   `_RefusesOneSpellingInBothForms`,
   `TestWorkspaceEditTargets_DuplicateErrorIsDeterministic`,
   `_RefusesNonAdjacentDuplicate`, `_BareMentionStillMerges`,
-  `_RefusesAcrossChangesAndDocumentChanges`, and
-  `_DistinctFilesUnderOneSymlinkAreKept`.
+  `_TwoSpellingsRefusedEvenWhenOneIsBare`, `_SortedAcrossBothForms`,
+  `_DoesNotAliasTheCallersEdits`, `_RefusesAcrossChangesAndDocumentChanges`,
+  `_DistinctFilesUnderOneSymlinkAreKept`, and
+  `TestRenameSymbol_DryRunRefusesOneFileNamedTwice`.
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second
