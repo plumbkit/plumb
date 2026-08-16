@@ -87,6 +87,24 @@
 
 ### Added
 
+- **The CHANGELOG placement guard now catches an entry moved OUT of the
+  unreleased section, and covers direct pushes to `main`.** Two gaps were left
+  in the guard as it landed. A line whose exact text was also deleted in the
+  same diff was treated as a relocation and never failed — so a *clean* move of
+  an entry from the unreleased section into a released one passed with an
+  advisory note, which is exactly the PR #310 shape the guard cites as one of
+  its four motivating incidents (`3e885aca` only failed because one incidental
+  new line rode along with it), and nobody reads the log of a passing check. A
+  move out of the unreleased section now fails; a move *between* two already
+  released sections stays advisory, because that is a cleanup only a human can
+  judge. Separately, the guard ran on `pull_request` alone, so the release and
+  pin commits an admin pushes straight to `main` were never checked — a second
+  step now checks a push against `github.event.before`, without `--require-base`
+  so a force-push whose `before` is unreachable stays a skip rather than
+  reddening `main`. Also: `CHANGELOG_PLACEMENT_ALLOW`, the documented escape
+  valve, had no test at all, and the base-heading scan was not fence-aware while
+  the file scan was. Four new cases, each mutation-verified against the rule it
+  pins.
 - **The TUI and web dashboards show daemon-wide cross-project mailbox traffic —
   but only where every participant agreed to be seen.** `workspace_sessions`
   has long shown a workspace its own cross-project conversation volume,

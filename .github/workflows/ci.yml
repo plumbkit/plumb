@@ -60,7 +60,7 @@ jobs:
 
       # base.sha comes straight from the event payload, so there is no guessing at
       # whether origin/main is fetched; the object is present because this job checks
-      # out with fetch-depth: 0 above. Skipped on push, where there is no base branch.
+      # out with fetch-depth: 0 above. The push case is handled by the step below.
       #
       # head.sha is passed for a reason worth keeping: this job checks out
       # refs/pull/N/merge, whose parent IS base.sha, so without it the merge-base is
@@ -71,6 +71,18 @@ jobs:
       - name: CHANGELOG placement guard
         if: github.event_name == 'pull_request'
         run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }} --head ${{ github.event.pull_request.head.sha }} --require-base
+
+      # A PR is not the only way a commit reaches main. Admins are exempt from branch
+      # protection here, so the maintainer lands release and pin commits by pushing
+      # straight to main, and those never see the step above. github.event.before is
+      # the previous tip, which is exactly the base for what this push added.
+      #
+      # Deliberately WITHOUT --require-base: on a force-push or the first push to a
+      # branch, `before` is all-zeros or unreachable, and that has to stay a skip
+      # rather than redden main for a ref that was never going to resolve.
+      - name: CHANGELOG placement guard (push)
+        if: github.event_name == 'push'
+        run: ./scripts/check-changelog-placement.sh --base ${{ github.event.before }}
 
       # go.mod/go.sum tidiness is asserted inside `make verify` (tidy-check) on
       # both OSes — drift is invisible locally (the build keeps working) but
