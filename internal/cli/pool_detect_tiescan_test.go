@@ -70,7 +70,11 @@ func TestStrongLangAt_TieBreakStillTruncatesAboveItsBudget(t *testing.T) {
 		"app/src/main/java/com/example/A.java",
 		"app/src/main/java/com/example/B.java",
 		"app/src/main/java/com/example/C.java")
-	manyFiles(t, dir, "docs", "page", ".png", tieScanMaxFiles+1000)
+	// Literal, not tieScanMaxFiles+1000: a symbolic count scales with the
+	// constant and can never pin it. 20500 sits over the 20000 cap, so the
+	// walk truncates today; raising the cap past the fixture completes it,
+	// and the assertion flips — the upper side is pinned on the VALUE.
+	manyFiles(t, dir, "docs", "page", ".png", 20500)
 
 	if got := contestedPool(t).strongLangAt(dir); got != "java" {
 		t.Fatalf("strongLangAt = %q, want java — the walk stopped at the %d-file "+
