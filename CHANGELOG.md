@@ -64,6 +64,27 @@
   every peer sees with a blank author, or a project memory nobody can trace or
   ask about. The refusal names `session_start` as the remedy, and nothing is
   stored.
+- **A failing test in the `coverage floor` job now names itself.**
+  `scripts/check-coverage.sh` ran the whole suite with stdout discarded under
+  `set -eu`, so when any test failed the output had already gone to
+  `/dev/null` and the entire CI record was `make: *** [Makefile:234: cover]
+  Error 1` — no test, no package, no assertion. Because the job is called
+  "coverage floor", that read as a coverage regression when it was an ordinary
+  test failure, sending the reader to `go tool cover` and to the FLOOR
+  constant, neither of which was the problem. Output is now captured and
+  printed on failure, prefixed with a line saying which kind of failure it is;
+  the green path is unchanged and still ends at `coverage: OK — total N%`.
+
+- **`TestFindReplace_LargeTree…` no longer fails the build on a slow runner.**
+  It asserted that 300 files were processed in under 10 seconds and came in at
+  10.11s on `integration (ubuntu-latest)`, failing a PR whose entire diff was
+  51 deleted lines of `CHANGELOG.md`. Its message named three possible
+  regressions it could not distinguish from ambient load, inviting a hunt for
+  one that was not there. The budget was removed rather than widened — all
+  three named causes are pinned deterministically by other tests — and the test
+  now asserts what it is actually good at: at 300 files every one is rewritten
+  and nothing outside the glob is touched. The duration is still logged, with
+  no power to fail the job.
 
 - **A note is no longer delivered back to the session that wrote it.** The
   delivery predicate matched `addressee = ? OR addressee = 'next'` with no

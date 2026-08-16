@@ -34,7 +34,32 @@ cd "$ROOT"
 mkdir -p "$(dirname "$PROFILE")"
 
 echo "coverage: running tests with -covermode=atomic (this takes a few minutes)…"
-GOTMPDIR="$ROOT/.testcache" go test -covermode=atomic -coverpkg=./... -coverprofile="$PROFILE" ./... >/dev/null
+# Quiet on success, loud on failure.
+#
+# This used to be a bare `... >/dev/null` under `set -e`. When any test failed,
+# every byte of go test's output had already gone to /dev/null and the script
+# aborted at that line, so the entire CI record of the failure was:
+#
+#     make: *** [Makefile:234: cover] Error 1
+#
+# No test name, no package, no assertion. And because this job is called
+# "coverage floor", the failure READ as a coverage regression when it was an
+# ordinary test failure — sending the reader to `go tool cover` and to FLOOR,
+# neither of which is the problem. It cost a full diagnostic cycle on PR #293,
+# and it is why PLAN-315 exists as an open question rather than a fixed bug: the
+# flake that job caught could not be identified, because its output was thrown
+# away.
+#
+# `if !` rather than `set -e` doing the aborting: the log has to be printed
+# between the failure and the exit, which needs the failure to be catchable.
+LOG="${LOG:-$ROOT/.testcache/coverage-test.log}"
+if ! GOTMPDIR="$ROOT/.testcache" go test -covermode=atomic -coverpkg=./... \
+	-coverprofile="$PROFILE" ./... >"$LOG" 2>&1; then
+	echo "coverage: the test run FAILED — this is a test failure, not a coverage regression." >&2
+	echo "" >&2
+	cat "$LOG" >&2
+	exit 1
+fi
 
 total=$(go tool cover -func="$PROFILE" | awk '/^total:/ {gsub(/%/,"",$NF); print $NF}')
 if [ -z "$total" ]; then
