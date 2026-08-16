@@ -80,7 +80,7 @@ import (
 // Every sample includes one time.Now/time.Since pair, and the M2 timebase ticks
 // at ~41.67ns, so v3's sub-100ns figures are quantised: read them as "one or
 // two ticks", not to three significant figures.
-// BenchmarkMailProbe_HarnessOverhead measures that floor.
+// BenchmarkMailProbe_HarnessOverheadUnderOneTick measures that floor.
 
 // benchClaimLimit mirrors the per-call delivery cap the tools package applies
 // (maxDeliveredPerCall), so the claim statement carries its production LIMIT.
@@ -168,18 +168,18 @@ type probe struct {
 
 // benchGate is a copy of (*chatWatch).due from internal/cli, reproduced here
 // because that type is unexported in a package that cannot import this one's
-// internals. Keep it identical — including lastCheck, which the production gate
-// records and nothing reads (see the note in the review follow-up); a copy that
-// quietly drops a field is not the fidelity claim this file makes.
+// internals. Keep it identical — a copy that quietly drops a field is not the
+// fidelity claim this file makes. (It previously carried a lastCheck field for
+// that reason; the production gate's copy was written and never read, and both
+// were removed together.)
 //
 // Concurrency: safe for concurrent use, like the original — tool calls on one
 // connection can overlap.
 type benchGate struct {
-	mu        sync.Mutex
-	keys      []string
-	gens      []uint64
-	lastFull  time.Time
-	lastCheck time.Time
+	mu       sync.Mutex
+	keys     []string
+	gens     []uint64
+	lastFull time.Time
 }
 
 const benchFullCheckInterval = 30 * time.Second
@@ -198,7 +198,6 @@ func (g *benchGate) due(keys []string, gens []uint64, now time.Time) bool {
 		}
 	}
 	backstop := now.Sub(g.lastFull) >= benchFullCheckInterval
-	g.lastCheck = now
 	if !changed && !backstop {
 		return false
 	}
@@ -550,7 +549,7 @@ func BenchmarkMailProbe_Idle(b *testing.B) {
 // across runs; an unstable number is worse than no number, because it gets
 // quoted.
 
-// BenchmarkMailProbe_HarnessOverhead is the floor every number above sits on:
+// BenchmarkMailProbe_HarnessOverheadUnderOneTick is the floor every number above sits on:
 // the time.Now/time.Since pair and the loop around an empty probe. On this
 // timebase a tick is ~41.67ns, so the cheap variants are measured in single
 // ticks and their low-order digits are quantisation, not signal.
@@ -558,7 +557,15 @@ func BenchmarkMailProbe_Idle(b *testing.B) {
 // Its own p50 is 0 — over half of all empty-probe calls complete inside one
 // tick — and the testing package omits a zero-valued metric, so this benchmark
 // reports no ns/op column at all. Read mean-ns as the floor.
-func BenchmarkMailProbe_HarnessOverhead(b *testing.B) {
+//
+// That is why the name says UnderOneTick. The absence of a column reads as a
+// broken benchmark to anyone who has not read this comment, and the benchmark
+// output is the artifact people actually see — pasted into a PR, quoted in a
+// review — usually without the source beside it. Reporting a fabricated floor
+// value instead would put a number in that column that no measurement produced,
+// which is worse; naming the row after the reason costs nothing and travels
+// with it.
+func BenchmarkMailProbe_HarnessOverheadUnderOneTick(b *testing.B) {
 	for _, sessions := range []int{1, 8} {
 		b.Run(fmt.Sprintf("sessions=%d", sessions), func(b *testing.B) {
 			runProbes(b, sessions, func(int) probe { return probe{call: func() {}} })

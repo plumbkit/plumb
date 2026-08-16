@@ -62,11 +62,10 @@ const chatFullCheckInterval = 30 * time.Second
 //
 // Concurrency: safe for concurrent use; tool calls on one connection can overlap.
 type chatWatch struct {
-	mu        sync.Mutex
-	keys      []string
-	gens      []uint64
-	lastFull  time.Time
-	lastCheck time.Time
+	mu       sync.Mutex
+	keys     []string
+	gens     []uint64
+	lastFull time.Time
 }
 
 // due reports whether the store should be consulted, and records the decision.
@@ -86,7 +85,6 @@ func (w *chatWatch) due(keys []string, gens []uint64, now time.Time) bool {
 		}
 	}
 	backstop := now.Sub(w.lastFull) >= chatFullCheckInterval
-	w.lastCheck = now
 	if !changed && !backstop {
 		return false
 	}
