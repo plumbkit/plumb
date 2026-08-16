@@ -30,6 +30,10 @@ type TaskCommand struct {
 	Slot       string
 	Steps      [][]string // one argv per step; empty ⇒ nothing to run
 	Provenance string     // "default" | "global" | "project"
+	// WorkingDir is the absolute directory to run in, already resolved and
+	// boundary-checked by the resolver. Empty falls back to the workspace root,
+	// which is what every caller got before [tasks.<lang>] working_dir existed.
+	WorkingDir string
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -58,7 +62,7 @@ var runTaskSchema = json.RawMessage(`{
     },
     "target": {
       "type": "string",
-      "description": "Optional target substituted for a literal {target} token in the stored command (e.g. a single test name or package). Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the stored command has no {target}."
+      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the stored command has no {target}."
     }
   },
   "required": ["slot"],
@@ -69,7 +73,8 @@ func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
 	return "Run a stored per-language task command — build, lint, test, e2e, or verify (build then test) — configured in [tasks.<lang>]. " +
-		"It executes only the command the user saved for this workspace's language (no shell, no agent-supplied command line); the optional target fills a {target} placeholder with one shell-safe argument. " +
+		"It executes only the command the user saved for this workspace's language (no shell, no agent-supplied command line); the optional target fills a {target} placeholder with one shell-safe argument, and the shipped test defaults carry one so scoping needs no config edit. " +
+		"Commands run from the workspace root, or from [tasks.<lang>] working_dir when the module lives in a subdirectory. " +
 		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
 		"Pairs with topology_affected (which says WHICH tests to run; this runs them)."
 }
@@ -120,7 +125,10 @@ func (t *Tasks) workspace() string {
 // run executes each step in sequence, stopping at the first non-zero exit, and
 // renders a compact report.
 func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
-	ws := t.workspace()
+	ws := cmd.WorkingDir
+	if ws == "" {
+		ws = t.workspace()
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run_task %s (source=%s)\n", cmd.Slot, cmd.Provenance)
 	for i, argv := range cmd.Steps {

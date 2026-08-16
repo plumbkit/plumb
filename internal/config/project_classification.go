@@ -271,6 +271,13 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"tasks.<lang>.test":   ClassTrustGated,
 	"tasks.<lang>.e2e":    ClassTrustGated,
 	"tasks.<lang>.verify": ClassTrustGated,
+	// working_dir is not a command, and is gated exactly like one: it decides
+	// WHERE the argv runs, which is half of what runs. A project that overrides no
+	// command at all can still point the SHIPPED DEFAULT `go build ./...` at a
+	// directory of its choosing, so treating it as a preference would gate the
+	// verb and leave the object open. taskProvenance therefore reports every slot
+	// of a language as project-supplied once its working_dir is project-supplied.
+	"tasks.<lang>.working_dir": ClassTrustGated,
 	// The whole [[command]] array is one ProjectPolicySpec entry, so adding or
 	// rewriting any entry invalidates the grant. Order is part of the hash because
 	// FindCommand takes the first match by name.

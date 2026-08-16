@@ -25,6 +25,23 @@ type TasksConfig struct {
 	Test   string `toml:"test"`
 	E2E    string `toml:"e2e"`
 	Verify string `toml:"verify"` // composite: runs Build then Test; stores no command
+	// WorkingDir is the directory these commands run in, relative to the
+	// workspace root. Empty or "." is the root — the historical behaviour and
+	// still the default.
+	//
+	// It exists because the workspace root is not always the module root. A
+	// holder repository — no go.mod at the top, only a go.work pointing at a
+	// subdirectory — made EVERY Go task command fail instantly (`go build ./...`
+	// exits 1 with "directory prefix . does not contain modules listed in
+	// go.work"), and took mutation_test with it, since its compile gate could
+	// never pass. Naming the module directory here is the fix.
+	//
+	// Explicit rather than inferred: a workspace may hold several modules, and
+	// silently relocating a command the user already has working is worse than
+	// asking. Validated relative and non-escaping at load
+	// (validateCommandWorkingDir), and re-checked against the workspace boundary
+	// after symlink resolution when it is resolved to an absolute path.
+	WorkingDir string `toml:"working_dir"`
 }
 
 // TaskSlots are the valid slot names, in display order.
@@ -51,22 +68,36 @@ func (t TasksConfig) Get(slot string) string {
 // is not part of a language's standard toolchain (and may not be installed) the
 // slot is left empty rather than guessed. The verify slot is always empty: it
 // is a composite of build then test, handled by the runner.
+//
+// The test slots carry a DEFAULTED placeholder, `{target:<all>}`, so scoping
+// works on an unmodified install while a bare run_task still runs everything.
+// Without it neither run_task's target nor mutation_test's test_target could be
+// used at all — substitution refuses a target the command has no slot for — so a
+// mutation run paid for the whole suite per mutant, with no way to say otherwise.
+//
+// Only languages whose runner takes a POSITIONAL scope get one. go and python
+// take a package path or test path; rust's `cargo test <filter>` takes a name
+// substring, so its default is empty (the argument is dropped when no target is
+// given, since "everything" there is the absence of the argument). typescript,
+// swift and zig scope through flags whose spelling depends on the project's
+// runner, and a guess that is wrong is worse than no placeholder — those keep
+// their commands unchanged.
 func defaultTasks() map[string]TasksConfig {
 	return map[string]TasksConfig{
 		"go": {
 			Build: "go build ./...",
 			Lint:  "golangci-lint run",
-			Test:  "go test ./...",
+			Test:  "go test {target:./...}",
 			E2E:   "go test -tags=integration ./...",
 		},
 		"python": {
-			Test: "pytest",
+			Test: "pytest {target:}",
 			Lint: "ruff check .",
 		},
 		"rust": {
 			Build: "cargo build",
 			Lint:  "cargo clippy",
-			Test:  "cargo test",
+			Test:  "cargo test {target:}",
 		},
 		"typescript": {
 			Build: "npm run build",

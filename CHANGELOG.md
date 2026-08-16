@@ -9,6 +9,69 @@
 
 ### Added
 
+- **`[tasks.<lang>] working_dir` — task commands can run where the module
+  actually is.** Stored commands ran from the workspace root, unconditionally.
+  In a **holder repository** — no `go.mod` at the top, only a `go.work` pointing
+  at a module in a subdirectory — that made every Go task command fail instantly
+  (`go build ./...` exits 1 in ~0.02s with *"directory prefix . does not contain
+  modules listed in go.work"*) while `cd module && go build ./...` compiles the
+  tree perfectly in seconds. `mutation_test` was unusable in such a repository
+  outright: its compile gate runs first and can never pass, so every run was
+  refused before a mutant was applied, with the advice *"Fix the build first"* on
+  a tree whose build is fine. plumb-ops — the workspace plumb's own agents work
+  in — is exactly this shape.
+
+  `working_dir` is relative to the workspace root (`""` or `"."` is the root, the
+  previous behaviour and still the default), and applies to `run_task`,
+  `mutation_test` and the `plumb build|lint|test|e2e|verify` CLI.
+
+  Explicit rather than inferred, deliberately: resolving "the nearest module
+  root" has no correct answer in a workspace holding several modules, and would
+  silently relocate commands that already work for every existing user. Naming
+  the directory is one line of config and cannot surprise anyone.
+
+  Two things are gated rather than assumed. The value is checked lexically at
+  load (relative, no `..`) **and again after symlink resolution** when it is made
+  absolute — a `working_dir` naming a symlink out of the tree passes every
+  spelling-based check and still lands outside, so it is refused rather than
+  "cleaned" into something that merely reads as contained. And a project-supplied
+  `working_dir` is trust-gated like a command, marking *every* slot for that
+  language project-supplied: a project that overrides no command at all still
+  decides where the shipped default `go build ./...` runs, and choosing the
+  directory is as much influence as choosing the argv. The same resolution-time
+  check now covers `[[command]] working_dir`, where the gap was latent.
+
+- **Scoping a test run works out of the box: the shipped test commands carry a
+  `{target}` placeholder with a default.** **This changes `run_task` for every
+  plumb user.** No shipped `[tasks.<lang>].test` default contained a `{target}`,
+  and substitution refuses a target the command has no slot for — so on an
+  unmodified install `run_task {slot: "test", target: "..."}` and
+  `mutation_test`'s `test_target` were not merely undiscoverable, they were an
+  error. Scoping meant editing the config first, and until you did, a mutation
+  run paid for the entire suite on every mutant (measured here: ~67 s per mutant
+  against ~76 s of baseline).
+
+  The placeholder gained an optional inline default, `{target:<default>}`:
+
+  | written | no target given | target given |
+  |---|---|---|
+  | `{target}` | error — the command requires one | substituted |
+  | `{target:./...}` | `./...` | substituted |
+  | `{target:}` | the element is omitted | substituted |
+
+  Shipped defaults are now `go test {target:./...}`, `pytest {target:}` and
+  `cargo test {target:}`. `typescript`, `swift` and `zig` are unchanged: they
+  scope through runner-specific flags whose spelling depends on the project, and
+  a wrong guess is worse than none.
+
+  The alternatives were rejected for the same reason. Falling back to a
+  per-language default for a *bare* `{target}` would change the meaning of
+  commands users already wrote — `go test -run {target}` would quietly run
+  everything instead of refusing — and a separate "scoped" slot doubles the
+  config surface for one argument. Written inline the default cannot drift from
+  its placeholder, and a bare `{target}` keeps its strict contract in both
+  directions, so **no existing configuration changes behaviour**.
+
 - **`workspace_sessions` now shows what you have sent and how busy each
   conversation is.** Two new sections, both observational: *your recent notes*
   gives each note you sent a `pending` / `delivered to <peer>` state, and

@@ -128,7 +128,7 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "test_target": {
       "type": "string",
-      "description": "Optional value for the test command's {target} placeholder — the way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). ONLY usable when the stored test command actually contains a {target} token: it is refused outright otherwise, and the shipped defaults (Go's is 'go test ./...') do NOT have one, so on an unmodified config the whole suite runs per mutant and scoping means editing [tasks.<lang>].test first. One shell-safe argument ([A-Za-z0-9._/:@-])."
+      "description": "Optional value for the test command's {target} placeholder — THE way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). The shipped go/python/rust test defaults carry a defaulted placeholder, so this works with no config edit; a hand-written test command needs a {target} token of its own or the target is refused. Scoping matters: each mutant costs a full compile+test cycle, so the whole suite per mutant is the difference between minutes and tens of minutes. One shell-safe argument ([A-Za-z0-9._/:@-])."
     },
     "compile_task": {
       "type": "string",
@@ -153,7 +153,7 @@ func (*MutationTest) Description() string {
 	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
 		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
 		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, did not compile, could not be started, or timed out — it proves nothing and is NEVER reported as a kill; that false kill is why the compile gate exists). " +
-		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — but only if the stored command HAS one; the shipped defaults do not, so the whole suite runs per mutant. " +
+		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — the shipped go/python/rust test defaults carry one, so scoping works out of the box. " +
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
 		"Restoration is guaranteed on every exit path (pass, fail, compile error, timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory, rewritten under the same per-path lock, and SHA-256-verified before the run is reported clean. " +
 		"It REFUSES to touch a file with uncommitted changes (untracked included), no override — a clean file means `git checkout` recovers it if the daemon dies mid-run; that is the recovery story. " +
@@ -411,12 +411,19 @@ func slotSource(slot string) string {
 // directory it ran in. A composite command runs several argvs, and naming the
 // first one beside output produced by the second contradicts itself on screen.
 //
-// The directory is the load-bearing half. Task commands run from the WORKSPACE
-// ROOT, which is not always a buildable directory — a repository whose root only
-// holds a go.work, with the module in a subdirectory, fails `go build ./...`
-// instantly while the tree itself compiles perfectly. Without the cwd on screen
-// that reads as "your build is broken", and the reader goes looking for a
-// compile error that does not exist.
+// The directory is the load-bearing half. A task command runs from the
+// workspace root unless [tasks.<lang>] working_dir names somewhere else, and the
+// root is not always a buildable directory — a repository whose root only holds
+// a go.work, with the module in a subdirectory, fails `go build ./...` instantly
+// while the tree itself compiles perfectly. Without the cwd on screen that reads
+// as "your build is broken", and the reader goes looking for a compile error that
+// does not exist.
+//
+// It reports the directory the argv ACTUALLY ran in, not the one it used to run
+// in. Naming the workspace root unconditionally was true before working_dir
+// existed; repeating it afterwards would send a reader to inspect a directory the
+// command never entered — the same wrong-place-to-look failure this note exists
+// to prevent, just relocated.
 func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 	if len(cmd.Steps) == 0 {
 		return ""
@@ -425,15 +432,24 @@ func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 		step = 0
 	}
 	argv := strings.Join(cmd.Steps[step], " ")
-	dir := ""
+	root := ""
 	if t.deps.WorkspaceFn != nil {
-		dir = t.deps.WorkspaceFn()
+		root = t.deps.WorkspaceFn()
+	}
+	dir := cmd.WorkingDir
+	if dir == "" {
+		dir = root
 	}
 	if dir == "" {
 		return fmt.Sprintf(" It ran `%s`.", argv)
 	}
-	return fmt.Sprintf(" It ran `%s` in %s — task commands run from the WORKSPACE ROOT, "+
-		"which is not always the directory the command expects.", argv, dir)
+	if dir != root {
+		return fmt.Sprintf(" It ran `%s` in %s — the WORKING DIR set by [tasks.<lang>] working_dir, "+
+			"not the workspace root.", argv, dir)
+	}
+	return fmt.Sprintf(" It ran `%s` in %s — task commands run from the WORKSPACE ROOT unless "+
+		"[tasks.<lang>] working_dir says otherwise, and the root is not always the directory the command "+
+		"expects. If the module lives in a subdirectory, point working_dir at it.", argv, dir)
 }
 
 // mutationTarget is one preflighted mutant: the resolved path plus the

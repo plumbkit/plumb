@@ -1029,10 +1029,11 @@ the `run_task` tool and the `plumb build|lint|test|e2e|verify` CLI.
 
 ```toml
 [tasks.go]
-build = "go build ./..."
-lint  = "golangci-lint run"
-test  = "go test ./..."        # may contain a {target} placeholder
-e2e   = "go test -tags=integration ./..."
+build       = "go build ./..."
+lint        = "golangci-lint run"
+test        = "go test {target:./...}"   # {target} with a default — see below
+e2e         = "go test -tags=integration ./..."
+working_dir = ""                         # relative to the workspace root; "" or "." is the root
 # verify is a COMPOSITE (build then test); it stores no command of its own
 ```
 
@@ -1042,6 +1043,51 @@ The only agent-supplied input that reaches the argv is a shell-safe `{target}`
 (`^[A-Za-z0-9._/:@-]+$`). Shipped defaults exist
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
+
+### `{target}` and its default
+
+A placeholder is a **whole argv element**, in one of two spellings:
+
+| written | no target given | target given |
+|---|---|---|
+| `{target}` | **error** — the command requires one | substituted |
+| `{target:./...}` | `./...` | substituted |
+| `{target:}` | the element is **omitted** | substituted |
+
+The defaulted form is what makes scoping usable out of the box: the shipped
+`go`, `python` and `rust` test commands carry one, so
+`run_task {slot: "test", target: "./internal/tools"}` works with no configuration
+and a bare `run_task {slot: "test"}` still runs the whole suite. A bare
+`{target}` keeps its strict contract, so a command you wrote yourself never
+silently guesses a scope. The empty default exists for runners where "everything"
+is the *absence* of an argument (`cargo test`, `swift test`).
+
+`typescript`, `swift` and `zig` ship without a placeholder: they scope through
+runner-specific flags whose spelling depends on the project, and a wrong guess is
+worse than none. Add your own `{target}` to those slots.
+
+### `working_dir` — when the module is not at the root
+
+Commands run from the workspace root unless `working_dir` names a subdirectory of
+it. This matters for a **holder repository**: a root with no `go.mod`, only a
+`go.work` pointing at a module below. There `go build ./...` fails instantly
+(`directory prefix . does not contain modules listed in go.work`) while the tree
+itself compiles perfectly, and `mutation_test` cannot run at all, because its
+compile gate can never pass.
+
+```toml
+[tasks.go]
+working_dir = "src"   # commands run in <workspace>/src
+```
+
+It is explicit rather than inferred: a workspace may hold several modules, and
+silently relocating a command that already works is worse than asking. The value
+must be relative and must not escape the workspace — checked lexically at load
+and again **after symlink resolution** when it is resolved, so a `working_dir`
+naming a symlink out of the tree is refused rather than silently followed. A
+project-supplied `working_dir` is trust-gated exactly like a command, and it
+makes *every* slot for that language project-supplied — choosing where the
+shipped default runs is as much influence as choosing what it runs.
 
 **Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
 not run until the workspace is trusted with `plumb trust` (recorded per workspace

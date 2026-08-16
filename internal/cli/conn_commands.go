@@ -59,10 +59,14 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 	if fromProject {
 		provenance = "project"
 	}
+	workdir, err := commandWorkdir(ws, cmd.WorkingDir)
+	if err != nil {
+		return tools.ResolvedCommand{}, fmt.Errorf("run_command %q: %w", name, err)
+	}
 	return tools.ResolvedCommand{
 		Name:       name,
 		Argv:       argv,
-		WorkingDir: commandWorkdir(ws, cmd.WorkingDir),
+		WorkingDir: workdir,
 		Timeout:    cmd.Timeout.Duration,
 		Sandbox: tools.SandboxOpts{
 			WorkspaceRoot: ws,
@@ -160,11 +164,30 @@ func (s *connSession) effectiveRequireSandbox() bool {
 // during THIS session's config apply, so there is no second read of the file to
 // disagree with the config actually loaded.
 
-// commandWorkdir resolves a command's working_dir (validated relative and
-// non-escaping at load) to an absolute path within the workspace.
-func commandWorkdir(ws, dir string) string {
+// commandWorkdir resolves a working_dir (validated relative and non-escaping at
+// load) to an absolute path, REFUSING one that leaves the workspace.
+//
+// The load-time validator is lexical: it rejects an absolute path and a ".."
+// segment, which is every escape you can spell. It is not every escape there is.
+// `working_dir = "build"` passes it and still runs the command in /etc when
+// build is a symlink, because the kernel resolves the link and filepath.Clean
+// never sees it. That is the lexical-Clean-before-symlink-resolution class of
+// bug, and the rule it taught is the one applied here: RE-CHECK after
+// resolution, and REFUSE — never "clean" a path into something that looks
+// contained, because the cleaned string and the directory the kernel opens are
+// then two different places.
+//
+// PathWithinWorkspace does the resolution (it follows symlinks for an existing
+// path and for the nearest existing ancestor), so this is the check the argv
+// actually runs under, not a second opinion about the string.
+func commandWorkdir(ws, dir string) (string, error) {
 	if dir == "" || dir == "." {
-		return ws
+		return ws, nil
 	}
-	return filepath.Join(ws, dir)
+	abs := filepath.Join(ws, dir)
+	if !tools.PathWithinWorkspace(ws, abs) {
+		return "", fmt.Errorf("working_dir %q resolves to %s, which is outside the workspace %s "+
+			"(a symlink out of the tree passes the relative-path check but not this one); refusing to run there", dir, abs, ws)
+	}
+	return abs, nil
 }

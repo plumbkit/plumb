@@ -27,6 +27,9 @@ type mutationEnv struct {
 	tool          *MutationTest
 	compileScript string
 	testScript    string
+	// workdir, when set, is handed to the resolver as the TaskCommand's
+	// WorkingDir — the holder-repository shape PLAN-325 exists for.
+	workdir string
 }
 
 // newMutationEnv builds the repo. compileOK/testOK are the exit codes the two
@@ -65,7 +68,7 @@ func newMutationEnv(t *testing.T, content string) *mutationEnv {
 		if target != "" {
 			argv = append(argv, target)
 		}
-		return TaskCommand{Slot: slot, Steps: [][]string{argv}, Provenance: "default"}, nil
+		return TaskCommand{Slot: slot, Steps: [][]string{argv}, Provenance: "default", WorkingDir: env.workdir}, nil
 	})
 	return env
 }
@@ -411,6 +414,58 @@ func TestBaseline_NamesTheDirectoryItRanIn(t *testing.T) {
 	}
 	if !strings.Contains(msg, env.compileScript) {
 		t.Errorf("the refusal must name the argv it ran; got:\n%s", msg)
+	}
+}
+
+// TestMutationTest_RunsCommandsInTheWorkingDir is PLAN-325 for the tool the card
+// was filed from.
+//
+// mutation_test could not complete a single run in plumb-ops — the workspace its
+// own agents work in — because the compile gate ran from the workspace root, and
+// that root holds a go.work rather than a go.mod. The gate cannot pass there, so
+// every run was refused before a mutant was applied. Running the resolved
+// working_dir instead is the fix, and this asserts the process actually lands
+// there rather than that a struct field was populated.
+//
+// The compile script refuses to succeed anywhere but the module directory, so a
+// regression that ignores WorkingDir cannot produce a passing baseline.
+func TestMutationTest_RunsCommandsInTheWorkingDir(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	module := filepath.Join(env.root, "module")
+	if err := os.MkdirAll(module, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// "Succeed only when the cwd is the module directory." This is the holder
+	// repository in miniature: correct place, exit 0; workspace root, exit 1.
+	env.installScript(t, env.compileScript, "test \"$(/bin/pwd)\" = \""+module+"\"")
+	env.workdir = module
+	env.commitAll(t)
+
+	out, err := env.run(t, "42", "43")
+	if err != nil {
+		t.Fatalf("the run was refused even though the compile gate passes in the working_dir: %v", err)
+	}
+	if !strings.Contains(out, "survived") && !strings.Contains(out, "killed") {
+		t.Errorf("expected a classified mutant, got:\n%s", out)
+	}
+}
+
+// TestMutationTest_WithoutAWorkingDirStillUsesTheRoot is the other direction:
+// the same fixture, no working_dir, and the baseline must now REFUSE — proving
+// the test above passes because of where the command ran, not because the script
+// succeeds everywhere.
+func TestMutationTest_WithoutAWorkingDirStillUsesTheRoot(t *testing.T) {
+	env := newMutationEnv(t, "answer = 42\n")
+	module := filepath.Join(env.root, "module")
+	if err := os.MkdirAll(module, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.installScript(t, env.compileScript, "test \"$(/bin/pwd)\" = \""+module+"\"")
+	env.commitAll(t) // env.workdir deliberately unset
+
+	if _, err := env.run(t, "42", "43"); err == nil {
+		t.Fatal("with no working_dir the commands must run from the workspace root, where this compile gate fails; " +
+			"a passing run means the root fallback was dropped")
 	}
 }
 
