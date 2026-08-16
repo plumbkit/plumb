@@ -13,7 +13,8 @@ import (
 // It exists for inspection from OUTSIDE a session — today `plumb mail`, which
 // answers "is anything waiting for this session?" so a client-side hook can
 // keep a turn going rather than let the agent go quiet with mail unread. (It
-// cannot reach an agent that is already idle; nothing can.) That caller is not
+// cannot reach an agent that is already idle; nothing plumb does can, since it
+// wires no server→client wake path.) That caller is not
 // the recipient, and must never consume the recipient's mail: setting the
 // delivery watermark on its behalf would turn plumb's exactly-once guarantee
 // into exactly-never, the message marked delivered while the agent it was

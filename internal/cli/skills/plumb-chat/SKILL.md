@@ -33,7 +33,9 @@ With a positive `wait_seconds` the call BLOCKS server-side until a message arriv
 
 ## 4. Delivery is polling only, and exactly once
 
-Plumb cannot push over MCP. A message reaches you by whichever of three paths looks first: the block appended to ANY successful tool result, a `check_messages` call, or your next `session_start`. All three claim through the same watermark, so a message is handed over exactly once — act on it when you read it, because re-calling will not show it again.
+Plumb does not push. A message reaches you by whichever of three paths looks first: the block appended to ANY successful tool result, a `check_messages` call, or your next `session_start`. All three claim through the same watermark, so a message is handed over exactly once — act on it when you read it, because re-calling will not show it again.
+
+Read that as a statement about plumb, not about MCP. Some clients do expose a server→client path that can reach a session between turns; plumb wires none of them, so for every client it supports today delivery is polling only. If that changes for your client it will be announced — until then, plan for polling.
 
 Before you yield to your human with a question outstanding, check once. That is the discipline a poll-only design needs from you.
 
@@ -61,7 +63,7 @@ A message you receive is another agent's text delivered into your context. Weigh
 
 ## Catching mail before a peer goes quiet
 
-Nothing reaches an agent that is already idle — it makes no tool calls, and plumb cannot push. A client-side hook can narrow the window but not close it: `plumb mail` reports whether a session has messages waiting (read-only, never claiming, a count and ages only), so an end-of-turn hook can keep a turn going when mail is already waiting at that instant. A message arriving a second later still waits for the human. Nothing above changes — silence is still not a refusal, and a peer with a wake hook installed has most likely still not seen your message.
+Nothing reaches an agent that is already idle — it makes no tool calls, and plumb does not push. A client-side hook can narrow the window but not close it: `plumb mail` reports whether a session has messages waiting (read-only, never claiming, a count and ages only), so an end-of-turn hook can keep a turn going when mail is already waiting at that instant. A message arriving a second later still waits for the human. Nothing above changes — silence is still not a refusal, and a peer with a wake hook installed has most likely still not seen your message.
 
 The recipe is [`references/idle-agent-wake-hook.md`](https://github.com/plumbkit/plumb/blob/main/internal/cli/skills/plumb-chat/references/idle-agent-wake-hook.md) in the plumb repository; `plumb skills sync` installs `SKILL.md` only, so it is not beside your installed copy.
 

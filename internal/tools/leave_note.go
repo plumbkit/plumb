@@ -30,40 +30,32 @@ func (*LeaveNote) Name() string { return "leave_note" }
 func (*LeaveNote) Description() string {
 	return "Send a message to another agent — a named peer session, or \"next\" " +
 		"(whoever attaches to this workspace next). This is the send half of plumb's " +
-		"mailbox; check_messages is the receive half.\n\n" +
+		"mailbox; check_messages is the receive half. Etiquette: the plumb-chat " +
+		"skill.\n\n" +
 		"CONVERSATIONS. Every message belongs to a thread. Omit conversation_id to " +
-		"start one (the reply tells you the new id); pass the conversation_id you " +
-		"were given to answer in the same thread — in which case you may omit `to` " +
-		"and the reply goes to that thread's other participant, or is refused if the " +
-		"thread has none or has several. A thread is capped at [collab] " +
-		"max_exchanges messages — once spent, further replies are refused and you " +
-		"should summarise the exchange for your human rather than starting a fresh " +
-		"thread to keep talking.\n\n" +
-		"DELIVERY is by polling only — plumb cannot push. A message reaches the peer " +
-		"when it next makes any tool call (pending messages are appended to the " +
-		"result), when it calls check_messages, or at its next session_start. Each " +
-		"message is delivered exactly once. A peer that is idle waiting on its human " +
-		"makes no tool calls and will not see it until it does something — so do not " +
-		"assume silence means refusal.\n\n" +
-		"ADDRESSED TO A SESSION, NOT TO A NAME. When the peer you name is connected, " +
-		"the message is bound to that exact session and only it can ever read it. " +
-		"Session names are reusable — an ended session does not reserve its name, and " +
-		"any session may rename to a free one — so without that binding a message its " +
-		"recipient never read would be handed to whoever next answers to the name. The " +
-		"trade is deliberate: a bound message expires unread if its recipient never " +
-		"comes back. Addressing a peer that is NOT CONNECTED stores no binding and " +
-		"is delivered by name, as is \"next\".\n\n" +
-		"CROSS-PROJECT. Addressing a session pinned to a different workspace is " +
-		"allowed, but it is delivered only if THAT project sets [collab] " +
-		"cross_project = true; otherwise it expires unread. Such a message is " +
-		"labelled with your workspace when the peer reads it.\n\n" +
+		"start one (the reply tells you its id); quote the id you were given to answer " +
+		"in that thread — then you may omit `to`, and the reply goes to the thread's " +
+		"other participant, or is refused if it has none or several. A thread is capped " +
+		"at [collab] max_exchanges messages; once spent, replies are refused — " +
+		"summarise for your human rather than opening a fresh thread to keep talking.\n\n" +
+		"DELIVERY is by polling only — plumb does not push. It reaches the peer on its " +
+		"next tool call (appended to the result), check_messages, or session_start — " +
+		"exactly once. A peer idle on its human makes no calls and will not see it " +
+		"until it acts, so do not read silence as refusal.\n\n" +
+		"ADDRESSED TO A SESSION, NOT TO A NAME. When the peer you name is connected " +
+		"the message is bound to that exact session and only it can read it — names " +
+		"are reusable, so without the binding a message its recipient never read " +
+		"would go to whoever next answers to the name. The trade: a bound message " +
+		"expires unread if its recipient never returns. A peer that is NOT CONNECTED " +
+		"stores no binding and is delivered by name, as is \"next\".\n\n" +
+		"CROSS-PROJECT sends are allowed but delivered only if THAT project sets " +
+		"[collab] cross_project = true; otherwise they expire unread.\n\n" +
 		"Messages expire after [collab] intent_ttl_minutes. Requires [collab] " +
-		"mailbox = true; otherwise the call is refused. The body is secret-scrubbed " +
-		"before storage.\n\n" +
+		"mailbox = true. The body is secret-scrubbed before storage.\n\n" +
 		"Parameters:\n" +
 		"  body            — the message (required, free text).\n" +
-		"  to              — a peer session name, or \"next\". Omitting it means \"next\" " +
-		"when starting a thread, and \"the other participant\" when replying into one.\n" +
+		"  to              — a peer session name, or \"next\"; omitted, it means \"next\" " +
+		"on a new thread and \"the other participant\" on a reply.\n" +
 		"  conversation_id — reply into an existing thread; omit to start one."
 }
 

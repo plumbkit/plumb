@@ -39,7 +39,7 @@ func (*ShareIntent) Description() string {
 		"You have at most ONE live intent — calling this again replaces it. The " +
 		"intent expires after ttl_minutes (default from [collab] intent_ttl_minutes) " +
 		"and is cleared automatically when your session ends. Delivery is by polling " +
-		"and hint injection only; plumb cannot push to another agent.\n\n" +
+		"and hint injection only; plumb does not push to another agent.\n\n" +
 		"Requires [collab] intents = true; otherwise the call is refused. " +
 		"Strictly per-workspace; the body is secret-scrubbed before storage.\n\n" +
 		"Parameters:\n" +
