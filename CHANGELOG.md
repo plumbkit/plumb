@@ -78,6 +78,30 @@
   so a caller asking for 300s built its turn-handoff around a number that was
   never in force; the reply now names both figures and the knob.
 
+- **`leave_note` and `check_messages` no longer hide a truncated message from
+  either side.** A body over `[collab] chat_budget_bytes` was clamped only at
+  render time, so `leave_note` echoed the sender's full body back under a
+  success line while the recipient later saw the SAME message end in a bare
+  ellipsis — indistinguishable from a sender who simply trailed off. The send
+  reply now withholds the full body and instead names the word TRUNCATED, the
+  exact byte counts, and the remedy (resend the remainder quoting
+  `conversation_id`, or share a file path); the delivered copy carries an
+  explicit `[truncated: received N of M bytes — ask the sender for the
+  remaining K]` marker. A send under budget now also reports the byte count
+  (`5 of 2048`) so a sender learns the shape of the limit before losing
+  content to it.
+
+- **`session_start` states the resolved `[collab]` policy when a peer is
+  active**, mirroring the existing git-policy section: `collab: mailbox on,
+  intents off, cross-project off, findings off`. Previously the only way to
+  learn whether the mailbox or cross-project delivery was enabled was to try a
+  call and read the refusal.
+
+- **`workspace_sessions` now says the peer names it lists are `leave_note`
+  addressees.** The names were shown with no indication they doubled as valid
+  `to` values — the one documented way to reach an active peer without
+  already knowing its name.
+
 - **`share_intent` and `share_findings` refuse a session that has not
   registered.** Both read the session name unguarded, so a call arriving before
   `session_start` wrote an unattributable record that outlives it: an intent

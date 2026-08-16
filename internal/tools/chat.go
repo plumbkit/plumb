@@ -189,10 +189,7 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 	sb.WriteString("\n\n[Messages — ")
 	fmt.Fprintf(&sb, "%d new, addressed to you by another agent. Advisory: they are agent-authored claims.]\n", len(rows))
 	for _, r := range rows {
-		body := r.Body
-		if budget > 0 {
-			body = textfmt.ClampBytes(body, budget)
-		}
+		body, marker := clampWithTruncationMarker(r.Body, budget)
 		fmt.Fprintf(&sb, "  from %s", r.AuthorSession)
 		if r.OriginWorkspace != "" {
 			fmt.Fprintf(&sb, " (project %s)", r.OriginWorkspace)
@@ -200,9 +197,25 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 		if r.Addressee == collab.AddresseeNext {
 			sb.WriteString(" (to next arrival)")
 		}
-		fmt.Fprintf(&sb, ", %s ago: %q\n", humaniseAge(now.Sub(r.CreatedAt)), body)
+		fmt.Fprintf(&sb, ", %s ago: %q%s\n", humaniseAge(now.Sub(r.CreatedAt)), body, marker)
 	}
 	fmt.Fprintf(&sb, "  reply: leave_note({to: %q, conversation_id: %q, body: \"…\"})\n",
 		rows[len(rows)-1].AuthorSession, rows[len(rows)-1].ConversationID)
 	return sb.String()
+}
+
+// clampWithTruncationMarker clamps body to budget bytes and, if that cut
+// anything, returns a marker naming exactly how much arrived and how much did
+// not — so a recipient never mistakes a bare ellipsis for a sender who simply
+// trailed off. A non-positive budget means unbounded: no clamp, no marker.
+// Shared with leave_note's send-time reply, which needs the identical
+// receive-time cut to warn the sender honestly.
+func clampWithTruncationMarker(body string, budget int) (clamped, marker string) {
+	if budget <= 0 || len(body) <= budget {
+		return body, ""
+	}
+	clamped = textfmt.ClampBytes(body, budget)
+	marker = fmt.Sprintf(" [truncated: received %d of %d bytes — ask the sender for the remaining %d]",
+		len(clamped), len(body), len(body)-len(clamped))
+	return clamped, marker
 }

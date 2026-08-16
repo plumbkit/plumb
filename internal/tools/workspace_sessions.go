@@ -437,6 +437,8 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 		for _, p := range peers {
 			fmt.Fprintf(&sb, "  %s\n", peerLine(p, selfSessID, now))
 		}
+		sb.WriteString("  Any of the names above is a valid leave_note `to` — that is how you reach a peer you did " +
+			"not already know the name of.\n")
 	}
 
 	// ── recent writes ──────────────────────────────────────────────────────
