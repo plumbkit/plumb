@@ -61,9 +61,16 @@ jobs:
       # base.sha comes straight from the event payload, so there is no guessing at
       # whether origin/main is fetched; the object is present because this job checks
       # out with fetch-depth: 0 above. Skipped on push, where there is no base branch.
+      #
+      # head.sha is passed for a reason worth keeping: this job checks out
+      # refs/pull/N/merge, whose parent IS base.sha, so without it the merge-base is
+      # the base branch tip rather than the branch's fork point — and a branch that is
+      # merely behind a release cut then fails. --require-base turns an unresolvable
+      # base into an error, because on the one path that gates a merge, a skip is a
+      # green tick for a check that never ran.
       - name: CHANGELOG placement guard
         if: github.event_name == 'pull_request'
-        run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }}
+        run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }} --head ${{ github.event.pull_request.head.sha }} --require-base
 
       # go.mod/go.sum tidiness is asserted inside `make verify` (tidy-check) on
       # both OSes — drift is invisible locally (the build keeps working) but
