@@ -203,7 +203,6 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCheckMessages(collabDeps))
 	srv.Register(tools.NewShareFindings(tools.ShareFindingsDeps{
 		Workspace:           s.workspace,
-		SessionName:         s.sessionName,
 		SessionID:           s.sessID,
 		Policy:              s.collabPolicy,
 		Index:               s.memoryIndexLive,

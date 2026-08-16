@@ -104,7 +104,7 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	if refusal := unregisteredSessionRefusal("share_intent", t.deps.SessionName()); refusal != "" {
+	if refusal := unregisteredSessionRefusal("share_intent", t.deps.SessionID); refusal != "" {
 		return refusal, nil
 	}
 	store := t.deps.Store()

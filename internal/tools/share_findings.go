@@ -36,9 +36,6 @@ type ShareFindings struct{ deps ShareFindingsDeps }
 type ShareFindingsDeps struct {
 	// Workspace returns the connection's pinned workspace root ("" pre-attach).
 	Workspace func() string
-	// SessionName returns this session's display name (unused for storage but kept
-	// for symmetry with the other collab tools and future surfacing).
-	SessionName func() string
 	// SessionID is this session's stable ID — the provenance author and the seed
 	// for the memory's distinguishing name suffix.
 	SessionID string
@@ -136,7 +133,7 @@ func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	if refusal := unregisteredSessionRefusal("share_findings", t.deps.SessionName()); refusal != "" {
+	if refusal := unregisteredSessionRefusal("share_findings", t.deps.SessionID); refusal != "" {
 		return refusal, nil
 	}
 	return t.run(ws, args)
