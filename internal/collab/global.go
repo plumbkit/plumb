@@ -23,11 +23,20 @@ import (
 // So a cross-project message lands in one daemon-level database beside stats.db
 // and session_state.db, addressed by recipient session name and stamped with the
 // sender's workspace. That location is also what makes consent cheap to enforce:
-// the gate is at DELIVERY, not send. A recipient whose [collab] cross_project is
-// off simply never reads this database, and the rows expire unread — so the
-// sender needs no knowledge of the recipient's configuration to be safely
-// ignored, and one project can never inject text into another's context by
+// a recipient whose [collab] cross_project is off simply never reads this
+// database, so a row this package accepts is never handed to a project that
+// declined it, and one project can never inject text into another's context by
 // writing a file it controls.
+//
+// This package itself gates only that DELIVERY side — it has no opinion on
+// whether a row should have been written at all. internal/tools' leave_note
+// ALSO checks the target's consent before it ever calls PutNote here, so a
+// send to an unconsenting project is refused up front rather than accepted
+// and left to expire unread with the sender never told. That send-side check
+// is a courtesy for an honest reply, not a second privacy boundary: this
+// package's own delivery gate is what actually protects a recipient that
+// never opted in, including against a row written before the send-side check
+// existed, or by a caller that skips it.
 //
 // The schema is identical to the per-workspace one, so the same Store type and
 // every query serve both. Only the file location and the origin_workspace stamp
