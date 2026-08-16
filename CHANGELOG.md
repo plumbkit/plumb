@@ -72,7 +72,7 @@
 - **Six tool descriptions were being silently truncated before any model read
   them — all six are now under the cap, and a test keeps them there.** Clients
   clip a long MCP tool description and append `… [truncated]`; Claude Code cuts
-  near 2,000 characters. Measured against a real `tools/list` captured from
+  at 2,048 characters. Measured against a real `tools/list` captured from
   `plumb serve`, six descriptions were over it: `edit_file` (2,909), `git`
   (2,186), `mutation_test` (2,121), `check_messages` (2,087), `move_symbol`
   (2,077) and `leave_note` (2,399). The clipped part is always the TAIL — the
@@ -85,7 +85,7 @@
   niche cost. Each description was tightened rather than gutted — every
   operative fact is kept, and the collab pair's doctrine moves to the
   `plumb-chat` skill, which is where it was already written and which nothing
-  truncates. All six now sit at 1,900–1,970 characters.
+  truncates. All six now sit between 1,900 and 1,975 characters.
 
   The recurrence is the real defect: nothing in the tree asserted a
   description-length ceiling, so a growing description had no failing build to
@@ -93,10 +93,13 @@
   now measures every advertised description over `leanToolSet` +
   `nonLeanToolSet` — the same construction `TestFullToolSet_Count` already pins
   to the real registration — and fails over 2,000 runes with the overflow and
-  the instruction to MOVE the text, not delete it. The exact client constant is
-  unpublished; 2,000 sits inside the measured bracket (`workspace_sessions` at
-  1,777 arrives intact, `move_symbol` at 2,077 arrives truncated), so the cap is
-  a ratchet rather than a spec.
+  the instruction to MOVE the text, not delete it. The client constant is
+  unpublished but measurable: locating the last surviving word of each of the
+  six truncated descriptions puts the cut at exactly 2,048 for all six. That
+  also fixes the unit — the six agree at 2,048 in runes and disagree in bytes
+  (2,056–2,064), so the ceiling counts runes. 2,000 rather than 2,048 is
+  deliberate headroom for a client that caps lower; the cap is a ratchet rather
+  than a spec.
 
 - **"plumb cannot push" is qualified: it is a fact about plumb, not about MCP.**
   The mailbox asserted the absolute across eleven files — tool descriptions,
