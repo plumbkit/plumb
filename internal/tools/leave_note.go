@@ -69,7 +69,7 @@ func (*LeaveNote) InputSchema() json.RawMessage {
     },
     "to": {
       "type": "string",
-      "description": "A peer session name, or \"next\" for whoever attaches to this workspace next. Omitting it defaults to \"next\" when you are starting a thread; when you pass a conversation_id it instead resolves to that thread's other participant, and the send is refused if the thread has no other participant or more than one. A name belonging to a session in another workspace is delivered only if that project allows cross-project messages."
+      "description": "A peer session name, or \"next\" for whoever attaches to this workspace next. Omitting it defaults to \"next\" when you are starting a thread; when you pass a conversation_id it instead resolves to that thread's other participant, and the send is refused if the thread has no other participant or more than one. A name belonging to a session in another workspace is refused up front unless that project has already opted in to cross-project messages."
     },
     "conversation_id": {
       "type": "string",
