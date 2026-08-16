@@ -93,13 +93,28 @@ func TruncateBytes(s string, n int) string {
 // drive it are named *_bytes, so a CJK or emoji summary must be measured the
 // way the knob promises, not by rune count.
 func ClampBytes(s string, budget int) string {
+	clamped, _ := ClampBytesKept(s, budget)
+	return clamped
+}
+
+// ClampBytesKept is ClampBytes plus the number of bytes OF S that survived the
+// cut. That is not len(clamped): the ellipsis spends budget without carrying
+// any of s, and a rune boundary can push the cut earlier still, so the two
+// differ by up to len(ellipsis) plus three.
+//
+// Any caller reporting "N of M bytes arrived" needs kept, not len(clamped) —
+// otherwise it overstates what was delivered and points a resend at an offset
+// that skips content neither side knows was dropped.
+func ClampBytesKept(s string, budget int) (clamped string, kept int) {
 	if budget <= 0 || len(s) <= budget {
-		return s
+		return s, len(s)
 	}
 	if budget <= len(ellipsis) {
-		return TruncateBytes(s, budget) // no room for content plus the marker
+		clamped = TruncateBytes(s, budget) // no room for content plus the marker
+		return clamped, len(clamped)
 	}
-	return TruncateBytes(s, budget-len(ellipsis)) + ellipsis
+	prefix := TruncateBytes(s, budget-len(ellipsis))
+	return prefix + ellipsis, len(prefix)
 }
 
 // HumanBytes formats a byte count for one-line CLI, TUI and tool output.

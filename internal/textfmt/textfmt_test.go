@@ -176,6 +176,39 @@ func TestClampBytes_NeverExceedsBudget(t *testing.T) {
 	}
 }
 
+// TestClampBytesKept_IsAPrefixLengthOfTheInput pins the property callers
+// report to a user: kept counts bytes of s, so s[:kept] is exactly what
+// survived and s[kept:] is exactly what did not. len(clamped) answers a
+// different question — it includes the ellipsis, which carries none of s.
+func TestClampBytesKept_IsAPrefixLengthOfTheInput(t *testing.T) {
+	inputs := []string{
+		"plain ascii text that is quite long indeed",
+		"日本語のテキストはマルチバイトです",
+		"mixed é ascii 日本語 🌍 emoji",
+		strings.Repeat("🌍", 30),
+	}
+	for _, s := range inputs {
+		for budget := -1; budget <= len(s)+2; budget++ {
+			clamped, kept := ClampBytesKept(s, budget)
+			if kept < 0 || kept > len(s) {
+				t.Fatalf("ClampBytesKept(%q, %d) kept = %d, out of range", s, budget, kept)
+			}
+			if !strings.HasPrefix(clamped, s[:kept]) {
+				t.Fatalf("ClampBytesKept(%q, %d) = %q does not start with the first %d bytes", s, budget, clamped, kept)
+			}
+			if tail := clamped[kept:]; tail != "" && tail != "…" {
+				t.Fatalf("ClampBytesKept(%q, %d) = %q carries %q past the input's bytes", s, budget, clamped, tail)
+			}
+			if !utf8.ValidString(s[:kept]) {
+				t.Fatalf("ClampBytesKept(%q, %d) kept = %d cuts mid-rune", s, budget, kept)
+			}
+			if got := ClampBytes(s, budget); got != clamped {
+				t.Fatalf("ClampBytes(%q, %d) = %q disagrees with ClampBytesKept = %q", s, budget, got, clamped)
+			}
+		}
+	}
+}
+
 func TestHumanBytes(t *testing.T) {
 	cases := []struct {
 		b    int64

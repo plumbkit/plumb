@@ -152,6 +152,16 @@ func TestLeaveNote_TruncationWarnsSenderAndWithholdsFullBody(t *testing.T) {
 	if !strings.Contains(out, "conversation_id") {
 		t.Errorf("expected the remedy to name the conversation_id resend; got %q", out)
 	}
+	// Three of the twenty budgeted bytes go on the trim marker, so seventeen of
+	// the hundred arrive and eighty-three do not. Quoting twenty and eighty here
+	// would be the same silent loss the warning exists to end: a sender resending
+	// "the remaining 80" would start at byte 20 and drop three bytes for good.
+	if !strings.Contains(out, "only 17 of 100 bytes") {
+		t.Errorf("expected the delivered count to exclude the trim marker; got %q", out)
+	}
+	if !strings.Contains(out, "remaining 83 bytes (everything from byte 17 on)") {
+		t.Errorf("expected the remedy to name the exact resend offset; got %q", out)
+	}
 }
 
 // TestLeaveNote_ReportsByteBudgetOnSuccess is PLAN-301 D3: a send under
