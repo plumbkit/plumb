@@ -61,11 +61,12 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// persist_state_ttl_minutes (default 1440), so a session whose declared wide
 	// pin was written more than a day before the restart loses the row too. In
 	// that case every lower rung refuses the wide root as well (roots and the cwd
-	// hint are weaker origins), so the connection comes back UNATTACHED and the
-	// caller must declare the workspace again. That is fail-safe — never wider,
-	// never a different repository — but it is a real behaviour change for anyone
-	// who deliberately pinned $HOME, and it is pinned by
-	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached.
+	// hint are weaker origins), so the caller must declare the workspace again.
+	// Never WIDER — but not necessarily unattached: the last rung is the serve
+	// cwd hint, which can resolve an unrelated project, so a relative path could
+	// then anchor somewhere the caller did not name. It is pinned by
+	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached (no hint set) and by
+	// the cwd-hint tests beside it.
 	if replayed := s.view().replayedPin; replayed != "" {
 		if err := undeclaredWideRootErr(replayed, sessionstate.PinSourceUnknown); err != nil {
 			// Info, not Warn: on a legitimately declared wide root with the row
@@ -76,6 +77,20 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 				"root", replayed, "reason", err)
 		} else {
 			s.attachReplayedPin(ctx, replayed, sessionstate.PinSourceSessionStart)
+			if s.workspace() != "" {
+				// Mark the accepted pin as an unauthenticated claim so the LIVE
+				// containment re-check withholds the exemption too. Without this the
+				// channel loses the exemption at attach and keeps it on every policy
+				// rebuild — and the rebuild is the half that catches the root being
+				// swapped for a symlink to a home container AFTER a clean attach,
+				// which is the attack this channel's holder is best placed to run.
+				// The policy is rebuilt here so the view never carries a policy that
+				// predates its own mark.
+				s.mutate(func(v *sessionView) {
+					v.pinUnverifiedReplay = true
+					v.policy = s.buildPathPolicy(v)
+				})
+			}
 		}
 	}
 	// Rung 1b: the same fact from the database, for a proxy that predates the key.

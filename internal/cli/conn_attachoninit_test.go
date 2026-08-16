@@ -11,6 +11,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/user"
 	"path/filepath"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // rootsReplying returns a client-request fake that answers roots/list with root,
@@ -240,11 +242,13 @@ func TestOnInit_ReplayedMetaPinCannotClaimHomeContainment(t *testing.T) {
 // caller's DECLARED wide root does not come back at all. Every lower rung
 // refuses it too, because roots and the cwd hint are weaker origins than the
 // declaration that is now missing, so the connection returns UNATTACHED rather
-// than pinned somewhere narrower.
+// than pinned somewhere narrower. (No cwd hint is set here; with one, the last
+// rung could attach an unrelated project instead — never wider, but not
+// nothing.)
 //
-// This doubles as the defence-in-depth assertion: no rung of the ladder may
-// pin a home container without a declaration, so a refusal at rung 1 cannot be
-// quietly undone further down.
+// It asserts the OUTCOME, not each rung's reasoning: with no marker at the wide
+// root, detection alone would also decline it. The roots rung's own guard is
+// covered by TestAttachWorkspace_HomeRootFromClientNeedsDeclaration.
 func TestOnInit_UndeclaredFallbackLeavesWideRootUnattached(t *testing.T) {
 	wide := wideRootOrSkip(t)
 	store, ss := newOriginStore(t) // deliberately no pin row: the pruned/persist-off case
@@ -259,6 +263,86 @@ func TestOnInit_UndeclaredFallbackLeavesWideRootUnattached(t *testing.T) {
 
 	if got := s.workspace(); got != "" {
 		t.Fatalf("a wide root was attached by a lower rung as %q — no origin but an explicit session_start may pin a home container", got)
+	}
+}
+
+// A pin accepted over the replayed _meta channel must ALSO lose #306's
+// exemption in the LIVE policy re-check, not only at attach (issue #318).
+//
+// The accepted pin deliberately records PinSourceSessionStart — that is what
+// keeps rank, stickiness and persistence unchanged — but policyRootRefused keys
+// on the same origin, so without a separate mark the channel would be refused a
+// home container at attach and handed one on the next policy rebuild. That is
+// the worse half to miss: the holder of this channel NAMES the root, so it can
+// pass a clean directory through the attach check and then replace it with a
+// symlink to a home container, which the 30-second config poll then absorbs.
+// Found by independent adversarial review, which demonstrated the swap putting
+// ~/.ssh read-write inside the boundary.
+func TestOnInit_ReplayedMetaPinLosesExemptionOnPolicyRebuild(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t)
+
+	// A perfectly innocent directory: it passes the attach-time containment check.
+	candidate := freshTempDir(t)
+	mustGitDir(t, candidate)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(candidate) // as the replayed initialize _meta would
+	s.setClientRequest(rootsReplying(freshTempDir(t), &calls))
+	s.attachOnInit(context.Background(), rootsReplying(freshTempDir(t), &calls))
+
+	if got := s.workspace(); got != candidate {
+		t.Fatalf("setup: workspace = %q, want the replayed root %q", got, candidate)
+	}
+	if s.boundaryPolicy() == nil {
+		t.Fatal("setup: an innocent replayed root must have a policy before the swap")
+	}
+
+	// Swap the named directory for a symlink to a container of home, exactly as
+	// the client that named it could.
+	if err := os.RemoveAll(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(wide, candidate); err != nil {
+		t.Skipf("symlinks unsupported on this filesystem: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(candidate) })
+
+	var rebuilt *tools.PathPolicy
+	s.mutate(func(v *sessionView) {
+		v.policy = s.buildPathPolicy(v)
+		rebuilt = v.policy
+	})
+	if rebuilt != nil {
+		t.Fatalf("a policy rebuild absorbed the swap: a pin claimed over the unauthenticated _meta channel now has a boundary of %q, which contains the home directory — every credential under it is inside the session (issues #306, #318)", wide)
+	}
+}
+
+// The mark is about the CHANNEL, not the root: a live session_start re-pin
+// clears it, so a caller who deliberately declares a workspace gets the full
+// exemption back on the very next pin. Without this, one replayed pin would
+// poison the connection's authority for the rest of its life.
+func TestOnInit_LiveRepinClearsTheUnverifiedReplayMark(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(rootA)
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+	if !s.view().pinUnverifiedReplay {
+		t.Fatal("setup: an accepted replayed pin must be marked unverified")
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", true); err != nil {
+		t.Fatalf("repinWorkspace: %v", err)
+	}
+	if s.view().pinUnverifiedReplay {
+		t.Fatal("a live session_start re-pin must clear the unverified-replay mark")
 	}
 }
 

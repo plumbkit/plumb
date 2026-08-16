@@ -136,12 +136,22 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 // posture of no pin at all — and the session is marked blocked so the
 // operator can see why. A declared session_start pin is exempt here as
 // everywhere in this guard (issue #182).
+//
+// The exemption asks pinUnverifiedReplay as well as the origin, because a pin
+// replayed over the serve proxy's initialize _meta records session_start origin
+// while being a claim the daemon cannot authenticate (issue #318). That channel
+// is precisely the one best placed to run the swap this re-check exists for —
+// its holder names the root, so it can point that directory at a home container
+// after a clean attach — and withholding the exemption at attach time while
+// granting it here would leave the guard covering the case nobody can reach and
+// missing the one somebody can.
 func (s *connSession) policyRootRefused(v *sessionView, ws string) bool {
 	if !filepath.IsAbs(ws) {
 		return true
 	}
-	if v.pinOrigin != sessionstate.PinSourceSessionStart && containsUserHome(paths.Canonical(ws)) {
-		s.log().Warn("daemon: refusing to build a path policy — the pinned root now contains a home directory", "root", ws, "origin", string(v.pinOrigin))
+	declared := v.pinOrigin == sessionstate.PinSourceSessionStart && !v.pinUnverifiedReplay
+	if !declared && containsUserHome(paths.Canonical(ws)) {
+		s.log().Warn("daemon: refusing to build a path policy — the pinned root now contains a home directory", "root", ws, "origin", string(v.pinOrigin), "unverified_replay", v.pinUnverifiedReplay)
 		s.markBoundaryViolation(fmt.Sprintf("workspace root %s now contains a home directory (issue #306); re-pin deliberately with session_start", ws))
 		return true
 	}
