@@ -50,15 +50,30 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// origin recorded for an accepted pin is unchanged, so stickiness, rank and
 	// what gets persisted all behave exactly as before.
 	//
-	// A caller who really did declare a wide root loses nothing when the pin was
-	// persisted: rung 1b restores it from the database below, where the row's
-	// session_start origin is a fact this daemon recorded itself rather than one
-	// a client asserted. Only a declared wide root with [session] persist_state
-	// off degrades — to a narrower root or to none, logged, never to a wider one.
+	// A caller who really did declare a wide root keeps it WHEN THE DATABASE
+	// STILL HAS THE ROW: rung 1b restores it below from a stored origin, which is
+	// at least a fact some daemon recorded on an accepted call rather than one a
+	// client asserted in this handshake.
+	//
+	// Be honest about when that safety net is absent — it is not only
+	// [session] persist_state = off. The startup prune runs with no live
+	// exemption and deletes pin rows older than [session]
+	// persist_state_ttl_minutes (default 1440), so a session whose declared wide
+	// pin was written more than a day before the restart loses the row too. In
+	// that case every lower rung refuses the wide root as well (roots and the cwd
+	// hint are weaker origins), so the connection comes back UNATTACHED and the
+	// caller must declare the workspace again. That is fail-safe — never wider,
+	// never a different repository — but it is a real behaviour change for anyone
+	// who deliberately pinned $HOME, and it is pinned by
+	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached.
 	if replayed := s.view().replayedPin; replayed != "" {
 		if err := undeclaredWideRootErr(replayed, sessionstate.PinSourceUnknown); err != nil {
-			s.log().Warn("daemon: replayed _meta pin refused — the proxy channel is not authenticated, so it does not carry the home-containment exemption (issue #318)",
-				"root", replayed, "err", err)
+			// Info, not Warn: on a legitimately declared wide root with the row
+			// present this fires on every restart and rung 1b then restores the
+			// same directory, so a scary "refused" would cry wolf at an operator
+			// watching a working session.
+			s.log().Info("daemon: replayed _meta pin not honoured over the unauthenticated proxy channel; trying the persisted pin (issue #318)",
+				"root", replayed, "reason", err)
 		} else {
 			s.attachReplayedPin(ctx, replayed, sessionstate.PinSourceSessionStart)
 		}
