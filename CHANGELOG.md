@@ -132,7 +132,7 @@
 - **Project-config sparse reads, writes and unsets now fold key case, matching
   what go-toml actually decodes (#319).** `ProjectValuePresent` walked the raw
   TOML map with exact key lookups while go-toml/v2 binds a table name to a
-  struct field case-insensitively — so a project supplying `[TASKS.go]` or
+  struct field through `strings.ToLower` — so a project supplying `[TASKS.go]` or
   `[[COMMAND]]` had the value honoured in the effective config and reported
   ABSENT under the lowercase path. That mismatch was the mechanism of the two
   trust-gate bypasses closed earlier (`run_command`, `run_task`); their
@@ -164,12 +164,21 @@
     fourth walker, was still exact-match, so an agent write over a `[TASKS.go]`
     table recorded "no previous value" while the write overwrote one, costing
     `plumb config unset` its one-step revert.
+  - **The fold is the decoder's rule, not simple case folding.** The two differ
+    in both directions on non-ASCII keys: `strings.EqualFold` treats `ſtrict` as
+    `strict`, which the decoder does not — an unset would have deleted a key the
+    user still wanted — and does NOT treat `wrİtes` as `writes`, which the
+    decoder does, leaving the #319 defect open for that spelling. Both are now
+    pinned against a real decode of the same bytes, so the rules cannot drift
+    apart.
 
   A sparse write also no longer reuses a fold-variant key holding an array of
   tables: `[[command]]` decodes to `[]any`, so a case-insensitive match would
-  find it where a table was wanted and overwrite a project's whole command
-  allow-list with an empty table. No caller reaches that today; it is pinned so
-  none does.
+  find it where a table was wanted and replace a project's whole command
+  allow-list with an empty table. That covers the variant spellings; writing over
+  an array under its EXACT spelling still clobbers it, which needs `setNested` to
+  refuse rather than overwrite and is tracked separately. No caller reaches
+  either shape today.
 
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a

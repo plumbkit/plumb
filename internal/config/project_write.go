@@ -125,9 +125,17 @@ func UnsetProjectValue(workspace string, path []string) error {
 // pick a variant at random on every call — Go randomises map iteration — so a
 // write could land in a different table run to run.
 func foldKeys(m map[string]any, want string) []string {
+	// strings.ToLower, NOT strings.EqualFold: go-toml/v2 binds a TOML key to a
+	// struct field through a map keyed by strings.ToLower(name) (unmarshaler.go
+	// byFold), and the two rules disagree in both directions on non-ASCII keys.
+	// EqualFold("ſtrict", "strict") is true where the decoder sees two distinct
+	// keys — folding there DELETES a key the user still wants — and
+	// EqualFold("wrİtes", "writes") is false where the decoder binds them, which
+	// is #319's own defect left open. Matching the decoder is the whole point.
+	lower := strings.ToLower(want)
 	var rest []string
 	for k := range m {
-		if k == want || !strings.EqualFold(k, want) {
+		if k == want || strings.ToLower(k) != lower {
 			continue
 		}
 		rest = append(rest, k)
@@ -139,9 +147,9 @@ func foldKeys(m map[string]any, want string) []string {
 	return rest
 }
 
-// foldLookup returns the key in m that matches want case-insensitively — the
-// way go-toml/v2 binds a TOML key to a struct field, so `TASKS` and `tasks`
-// are the same setting — preferring the exact spelling when both appear.
+// foldLookup returns the key in m that matches want the way go-toml/v2 binds a
+// TOML key to a struct field (see foldKeys), so `TASKS` and `tasks` are the
+// same setting — preferring the exact spelling when both appear.
 // ok is false when no fold variant exists.
 func foldLookup(m map[string]any, want string) (key string, ok bool) {
 	keys := foldKeys(m, want)
@@ -169,8 +177,16 @@ func foldDelete(m map[string]any, want string) {
 //
 // Precedence follows that same last-wins rule, applied to the order plumb will
 // re-marshal the file in (go-toml sorts map keys), so the surviving value is
-// the one the decoder would have chosen. Tables are merged recursively; a
-// scalar variant alongside a table is dropped in favour of the winner.
+// the one the decoder chooses from the file this write produces. Tables are
+// merged recursively; a scalar variant alongside a table is dropped in favour
+// of the winner.
+//
+// What it does NOT promise: that the value in force BEFORE the write survives
+// it. That one comes from the variants' order in the source document, which the
+// raw map does not carry, so when document order and marshal order disagree a
+// write to one key can change another. Pre-existing — re-marshalling reorders
+// the variants regardless — and tracked as its own change rather than smuggled
+// in here, because fixing it means collapsing in document order at load.
 func foldCollapse(m map[string]any, want string) string {
 	keys := foldKeys(m, want)
 	if len(keys) == 0 {
@@ -200,11 +216,17 @@ func foldCollapse(m map[string]any, want string) string {
 // be descended into. A variant holding something else (most importantly an
 // array of tables: `[[command]]` decodes to []any, not map[string]any) is left
 // strictly alone and its spelling is not reused, so a sparse write of
-// `command.name` cannot overwrite a project's whole command allow-list with an
-// empty table. Such a file is already incoherent — `command` cannot be both an
-// array and a table — and the caller's own spelling is where the new table
-// goes, matching what the pre-#319 code did: adding a key beats deleting one
-// the user never asked us to touch.
+// `command.name` cannot replace a VARIANT-spelled allow-list with an empty
+// table. The exact spelling is not covered: setNested still writes over a
+// `[[command]]` array under the very key it was asked for, which destroys the
+// allow-list and leaves a file that fails validation. That needs setNested to
+// refuse rather than clobber — an error path it has not got — and no live
+// caller reaches it, so it is filed rather than fixed here.
+//
+// Such a file is already incoherent — `command` cannot be both an array and a
+// table — and the caller's own spelling is where the new table goes, matching
+// what the pre-#319 code did: adding a key beats deleting one the user never
+// asked us to touch.
 func foldCollapseTable(m map[string]any, want string) string {
 	var tables []string
 	for _, k := range foldKeys(m, want) {

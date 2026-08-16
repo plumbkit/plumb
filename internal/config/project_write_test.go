@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -342,7 +343,157 @@ func TestSetProjectValue_LeavesAnArrayOfTablesIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading config: %v", err)
 	}
-	if !contains(string(data), "exec") {
-		t.Errorf("the [[COMMAND]] array was destroyed by a sparse write; file:\n%s", data)
+	// Assert the DECODED config, not the bytes: a substring check for "exec"
+	// passes while the effective allow-list is wrecked, which is the whole
+	// failure mode. What must hold is that the project still loads and its one
+	// allow-listed command keeps its argv.
+	//
+	// Known gap, filed rather than pinned: the new [command] table folds onto the
+	// same field, so the surviving entry takes the written name. Nothing live
+	// reaches it — the web API gates on config.Lookup and the TUI writes only the
+	// `command` leaf — and the exact-spelling case ([[command]] lowercase) is
+	// worse and equally pre-existing.
+	cfg, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("the project no longer loads after a sparse write beside [[COMMAND]]: %v\nfile:\n%s", err, data)
+	}
+	if len(cfg.Commands) != 1 {
+		t.Fatalf("commands = %+v, want the one allow-listed entry to survive; file:\n%s", cfg.Commands, data)
+	}
+	if got := cfg.Commands[0].Exec; len(got) != 1 || got[0] != "true" {
+		t.Errorf("the allow-listed argv became %v, want [true]; file:\n%s", got, data)
+	}
+}
+
+// TestFoldMatchesTheDecoderOnNonASCIIKeys is the point of #319 stated as a
+// property: plumb's raw-map walkers must fold a key exactly when go-toml/v2
+// binds it to the same struct field, no more and no less. The decoder keys its
+// field map on strings.ToLower, so simple case folding (strings.EqualFold)
+// disagrees in BOTH directions on non-ASCII keys — over-folding "ſtrict" onto
+// "strict", which the decoder keeps separate, and under-folding "wrİtes" away
+// from "writes", which it binds. Each case below asserts plumb's answer against
+// what the decoder actually did with the same bytes, so the two cannot drift.
+func TestFoldMatchesTheDecoderOnNonASCIIKeys(t *testing.T) {
+	// Both fields are plain ints on purpose: a one-way safety bool is forced back
+	// to base by the merge whatever the decoder did, which would measure the
+	// forcing rather than the fold.
+	cases := []struct {
+		name string
+		raw  string
+		path []string
+		// bound reports what the decoder did, read back off the loaded config.
+		bound func(Config) bool
+	}{
+		{
+			name:  "long s is a DIFFERENT key to the decoder",
+			raw:   "[edits]\n\"poſt_write_diagnostics_ms\" = 42\n",
+			path:  []string{"edits", "post_write_diagnostics_ms"},
+			bound: func(c Config) bool { return c.Edits.PostWriteDiagnosticsMs == 42 },
+		},
+		{
+			name:  "dotted capital I folds onto i for the decoder",
+			raw:   "[edits]\n\"rate_limit_per_mİnute\" = 7\n",
+			path:  []string{"edits", "rate_limit_per_minute"},
+			bound: func(c Config) bool { return c.Edits.RateLimitPerMinute == 7 },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+			writeRawProjectConfig(t, ws, tc.raw)
+
+			cfg, err := LoadProject(Defaults(), ws)
+			if err != nil {
+				t.Fatalf("LoadProject: %v", err)
+			}
+			decoderBound := tc.bound(cfg)
+
+			present, err := ProjectValuePresent(ws, tc.path)
+			if err != nil {
+				t.Fatalf("ProjectValuePresent: %v", err)
+			}
+			if present != decoderBound {
+				t.Errorf("ProjectValuePresent(%v) = %v but the decoder bound it = %v; the fold rule disagrees with go-toml on:\n%s",
+					tc.path, present, decoderBound, tc.raw)
+			}
+		})
+	}
+}
+
+// TestUnsetProjectValue_KeepsAKeyTheDecoderTreatsAsDistinct is the same rule on
+// the write half, where getting it wrong destroys data: "ſtrict" is a key of
+// its own to go-toml, so unsetting edits.strict must leave it alone. Simple case
+// folding deleted it — and then pruned the file for being empty.
+func TestUnsetProjectValue_KeepsAKeyTheDecoderTreatsAsDistinct(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[edits]\n\"ſtrict\" = true\nstrict = true\n")
+
+	if err := UnsetProjectValue(ws, []string{"edits", "strict"}); err != nil {
+		t.Fatalf("UnsetProjectValue: %v", err)
+	}
+
+	raw, err := LoadProjectRaw(ws)
+	if err != nil {
+		t.Fatalf("LoadProjectRaw: %v", err)
+	}
+	edits, ok := raw["edits"].(map[string]any)
+	if !ok {
+		t.Fatalf("[edits] is gone entirely after unsetting one of its keys; raw = %v", raw)
+	}
+	if _, ok := edits["ſtrict"]; !ok {
+		t.Errorf("unsetting edits.strict also removed \"ſtrict\", which go-toml decodes as a different key; [edits] = %v", edits)
+	}
+	if _, ok := edits["strict"]; ok {
+		t.Errorf("edits.strict survived the unset; [edits] = %v", edits)
+	}
+}
+
+// TestSetProjectValue_CollapseIsDeterministicAcrossRuns pins the ordering the
+// collapse depends on. Two variants holding DIFFERENT values make the choice
+// observable — with the fixture's values equal, any ordering looks correct —
+// and Go randomises map iteration, so an unordered merge shows up as a value
+// that changes run to run. Repeated because one run of a random order can agree
+// with the sorted one by chance.
+func TestSetProjectValue_CollapseIsDeterministicAcrossRuns(t *testing.T) {
+	const runs = 50
+	first := ""
+	for i := range runs {
+		ws := t.TempDir()
+		writeRawProjectConfig(t, ws, "[EDITS]\nstrict = true\n\n[edits]\nstrict = false\n")
+
+		if err := SetProjectValue(ws, []string{"edits", "rate_limit_per_minute"}, int64(7)); err != nil {
+			t.Fatalf("SetProjectValue: %v", err)
+		}
+		cfg, err := LoadProject(Defaults(), ws)
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		got := fmt.Sprintf("strict=%v", cfg.Edits.Strict)
+		if i == 0 {
+			first = got
+			continue
+		}
+		if got != first {
+			t.Fatalf("run %d gave %s, run 0 gave %s — the collapse depends on map iteration order", i, got, first)
+		}
+	}
+	t.Logf("stable across %d runs: %s", runs, first)
+}
+
+// TestProjectValuePresent_DescendsEveryFoldVariant covers the intermediate
+// segment rather than the leaf: the setting lives under the variant spelling
+// while the preferred (exact) spelling holds a different key entirely, so an
+// answer that descends only the first variant reports it absent.
+func TestProjectValuePresent_DescendsEveryFoldVariant(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[git]\ncommit_trailer = true\n\n[GIT]\nallow_writes = false\n")
+
+	present, err := ProjectValuePresent(ws, []string{"git", "allow_writes"})
+	if err != nil {
+		t.Fatalf("ProjectValuePresent: %v", err)
+	}
+	if !present {
+		data, _ := os.ReadFile(filepath.Join(ws, ".plumb", "config.toml"))
+		t.Errorf("git.allow_writes reported absent, but [GIT] holds it and the decoder binds it; file:\n%s", data)
 	}
 }
