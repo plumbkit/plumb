@@ -182,6 +182,85 @@ func TestLeaveNote_ReportsByteBudgetOnSuccess(t *testing.T) {
 	}
 }
 
+// TestLeaveNote_RefusesCrossProjectWhenTargetHasNotOptedIn is PLAN-334: a note
+// addressed to a live peer pinned to a DIFFERENT workspace must not be silently
+// accepted and reported sent when that project has not opted in to
+// [collab] cross_project — it would sit unclaimed until it expires, with the
+// sender never told. The refusal must be explicit, and nothing may be written
+// to the cross-project store.
+func TestLeaveNote_RefusesCrossProjectWhenTargetHasNotOptedIn(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		allows func(string) bool
+	}{
+		{"target explicitly declines", func(string) bool { return false }},
+		{"consent unwired — cannot confirm, so refuse", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+			deps.ResolvePeer = func(string) (PeerSession, bool) {
+				return PeerSession{Workspace: "/other/project", ID: "sess-bob"}, true
+			}
+			globalCreated := false
+			var globalStore *collab.Store
+			if tc.allows != nil {
+				deps.TargetAllowsCrossProject = tc.allows
+			}
+			deps.GlobalStore = func() *collab.Store {
+				globalCreated = true
+				return globalStore
+			}
+
+			_, err := NewLeaveNote(deps).Execute(context.Background(),
+				json.RawMessage(`{"to":"bob","body":"ping"}`))
+			if err == nil {
+				t.Fatal("expected a refusal error, got success")
+			}
+			if !strings.Contains(err.Error(), "cross_project") {
+				t.Errorf("expected the refusal to name cross_project as the reason; got %q", err.Error())
+			}
+			if globalCreated {
+				t.Error("the cross-project store must never be touched when consent cannot be confirmed")
+			}
+		})
+	}
+}
+
+// TestLeaveNote_CrossProjectSendsWhenTargetOptedIn guards the positive case:
+// the new consent check must not block a legitimate cross-project send once
+// the recipient project has actually opted in.
+func TestLeaveNote_CrossProjectSendsWhenTargetOptedIn(t *testing.T) {
+	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+	deps.ResolvePeer = func(string) (PeerSession, bool) {
+		return PeerSession{Workspace: "/other/project", ID: "sess-bob"}, true
+	}
+	deps.TargetAllowsCrossProject = func(ws string) bool { return ws == "/other/project" }
+	globalWS := t.TempDir()
+	globalStore, err := collab.Open(globalWS)
+	if err != nil {
+		t.Fatalf("open global store: %v", err)
+	}
+	t.Cleanup(func() { _ = globalStore.Close() })
+	deps.GlobalStore = func() *collab.Store { return globalStore }
+
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"bob","body":"ping"}`))
+	if err != nil {
+		t.Fatalf("an opted-in target must not be refused: %v", err)
+	}
+	if !strings.Contains(out, "Message sent") {
+		t.Errorf("expected a success reply; got %q", out)
+	}
+	pending, err := globalStore.PendingNotes(context.Background(),
+		collab.Claimant{Name: "bob", ID: "sess-bob", Workspace: "/other/project"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending in the global store = %d, want 1", len(pending))
+	}
+}
+
 func TestLeaveNote_MissingBodyRejected(t *testing.T) {
 	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true})
 	tool := NewLeaveNote(deps)

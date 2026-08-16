@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -116,22 +117,38 @@ func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 	return found, true
 }
 
+// targetAllowsCrossProject reports whether the project pinned at workspace has
+// opted in to [collab] cross_project — the RECIPIENT's consent, resolved from
+// just its path via the same LoadProject every session's own attach path uses,
+// with no live connection to that project required. A config that will not
+// load is treated as NOT opted in: consent must be affirmatively readable, the
+// alternative being a send that is accepted and reported successful while the
+// recipient project silently never reads it.
+func (s *connSession) targetAllowsCrossProject(workspace string) bool {
+	cfg, err := config.LoadProject(s.store.Current(), workspace)
+	if err != nil {
+		return false
+	}
+	return cfg.Collab.CrossProject
+}
+
 // collabDeps bundles everything the mailbox tools need. Note the deliberate
 // asymmetry between the create and if-exists accessors: only a send may bring a
 // database into existence, so every read path is wired to the if-exists variant.
 func (s *connSession) collabDeps() tools.CollabDeps {
 	return tools.CollabDeps{
-		Workspace:           s.workspace,
-		SessionName:         s.sessionName,
-		SessionID:           s.sessID,
-		Policy:              s.collabPolicy,
-		Store:               s.collabStoreCreate,
-		StoreIfExists:       s.collabStoreIfExists,
-		GlobalStore:         s.collabGlobalCreate,
-		GlobalStoreIfExists: s.collabGlobalIfExists,
-		Notifier:            s.collabPool.notifier(),
-		ResolvePeer:         s.resolvePeer,
-		InheritedSessionIDs: s.inheritedSessionIDs,
+		Workspace:                s.workspace,
+		SessionName:              s.sessionName,
+		SessionID:                s.sessID,
+		Policy:                   s.collabPolicy,
+		Store:                    s.collabStoreCreate,
+		StoreIfExists:            s.collabStoreIfExists,
+		GlobalStore:              s.collabGlobalCreate,
+		GlobalStoreIfExists:      s.collabGlobalIfExists,
+		Notifier:                 s.collabPool.notifier(),
+		ResolvePeer:              s.resolvePeer,
+		InheritedSessionIDs:      s.inheritedSessionIDs,
+		TargetAllowsCrossProject: s.targetAllowsCrossProject,
 	}
 }
 

@@ -406,6 +406,18 @@
   than resolving and re-checking it follows the same rule as #264: a resolved
   path and the path the walk would read are two names for two possibly different
   files.
+- **`leave_note` no longer reports a cross-project message as sent when the
+  recipient project will never read it.** Addressing a peer pinned to a
+  different workspace routed the message into the daemon-level store
+  unconditionally, with no check of the *recipient* project's `[collab]
+  cross_project` setting — which gates the read side (`check_messages` and the
+  piggyback path both refuse to look at that store unless their own project
+  opted in). With the default `cross_project = false`, the note was accepted,
+  the sender told it succeeded, and it then sat unclaimed until it expired,
+  with nobody ever told. `leave_note` now resolves the target project's
+  consent itself (`config.LoadProject`, no live connection to that project
+  required) and refuses up front, naming the reason, if it has not opted in —
+  the same fail-closed treatment ambiguous in-thread replies already got.
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second

@@ -194,6 +194,12 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 		}
 	}
 	if found && peer.Workspace != "" && !sameWorkspace(peer.Workspace, ws) {
+		if t.deps.TargetAllowsCrossProject == nil || !t.deps.TargetAllowsCrossProject(peer.Workspace) {
+			return noteTarget{}, errors.New("leave_note: not sent — the recipient's project has not enabled " +
+				"[collab] cross_project, so it will never read messages from other projects. This note would " +
+				"sit unclaimed until it expires, and you would not otherwise be told. Ask that project to set " +
+				"cross_project = true, or address a peer in your own workspace instead")
+		}
 		if t.deps.GlobalStore == nil {
 			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
 		}

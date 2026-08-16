@@ -141,6 +141,16 @@ type CollabDeps struct {
 	// continues, so it can still read mail bound to the session a daemon restart
 	// ended. May be nil.
 	InheritedSessionIDs func() []string
+	// TargetAllowsCrossProject reports whether the project pinned at workspace
+	// has opted in to [collab] cross_project — the RECIPIENT's consent, resolved
+	// from just its path, no live connection to that project required. nil is
+	// treated as "cannot confirm consent" and refuses, never as "allowed": the
+	// alternative is a message that is accepted and reported sent while the
+	// recipient project silently never reads the daemon-level store it lives in,
+	// so the sender is told success for something that will sit unclaimed until
+	// it expires. May be nil only where the cross-project send path is never
+	// exercised (e.g. a test that stays same-project).
+	TargetAllowsCrossProject func(workspace string) bool
 }
 
 // PeerSession is a live peer session resolved by name.
