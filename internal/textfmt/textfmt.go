@@ -98,9 +98,9 @@ func ClampBytes(s string, budget int) string {
 }
 
 // ClampBytesKept is ClampBytes plus the number of bytes OF S that survived the
-// cut. That is not len(clamped): the ellipsis spends budget without carrying
-// any of s, and a rune boundary can push the cut earlier still, so the two
-// differ by up to len(ellipsis) plus three.
+// cut. That is not len(clamped): the ellipsis spends three bytes of the budget
+// without carrying any of s, and backing the cut up to a rune boundary can
+// drop three more, so the two can differ by six.
 //
 // Any caller reporting "N of M bytes arrived" needs kept, not len(clamped) —
 // otherwise it overstates what was delivered and points a resend at an offset
