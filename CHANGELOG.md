@@ -28,8 +28,12 @@
   declined. `session_start` again is the remedy in all four (in the drift
   sub-case it pins the resolved root rather than the spelling asked for), so
   the message states what happened and what to do rather than guessing at
-  intent — and the dashboard alert now shows that message instead of a fixed
-  "start a new MCP connection", which for this cause is advice that loops. The
+  intent — and the dashboard alert now shows the session's own message instead
+  of a fixed "start a new MCP connection", which for this cause is advice that
+  loops. That last change applies to **every** cause of a blocked session, not
+  just this one: a boundary violation and a refused sticky re-pin now show their
+  own text and remedy too, untruncated and with terminal escapes stripped (the
+  message embeds a client-supplied path, and this box is always on screen). The
   mark clears on the next explicit `session_start`, as the sticky-pin refusal's
   does; a bare `session_start({})` does not clear it, and every reconnect
   re-raises it until the workspace is re-declared.
@@ -46,8 +50,9 @@
   re-declaration — the same cost the ladder already imposes when the row is
   absent — and does not fire again on that database; sweeping on every start
   would make a deliberately declared wide workspace impossible to keep, which is
-  #182's contract. The deletes and the flag commit in one transaction, so a
-  process that dies mid-sweep cannot leave it half-done and repeat. The removal
+  #182's contract. The deletes and the flag commit in one transaction, so the
+  database is never left half-swept — belt-and-braces rather than a fix for a
+  reachable race, since the sweep runs before any connection is accepted. The removal
   is logged at Warn naming each root, and the swept workspace's read-tracking
   rows go with it.
 
@@ -67,7 +72,11 @@
   `TestSweepLegacyWidePins_NilStore`,
   `TestSweepWidePinsOnce_RemovesWideRowsAndSparesOthers`, `_DoesNotRunTwice`,
   `_DisarmsEvenWithNothingToRemove`, `_DropsTheSweptWorkspacesReads`,
-  `_FlagSurvivesReopen`, and `_NilSafe` (issue #318).
+  `_FlagSurvivesReopen`, `_NilSafe`,
+  `TestBlockedAlert_CarriesEachCausesRemedyInFull`, `_StripsTerminalEscapes`,
+  `_FallsBackWithoutAMessage`, and
+  `TestDashboardWorkspaceStateAlert_UsesTheSessionsBlockedMessage`
+  (issue #318).
 
 - **`plumb config show` now prints a provenance row for every `[git]` field, so
   the check `session_start` prescribes can actually be followed.** The rows came

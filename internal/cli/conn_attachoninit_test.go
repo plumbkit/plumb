@@ -11,6 +11,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -376,28 +377,45 @@ func TestOnInit_UnbackedWideClaimMarksTheSessionBlocked(t *testing.T) {
 
 // assertClaimMessage binds what the operator-facing text must and must NOT say.
 //
-// Without this the whole correction is unguarded: an independent review
-// restored the earlier wording — which accused the client of forgery and
-// asserted "no persisted session_start pin names that root" — and the entire
-// suite stayed green, because the only assertion was that the message contained
-// the root path, which both wordings do. That is the substring-passes-
-// incidentally shape, on the one behaviour a previous review round rejected.
+// This is the THIRD attempt at guarding it, and the first two both fell to the
+// same trap they were written to close — worth stating so the next edit does not
+// make it four:
+//
+//  1. Only `Contains(msg, root)`. The rejected accusatory wording names the
+//     root too, so restoring it stayed green.
+//  2. Added `Contains(msg, "session_start")` as a "carries the remedy" check.
+//     The accusation contains that token as well — "with no session_start
+//     behind it" — so it still stayed green. A banned-substring list beside it
+//     was no better: one of its entries only ever appeared in the LOG line, not
+//     in this message, so it bound nothing at all, and any freshly-worded
+//     accusation walked straight past the rest.
+//
+// A banned-word list cannot bind a claim; it only bans spellings. So the load-
+// bearing assertion here is POSITIVE and specific: the message must contain the
+// actionable call form, `session_start({workspace: "<root>"`. An accusation does
+// not incidentally contain that — it is the remedy itself, quoted, with the very
+// root at issue. The banned list is kept as a second line of defence for the
+// spellings actually seen in review, not as the primary guard.
 func assertClaimMessage(t *testing.T, msg, root string) {
 	t.Helper()
 	if !strings.Contains(msg, root) {
 		t.Errorf("message does not name the claimed root %q: %s", root, msg)
 	}
-	// It must not accuse: the daemon cannot tell a forged claim from a
-	// declaration whose row the sweep or the TTL prune removed.
-	for _, banned := range []string{"forged", "forgery", "no persisted session_start pin names that root"} {
-		if strings.Contains(strings.ToLower(msg), banned) {
-			t.Errorf("message accuses the client (%q), which the daemon cannot know: %s", banned, msg)
-		}
+	// The primary bind: an actionable remedy naming this root. This is what the
+	// rejected wording cannot satisfy, whatever else it says.
+	if remedy := fmt.Sprintf("session_start({workspace: %q", root); !strings.Contains(msg, remedy) {
+		t.Errorf("message does not carry the actionable remedy %q — marking a legitimate caller's session blocked is only defensible if it tells them what to do: %s", remedy, msg)
 	}
-	// And it must carry the remedy, which is what makes marking the session
-	// blocked defensible for a legitimate caller.
-	if !strings.Contains(msg, "session_start") {
-		t.Errorf("message does not name the remedy (session_start): %s", msg)
+	// Second line of defence. The daemon cannot tell a forged claim from a
+	// declaration whose row the sweep or the TTL prune removed, so it must not
+	// assert either intent OR the absence of a declaration it cannot observe.
+	for _, banned := range []string{
+		"forged", "forgery", "fabricat", "rogue",
+		"no session_start", "never ran", "nothing corroborates", "never used",
+	} {
+		if strings.Contains(strings.ToLower(msg), banned) {
+			t.Errorf("message accuses the client or asserts an absence it cannot know (%q): %s", banned, msg)
+		}
 	}
 }
 
