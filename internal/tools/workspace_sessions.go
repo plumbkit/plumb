@@ -65,6 +65,12 @@ type WorkspaceSessions struct {
 	collabStore  func() *collab.Store
 	collabPolicy func() (intents, mailbox bool)
 	selfName     func() string
+	// Observability extras (all nil-safe, all OFF when unwired):
+	// collabGlobalStore returns the daemon-level cross-project store ONLY if it
+	// already exists; collabCrossProject is THIS workspace's [collab]
+	// cross_project consent, which gates cross-project conversation metadata.
+	collabGlobalStore  func() *collab.Store
+	collabCrossProject func() bool
 }
 
 // NewWorkspaceSessions creates the workspace_sessions tool.
@@ -267,8 +273,19 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 // hint, so this is a display guard rather than the [collab] hint budget.
 const collabNoteBodyCap = 240
 
+// WithCollabObservability wires the daemon-level store accessor and this
+// workspace's cross_project consent, enabling the sent-notes and
+// conversation-volume sections. Both are nil-safe and both default to off, so a
+// caller that does not wire them gets the listing exactly as it was.
+func (t *WorkspaceSessions) WithCollabObservability(global func() *collab.Store, crossProject func() bool) *WorkspaceSessions {
+	t.collabGlobalStore = global
+	t.collabCrossProject = crossProject
+	return t
+}
+
 // collabBlock renders the phase-2 sharing surface: every active session's live
-// intent (when [collab] intents is on) and the caller's pending notes (when
+// intent (when [collab] intents is on), the caller's pending notes, its own
+// sent notes with delivery state, and per-conversation note volume (all when
 // [collab] mailbox is on). Returns "" when the feature is off or collab.db does
 // not exist — a listing never creates one. Best-effort: a query error yields no
 // block rather than failing the tool.
@@ -315,6 +332,14 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 				writeCollabNotes(&sb, notes, now)
 			}
 		}
+	}
+	// Observational sections last: they are the least urgent thing in the block,
+	// and a human scanning for a message addressed to them should not have to read
+	// past a volume table to find it.
+	if mailboxOn {
+		sent, vols := t.collabObservations(ctx, store, now)
+		writeCollabSent(&sb, sent, now)
+		writeConversationVolumes(&sb, vols, now)
 	}
 	return sb.String()
 }

@@ -291,13 +291,41 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 // stops a project READING another project's messages, and these are the caller's
 // own. limit caps the scan (non-positive means no cap).
 func (s *Store) UnreadSentBy(ctx context.Context, authorID string, now time.Time, limit int) ([]Row, error) {
+	return s.sentBy(ctx, authorID, now, limit, true)
+}
+
+// SentBy returns the caller's unexpired sent notes whether or not they have
+// been read, NEWEST first — the observability view of the same outbox
+// UnreadSentBy exposes.
+//
+// The two orderings are not a style difference. UnreadSentBy answers "what have
+// I lost?", so it leads with the oldest, which is the one most likely to expire
+// unread. This answers "what have I been doing?", where the newest is the one
+// worth seeing first, and it keeps delivered rows because "delivered" is the
+// fact being displayed — an outbox that showed only failures could not
+// distinguish a quiet session from a broken one.
+//
+// Same author_id scoping and the same pure-read guarantee as UnreadSentBy: a
+// session asks only about rows it wrote itself, and nothing here moves a
+// watermark.
+func (s *Store) SentBy(ctx context.Context, authorID string, now time.Time, limit int) ([]Row, error) {
+	return s.sentBy(ctx, authorID, now, limit, false)
+}
+
+// sentBy is the one query behind both, so the outbox cannot come to mean two
+// different things depending on which caller asked.
+func (s *Store) sentBy(ctx context.Context, authorID string, now time.Time, limit int, unreadOnly bool) ([]Row, error) {
 	if s == nil || s.db == nil || authorID == "" {
 		return nil, nil
 	}
 	q := `SELECT ` + rowColumns + `
 		 FROM collab_rows
-		 WHERE kind = ? AND author_id = ? AND delivered_at = 0 AND expires_at > ?
-		 ORDER BY created_at ASC`
+		 WHERE kind = ? AND author_id = ? AND expires_at > ?`
+	if unreadOnly {
+		q += ` AND delivered_at = 0 ORDER BY created_at ASC`
+	} else {
+		q += ` ORDER BY created_at DESC`
+	}
 	args := []any{string(KindNote), authorID, now.UnixNano()}
 	if limit > 0 {
 		q += ` LIMIT ?`

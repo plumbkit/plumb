@@ -8,6 +8,25 @@
 
 ### Added
 
+- **`workspace_sessions` now shows what you have sent and how busy each
+  conversation is.** Two new sections, both observational: *your recent notes*
+  gives each note you sent a `pending` / `delivered to <peer>` state, and
+  *conversation volume* counts the live notes per thread with the unread subset
+  called out separately — a long thread whose notes are nearly all unread means
+  one side has stopped reading, which no message count alone reveals.
+
+  This is the non-destructive answer to the question `[collab] max_exchanges`
+  answers by severing a conversation: a human who can SEE a thread growing can
+  intervene, and a legitimate exchange pays nothing. Nothing here throttles or
+  refuses, and the sections say so.
+
+  Message bodies are deliberately not rendered in the sent section — those
+  notes were addressed to someone else. Cross-project conversation metadata is
+  shown only to the RECIPIENT project, only when that project has set
+  `[collab] cross_project`, and only for traffic aimed at it: a sender writing
+  across projects cannot consent on the recipient's behalf to that traffic
+  appearing on the recipient's screen.
+
 - **A fuzz target over workspace-root synthesis, the last of the six
   attacker-influenced parsers named in the security programme without one.**
   `SynthesiseRoot` decides how far up the tree a session's read-write boundary

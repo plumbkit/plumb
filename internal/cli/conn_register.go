@@ -188,6 +188,14 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			// uniqueness check and may shadow a live peer. Listing its mail would
 			// print that peer's sender and body to the shadow.
 			s.addressableName,
+		).
+		WithCollabObservability(
+			s.collabGlobalIfExists,
+			// THIS workspace's consent, not the sender's: the cross-project
+			// conversation counts are rendered inside this project, so the project
+			// being told that another one is talking to it is the one that has to
+			// have opted in.
+			func() bool { return s.collabConfig().CrossProject },
 		))
 	collabDeps := s.collabDeps()
 	srv.Register(tools.NewShareIntent(collabDeps))
