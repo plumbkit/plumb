@@ -41,6 +41,12 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 		GlobalStore:         func() *collab.Store { return global },
 		GlobalStoreIfExists: func() *collab.Store { return global },
 		Notifier:            collab.NewNotifier(),
+		// Every test built on this helper is about ROUTING (does the message land
+		// in the right store, addressed to the right workspace), not about consent
+		// refusal — that is covered separately in leave_note_test.go. Default the
+		// target to opted-in so routing tests exercise routing, not this gate; a
+		// test that wants the refusal path overrides this field itself.
+		TargetAllowsCrossProject: func(string) bool { return true },
 	}
 	return deps, local, global
 }
