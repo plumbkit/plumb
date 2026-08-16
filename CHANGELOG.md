@@ -9,6 +9,43 @@
 
 ### Fixed
 
+- **A forged home-wide workspace claim is now visible to the operator, and a
+  pre-0.16.7 forged pin is cleaned up instead of living forever.** Two loose
+  ends from #318's fix, both found by auditing what that change left behind.
+
+  *The alarm.* Refusing the replayed `_meta` pin logs at Info, deliberately — a
+  caller who really did declare a wide workspace hits that refusal on every
+  restart, and a Warn there would cry wolf at a working session. But that left
+  the genuinely hostile case with no operator-visible signal at all. Once the
+  attach ladder has finished the two ARE distinguishable: a real declaration
+  left a `session_start` row, so the pin is restored to the same root. A wide
+  claim that arrives over the unauthenticated channel and is corroborated by
+  nothing now logs at Warn and marks the session blocked, so it surfaces in the
+  TUI and dashboard. The comparison is canonical, so two spellings of one
+  directory do not raise a false alarm.
+
+  *The cleanup.* Before #318 any client could claim a workspace through that
+  key, and the daemon stored the result with `session_start` origin — the origin
+  #306 permits to name a home directory or a container of one. Those rows
+  outlive the fix: nothing in a stored row records which channel wrote it, and
+  restoring one re-persists it, refreshing `updated_at`, so the TTL prune never
+  reaches a session that keeps reconnecting. The daemon now sweeps pins at a
+  home directory or a container of one **once per database** and records that it
+  did (new `meta` table, schema v5). A wide root a human really did declare is
+  indistinguishable from a forged one, so this costs that person a single
+  re-declaration — the same cost the ladder already imposes when the row is
+  absent — and then never fires again; sweeping on every start would make a
+  deliberately declared wide workspace impossible to keep, which is #182's
+  contract. The removal is logged at Warn naming each root.
+
+  `docs/architecture.md` now documents the reconnect attach ladder, which it
+  described only for the cold-start path — so the rung this all concerns was
+  missing from the canonical description. Guarded by
+  `TestOnInit_UnbackedWideClaimMarksTheSessionBlocked`,
+  `TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm`,
+  `TestSweepWidePinsOnce_RemovesWideRowsAndSparesOthers`, `_DoesNotRunTwice`,
+  `_FlagSurvivesReopen`, and `_NilSafe` (issue #318).
+
 - **`plumb config show` now prints a provenance row for every `[git]` field, so
   the check `session_start` prescribes can actually be followed.** The rows came
   from a hand-written literal while `internal/config`'s field registry grew

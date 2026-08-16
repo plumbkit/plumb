@@ -301,8 +301,8 @@ func countErrors(diags []protocol.Diagnostic) int {
 func TestIntegration_AdvertisesPullUnderBothCapabilityShapes(t *testing.T) {
 	ws := gradleFixture(t)
 	for name, params := range map[string]protocol.InitializeParams{
-		"pool pull shape":     pullInitParams(ws),
-		"adapter push shape":  kotlin.DefaultInitParams(protocol.FileURI(ws)),
+		"pool pull shape":    pullInitParams(ws),
+		"adapter push shape": kotlin.DefaultInitParams(protocol.FileURI(ws)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			ad := startKotlinLSPWith(t, ws, params)

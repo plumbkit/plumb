@@ -324,6 +324,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	}
 	defer sessState.Close()
 	pruneSessionState(sessState, cfg.Session.PersistStateTTLMinutes)
+	sweepLegacyWidePins(sessState)
 
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()
@@ -446,22 +447,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 // suspended), so a 22 h-old daemon reported 5 h of uptime. Wall-clock semantics
 // match `ps`. Extracted from runDaemon so the strip is pinned by a test.
 func daemonStartTime() time.Time { return time.Now().Round(0) }
-
-// pruneSessionState reclaims persisted per-connection state older than the TTL,
-// dropping rows left by a serve proxy that died without reconnecting. A TTL of 0
-// disables pruning (state lingers until the next daemon restart with a positive
-// TTL). Best-effort and nil-safe.
-func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...string) {
-	if sessState == nil || ttlMinutes <= 0 {
-		return
-	}
-	// live sessions are exempt: their pin and name are written once at
-	// initialize, so a conversation older than the TTL would otherwise have them
-	// reclaimed while it is still connected.
-	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes)*time.Minute), live...); err != nil {
-		slog.Debug("daemon: session-state prune failed", "err", err)
-	}
-}
 
 func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup

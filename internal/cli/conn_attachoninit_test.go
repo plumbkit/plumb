@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -343,6 +344,62 @@ func TestOnInit_LiveRepinClearsTheUnverifiedReplayMark(t *testing.T) {
 	}
 	if s.view().pinUnverifiedReplay {
 		t.Fatal("a live session_start re-pin must clear the unverified-replay mark")
+	}
+}
+
+// A forged wide claim must reach the OPERATOR, not just the log at Info.
+//
+// The refusal itself cannot tell forged from legitimate, so it stays quiet
+// there. Once the ladder has finished it can: a real declaration left a
+// session_start row, so rung 1b restores the SAME root. A claim backed by
+// nothing is the shape a forged _meta key produces, and it marks the session
+// blocked so the TUI and dashboard show it (issue #318).
+func TestOnInit_UnbackedWideClaimMarksTheSessionBlocked(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t) // no row: nothing vouches for the claim
+	rootA := freshTempDir(t)
+	mustGitDir(t, rootA)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(wide)
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	health, msg := sessionHealth(t, s.sessID)
+	if health != "blocked" {
+		t.Fatalf("an unbacked wide claim left health = %q, want \"blocked\" — a forged claim must be visible to an operator", health)
+	}
+	if !strings.Contains(msg, wide) {
+		t.Errorf("health message does not name the claimed root %q: %s", wide, msg)
+	}
+}
+
+// ...and a wide root the caller really did declare must NOT raise it. The row
+// restores the same directory, so the claim is corroborated and the session is
+// healthy. Without this the alarm would fire on every restart of a legitimate
+// dotfiles session, which is exactly the crying-wolf the Info-level refusal was
+// demoted to avoid.
+func TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t)
+	if err := ss.UpsertPin("proxyX", wide, LanguageNone, sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("seed declared wide pin: %v", err)
+	}
+	rootA := freshTempDir(t)
+	mustGitDir(t, rootA)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(wide)
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got != wide {
+		t.Fatalf("setup: the declared wide root did not restore: got %q, want %q", got, wide)
+	}
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Fatalf("a corroborated declaration raised the forged-claim alarm: health=%q msg=%s", health, msg)
 	}
 }
 
