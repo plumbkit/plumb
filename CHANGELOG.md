@@ -97,14 +97,28 @@
   new line rode along with it), and nobody reads the log of a passing check. A
   move out of the unreleased section now fails; a move *between* two already
   released sections stays advisory, because that is a cleanup only a human can
-  judge. Separately, the guard ran on `pull_request` alone, so the release and
-  pin commits an admin pushes straight to `main` were never checked — a second
-  step now checks a push against `github.event.before`, without `--require-base`
-  so a force-push whose `before` is unreachable stays a skip rather than
-  reddening `main`. Also: `CHANGELOG_PLACEMENT_ALLOW`, the documented escape
-  valve, had no test at all, and the base-heading scan was not fence-aware while
-  the file scan was. Four new cases, each mutation-verified against the rule it
-  pins.
+  judge. R3 is checked before the pure-addition gate R1 uses, because a move is
+  identified by its delete/re-add pair rather than by hunk shape — otherwise an
+  unrelated edit beside the landing site hid it completely. Sub-headings are
+  exempt: `### Added` appears in nearly every section, so deleting it from the
+  unreleased section once would otherwise mark every later re-addition anywhere
+  as a move and hard-fail a legitimate cleanup.
+
+  Separately, the guard ran on `pull_request` alone, so the release and pin
+  commits an admin pushes straight to `main` were never checked. A second step
+  now checks a push against `github.event.before`, and is **advisory** — it
+  cannot pass `--head`, so a branch that was merely behind a release cut reads
+  as misplaced once it merges, which is the case the `pull_request` step
+  deliberately allows. Replaying real history, 14 of the last 150 first-parent
+  commits on `main` would have failed that way with no bypass available, so the
+  step reports through a workflow warning instead of blocking, the same posture
+  as the npm-audit job's dev-dependency tier.
+
+  Also: `CHANGELOG_PLACEMENT_ALLOW`, the documented escape valve, had no test at
+  all, and the base-heading scan was not fence-aware while the file scan was.
+  Six new cases, 26 in total, and every rule is now killed by a named case when
+  it is removed — which is how the sub-heading and fence gaps were found, both
+  having first shipped a rule no test actually pinned.
 - **The TUI and web dashboards show daemon-wide cross-project mailbox traffic —
   but only where every participant agreed to be seen.** `workspace_sessions`
   has long shown a workspace its own cross-project conversation volume,

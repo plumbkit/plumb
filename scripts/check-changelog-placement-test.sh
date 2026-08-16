@@ -91,6 +91,48 @@ CASES_EOF
 # The guard resolves its own repo root from $0, so each fixture gets a throwaway
 # repository with a copy of the guard in it.
 
+# A base whose first column-0 '## ' line is quoted inside a fence, above the real
+# unreleased heading. Only a fence-aware scan finds 0.2.0 rather than 9.9.9.
+SYNTH_BASE_FENCED_HEAD='# Changelog
+
+```
+## 9.9.9 (not a heading)
+```
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry'
+
+# A base whose UNRELEASED section carries a '### Added' sub-heading, so a case can
+# delete it (a reverted feature) and re-add the identical line elsewhere.
+SYNTH_BASE_REVERT='# Changelog
+
+## 0.3.0 (unreleased)
+
+### Added
+
+- a feature that got reverted
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry that shipped in 0.2.0
+
+## 0.1.0 (2026-01-01)
+
+### Fixed
+
+- first released entry'
+
 # A base with TWO already-released sections, for cases about moving between them.
 SYNTH_BASE_TWO_RELEASES='# Changelog
 
@@ -346,6 +388,78 @@ synth fail 'new entry in old section (control)' <<'EOF'
 - first released entry
 - second released entry
 - a genuinely new entry
+EOF
+
+# Independent review, probe C. fromunrel is keyed by TEXT, and '### Added' appears in
+# nearly every section, so dropping a reverted feature from the unreleased section
+# (taking its '### Added' with it) used to mark every later re-addition of that exact
+# line as a move OUT of unreleased — hard-failing a legitimate cleanup with a
+# confidently wrong diagnosis, in the same report where the actual entry move was
+# correctly advisory. Sub-headings are exempt from R3 for this reason.
+synth pass 'cleanup that re-adds a sub-heading' "$SYNTH_BASE_REVERT" <<'EOF'
+# Changelog
+
+## 0.3.0 (unreleased)
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+## 0.1.0 (2026-01-01)
+
+### Fixed
+
+- first released entry
+
+### Added
+
+- an entry that shipped in 0.2.0
+EOF
+
+# Independent review, probe B. R3 is checked BEFORE the pure-addition gate, because a
+# move is identified by the delete/re-add pair rather than by hunk shape. Editing the
+# line above the landing site pairs the moved line into a rewrite hunk, which used to
+# hide the #310 shape completely — no failure and no advisory note.
+synth fail 'move out of unreleased, beside an edit' <<'EOF'
+# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry, typo fixed
+- an entry in the right place
+- second released entry
+EOF
+
+# Independent review, finding 5. The base scan is fence-aware; without that, a heading
+# quoted in an example ABOVE the real one is taken for the unreleased section and
+# every comparison in the run comes out against the wrong version. This case is what
+# pins it — reverting the base scan to a plain /^## / match leaves the whole suite
+# green otherwise.
+synth pass 'fenced heading above the real one' "$SYNTH_BASE_FENCED_HEAD" <<'EOF'
+# Changelog
+
+```
+## 9.9.9 (not a heading)
+```
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+- a second entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
 EOF
 
 # The documented escape valve, which had no coverage at all: the control case above is
