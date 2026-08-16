@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/sqlitex"
@@ -86,6 +87,30 @@ func OpenGlobalAt(path string) (*Store, error) {
 	}
 	// ws is deliberately empty: this store belongs to the daemon, not to any one
 	// workspace, and nothing may treat it as a workspace's own database.
+	return &Store{db: db, ws: ""}, nil
+}
+
+// OpenGlobalReadOnly opens the daemon-level cross-project store strictly for
+// reading, without creating or migrating it.
+//
+// It exists for a reader outside the daemon process — today the TUI dashboard,
+// which is a separate process talking to the daemon only over its control
+// socket for a handful of live commands, so it has no access to the daemon's
+// in-memory collabPool the way internal/cli's connSession does and must read
+// collab-xproject.db off disk the same way OpenReadOnly lets `plumb mail` read
+// a workspace's collab.db. Guard with GlobalExists first when "absent" is a
+// normal answer rather than an error.
+func OpenGlobalReadOnly() (*Store, error) {
+	path := GlobalDBPath()
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	db, err := sqlitex.OpenReadOnly(path, sqlitex.ReadOnlyOptions{BusyTimeout: 2 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	// ws is deliberately empty, as in OpenGlobalAt: this store belongs to the
+	// daemon, not to any one workspace.
 	return &Store{db: db, ws: ""}, nil
 }
 

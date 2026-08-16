@@ -1,8 +1,14 @@
 package web
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -66,5 +72,108 @@ func TestSavingsBreakdown_FromPrecomputedRows(t *testing.T) {
 	}
 	if out.ByTool[1].Tool != "edit_file" {
 		t.Errorf("second savings row = %q, want edit_file", out.ByTool[1].Tool)
+	}
+}
+
+func writeDashboardProjectConfig(t *testing.T, ws, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func grantDashboardTrust(t *testing.T, ws string) {
+	t.Helper()
+	spec, err := config.ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmds, err := config.ProjectTaskCommands(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, spec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDaemonWideConversationsDTO_RequiresEveryParticipantToOptIn is the web
+// layer's half of the unanimous-consent rule, end to end: real project
+// configs, real trust grants, a real global collab store.
+func TestDaemonWideConversationsDTO_RequiresEveryParticipantToOptIn(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	optedIn := t.TempDir()
+	writeDashboardProjectConfig(t, optedIn, "[collab]\ncross_project = true\n")
+	grantDashboardTrust(t, optedIn)
+
+	peerOptedIn := t.TempDir()
+	writeDashboardProjectConfig(t, peerOptedIn, "[collab]\ncross_project = true\n")
+	grantDashboardTrust(t, peerOptedIn)
+
+	silent := t.TempDir() // never opts in
+
+	g, err := collab.OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	ctx, now := context.Background(), time.Now()
+
+	unanimous, err := g.PutNote(ctx, collab.NoteInput{
+		AuthorSession: "a", AuthorID: "a", Body: "hi", Addressee: "b",
+		TTL: time.Hour, OriginWorkspace: optedIn, TargetWorkspace: peerOptedIn,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := g.PutNote(ctx, collab.NoteInput{
+		AuthorSession: "a", AuthorID: "a", Body: "hi", Addressee: "c",
+		TTL: time.Hour, OriginWorkspace: optedIn, TargetWorkspace: silent,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deps := Deps{
+		Store:             config.NewStore(config.Defaults()),
+		CollabGlobalStore: func() *collab.Store { return g },
+	}
+	got := daemonWideConversationsDTO(ctx, deps)
+
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	found := false
+	for _, id := range ids {
+		if id == unanimous {
+			found = true
+		}
+		if id == partial {
+			t.Errorf("a conversation with a non-consenting participant leaked into the dashboard DTO: %v", ids)
+		}
+	}
+	if !found {
+		t.Errorf("the unanimously-consented conversation is missing: %v", ids)
+	}
+}
+
+// TestDaemonWideConversationsDTO_NoStoreYieldsNil covers the common case: a
+// daemon with no CollabGlobalStore wiring (or no store yet) must render no
+// panel at all, not an error.
+func TestDaemonWideConversationsDTO_NoStoreYieldsNil(t *testing.T) {
+	if got := daemonWideConversationsDTO(context.Background(), Deps{}); got != nil {
+		t.Errorf("expected nil with no CollabGlobalStore wiring, got %+v", got)
+	}
+	deps := Deps{
+		Store:             config.NewStore(config.Defaults()),
+		CollabGlobalStore: func() *collab.Store { return nil },
+	}
+	if got := daemonWideConversationsDTO(context.Background(), deps); got != nil {
+		t.Errorf("expected nil when the store does not yet exist, got %+v", got)
 	}
 }

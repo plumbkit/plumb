@@ -82,6 +82,43 @@ func (s *connSession) collabGlobalIfExists() *collab.Store {
 	return s.collabPool.getGlobal()
 }
 
+// daemonWideConversationsFetchLimit is how many daemon-wide conversations a
+// dashboard may ask for. It is a small, fixed cap rather than a caller-chosen
+// one: this is a display surface (TUI/web dashboards), not a paginated
+// listing, and every candidate costs one extra ConversationWorkspaces query.
+const daemonWideConversationsFetchLimit = 8
+
+// targetAllowsCrossProject reports whether the named workspace — which is NOT
+// necessarily this connection's own pinned workspace — has opted in to
+// [collab] cross_project. It is the recipient-consent check
+// workspace_sessions_collab.go's crossProjectOn performs for a session's own
+// workspace, generalised to an ARBITRARY other workspace: a daemon-wide
+// display (see daemonWideConversations) has no single recipient to ask, so it
+// must resolve this per participating workspace rather than off the cached
+// per-connection config snapshot.
+//
+// Thin wrapper: config.TargetAllowsCrossProject does the actual LoadProject +
+// `plumb trust` resolution (an untrusted project's own config.toml cannot
+// grant itself the channel), and fails closed on any error.
+func (s *connSession) targetAllowsCrossProject(workspace string) bool {
+	return config.TargetAllowsCrossProject(s.store.Current(), workspace)
+}
+
+// daemonWideConversations returns live conversations from the daemon-level
+// store, filtered to those where EVERY participating workspace has opted in
+// to [collab] cross_project — the daemon dashboards have no single recipient
+// to ask consent of, so consent must be unanimous among everyone in the
+// thread (see collab.(*Store).FilterDaemonWideConversations for the "any one"
+// vs "none at all" reasoning). Read-only: never creates the global store, and
+// answers nothing when it does not already exist.
+func (s *connSession) daemonWideConversations(ctx context.Context) ([]collab.ConversationSummary, error) {
+	g := s.collabGlobalIfExists()
+	if g == nil {
+		return nil, nil
+	}
+	return g.FilterDaemonWideConversations(ctx, time.Now(), daemonWideConversationsFetchLimit, s.targetAllowsCrossProject)
+}
+
 // resolvePeer reports the live session answering to a name: the workspace it is
 // pinned to (which decides whether a message stays in this workspace's collab.db
 // or crosses into the daemon-level store) and its stable session ID (which binds

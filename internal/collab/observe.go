@@ -115,6 +115,103 @@ func (s *Store) conversationSummaries(
 	return out, rows.Err()
 }
 
+// ConversationWorkspaces returns the distinct non-empty origin/target
+// workspaces that have appeared in a conversation's unexpired rows in this
+// store. Read-only; discloses no message body or participant identity, only
+// which projects were involved — the minimum needed to evaluate daemon-wide
+// display consent.
+func (s *Store) ConversationWorkspaces(ctx context.Context, convID string, now time.Time) ([]string, error) {
+	if s == nil || s.db == nil || convID == "" {
+		return nil, nil
+	}
+	// UNION (not UNION ALL) dedupes origin and target across both halves of the
+	// query, so a conversation with several notes between the same two
+	// workspaces still reports exactly two.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT origin_workspace FROM collab_rows
+		  WHERE kind = ? AND conversation_id = ? AND expires_at > ? AND origin_workspace != ''
+		 UNION
+		 SELECT target_workspace FROM collab_rows
+		  WHERE kind = ? AND conversation_id = ? AND expires_at > ? AND target_workspace != ''`,
+		string(KindNote), convID, now.UnixNano(),
+		string(KindNote), convID, now.UnixNano())
+	if err != nil {
+		return nil, fmt.Errorf("collab: conversation workspaces: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var ws string
+		if err := rows.Scan(&ws); err != nil {
+			return nil, fmt.Errorf("collab: scan conversation workspace: %w", err)
+		}
+		out = append(out, ws)
+	}
+	return out, rows.Err()
+}
+
+// daemonWideOverfetch is how much larger a FilterDaemonWideConversations query
+// asks for than the caller's display limit. Filtering removes rows, so asking
+// for exactly `limit` and then discarding some would under-fill the daemon-wide
+// view even when enough consented conversations exist to fill it.
+const daemonWideOverfetch = 4
+
+// FilterDaemonWideConversations returns live conversations from this
+// (necessarily global) store, trimmed to those where EVERY participating
+// workspace satisfies allow — the unanimous-consent rule for a daemon-wide
+// display (the TUI and web dashboards) that has no single recipient to ask
+// consent of, unlike ConversationSummariesForWorkspace's one-recipient
+// question. "Any one workspace consents" would let project A's opt-in expose
+// project B's traffic without B's consent; "none at all" would make the
+// feature pointless. Only unanimous consent satisfies both projects at once.
+//
+// A conversation whose participants cannot be determined (ConversationWorkspaces
+// errors, or returns no known workspace) is excluded rather than shown — fail
+// closed, the same posture ConversationSummariesForWorkspace's callers already
+// take on error.
+//
+// limit caps the RETURNED count; the underlying query over-fetches by
+// daemonWideOverfetch so filtering does not silently under-fill the view.
+// Non-positive limit means no cap on either the fetch or the result.
+func (s *Store) FilterDaemonWideConversations(
+	ctx context.Context, now time.Time, limit int, allow func(workspace string) bool,
+) ([]ConversationSummary, error) {
+	if s == nil || s.db == nil || !s.IsGlobal() || allow == nil {
+		return nil, nil
+	}
+	fetch := limit
+	if fetch > 0 {
+		fetch *= daemonWideOverfetch
+	}
+	all, err := s.ConversationSummaries(ctx, now, fetch)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ConversationSummary, 0, len(all))
+	for _, sum := range all {
+		workspaces, wErr := s.ConversationWorkspaces(ctx, sum.ID, now)
+		if wErr != nil || len(workspaces) == 0 {
+			continue
+		}
+		consented := true
+		for _, ws := range workspaces {
+			if !allow(ws) {
+				consented = false
+				break
+			}
+		}
+		if !consented {
+			continue
+		}
+		out = append(out, sum)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // MergeConversationSummaries folds several stores' counts into one ranking.
 //
 // A conversation can legitimately have notes in two stores at once: a

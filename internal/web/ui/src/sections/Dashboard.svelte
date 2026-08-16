@@ -123,5 +123,35 @@
         <div class="text-[12px] py-8 text-center" style="color:var(--faint)">No savings recorded yet.</div>
       {/if}
     </Card>
+
+    {#if data.crossProjectConversations?.length}
+      <Card
+        span2
+        title="Cross-project conversations"
+        badge="mailbox"
+        desc="Shown only where every participating workspace opted in to [collab] cross_project."
+      >
+        <table class="w-full text-[12px]" style="color:var(--soft)">
+          <thead>
+            <tr style="color:var(--faint)">
+              <th class="text-left font-normal pb-1">Thread</th>
+              <th class="text-right font-normal pb-1">Notes</th>
+              <th class="text-right font-normal pb-1">Unread</th>
+              <th class="text-right font-normal pb-1">Last activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.crossProjectConversations as c (c.id)}
+              <tr style="border-top:1px solid var(--rule)">
+                <td class="py-1 font-mono" style="color:var(--text)">{c.id}</td>
+                <td class="py-1 text-right">{num(c.notes)}</td>
+                <td class="py-1 text-right">{c.pending ? num(c.pending) : "—"}</td>
+                <td class="py-1 text-right">{humanDuration(c.ageSeconds)} ago</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </Card>
+    {/if}
   </div>
 {/if}
