@@ -50,6 +50,62 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/domain` | Reserved for future shared domain types (currently empty) |
 | `internal/workspace` | Reserved for future routing logic (currently empty) |
 
+### The base adapter's exported surface
+
+`internal/lsp/adapters/base` is the half of every adapter that is identical
+across servers: the plumbing behind all 23 `lsp.Client` methods, the capability
+cache, the notification fan-out, the server-request handler, and the
+`"<server> <label>: <cause>"` error labelling. Adapters embed `*base.Adapter`
+and shadow only what their server does differently.
+
+**Its exported surface is exactly `lsp.Client`, and must stay that way.** Go
+promotes an embedded type's exported methods into all nine adapters, and
+`internal/cli` resolves optional capabilities *structurally* — so one extra
+exported method here silently opts every language server into a capability it
+does not have.
+
+The consequences for anyone editing that package:
+
+- Escape hatches are package-level **functions** (`base.Call`, `CallPtr`,
+  `CallRaw`, `Notify`, `Wrap`), never methods.
+- `base.OpenTracker` (lazy `didOpen` for swift/zig/html/kotlin) is held as a
+  **named field**, never embedded.
+- Four tests guard it: `TestExportedSurface_IsExactlyLSPClient`,
+  `TestAdapters_OptionalInterfaceSurface`,
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface`, and
+  `TestLazyOpenAdapters_DidOpenMatrix` — the per-method `didOpen` count of each
+  lazy-open adapter, in both directions. **The ensure-open set is asymmetric on
+  purpose**, so making the two sides "consistent" is not tidying; it is a
+  behaviour change the matrix will catch.
+
+### Structural extractors and their memory discipline
+
+`internal/topology/extractors/` holds three engines, and which one is
+production for a language is a deliberate per-language choice
+(`internal/langsupport` is the registry, and the seam for moving a language):
+
+| Extractor | Status |
+|---|---|
+| `golang` | Go, via `go/parser`+`go/ast` (no CGo) |
+| `treesitter` | gotreesitter (pure Go), pinned v0.48.0, embeds the `grammars` package (~+26 MB). Python, Ruby, C, C#, Elixir, Scala, PHP, JSON, CSS, SCSS, XML, Lua, C++, Objective-C, Dart, JavaScript, Rust, Zig, Kotlin, Swift, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML. JavaScript (`.js`/`.mjs`/`.cjs`) and TypeScript/TSX/JSX (`.ts`/`.tsx`/`.jsx`) are primary here since the v0.48.0 per-language flip — 435/435 corpus extraction parity |
+| `wasmts` | Grammar-generic WASM extractor driven by wazero (pure Go). Production for **Swift only**: the canonical alex-pinkus `tree-sitter-swift` grammar plus its C external scanner (`swift.wasm`, ~3.5 MB, `make swift-wasm`), held until gotreesitter clears six residual Swift parse shapes. Its TypeScript + TSX bundle (`ts.wasm`, ~2.9 MB, `make ts-wasm`) is no longer wired into production and is kept as the parity-sweep reference. Each bundle has its own builder; both need Zig only to regenerate |
+
+Config/IaC/markup grammars extract named declarations; TOML/YAML/Markdown/HTML
+also index nesting via containment edges, and HTML and Markdown are flagged
+`PreferStructuralOutline` so outline tools use the Map over the noisy LSP.
+
+`internal/topology/extractors/typescript` is the legacy regex TS/JS extractor.
+It is no longer production-reachable since the TS flip (it was the `wasmts` TS
+init-failure fallback) and is retained only for the parity harness.
+
+**Memory discipline.** Each extractor decodes its grammar **lazily** — a
+`lazyGrammar` resolved on first `Extract`, not in the constructor — and
+`defer tree.Release()`s its parse arena back to gotreesitter's pool after the
+walk. So grammar memory scales with the languages a workspace actually
+contains rather than the full supported set, and a resync recycles one arena
+instead of allocating per file. This is why idle daemon RSS is dominated by
+that pool rather than by a leak.
+
 ### Charm dependency rule
 
 Plumb's UI stack is Bubble Tea v2 only. Use `charm.land/bubbletea/v2`,
