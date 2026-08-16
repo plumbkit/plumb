@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -103,14 +105,59 @@ func TestGatedDenyNetwork(t *testing.T) {
 }
 
 func TestCommandWorkdir(t *testing.T) {
-	ws := "/ws"
-	if got := commandWorkdir(ws, ""); got != ws {
-		t.Errorf("empty workdir = %q, want %q", got, ws)
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "internal", "x"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if got := commandWorkdir(ws, "."); got != ws {
-		t.Errorf("dot workdir = %q, want %q", got, ws)
+	got, err := commandWorkdir(ws, "")
+	if err != nil || got != ws {
+		t.Errorf("empty workdir = %q, %v; want %q", got, err, ws)
 	}
-	if got := commandWorkdir(ws, "internal/x"); got != "/ws/internal/x" {
-		t.Errorf("subdir workdir = %q", got)
+	got, err = commandWorkdir(ws, ".")
+	if err != nil || got != ws {
+		t.Errorf("dot workdir = %q, %v; want %q", got, err, ws)
+	}
+	want := filepath.Join(ws, "internal", "x")
+	got, err = commandWorkdir(ws, "internal/x")
+	if err != nil || got != want {
+		t.Errorf("subdir workdir = %q, %v; want %q", got, err, want)
+	}
+}
+
+// TestCommandWorkdir_RefusesASymlinkOutOfTheTree is the escape the load-time
+// validator cannot see.
+//
+// validateCommandWorkingDir rejects an absolute path and a ".." segment — every
+// escape you can SPELL. "escape" names a symlink, so it spells nothing: it is a
+// plain relative single-segment path, lexically impeccable, and
+// filepath.Join(ws, "escape") cleans to a string that looks contained. Only
+// resolving it says otherwise, which is why the check has to run after
+// resolution and has to REFUSE rather than rewrite the path into something that
+// merely reads as contained.
+//
+// Without the resolution-time check this test's command runs in outside/, and
+// nothing in the config, the validator, or the argv looks wrong.
+func TestCommandWorkdir_RefusesASymlinkOutOfTheTree(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(ws, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// Precondition, through the real loader rather than a restatement of the rule:
+	// a project config naming this working_dir loads WITHOUT error, so the lexical
+	// validator genuinely accepts it and the gap is genuinely here.
+	writeProjectConfig(t, ws, "[tasks.go]\nworking_dir = \"escape\"\n")
+	if _, _, err := config.LoadProjectWithPolicy(config.Defaults(), ws); err != nil {
+		t.Fatalf("precondition: a project config with working_dir = \"escape\" was expected to load cleanly, got %v", err)
+	}
+
+	got, err := commandWorkdir(ws, "escape")
+	if err == nil {
+		t.Fatalf("a working_dir symlinked out of the workspace was accepted, resolving to %q — "+
+			"the command would have run in %s", got, outside)
+	}
+	if got != "" {
+		t.Errorf("a refused working_dir must return no directory, got %q", got)
 	}
 }

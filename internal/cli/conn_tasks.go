@@ -24,12 +24,17 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 	if ws == "" || lang == "" || lang == "none" {
 		return tools.TaskCommand{}, errors.New("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
 	}
-	steps, err := buildTaskSteps(s.view().tasks[lang], slot, target)
+	tc := s.view().tasks[lang]
+	steps, err := buildTaskSteps(tc, slot, target)
 	if err != nil {
 		return tools.TaskCommand{}, err
 	}
 	if len(steps) == 0 {
 		return tools.TaskCommand{Slot: slot}, nil // no command configured; the tool reports it
+	}
+	workdir, err := commandWorkdir(ws, tc.WorkingDir)
+	if err != nil {
+		return tools.TaskCommand{}, fmt.Errorf("run_task %s: %w", slot, err)
 	}
 	provenance, fromProject := taskProvenance(ws, lang, slot)
 	if fromProject {
@@ -44,7 +49,7 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 					"review them, then run `plumb trust` in %s to allow this project's task commands", slot, lang, ws)
 		}
 	}
-	return tools.TaskCommand{Slot: slot, Steps: steps, Provenance: provenance}, nil
+	return tools.TaskCommand{Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir}, nil
 }
 
 // buildTaskSteps turns a slot into the argv steps to run. verify is the
@@ -86,26 +91,71 @@ func taskStep(tc config.TasksConfig, slot, target string) ([]string, error) {
 	return substituteTarget(argv, target)
 }
 
-// substituteTarget replaces a literal {target} argv element with target. A
-// target with no placeholder, or a placeholder with no target, is an error.
+// substituteTarget replaces a {target} argv element with target. A target with
+// no placeholder is an error; a placeholder with no target is an error UNLESS
+// the placeholder declares a default, written {target:<default>}.
+//
+// The inline default is what makes scoping reachable out of the box. Every
+// shipped test command was `go test ./...` — no placeholder — so run_task's
+// target and mutation_test's test_target were not merely undiscoverable but an
+// outright error on an unmodified install, and a mutation run therefore paid for
+// the WHOLE suite per mutant.
+//
+// Why a default attached to the placeholder rather than one held elsewhere: the
+// two alternatives both misfire. A per-language fallback applied to a bare
+// {target} would silently change the meaning of commands users already wrote —
+// `go test -run {target}` would quietly run everything instead of refusing — and
+// a separate "scoped" slot doubles the config surface for one argument. Written
+// inline, the default sits where the placeholder is and cannot drift from it,
+// and a bare {target} keeps its strict contract exactly as before, so no
+// existing configuration changes behaviour.
+//
+// An EMPTY default ({target:}) drops the element entirely. That is not a
+// curiosity: for cargo test, swift test and friends, "everything" is the ABSENCE
+// of a positional argument, so there is no string that could stand in for it.
 func substituteTarget(argv []string, target string) ([]string, error) {
 	out := make([]string, 0, len(argv))
 	found := false
 	for _, a := range argv {
-		if a == "{target}" {
-			found = true
-			if target == "" {
-				return nil, errors.New("this command needs a target ({target} placeholder)")
-			}
-			out = append(out, target)
+		def, ok := targetPlaceholder(a)
+		if !ok {
+			out = append(out, a)
 			continue
 		}
-		out = append(out, a)
+		found = true
+		value := target
+		if value == "" {
+			if def == nil {
+				return nil, errors.New("this command needs a target ({target} placeholder)")
+			}
+			value = *def
+		}
+		if value == "" {
+			continue // an empty default means "omit this argument"
+		}
+		out = append(out, value)
 	}
 	if target != "" && !found {
 		return nil, errors.New("a target was given but the command has no {target} placeholder")
 	}
 	return out, nil
+}
+
+// targetPlaceholder recognises `{target}` and `{target:<default>}` as WHOLE argv
+// elements, returning the declared default (nil when there is none).
+//
+// Whole-element only, matching what the plain token always accepted: the argv is
+// split on whitespace with no quoting, so a placeholder glued to other text
+// would substitute into an argument whose boundaries nobody can see.
+func targetPlaceholder(arg string) (def *string, ok bool) {
+	if arg == config.TargetToken {
+		return nil, true
+	}
+	if !config.IsTargetToken(arg) {
+		return nil, false
+	}
+	value := arg[len(config.TargetTokenPrefix) : len(arg)-1]
+	return &value, true
 }
 
 // taskProvenance reports the layer a slot's command comes from and whether the
@@ -140,6 +190,17 @@ func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
 		if !strings.EqualFold(c.Lang, lang) {
 			continue
 		}
+		// A project working_dir makes EVERY slot of that language project-supplied,
+		// including the ones whose command comes from the shipped defaults.
+		//
+		// Without this the gate has a hole the size of the feature: working_dir is
+		// not a command, so a project that overrides no command at all still
+		// decides WHERE the default `go build ./...` runs. Provenance answers "did
+		// this project influence what is about to execute?", and choosing the
+		// directory is influence — the argv is only half of what runs.
+		if strings.EqualFold(c.Slot, taskWorkingDirKey) {
+			return "project", true
+		}
 		for _, sl := range slots {
 			if strings.EqualFold(c.Slot, sl) {
 				return "project", true
@@ -148,3 +209,9 @@ func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
 	}
 	return "config", false
 }
+
+// taskWorkingDirKey is the [tasks.<lang>] key that is not a command slot.
+// ProjectTaskCommands sweeps every string under the table, so it arrives as a
+// TaskCommandSpec with this Slot — which is what puts it in the trust hash, and
+// what taskProvenance matches on above.
+const taskWorkingDirKey = "working_dir"

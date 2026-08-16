@@ -211,6 +211,13 @@ func validateTasks(tasks map[string]TasksConfig) error {
 				return fmt.Errorf("tasks.%s.%s: %w", lang, sl.name, err)
 			}
 		}
+		// Same rule as a [[command]] working_dir: relative to the workspace root and
+		// no ".." escape. This is the LEXICAL half; the resolution-time half runs
+		// when the directory is made absolute, because a relative path naming a
+		// symlink passes every lexical check and still lands outside the tree.
+		if err := validateCommandWorkingDir(t.WorkingDir); err != nil {
+			return fmt.Errorf("tasks.%s: %w", lang, err)
+		}
 	}
 	return nil
 }

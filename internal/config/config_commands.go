@@ -65,6 +65,21 @@ type CommandsConfig struct {
 // run_command tool substitutes it with a bounded target argument.
 const TargetToken = "{target}"
 
+// TargetTokenPrefix opens the defaulted form, `{target:<default>}`, which stands
+// in for the target when the caller gives none (an empty default omits the
+// argument entirely). Substitution lives at the cli seam; this package only has
+// to COUNT placeholders, and it has to count both spellings — an "at most once"
+// rule that recognises one form lets `{target} {target:./...}` past, and the
+// second substitution then lands in an argv nobody validated for it.
+const TargetTokenPrefix = "{target:"
+
+// IsTargetToken reports whether a whole argv element is a target placeholder in
+// either spelling.
+func IsTargetToken(arg string) bool {
+	return arg == TargetToken ||
+		(strings.HasPrefix(arg, TargetTokenPrefix) && strings.HasSuffix(arg, "}"))
+}
+
 // Find returns the command with the given name and whether it was found.
 func FindCommand(cmds []CommandConfig, name string) (CommandConfig, bool) {
 	for _, c := range cmds {
@@ -139,11 +154,12 @@ func validateCommands(cmds []CommandConfig) error {
 	return nil
 }
 
-// countTargetTokens counts exec elements that are exactly the {target} token.
+// countTargetTokens counts exec elements that are a target placeholder, in
+// either spelling.
 func countTargetTokens(argv []string) int {
 	n := 0
 	for _, a := range argv {
-		if a == TargetToken {
+		if IsTargetToken(a) {
 			n++
 		}
 	}

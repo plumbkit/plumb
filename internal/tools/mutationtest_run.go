@@ -229,8 +229,12 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	var out stepOutcome
 	out.ran = true
 	start := time.Now()
-	ws := ""
-	if t.deps.WorkspaceFn != nil {
+	// The resolver's directory when it has one — the workspace root is only the
+	// fallback. In a holder repository (go.work at the top, the module below) the
+	// root is where every command fails, so running the compile gate there made
+	// the whole tool unusable in exactly the repositories that need it.
+	ws := cmd.WorkingDir
+	if ws == "" && t.deps.WorkspaceFn != nil {
 		ws = t.deps.WorkspaceFn()
 	}
 	for i, argv := range cmd.Steps {
