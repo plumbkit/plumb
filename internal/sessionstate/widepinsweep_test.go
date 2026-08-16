@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // wideUnder is a stand-in for internal/cli's containsUserHome. The real
@@ -81,6 +82,61 @@ func TestSweepWidePinsOnce_DoesNotRunTwice(t *testing.T) {
 	}
 	if _, _, _, ok, err := s.LoadPin("p"); err != nil || !ok {
 		t.Fatalf("the re-declared wide pin was swept again (ok=%v err=%v)", ok, err)
+	}
+}
+
+// A database with NO wide pins must still disarm the sweep. Otherwise it stays
+// armed on a clean install and fires on the first wide root the caller declares
+// AFTER upgrading — a workspace this cleanup has no business touching, and a
+// permanent breach of #182's "a declared wide root is yours to keep".
+func TestSweepWidePinsOnce_DisarmsEvenWithNothingToRemove(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertPin("proj", "/srv/proj", "go", PinSourceSessionStart); err != nil {
+		t.Fatal(err)
+	}
+
+	if removed, err := s.SweepWidePinsOnce(wideUnder); err != nil || len(removed) != 0 {
+		t.Fatalf("first sweep on a clean database: removed=%v err=%v", removed, err)
+	}
+
+	// The caller now deliberately declares a wide workspace.
+	if err := s.UpsertPin("declared", "/wide/Users", "go", PinSourceSessionStart); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := s.SweepWidePinsOnce(wideUnder); err != nil || len(removed) != 0 {
+		t.Fatalf("the sweep fired on a root declared AFTER it ran: removed=%v err=%v", removed, err)
+	}
+	if _, _, _, ok, err := s.LoadPin("declared"); err != nil || !ok {
+		t.Fatalf("a wide root declared after the sweep was removed (ok=%v err=%v)", ok, err)
+	}
+}
+
+// The swept workspace's read-tracking rows go with it — leaving them would keep
+// a home directory's file list in the database after the pin is gone.
+func TestSweepWidePinsOnce_DropsTheSweptWorkspacesReads(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertPin("forged", "/wide/Users", "go", PinSourceSessionStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertRead("forged", "/wide/Users", "/wide/Users/me/.ssh/id_rsa", time.Unix(1, 0), "sha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertPin("proj", "/srv/proj", "go", PinSourceSessionStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertRead("proj", "/srv/proj", "/srv/proj/main.go", time.Unix(1, 0), "sha"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.SweepWidePinsOnce(wideUnder); err != nil {
+		t.Fatalf("SweepWidePinsOnce: %v", err)
+	}
+
+	if reads, err := s.LoadReads("forged", "/wide/Users"); err != nil || len(reads) != 0 {
+		t.Errorf("the swept workspace kept %d read row(s) (err=%v)", len(reads), err)
+	}
+	if reads, err := s.LoadReads("proj", "/srv/proj"); err != nil || len(reads) != 1 {
+		t.Errorf("an untouched workspace lost its reads: %d (err=%v)", len(reads), err)
 	}
 }
 
