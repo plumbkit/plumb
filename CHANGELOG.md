@@ -9,6 +9,23 @@
 
 ### Fixed
 
+- **The unregistered-session guard on `share_intent` and `share_findings` now
+  actually fires.** It tested the session NAME, and a session whose registration
+  failed still has one — the daemon logs "continuing unregistered and
+  unaddressable" and then assigns a generated display name anyway, for the TUI
+  and the logs. What is empty in that state is the session ID. The guard read the
+  one field that is never empty, so it shipped inert.
+
+  The consequences it was written to prevent were therefore all still live:
+  `share_intent` stored an empty author id, which `ClearSessionIntents` skips, so
+  the claim was never cleared at session end and lingered for the whole TTL — and
+  because `PutIntent` replaces via `DELETE ... WHERE author_id = ?`, one
+  unregistered session's intent deleted every other unregistered session's.
+  `share_findings` wrote a project memory whose provenance nothing could trace.
+
+  Every other gate in the daemon already keys on the session ID; this one now
+  matches them.
+
 - **An unrestored home-wide workspace claim is now visible to the operator, and
   a pre-0.16.7 wide pin is cleaned up instead of living forever.** Two loose
   ends from #318's fix, both found by auditing what that change left behind.

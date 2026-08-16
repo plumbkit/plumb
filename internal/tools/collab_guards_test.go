@@ -18,17 +18,25 @@ import (
 // way the caller could not see: an unattributable row that outlives the session
 // that made it, and a wait silently reduced to a fraction of what was asked for.
 
-// unnamedDeps is collabTestDeps with the session name stripped — a connection
-// that reached a tool before session_start registered it.
-func unnamedDeps(t *testing.T, policy CollabPolicy) (CollabDeps, *collab.Store) {
+// unregisteredDeps reproduces the PRODUCTION shape of an unregistered session,
+// which is the part the first version of this test got wrong.
+//
+// Registration failure does NOT leave the session nameless: newConnSession logs
+// "continuing unregistered and unaddressable" and then assigns a generated
+// display name anyway, for the TUI and the logs. What is actually empty is the
+// session ID. A test that only blanked the NAME therefore exercised a state the
+// daemon never produces, and passed while the guard it was testing read the one
+// field that is never empty.
+func unregisteredDeps(t *testing.T, policy CollabPolicy) (CollabDeps, *collab.Store) {
 	t.Helper()
 	deps, store, _ := collabTestDeps(t, policy)
-	deps.SessionName = func() string { return "" }
+	deps.SessionName = func() string { return "lively-otter" } // generated, non-empty
+	deps.SessionID = ""                                        // registration failed
 	return deps, store
 }
 
 func TestShareIntent_RefusesAnUnregisteredSession(t *testing.T) {
-	deps, store := unnamedDeps(t, CollabPolicy{Intents: true, IntentTTLMinutes: 120})
+	deps, store := unregisteredDeps(t, CollabPolicy{Intents: true, IntentTTLMinutes: 120})
 
 	out, err := NewShareIntent(deps).Execute(context.Background(),
 		json.RawMessage(`{"body":"refactoring the limiter"}`))
@@ -51,7 +59,10 @@ func TestShareIntent_RefusesAnUnregisteredSession(t *testing.T) {
 
 func TestShareFindings_RefusesAnUnregisteredSession(t *testing.T) {
 	deps, ws := shareFindingsTestDeps(t, CollabPolicy{KnowledgeHandoff: true}, 50)
-	deps.SessionName = func() string { return "" }
+	// Registration failed: the daemon still assigns a display name, but no ID.
+	// ShareFindingsDeps no longer carries the name at all, since the guard that
+	// was its last reader now keys on the ID.
+	deps.SessionID = ""
 
 	out, err := NewShareFindings(deps).Execute(context.Background(),
 		json.RawMessage(`{"summary":"the limiter is per-connection, not per-session"}`))
@@ -70,19 +81,42 @@ func TestShareFindings_RefusesAnUnregisteredSession(t *testing.T) {
 	}
 }
 
-// TestUnregisteredSessionRefusal_LetsARegisteredSessionThrough is the direction
-// a too-eager guard would break: the refusal must fire on an absent name only,
-// not on any name a caller might present.
-func TestUnregisteredSessionRefusal_LetsARegisteredSessionThrough(t *testing.T) {
-	for _, name := range []string{"icy-storm", "a", "Session-With-Caps", "ends-with-9"} {
-		if got := unregisteredSessionRefusal("share_intent", name); got != "" {
-			t.Errorf("session %q was refused: %q", name, got)
+// TestShareIntent_AllowsARegisteredSession is the direction a too-eager guard
+// would break, driven through Execute rather than the helper for the same reason
+// the refusal tests are: the wiring is what was wrong, not the predicate.
+func TestShareIntent_AllowsARegisteredSession(t *testing.T) {
+	deps, store, _ := collabTestDeps(t, CollabPolicy{Intents: true, IntentTTLMinutes: 120})
+
+	out, err := NewShareIntent(deps).Execute(context.Background(),
+		json.RawMessage(`{"body":"refactoring the limiter"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "registered session") {
+		t.Errorf("a registered session was refused: %q", out)
+	}
+	intents, err := store.LiveIntents(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 {
+		t.Errorf("registered share_intent stored %d rows, want 1", len(intents))
+	}
+}
+
+// TestUnregisteredSessionRefusal_KeysOnIdentityNotName pins the predicate, and
+// pins WHY: a populated display name must not be mistaken for registration.
+// This is the assertion whose absence let the inert version ship.
+func TestUnregisteredSessionRefusal_KeysOnIdentityNotName(t *testing.T) {
+	for _, id := range []string{"sess-1", "f9ae0c-1234", "x"} {
+		if got := unregisteredSessionRefusal("share_intent", id); got != "" {
+			t.Errorf("session id %q was refused: %q", id, got)
 		}
 	}
-	// Whitespace is not a name — it would store a blank author just as surely.
+	// Whitespace is not an identity — it would store a blank author just as surely.
 	for _, blank := range []string{"", " ", "\t", "\n  "} {
 		if got := unregisteredSessionRefusal("share_intent", blank); got == "" {
-			t.Errorf("session name %q was accepted as registered", blank)
+			t.Errorf("session id %q was accepted as registered", blank)
 		}
 	}
 }

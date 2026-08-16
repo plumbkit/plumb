@@ -57,26 +57,34 @@ const (
 	defaultMaxWaitSeconds = 55
 )
 
-// unregisteredSessionRefusal refuses a broadcast from a session with no name,
-// returning a message for the agent, or "" when the session is registered.
+// unregisteredSessionRefusal refuses a broadcast from a session that never
+// registered, returning a message for the agent, or "" when it did.
 //
-// The name is the author label AND the address peers reply to. A session that
-// has not registered has neither, so what it writes is an unattributable row
-// that outlives the call: share_intent's claim appears in every peer's
-// workspace_sessions with a blank author, and share_findings writes a memory
-// into the project that nobody can trace or ask about. Both persist past the
-// session that made them, which is why this refuses rather than writing an
-// anonymous row and hoping the name arrives later.
+// IT MUST TEST THE SESSION ID, NOT THE NAME. An unregistered session still has
+// a name: newConnSession logs "continuing unregistered and unaddressable" and
+// then assigns `reg.Name = session.GenerateName()` anyway, so the display name
+// is populated for the TUI and the logs while the ID is empty. The first
+// version of this guard read the name and therefore never fired — it shipped
+// inert. Every other gate in the codebase already keys on the ID
+// (addressableName, check_messages, workspace_sessions); this one now matches.
 //
-// Refusing is cheap for a caller that is simply early: session_start registers
+// What the guard is for: a session with no ID writes rows nothing can attribute
+// or clean up, and they OUTLIVE the call. share_intent stores AuthorID = "",
+// and ClearSessionIntents returns early on an empty id, so the claim is never
+// cleared at session end and lingers for the whole TTL — worse, PutIntent's
+// replace step is `DELETE ... WHERE author_id = ?`, so one unregistered
+// session's intent deletes every other unregistered session's. share_findings
+// writes a project memory whose provenance nobody can trace or ask about.
+//
+// Refusing costs a caller that is simply early nothing: session_start registers
 // the session, and the refusal says so.
-func unregisteredSessionRefusal(tool, sessionName string) string {
-	if strings.TrimSpace(sessionName) != "" {
+func unregisteredSessionRefusal(tool, sessionID string) string {
+	if strings.TrimSpace(sessionID) != "" {
 		return ""
 	}
-	return tool + " needs a registered session: this connection has no session name yet, and the name is " +
-		"both the author label peers see and the address they reply to. Writing without one would leave an " +
-		"unattributable record that outlives this call. Call session_start first."
+	return tool + " needs a registered session: this connection has no session identity yet, so " +
+		"what it writes could not be attributed to it, replaced by it, or cleaned up when it " +
+		"ends — and those records outlive this call. Call session_start first."
 }
 
 func (p CollabPolicy) maxExchanges() int {

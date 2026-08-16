@@ -18,7 +18,6 @@ func shareFindingsTestDeps(t *testing.T, policy CollabPolicy, keep int) (ShareFi
 	ws := t.TempDir()
 	deps := ShareFindingsDeps{
 		Workspace:           func() string { return ws },
-		SessionName:         func() string { return "test-session" },
 		SessionID:           "sess-abcdef01",
 		Policy:              func() CollabPolicy { return policy },
 		Index:               func() *memory.Index { return nil },
@@ -138,7 +137,6 @@ func TestShareFindings_RapidCallsDoNotCollide(t *testing.T) {
 func TestShareFindings_NoWorkspace(t *testing.T) {
 	tool := NewShareFindings(ShareFindingsDeps{
 		Workspace:           func() string { return "" },
-		SessionName:         func() string { return "s" },
 		Policy:              func() CollabPolicy { return CollabPolicy{KnowledgeHandoff: true} },
 		Index:               func() *memory.Index { return nil },
 		GeneratedMemoryKeep: func() int { return 50 },
