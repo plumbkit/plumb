@@ -68,3 +68,22 @@ func TestNormalSyntheticPin_DoesNotRecordLSPSkipNote(t *testing.T) {
 		t.Fatalf("session record DetectedLanguage = the LSP-skip note for an ordinary workspace; the note is specific to a home-directory root")
 	}
 }
+
+// TestAttachSynthetic_NormalPin_DoesNotRecordLSPSkipNote is the attachSynthetic
+// half of the negative above. The re-pin test alone could not fail under a
+// regression that mis-sets the home-skip flag on the FIRST-ATTACH path only —
+// found by mutation during #326's review (mutant survived the whole suite),
+// which would have mislabelled every markerless workspace's session record.
+func TestAttachSynthetic_NormalPin_DoesNotRecordLSPSkipNote(t *testing.T) {
+	pool := enableTestPool()
+	root := freshTempDir(t) // markerless and nowhere near $HOME: an ordinary synthetic pin
+
+	s := newRefreshSession(t, pool)
+	s.attachSynthetic(context.Background(), root, sessionstate.PinSourceSessionStart, pinTriggerLive)
+
+	info := sessionRecord(t, s.sessID)
+	if info.DetectedLanguage == homeLSPSkipNote {
+		t.Fatalf("session record DetectedLanguage = the LSP-skip note for an ordinary synthetic pin; " +
+			"the note is specific to a home-directory root and must not fire on the first-attach path")
+	}
+}
