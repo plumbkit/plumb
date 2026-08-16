@@ -194,13 +194,26 @@
   commands run from the workspace ROOT, which need not be buildable (a
   repository whose root holds only a `go.work`, with the module in a
   subdirectory, fails `go build ./...` instantly while the tree compiles
-  perfectly), so it now names the argv and the directory; and it recommended
+  perfectly), so it now names the argv and the directory — specifically the argv
+  of the step that FAILED, since a composite command (`verify` = build then
+  test) stops at its first failure and naming the first step beside the second
+  step's output puts two contradictory facts in one message; and it recommended
   `test_target` unconditionally even though the shipped `[tasks.go].test`
   default has no `{target}` placeholder and the resolver refuses a target a
-  command cannot hold, so that advice is now offered only when the stored
-  command can actually accept one. The `test_target` schema and the tool
-  description say the same thing rather than presenting scoping as always
-  available.
+  command cannot hold. That advice is now offered nowhere, because it could
+  never be followed: a resolved command cannot hold the placeholder at all — the
+  resolver either substitutes it or refuses the command — and the compile gate
+  resolves without a target by construction, so scoping the test command could
+  not have helped it. The `test_target` schema and the tool description say the
+  same thing rather than presenting scoping as always available.
+
+  Known and filed rather than fixed here: a cancelled context or a signal kill
+  produces exit code -1 with neither the timeout nor the start-error flag set,
+  so it still classifies as a red suite at the baseline and as a KILL in a
+  verdict — a false kill, which is the outcome this tool exists to prevent. It
+  reproduces identically before this change; closing it means teaching `RunArgv`
+  to distinguish cancellation from a genuine non-zero exit, in a primitive that
+  three other tools share.
 
 - **The TUI Settings scope column no longer lists git linked worktrees as
   separate workspaces.** Every live session's folder became a scope row, so a
