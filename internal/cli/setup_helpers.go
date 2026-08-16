@@ -108,6 +108,26 @@ func HermesConfigPath() (string, error) {
 	return homeRelConfigPath(".hermes", "config.yaml")
 }
 
+// ZCodeConfigPath returns the ZCode user config (~/.zcode/cli/config.json), the
+// file both the desktop client and its agent core read for MCP servers (under
+// the nested mcp.servers key — see setup_zcode.go).
+func ZCodeConfigPath() (string, error) {
+	return homeRelConfigPath(".zcode", "cli", "config.json")
+}
+
+// zcodeInstalled reports whether ZCode looks installed: its home dir (~/.zcode)
+// exists. The desktop app creates the dir on first run, but cli/config.json only
+// appears once a setting is configured there — the same absent-file ambiguity
+// that gives Kimi Code an installedFn — so the bulk paths and doctor use the dir
+// to tell "installed, nothing configured yet" from "not installed".
+func zcodeInstalled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return dirExists(filepath.Join(home, ".zcode"))
+}
+
 // AntigravityConfigPath returns the global Antigravity CLI MCP config
 // (~/.gemini/antigravity-cli/mcp/plumb.json).
 func AntigravityConfigPath() (string, error) {

@@ -147,7 +147,7 @@ func TestRunSkillsSync_UnknownClientIsAUsageError(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown client name must be an error")
 	}
-	for _, want := range []string{"not-a-client", "claude-code", "codex", "kimi-code"} {
+	for _, want := range []string{"not-a-client", "claude-code", "codex", "kimi-code", "zcode"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error must name %q: %v", want, err)
 		}

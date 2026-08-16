@@ -25,6 +25,7 @@ func TestNewClientConfigPaths(t *testing.T) {
 		{"crush", CrushConfigPath, "crush.json", "crush"},
 		{"goose", GooseConfigPath, "config.yaml", "goose"},
 		{"hermes", HermesConfigPath, "config.yaml", ".hermes"},
+		{"zcode", ZCodeConfigPath, "config.json", "cli"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

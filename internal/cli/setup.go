@@ -18,7 +18,7 @@ var setupCmd = &cobra.Command{
 	Long: `Register plumb as an MCP server in an external client's config.
 
 Registration is config-only: it never installs skill files. Skill-capable
-clients (claude-code, codex, kimi-code) get their skills from
+clients (claude-code, codex, kimi-code, zcode) get their skills from
 ` + "`plumb skills sync`" + ` — setup prints a hint when it notices them missing or
 stale, and bare ` + "`plumb skills`" + ` shows the full status table.
 
@@ -33,10 +33,11 @@ client, or use a bulk flag:
             have it yet (config file present but no plumb entry). Clients
             with no config file at all are left untouched — plumb cannot
             tell an absent config from an uninstalled client, so use the
-            client's named subcommand to create one. The one exception is
-            Kimi Code, detected via its data dir ($KIMI_CODE_HOME, or
-            ~/.kimi-code): its mcp.json only exists once an MCP server is
-            configured, so --all creates it fresh.`,
+            client's named subcommand to create one. The exceptions are Kimi
+            Code, detected via its data dir ($KIMI_CODE_HOME, or
+            ~/.kimi-code), and ZCode, detected via its home dir (~/.zcode):
+            their MCP configs only exist once a server is configured, so
+            --all creates them fresh.`,
 	RunE: runSetupAll,
 }
 

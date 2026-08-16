@@ -78,6 +78,18 @@ func kimiCodeSkillsDir() (string, error) {
 	return homeRelConfigPath(".kimi-code", "skills")
 }
 
+// zcodeSkillsDir returns the user-scoped ZCode skills directory (~/.zcode/skills).
+//
+// Verified against the installed desktop app's own shipped documentation, not
+// assumed: ZCode bundles a configuration guide inside the app that states user
+// skills are discovered at ~/.zcode/skills/, loaded as <name>/SKILL.md directory
+// bundles, and matched on frontmatter name + description — the exact shape every
+// shipped plumb skill already carries (TestEmbeddedSkills_HaveValidFrontmatter
+// pins that).
+func zcodeSkillsDir() (string, error) {
+	return homeRelConfigPath(".zcode", "skills")
+}
+
 // skillResult is one skill's outcome: the action installSkill reported
 // ("installed"/"updated"/"unchanged"), or the error that stopped it.
 type skillResult struct {

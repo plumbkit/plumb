@@ -117,7 +117,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	const (
 		wantLanguages = 32 // indexed languages; site shows 28 (.tsx folds into TypeScript), README says "15+"
 		wantUncovered = 0  // langsupport rows recognised but not yet indexed — decreases as extractors land
-		wantClients   = 14 // plumb setup targets; site shows 14 ("Fourteen agents")
+		wantClients   = 15 // plumb setup targets; site shows 15 ("Fifteen agents")
 	)
 	var supported int
 	for _, l := range langsupport.All() {
@@ -140,7 +140,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	if got := len(allSetupClients()); got != wantClients {
 		t.Errorf("plumb has %d setup clients, pinned at %d.\n"+
 			"If intended, update the website's client count (site/index.html — the \"AI clients\" "+
-			"stat and the \"Fourteen agents\" heading/chips, currently 14) "+
+			"stat and the \"Fifteen agents\" heading/chips, currently 15) "+
 			"and the docs/cli-reference.md setup table, then bump wantClients.", got, wantClients)
 	}
 }
