@@ -193,16 +193,27 @@ func TestLeanProfileBudget(t *testing.T) {
 }
 
 // maxDescriptionChars is the per-tool description ceiling. Clients truncate a
-// long description before the model ever sees it — Claude Code cuts near 2,000
-// characters and appends "… [truncated]" — so every character past the cap is
-// authored, shipped, and then discarded, and the discarded part is always the
-// TAIL: the parameter notes and caveats that tend to sit at the end.
+// long description before the model ever sees it and append "… [truncated]", so
+// every character past the cap is authored, shipped, and then discarded — and
+// the discarded part is always the TAIL: the parameter notes and caveats that
+// tend to sit at the end.
 //
-// The exact client constant is not published. It is bracketed by measurement
-// against a real tools/list captured from `plumb serve`: workspace_sessions at
-// 1,777 characters arrives intact, move_symbol at 2,077 arrives truncated. 2,000
-// is the value inside that bracket, and the cap is a ratchet rather than a spec —
-// under it a description is known to survive.
+// The client constant is not published, but it is directly measurable, and it
+// was measured rather than guessed. Taking the six descriptions that arrived
+// truncated in a live Claude Code session and locating the last surviving word
+// of each in the source string puts the cut at exactly 2048 for all six —
+// edit_file, git, move_symbol, mutation_test, leave_note and check_messages,
+// whose full lengths span 2,077 to 2,909.
+//
+// That measurement fixes the UNIT as well as the value, which is the part worth
+// writing down: the six cut points agree at 2048 in RUNES and disagree in bytes
+// (2,056–2,064, the spread being each description's own em dashes and arrows).
+// A byte-counting ceiling would therefore be measuring the wrong quantity, and
+// would reject text the client would have delivered. Count runes.
+//
+// 2000 rather than 2048 is deliberate headroom: it is one client's constant, not
+// a spec, and a second client may well cap lower. The cap is a ratchet — under
+// it a description is known to survive.
 //
 // When a description outgrows this, MOVE the material, do not delete it: the
 // shipped skills (internal/cli/skills/) and docs/tools.md are the places
