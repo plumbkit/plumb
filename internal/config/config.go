@@ -432,8 +432,10 @@ type CollabConfig struct {
 	// CrossProject lets this session RECEIVE messages from sessions pinned to a
 	// different workspace. Opt-in, default false, and deliberately the recipient's
 	// decision rather than the sender's, so another project can never inject text
-	// into this one's context uninvited. Sending across is always permitted; an
-	// un-opted-in recipient simply never reads it and the message expires unread.
+	// into this one's context uninvited. leave_note checks this before sending:
+	// an un-opted-in recipient refuses the send up front, naming the reason,
+	// rather than accepting a message that would otherwise sit unclaimed until
+	// it expires.
 	//
 	// Gated on `plumb trust`: "the recipient's decision" would mean nothing if the
 	// recipient's own repository — an untrusted surface a clone ships — could flip

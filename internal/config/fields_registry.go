@@ -241,7 +241,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadNextSession,
-		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means they expire unread.",
+		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means a cross-project send to you is refused up front, not silently dropped.",
 	},
 	{
 		Key: "collab.max_exchanges", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
