@@ -665,8 +665,10 @@ func TestRenameSymbol_DryRunRefusesOneFileNamedTwice(t *testing.T) {
 
 // A server that names one file in both Changes and DocumentChanges (nothing in
 // the protocol forbids it) must still be treated as one target: the apply path
-// groups its plans by URI, so a duplicated entry here would shift the file list
-// out of step with the plans and cost a reported file its pre-write baseline.
+// resolves one plan per file, so a duplicated entry here would shift the file
+// list out of step with the plans and cost a reported file its pre-write
+// baseline. Only the BARE second mention survives to reach this code — two
+// mentions that both carry edits are refused outright (issue #314).
 func TestRenameSymbol_DeduplicatesTargetsAcrossEditForms(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.go")

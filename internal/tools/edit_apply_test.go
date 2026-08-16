@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -330,6 +331,87 @@ func TestWorkspaceEditTargets_BareMentionStillMerges(t *testing.T) {
 	}
 }
 
+// Targets must be sorted by path even when the edit set uses BOTH forms.
+// workspaceEditEntries sorts the Changes map and then appends DocumentChanges
+// in server order, so the final sort.Slice is what actually orders the result
+// here — on every platform, not only where URIToPath rewrites separators.
+// TestWorkspaceEditTargets_SortedByPath uses Changes alone and is satisfied by
+// the URI sort, so without this case the final sort is unpinned.
+func TestWorkspaceEditTargets_SortedAcrossBothForms(t *testing.T) {
+	we := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			"file:///z.txt": {{NewText: "z"}},
+		},
+		DocumentChanges: []protocol.TextDocumentEdit{
+			{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: "file:///a.txt"}, Edits: []protocol.TextEdit{{NewText: "a"}}},
+			{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: "file:///m.txt"}, Edits: []protocol.TextEdit{{NewText: "m"}}},
+		},
+	}
+	targets, err := workspaceEditTargets(we)
+	if err != nil {
+		t.Fatalf("three distinct files must not be refused: %v", err)
+	}
+	for i, want := range []string{"/a.txt", "/m.txt", "/z.txt"} {
+		if targets[i].path != want {
+			t.Fatalf("targets[%d].path = %q, want %q — DocumentChanges arrive in server order, so the final sort is load-bearing", i, targets[i].path, want)
+		}
+	}
+}
+
+// workspaceEditTargets must not alias the caller's WorkspaceEdit: applyTextEdits
+// sorts its argument in place, so handing it the server's own slice would
+// reorder a structure the caller still owns. The merge this replaced always
+// allocated, so the contract was previously satisfied by accident.
+func TestWorkspaceEditTargets_DoesNotAliasTheCallersEdits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("1 bbb 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edits := []protocol.TextEdit{
+		{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 1}}, NewText: "A"},
+		{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 6}, End: protocol.Position{Line: 0, Character: 7}}, NewText: "C"},
+	}
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{"file://" + path: edits}}
+	before := slices.Clone(edits)
+
+	if _, err := applyWorkspaceEdit(we); err != nil {
+		t.Fatalf("applyWorkspaceEdit: %v", err)
+	}
+	if !slices.Equal(before, we.Changes["file://"+path]) {
+		t.Errorf("the caller's edit slice was reordered in place:\n before %v\n after  %v", before, we.Changes["file://"+path])
+	}
+}
+
+// The bare-mention carve-out applies only to the SAME spelling. Two spellings
+// of one file are the defect this guard exists for; a bare second mention does
+// not make the pair benign, it only makes it harmless today — and admitting it
+// would leave one target carrying one spelling while collectRenameTargets
+// counts both, breaking the invariant that file list and plans agree.
+func TestWorkspaceEditTargets_TwoSpellingsRefusedEvenWhenOneIsBare(t *testing.T) {
+	viaReal, viaLink, _ := symlinkedSpellings(t, "alpha\n")
+	for _, tc := range []struct {
+		name       string
+		bare, real string
+	}{
+		{"bare spelling first", viaReal, viaLink},
+		{"bare spelling second", viaLink, viaReal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			we := &protocol.WorkspaceEdit{
+				Changes: map[string][]protocol.TextEdit{"file://" + tc.bare: {}},
+				DocumentChanges: []protocol.TextDocumentEdit{{
+					TextDocument: protocol.VersionedTextDocumentIdentifier{URI: "file://" + tc.real},
+					Edits:        []protocol.TextEdit{{NewText: "x"}},
+				}},
+			}
+			if targets, err := workspaceEditTargets(we); err == nil {
+				t.Fatalf("two spellings were admitted because one was bare: %v", targets)
+			}
+		})
+	}
+}
+
 // The duplicate scan must compare against EVERY earlier entry, not just the
 // previous one. A pair that is not adjacent in sorted order (here link/f.txt,
 // link/g.txt, real/f.txt) slips past an adjacent-only check while every other
@@ -354,7 +436,7 @@ func TestWorkspaceEditTargets_RefusesNonAdjacentDuplicate(t *testing.T) {
 }
 
 // The refusal must fire on the documentChanges form too, and across the two
-// forms: workspaceEditGroups folds both into one map, so a server that sends
+// forms: workspaceEditEntries flattens both into one entry list, so a server that sends
 // one spelling in changes and the other in documentChanges produces exactly the
 // pair of targets this guard exists to catch.
 func TestWorkspaceEditTargets_RefusesAcrossChangesAndDocumentChanges(t *testing.T) {
