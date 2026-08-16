@@ -31,7 +31,8 @@ import (
 // a skill is measurable rather than aesthetic — the mailbox's three hardest
 // facts (delivery is poll-only, so silence is not refusal; the exchange cap
 // bounds one thread, not one conversation; cross-project delivery is the
-// recipient's gate and fails silently) are each a wrong default assumption
+// recipient's gate and is refused up front when it is not met) are each a
+// wrong default assumption
 // away from an agent escalating at a peer that never saw its message, or
 // talking to it forever. Folding those into plumb-explore or plumb-memory
 // would file them under a trigger phrase that does not match, which is the
