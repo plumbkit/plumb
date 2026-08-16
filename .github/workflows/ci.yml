@@ -77,12 +77,26 @@ jobs:
       # straight to main, and those never see the step above. github.event.before is
       # the previous tip, which is exactly the base for what this push added.
       #
-      # Deliberately WITHOUT --require-base: on a force-push or the first push to a
-      # branch, `before` is all-zeros or unreachable, and that has to stay a skip
-      # rather than redden main for a ref that was never going to resolve.
-      - name: CHANGELOG placement guard (push)
+      # ADVISORY ONLY, and that is the whole design of this step. It cannot pass
+      # --head, so its merge-base is the branch tip rather than a PR's fork point,
+      # and a branch that was merely BEHIND a release cut then reads as misplaced
+      # once it merges — the exact case the pull_request step above deliberately
+      # green-lights via --head. Replaying real history, 14 of the last 150
+      # first-parent commits on main would have failed this way, and once main is
+      # red there is no bypass short of a corrective commit. Some of those 14 are
+      # genuine misplacements the PR step tolerates by design, which is why this
+      # reports rather than being deleted. Same posture, and same shape, as the
+      # npm-audit job's dev-dependency tier below.
+      #
+      # Also deliberately without --require-base: on a force-push or the first push
+      # to a branch, `before` is all-zeros or unreachable, and that must stay a skip.
+      - name: CHANGELOG placement guard (push, advisory)
         if: github.event_name == 'push'
-        run: ./scripts/check-changelog-placement.sh --base ${{ github.event.before }}
+        continue-on-error: true
+        run: |
+          if ! ./scripts/check-changelog-placement.sh --base ${{ github.event.before }}; then
+            echo "::warning::a CHANGELOG entry on this push looks misplaced — advisory only, because a branch merely behind a release cut reads the same way here (see the step comment in ci.yml); check it landed under the unreleased heading"
+          fi
 
       # go.mod/go.sum tidiness is asserted inside `make verify` (tidy-check) on
       # both OSes — drift is invisible locally (the build keeps working) but

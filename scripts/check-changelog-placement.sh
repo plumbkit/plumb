@@ -71,8 +71,16 @@
 # example, where 16 lines moved into the wrong section and only the one genuinely new
 # line ('### Added') failed the check.
 #
-# Last resort: CHANGELOG_PLACEMENT_ALLOW=1, meant to be set on the workflow step in
-# the same PR, so the bypass is part of the diff a reviewer reads, not a deletion.
+# Last resort: CHANGELOG_PLACEMENT_ALLOW=1, meant to be set in the same PR on the
+# `CHANGELOG placement guard` step in ci.yml, so the bypass is part of the diff a
+# reviewer reads rather than a deleted step. That is the only step it needs: the push
+# step is advisory and cannot block a merge.
+#
+# One more fail-open worth naming, since this comment enumerates the rest: an ODD
+# number of column-0 fences above the first heading leaves the base scan with no
+# heading to find, and the run skips. Not reachable in this file today (it has none),
+# and the fence handling is what stops a quoted heading in an example being mistaken
+# for a real one — but it is a silent green, so it belongs on this list.
 set -eu
 
 usage() {
@@ -89,7 +97,8 @@ usage: check-changelog-placement.sh [--base <ref>] [--head <ref>] [--require-bas
 environment:
   CHANGELOG_BASE_REF      default for --base
   CHANGELOG_PLACEMENT_ALLOW  set to any value to bypass the guard entirely; meant
-                          to be set on the workflow step in the PR that needs it
+                          to be set on the pull_request workflow step in ci.yml, in
+                          the PR that needs it
 EOF
 }
 
@@ -333,25 +342,37 @@ END {
 			checked++
 			continue
 		}
+		# R3 — the line came OUT of the unreleased section in the base and landed in a
+		# released one. That is 3e885aca (#310): a deliberate relocation aimed at the
+		# unreleased heading that hit a released one instead. It only failed back then
+		# because one incidental new line rode along with it.
+		#
+		# Checked BEFORE the pure-addition gate below, unlike R1: a move is identified
+		# by the delete/re-add pair, not by the shape of the hunk it lands in, so an
+		# unrelated edit next to the landing site must not hide it.
+		#
+		# Sub-headings are exempt. fromunrel is keyed by TEXT, and "### Added" appears
+		# in nearly every section, so one deletion of it from the unreleased section
+		# would otherwise mark every later re-addition anywhere as a move and hard-fail
+		# a legitimate cleanup. The same ambiguity remains for a genuinely duplicated
+		# BULLET, which is inherent: two identical lines are indistinguishable, and the
+		# guard errs toward reporting rather than staying silent on the #310 shape.
+		if (deleted[t] > 0 && (t in fromunrel) && substr(t, 1, 3) != "###") {
+			deleted[t]--
+			status = 1
+			if (nr3 > 0 && r3head[nr3] == htext[h] && r3end[nr3] == ln - 1) {
+				r3end[nr3] = ln
+			} else {
+				nr3++
+				r3start[nr3] = ln
+				r3end[nr3] = ln
+				r3head[nr3] = htext[h]
+			}
+			continue
+		}
 		if (!(ln in pureadd)) continue
 		if (deleted[t] > 0) {
 			deleted[t]--
-			# R3 — the line came OUT of the unreleased section in the base and landed
-			# in a released one. That is 3e885aca (#310): a deliberate relocation aimed
-			# at the unreleased heading that hit a released one instead. It only failed
-			# back then because one incidental new line rode along with it.
-			if (t in fromunrel) {
-				status = 1
-				if (nr3 > 0 && r3head[nr3] == htext[h] && r3end[nr3] == ln - 1) {
-					r3end[nr3] = ln
-				} else {
-					nr3++
-					r3start[nr3] = ln
-					r3end[nr3] = ln
-					r3head[nr3] = htext[h]
-				}
-				continue
-			}
 			nmoved++
 			if (!(htext[h] in mseen)) {
 				mseen[htext[h]] = ++nmt
@@ -419,8 +440,8 @@ END {
 	print ""
 	print "If the placement really is deliberate — a changelog cleanup, or an entry that"
 	print "belongs to a version that already shipped — say so in the PR and set"
-	print "CHANGELOG_PLACEMENT_ALLOW=1 on the workflow step, so the bypass is part of the"
-	print "diff a reviewer reads."
+	print "CHANGELOG_PLACEMENT_ALLOW=1 on the pull_request step in ci.yml, so the bypass"
+	print "is part of the diff a reviewer reads."
 	exit 1
 }
 ' "$TMP/diff" "$TMP/new.md"
