@@ -143,12 +143,156 @@ func TestWorkspaceEditTargets_SortedByPath(t *testing.T) {
 	}}
 	want := []string{"/a.txt", "/m.txt", "/z.txt"}
 	for range 20 { // map order varies per iteration; the result must not
-		got := workspaceEditTargets(we)
+		got, err := workspaceEditTargets(we)
+		if err != nil {
+			t.Fatalf("three distinct files must not be refused: %v", err)
+		}
 		for i, w := range want {
 			if got[i].path != w {
 				t.Fatalf("targets[%d].path = %q, want %q", i, got[i].path, w)
 			}
 		}
+	}
+}
+
+// symlinkedSpellings returns two spellings of ONE file — one through a real
+// directory, one through a symlink to it — plus the real path and the bytes it
+// was seeded with. Skips when the platform will not make a symlink.
+func symlinkedSpellings(t *testing.T, content string) (viaReal, viaLink, realPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	realPath = filepath.Join(realDir, "f.txt")
+	if err := os.WriteFile(realPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return realPath, filepath.Join(dir, "link", "f.txt"), realPath
+}
+
+// Two URIs naming ONE file are refused, not applied (issue #314). Before the
+// fix both spellings became their own target, both were prepared from the same
+// pre-edit bytes, and both were written in turn — so the second write silently
+// discarded the first, inside an apply whose contract is that it is atomic.
+// lockPaths collapses the pair to one mutex (issue #290), so the bug never
+// deadlocked and never errored: it just lost an edit and reported success.
+func TestApplyWorkspaceEdit_RefusesTwoSpellingsOfOneFile(t *testing.T) {
+	const original = "alpha\nbeta\n"
+	viaReal, viaLink, realPath := symlinkedSpellings(t, original)
+
+	// Two DIFFERENT edits, so a lost update is visible in the bytes: line 0 via
+	// the real path, line 1 via the symlink.
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + viaReal: {{
+			Range:   protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 5}},
+			NewText: "ALPHA",
+		}},
+		"file://" + viaLink: {{
+			Range:   protocol.Range{Start: protocol.Position{Line: 1, Character: 0}, End: protocol.Position{Line: 1, Character: 4}},
+			NewText: "BETA",
+		}},
+	}}
+
+	modified, err := applyWorkspaceEdit(we)
+	if err == nil {
+		t.Fatalf("expected a refusal; the apply reported success, modified=%v", modified)
+	}
+	if len(modified) != 0 {
+		t.Errorf("a refused apply must report no modified files, got %v", modified)
+	}
+	if !isEditLogicError(err) {
+		t.Errorf("refusal is not marked editLogicErr, so callers will retry it: %v", err)
+	}
+	if !strings.Contains(err.Error(), "same file under two paths") {
+		t.Errorf("error does not name the defect: %v", err)
+	}
+	// The point of refusing: no byte lands, rather than one edit landing and the
+	// other being silently dropped.
+	got, readErr := os.ReadFile(realPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != original {
+		t.Fatalf("file was written despite the refusal: %q, want %q", got, original)
+	}
+}
+
+// The refusal names the same pair of spellings on every run. Iterating the URI
+// map directly would let Go's randomised map order pick a different "first"
+// spelling each time, so the same broken WorkspaceEdit would report a different
+// error message run to run and look unreproducible.
+func TestWorkspaceEditTargets_DuplicateErrorIsDeterministic(t *testing.T) {
+	viaReal, viaLink, _ := symlinkedSpellings(t, "alpha\n")
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + viaReal: {{NewText: "a"}},
+		"file://" + viaLink: {{NewText: "b"}},
+	}}
+
+	var first string
+	for i := range 20 {
+		targets, err := workspaceEditTargets(we)
+		if err == nil {
+			t.Fatalf("two spellings of one file were not refused: %v", targets)
+		}
+		if i == 0 {
+			first = err.Error()
+			continue
+		}
+		if err.Error() != first {
+			t.Fatalf("error text varies with map order:\n first: %s\n now:   %s", first, err.Error())
+		}
+	}
+}
+
+// The refusal must fire on the documentChanges form too, and across the two
+// forms: workspaceEditGroups folds both into one map, so a server that sends
+// one spelling in changes and the other in documentChanges produces exactly the
+// pair of targets this guard exists to catch.
+func TestWorkspaceEditTargets_RefusesAcrossChangesAndDocumentChanges(t *testing.T) {
+	viaReal, viaLink, _ := symlinkedSpellings(t, "alpha\n")
+	we := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			"file://" + viaReal: {{NewText: "a"}},
+		},
+		DocumentChanges: []protocol.TextDocumentEdit{{
+			TextDocument: protocol.VersionedTextDocumentIdentifier{URI: "file://" + viaLink},
+			Edits:        []protocol.TextEdit{{NewText: "b"}},
+		}},
+	}
+	if targets, err := workspaceEditTargets(we); err == nil {
+		t.Fatalf("two spellings split across changes/documentChanges were not refused: %v", targets)
+	}
+}
+
+// The guard must not fire on the ordinary case it sits in front of: distinct
+// files reached through a symlinked parent are still one target each. Without
+// this, keying the dedup on anything coarser than the file itself (the parent
+// directory, say) would pass every other test here.
+func TestWorkspaceEditTargets_DistinctFilesUnderOneSymlinkAreKept(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + filepath.Join(realDir, "one.txt"):       {{NewText: "1"}},
+		"file://" + filepath.Join(dir, "link", "two.txt"):   {{NewText: "2"}},
+		"file://" + filepath.Join(dir, "link", "three.txt"): {{NewText: "3"}},
+	}}
+	targets, err := workspaceEditTargets(we)
+	if err != nil {
+		t.Fatalf("three distinct files must not be refused: %v", err)
+	}
+	if len(targets) != 3 {
+		t.Fatalf("got %d targets, want 3: %v", len(targets), targets)
 	}
 }
 
