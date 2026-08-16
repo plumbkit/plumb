@@ -268,8 +268,17 @@ const collaborationStatsOutputOmitted = "[collaboration content omitted from sta
 // never pruned — so a second raw copy there would outlive every guarantee the
 // first copy was given, and would do so silently. Message CONTENT is the one
 // thing telemetry has no use for: raw byte counts stay on the Call, and the
-// routing metadata that makes a row queryable (to, conversation_id, paths,
-// waits) is preserved.
+// routing metadata PRESENT IN THE ARGUMENTS (to, paths, waits, and a quoted
+// conversation_id) is preserved.
+//
+// One honest limit on that, because an earlier version of this comment claimed
+// more than it delivered: a note that OPENS a thread does not carry a
+// conversation_id in its arguments — the id is minted during the call and
+// appears only in the reply, which is dropped. So the first message of every
+// thread is unattributable to its thread in telemetry, while every reply into
+// one is not. Recovering it would mean parsing our own receipt text for an id,
+// which is a worse dependency than the gap it closes; if this matters later, the
+// fix is a structured channel from the tool to the recorder, not a regex.
 //
 // leave_note/share_intent/share_findings are stripped on the way IN. The two
 // mailbox readers carry no body in their arguments, but their output delivers
