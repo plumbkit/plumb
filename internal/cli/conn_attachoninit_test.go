@@ -394,8 +394,14 @@ func TestOnInit_UnbackedWideClaimMarksTheSessionBlocked(t *testing.T) {
 // bearing assertion here is POSITIVE and specific: the message must contain the
 // actionable call form, `session_start({workspace: "<root>"`. An accusation does
 // not incidentally contain that — it is the remedy itself, quoted, with the very
-// root at issue. The banned list is kept as a second line of defence for the
-// spellings actually seen in review, not as the primary guard.
+// root at issue.
+//
+// Be honest about the remaining hole rather than claim it is closed: a message
+// that carries the remedy AND accuses anyway still passes, and review confirmed
+// one can be written. String matching cannot decide what a sentence asserts.
+// What this guard does buy is that the message can never SILENTLY lose its
+// remedy — which is the half that changes what a caller can do about it — and
+// that the specific wordings a review has already rejected cannot come back.
 func assertClaimMessage(t *testing.T, msg, root string) {
 	t.Helper()
 	if !strings.Contains(msg, root) {

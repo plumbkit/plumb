@@ -490,11 +490,12 @@ func (s *connSession) lspDiagMode() string {
 // markBoundaryViolation records the violation on the session record and is
 // deliberately sticky-not-terminating: each offending tool call already gets a
 // WorkspaceBoundaryError back, which is the per-call enforcement contract.
-// "Health: blocked" + HealthMessage is observability — the TUI session detail
-// and the dashboard alert surface it for the operator. The alert renders THIS
-// message (it used to print a fixed "start a new MCP connection", which is
-// wrong for a refused wide claim: reconnecting replays the same pin), so a
-// message written here must name its own remedy,
+// "Health: blocked" + HealthMessage is observability — the TUI surfaces it for
+// the operator. NOTE the dashboard alert currently prints a FIXED string
+// ("start a new MCP connection") rather than this message, which is wrong for a
+// refused wide claim because reconnecting replays the same pin; only the
+// session detail pane shows the text written here. Tracked separately — a
+// message written here should still name its own remedy,
 // while legitimate calls inside the pinned workspace keep working. We do not
 // cancel s.ctx here: a single confused tool call (e.g. an agent fumbling a
 // path) should not tear down an otherwise-working session, and the boundary
