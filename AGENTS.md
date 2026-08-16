@@ -43,13 +43,11 @@ Key packages:
 |---|---|
 | `internal/mcp/` | MCP server, tool registry, prompts, stdio transport |
 | `internal/lsp/` | `lsp.Client` interface (23 methods), JSON-RPC 2.0 (with server-request support), process supervisor |
-| `internal/lsp/adapters/base/` | The half of every adapter that is identical across servers: the plumbing behind all 23 `lsp.Client` methods, the capability cache, the notification fan-out, the server-request handler, and the `"<server> <label>: <cause>"` error labelling. Adapters embed `*base.Adapter` and shadow only what their server does differently. **Its exported surface is exactly `lsp.Client` and must stay that way** — Go promotes an embedded type's exported methods into all nine adapters, and `internal/cli` resolves optional capabilities structurally, so one extra method there silently opts every server into a capability it lacks. Escape hatches are package-level FUNCTIONS (`base.Call`/`CallPtr`/`CallRaw`/`Notify`/`Wrap`), never methods; `base.OpenTracker` (lazy `didOpen` for swift/zig/html/kotlin) is held as a named field, never embedded. Guards: `TestExportedSurface_IsExactlyLSPClient`, `TestAdapters_OptionalInterfaceSurface`, `TestLazyOpenAdapters_LanguageIDAndExportedSurface`, `TestLazyOpenAdapters_DidOpenMatrix` (the per-method `didOpen` count of each lazy-open adapter, both directions — the ensure-open set is asymmetric on purpose, so making them "consistent" is not tidying). |
+| `internal/lsp/adapters/base/` | The half of every adapter that is identical across servers; adapters embed `*base.Adapter` and shadow only what differs. **Its exported surface is exactly `lsp.Client` and must stay that way** — one extra exported method silently opts every server into a capability it lacks. Escape hatches are package-level FUNCTIONS, never methods. Rules + the four guard tests: [`docs/architecture.md`](docs/architecture.md#the-base-adapters-exported-surface) |
 | `internal/lsp/adapters/{gopls,pyright,jdtls,rust,swift,zig,typescript,kotlin,html}/` | All languages enabled by default and activated automatically when their server binary is installed (set `[lsp.<lang>] enabled = false` to exclude one). Validated except `html`; see the adapter status table in [`docs/adding-an-lsp.md`](docs/adding-an-lsp.md#validation-levels). |
 | `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST, gotreesitter (most languages incl. TypeScript/TSX/JSX, below), and canonical-tree-sitter-via-WASM Swift (`wasmts`); search + BFS explore/impact/affected/routes |
 | `internal/topology/extractors/golang/` | Go extractor (`go/parser`+`go/ast`; no CGo) |
-| `internal/topology/extractors/treesitter/` | gotreesitter extractors (pure-Go): Python, Ruby, C, C#, Elixir, Scala, PHP, JSON, CSS, SCSS, XML, Lua, C++, Objective-C, Dart, JavaScript, Rust, Zig, Kotlin, Swift, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML. Config/IaC/markup grammars extract named declarations (TOML/YAML/Markdown/HTML also index nesting via containment edges; HTML and Markdown are flagged `PreferStructuralOutline` so outline tools use the Map over the noisy LSP). JavaScript (`.js`/`.mjs`/`.cjs`) and TypeScript/TSX/JSX (`.ts`/`.tsx`/`.jsx`, primary since the v0.48.0 per-language flip — 435/435 corpus extraction parity) are here; Swift stays on `wasmts` until its upstream parse residuals clear (the gotreesitter Swift extractor remains as its wasm init-failure fallback; the `recoverIUOBangs` IUO workaround was retired once gotreesitter v0.47.x fixed the IUO parse natively). Embeds the `grammars` package (~+26 MB); pinned v0.48.0. **Memory discipline:** each extractor decodes its grammar **lazily** (a `lazyGrammar` resolved on first `Extract`, not in the constructor) and `defer tree.Release()`s its parse arena back to gotreesitter's pool after the walk — so grammar memory scales with the languages a workspace actually contains, not the full supported set, and a resync recycles one arena instead of allocating per file. |
-| `internal/topology/extractors/typescript/` | Legacy regex TS/JS extractor; no longer production-reachable since the TS flip (it was the `wasmts` TS init-failure fallback) — retained with the wasmts TS bundle for the parity harness until wasmts retirement. |
-| `internal/topology/extractors/wasmts/` | Grammar-generic WASM extractor driven by wazero (pure-Go). Production path for **Swift only** since the TS flip: the **canonical** alex-pinkus `tree-sitter-swift` grammar + its C external scanner (`swift.wasm`, ~3.5 MB, `make swift-wasm`), held until gotreesitter clears the six residual Swift parse shapes. The **TypeScript + TSX** bundle (`ts.wasm`, ~2.9 MB, `make ts-wasm`) is no longer wired into production — kept as the parity-sweep reference until wasmts retirement. Each bundle has its own builder; both need Zig only to regenerate. |
+| `internal/topology/extractors/` | Three engines: `golang` (go/ast), `treesitter` (gotreesitter, pure-Go, ~29 languages incl. JS/TS/TSX — primary since the v0.48.0 flip), `wasmts` (wazero; production for **Swift only**). `typescript/` is the retired regex extractor, kept for the parity harness. **Grammars decode lazily and parse arenas are released back to the pool** — which is why idle RSS looks large without leaking. Per-language status + the memory rule: [`docs/architecture.md`](docs/architecture.md#structural-extractors-and-their-memory-discipline) |
 | `internal/langsupport/` | Per-language capability registry (structural engine + LSP adapter). Single source of truth for `buildExtractors`; the seam for moving a language onto tree-sitter. |
 | `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool deps; `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality/` | Offline post-write analysers (golangci-lint, …) on changed files; findings appended to write responses |
@@ -150,32 +148,19 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `chore`. Prefer one comm
 ## Build commands
 
 ```sh
-make build       # compile to ./plumb, version stamped from git/VERSION
-make test        # go test ./...
-make test-race   # go test -race ./...
-make lint        # golangci-lint run (current GOOS only)
-make lint-cross  # lint + vet the OTHER OS's tree (Linux ↔ macOS); static analysis, runs no tests
-make check-size  # file-size rule: 600 lines source, 900 test
-make check-brief # AGENTS.md stays a brief: ≤200 lines
-make tidy-check  # assert go.mod/go.sum are already tidy
-make verify      # build + test + lint + integration/clients tag-compile + check-size + check-brief + tidy-check — "ready to commit"
-make cover       # statement coverage, failing under the floor in scripts/check-coverage.sh
-make cover-report # same, plus the 20 least-covered packages
-make vuln        # govulncheck over the module graph
-make fuzz        # fuzz targets, discovered (FUZZTIME=60s)
-make tidy        # go mod tidy
-make clean       # remove ./plumb
-make install-hooks  # install pre-commit hook (required after every fresh clone; `make hooks` is an alias)
-make install-clients     # install the MCP client CLIs (gemini, codex, qwen, …) the clientsmoke harness drives
-make clients-test        # on-demand: each installed client CLI completes an MCP handshake with plumb (no API keys)
-make clients-test-auth   # on-demand: drive each client headless to force a real plumb tool call (needs API keys)
+make verify   # build + test + lint + tag-compile + check-size + check-brief + tidy-check — "ready to commit"
+make build    # compile to ./plumb, version stamped from git/VERSION
+make test     # go test ./...          (test-race for the race detector)
+make lint     # golangci-lint run      (lint-cross static-checks the OTHER OS's tree)
+make cover    # statement coverage against the floor in scripts/check-coverage.sh
+make vuln     # govulncheck over the module graph
 ```
 
-The two `clients-test*` targets are on-demand (own build tags, never in `make verify` beyond a compile check) and drive real client CLIs non-interactively.
+`make help` lists every target; the rest are in [`docs/contributing.md`](docs/contributing.md#build--verify).
 
-**`cover` and `vuln` are deliberately NOT in `verify`** — coverage re-runs the whole suite with instrumentation (roughly doubling the local edit loop) and govulncheck needs the network. CI runs both on every push, as their own jobs, alongside `verify` (2-OS matrix), `test-race`, and the real-binary `integration` job. The coverage floor is a ratchet: raise it when the tree sits comfortably above, never lower it to make a red build green.
+**`cover` and `vuln` are deliberately NOT in `verify`** — coverage re-runs the whole suite instrumented (roughly doubling the local edit loop) and govulncheck needs the network. CI runs both on every push as their own jobs, alongside `verify` (2-OS matrix), `test-race`, and the real-binary `integration` job. The coverage floor is a ratchet: raise it when the tree sits comfortably above, never lower it to make a red build green.
 
-**`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`. The hook resolves that binary on `PATH` first and then in the Go tool bin dir (`$GOBIN`, else `$GOPATH/bin`, else `~/go/bin`), because hooks inherit the environment of whatever invoked git — an editor, a GUI client, an agent daemon — which often lacks `~/go/bin` even when your terminal has it; without the fallback the hook would fail on every commit. If it resolves nowhere the hook fails loudly with install guidance rather than skipping the lint silently. **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
+**`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`, resolving that binary on `PATH` and then in the Go tool bin dir, because hooks inherit the environment of whatever invoked git (an editor, a GUI client, an agent daemon) which often lacks `~/go/bin`. It fails loudly if the binary resolves nowhere rather than skipping the lint silently. **Formatting note:** format via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
 
 ## Known limitations and pending work
 
