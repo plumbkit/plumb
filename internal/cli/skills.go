@@ -39,19 +39,36 @@ import (
 //
 // So: eight, and the ninth needs its own justification against both paragraphs.
 //
-// The pattern is SKILL.md files rather than the whole tree: a skill directory
-// may carry supporting material (plumb-chat has a references/ note), and
-// embeddedSkills only ever reads SKILL.md, so anything else would be bytes in
-// every user's binary that nothing can reach.
+// The pattern is SKILL.md plus references/*.md, not the whole tree. The
+// original rule was SKILL.md alone, on the reasoning that anything else would
+// be bytes in every user's binary that nothing can reach — correct as far as it
+// went, and it produced the opposite failure: plumb-chat/SKILL.md tells the
+// reader to use references/idle-agent-wake-hook.md, the file was not in the
+// binary at all, and a release-binary user got a skill pointing at something
+// they could not obtain. SKILL.md §"Catching mail before a peer goes quiet"
+// admitted as much, linking to GitHub as the only way to reach it.
+//
+// So the rule is unchanged in substance — ship only what a reader can reach —
+// and references/ now qualifies because sync installs it beside SKILL.md.
+// Supporting material that is NOT under references/ still ships nowhere, and
+// still should not: a skill that needs a file must name it under references/.
 //
 //go:embed skills/*/SKILL.md
+//go:embed skills/*/references/*.md
 var skillsFS embed.FS
 
-// embeddedSkill is a named skill file to be installed into a client's skills
-// directory.
-type embeddedSkill struct {
+// embeddedFile is one installable file's basename and content.
+type embeddedFile struct {
 	Name    string
 	Content string
+}
+
+// embeddedSkill is a named skill file to be installed into a client's skills
+// directory, plus any reference notes SKILL.md points at.
+type embeddedSkill struct {
+	Name       string
+	Content    string
+	References []embeddedFile
 }
 
 // embeddedSkills returns the shipped skills, one per subdirectory of the
@@ -72,7 +89,34 @@ func embeddedSkills() []embeddedSkill {
 		if err != nil {
 			continue
 		}
-		skills = append(skills, embeddedSkill{Name: name, Content: string(data)})
+		skills = append(skills, embeddedSkill{
+			Name:       name,
+			Content:    string(data),
+			References: embeddedReferences(name),
+		})
 	}
 	return skills
+}
+
+// embeddedReferences returns the reference notes shipped with skill name, in
+// directory order. A skill with no references/ directory yields none — that is
+// the common case and not an error.
+func embeddedReferences(name string) []embeddedFile {
+	dir := "skills/" + name + "/references"
+	entries, err := skillsFS.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var refs []embeddedFile
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := skillsFS.ReadFile(dir + "/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		refs = append(refs, embeddedFile{Name: entry.Name(), Content: string(data)})
+	}
+	return refs
 }

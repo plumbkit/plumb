@@ -105,9 +105,71 @@ func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
 	}
 	for _, skill := range embeddedSkills() {
 		action, err := installSkill(dir, skill.Name, skill.Content)
+		if err == nil {
+			action, err = installSkillReferences(dir, skill, action)
+		}
 		results = append(results, skillResult{name: skill.Name, action: action, err: err})
 	}
 	return dir, results
+}
+
+// installSkillReferences writes the skill's reference notes into
+// <skillsDir>/<name>/references/, so a SKILL.md that points at one is pointing
+// at a file the reader actually has.
+//
+// They are reported under the SKILL.md action rather than as rows of their own:
+// a reference note is part of the skill, not a peer of it, and one row per file
+// would make the sync table grow with material the user never asked about by
+// name. The skill's action is promoted to the strongest of its parts, so a
+// current SKILL.md beside a rewritten reference reports "updated" rather than
+// the "unchanged" that would hide the write.
+//
+// Reference notes carry no provenance marker. The marker is an HTML comment,
+// invisible in the markdown SKILL.md presentations render — but a reference is
+// plain material a user may open in any viewer, and stamping it would buy
+// nothing: staleness is already decided per skill by skillStateAt, which reads
+// the references too.
+func installSkillReferences(skillsDir string, skill embeddedSkill, action string) (string, error) {
+	if len(skill.References) == 0 {
+		return action, nil
+	}
+	dir := filepath.Join(skillsDir, skill.Name, "references")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return action, fmt.Errorf("creating references directory: %w", err)
+	}
+	for _, ref := range skill.References {
+		dst := filepath.Join(dir, ref.Name)
+		existing, readErr := os.ReadFile(dst)
+		switch {
+		case readErr == nil && string(existing) == ref.Content:
+			continue
+		case readErr == nil:
+			if err := backupFile(dst); err != nil {
+				return action, fmt.Errorf("backing up %s: %w", dst, err)
+			}
+			action = strongerSkillAction(action, "updated")
+		case os.IsNotExist(readErr):
+			action = strongerSkillAction(action, "installed")
+		default:
+			return action, fmt.Errorf("reading %s: %w", dst, readErr)
+		}
+		if err := fsync.AtomicWrite(dst, []byte(ref.Content), setupWriteOptions(".plumb_skill_ref_*.md")); err != nil {
+			return action, fmt.Errorf("installing skill reference: %w", err)
+		}
+	}
+	return action, nil
+}
+
+// strongerSkillAction merges two per-file outcomes into the one the skill row
+// reports: "updated" outranks "installed", which outranks "unchanged". Ranking
+// rather than last-write-wins is what stops a run that rewrote a reference from
+// reporting "unchanged" because SKILL.md happened to be current.
+func strongerSkillAction(a, b string) string {
+	rank := map[string]int{"unchanged": 0, "installed": 1, "updated": 2}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
 }
 
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating

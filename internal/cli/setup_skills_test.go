@@ -510,3 +510,97 @@ func assertRowStatus(t *testing.T, rows []clientRow, want string) {
 	}
 	t.Errorf("no row with status %q; got %+v", want, rows)
 }
+
+// TestEmbeddedSkills_ReferencesAreInTheBinary is the defect this pair of tests
+// exists for. plumb-chat/SKILL.md instructs the reader to use
+// references/idle-agent-wake-hook.md; the embed pattern was skills/*/SKILL.md,
+// so the file was not in the binary at all and a release-binary user got a skill
+// pointing at something they could not obtain.
+//
+// It asserts a NAMED reference rather than "some skill has some reference":
+// the latter passes on any stray file added later while the one SKILL.md
+// actually cites goes missing, which is exactly the failure being fixed.
+func TestEmbeddedSkills_ReferencesAreInTheBinary(t *testing.T) {
+	var chat *embeddedSkill
+	for i, s := range embeddedSkills() {
+		if s.Name == "plumb-chat" {
+			chat = &embeddedSkills()[i]
+		}
+	}
+	if chat == nil {
+		t.Fatal("plumb-chat is not among the embedded skills")
+	}
+
+	var found *embeddedFile
+	for i, ref := range chat.References {
+		if ref.Name == "idle-agent-wake-hook.md" {
+			found = &chat.References[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("plumb-chat/SKILL.md cites references/idle-agent-wake-hook.md but it is not embedded; got %d reference(s)", len(chat.References))
+	}
+	if len(found.Content) == 0 {
+		t.Error("the embedded reference is empty")
+	}
+	if !strings.Contains(chat.Content, "references/idle-agent-wake-hook.md") {
+		t.Error("plumb-chat/SKILL.md no longer cites the reference this test pins — re-point or remove it")
+	}
+}
+
+// TestInstallSkillsFor_WritesReferencesBesideSKILLmd covers the install side and
+// the two states the status table has to tell apart afterwards.
+func TestInstallSkillsFor_WritesReferencesBesideSKILLmd(t *testing.T) {
+	pointClientHomesAt(t)
+	c := skillCapableClients()[0]
+
+	dir, results := installSkillsFor(c)
+	for _, r := range results {
+		if r.err != nil {
+			t.Fatalf("installing %q: %v", r.name, r.err)
+		}
+	}
+
+	ref := filepath.Join(dir, "plumb-chat", "references", "idle-agent-wake-hook.md")
+	got, err := os.ReadFile(ref)
+	if err != nil {
+		t.Fatalf("reading installed reference: %v", err)
+	}
+
+	// Exact, unstamped: a reference is plain material a user may open in any
+	// viewer, so unlike SKILL.md it carries no provenance marker.
+	var want string
+	for _, s := range embeddedSkills() {
+		if s.Name == "plumb-chat" {
+			want = s.References[0].Content
+		}
+	}
+	if string(got) != want {
+		t.Error("installed reference differs from the embedded source (or was stamped, which it must not be)")
+	}
+
+	// A second sync is a no-op.
+	if _, results = installSkillsFor(c); results[0].err != nil {
+		t.Fatalf("re-sync: %v", results[0].err)
+	}
+	for _, r := range results {
+		if r.name == "plumb-chat" && r.action != "unchanged" {
+			t.Errorf("re-sync reported %q for plumb-chat, want %q", r.action, "unchanged")
+		}
+	}
+
+	// Deleting the reference must make the skill read stale, not installed:
+	// grading on SKILL.md alone would report everything current while the file
+	// SKILL.md sends the reader to is gone.
+	if err := os.Remove(ref); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range embeddedSkills() {
+		if s.Name != "plumb-chat" {
+			continue
+		}
+		if state := skillStateAt(dir, s.Name, s.Content, s.References); state == skillStateInstalled {
+			t.Error("a skill whose reference note is missing still reports installed")
+		}
+	}
+}
