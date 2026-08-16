@@ -9,8 +9,8 @@
 
 ### Fixed
 
-- **A forged home-wide workspace claim is now visible to the operator, and a
-  pre-0.16.7 forged pin is cleaned up instead of living forever.** Two loose
+- **An unrestored home-wide workspace claim is now visible to the operator, and
+  a pre-0.16.7 wide pin is cleaned up instead of living forever.** Two loose
   ends from #318's fix, both found by auditing what that change left behind.
 
   *The alarm.* Refusing the replayed `_meta` pin logs at Info, deliberately — a
@@ -25,10 +25,14 @@
   tell. A claim is left unrestored by a client that forged the key and never ran
   `session_start` — but equally by a genuine declaration whose row the one-time
   sweep below removed, or the startup TTL prune removed, or whose restore
-  declined. The remedy is the same in all four cases (`session_start` again), so
+  declined. `session_start` again is the remedy in all four (in the drift
+  sub-case it pins the resolved root rather than the spelling asked for), so
   the message states what happened and what to do rather than guessing at
-  intent. The mark clears on the next explicit `session_start`, as the
-  sticky-pin refusal's does; a bare `session_start({})` does not clear it.
+  intent — and the dashboard alert now shows that message instead of a fixed
+  "start a new MCP connection", which for this cause is advice that loops. The
+  mark clears on the next explicit `session_start`, as the sticky-pin refusal's
+  does; a bare `session_start({})` does not clear it, and every reconnect
+  re-raises it until the workspace is re-declared.
 
   *The cleanup.* Before #318 any client could claim a workspace through that
   key, and the daemon stored the result with `session_start` origin — the origin
@@ -48,9 +52,9 @@
   rows go with it.
 
   Note the two halves interact, once: on the first start after upgrading, a wide
-  root you had declared is swept, and the next reconnect therefore reports it as
-  unrestored. That is the same one re-declaration, surfaced — not a second
-  problem.
+  root you had declared is swept, and every reconnect then reports it as
+  unrestored until you re-declare it. That is the same one re-declaration,
+  surfaced — not a second problem.
 
   `docs/architecture.md` now documents the reconnect attach ladder, which it
   described only for the cold-start path — so the rung this all concerns was
@@ -60,7 +64,9 @@
   `TestOnInit_OrdinarySessionIsNotMarkedBlocked`,
   `TestReportUnbackedReplay_ComparesCanonically`,
   `TestSweepLegacyWidePins_UsesTheRealContainmentPredicate`,
+  `TestSweepLegacyWidePins_NilStore`,
   `TestSweepWidePinsOnce_RemovesWideRowsAndSparesOthers`, `_DoesNotRunTwice`,
+  `_DisarmsEvenWithNothingToRemove`, `_DropsTheSweptWorkspacesReads`,
   `_FlagSurvivesReopen`, and `_NilSafe` (issue #318).
 
 - **`plumb config show` now prints a provenance row for every `[git]` field, so

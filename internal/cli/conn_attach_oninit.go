@@ -152,8 +152,12 @@ func (s *connSession) reportUnbackedReplay(refused string) {
 	}
 	s.log().Warn("daemon: a home-containing workspace was claimed over the unauthenticated initialize _meta channel and refused, and no persisted pin restored it — re-declare it with session_start if it is yours, or treat it as a client claiming a workspace nobody asked for (issue #318)",
 		"claimed", refused, "attached", s.workspace())
+	// The remedy names force: a peer on a multiplexed connection may already hold
+	// an explicit pin, in which case the plain call is refused by the sticky-pin
+	// guard (issue #182) AND that refusal overwrites this message — so the reader
+	// would lose the explanation before learning the next step.
 	s.markBoundaryViolation(fmt.Sprintf(
-		"the home-containing workspace %s was claimed over the initialize _meta channel and refused, and no persisted pin restored it; call session_start({workspace: %q}) to declare it deliberately (issue #318)", refused, refused))
+		"the home-containing workspace %s was claimed over the initialize _meta channel and refused, and no persisted pin restored it; call session_start({workspace: %q}) to declare it deliberately (add force: true if this connection already holds another explicit pin) — issue #318", refused, refused))
 }
 
 // attachReplayedPin attaches a workspace restored from a persisted pin, keeping

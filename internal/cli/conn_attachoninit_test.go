@@ -213,7 +213,7 @@ func TestOnInit_ReplayedMetaPinCannotClaimHomeContainment(t *testing.T) {
 
 	calls := 0
 	s := newPersistSession(t, store, ss, "proxyX")
-	s.onPinnedWorkspace(wide) // as a forged initialize _meta would
+	s.onPinnedWorkspace(wide) // as any client setting the _meta key would
 	s.setClientRequest(rootsReplying(rootA, &calls))
 	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
 
@@ -347,13 +347,14 @@ func TestOnInit_LiveRepinClearsTheUnverifiedReplayMark(t *testing.T) {
 	}
 }
 
-// A forged wide claim must reach the OPERATOR, not just the log at Info.
+// An unrestored wide claim must reach the OPERATOR, not just the log at Info.
 //
-// The refusal itself cannot tell forged from legitimate, so it stays quiet
-// there. Once the ladder has finished it can: a real declaration left a
-// session_start row, so rung 1b restores the SAME root. A claim backed by
-// nothing is the shape a forged _meta key produces, and it marks the session
-// blocked so the TUI and dashboard show it (issue #318).
+// The refusal stays quiet because it fires on every restart of a legitimately
+// declared wide workspace. Once the ladder has finished, a claim that nothing
+// restored is worth surfacing whatever caused it — the session is not attached
+// where its client asked. It does NOT follow that the claim was forged: the
+// daemon cannot tell, and this release's own sweep produces the same shape for
+// a caller who really did declare that root (issue #318).
 func TestOnInit_UnbackedWideClaimMarksTheSessionBlocked(t *testing.T) {
 	wide := wideRootOrSkip(t)
 	store, ss := newOriginStore(t) // no row: nothing vouches for the claim
@@ -368,10 +369,35 @@ func TestOnInit_UnbackedWideClaimMarksTheSessionBlocked(t *testing.T) {
 
 	health, msg := sessionHealth(t, s.sessID)
 	if health != "blocked" {
-		t.Fatalf("an unbacked wide claim left health = %q, want \"blocked\" — a forged claim must be visible to an operator", health)
+		t.Fatalf("an unrestored wide claim left health = %q, want \"blocked\" — it must be visible to an operator", health)
 	}
-	if !strings.Contains(msg, wide) {
-		t.Errorf("health message does not name the claimed root %q: %s", wide, msg)
+	assertClaimMessage(t, msg, wide)
+}
+
+// assertClaimMessage binds what the operator-facing text must and must NOT say.
+//
+// Without this the whole correction is unguarded: an independent review
+// restored the earlier wording — which accused the client of forgery and
+// asserted "no persisted session_start pin names that root" — and the entire
+// suite stayed green, because the only assertion was that the message contained
+// the root path, which both wordings do. That is the substring-passes-
+// incidentally shape, on the one behaviour a previous review round rejected.
+func assertClaimMessage(t *testing.T, msg, root string) {
+	t.Helper()
+	if !strings.Contains(msg, root) {
+		t.Errorf("message does not name the claimed root %q: %s", root, msg)
+	}
+	// It must not accuse: the daemon cannot tell a forged claim from a
+	// declaration whose row the sweep or the TTL prune removed.
+	for _, banned := range []string{"forged", "forgery", "no persisted session_start pin names that root"} {
+		if strings.Contains(strings.ToLower(msg), banned) {
+			t.Errorf("message accuses the client (%q), which the daemon cannot know: %s", banned, msg)
+		}
+	}
+	// And it must carry the remedy, which is what makes marking the session
+	// blocked defensible for a legitimate caller.
+	if !strings.Contains(msg, "session_start") {
+		t.Errorf("message does not name the remedy (session_start): %s", msg)
 	}
 }
 
@@ -399,7 +425,7 @@ func TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm(t *testing.T) {
 		t.Fatalf("setup: the declared wide root did not restore: got %q, want %q", got, wide)
 	}
 	if health, msg := sessionHealth(t, s.sessID); health != "" {
-		t.Fatalf("a corroborated declaration raised the forged-claim alarm: health=%q msg=%s", health, msg)
+		t.Fatalf("a restored declaration raised the unrestored-claim alarm: health=%q msg=%s", health, msg)
 	}
 }
 
@@ -430,7 +456,7 @@ func TestOnInit_OrdinarySessionIsNotMarkedBlocked(t *testing.T) {
 // resolves symlinks — so a caller who declared a workspace through a symlinked
 // parent has a refused claim and an attached root that are the same directory
 // under two spellings. A textual comparison would call that uncorroborated and
-// raise the forged-claim alarm on a legitimate session, which is exactly the
+// raise the unrestored-claim alarm on a legitimate session, which is exactly the
 // crying wolf this design set out to avoid.
 //
 // Exercised on reportUnbackedReplay directly: two spellings of a WIDE root are
