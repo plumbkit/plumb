@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/plumbkit/plumb/internal/textfmt"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m Model) dashAlertsWidget(width int) []string {
@@ -79,25 +79,32 @@ func (m Model) dashboardDaemonVersionAlert() string {
 	return ""
 }
 
-// blockedAlert renders the one-line alert for a session marked blocked.
+// blockedAlert renders the alert for a session marked blocked.
 //
-// It prefers the session's own HealthMessage, because "blocked" now covers
-// causes with different remedies: a boundary violation, a refused sticky re-pin
-// (issue #182), and a refused wide workspace claim (issue #318). The old fixed
-// string prescribed "start a new MCP connection" for all of them, which for the
-// #318 case is advice that LOOPS — a fresh connection replays the same pin and
-// is refused again. Every writer of the mark supplies a message naming its own
-// remedy; the fixed string is kept only for a mark that somehow carries none.
+// It prefers the session's own HealthMessage, because "blocked" covers causes
+// with different remedies: a boundary violation, a refused sticky re-pin (issue
+// #182), and a refused wide workspace claim (issue #318). The old fixed string
+// prescribed "start a new MCP connection" for all of them, which for the #318
+// case is advice that LOOPS — a fresh connection replays the same pin and is
+// refused again. Every writer of the mark supplies a message naming its own
+// remedy; the fixed string is kept only for a mark that carries none.
+//
+// The message is NOT truncated. An earlier version capped it at 160 runes to
+// protect a "single-line alert row" that does not exist — dashAlertsWidget wraps
+// and the box grows — and the cap fell exactly where it hurt: the boundary
+// violation lost its whole remedy, and the #318 message was cut mid-
+// `session_start({workspace…`, discarding the very `force: true` clause this
+// alert exists to deliver. A blocked session is worth the extra wrapped lines.
+//
+// Escapes are stripped: HealthMessage embeds a client-supplied path (ESC is a
+// legal path byte), and this text is rendered on the always-visible dashboard,
+// where a cursor-movement or erase sequence could corrupt or spoof the frame.
 func blockedAlert(healthMessage string) string {
-	if msg := strings.TrimSpace(healthMessage); msg != "" {
-		return textfmt.Ellipsis(msg, maxBlockedAlertRunes)
+	if msg := strings.TrimSpace(ansi.Strip(healthMessage)); msg != "" {
+		return msg
 	}
 	return "Workspace blocked; see the session detail for why"
 }
-
-// maxBlockedAlertRunes keeps a health message from overrunning the single-line
-// alert row; the untruncated text is in the session detail pane.
-const maxBlockedAlertRunes = 160
 
 func (m Model) dashboardWorkspaceStateAlert() string {
 	for _, s := range m.sessions {
