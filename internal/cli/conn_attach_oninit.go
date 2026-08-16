@@ -120,33 +120,40 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	s.reportUnbackedReplay(refusedReplay)
 }
 
-// reportUnbackedReplay raises the alarm for a refused wide replayed pin that
-// NOTHING else corroborated.
+// reportUnbackedReplay surfaces a refused wide replayed pin that nothing else
+// restored, so the operator learns the session is not attached where its client
+// asked — and can act on it.
 //
-// The refusal itself cannot tell a forged claim from a legitimate one, which is
-// why it only logs at Info — a caller who really did declare a wide workspace
-// hits it on every restart. But once the ladder has finished, the two are
-// distinguishable: a genuine declaration left a session_start row behind, so
-// rung 1b restores the SAME root, and the claim is corroborated by a fact this
-// daemon's database recorded on an accepted call. A claim that arrived over the
-// unauthenticated channel and is backed by nothing at all is the shape a forged
-// `_meta` key produces, and an operator should see it.
+// It deliberately does NOT accuse the client of forgery, because the daemon
+// cannot tell. A wide claim is left uncorroborated by at least four routes, and
+// three of them are plumb's own doing:
+//
+//   - the client forged the `_meta` key and never ran session_start;
+//   - the caller DID declare it, but the one-time #318 sweep removed the row
+//     (sweepLegacyWidePins) — this release causes exactly that, once;
+//   - the caller DID declare it, but the startup TTL prune removed the row
+//     (it runs with no live exemption, default 1440 minutes);
+//   - the row survived but restoreRootIntact declined it, or the re-pin failed.
+//
+// An earlier draft asserted "no persisted session_start pin names that root",
+// which is false in the last case and blames the caller in the middle two. The
+// message now states what was observed and what to do about it; the remedy is
+// the same either way, so nothing is lost by not guessing.
 //
 // Comparison is canonical, not textual: the proxy replays the workspace ARGUMENT
 // it observed, while the persisted row holds the resolved root, so two spellings
-// of one directory would otherwise read as "uncorroborated" and cry the wolf
-// this function exists to avoid.
+// of one directory would otherwise read as "uncorroborated".
 func (s *connSession) reportUnbackedReplay(refused string) {
 	if refused == "" {
 		return
 	}
 	if ws := s.workspace(); ws != "" && paths.Canonical(ws) == paths.Canonical(refused) {
-		return // a persisted declaration vouched for it
+		return // something restored the same root; the claim needs no attention
 	}
-	s.log().Warn("daemon: a client claimed a home-containing workspace over the unauthenticated initialize _meta channel, and nothing corroborates it — no persisted session_start pin names that root (issue #318)",
+	s.log().Warn("daemon: a home-containing workspace was claimed over the unauthenticated initialize _meta channel and refused, and no persisted pin restored it — re-declare it with session_start if it is yours, or treat it as a client claiming a workspace nobody asked for (issue #318)",
 		"claimed", refused, "attached", s.workspace())
 	s.markBoundaryViolation(fmt.Sprintf(
-		"a client claimed the home-containing workspace %s over the initialize _meta channel with no session_start behind it; the claim was refused (issue #318)", refused))
+		"the home-containing workspace %s was claimed over the initialize _meta channel and refused, and no persisted pin restored it; call session_start({workspace: %q}) to declare it deliberately (issue #318)", refused, refused))
 }
 
 // attachReplayedPin attaches a workspace restored from a persisted pin, keeping

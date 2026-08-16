@@ -16,13 +16,19 @@
   *The alarm.* Refusing the replayed `_meta` pin logs at Info, deliberately — a
   caller who really did declare a wide workspace hits that refusal on every
   restart, and a Warn there would cry wolf at a working session. But that left
-  the genuinely hostile case with no operator-visible signal at all. Once the
-  attach ladder has finished the two ARE distinguishable: a real declaration
-  left a `session_start` row, so the pin is restored to the same root. A wide
-  claim that arrives over the unauthenticated channel and is corroborated by
-  nothing now logs at Warn and marks the session blocked, so it surfaces in the
-  TUI and dashboard. The comparison is canonical, so two spellings of one
-  directory do not raise a false alarm.
+  the case worth seeing with no operator-visible signal at all. So once the
+  attach ladder has finished, a wide claim that **nothing restored** now logs at
+  Warn and marks the session blocked. The comparison is canonical, so two
+  spellings of one directory do not raise it.
+
+  It deliberately does not call the claim forged, because the daemon cannot
+  tell. A claim is left unrestored by a client that forged the key and never ran
+  `session_start` — but equally by a genuine declaration whose row the one-time
+  sweep below removed, or the startup TTL prune removed, or whose restore
+  declined. The remedy is the same in all four cases (`session_start` again), so
+  the message states what happened and what to do rather than guessing at
+  intent. The mark clears on the next explicit `session_start`, as the
+  sticky-pin refusal's does; a bare `session_start({})` does not clear it.
 
   *The cleanup.* Before #318 any client could claim a workspace through that
   key, and the daemon stored the result with `session_start` origin — the origin
@@ -34,15 +40,26 @@
   did (new `meta` table, schema v5). A wide root a human really did declare is
   indistinguishable from a forged one, so this costs that person a single
   re-declaration — the same cost the ladder already imposes when the row is
-  absent — and then never fires again; sweeping on every start would make a
-  deliberately declared wide workspace impossible to keep, which is #182's
-  contract. The removal is logged at Warn naming each root.
+  absent — and does not fire again on that database; sweeping on every start
+  would make a deliberately declared wide workspace impossible to keep, which is
+  #182's contract. The deletes and the flag commit in one transaction, so a
+  process that dies mid-sweep cannot leave it half-done and repeat. The removal
+  is logged at Warn naming each root, and the swept workspace's read-tracking
+  rows go with it.
+
+  Note the two halves interact, once: on the first start after upgrading, a wide
+  root you had declared is swept, and the next reconnect therefore reports it as
+  unrestored. That is the same one re-declaration, surfaced — not a second
+  problem.
 
   `docs/architecture.md` now documents the reconnect attach ladder, which it
   described only for the cold-start path — so the rung this all concerns was
   missing from the canonical description. Guarded by
   `TestOnInit_UnbackedWideClaimMarksTheSessionBlocked`,
   `TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm`,
+  `TestOnInit_OrdinarySessionIsNotMarkedBlocked`,
+  `TestReportUnbackedReplay_ComparesCanonically`,
+  `TestSweepLegacyWidePins_UsesTheRealContainmentPredicate`,
   `TestSweepWidePinsOnce_RemovesWideRowsAndSparesOthers`, `_DoesNotRunTwice`,
   `_FlagSurvivesReopen`, and `_NilSafe` (issue #318).
 

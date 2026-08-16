@@ -29,7 +29,6 @@ package sessionstate
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -357,86 +356,6 @@ func (s *Store) DeletePin(proxySessionID string) error {
 	}
 	return nil
 }
-
-// SweepWidePinsOnce deletes every pinned_workspace row whose workspace isWide
-// reports true for, and records that it ran so it never runs again on this
-// database. Returns the roots it removed.
-//
-// This exists for issue #318. Before the fix, a client could claim any
-// workspace by setting the initialize `_meta` pinned-workspace key, and the
-// daemon recorded the resulting pin with session_start origin — the one origin
-// permitted to name a home directory or a container of one (issue #306). Rows
-// minted that way survive the fix: nothing about a stored row says which
-// channel produced it, and restoring one re-persists it, refreshing updated_at,
-// so the TTL prune never ages it out of a session that keeps reconnecting.
-//
-// ONCE is the whole point. A row a human really did declare is indistinguishable
-// from a forged one, so the sweep costs that human a single re-declaration — the
-// same cost the ladder already imposes when the row is absent. Running it on
-// every start instead would make a deliberately declared wide workspace
-// impossible to keep, which is issue #182's contract.
-//
-// isWide is injected rather than implemented here: containment is answered by
-// probing the filesystem (internal/cli's containsUserHome), and this package
-// sits below that. nil-safe.
-func (s *Store) SweepWidePinsOnce(isWide func(root string) bool) ([]string, error) {
-	if s == nil || isWide == nil {
-		return nil, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var done string
-	err := s.db.QueryRow(`SELECT value FROM meta WHERE key=?`, metaWidePinSweep).Scan(&done)
-	switch {
-	case err == nil:
-		return nil, nil // already run on this database
-	case !errors.Is(err, sql.ErrNoRows):
-		return nil, fmt.Errorf("sessionstate: read %s: %w", metaWidePinSweep, err)
-	}
-
-	rows, err := s.db.Query(`SELECT proxy_session_id, workspace FROM pinned_workspace`)
-	if err != nil {
-		return nil, fmt.Errorf("sessionstate: scan pins for wide sweep: %w", err)
-	}
-	type pin struct{ id, ws string }
-	var wide []pin
-	for rows.Next() {
-		var p pin
-		if err := rows.Scan(&p.id, &p.ws); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("sessionstate: scan pin row: %w", err)
-		}
-		if isWide(p.ws) {
-			wide = append(wide, p)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, fmt.Errorf("sessionstate: scan pins for wide sweep: %w", err)
-	}
-	rows.Close()
-
-	removed := make([]string, 0, len(wide))
-	for _, p := range wide {
-		if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE proxy_session_id=?`, p.id); err != nil {
-			return nil, fmt.Errorf("sessionstate: delete wide pin %q: %w", p.ws, err)
-		}
-		removed = append(removed, p.ws)
-	}
-	// Stamped only after the deletes succeed: a failure part-way leaves the flag
-	// unset, so the next start finishes the job rather than skipping it.
-	if _, err := s.db.Exec(
-		`INSERT OR REPLACE INTO meta(key, value, updated_at) VALUES(?,?,?)`,
-		metaWidePinSweep, "done", time.Now().UnixNano(),
-	); err != nil {
-		return nil, fmt.Errorf("sessionstate: stamp %s: %w", metaWidePinSweep, err)
-	}
-	return removed, nil
-}
-
-// metaWidePinSweep is the meta key recording that SweepWidePinsOnce has run.
-const metaWidePinSweep = "wide_pin_sweep_318"
 
 // Identity is what a proxy session was last known as: the display name it
 // answered to, and the plumb session ID that name belonged to.

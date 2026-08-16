@@ -403,6 +403,28 @@ func TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm(t *testing.T) {
 	}
 }
 
+// The alarm must stay SILENT for an ordinary session — the half of the design
+// that justified keeping the refusal at Info in the first place. Without this,
+// dropping the `refused == ""` early return marks EVERY session blocked and the
+// whole suite stays green, which an adversarial review demonstrated.
+func TestOnInit_OrdinarySessionIsNotMarkedBlocked(t *testing.T) {
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.setClientRequest(rootsReplying(root, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(root, &calls))
+
+	if got := s.workspace(); got != root {
+		t.Fatalf("setup: workspace = %q, want %q", got, root)
+	}
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Fatalf("an ordinary session with no replayed pin was marked %q: %s", health, msg)
+	}
+}
+
 // The corroboration check compares CANONICALLY, and that is load-bearing. The
 // proxy replays the session_start ARGUMENT it observed, while the attach
 // resolves symlinks — so a caller who declared a workspace through a symlinked
