@@ -568,13 +568,10 @@ func TestInstallSkillsFor_WritesReferencesBesideSKILLmd(t *testing.T) {
 	}
 
 	// Exact, unstamped: a reference is plain material a user may open in any
-	// viewer, so unlike SKILL.md it carries no provenance marker.
-	var want string
-	for _, s := range embeddedSkills() {
-		if s.Name == "plumb-chat" {
-			want = s.References[0].Content
-		}
-	}
+	// viewer, so unlike SKILL.md it carries no provenance marker. Looked up by
+	// NAME, not References[0] — a second reference sorting ahead of this one
+	// would otherwise compare the wrong file's content and fail spuriously.
+	want := embeddedReferenceNamed(t, "plumb-chat", "idle-agent-wake-hook.md").Content
 	if string(got) != want {
 		t.Error("installed reference differs from the embedded source (or was stamped, which it must not be)")
 	}
@@ -603,4 +600,107 @@ func TestInstallSkillsFor_WritesReferencesBesideSKILLmd(t *testing.T) {
 			t.Error("a skill whose reference note is missing still reports installed")
 		}
 	}
+}
+
+// TestInstallSkillsFor_RefreshesADriftedReference covers the other half of the
+// reference path: a note that EXISTS but no longer matches the embedded copy.
+// The test above only ever deletes the file, and deletion and drift take
+// different branches in both directions — installSkillReferences backs a
+// drifted note up before rewriting it (a missing one is written outright), and
+// referencesCurrent has to compare content rather than merely stat the path.
+//
+// Both branches were unpinned without this: making installSkillReferences skip
+// any reference that already exists, and making referencesCurrent ignore
+// content and check only readability, each left the whole internal/cli suite
+// green. So this asserts all three consequences of a drifted note — the
+// stale reading, the backup, and the restored content — plus the "updated"
+// promotion, which is the only thing that stops a run that rewrote a reference
+// reporting "unchanged" because the SKILL.md beside it happened to be current.
+func TestInstallSkillsFor_RefreshesADriftedReference(t *testing.T) {
+	pointClientHomesAt(t)
+	c := skillCapableClients()[0]
+
+	dir, results := installSkillsFor(c)
+	for _, r := range results {
+		if r.err != nil {
+			t.Fatalf("installing %q: %v", r.name, r.err)
+		}
+	}
+
+	chat := embeddedSkillNamed(t, "plumb-chat")
+	ref := filepath.Join(dir, chat.Name, "references", "idle-agent-wake-hook.md")
+	const drifted = "hand-edited, and no longer what the skill ships\n"
+	if err := os.WriteFile(ref, []byte(drifted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// SKILL.md is untouched and current, so grading it alone would report the
+	// skill installed while the note it sends the reader to says something else.
+	if state := skillStateAt(dir, chat.Name, chat.Content, chat.References); state == skillStateInstalled {
+		t.Error("a skill whose reference note has drifted still reports installed")
+	}
+
+	_, results = installSkillsFor(c)
+	var action string
+	for _, r := range results {
+		if r.name != chat.Name {
+			continue
+		}
+		if r.err != nil {
+			t.Fatalf("re-sync: %v", r.err)
+		}
+		action = r.action
+	}
+	if action != "updated" {
+		t.Errorf("re-sync over a drifted reference reported %q, want %q", action, "updated")
+	}
+
+	got, err := os.ReadFile(ref)
+	if err != nil {
+		t.Fatalf("reading refreshed reference: %v", err)
+	}
+	if want := embeddedReferenceNamed(t, chat.Name, "idle-agent-wake-hook.md").Content; string(got) != want {
+		t.Error("the drifted reference was not restored to the embedded content")
+	}
+
+	// The overwritten copy is recoverable, on the same terms as a drifted
+	// SKILL.md: sync never silently discards something the user may have edited.
+	backups, err := filepath.Glob(ref + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("want exactly 1 backup of the drifted reference, got %d: %v", len(backups), backups)
+	}
+	if data, err := os.ReadFile(backups[0]); err != nil || string(data) != drifted {
+		t.Errorf("backup does not hold the drifted content (err=%v)", err)
+	}
+}
+
+// embeddedSkillNamed returns the embedded skill called name, failing the test
+// when there is none.
+func embeddedSkillNamed(t *testing.T, name string) embeddedSkill {
+	t.Helper()
+	for _, s := range embeddedSkills() {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("%q is not among the embedded skills", name)
+	return embeddedSkill{}
+}
+
+// embeddedReferenceNamed returns skill's reference note called ref, failing the
+// test when there is none. Lookup is by name so that adding a second reference
+// cannot silently repoint an assertion at the wrong file.
+func embeddedReferenceNamed(t *testing.T, skill, ref string) embeddedFile {
+	t.Helper()
+	s := embeddedSkillNamed(t, skill)
+	for _, r := range s.References {
+		if r.Name == ref {
+			return r
+		}
+	}
+	t.Fatalf("%s does not ship references/%s; got %d reference(s)", skill, ref, len(s.References))
+	return embeddedFile{}
 }
