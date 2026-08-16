@@ -7,6 +7,30 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Fixed
+
+- **`plumb config show` now prints a provenance row for every `[git]` field, so
+  the check `session_start` prescribes can actually be followed.** The rows came
+  from a hand-written literal while `internal/config`'s field registry grew
+  independently, and the two drifted: `git.commit_trailer` and
+  `git.write_timeout` were registered fields with no row at all, and `envVarFor`
+  had no `commit_trailer` case, so the command could not name
+  `PLUMB_GIT_COMMIT_TRAILER` either.
+
+  That is more than cosmetic. The ignored-project-`[git]` notice added in 0.16.6
+  tells the agent to confirm the resolved value with
+  `plumb config show --workspace <ws>`, *"which prints each value's
+  provenance"*, and names `PLUMB_GIT_COMMIT_TRAILER` as one of four variables
+  that may be overriding a trusted project value. One of the four could not be
+  confirmed the way the notice prescribes — the notice was right and the tool it
+  points at fell short.
+
+  The rows moved into one function with a **drift guard**: a test walks the field
+  registry for `git.*` entries and fails when one has no row, naming the field
+  and the fix. Two further tests pin the env column — that each row can name its
+  `PLUMB_GIT_*` variable, and that setting one actually makes the row say so.
+  Without the guard this recurs the moment a seventh field is registered.
+
 ### Added
 
 - **`[tasks.<lang>] working_dir` — task commands can run where the module

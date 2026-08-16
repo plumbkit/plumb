@@ -230,12 +230,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	}
 	addConfigSection(cfgTable, "workspace", wsRows)
 
-	addConfigSection(cfgTable, "git", [][]string{
-		{"allow_writes", strconv.FormatBool(projectCfg.Git.AllowWrites), policySourceFor(policy, "git.allow_writes", sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites))},
-		{"allow_destructive", strconv.FormatBool(projectCfg.Git.AllowDestructive), policySourceFor(policy, "git.allow_destructive", sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive))},
-		{"allow_push", strconv.FormatBool(projectCfg.Git.AllowPush), policySourceFor(policy, "git.allow_push", sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush))},
-		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), policySourceFor(policy, "git.protected_branches", sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches))},
-	})
+	addConfigSection(cfgTable, "git", gitConfigRows(defaultsCfg, globalCfg, projectCfg, policy))
 
 	addConfigSection(cfgTable, "lsp_query", [][]string{
 		{"timeout", projectCfg.LSPQuery.Timeout.String(), sourceFor("timeout", defaultsCfg.LSPQuery.Timeout, globalCfg.LSPQuery.Timeout, projectCfg.LSPQuery.Timeout)},
@@ -509,6 +504,31 @@ func contractConfigPath(p string) string {
 	return render.ContractPath(p)
 }
 
+// gitConfigRows builds the [git] provenance rows for `plumb config show`.
+//
+// Extracted from the caller so a test can assert it covers EVERY git.* field in
+// the config field registry. It drifted precisely because it was an inline
+// literal: git.commit_trailer and git.write_timeout were added to the registry
+// and never gained a row, and envVarFor had no commit_trailer case either — so
+// `plumb config show` could not confirm PLUMB_GIT_COMMIT_TRAILER, which is
+// exactly the check session_start's ignored-[git] notice tells the reader to run.
+// A notice that names a variable and a command that cannot show it leave the
+// reader with no way to answer the question either one raises.
+//
+// The list stays hand-written rather than generated: each row needs a typed
+// accessor and its own formatting (bool, duration, slice), and the registry
+// holds no accessor. The guard test is what makes hand-written safe.
+func gitConfigRows(defaultsCfg, globalCfg, projectCfg config.Config, policy config.ProjectPolicyStatus) [][]string { //nolint:revive // one row per registry field; splitting it would recreate the drift the guard test exists to stop
+	return [][]string{
+		{"allow_writes", strconv.FormatBool(projectCfg.Git.AllowWrites), policySourceFor(policy, "git.allow_writes", sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites))},
+		{"allow_destructive", strconv.FormatBool(projectCfg.Git.AllowDestructive), policySourceFor(policy, "git.allow_destructive", sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive))},
+		{"allow_push", strconv.FormatBool(projectCfg.Git.AllowPush), policySourceFor(policy, "git.allow_push", sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush))},
+		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), policySourceFor(policy, "git.protected_branches", sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches))},
+		{"commit_trailer", strconv.FormatBool(projectCfg.Git.CommitTrailer), policySourceFor(policy, "git.commit_trailer", sourceFor("commit_trailer", defaultsCfg.Git.CommitTrailer, globalCfg.Git.CommitTrailer, projectCfg.Git.CommitTrailer))},
+		{"write_timeout", projectCfg.Git.WriteTimeout.String(), policySourceFor(policy, "git.write_timeout", sourceFor("write_timeout", defaultsCfg.Git.WriteTimeout, globalCfg.Git.WriteTimeout, projectCfg.Git.WriteTimeout))},
+	}
+}
+
 // sourceFor returns a short label naming the layer that supplied the
 // current value. Comparison is order-sensitive: env > project > global > default.
 func sourceFor(field string, def, global, final any) string {
@@ -529,36 +549,33 @@ func envForField(field string) string {
 	return os.Getenv(envVarForField(field))
 }
 
+// fieldEnvVars maps a config field's short name to the environment variable that
+// overrides it. A table rather than a switch: the switch crossed gocyclo's limit
+// as [git] fields were added, and a lookup is the shape this always was — the
+// "logic" was one return per case.
+//
+// Short names, not dotted keys, because that is what sourceFor is handed. Two
+// sections can therefore collide on a name: "timeout" here is lsp_query's, and
+// git's is spelled write_timeout, which is why it has its own entry.
+var fieldEnvVars = map[string]string{
+	"strict":                    "PLUMB_STRICT_EDITS",
+	"rate_limit_per_minute":     "PLUMB_WRITE_RATE_LIMIT",
+	"log_level":                 "PLUMB_LOG_LEVEL",
+	"log_file":                  "PLUMB_LOG_FILE",
+	"refuse_home_roots":         "PLUMB_REFUSE_HOME_ROOTS",
+	"log_format":                "PLUMB_LOG_FORMAT",
+	"post_write_diagnostics_ms": "PLUMB_POST_WRITE_DIAG_MS",
+	"block_dirty_writes":        "PLUMB_BLOCK_DIRTY_WRITES",
+	"auto_attach":               "PLUMB_AUTO_ATTACH",
+	"auto_attach_persist":       "PLUMB_AUTO_ATTACH_PERSIST",
+	"allow_writes":              "PLUMB_GIT_ALLOW_WRITES",
+	"allow_destructive":         "PLUMB_GIT_ALLOW_DESTRUCTIVE",
+	"allow_push":                "PLUMB_GIT_ALLOW_PUSH",
+	"commit_trailer":            "PLUMB_GIT_COMMIT_TRAILER",
+	"write_timeout":             "PLUMB_GIT_WRITE_TIMEOUT",
+	"timeout":                   "PLUMB_LSP_QUERY_TIMEOUT",
+}
+
 func envVarForField(field string) string {
-	switch field {
-	case "strict":
-		return "PLUMB_STRICT_EDITS"
-	case "rate_limit_per_minute":
-		return "PLUMB_WRITE_RATE_LIMIT"
-	case "log_level":
-		return "PLUMB_LOG_LEVEL"
-	case "log_file":
-		return "PLUMB_LOG_FILE"
-	case "refuse_home_roots":
-		return "PLUMB_REFUSE_HOME_ROOTS"
-	case "log_format":
-		return "PLUMB_LOG_FORMAT"
-	case "post_write_diagnostics_ms":
-		return "PLUMB_POST_WRITE_DIAG_MS"
-	case "block_dirty_writes":
-		return "PLUMB_BLOCK_DIRTY_WRITES"
-	case "auto_attach":
-		return "PLUMB_AUTO_ATTACH"
-	case "auto_attach_persist":
-		return "PLUMB_AUTO_ATTACH_PERSIST"
-	case "allow_writes":
-		return "PLUMB_GIT_ALLOW_WRITES"
-	case "allow_destructive":
-		return "PLUMB_GIT_ALLOW_DESTRUCTIVE"
-	case "allow_push":
-		return "PLUMB_GIT_ALLOW_PUSH"
-	case "timeout":
-		return "PLUMB_LSP_QUERY_TIMEOUT"
-	}
-	return ""
+	return fieldEnvVars[field]
 }
