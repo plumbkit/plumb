@@ -25,6 +25,49 @@
 
   Every other gate in the daemon already keys on the session ID; this one now
   matches them.
+- **A conversation id is an address, not a capability: only a thread's
+  participants can write into it.** Nothing checked membership, so any session
+  holding an id could insert into an exchange between two other agents — landing
+  agent-authored text in the middle of what the participants believe is their own
+  conversation — and could repeat that until the thread hit `max_exchanges`,
+  permanently severing an exchange it was never part of. The id had been an
+  unguessable token held only by participants, which made this unreachable in
+  practice; `workspace_sessions` then began printing live ids, which is what
+  turned it into a real hole.
+
+  Both halves are closed. `PutNote` refuses to thread onto a conversation the
+  author is not in, enforced inside the insert for the same reason the exchange
+  budget is — checking in the caller and then inserting is two steps, and a rule
+  in the store cannot be forgotten by a future caller. And the conversation
+  volume listing is now scoped to the caller's own threads, so an uninvolved
+  session cannot enumerate other agents' exchanges in the first place.
+
+  Membership admits names as well as session ids, because a note to a peer that
+  was not live stores no addressee id and its recipient must still be able to
+  reply — the same concession delivery already makes. It deliberately ignores
+  expiry: having been in a thread is a historical fact, so a long exchange whose
+  opening notes have aged out does not lock out its own participants. Once the
+  reaper deletes those rows the id stops working entirely.
+
+- **An in-thread reply now resolves by session identity, not by name.** After a
+  `rename_session` the caller saw its own former name among the participants and
+  its reply was refused as ambiguous — naming the caller as one of the two
+  parties. In the other direction, a session that later drew a departed peer's
+  name was treated as that peer. Rows carry author and addressee ids; names are
+  consulted only where a row has none.
+
+  The same path no longer answers "who is in this thread?" for a thread the
+  caller is not in — it refused to send, but named the participants while doing
+  so, which made it an enumeration oracle for other agents' exchanges. It also
+  reads the daemon-level store only when this workspace has opted in to
+  cross-project mail, matching the gate the observability path already applied.
+
+- **`workspace_sessions` no longer renders twice as many sent notes as it says,
+  in the wrong order.** The section takes the caller's outbox from the workspace
+  store and the daemon-level one; each returns its own rows newest-first, so
+  concatenating them yielded up to double the documented cap with a note sent
+  seconds ago printed below one sent hours ago — under a heading that says
+  "recent". Sorted across both, then capped.
 
 - **An unrestored home-wide workspace claim is now visible to the operator, and
   a pre-0.16.7 wide pin is cleaned up instead of living forever.** Two loose

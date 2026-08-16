@@ -381,7 +381,7 @@ func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, lim
 			 WHERE ` + where + `
 			 ORDER BY created_at ASC`
 	args := append(
-		[]any{now.UnixNano(), who.Name}, // SET delivered_at, delivered_to
+		[]any{now.UnixNano(), who.Name, who.ID}, // SET delivered_at, delivered_to, delivered_to_id
 		whereArgs...)
 	if limit > 0 {
 		select_ += ` LIMIT ?`
@@ -391,7 +391,7 @@ func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, lim
 	// a generated "?" list — no caller data reaches the statement text; identities and
 	// the limit are bound. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
-		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
+		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?, delivered_to_id = ?
 		 WHERE id IN (`+select_+`)
 		 RETURNING `+rowColumns, args...)
 	if err != nil {
