@@ -37,8 +37,31 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// live call's own authority, re-delivered — and unlike the persisted pin it
 	// needs no database, so it holds even with [session] persist_state off or the
 	// pin row pruned.
+	//
+	// It arrives in the initialize `_meta` of whatever process spoke to the
+	// daemon, and the daemon CANNOT tell a `plumb serve` proxy replaying an
+	// accepted session_start from any other MCP client that simply set the key
+	// (issue #318). The rung therefore keeps its RANK — it still outranks client
+	// roots, which is the whole point of the restart fix — but it does not get
+	// the one power genuinely unique to a declaration: #306's exemption letting
+	// session_start pin the home directory, or a directory CONTAINING one, and so
+	// admit every credential under it to the boundary. Asking the containment
+	// guard with an unprivileged origin is how that exemption is withheld; the
+	// origin recorded for an accepted pin is unchanged, so stickiness, rank and
+	// what gets persisted all behave exactly as before.
+	//
+	// A caller who really did declare a wide root loses nothing when the pin was
+	// persisted: rung 1b restores it from the database below, where the row's
+	// session_start origin is a fact this daemon recorded itself rather than one
+	// a client asserted. Only a declared wide root with [session] persist_state
+	// off degrades — to a narrower root or to none, logged, never to a wider one.
 	if replayed := s.view().replayedPin; replayed != "" {
-		s.attachReplayedPin(ctx, replayed, sessionstate.PinSourceSessionStart)
+		if err := undeclaredWideRootErr(replayed, sessionstate.PinSourceUnknown); err != nil {
+			s.log().Warn("daemon: replayed _meta pin refused — the proxy channel is not authenticated, so it does not carry the home-containment exemption (issue #318)",
+				"root", replayed, "err", err)
+		} else {
+			s.attachReplayedPin(ctx, replayed, sessionstate.PinSourceSessionStart)
+		}
 	}
 	// Rung 1b: the same fact from the database, for a proxy that predates the key.
 	if s.workspace() == "" && pinOK && pinSource == sessionstate.PinSourceSessionStart {

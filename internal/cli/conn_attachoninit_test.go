@@ -11,6 +11,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os/user"
+	"path/filepath"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -174,6 +176,106 @@ func TestOnInit_ReplayedMetaPinBeatsRoots(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("roots/list called %d times despite a replayed pin", calls)
+	}
+}
+
+// wideRootOrSkip returns a directory that CONTAINS the machine's home directory
+// (home's parent: /Users on macOS, /home on Linux CI), which is what #306's
+// containment guard refuses without a declaration.
+func wideRootOrSkip(t *testing.T) string {
+	t.Helper()
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no user-database home: %v", err)
+	}
+	wide := filepath.Dir(u.HomeDir)
+	if wide == "/" || wide == "." || wide == "" {
+		t.Skipf("home %q sits at the filesystem root; no container to test", u.HomeDir)
+	}
+	return wide
+}
+
+// The initialize `_meta` pinned-workspace key is not authenticated: the daemon
+// cannot distinguish a plumb serve proxy replaying an accepted session_start
+// from any other MCP client that simply set the key. So it must not carry
+// #306's home-containment exemption, which is the one authority unique to a
+// declaration — a client shipping `_meta[pinned-workspace] = "/Users"` would
+// otherwise put every home directory on the machine, and every credential under
+// them, inside the session's read-write boundary (issue #318).
+func TestOnInit_ReplayedMetaPinCannotClaimHomeContainment(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t)
+	rootA := freshTempDir(t) // the client's honest launch root
+	mustGitDir(t, rootA)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(wide) // as a forged initialize _meta would
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got == wide {
+		t.Fatalf("replayed _meta pin attached %q — a root containing the home directory must not be reachable over an unauthenticated channel (issue #318)", got)
+	}
+	// Fail-safe, not fail-open: the ladder carries on and the honest client root
+	// still attaches. A refusal that left the session unattached would be a
+	// denial-of-service any client could inflict on itself.
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("after refusing the wide replayed pin the ladder landed on %q, want the client root %q", got, rootA)
+	}
+	// And nothing wide may be left behind in the database for a later rehydrate.
+	if ws, _, _, ok, err := ss.LoadPin("proxyX"); err == nil && ok && ws == wide {
+		t.Fatalf("a refused wide replayed pin was persisted as %q", ws)
+	}
+}
+
+// The exemption is withheld from the _meta CHANNEL, not from the declaration
+// itself. A caller who really did run session_start on a wide root had that
+// origin recorded by this daemon, so rung 1b restores it from the database on
+// reconnect — the restart path #182/#181 exist to protect is untouched.
+func TestOnInit_DeclaredWideRootStillRestoresFromDatabase(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t)
+	rootA := freshTempDir(t)
+	mustGitDir(t, rootA)
+	if err := ss.UpsertPin("proxyX", wide, LanguageNone, sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("seed declared wide pin: %v", err)
+	}
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(wide) // the proxy replays the same fact it observed
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got != wide {
+		t.Fatalf("a wide root declared by session_start and recorded in the database did not restore: got %q, want %q (issue #182's contract)", got, wide)
+	}
+}
+
+// The narrowing must not cost the rung its rank: an ordinary project replayed
+// over _meta still beats the client's roots, which is the restart regression
+// TestOnInit_ReplayedMetaPinBeatsRoots guards. Asserted here too because the
+// containment check runs before the attach and an over-broad predicate would
+// silently demote every replayed pin to the roots rung.
+func TestOnInit_ReplayedMetaPinKeepsRankForOrdinaryRoots(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(rootB)
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got != rootB {
+		t.Fatalf("ordinary replayed pin lost its rank: got %q, want %q", got, rootB)
+	}
+	if got := s.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
+		t.Fatalf("accepted replayed pin recorded origin %q, want %q — the channel check must not demote the pin it accepts",
+			got, sessionstate.PinSourceSessionStart)
 	}
 }
 
