@@ -429,6 +429,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	writeSessionMemories(&sb, ws, recent)
 	t.writeSessionEpisodic(&sb, ws)
 	t.writeSessionPeers(&sb, ws)
+	t.writeSessionCollabPolicy(&sb, ws)
 	t.writeSessionMessages(&sb, ws)
 	writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)

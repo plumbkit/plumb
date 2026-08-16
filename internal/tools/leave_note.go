@@ -362,7 +362,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// costs delivery latency (the next periodic check still finds the row), never
 	// the message.
 	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
-	return formatNoteResult(body, args.To, conv, ttl, redacted, target), nil
+	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget()), nil
 }
 
 // replyDeliveryLine names BOTH delivery paths, because they are not
@@ -377,14 +377,14 @@ func replyDeliveryLine() string {
 		"otherwise it is appended to the result of your next tool call.\n"
 }
 
-func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget) string {
+func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget, budget int) string {
 	var sb strings.Builder
 	dest := "session " + to
 	if to == collab.AddresseeNext {
 		dest = "the next session to attach (delivered once)"
 	}
 	fmt.Fprintf(&sb, "Message sent to %s (advisory; delivered by polling only).\n", dest)
-	fmt.Fprintf(&sb, "  message:      %s\n", body)
+	writeDeliveredBody(&sb, body, conv, budget)
 	fmt.Fprintf(&sb, "  conversation: %s  — quote this as conversation_id to stay in the thread\n", conv)
 	fmt.Fprintf(&sb, "  expires:      in %s\n", humaniseTTL(ttl))
 	if redacted {
@@ -407,4 +407,37 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 	}
 	sb.WriteString(replyDeliveryLine())
 	return sb.String()
+}
+
+// writeDeliveredBody reports the send-time truth about what the recipient
+// will actually see, using the same clamp RenderMessages applies on delivery
+// so the two never disagree about what fits.
+//
+// Under budget: the body is echoed (there is nothing yet to hide) alongside
+// the byte count, so a sender learns the shape of the limit before losing
+// content to it (PLAN-301 D3) rather than discovering it only once a message
+// gets cut.
+//
+// Over budget: the full body is deliberately WITHHELD from this reply.
+// Echoing it under a success line is what made the eventual delivery-time
+// truncation invisible — the sender saw their complete message and reasonably
+// concluded it arrived whole. Instead this names the word TRUNCATED, the
+// exact byte counts, and the remedy: resend the remainder quoting
+// conversation_id, or write the full text to a file and share its path
+// (PLAN-301 D1, and the card's standing "notes are pointers" position).
+func writeDeliveredBody(sb *strings.Builder, body, conv string, budget int) {
+	clamped, marker := clampWithTruncationMarker(body, budget)
+	if marker == "" {
+		fmt.Fprintf(sb, "  message:      %s\n", body)
+		if budget > 0 {
+			fmt.Fprintf(sb, "  bytes:        %d of %d\n", len(body), budget)
+		}
+		return
+	}
+	fmt.Fprintf(sb, "  message:      TRUNCATED for delivery — only %d of %d bytes will reach the recipient "+
+		"(the %d-byte [collab] chat_budget_bytes limit). The full text is withheld from this reply so it "+
+		"cannot be mistaken for confirmed delivery.\n", len(clamped), len(body), budget)
+	fmt.Fprintf(sb, "  remedy:       resend the remaining %d bytes in a follow-up leave_note quoting "+
+		"conversation_id %q, or write the full text to a file and share its path instead.\n",
+		len(body)-len(clamped), conv)
 }

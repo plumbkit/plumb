@@ -95,6 +95,24 @@ func TestFormatWorkspaceSessions_MultiplePeersAndWrites(t *testing.T) {
 	if !strings.Contains(out, "git") {
 		t.Errorf("a path-less write (git) should still be listed:\n%s", out)
 	}
+	// PLAN-301 D5: with a peer present, the names listed must be told to be
+	// usable as leave_note's `to` — otherwise there is no documented way to
+	// reach a peer without already knowing its name.
+	if !strings.Contains(out, "leave_note") {
+		t.Errorf("expected a hint that the listed names are leave_note addressees:\n%s", out)
+	}
+}
+
+// TestFormatWorkspaceSessions_AloneOmitsAddressabilityHint guards against the
+// D5 hint firing when there is nobody to address — alone, "leave_note" would
+// be a dead pointer rather than useful guidance.
+func TestFormatWorkspaceSessions_AloneOmitsAddressabilityHint(t *testing.T) {
+	now := time.Now()
+	peers := []session.Info{{ID: "self-1", Name: "me-fox", Folder: "/ws", LastSeenAt: now}}
+	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, nil, now)
+	if strings.Contains(out, "leave_note") {
+		t.Errorf("a solo session has nobody to address; expected no leave_note hint:\n%s", out)
+	}
 }
 
 // TestFormatWorkspaceSessions_ListsActiveLSPs verifies that every language

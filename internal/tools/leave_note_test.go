@@ -131,6 +131,47 @@ func TestLeaveNote_BoundMessageIsUnreadableByANameReuser(t *testing.T) {
 	}
 }
 
+// TestLeaveNote_TruncationWarnsSenderAndWithholdsFullBody is PLAN-301 D1's
+// send half. A body over chat_budget_bytes must not be echoed back whole
+// under a success line — that echo is what made the eventual delivery-time
+// cut invisible to the sender.
+func TestLeaveNote_TruncationWarnsSenderAndWithholdsFullBody(t *testing.T) {
+	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120, ChatBudgetBytes: 20})
+	tool := NewLeaveNote(deps)
+	body := strings.Repeat("x", 100)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"body":`+jsonStr(body)+`,"to":"alice"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "TRUNCATED") {
+		t.Errorf("expected a truncation warning; got %q", out)
+	}
+	if strings.Contains(out, body) {
+		t.Errorf("the full over-budget body must not be echoed back; got %q", out)
+	}
+	if !strings.Contains(out, "conversation_id") {
+		t.Errorf("expected the remedy to name the conversation_id resend; got %q", out)
+	}
+}
+
+// TestLeaveNote_ReportsByteBudgetOnSuccess is PLAN-301 D3: a send under
+// budget should tell the sender the shape of the limit before they lose
+// content to it, not just silently succeed.
+func TestLeaveNote_ReportsByteBudgetOnSuccess(t *testing.T) {
+	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120, ChatBudgetBytes: 2048})
+	tool := NewLeaveNote(deps)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"body":"hello","to":"alice"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "5 of 2048") {
+		t.Errorf("expected the byte budget reported as \"5 of 2048\"; got %q", out)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Errorf("a body under budget should still be echoed; got %q", out)
+	}
+}
+
 func TestLeaveNote_MissingBodyRejected(t *testing.T) {
 	deps, _, _ := collabTestDeps(t, CollabPolicy{Mailbox: true})
 	tool := NewLeaveNote(deps)
