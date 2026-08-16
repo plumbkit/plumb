@@ -25,6 +25,12 @@
 #   R2  An added '## ' heading must have no pre-existing '## ' heading above it, i.e.
 #       added headings form a contiguous run from the top of the file. R2 is what
 #       makes R1's "a heading we added" clause safe, and what catches f9451a42.
+#   R3  A line deleted from the base's unreleased section and re-added under a
+#       released one is a move OUT of the unreleased section, and fails. This is the
+#       3e885aca (#310) shape — a relocation aimed at the unreleased heading that hit
+#       a released one — and it is the case the guard most has to catch, since #310
+#       is one of the four incidents it cites. A move BETWEEN two released sections
+#       stays advisory: that is a cleanup, and only a human can judge it.
 #
 # Why the BASE's first heading and not the new file's: when the diff range spans a
 # release cut, the old unreleased heading is no longer topmost, but entries added
@@ -187,22 +193,41 @@ else
 	git diff --no-ext-diff --unified=0 --no-color "$BASE" -- CHANGELOG.md >"$TMP/diff"
 fi
 
-BASE_FIRST="$(awk '/^## /{print; exit}' "$TMP/base.md")"
+# Fence-aware, for the same reason pass 2 is: a '## ' shown inside a fenced example
+# is quoted text, and taking it for the unreleased heading would compare against the
+# wrong section for the whole run.
+BASE_FIRST="$(awk 'substr($0, 1, 3) == "```" { f = !f; next } !f && /^## / { print; exit }' "$TMP/base.md")"
 [ -n "$BASE_FIRST" ] || skip "the base CHANGELOG.md has no '## ' heading"
 [ -s "$TMP/diff" ] || skip "CHANGELOG.md is unchanged against ${BASE}"
+
+# The line span of the base's unreleased section — its first '## ' heading up to the
+# next one. A line deleted from inside that span and re-added under a released heading
+# is a move OUT of the unreleased section, which is the #310 shape and never right.
+BASE_SPAN="$(awk '
+	substr($0, 1, 3) == "```" { f = !f; next }
+	!f && /^## / {
+		if (!s) { s = NR; next }
+		if (!e) e = NR - 1
+	}
+	END { if (!e) e = NR; print s "," e }
+' "$TMP/base.md")"
+BASE_SPAN_START="${BASE_SPAN%,*}"
+BASE_SPAN_END="${BASE_SPAN#*,}"
 
 # Pass 1 reads the unified=0 diff and records which NEW-file line numbers were added
 # (plus a multiset of deleted line texts, for relocation detection). Pass 2 reads the
 # post-change file, so every added line can be mapped to the heading it landed under.
-awk -v basefirst="$BASE_FIRST" -v base="$BASE" '
-# Relocated lines never fail the check, but they are reported either way: a move into
-# a released section is legitimate for a cleanup and a mistake for a rebase, and only
-# a human can tell which.
+awk -v basefirst="$BASE_FIRST" -v base="$BASE" \
+	-v spanstart="$BASE_SPAN_START" -v spanend="$BASE_SPAN_END" '
+# A move BETWEEN released sections is reported but never failed: only a human can tell
+# a deliberate cleanup from a mistake, and failing it would block the tidy-up PRs this
+# guard is supposed to survive. A move OUT of the unreleased section is different, and
+# is handled by R3 below.
 function relocnote(   i) {
 	if (!nmoved) return
-	printf "  note: %d line(s) were RELOCATED into an already-released section — their\n", nmoved
-	print "        exact text was also deleted in this diff, so this is a move, not a new"
-	print "        entry. Advisory, never a failure; confirm it was deliberate:"
+	printf "  note: %d line(s) moved between already-released sections — their exact\n", nmoved
+	print "        text was also deleted in this diff, so this is a move, not a new entry."
+	print "        Advisory, never a failure; confirm it was deliberate:"
 	for (i = 1; i <= nmt; i++) printf "          %d line(s) under %s\n", mcount[i], mhead[i]
 	print ""
 }
@@ -238,6 +263,11 @@ FNR == NR {
 		sub(/^-/, "", minus)
 		nm = split(minus, m, ",")
 		mrem = (nm > 1) ? m[2] + 0 : 1
+		# mcur walks the OLD line numbers so a deleted line can be placed in the base
+		# file. It is deliberately NOT mrem: mrem is read when the plus lines arrive, and
+		# decrementing it on the minus lines (which come first) would make every rewrite
+		# look like a pure addition.
+		mcur = m[1] + 0
 		next
 	}
 	if (!inhunk) next
@@ -251,7 +281,12 @@ FNR == NR {
 		}
 		next
 	}
-	if (c == "-") deleted[substr($0, 2)]++
+	if (c == "-") {
+		dt = substr($0, 2)
+		deleted[dt]++
+		if (spanstart && mcur >= spanstart && mcur <= spanend) fromunrel[dt] = 1
+		mcur++
+	}
 	next
 }
 
@@ -301,6 +336,22 @@ END {
 		if (!(ln in pureadd)) continue
 		if (deleted[t] > 0) {
 			deleted[t]--
+			# R3 — the line came OUT of the unreleased section in the base and landed
+			# in a released one. That is 3e885aca (#310): a deliberate relocation aimed
+			# at the unreleased heading that hit a released one instead. It only failed
+			# back then because one incidental new line rode along with it.
+			if (t in fromunrel) {
+				status = 1
+				if (nr3 > 0 && r3head[nr3] == htext[h] && r3end[nr3] == ln - 1) {
+					r3end[nr3] = ln
+				} else {
+					nr3++
+					r3start[nr3] = ln
+					r3end[nr3] = ln
+					r3head[nr3] = htext[h]
+				}
+				continue
+			}
 			nmoved++
 			if (!(htext[h] in mseen)) {
 				mseen[htext[h]] = ++nmt
@@ -346,6 +397,17 @@ END {
 			if (bstart[i] == bend[i]) printf "    line %d", bstart[i]
 			else printf "    lines %d-%d", bstart[i], bend[i]
 			printf "  under %s\n", bhead[i]
+		}
+		print ""
+	}
+	if (nr3) {
+		printf "  Lines MOVED OUT of %s and into an already-released section.\n", basefirst
+		print "  This is the PR #310 shape: a relocation aimed at the unreleased heading"
+		print "  that landed on a released one instead."
+		for (i = 1; i <= nr3; i++) {
+			if (r3start[i] == r3end[i]) printf "    line %d", r3start[i]
+			else printf "    lines %d-%d", r3start[i], r3end[i]
+			printf "  under %s\n", r3head[i]
 		}
 		print ""
 	}

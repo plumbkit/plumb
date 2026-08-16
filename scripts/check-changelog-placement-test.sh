@@ -91,6 +91,27 @@ CASES_EOF
 # The guard resolves its own repo root from $0, so each fixture gets a throwaway
 # repository with a copy of the guard in it.
 
+# A base with TWO already-released sections, for cases about moving between them.
+SYNTH_BASE_TWO_RELEASES='# Changelog
+
+## 0.3.0 (unreleased)
+
+### Fixed
+
+- an unreleased entry
+
+## 0.2.0 (2026-02-01)
+
+### Added
+
+- an entry that shipped in 0.2.0
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry'
+
 SYNTH_BASE='# Changelog
 
 ## 0.2.0 (unreleased)
@@ -106,16 +127,20 @@ SYNTH_BASE='# Changelog
 - first released entry
 - second released entry'
 
-# synth <pass|fail> <name>, with the post-change CHANGELOG.md on stdin.
+# synth <pass|fail> <name> [base-content], with the post-change CHANGELOG.md on stdin.
+# base-content defaults to $SYNTH_BASE; pass one explicitly when a case needs a shape
+# the shared base cannot express (e.g. two already-released sections).
+# Set SYNTH_ALLOW=1 around a call to run it with CHANGELOG_PLACEMENT_ALLOW set.
 synth() {
 	want="$1"
 	name="$2"
+	base_md="${3:-$SYNTH_BASE}"
 	total=$((total + 1))
 	d="$(mktemp -d)"
 	mkdir -p "$d/scripts"
 	cp "$GUARD" "$d/scripts/check-changelog-placement.sh"
 	git -C "$d" init -q >/dev/null 2>&1
-	printf '%s\n' "$SYNTH_BASE" >"$d/CHANGELOG.md"
+	printf '%s\n' "$base_md" >"$d/CHANGELOG.md"
 	git -C "$d" add -A
 	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm base
 	synth_base_sha="$(git -C "$d" rev-parse HEAD)"
@@ -124,7 +149,7 @@ synth() {
 	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm head
 	synth_head_sha="$(git -C "$d" rev-parse HEAD)"
 
-	if out=$("$d/scripts/check-changelog-placement.sh" \
+	if out=$(CHANGELOG_PLACEMENT_ALLOW="${SYNTH_ALLOW:-}" "$d/scripts/check-changelog-placement.sh" \
 		--base "$synth_base_sha" --head "$synth_head_sha" 2>&1); then rc=0; else rc=$?; fi
 	rm -rf "$d"
 
@@ -162,7 +187,12 @@ synth pass 'blank line in old section' <<'EOF'
 - second released entry
 EOF
 
-synth pass 'entry relocated into old section' <<'EOF'
+# R3. An entry MOVED OUT of the unreleased section and into a released one: the
+# 3e885aca (#310) shape, where a relocation aimed at the unreleased heading landed on
+# a released one. #310 only failed the guard because one incidental new line rode
+# along with it; as a clean move it used to pass with an advisory note nobody would
+# read, since nobody reads the log of a passing check.
+synth fail 'entry moved OUT of unreleased (#310)' <<'EOF'
 # Changelog
 
 ## 0.2.0 (unreleased)
@@ -176,6 +206,31 @@ synth pass 'entry relocated into old section' <<'EOF'
 - first released entry
 - second released entry
 - an entry in the right place
+EOF
+
+# The other direction stays advisory. Moving an entry BETWEEN two already-released
+# sections is a cleanup — correcting which shipped version an entry belongs to — and
+# only a human can judge it, so R3 must not reach for it. This is the case that fails
+# if R3 is ever widened from "out of unreleased" to "into anything released".
+synth pass 'entry moved between released sections' "$SYNTH_BASE_TWO_RELEASES" <<'EOF'
+# Changelog
+
+## 0.3.0 (unreleased)
+
+### Fixed
+
+- an unreleased entry
+
+## 0.2.0 (2026-02-01)
+
+### Added
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- an entry that shipped in 0.2.0
 EOF
 
 # A branch whose merge-base predates a release: something opened a newer unreleased
@@ -293,6 +348,30 @@ synth fail 'new entry in old section (control)' <<'EOF'
 - a genuinely new entry
 EOF
 
+# The documented escape valve, which had no coverage at all: the control case above is
+# a real violation, so if setting the variable does not turn it green the bypass is
+# broken — and a bypass nobody can rely on is one people route around by deleting the
+# step instead.
+SYNTH_ALLOW=1
+synth pass 'CHANGELOG_PLACEMENT_ALLOW bypasses a violation' <<'EOF'
+# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry
+- a genuinely new entry
+EOF
+SYNTH_ALLOW=""
+
 # ── The CI shape ─────────────────────────────────────────────────────────────────────
 #
 # Everything above replays a linear base→head pair, which is NOT what CI hands the
@@ -358,6 +437,18 @@ for flag in --head --require-base; do
 		failed=$((failed + 1))
 	fi
 done
+
+# Admins bypass branch protection here, so release and pin commits reach main by a
+# direct push and never meet the pull_request step. Without this the guard covers only
+# the PR route, which is invisible from the guard itself.
+total=$((total + 1))
+if grep -q "github.event_name == 'push'" "$WORKFLOW" &&
+	grep -q -- 'check-changelog-placement.sh --base ..{ github.event.before' "$WORKFLOW"; then
+	printf '  ok    %-38s %s\n' 'workflow guards direct pushes' 'present'
+else
+	printf '  FAIL  %-38s missing from %s\n' 'workflow guards direct pushes' "$WORKFLOW"
+	failed=$((failed + 1))
+fi
 
 echo ""
 if [ "$failed" -ne 0 ]; then
