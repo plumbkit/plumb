@@ -281,21 +281,31 @@
   The rung keeps its rank — it still outranks the client's `roots/list`, which
   is the restart regression it exists to fix, and an accepted pin still records
   `session_start` origin, so stickiness and persistence are unchanged — but the
-  containment question is now asked of it as an unprivileged origin. A wide root
-  is refused and the ladder falls through to its lower rungs rather than leaving
-  the session unattached. A wide root a caller really did declare still restores
-  from the persisted pin, whose origin this daemon recorded itself; the one
-  narrow cost is that with `[session] persist_state` off such a root must be
-  re-declared after a restart.
+  containment question is now asked of it as an unprivileged origin. An ordinary
+  project root is unaffected; only a home directory or a container of one is
+  refused, and the ladder then falls through to its lower rungs.
+
+  **Behaviour change worth reading if you deliberately pin `$HOME`.** A wide
+  root you really did declare still comes back when the persisted pin row is
+  there. When it is not — `[session] persist_state` off, a first connect, or the
+  row aged past `[session] persist_state_ttl_minutes` (default 1440) and swept
+  by the startup prune, which is the case that bites in the default
+  configuration — every lower rung refuses that root too, so the connection
+  comes back **unattached** and you must call `session_start` again. It is
+  fail-safe (never wider, never a different repository), but it is not free.
+  A database written before this release may also still hold a wide root stamped
+  `session_start` that came from the forged key; nothing invalidates those rows
+  retroactively, the TTL prune ages them out.
 
   This closes no privilege escalation — whoever can set initialize `_meta` runs
   the client host and could call `session_start` directly (B1 does not
   authenticate the client) — but it stops the widest boundary plumb can grant
   from being claimed over a channel no human declared anything on.
   `docs/threat-model.md` now states what the daemon can and cannot verify about
-  a declaration. Guarded by
+  a declaration, and what the fallback costs. Guarded by
   `TestOnInit_ReplayedMetaPinCannotClaimHomeContainment`,
-  `TestOnInit_DeclaredWideRootStillRestoresFromDatabase`, and
+  `TestOnInit_DeclaredWideRootStillRestoresFromDatabase`,
+  `TestOnInit_UndeclaredFallbackLeavesWideRootUnattached`, and
   `TestOnInit_ReplayedMetaPinKeepsRankForOrdinaryRoots` (issue #318).
 
 - **`check_messages` now reports its wait in seconds, and says when it was

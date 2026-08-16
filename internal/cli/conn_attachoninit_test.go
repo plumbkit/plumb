@@ -224,8 +224,41 @@ func TestOnInit_ReplayedMetaPinCannotClaimHomeContainment(t *testing.T) {
 		t.Fatalf("after refusing the wide replayed pin the ladder landed on %q, want the client root %q", got, rootA)
 	}
 	// And nothing wide may be left behind in the database for a later rehydrate.
-	if ws, _, _, ok, err := ss.LoadPin("proxyX"); err == nil && ok && ws == wide {
+	ws, _, _, _, err := ss.LoadPin("proxyX")
+	if err != nil {
+		t.Fatalf("LoadPin: %v", err) // an error here must not silently pass the check below
+	}
+	if ws == wide {
 		t.Fatalf("a refused wide replayed pin was persisted as %q", ws)
+	}
+}
+
+// The refusal's real cost, pinned so the docs cannot understate it. When the
+// database has no row to fall back on — [session] persist_state off, a first
+// connect, or (the case that bites in the DEFAULT configuration) a row older
+// than [session] persist_state_ttl_minutes that the startup prune swept — a
+// caller's DECLARED wide root does not come back at all. Every lower rung
+// refuses it too, because roots and the cwd hint are weaker origins than the
+// declaration that is now missing, so the connection returns UNATTACHED rather
+// than pinned somewhere narrower.
+//
+// This doubles as the defence-in-depth assertion: no rung of the ladder may
+// pin a home container without a declaration, so a refusal at rung 1 cannot be
+// quietly undone further down.
+func TestOnInit_UndeclaredFallbackLeavesWideRootUnattached(t *testing.T) {
+	wide := wideRootOrSkip(t)
+	store, ss := newOriginStore(t) // deliberately no pin row: the pruned/persist-off case
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(wide)
+	// The client reports the same wide directory, so the roots rung is the one
+	// that would otherwise catch the fall.
+	s.setClientRequest(rootsReplying(wide, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(wide, &calls))
+
+	if got := s.workspace(); got != "" {
+		t.Fatalf("a wide root was attached by a lower rung as %q — no origin but an explicit session_start may pin a home container", got)
 	}
 }
 

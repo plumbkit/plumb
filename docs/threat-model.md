@@ -152,10 +152,25 @@ it is asked the containment question as an unprivileged origin, so it cannot
 pin a home directory or a container of one. A client shipping
 `_meta[dev.plumbkit/pinned-workspace] = "/Users"` is refused and the ladder
 falls through to its lower rungs; a wide root a caller really did declare is
-restored from the persisted pin instead, whose `session_start` origin is a
-fact this daemon recorded itself. The residual cost is narrow and fail-safe:
-with `[session] persist_state` off, a declared wide root does not survive a
-restart and must be re-declared.
+restored from the persisted pin instead, whose `session_start` origin was
+recorded by a daemon on an accepted call rather than asserted by a client in
+this handshake.
+
+That fallback is not unconditional, and the cost of losing it is larger than
+it first looks. The row is absent with `[session] persist_state` off, on a
+first connect, and — the case that bites in the DEFAULT configuration — once
+the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
+startup prune, which runs with no live exemption, deletes it. When the row is
+gone, every lower rung refuses the wide root too, because `roots` and the cwd
+hint are weaker origins than the declaration that is now missing: the
+connection comes back **unattached** and the caller must declare the workspace
+again. That is fail-safe — never wider, never a different repository — but a
+dotfiles session pinned at `$HOME` does feel it.
+
+One stale-data caveat: a database written before 0.16.7 may already hold a wide
+root stamped `session_start` that was minted from exactly this unauthenticated
+key, and nothing retroactively invalidates those rows — the TTL prune ages them
+out rather than the guard rejecting them.
 
 This is a guard on the guard's own premise, not a privilege boundary. Whoever
 can set initialize `_meta` is running the client host and could call
