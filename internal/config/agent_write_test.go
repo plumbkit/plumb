@@ -100,3 +100,34 @@ func TestAgentApplyBatch_RecordsPriorValueFromFoldVariantTable(t *testing.T) {
 		t.Errorf("previous = %q, want \"old-linter\"", *entry.Previous)
 	}
 }
+
+// TestAgentApplyBatch_RecordsPriorValueFromAFoldVariantTopLevelKey covers the
+// one-segment path through getNested, which the nested case cannot reach: a
+// top-level key has no table to descend, so the leaf fold is the only thing
+// standing between `plumb config unset` and a revert to a value that was never
+// in force.
+func TestAgentApplyBatch_RecordsPriorValueFromAFoldVariantTopLevelKey(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "LOG_LEVEL = \"warn\"\n")
+
+	if _, err := AgentApplyBatch(Defaults(), ws,
+		map[string]any{"log_level": "error"},
+		ProvenanceEntry{Source: "agent", SessionID: "s1"}); err != nil {
+		t.Fatalf("AgentApplyBatch: %v", err)
+	}
+
+	prov, err := LoadProvenance(ws)
+	if err != nil {
+		t.Fatalf("LoadProvenance: %v", err)
+	}
+	entry, ok := prov["log_level"]
+	if !ok {
+		t.Fatal("no provenance entry for log_level")
+	}
+	if entry.Previous == nil {
+		t.Fatal("provenance recorded NO previous value, but LOG_LEVEL held one")
+	}
+	if *entry.Previous != "warn" {
+		t.Errorf("previous = %q, want \"warn\"", *entry.Previous)
+	}
+}
