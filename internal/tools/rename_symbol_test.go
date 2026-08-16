@@ -623,6 +623,46 @@ func TestRenameSymbol_ByPosition_ServerRejectionKeepsCoordinateHint(t *testing.T
 	}
 }
 
+// The duplicate-file refusal must fire in DRY RUN as well as on apply (issue
+// #314). Without it the preview renders a diff and promises "would change N
+// file(s)" for an edit set the apply then rejects — the caller only discovers
+// the problem after acting on a preview that said it was fine.
+func TestRenameSymbol_DryRunRefusesOneFileNamedTwice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nvar Foo = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := "file://" + path
+	edit := protocol.TextEdit{
+		Range:   protocol.Range{Start: protocol.Position{Line: 2, Character: 4}, End: protocol.Position{Line: 2, Character: 7}},
+		NewText: "Bar",
+	}
+	// Both forms carry the SAME edit — merging them would apply it twice.
+	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{uri: {edit}},
+		DocumentChanges: []protocol.TextDocumentEdit{{
+			TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri},
+			Edits:        []protocol.TextEdit{edit},
+		}},
+	}}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": uri, "line": 2, "character": 4, "new_name": "Bar", "dry_run": true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatalf("dry run previewed an edit set the apply would refuse:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "same file") {
+		t.Errorf("dry-run error does not name the defect: %v", err)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "var Foo = 1") {
+		t.Fatalf("a dry run must not write: %q", got)
+	}
+}
+
 // A server that names one file in both Changes and DocumentChanges (nothing in
 // the protocol forbids it) must still be treated as one target: the apply path
 // groups its plans by URI, so a duplicated entry here would shift the file list
