@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
 )
 
@@ -39,6 +40,13 @@ type Deps struct {
 	LogPath string
 	// StartedAt is the daemon start time, for the dashboard uptime figure.
 	StartedAt time.Time
+	// CollabGlobalStore returns the daemon-level cross-project collab store
+	// when it already exists, never creating one — the same if-exists
+	// accessor internal/cli's connSession uses (collabPool.getGlobal), wired
+	// through so the dashboard's cross-project conversation panel shares the
+	// daemon's live handle instead of opening a second connection to the same
+	// file. May be nil (a Server built without it simply shows no panel).
+	CollabGlobalStore func() *collab.Store
 }
 
 // Server owns the loopback HTTP listener and its lifecycle. It is constructed

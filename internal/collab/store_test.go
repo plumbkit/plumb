@@ -618,3 +618,49 @@ func TestClampTTL_FloorsShortTTL(t *testing.T) {
 		t.Fatalf("a zero-TTL intent should still live at least minTTL; got %d", len(intents))
 	}
 }
+
+// TestOpenGlobalReadOnly_ReadsWithoutCreatingOrWriting pins the TUI's read
+// path: it must see rows a writer (e.g. leave_note through the daemon) put
+// there, must never create the file when absent, and must refuse a write.
+func TestOpenGlobalReadOnly_ReadsWithoutCreatingOrWriting(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+
+	if _, err := OpenGlobalReadOnly(); err == nil {
+		t.Fatal("OpenGlobalReadOnly must error, not create, when collab-xproject.db does not exist")
+	}
+	if GlobalExists() {
+		t.Fatal("a failed OpenGlobalReadOnly must not have created the global store")
+	}
+
+	w, err := OpenGlobal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	ctx, now := context.Background(), time.Now()
+	if _, err := w.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := OpenGlobalReadOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	sums, err := r.ConversationSummaries(ctx, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sums) != 1 {
+		t.Fatalf("read-only handle did not see the written note: %+v", sums)
+	}
+	if _, err := r.PutNote(ctx, NoteInput{
+		AuthorID: "x", Body: "should fail", Addressee: "y", TTL: time.Hour, TargetWorkspace: "/proj/a",
+	}, now); err == nil {
+		t.Error("a read-only handle must refuse a write")
+	}
+}

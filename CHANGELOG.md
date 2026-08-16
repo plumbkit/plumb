@@ -33,6 +33,34 @@
 
 ### Added
 
+- **The TUI and web dashboards show daemon-wide cross-project mailbox traffic —
+  but only where every participant agreed to be seen.** `workspace_sessions`
+  has long shown a workspace its own cross-project conversation volume,
+  gated on that workspace's `[collab] cross_project` opt-in — the *recipient's*
+  consent, because the recipient is whose screen it appears on. The daemon-wide
+  dashboards have no recipient to ask: they are not inside any one project, they
+  are watching the whole daemon.
+
+  The rule that fills that gap is unanimous consent: a conversation appears on
+  the dashboard only when **every** workspace that has participated in it has
+  independently opted in. Either weaker rule fails a real project — "any one
+  opts in" would let project A's opt-in expose project B's traffic without B's
+  consent, and "show nothing at all" would make the feature pointless for the
+  common two-sided case where both sides *do* want visibility.
+
+  `internal/collab`'s `ConversationWorkspaces` names the distinct workspaces
+  behind a thread (nothing else — no bodies, no session identity, matching
+  `ConversationSummary`'s own disclosure rule), and
+  `FilterDaemonWideConversations` applies the unanimous check, fail-closed: a
+  conversation whose participants cannot all be resolved, or whose consent
+  cannot be determined, is excluded rather than shown. Consent itself is
+  resolved per workspace through the same `plumb trust` gate every other
+  capability-granting project setting uses — a repository cannot opt itself
+  into being watched by shipping a `.plumb/config.toml`. The panel and the
+  `/api/dashboard` field are both read-only and never create the daemon-level
+  mailbox store; a daemon that has never carried cross-project traffic shows
+  nothing.
+
 - **`[tasks.<lang>] working_dir` — task commands can run where the module
   actually is.** Stored commands ran from the workspace root, unconditionally.
   In a **holder repository** — no `go.mod` at the top, only a `go.work` pointing

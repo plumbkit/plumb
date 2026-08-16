@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/monitor"
@@ -175,10 +176,17 @@ type Model struct {
 	dashProjectAxes         stats.AxisTotals
 	dashProjectTopTools     []stats.ToolStat
 	dashScroll              int
-	waitingForQuit          bool
-	quitMessageID           int
-	keys                    keymap
-	keyWarnings             []string
+
+	// Cross-Project Conversations panel (section 0) — see dashboard_collab.go.
+	// dashCollabStore is opened lazily and kept for the process lifetime, the
+	// same pattern globalDB uses.
+	dashCollabStore         *collab.Store
+	dashCollabConversations []collab.ConversationSummary
+
+	waitingForQuit bool
+	quitMessageID  int
+	keys           keymap
+	keyWarnings    []string
 }
 
 func NewModel(logPath, ctrlPath string) Model {

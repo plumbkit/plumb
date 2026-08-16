@@ -2,6 +2,8 @@ package collab
 
 import (
 	"context"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -194,6 +196,226 @@ func TestSentBy_ShowsDeliveredAndUndeliveredNewestFirst(t *testing.T) {
 	}
 	if len(unread) != 1 {
 		t.Fatalf("UnreadSentBy returned %d rows, want 1 — its contract changed", len(unread))
+	}
+}
+
+// openTestGlobalStore opens a real daemon-level store at a temp path, the same
+// helper shape store_test.go's cross-project tests use inline.
+func openTestGlobalStore(t *testing.T) *Store {
+	t.Helper()
+	g, err := OpenGlobalAt(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	return g
+}
+
+// TestConversationWorkspaces_CollectsDistinctOriginAndTarget pins the shape
+// FilterDaemonWideConversations depends on: a two-sided thread reports both
+// participants exactly once, regardless of how many notes each side sent.
+func TestConversationWorkspaces_CollectsDistinctOriginAndTarget(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	conv, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, g, NoteInput{
+		AuthorSession: "alice", AuthorID: "a", Body: "hi back", Addressee: "bob",
+		ConversationID: conv, OriginWorkspace: "/proj/a", TargetWorkspace: "/proj/b",
+	}, now)
+	// A second reply from bob must not duplicate /proj/b in the result.
+	mustPut(t, g, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "again", Addressee: "alice",
+		ConversationID: conv, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
+	}, now)
+
+	got, err := g.ConversationWorkspaces(ctx, conv, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	if want := []string{"/proj/a", "/proj/b"}; !slices.Equal(got, want) {
+		t.Errorf("workspaces = %v, want %v", got, want)
+	}
+}
+
+// TestConversationWorkspaces_ExcludesExpired: an expired row's workspace must
+// not count as a live participant.
+func TestConversationWorkspaces_ExcludesExpired(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	conv, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Minute, OriginWorkspace: "/proj/b", TargetWorkspace: "/proj/a",
+	}, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := g.ConversationWorkspaces(ctx, conv, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expired row's workspaces still counted: %v", got)
+	}
+}
+
+// TestConversationWorkspaces_UnknownConversationIsEmpty: no rows, no error —
+// FilterDaemonWideConversations relies on an empty (not erroring) answer to
+// exclude a conversation it cannot place any participant for.
+func TestConversationWorkspaces_UnknownConversationIsEmpty(t *testing.T) {
+	g := openTestGlobalStore(t)
+	got, err := g.ConversationWorkspaces(context.Background(), "no-such-conversation", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("unknown conversation reported workspaces: %v", got)
+	}
+}
+
+// TestFilterDaemonWideConversations_RequiresUnanimousConsent is the rule
+// itself: a conversation is shown only when EVERY participating workspace
+// consents, not when any one does.
+func TestFilterDaemonWideConversations_RequiresUnanimousConsent(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	// Both consent: must appear.
+	bothConsent, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, OriginWorkspace: "/proj/consents-a", TargetWorkspace: "/proj/consents-b",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One side never consents: must be excluded even though the other does.
+	oneRefuses, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "carol", AuthorID: "c", Body: "hi", Addressee: "dave",
+		TTL: time.Hour, OriginWorkspace: "/proj/consents-a", TargetWorkspace: "/proj/refuses",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consenting := map[string]bool{"/proj/consents-a": true, "/proj/consents-b": true}
+	allow := func(ws string) bool { return consenting[ws] }
+
+	got, err := g.FilterDaemonWideConversations(ctx, now, 0, allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	if !slices.Contains(ids, bothConsent) {
+		t.Errorf("a conversation both participants opted in to must appear; got %v", ids)
+	}
+	if slices.Contains(ids, oneRefuses) {
+		t.Errorf("a conversation with even one non-consenting participant must not appear; got %v", ids)
+	}
+}
+
+// TestFilterDaemonWideConversations_KnownParticipantPasses is the positive
+// control for the fail-closed "no known participants" guard: a row with only a
+// target workspace stamped (origin never required by PutNote) still resolves
+// one known participant and is shown when that workspace consents. The
+// negative case — zero known participants — has no way to arise through
+// PutNote's own invariant (a global-store row is refused without a target
+// workspace), so it is covered directly at TestConversationWorkspaces_
+// UnknownConversationIsEmpty; this pins that FilterDaemonWideConversations
+// still finds and includes the ordinary case around that guard.
+func TestFilterDaemonWideConversations_KnownParticipantPasses(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	if _, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "bob", AuthorID: "b", Body: "hi", Addressee: "alice",
+		TTL: time.Hour, TargetWorkspace: "/proj/only-target",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	allow := func(ws string) bool { return ws == "/proj/only-target" }
+	got, err := g.FilterDaemonWideConversations(ctx, now, 0, allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the one known-participant conversation to pass, got %d: %+v", len(got), got)
+	}
+}
+
+// TestFilterDaemonWideConversations_OnlyRunsOnGlobalStore: a per-workspace
+// store answers nothing rather than silently misreading its own columns —
+// mirroring ConversationSummariesForWorkspace's contract.
+func TestFilterDaemonWideConversations_OnlyRunsOnGlobalStore(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+	mustPut(t, s, NoteInput{AuthorSession: "alice", AuthorID: "a", Body: "hi", Addressee: "bob"}, now)
+
+	got, err := s.FilterDaemonWideConversations(ctx, now, 0, func(string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("a non-global store answered a daemon-wide question: %+v", got)
+	}
+}
+
+// TestFilterDaemonWideConversations_LimitTrimsAfterFiltering proves the
+// over-fetch: with several consented conversations available, a small limit
+// still returns a full page rather than under-filling because non-consenting
+// conversations occupied slots in the raw fetch.
+func TestFilterDaemonWideConversations_LimitTrimsAfterFiltering(t *testing.T) {
+	g := openTestGlobalStore(t)
+	ctx := context.Background()
+
+	// Five non-consenting conversations, newest first (busiest-first ranking is
+	// by note count then recency; give them all one note so the refused ones
+	// would otherwise crowd out the consented ones in a naive `LIMIT 2` fetch).
+	for i := range 5 {
+		ws := filepath.Join("/proj/refuses", string(rune('a'+i)))
+		if _, err := g.PutNote(ctx, NoteInput{
+			AuthorSession: "x", AuthorID: "x", Body: "hi", Addressee: "y",
+			TTL: time.Hour, OriginWorkspace: ws, TargetWorkspace: "/proj/refuses-target",
+		}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One consented conversation, oldest of the batch so a naive small LIMIT on
+	// the unfiltered query would drop it.
+	consented, err := g.PutNote(ctx, NoteInput{
+		AuthorSession: "a", AuthorID: "a", Body: "hi", Addressee: "b",
+		TTL: time.Hour, OriginWorkspace: "/proj/consents", TargetWorkspace: "/proj/consents-2",
+	}, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allow := func(ws string) bool {
+		return ws == "/proj/consents" || ws == "/proj/consents-2"
+	}
+	got, err := g.FilterDaemonWideConversations(ctx, time.Now(), 2, allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	if !slices.Contains(ids, consented) {
+		t.Errorf("the consented conversation was crowded out by refused ones: %v", ids)
 	}
 }
 

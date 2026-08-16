@@ -373,6 +373,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		MetricsPath: monitor.SnapshotPath(),
 		LogPath:     daemonLogPath(),
 		StartedAt:   daemonStartedAt,
+		// getGlobal never creates collab-xproject.db — a daemon whose sessions
+		// have never exchanged a cross-project message never materialises it,
+		// including from the dashboard reading this.
+		CollabGlobalStore: collabPool.getGlobal,
 	})
 	defer webServer.Close()
 

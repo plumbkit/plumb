@@ -147,6 +147,116 @@ func TestIntentHint_AdvisoryOnlyIsAdditive(t *testing.T) {
 	}
 }
 
+// TestTargetAllowsCrossProject_ResolvesArbitraryWorkspace pins the difference
+// from crossProjectOn (workspace_sessions_collab.go): that reads THIS
+// connection's own cached [collab] snapshot, while targetAllowsCrossProject
+// resolves an ARBITRARY other workspace's config fresh, on demand — the shape
+// a daemon-wide display needs when checking consent for every participant in
+// a conversation, none of which need be the workspace this session is pinned
+// to.
+func TestTargetAllowsCrossProject_ResolvesArbitraryWorkspace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	other := t.TempDir()
+	writeProjectConfig(t, other, "[collab]\ncross_project = true\n")
+	grantExecTrust(t, other)
+
+	// This session is pinned to an unrelated workspace; the question is about
+	// `other`, not about where this session lives.
+	s := newIntentTestSession(t, t.TempDir(), config.CollabConfig{})
+
+	if !s.targetAllowsCrossProject(other) {
+		t.Error("a trusted, opted-in OTHER workspace must report consent")
+	}
+	if s.targetAllowsCrossProject(t.TempDir()) {
+		t.Error("a workspace with no opt-in must not report consent")
+	}
+	if s.targetAllowsCrossProject("") {
+		t.Error("an empty workspace must never report consent")
+	}
+}
+
+// TestDaemonWideConversations_RequiresEveryParticipantToOptIn is the
+// end-to-end wiring proof: real project configs, real trust grants, a real
+// global collab store, filtered by the real connSession method.
+func TestDaemonWideConversations_RequiresEveryParticipantToOptIn(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	optedIn := t.TempDir()
+	writeProjectConfig(t, optedIn, "[collab]\ncross_project = true\n")
+	grantExecTrust(t, optedIn)
+
+	peerOptedIn := t.TempDir()
+	writeProjectConfig(t, peerOptedIn, "[collab]\ncross_project = true\n")
+	grantExecTrust(t, peerOptedIn)
+
+	silent := t.TempDir() // never opts in
+
+	s := newIntentTestSession(t, optedIn, config.CollabConfig{})
+	global := s.collabPool.acquireGlobal()
+	if global == nil {
+		t.Fatal("acquire global collab store")
+	}
+	ctx, now := context.Background(), time.Now()
+
+	// Both participants consent: must be included.
+	unanimous, err := global.PutNote(ctx, collab.NoteInput{
+		AuthorSession: "a", AuthorID: "a", Body: "hi", Addressee: "b",
+		TTL: time.Hour, OriginWorkspace: optedIn, TargetWorkspace: peerOptedIn,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One participant never consented: must be excluded even though the other did.
+	partial, err := global.PutNote(ctx, collab.NoteInput{
+		AuthorSession: "a", AuthorID: "a", Body: "hi", Addressee: "c",
+		TTL: time.Hour, OriginWorkspace: optedIn, TargetWorkspace: silent,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.daemonWideConversations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	found := false
+	for _, id := range ids {
+		if id == unanimous {
+			found = true
+		}
+		if id == partial {
+			t.Errorf("a conversation with a non-consenting participant leaked into the daemon-wide view: %v", ids)
+		}
+	}
+	if !found {
+		t.Errorf("the unanimously-consented conversation is missing from the daemon-wide view: %v", ids)
+	}
+}
+
+// TestDaemonWideConversations_NoGlobalStoreYieldsNothingWithoutCreatingOne: the
+// common case (no cross-project traffic has ever happened on this daemon) must
+// answer cleanly, and the read path must never be the thing that materialises
+// collab-xproject.db.
+func TestDaemonWideConversations_NoGlobalStoreYieldsNothingWithoutCreatingOne(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	s := newIntentTestSession(t, t.TempDir(), config.CollabConfig{})
+
+	got, err := s.daemonWideConversations(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil with no global store, got %+v", got)
+	}
+	if collab.GlobalExists() {
+		t.Error("the read path must never create the global collab store")
+	}
+}
+
 // writeLiveSessionFile plants a session file directly in the session directory.
 // It exists because session.Register REFUSES a name a live session already
 // holds, so the duplicate-name state resolvePeer must survive cannot be reached

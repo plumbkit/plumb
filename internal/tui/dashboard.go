@@ -91,6 +91,7 @@ func (m *Model) refreshDashboard() {
 		failures, _ := m.globalDB.FailureSummary(dashFailureBucketLimit, uptimeFilter)
 		m.dashUptimeFailures = failures.Buckets
 		m.refreshDashboardProject()
+		m.refreshDashboardCollab()
 	}
 	chartBuckets := max(m.dashChartWidth, activityBuckets)
 	if m.refreshDashboardBuckets(now, chartBuckets, globalFilter) {
@@ -233,6 +234,11 @@ func (m Model) dashboardBodyLines(width int) []string {
 	if m.dashProjectFolder != "" && m.dashProjectCalls > 0 {
 		lines = append(lines, "")
 		lines = append(lines, m.dashProjectWidget(width)...)
+	}
+
+	if collabWidget := m.dashCollabWidget(width); len(collabWidget) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, collabWidget...)
 	}
 
 	lines = append(lines, "")
