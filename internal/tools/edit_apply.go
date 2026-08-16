@@ -108,63 +108,108 @@ type workspaceEditTarget struct {
 	edits []protocol.TextEdit
 }
 
-// workspaceEditTargets groups we's edits per file and returns them in sorted
-// path order, so preparation, writing, and any resulting error are deterministic
+// workspaceEditTargets resolves we into one target per file, in sorted path
+// order, so preparation, writing, and any resulting error are deterministic
 // regardless of Go's map iteration.
 //
-// Two URIs naming ONE file are refused rather than applied (issue #314). Both
-// would become their own target, both would be prepared from the same pre-edit
-// bytes, and both would be written in turn — so the second write would silently
-// discard the first: a lost update inside an edit whose whole contract is that
-// it lands atomically. lockPaths already collapses the pair to one mutex
-// (issue #290), so nothing deadlocks and nothing fails; the writes just both
-// happen, and the caller is told the rename succeeded.
+// A file named by TWO entries that both carry edits is refused (issue #314).
+// An "entry" is one key of Changes or one element of DocumentChanges, and the
+// two dangerous shapes are the same defect wearing different clothes:
 //
-// Refusing mirrors the decision transaction_apply made for the same shape
-// (txCanonicalPaths). Merging the two edit lists instead would be wrong in the
-// very case most likely to produce them: a server emitting one edit under two
-// spellings would have that edit applied TWICE, because applyTextEdits runs
-// every edit in a target against the same pre-edit buffer. A refusal cannot
-// corrupt a file; a merge can.
+//   - Two SPELLINGS of one file (through a symlinked parent, say) used to
+//     become two targets. Both were prepared from the same pre-edit bytes and
+//     both were written in turn, so the second write silently discarded the
+//     first — a lost update inside an apply whose contract is that it lands
+//     atomically. lockPaths already collapses the pair to one mutex (issue
+//     #290), so nothing deadlocked and nothing failed; that is exactly what
+//     made it silent.
+//   - The SAME spelling in both Changes and DocumentChanges used to be merged
+//     into one edit list. A server that emits its edits under both forms for
+//     capability compatibility would then have each edit applied TWICE.
+//     applyTextEdits threads the buffer through its loop (each edit sees the
+//     previous edit's output, not the pre-edit bytes), so a repeated
+//     length-changing edit does not land idempotently: it corrupts the file.
 //
-// The scan runs over URIs in sorted order so a duplicate names the same pair on
-// every run — Go's map iteration would otherwise pick a different "first"
-// spelling each time and make the error unreproducible.
+// Refusing both mirrors the decision transaction_apply made for the same shape
+// (txCanonicalPaths). It is the safe direction: a refusal cannot corrupt a
+// file, and merging — the alternative #314 offered — is precisely what produces
+// the second case above.
+//
+// An entry carrying NO edits is exempt, because it cannot lose or duplicate
+// anything: servers emit a bare documentChanges entry alongside changes, and
+// TestRenameSymbol_DeduplicatesTargetsAcrossEditForms pins that such a file is
+// still counted once rather than refused.
+//
+// KNOWN GAP: two spellings differing only in CASE on a case-insensitive
+// filesystem are one file but two lock keys, so they are neither refused here
+// nor collapsed by lockPaths. That is a property of paths.Canonical, which
+// deliberately does not case-fold (see internal/paths/canonical.go), and it is
+// shared with transaction_apply's txCanonicalPaths — not something this guard
+// introduces or can fix on its own.
 func workspaceEditTargets(we *protocol.WorkspaceEdit) ([]workspaceEditTarget, error) {
-	editsByURI := workspaceEditGroups(we)
-	uris := make([]string, 0, len(editsByURI))
-	for uri := range editsByURI {
-		uris = append(uris, uri)
-	}
-	sort.Strings(uris)
-
-	targets := make([]workspaceEditTarget, 0, len(editsByURI))
-	seen := make(map[string]string, len(editsByURI))
-	for _, uri := range uris {
-		p := paths.URIToPath(uri)
+	targets := make([]workspaceEditTarget, 0, len(we.Changes)+len(we.DocumentChanges))
+	byKey := make(map[string]int, cap(targets))
+	for _, e := range workspaceEditEntries(we) {
+		p := paths.URIToPath(e.uri)
 		key := lockPathKey(p)
-		if prev, dup := seen[key]; dup {
-			return nil, &editLogicErr{fmt.Errorf(
-				"workspace edit names the same file under two paths (%q and %q), so one file's edits would silently overwrite the other's — the language server sent an edit plumb cannot apply atomically",
-				prev, p,
-			)}
+		idx, dup := byKey[key]
+		if !dup {
+			byKey[key] = len(targets)
+			targets = append(targets, workspaceEditTarget{path: p, edits: e.edits})
+			continue
 		}
-		seen[key] = p
-		targets = append(targets, workspaceEditTarget{path: p, edits: editsByURI[uri]})
+		if len(e.edits) == 0 {
+			continue // a bare mention changes nothing
+		}
+		if len(targets[idx].edits) == 0 {
+			targets[idx].edits = e.edits // the earlier mention was the bare one
+			continue
+		}
+		named := fmt.Sprintf("under two paths (%q and %q)", targets[idx].path, p)
+		if targets[idx].path == p {
+			named = fmt.Sprintf("twice (%q)", p)
+		}
+		return nil, &editLogicErr{fmt.Errorf(
+			"workspace edit names the same file %s and both carry edits, so one set would silently overwrite the other or the same edit would be applied twice — plumb cannot apply that atomically. Re-run once the language server has settled, or apply the edits to that file with edit_file",
+			named,
+		)}
 	}
+	// Not redundant with the entry ordering below: on Windows URIToPath rewrites
+	// separators and strips the leading slash, and a non-file:// URI is returned
+	// verbatim, so sorted URIs do not imply sorted paths there.
 	sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
 	return targets, nil
 }
 
-func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
-	editsByURI := make(map[string][]protocol.TextEdit)
-	for uri, edits := range we.Changes {
-		editsByURI[uri] = append(editsByURI[uri], edits...)
+// workspaceEditEntry is one (URI, edits) pair exactly as the server sent it:
+// one key of Changes, or one element of DocumentChanges. Entries are kept
+// distinct rather than merged by URI so that a file named by two of them can be
+// recognised as such instead of being silently concatenated.
+type workspaceEditEntry struct {
+	uri   string
+	edits []protocol.TextEdit
+}
+
+// workspaceEditEntries flattens we in a deterministic order — Changes sorted by
+// URI, then DocumentChanges as the server ordered them. Determinism matters
+// because a duplicate must be reported against the same pair of entries on
+// every run; iterating the Changes map directly would pick a different "first"
+// mention each time and make the refusal look unreproducible.
+func workspaceEditEntries(we *protocol.WorkspaceEdit) []workspaceEditEntry {
+	uris := make([]string, 0, len(we.Changes))
+	for uri := range we.Changes {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+
+	entries := make([]workspaceEditEntry, 0, len(uris)+len(we.DocumentChanges))
+	for _, uri := range uris {
+		entries = append(entries, workspaceEditEntry{uri: uri, edits: we.Changes[uri]})
 	}
 	for _, dce := range we.DocumentChanges {
-		editsByURI[dce.TextDocument.URI] = append(editsByURI[dce.TextDocument.URI], dce.Edits...)
+		entries = append(entries, workspaceEditEntry{uri: dce.TextDocument.URI, edits: dce.Edits})
 	}
-	return editsByURI
+	return entries
 }
 
 // lockPaths locks every distinct path and returns the unlock funcs. Paths are

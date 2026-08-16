@@ -185,12 +185,15 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 // checks every output URI before any edit is applied, and returns the unique
 // file list plus the total edit count for the response.
 //
-// The list must be deduplicated: applyWorkspaceEditDetailed groups its plans by
-// URI, so a server that names one file in both Changes and DocumentChanges (or
-// twice in DocumentChanges — nothing in the protocol forbids it) yields one plan
-// but would otherwise yield two entries here. captureRenameBaselines caps this
-// list and postWriteRename caps the plans, and the two prefixes must name the
-// same files or a reported file silently loses its pre-write baseline.
+// The list must be deduplicated: applyWorkspaceEditDetailed resolves its plans
+// per file, so a server that names one file in both Changes and DocumentChanges
+// (or twice in DocumentChanges — nothing in the protocol forbids it) yields one
+// plan but would otherwise yield two entries here. Note that when BOTH such
+// mentions carry edits the whole edit set is refused before this matters
+// (issue #314); the surviving case is a bare mention alongside a real one.
+// captureRenameBaselines caps this list and postWriteRename caps the plans, and
+// the two prefixes must name the same files or a reported file silently loses
+// its pre-write baseline.
 func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]string, int, error) {
 	totalEdits := 0
 	files := []string{}
@@ -338,6 +341,15 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	files, totalEdits, err := t.collectRenameTargets(we)
 	if err != nil {
 		return "", err
+	}
+	// Resolve the edit set to its targets up front, so a WorkspaceEdit naming one
+	// file twice is refused in DRY RUN too (issue #314). Without this the preview
+	// would render a diff and promise "would change N file(s)" for an edit the
+	// apply then rejects — and a guard whose job is to be a canary should sing
+	// where the caller is looking. The targets are recomputed inside
+	// applyWorkspaceEditDetailed, which owns them under the path locks.
+	if _, err := workspaceEditTargets(we); err != nil {
+		return "", fmt.Errorf("rename_symbol: %w", err)
 	}
 	sort.Strings(files)
 	if err := t.preflightTargets(ctx, files, a); err != nil {

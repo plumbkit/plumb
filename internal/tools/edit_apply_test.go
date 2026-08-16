@@ -249,6 +249,110 @@ func TestWorkspaceEditTargets_DuplicateErrorIsDeterministic(t *testing.T) {
 	}
 }
 
+// The SAME spelling in both Changes and DocumentChanges used to be MERGED into
+// one edit list, so a server emitting its edits under both forms for capability
+// compatibility had each edit applied twice. That is not idempotent:
+// applyTextEdits threads the buffer through its loop, so the second application
+// of a length-changing edit lands on already-rewritten bytes. Replacing "foo"
+// with "X" once gives "X bar"; twice gives "Xar" — silent corruption reported
+// as success. This is the second half of issue #314, and the reason merging the
+// lists was the wrong fix.
+func TestApplyWorkspaceEdit_RefusesOneSpellingInBothForms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	const original = "foo bar\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := "file://" + path
+	edit := protocol.TextEdit{
+		Range:   protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}},
+		NewText: "X",
+	}
+	we := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{uri: {edit}},
+		DocumentChanges: []protocol.TextDocumentEdit{{
+			TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri},
+			Edits:        []protocol.TextEdit{edit},
+		}},
+	}
+
+	modified, err := applyWorkspaceEdit(we)
+	if err == nil {
+		got, _ := os.ReadFile(path)
+		t.Fatalf("one file carrying edits in both forms was applied, not refused: modified=%v, content=%q", modified, got)
+	}
+	if !strings.Contains(err.Error(), "twice") {
+		t.Errorf("error does not say the file was named twice: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != original {
+		t.Fatalf("file was written despite the refusal: %q, want %q", got, original)
+	}
+}
+
+// A bare DocumentChanges entry carrying NO edits alongside a real Changes entry
+// is the compatibility shape servers actually emit, and it cannot lose or
+// duplicate anything — so it must still MERGE rather than trip the guard.
+// TestRenameSymbol_DeduplicatesTargetsAcrossEditForms depends on this; without
+// the carve-out the guard would break a working case to fix a broken one.
+func TestWorkspaceEditTargets_BareMentionStillMerges(t *testing.T) {
+	uri := "file:///only.txt"
+	edit := protocol.TextEdit{NewText: "a"}
+	for _, tc := range []struct {
+		name string
+		we   *protocol.WorkspaceEdit
+	}{
+		{"bare entry second", &protocol.WorkspaceEdit{
+			Changes:         map[string][]protocol.TextEdit{uri: {edit}},
+			DocumentChanges: []protocol.TextDocumentEdit{{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri}}},
+		}},
+		{"bare entry first", &protocol.WorkspaceEdit{
+			Changes: map[string][]protocol.TextEdit{uri: {}},
+			DocumentChanges: []protocol.TextDocumentEdit{{
+				TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri},
+				Edits:        []protocol.TextEdit{edit},
+			}},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targets, err := workspaceEditTargets(tc.we)
+			if err != nil {
+				t.Fatalf("a bare mention must merge, not be refused: %v", err)
+			}
+			if len(targets) != 1 {
+				t.Fatalf("got %d targets, want 1", len(targets))
+			}
+			// The real edit must survive the merge in either order.
+			if len(targets[0].edits) != 1 {
+				t.Fatalf("got %d edits, want the one real edit", len(targets[0].edits))
+			}
+		})
+	}
+}
+
+// The duplicate scan must compare against EVERY earlier entry, not just the
+// previous one. A pair that is not adjacent in sorted order (here link/f.txt,
+// link/g.txt, real/f.txt) slips past an adjacent-only check while every other
+// test in this file still passes, because they all place the pair side by side.
+func TestWorkspaceEditTargets_RefusesNonAdjacentDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + filepath.Join(dir, "link", "f.txt"): {{NewText: "a"}},
+		"file://" + filepath.Join(dir, "link", "g.txt"): {{NewText: "b"}},
+		"file://" + filepath.Join(realDir, "f.txt"):     {{NewText: "c"}},
+	}}
+	if targets, err := workspaceEditTargets(we); err == nil {
+		t.Fatalf("a duplicate pair separated by another file was not refused: %v", targets)
+	}
+}
+
 // The refusal must fire on the documentChanges form too, and across the two
 // forms: workspaceEditGroups folds both into one map, so a server that sends
 // one spelling in changes and the other in documentChanges produces exactly the
