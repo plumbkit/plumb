@@ -24,14 +24,6 @@ var taskSlots = map[string]bool{"build": true, "lint": true, "test": true, "e2e"
 // targetPattern bounds the {target} token to a single shell-safe argument.
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
 
-// taskTargetToken is the literal placeholder a stored command must contain for a
-// target to be accepted at all — the resolver REFUSES a target a command has no
-// slot for, so "pass a target" is only sound advice for a command holding one.
-// Kept in step with config.TargetToken by hand: this package deliberately does
-// not import config (the resolver bridges the two), and the token is one literal
-// the wire format has fixed.
-const taskTargetToken = "{target}"
-
 // TaskCommand is a resolved, ready-to-run task: one or more argv steps run in
 // sequence (verify is build then test), with the config layer it came from.
 type TaskCommand struct {

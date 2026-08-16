@@ -42,6 +42,10 @@ type stepOutcome struct {
 	startErr bool
 	elapsed  time.Duration
 	output   string
+	// step indexes the argv this outcome came from. A composite command (verify
+	// = build then test) stops at its first failure, so the argv worth naming in
+	// a diagnostic is that one — not Steps[0], which may have passed.
+	step int
 }
 
 // failed reports whether this step did anything other than succeed, by any
@@ -74,10 +78,11 @@ const (
 	stepExited
 )
 
-// failure classifies this outcome. The ORDER is load-bearing and matches the
-// order the fields are set in runStep: a command that could not be started also
+// failure classifies this outcome. What is load-bearing is that startErr and
+// timedOut are both tested BEFORE exitCode: a command that could not be started
 // carries exitCode -1, and a timeout carries one too, so testing exitCode first
-// would swallow both of the causes that are not about the workspace.
+// would swallow both of the causes that are not about the workspace. Their order
+// relative to EACH OTHER is not — runStep breaks before it can set both.
 func (s stepOutcome) failure() stepFailure {
 	switch {
 	case s.startErr:
@@ -228,7 +233,8 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	if t.deps.WorkspaceFn != nil {
 		ws = t.deps.WorkspaceFn()
 	}
-	for _, argv := range cmd.Steps {
+	for i, argv := range cmd.Steps {
+		out.step = i
 		res, err := RunArgv(ctx, ws, argv, timeout)
 		if err != nil {
 			out.startErr = true
