@@ -201,6 +201,25 @@
   into believing a wake path could not exist. The wording shifts from "plumb
   cannot push" to "plumb does not push", with the reason spelled out in
   `plumb-chat` §4 and `docs/tools.md`, which have no character budget.
+- **A `WorkspaceEdit` naming one file under two paths is now refused instead of
+  silently dropping one file's edits.** `applyWorkspaceEditDetailed` grouped a
+  server's edits by raw URI string, so two spellings of the same file (one
+  through a symlinked parent, say) became two targets. Both were prepared from
+  the same pre-edit bytes and both were written in turn, so the second write
+  discarded the first — a lost update inside an apply whose contract is that it
+  lands atomically, reported to the caller as success. The pair never deadlocked
+  or errored because `lockPaths` already collapses it to one mutex, which is
+  exactly what made it silent. The refusal mirrors the one `transaction_apply`
+  makes for the same shape (`txCanonicalPaths`); merging the two edit lists
+  instead would corrupt the likeliest case, since a server emitting one edit
+  under two spellings would have it applied twice against the same buffer.
+  Reaching this needs a language server to emit two spellings in a single
+  `WorkspaceEdit`, which none is known to do — the guard is a canary, not a fix
+  for observed breakage. Guarded by
+  `TestApplyWorkspaceEdit_RefusesTwoSpellingsOfOneFile`,
+  `TestWorkspaceEditTargets_DuplicateErrorIsDeterministic`,
+  `_RefusesAcrossChangesAndDocumentChanges`, and
+  `_DistinctFilesUnderOneSymlinkAreKept` (issue #314).
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second

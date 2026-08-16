@@ -52,7 +52,10 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 		return nil, nil, nil
 	}
 
-	targets := workspaceEditTargets(we)
+	targets, err := workspaceEditTargets(we)
+	if err != nil {
+		return nil, nil, err
+	}
 	targetPaths := make([]string, 0, len(targets))
 	for _, tgt := range targets {
 		targetPaths = append(targetPaths, tgt.path)
@@ -108,14 +111,49 @@ type workspaceEditTarget struct {
 // workspaceEditTargets groups we's edits per file and returns them in sorted
 // path order, so preparation, writing, and any resulting error are deterministic
 // regardless of Go's map iteration.
-func workspaceEditTargets(we *protocol.WorkspaceEdit) []workspaceEditTarget {
+//
+// Two URIs naming ONE file are refused rather than applied (issue #314). Both
+// would become their own target, both would be prepared from the same pre-edit
+// bytes, and both would be written in turn — so the second write would silently
+// discard the first: a lost update inside an edit whose whole contract is that
+// it lands atomically. lockPaths already collapses the pair to one mutex
+// (issue #290), so nothing deadlocks and nothing fails; the writes just both
+// happen, and the caller is told the rename succeeded.
+//
+// Refusing mirrors the decision transaction_apply made for the same shape
+// (txCanonicalPaths). Merging the two edit lists instead would be wrong in the
+// very case most likely to produce them: a server emitting one edit under two
+// spellings would have that edit applied TWICE, because applyTextEdits runs
+// every edit in a target against the same pre-edit buffer. A refusal cannot
+// corrupt a file; a merge can.
+//
+// The scan runs over URIs in sorted order so a duplicate names the same pair on
+// every run — Go's map iteration would otherwise pick a different "first"
+// spelling each time and make the error unreproducible.
+func workspaceEditTargets(we *protocol.WorkspaceEdit) ([]workspaceEditTarget, error) {
 	editsByURI := workspaceEditGroups(we)
+	uris := make([]string, 0, len(editsByURI))
+	for uri := range editsByURI {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+
 	targets := make([]workspaceEditTarget, 0, len(editsByURI))
-	for uri, edits := range editsByURI {
-		targets = append(targets, workspaceEditTarget{path: paths.URIToPath(uri), edits: edits})
+	seen := make(map[string]string, len(editsByURI))
+	for _, uri := range uris {
+		p := paths.URIToPath(uri)
+		key := lockPathKey(p)
+		if prev, dup := seen[key]; dup {
+			return nil, &editLogicErr{fmt.Errorf(
+				"workspace edit names the same file under two paths (%q and %q), so one file's edits would silently overwrite the other's — the language server sent an edit plumb cannot apply atomically",
+				prev, p,
+			)}
+		}
+		seen[key] = p
+		targets = append(targets, workspaceEditTarget{path: p, edits: editsByURI[uri]})
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
-	return targets
+	return targets, nil
 }
 
 func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
