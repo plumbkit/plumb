@@ -83,7 +83,7 @@ func TestAttachSynthetic_NormalPin_DoesNotRecordLSPSkipNote(t *testing.T) {
 
 	info := sessionRecord(t, s.sessID)
 	if info.DetectedLanguage == homeLSPSkipNote {
-		t.Fatalf("session record DetectedLanguage = the LSP-skip note for an ordinary synthetic pin; "+
+		t.Fatalf("session record DetectedLanguage = the LSP-skip note for an ordinary synthetic pin; " +
 			"the note is specific to a home-directory root and must not fire on the first-attach path")
 	}
 }
