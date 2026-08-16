@@ -403,6 +403,50 @@ func TestOnInit_DeclaredWideRootDoesNotRaiseTheAlarm(t *testing.T) {
 	}
 }
 
+// The corroboration check compares CANONICALLY, and that is load-bearing. The
+// proxy replays the session_start ARGUMENT it observed, while the attach
+// resolves symlinks — so a caller who declared a workspace through a symlinked
+// parent has a refused claim and an attached root that are the same directory
+// under two spellings. A textual comparison would call that uncorroborated and
+// raise the forged-claim alarm on a legitimate session, which is exactly the
+// crying wolf this design set out to avoid.
+//
+// Exercised on reportUnbackedReplay directly: two spellings of a WIDE root are
+// not portable to construct, but the comparison itself is what needs pinning.
+func TestReportUnbackedReplay_ComparesCanonically(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	mustGitDir(t, realDir)
+
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachWorkspacePin(context.Background(), "file://"+realDir, sessionstate.PinSourceSessionStart)
+	if got := s.workspace(); got == "" {
+		t.Fatal("setup: the session did not attach")
+	}
+
+	// The claim names the SAME directory through the symlink.
+	s.reportUnbackedReplay(link)
+
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Fatalf("a claim naming the attached directory under a second spelling raised the alarm: health=%q msg=%s", health, msg)
+	}
+
+	// Control: a genuinely different directory still raises it, so the test above
+	// is not passing because the alarm never fires.
+	s.reportUnbackedReplay(freshTempDir(t))
+	if health, _ := sessionHealth(t, s.sessID); health != "blocked" {
+		t.Fatalf("control: an unrelated claimed root left health = %q, want \"blocked\"", health)
+	}
+}
+
 // The exemption is withheld from the _meta CHANNEL, not from the declaration
 // itself. A caller who really did run session_start on a wide root had that
 // origin recorded by this daemon, so rung 1b restores it from the database on
