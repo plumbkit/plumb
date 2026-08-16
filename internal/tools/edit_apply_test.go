@@ -372,14 +372,45 @@ func TestWorkspaceEditTargets_DoesNotAliasTheCallersEdits(t *testing.T) {
 		{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 1}}, NewText: "A"},
 		{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 6}, End: protocol.Position{Line: 0, Character: 7}}, NewText: "C"},
 	}
-	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{"file://" + path: edits}}
+	uri := "file://" + path
 	before := slices.Clone(edits)
 
-	if _, err := applyWorkspaceEdit(we); err != nil {
-		t.Fatalf("applyWorkspaceEdit: %v", err)
-	}
-	if !slices.Equal(before, we.Changes["file://"+path]) {
-		t.Errorf("the caller's edit slice was reordered in place:\n before %v\n after  %v", before, we.Changes["file://"+path])
+	// Both insertion routes must clone: the ordinary first-insert, and the
+	// adoption branch where a BARE mention was seen first and a later entry's
+	// edits are taken over.
+	for _, tc := range []struct {
+		name string
+		we   *protocol.WorkspaceEdit
+		get  func(*protocol.WorkspaceEdit) []protocol.TextEdit
+	}{
+		{
+			name: "first insert",
+			we:   &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{uri: slices.Clone(edits)}},
+			get:  func(w *protocol.WorkspaceEdit) []protocol.TextEdit { return w.Changes[uri] },
+		},
+		{
+			name: "adopted after a bare mention",
+			we: &protocol.WorkspaceEdit{
+				Changes: map[string][]protocol.TextEdit{uri: {}},
+				DocumentChanges: []protocol.TextDocumentEdit{{
+					TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri},
+					Edits:        slices.Clone(edits),
+				}},
+			},
+			get: func(w *protocol.WorkspaceEdit) []protocol.TextEdit { return w.DocumentChanges[0].Edits },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte("1 bbb 3\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := applyWorkspaceEdit(tc.we); err != nil {
+				t.Fatalf("applyWorkspaceEdit: %v", err)
+			}
+			if got := tc.get(tc.we); !slices.Equal(before, got) {
+				t.Errorf("the caller's edit slice was reordered in place:\n before %v\n after  %v", before, got)
+			}
+		})
 	}
 }
 
