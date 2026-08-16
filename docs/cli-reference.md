@@ -271,10 +271,15 @@ reasoning lives on `skillsFS` in `internal/cli/skills.go`, where each skill
 past the stated limit has to argue against it in writing — `plumb-chat` is the
 eighth and does so there, so a ninth argues against both paragraphs.
 
-Only `SKILL.md` is installed. A skill directory in this repository may carry
-supporting material — `plumb-chat` ships a `references/` note on waking an
-idle agent — and that material stays in the repository; `sync` does not copy
-it into a client's skills directory.
+`SKILL.md` and the skill's `references/*.md` notes are installed, the latter
+into `<skills dir>/<name>/references/` — so a `SKILL.md` that points at one
+(as `plumb-chat` does for its note on waking an idle agent) points at a file
+the reader actually has. Reference notes carry no provenance marker, and they
+count towards the skill's freshness: a current `SKILL.md` whose reference note
+is missing or has drifted reports `stale`, not `installed`, and a re-sync
+backs the drifted copy up before restoring it. Supporting material anywhere
+else in a skill directory is not shipped at all — a skill that needs a file
+must name it under `references/`.
 
 ---
 
