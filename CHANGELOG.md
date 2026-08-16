@@ -266,6 +266,37 @@
   `_DoesNotAliasTheCallersEdits`, `_RefusesAcrossChangesAndDocumentChanges`,
   `_DistinctFilesUnderOneSymlinkAreKept`, and
   `TestRenameSymbol_DryRunRefusesOneFileNamedTwice`.
+- **The serve proxy's replayed workspace can no longer claim the
+  home-containment exemption, which the daemon cannot verify it is entitled
+  to.** After a daemon restart, `plumb serve` replays the workspace it watched a
+  `session_start` succeed with in the reconnecting `initialize` `_meta`
+  (`dev.plumbkit/pinned-workspace`), and the daemon honoured it as rung 1 of the
+  attach ladder with `session_start` origin. But the daemon reads that key from
+  whatever process spoke to it and cannot distinguish a genuine proxy replay
+  from any other MCP client that simply set it — while `session_start` origin is
+  the ONLY one #306 lets pin a home directory or a directory containing one. A
+  client shipping `_meta[dev.plumbkit/pinned-workspace] = "/Users"` got that
+  exemption with no human declaring anything.
+
+  The rung keeps its rank — it still outranks the client's `roots/list`, which
+  is the restart regression it exists to fix, and an accepted pin still records
+  `session_start` origin, so stickiness and persistence are unchanged — but the
+  containment question is now asked of it as an unprivileged origin. A wide root
+  is refused and the ladder falls through to its lower rungs rather than leaving
+  the session unattached. A wide root a caller really did declare still restores
+  from the persisted pin, whose origin this daemon recorded itself; the one
+  narrow cost is that with `[session] persist_state` off such a root must be
+  re-declared after a restart.
+
+  This closes no privilege escalation — whoever can set initialize `_meta` runs
+  the client host and could call `session_start` directly (B1 does not
+  authenticate the client) — but it stops the widest boundary plumb can grant
+  from being claimed over a channel no human declared anything on.
+  `docs/threat-model.md` now states what the daemon can and cannot verify about
+  a declaration. Guarded by
+  `TestOnInit_ReplayedMetaPinCannotClaimHomeContainment`,
+  `TestOnInit_DeclaredWideRootStillRestoresFromDatabase`, and
+  `TestOnInit_ReplayedMetaPinKeepsRankForOrdinaryRoots` (issue #318).
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second

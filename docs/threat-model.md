@@ -138,6 +138,34 @@ succeeds — issue #182's contract — so a deliberate `session_start` of
 `/Users` still attaches; only the undeclared routes and the permanent marker
 are refused.
 
+**What counts as a declaration — and what the daemon can actually verify.**
+The carve-out keys on the pin's recorded ORIGIN, and one route sets that
+origin without the daemon seeing the call it stands for. Across a daemon
+restart the `plumb serve` proxy replays the workspace it watched a
+`session_start` succeed with, in the reconnecting `initialize` request's
+`_meta` under `dev.plumbkit/pinned-workspace`; the daemon reads that key from
+whatever process spoke to it and cannot tell a genuine proxy replay from any
+other MCP client that simply set the key (issue #318). Since 0.16.7 that
+channel therefore keeps its RANK in the attach ladder — it still outranks the
+client's `roots/list`, which is the restart regression it exists to fix — but
+it is asked the containment question as an unprivileged origin, so it cannot
+pin a home directory or a container of one. A client shipping
+`_meta[dev.plumbkit/pinned-workspace] = "/Users"` is refused and the ladder
+falls through to its lower rungs; a wide root a caller really did declare is
+restored from the persisted pin instead, whose `session_start` origin is a
+fact this daemon recorded itself. The residual cost is narrow and fail-safe:
+with `[session] persist_state` off, a declared wide root does not survive a
+restart and must be re-declared.
+
+This is a guard on the guard's own premise, not a privilege boundary. Whoever
+can set initialize `_meta` is running the client host and could call
+`session_start` directly, so nothing here stops a hostile client from pinning
+whatever it likes — B1 does not authenticate the client, and never claimed to.
+What it stops is the exemption being claimed by a channel no human declared
+anything over: a misconfigured or compromised client that never ran
+`session_start` no longer gets the widest boundary plumb can grant just by
+setting a key.
+
 **B4 — daemon → git.** Tiered policy: read, write, destructive, network. Each
 tier is separately enabled; destructive and network additionally require
 `confirm: true`. Force-pushing a protected branch and using an ad-hoc URL or
