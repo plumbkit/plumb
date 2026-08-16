@@ -207,6 +207,72 @@ synth pass 'entry under the base unreleased head' <<'EOF'
 - second released entry
 EOF
 
+# Rewriting an existing released entry is a hunk with deletions, so it is not an
+# insertion and cannot be a replayed entry. Failing it would be a pure false positive
+# on the commonest legitimate reason to touch an old section, and the guard's own
+# header promises it stays free.
+synth pass 'typo fixed in a released entry' <<'EOF'
+# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry, with the typo corrected
+- second released entry
+EOF
+
+# The same rule from the other side: one released line reflowed into two. The hunk is
+# -1/+2, so both added lines are exempt.
+synth pass 'released entry reflowed across two lines' <<'EOF'
+# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry, now long enough that it wraps
+  onto a second line
+- second released entry
+EOF
+
+# An entry that quotes a CHANGELOG heading inside a fenced block — the guard's own
+# entry does exactly this kind of thing. The fenced line is not a heading, so R2 must
+# not read it as one added below the top of the file.
+synth pass 'heading quoted inside a fenced block' <<'EOF'
+# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+- a guard that fails when an entry lands under a stamped heading:
+
+```
+## 0.1.0 (2026-01-01)
+```
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry
+EOF
+
 # The control. If the harness were broken (guard skipping, base unresolved) the cases
 # above would pass for the wrong reason; this one proves it really runs.
 synth fail 'new entry in old section (control)' <<'EOF'
@@ -226,6 +292,72 @@ synth fail 'new entry in old section (control)' <<'EOF'
 - second released entry
 - a genuinely new entry
 EOF
+
+# ── The CI shape ─────────────────────────────────────────────────────────────────────
+#
+# Everything above replays a linear base→head pair, which is NOT what CI hands the
+# guard: actions/checkout builds refs/pull/N/merge, whose parent is the base SHA, so a
+# merge-base against the checked-out HEAD resolves to the base branch tip rather than
+# the branch's fork point. That difference is invisible until main cuts a release
+# between the two — then the branch's own unreleased heading is a released one at the
+# base, and the "entry under the base unreleased head" carve-out above stops applying.
+# Passing the PR's head SHA restores the fork point, which is why the workflow does.
+
+echo ""
+echo "check-changelog-placement-test: the CI invocation shape"
+echo ""
+
+total=$((total + 1))
+d="$(mktemp -d)"
+mkdir -p "$d/scripts"
+cp "$GUARD" "$d/scripts/check-changelog-placement.sh"
+git -C "$d" init -q >/dev/null 2>&1
+git -C "$d" symbolic-ref HEAD refs/heads/main
+printf '%s\n' "$SYNTH_BASE" >"$d/CHANGELOG.md"
+git -C "$d" add -A
+git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm fork
+
+git -C "$d" checkout -q -b feature
+printf '%s\n' "$SYNTH_BASE" | sed 's/- an entry in the right place/- an entry in the right place\
+- a second entry, added on the branch/' >"$d/CHANGELOG.md"
+git -C "$d" add -A
+git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'branch entry'
+ci_head_sha="$(git -C "$d" rev-parse HEAD)"
+
+git -C "$d" checkout -q main
+printf '%s\n' "$SYNTH_BASE" | sed 's/## 0.2.0 (unreleased)/## 0.3.0 (unreleased)\
+\
+## 0.2.0 (2026-02-01)/' >"$d/CHANGELOG.md"
+git -C "$d" add -A
+git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'chore(release): 0.2.0'
+ci_base_sha="$(git -C "$d" rev-parse HEAD)"
+git -C "$d" -c user.email=t@example.com -c user.name=Test merge -q --no-ff feature -m 'merge pr' >/dev/null 2>&1
+
+if out=$("$d/scripts/check-changelog-placement.sh" \
+	--base "$ci_base_sha" --head "$ci_head_sha" 2>&1); then rc=0; else rc=$?; fi
+rm -rf "$d"
+
+if [ "$rc" -eq 0 ]; then
+	printf '  ok    %-38s %s\n' 'branch behind a release cut' 'pass'
+else
+	printf '  FAIL  %-38s wanted pass, got exit %d\n' 'branch behind a release cut' "$rc"
+	printf '%s\n' "$out" | sed 's/^/          | /'
+	failed=$((failed + 1))
+fi
+
+# The invocation itself is load-bearing: without --head the case above fails, and
+# without --require-base an unresolvable base prints a skip and a green tick. Neither
+# is visible from the guard's own behaviour, so the workflow line is asserted here.
+WORKFLOW=.github/workflows/ci.yml
+for flag in --head --require-base; do
+	total=$((total + 1))
+	if grep -q -- "check-changelog-placement.sh .*$flag" "$WORKFLOW"; then
+		printf '  ok    %-38s %s\n' "workflow passes $flag" 'present'
+	else
+		printf '  FAIL  %-38s missing from %s\n' "workflow passes $flag" "$WORKFLOW"
+		failed=$((failed + 1))
+	fi
+done
 
 echo ""
 if [ "$failed" -ne 0 ]; then

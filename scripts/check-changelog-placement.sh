@@ -14,8 +14,10 @@
 # lines actually land. Neither subsumes the other; #320/#292/#310 created no duplicate
 # heading at all, and a duplicate can arrive by a route this script never sees.
 #
-# Two rules, over `git diff` against a real merge-base. Only ADDED lines count —
-# removing or rewriting a line in an old section is always fine.
+# Two rules, over `git diff` against a real merge-base. Only lines added by a
+# PURE-ADDITION hunk count: deleting from an old section, or rewriting a line that
+# was already there, is always fine, because a rebase replays entries rather than
+# editing existing ones (see the pass-1 comment on the minus side of '@@').
 #
 #   R1  A non-blank added line's enclosing '## ' heading must be the BASE's first
 #       heading (matched on the version number, so a release re-stamp from
@@ -69,17 +71,25 @@ set -eu
 
 usage() {
 	cat <<'EOF'
-usage: check-changelog-placement.sh [--base <ref>] [--head <ref>]
+usage: check-changelog-placement.sh [--base <ref>] [--head <ref>] [--require-base]
 
-  --base <ref>  compare against the merge-base with <ref>
-                (default: $CHANGELOG_BASE_REF, else origin/main)
-  --head <ref>  check <ref> instead of the working tree. This is how a historical
-                commit is replayed: --base <sha>^ --head <sha>
+  --base <ref>    compare against the merge-base with <ref>
+                  (default: $CHANGELOG_BASE_REF, else origin/main)
+  --head <ref>    check <ref> instead of the working tree. This is how a historical
+                  commit is replayed: --base <sha>^ --head <sha>
+  --require-base  exit 1 instead of skipping when the base cannot be resolved.
+                  For CI, where a skip is a green lie; leave it off locally.
+
+environment:
+  CHANGELOG_BASE_REF      default for --base
+  CHANGELOG_PLACEMENT_ALLOW  set to any value to bypass the guard entirely; meant
+                          to be set on the workflow step in the PR that needs it
 EOF
 }
 
 BASE_REF="${CHANGELOG_BASE_REF:-origin/main}"
 HEAD_REF=""
+REQUIRE_BASE=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -107,6 +117,10 @@ while [ $# -gt 0 ]; do
 		HEAD_REF="${1#--head=}"
 		shift
 		;;
+	--require-base)
+		REQUIRE_BASE=1
+		shift
+		;;
 	-h | --help)
 		usage
 		exit 0
@@ -124,21 +138,35 @@ skip() {
 	exit 0
 }
 
+# Why the two exit paths differ: fail-open is right for the local and `make` routes,
+# where a fresh or shallow clone genuinely has no base and blocking there just teaches
+# people to bypass the guard. It is wrong for the route that gates merges — CI's base
+# comes from the event payload and its history from fetch-depth: 0, so a base it cannot
+# resolve means the checkout changed under the guard, and skipping prints a pass for a
+# check that never ran. That is the "0 of 10 cases ran" green lie the test harness
+# header warns about, in the one place it would not be noticed.
+needbase() {
+	[ "$REQUIRE_BASE" = 1 ] || skip "$1"
+	echo "check-changelog-placement: $1" >&2
+	echo "check-changelog-placement: --require-base is set, so this is an error rather than a skip." >&2
+	exit 1
+}
+
 [ -z "${CHANGELOG_PLACEMENT_ALLOW:-}" ] || skip "CHANGELOG_PLACEMENT_ALLOW is set"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-git rev-parse --git-dir >/dev/null 2>&1 || skip "not a git repository"
+git rev-parse --git-dir >/dev/null 2>&1 || needbase "not a git repository"
 
 HEAD_REV="${HEAD_REF:-HEAD}"
 git rev-parse --verify -q "$BASE_REF^{commit}" >/dev/null ||
-	skip "base ref '$BASE_REF' does not resolve (shallow clone, or no remote configured)"
+	needbase "base ref '$BASE_REF' does not resolve (shallow clone, or no remote configured)"
 git rev-parse --verify -q "$HEAD_REV^{commit}" >/dev/null ||
-	skip "head ref '$HEAD_REV' does not resolve"
+	needbase "head ref '$HEAD_REV' does not resolve"
 
 BASE="$(git merge-base "$BASE_REF" "$HEAD_REV")" ||
-	skip "no merge-base between '$BASE_REF' and '$HEAD_REV'"
+	needbase "no merge-base between '$BASE_REF' and '$HEAD_REV'"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
@@ -150,11 +178,13 @@ git show "$BASE:CHANGELOG.md" >"$TMP/base.md"
 if [ -n "$HEAD_REF" ]; then
 	git show "$HEAD_REF:CHANGELOG.md" >"$TMP/new.md" 2>/dev/null ||
 		skip "CHANGELOG.md does not exist at '$HEAD_REF'"
-	git diff --unified=0 --no-color "$BASE" "$HEAD_REF" -- CHANGELOG.md >"$TMP/diff"
+	git diff --no-ext-diff --unified=0 --no-color "$BASE" "$HEAD_REF" -- CHANGELOG.md >"$TMP/diff"
 else
 	[ -f CHANGELOG.md ] || skip "no CHANGELOG.md in the working tree"
 	cp CHANGELOG.md "$TMP/new.md"
-	git diff --unified=0 --no-color "$BASE" -- CHANGELOG.md >"$TMP/diff"
+	# --no-ext-diff on both paths: a user's diff.external or GIT_EXTERNAL_DIFF emits
+	# no unified diff, which would read here as "CHANGELOG.md is unchanged" and pass.
+	git diff --no-ext-diff --unified=0 --no-color "$BASE" -- CHANGELOG.md >"$TMP/diff"
 fi
 
 BASE_FIRST="$(awk '/^## /{print; exit}' "$TMP/base.md")"
@@ -195,6 +225,19 @@ FNR == NR {
 		n = split(plus, p, ",")
 		cur = p[1] + 0
 		rem = (n > 1) ? p[2] + 0 : 1
+		# The minus side decides whether this hunk REWRITES or purely INSERTS, and
+		# only an insertion can be a misplaced entry: a rebase replays entries, it
+		# never edits the ones already there. All four incidents confirm it —
+		# f9451a42, 53bb60a4 and 3fa005e7 are 52/0, 44/0 and 47/0 in git numstat, and
+		# 3e885aca is 17/16 overall but adds through a single pure-addition hunk, with
+		# its deletions in separate pure-deletion hunks. A hunk that both
+		# adds and deletes is someone rewriting text that was already there — fixing
+		# a typo or reflowing a line in a released section — which R1 must not fail,
+		# because a guard that blocks a legitimate cleanup gets bypassed.
+		minus = $2
+		sub(/^-/, "", minus)
+		nm = split(minus, m, ",")
+		mrem = (nm > 1) ? m[2] + 0 : 1
 		next
 	}
 	if (!inhunk) next
@@ -202,6 +245,7 @@ FNR == NR {
 	if (c == "+") {
 		if (rem > 0) {
 			added[cur] = 1
+			if (mrem == 0) pureadd[cur] = 1
 			cur++
 			rem--
 		}
@@ -213,7 +257,10 @@ FNR == NR {
 
 {
 	text[FNR] = $0
-	if ($0 ~ /^## /) {
+	# A heading line inside a fenced code block is quoted text, not a heading — an
+	# entry that shows a CHANGELOG heading in an example would otherwise trip R2.
+	if (substr($0, 1, 3) == "```") infence = !infence
+	if (!infence && $0 ~ /^## /) {
 		nh++
 		hline[nh] = FNR
 		htext[nh] = $0
@@ -251,6 +298,7 @@ END {
 			checked++
 			continue
 		}
+		if (!(ln in pureadd)) continue
 		if (deleted[t] > 0) {
 			deleted[t]--
 			nmoved++
@@ -275,6 +323,7 @@ END {
 
 	if (!status) {
 		if (checked) printf "check-changelog-placement: OK (%d added line(s), all under %s)\n", checked, basefirst
+		else if (nmoved) print "check-changelog-placement: OK (nothing NEW was added to a released section)"
 		else print "check-changelog-placement: OK (nothing was added to a released section)"
 		relocnote()
 		exit 0

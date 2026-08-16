@@ -698,8 +698,10 @@
   #292 and #310, none of which created a duplicate.
   `scripts/check-changelog-placement.sh` closes that half: it diffs against the
   merge-base and fails when an added line lands under any heading other than the
-  one that was unreleased at the base. Only *added* lines count, so editing or
-  deleting inside a released section stays free. It is deliberately **not** in
+  one that was unreleased at the base. Only lines added by a *pure-addition* hunk
+  count, so deleting from a released section — or rewriting a line that is already
+  there, such as fixing a typo — stays free; a rebase replays entries rather than
+  editing the ones already present. It is deliberately **not** in
   `make verify` or the pre-commit hook — alone among the guards it needs a base
   ref, which a working tree has not got, and `verify` has to stay hermetic; CI's
   verify job runs it with the exact base SHA from the pull_request event.
@@ -707,8 +709,13 @@
   own regression suite (`make check-changelog-placement-test`) replays ten real
   commits from this repository — four that shipped a misplaced entry, six that
   merely look misplaced, including the `chore(release)` shape and PR #325's
-  dedupe — plus four synthetic cases covering the rules no real commit
-  exercises.
+  dedupe — plus seven synthetic cases covering the rules no real commit
+  exercises, and the CI invocation shape itself: CI checks out
+  `refs/pull/N/merge`, so the guard is handed the pull request's head SHA as well
+  as its base, or the merge-base would be the base branch tip and a branch merely
+  behind a release cut would fail. `--require-base` makes an unresolvable base an
+  error there, since a skip on the path that gates a merge is a green tick for a
+  check that never ran.
 - **Skipped topology files now say WHY they were skipped.** `error_msg` was
   write-only: recorded on every indexing failure and read back only as a
   count, so a parse timeout, a malformed file and a panicking grammar were
