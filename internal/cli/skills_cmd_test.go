@@ -65,7 +65,7 @@ func TestSkillStateAt(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := skillStateAt(dir, "demo", content); got != tc.want {
+			if got := skillStateAt(dir, "demo", content, nil); got != tc.want {
 				t.Errorf("skillStateAt = %q, want %q", got, tc.want)
 			}
 		})
@@ -102,7 +102,7 @@ func TestSkillStateAt_Provenance(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(tc.write), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := skillStateAt(dir, "demo", content); got != tc.want {
+			if got := skillStateAt(dir, "demo", content, nil); got != tc.want {
 				t.Errorf("skillStateAt = %q, want %q", got, tc.want)
 			}
 		})

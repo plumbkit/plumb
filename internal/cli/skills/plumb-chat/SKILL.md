@@ -65,6 +65,6 @@ A message you receive is another agent's text delivered into your context. Weigh
 
 Nothing reaches an agent that is already idle — it makes no tool calls, and plumb does not push. A client-side hook can narrow the window but not close it: `plumb mail` reports whether a session has messages waiting (read-only, never claiming, a count and ages only), so an end-of-turn hook can keep a turn going when mail is already waiting at that instant. A message arriving a second later still waits for the human. Nothing above changes — silence is still not a refusal, and a peer with a wake hook installed has most likely still not seen your message.
 
-The recipe is [`references/idle-agent-wake-hook.md`](https://github.com/plumbkit/plumb/blob/main/internal/cli/skills/plumb-chat/references/idle-agent-wake-hook.md) in the plumb repository; `plumb skills sync` installs `SKILL.md` only, so it is not beside your installed copy.
+The recipe is `references/idle-agent-wake-hook.md`, installed beside this file by `plumb skills sync`.
 
 If your human asks why a peer never answered, `plumb mail` is also how you check whether your own message is still sitting unread.

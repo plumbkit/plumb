@@ -325,6 +325,31 @@
   `TestOnInit_DeclaredWideRootStillRestoresFromDatabase`,
   `TestOnInit_UndeclaredFallbackLeavesWideRootUnattached`, and
   `TestOnInit_ReplayedMetaPinKeepsRankForOrdinaryRoots` (issue #318).
+- **`plumb skills sync` now installs a skill's `references/` notes, so a skill
+  no longer points at a file the user cannot obtain.** The embed pattern was
+  `skills/*/SKILL.md` and `installSkill` wrote exactly one file, so
+  `plumb-chat/references/idle-agent-wake-hook.md` was not in the binary at all
+  — a release-binary user got a skill instructing them to use a recipe that
+  existed only in the git repository. `SKILL.md` already admitted this, linking
+  to GitHub as the only way to reach it; that link is now a plain relative
+  reference to the installed copy.
+
+  The original comment in `skills.go` justified `SKILL.md`-only on the grounds
+  that anything else would be "bytes in every user's binary that nothing can
+  reach". That reasoning is kept, not contradicted — the rule is still *ship
+  only what a reader can reach*, and `references/` now qualifies because sync
+  installs it. Supporting material outside `references/` still ships nowhere.
+
+  Reference notes carry no provenance marker: it is an HTML comment, invisible
+  in the markdown `SKILL.md` presentations render, whereas a reference is plain
+  material a user may open in any viewer. Staleness is instead decided per
+  skill — `skillStateAt` now reads the references too, so a current `SKILL.md`
+  whose reference is missing or drifted reports **stale**, not installed.
+  Grading on `SKILL.md` alone would tell a user everything is current while the
+  very file it sends them to is absent. Reference writes are reported under the
+  skill's own row (promoted to the strongest outcome of its parts) rather than
+  as rows of their own, so the sync table does not grow with files the user
+  never asked about by name.
 
 - **`check_messages` now reports its wait in seconds, and says when it was
   clamped.** Elapsed time was rendered in whole minutes, so a full 55-second

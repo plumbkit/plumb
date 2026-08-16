@@ -73,7 +73,7 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 			if i > 0 {
 				name, shown = "", ""
 			}
-			t.Row(name, s.Name, skillStateAt(dir, s.Name, s.Content), shown)
+			t.Row(name, s.Name, skillStateAt(dir, s.Name, s.Content, s.References), shown)
 		}
 	}
 	fmt.Println(t.Render())
@@ -210,12 +210,18 @@ const (
 // "stale" when the marker matches or exceeds the running version or cannot
 // be parsed (see versionOlder) — a marker at the running version means the
 // content drifted after installation, which the version cannot explain.
-func skillStateAt(dir, name, content string) string {
+//
+// A skill's reference notes count towards its state: a current SKILL.md whose
+// references/ note is missing or drifted reports stale, not installed. The
+// alternative — grading on SKILL.md alone — would tell a user everything is
+// current while the very file SKILL.md sends them to is absent, which is the
+// failure the references embed exists to fix.
+func skillStateAt(dir, name, content string, refs []embeddedFile) string {
 	data, err := os.ReadFile(filepath.Join(dir, name, "SKILL.md"))
 	switch {
 	case err != nil:
 		return skillStateMissing
-	case stripSkillMarker(string(data)) == content:
+	case stripSkillMarker(string(data)) == content && referencesCurrent(dir, name, refs):
 		return skillStateInstalled
 	default:
 		marker, ok := skillMarkerVersion(string(data))
@@ -228,6 +234,19 @@ func skillStateAt(dir, name, content string) string {
 			return skillStateStale
 		}
 	}
+}
+
+// referencesCurrent reports whether every embedded reference note for skill
+// name is present at <dir>/<name>/references/ with identical content. Reference
+// notes carry no provenance marker, so the comparison is exact.
+func referencesCurrent(dir, name string, refs []embeddedFile) bool {
+	for _, ref := range refs {
+		data, err := os.ReadFile(filepath.Join(dir, name, "references", ref.Name))
+		if err != nil || string(data) != ref.Content {
+			return false
+		}
+	}
+	return true
 }
 
 // printSkillsDriftHint is the post-registration pointer printed by the named
@@ -254,7 +273,7 @@ func skillsDrift(t setupTarget) (dir string, drifted bool) {
 		return "", false
 	}
 	for _, s := range embeddedSkills() {
-		if skillStateAt(dir, s.Name, s.Content) != skillStateInstalled {
+		if skillStateAt(dir, s.Name, s.Content, s.References) != skillStateInstalled {
 			return dir, true
 		}
 	}
@@ -266,7 +285,7 @@ func skillsDrift(t setupTarget) (dir string, drifted bool) {
 // say). The stale states carry provenance suffixes, hence the prefix match.
 func skillDriftCounts(dir string) (missing, stale int) {
 	for _, s := range embeddedSkills() {
-		switch state := skillStateAt(dir, s.Name, s.Content); {
+		switch state := skillStateAt(dir, s.Name, s.Content, s.References); {
 		case state == skillStateMissing:
 			missing++
 		case strings.HasPrefix(state, skillStateStale):
@@ -284,7 +303,7 @@ func skillDriftCounts(dir string) (missing, stale int) {
 func skillStaleDetails(dir string) []string {
 	var out []string
 	for _, s := range embeddedSkills() {
-		state := skillStateAt(dir, s.Name, s.Content)
+		state := skillStateAt(dir, s.Name, s.Content, s.References)
 		if strings.HasPrefix(state, skillStateStale) {
 			out = append(out, s.Name+strings.TrimPrefix(state, skillStateStale))
 		}
