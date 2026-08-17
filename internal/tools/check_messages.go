@@ -110,14 +110,14 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// review; both are closed now. Do not restate either as "the only one" — the
 	// pattern is that each surface deriving its own address is a fresh chance to
 	// skip the gate, so the guard belongs at every one of them.
-	if t.deps.SessionID == "" {
+	if t.deps.sessionID() == "" {
 		return "This session is not registered in the session directory, so it has no mailbox " +
 			"address and no peer can write to it. Registration failed at startup — see the " +
 			"daemon log.", nil
 	}
 	inbox := Inbox{
 		Self:         self,
-		SelfID:       t.deps.SessionID,
+		SelfID:       t.deps.sessionID(),
 		InheritedIDs: t.inheritedIDs(),
 		Root:         t.deps.Workspace(),
 		Policy:       policy,
@@ -205,7 +205,7 @@ const maxReceiptRows = 5
 // recipient who never opted in expires unread by default. Errors are swallowed
 // and the store is never created; a receipt must not fail the call it rides on.
 func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
-	if t.deps.SessionID == "" {
+	if t.deps.sessionID() == "" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
@@ -226,9 +226,9 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 		// trusted as a total: two stores each capped at the display limit yield
 		// twice it, and the overflow count would be measuring the query rather than
 		// the mailbox.
-		rows, err := s.UnreadSentBy(ctx, t.deps.SessionID, now, maxReceiptRows+1)
+		rows, err := s.UnreadSentBy(ctx, t.deps.sessionID(), now, maxReceiptRows+1)
 		if err != nil {
-			slog.Debug("collab: outbox receipt failed", "session", t.deps.SessionID, "err", err)
+			slog.Debug("collab: outbox receipt failed", "session", t.deps.sessionID(), "err", err)
 			continue
 		}
 		unread = append(unread, rows...)

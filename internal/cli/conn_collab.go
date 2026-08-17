@@ -168,7 +168,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 	return tools.CollabDeps{
 		Workspace:                s.workspace,
 		SessionName:              s.sessionName,
-		SessionID:                s.sessID,
+		SessionID:                s.sessionID,
 		Policy:                   s.collabPolicy,
 		Store:                    s.collabStoreCreate,
 		StoreIfExists:            s.collabStoreIfExists,

@@ -370,7 +370,7 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 func (t *LeaveNote) selfMatcher() func(id, name string) bool {
 	selfName := t.deps.SessionName()
 	selfIDs := map[string]bool{}
-	if id := t.deps.SessionID; id != "" {
+	if id := t.deps.sessionID(); id != "" {
 		selfIDs[id] = true
 	}
 	if t.deps.InheritedSessionIDs != nil {
@@ -435,7 +435,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	}
 	in := collab.NoteInput{
 		AuthorSession: t.deps.SessionName(),
-		AuthorID:      t.deps.SessionID,
+		AuthorID:      t.deps.sessionID(),
 		// A restarted session must still be able to reply into the threads its
 		// predecessor was in; the store's membership guard keys on identity, and
 		// these are the identities this session provably continues.

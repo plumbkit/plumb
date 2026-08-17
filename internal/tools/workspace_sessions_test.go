@@ -162,7 +162,7 @@ func TestWorkspaceSessions_ConcurrentNoDeadlock(t *testing.T) {
 		t.Fatalf("register peer: %v", err)
 	}
 
-	tool := NewWorkspaceSessions(func() string { return ws }, selfID)
+	tool := NewWorkspaceSessions(func() string { return ws }, func() string { return selfID })
 
 	// 6 goroutines × 4 calls = 24 Execute invocations, each taking the flock
 	// once. At ~1ms per flock+read (local tmpfs), 24 serial acquisitions fit
@@ -298,7 +298,7 @@ func TestWorkspaceSessions_NotesListingIsBoundToThisSession(t *testing.T) {
 
 	listFor := func(selfID string) string {
 		t.Helper()
-		tool := NewWorkspaceSessions(func() string { return ws }, selfID).
+		tool := NewWorkspaceSessions(func() string { return ws }, func() string { return selfID }).
 			WithCollab(
 				func() (bool, bool) { return false, true },
 				func() *collab.Store { return store },
@@ -340,7 +340,7 @@ func TestWorkspaceSessions_ListsInheritedMail(t *testing.T) {
 
 	listFor := func(inherited []string) string {
 		t.Helper()
-		out, err := NewWorkspaceSessions(func() string { return ws }, "sess-after-restart").
+		out, err := NewWorkspaceSessions(func() string { return ws }, func() string { return "sess-after-restart" }).
 			WithInheritedSessions(func() []string { return inherited }).
 			WithCollab(
 				func() (bool, bool) { return false, true },
@@ -385,7 +385,7 @@ func TestWorkspaceSessions_UnregisteredSessionIsShownNoMail(t *testing.T) {
 
 	listFor := func(selfID, selfName string) string {
 		t.Helper()
-		out, err := NewWorkspaceSessions(func() string { return ws }, selfID).
+		out, err := NewWorkspaceSessions(func() string { return ws }, func() string { return selfID }).
 			WithCollab(
 				func() (bool, bool) { return false, true },
 				func() *collab.Store { return store },

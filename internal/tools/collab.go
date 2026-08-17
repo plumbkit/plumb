@@ -119,7 +119,8 @@ type CollabDeps struct {
 	// SessionName returns this session's display name (the author label).
 	SessionName func() string
 	// SessionID is this session's stable ID (intent replace + session-end clear).
-	SessionID string
+	// An accessor, so an ID adopted during initialize (PLAN-296) is seen live.
+	SessionID func() string
 	// Policy returns the resolved [collab] snapshot.
 	Policy func() CollabPolicy
 	// Store opens (creating on first use) the workspace's collab.db and returns
@@ -159,6 +160,14 @@ type CollabDeps struct {
 	// it expires. May be nil only where the cross-project send path is never
 	// exercised (e.g. a test that stays same-project).
 	TargetAllowsCrossProject func(workspace string) bool
+}
+
+// sessionID returns the session ID, or "" when unwired (tests / pre-registration).
+func (d CollabDeps) sessionID() string {
+	if d.SessionID == nil {
+		return ""
+	}
+	return d.SessionID()
 }
 
 // PeerSession is a live peer session resolved by name.

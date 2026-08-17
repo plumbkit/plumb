@@ -146,7 +146,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewFileDiff().WithBoundary(boundary).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFindReplace(wd))
 	prov := Provenance()
-	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt).
+	srv.Register(tools.NewDaemonInfoFunc(s.sessionID, s.sessionName, Version, daemonStartedAt).
 		WithSourceRevision(prov.Revision, prov.Dirty, prov.DirtyKnown).
 		WithConfigStatus(func() tools.ConfigStatus {
 			return tools.ConfigStatus{
@@ -176,7 +176,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPinProvenance(s.pinProvenance).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
 		WithInheritedSessions(s.inheritedSessionIDs).
 		WithTopology(topoFn).
 		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).
@@ -203,7 +203,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCheckMessages(collabDeps))
 	srv.Register(tools.NewShareFindings(tools.ShareFindingsDeps{
 		Workspace:           s.workspace,
-		SessionID:           s.sessID,
+		SessionID:           s.sessionID,
 		Policy:              s.collabPolicy,
 		Index:               s.memoryIndexLive,
 		GeneratedMemoryKeep: func() int { return s.memoryConfig().GeneratedMemoryKeep },
@@ -218,7 +218,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv), reason
 		}).
 		WithEpisodic(s.latestEpisodic).
-		WithSelfSession(s.sessID).
+		WithSelfSession(s.sessionID).
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
