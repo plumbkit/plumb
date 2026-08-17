@@ -661,3 +661,58 @@ func TestStickyPin_ForceOnRootsHeldPinLands(t *testing.T) {
 		t.Fatalf("forced re-pin did not land: got %q, want %q", got, rootB)
 	}
 }
+
+func TestStickyPin_MarkerlessExplicitPinPinsUnderDefaultAutoAttach(t *testing.T) {
+	// The sticky contract is unconditional: an explicit session_start workspace
+	// arg must synthesise a root for a markerless directory even under the
+	// DEFAULT config (workspace.auto_attach = false), which used to gate the
+	// synthesis and leave the connection unpinned while the workspace+language
+	// path synthesised regardless (PLAN-266 item 2).
+	store, ss := newOriginStore(t) // config.Defaults(): auto_attach = false
+
+	rootA, rootB := freshTempDir(t), freshTempDir(t) // deliberately NO markers
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+
+	s.onBeforeTool(context.Background(), "session_start", json.RawMessage(`{"workspace":"`+rootA+`"}`))
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("markerless explicit pin did not attach under default auto_attach: workspace = %q, want %q", got, rootA)
+	}
+	if got := s.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
+		t.Fatalf("pin origin = %q, want session_start", got)
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("a markerless explicit pin under default auto_attach must be sticky: the peer re-pin should have been refused")
+	}
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("the refused re-pin still moved the pin: got %q, want %q", got, rootA)
+	}
+}
+
+func TestStickyPin_LanguageOverrideOnStickyPinLogsBreadcrumb(t *testing.T) {
+	// A peer can flip the shared connection's primary language without force:
+	// the same-root language override takes the teardown path and resets the
+	// read/write/undo trackers. The deliberate call stays honoured (accepted
+	// design, PLAN-266 item 3), but a Warn breadcrumb must surface the reset to
+	// the operator rather than let it pass silently.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+
+	buf := captureLog(s)
+	if _, err := s.repinWorkspace(context.Background(), root, "go", false); err != nil {
+		t.Fatalf("language override re-pin: %v", err)
+	}
+	for _, want := range []string{"primary language overridden", "sticky pin", "issue #182"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("language-override breadcrumb missing %q:\n%s", want, buf.String())
+		}
+	}
+}

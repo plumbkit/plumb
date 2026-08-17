@@ -225,6 +225,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			return
 		}
 		changed = true
+		s.logLanguageOverrideBreadcrumb(v, prev, root, language, langForced)
 		// The pinned LS reference (if any) for the workspace we are leaving;
 		// released at the end once the new root is acquired, so the pool can reclaim
 		// the old server after its idle grace if no other session holds it.
@@ -287,4 +288,16 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			"source", pinSourceLabel(origin), "trigger", string(trigger))
 	})
 	return changed, refused
+}
+
+// logLanguageOverrideBreadcrumb emits the distinguishing signal for a same-root
+// language override on a sticky session_start pin (issue #182). The generic
+// "session re-pinned" line below also covers a project switch and cannot tell the
+// two apart, but this case tears down and re-acquires the language server —
+// resetting the read/write/undo trackers a peer on a multiplexed connection may
+// be relying on.
+func (s *connSession) logLanguageOverrideBreadcrumb(v *sessionView, prev, root, language string, langForced bool) {
+	if root == prev && langForced && v.pinOrigin == sessionstate.PinSourceSessionStart {
+		s.log().Warn("daemon: primary language overridden on a sticky pin — read/write/undo trackers reset (issue #182)", "pinned", prev, "language", language, "previous", v.acquiredLanguage)
+	}
 }

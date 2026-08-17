@@ -171,6 +171,14 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 	return s.rootFromHint()
 }
 
+// explicitOrAutoAttach reports whether root synthesis is permitted for a
+// directory the detector could not place: an explicit session_start workspace
+// arg always pins (even a markerless directory), and auto_attach is the opt-in
+// that lets an incidental tool path synthesise a root.
+func explicitOrAutoAttach(explicit, autoAttach bool) bool {
+	return explicit || autoAttach
+}
+
 // onBeforeTool resolves the workspace root from the tool arguments when the
 // session has no primary workspace yet. Applies auto-attach and auto-attach-
 // persist when configured.
@@ -236,7 +244,11 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	}
 	root, _, err := s.pool.Detect(startDir)
 	if err != nil {
-		if !s.store.Current().Workspace.AutoAttach {
+		// A deliberate session_start workspace arg always pins — even a markerless
+		// directory — mirroring repinWorkspaceFrom's SynthesiseRoot fallback, so the
+		// sticky contract is unconditional. auto_attach stays the opt-in that lets an
+		// incidental tool path (file_path/path/uri) synthesise a root.
+		if !explicitOrAutoAttach(explicit, s.store.Current().Workspace.AutoAttach) {
 			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
