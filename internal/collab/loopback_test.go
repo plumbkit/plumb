@@ -159,3 +159,39 @@ func TestClaimNotes_ExclusionIsByIdentityNotName(t *testing.T) {
 		t.Fatalf("a different session sharing the author's name read %d notes, want 1", len(got))
 	}
 }
+
+// TestClaimNotes_ByNameAddressDoesNotRescueASelfAuthoredNote pins the exclusion
+// on the by-name arm too, not only on "next". Being addressed to the claimant's
+// current name cannot make a note fresh mail for the session that WROTE it: if
+// the name arm overrode the author exclusion, rename_session would launder the
+// loopback — write to a peer, adopt the peer's name, and consume the message
+// yourself. The author is the same session whatever name it answers to, so the
+// identity decides, on both arms alike. (The reverse case — a DIFFERENT session
+// answering to the name — is a legitimate recipient, pinned just above.)
+func TestClaimNotes_ByNameAddressDoesNotRescueASelfAuthoredNote(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	author := Claimant{Name: "alice", ID: "sess-alice-1"}
+	mustPut(t, s, NoteInput{
+		AuthorSession: "alice", AuthorID: "sess-alice-1",
+		Body: "addressed to the name I now hold", Addressee: "alice",
+	}, now)
+
+	got, err := s.ClaimNotes(ctx, author, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("author claimed %d of its own notes via the by-name arm: %v", len(got), bodies(got))
+	}
+
+	// Skipped, not dropped: a different session answering to the name collects it.
+	got, err = s.ClaimNotes(ctx, Claimant{Name: "alice", ID: "sess-alice-2"}, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("a different session with the addressee's name read %d notes, want 1", len(got))
+	}
+}
