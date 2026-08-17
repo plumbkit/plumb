@@ -31,6 +31,7 @@ import (
 // via the shard pointer. The trackers/limiter/undo carry their own internal
 // locks and are never swapped after creation.
 type agentShard struct {
+	id       string // the logical-agent identity this shard is keyed on
 	mu       sync.RWMutex
 	root     string
 	language string
@@ -81,6 +82,7 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	}
 	v := s.view()
 	sh := &agentShard{
+		id:           id,
 		root:         v.acquiredRoot,
 		language:     v.acquiredLanguage,
 		readTracker:  tools.NewReadTracker(),
@@ -90,6 +92,10 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		pinOrigin:    v.pinOrigin,
 	}
 	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
+	// Mirror every strict-mode read to the durable store under (proxy, agent),
+	// so a shared connection's per-agent reads survive a daemon restart (2e).
+	sh.readTracker.SetPersistSink(s.persistReadShard(sh))
+	s.rehydrateReadsForAgent(sh, sh.root)
 	if s.shards == nil {
 		s.shards = make(map[string]*agentShard)
 	}
@@ -179,5 +185,53 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.readTracker.Reset()
 	sh.writeTracker.Reset()
 	sh.undoStore.Reset()
+	s.rehydrateReadsForAgent(sh, root)
 	return changed, nil
+}
+
+// persistReadShard mirrors a per-agent recorded read to the durable store, keyed
+// by (proxy session ID, logical-agent ID, workspace) so a shared connection's
+// per-agent reads survive a daemon restart. The shard's root is read under
+// sh.mu, since repinAgent may move it concurrently with a tool call.
+func (s *connSession) persistReadShard(sh *agentShard) func(path string, mtime time.Time, sha string) {
+	return func(path string, mtime time.Time, sha string) {
+		v := s.view()
+		if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
+			return
+		}
+		sh.mu.RLock()
+		root := sh.root
+		sh.mu.RUnlock()
+		if root == "" {
+			return
+		}
+		if err := s.sessionState.UpsertReadForAgent(v.proxySessionID, sh.id, root, path, mtime, sha); err != nil {
+			s.log().Debug("daemon: persist agent read failed", "err", err)
+		}
+	}
+}
+
+// rehydrateReadsForAgent loads the persisted reads for (proxyID, agentID, root)
+// into the shard's read tracker. Called from the shard-creation lane and from
+// repinAgent (which holds sh.mu), hence the explicit root arg — the caller
+// guarantees no concurrent shard mutation, so sh.root is not re-locked here.
+func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
+	v := s.view()
+	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
+		return
+	}
+	recs, err := s.sessionState.LoadReadsForAgent(v.proxySessionID, sh.id, root)
+	if err != nil {
+		s.log().Debug("daemon: rehydrate agent reads failed", "err", err)
+		return
+	}
+	if len(recs) == 0 {
+		return
+	}
+	out := make([]tools.ReadRecord, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, tools.ReadRecord{Path: r.Path, Mtime: r.Mtime, SHA: r.SHA})
+	}
+	sh.readTracker.Hydrate(out)
+	s.log().Info("daemon: rehydrated per-agent read-tracking", "agent", sh.id, "root", root, "count", len(out))
 }
