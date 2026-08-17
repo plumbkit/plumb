@@ -158,6 +158,14 @@ make vuln     # govulncheck over the module graph
 
 `make help` lists every target; the rest are in [`docs/contributing.md`](docs/contributing.md#build--verify).
 
+**`make test` redirects the test temp dir inside the checkout.** It runs with
+`GOTMPDIR=$(CURDIR)/.testcache`, and Go's `testing` package creates `t.TempDir()`
+under `GOTMPDIR` — so under `make test` every `t.TempDir()` sits inside the
+repository, whereas a bare `go test` puts it in the system temp dir. A test that
+assumes its temp dir is outside the repo (repo ancestry, path contents, outside
+the workspace) is green locally and red on CI. Pre-push, run the CI-style
+invocation too: `GOTMPDIR=$PWD/.testcache go test ./...`.
+
 **`cover` and `vuln` are deliberately NOT in `verify`** — coverage re-runs the whole suite instrumented (roughly doubling the local edit loop) and govulncheck needs the network. CI runs both on every push as their own jobs, alongside `verify` (2-OS matrix), `test-race`, and the real-binary `integration` job. The coverage floor is a ratchet: raise it when the tree sits comfortably above, never lower it to make a red build green.
 
 **`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`, resolving that binary on `PATH` and then in the Go tool bin dir, because hooks inherit the environment of whatever invoked git (an editor, a GUI client, an agent daemon) which often lacks `~/go/bin`. It fails loudly if the binary resolves nowhere rather than skipping the lint silently. **Formatting note:** format via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
