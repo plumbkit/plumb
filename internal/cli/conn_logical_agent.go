@@ -91,11 +91,12 @@ func (s *connSession) recordLogicalAgent(id string, attach bool) {
 
 // markSharedConnectionDetected records the shared-connection condition on the
 // session record so it is visible to an operator, not merely refused per call.
-// It is deliberately NOT "blocked": a shared connection with distinct IDs keeps
-// working (state is keyed per logical agent), so the hard refusal is reserved
-// for the anonymous call path below.
+// It is deliberately NOT "blocked": the hard refusal is reserved for the
+// anonymous call path below. Note the condition is detected, not yet remedied —
+// until step 2 keys state per logical agent, distinct-ID agents still share one
+// pin/trackers.
 func (s *connSession) markSharedConnectionDetected() {
-	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; state is keyed per logical agent and anonymous state-changing calls are refused")
+	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; state is NOT yet keyed per logical agent, so anonymous state-changing calls are refused")
 	if s.sessID == "" {
 		return
 	}
