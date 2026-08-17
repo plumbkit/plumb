@@ -497,3 +497,75 @@ func TestProjectValuePresent_DescendsEveryFoldVariant(t *testing.T) {
 		t.Errorf("git.allow_writes reported absent, but [GIT] holds it and the decoder binds it; file:\n%s", data)
 	}
 }
+
+// TestSetProjectValue_CollapsesFoldVariantsInDocumentOrder pins PLAN-330: two
+// fold variants of one setting must collapse to the value that was in force
+// BEFORE the write — the last in DOCUMENT order — not the sort.Strings order the
+// re-marshalled map would otherwise reproduce. Writing an unrelated key used to
+// flip tasks.go.test from "SECOND" back to "FIRST".
+func TestSetProjectValue_CollapsesFoldVariantsInDocumentOrder(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[tasks.go]\ntest = \"FIRST\"\n\n[TASKS.go]\ntest = \"SECOND\"\n")
+
+	if err := SetProjectValue(ws, []string{"tasks", "go", "build"}, "go build ./..."); err != nil {
+		t.Fatalf("SetProjectValue: %v", err)
+	}
+
+	cfg, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if got := cfg.Tasks["go"].Test; got != "SECOND" {
+		t.Errorf("tasks.go.test = %q after writing tasks.go.build, want %q (the document-order winner survives)", got, "SECOND")
+	}
+	if got := cfg.Tasks["go"].Build; got != "go build ./..." {
+		t.Errorf("tasks.go.build = %q, want the written value", got)
+	}
+
+	// The collapse happens at load, so the raw map holds one spelling carrying
+	// the document-order winner, not the two variants the write would re-marshal.
+	raw, err := LoadProjectRaw(ws)
+	if err != nil {
+		t.Fatalf("LoadProjectRaw: %v", err)
+	}
+	if n := len(foldKeys(raw, "tasks")); n != 1 {
+		t.Errorf("%d fold variants of [tasks] after load, want exactly 1; raw = %#v", n, raw)
+	}
+	tasks, ok := raw["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw[tasks] is not a table: %#v", raw)
+	}
+	goTable, ok := tasks["go"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw[tasks][go] is not a table: %#v", tasks)
+	}
+	if got := goTable["test"]; got != "SECOND" {
+		t.Errorf("raw[tasks][go][test] = %v, want %q", got, "SECOND")
+	}
+}
+
+// TestSetProjectValue_RefusesToClobberAnArrayOfTables pins PLAN-331: setNested
+// must REFUSE rather than overwrite when a path segment already exists as
+// something other than a table. Writing command.name over an exact-spelled
+// [[command]] allow-list used to destroy the list and leave a config that fails
+// validation.
+func TestSetProjectValue_RefusesToClobberAnArrayOfTables(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, "[[command]]\nname = \"lint\"\nexec = [\"true\"]\n")
+
+	if err := SetProjectValue(ws, []string{"command", "name"}, "clobbered"); err == nil {
+		t.Fatal("SetProjectValue(command.name) over an exact-spelled [[command]] succeeded, want refusal")
+	}
+
+	// The write must be a no-op: the allow-list survives intact and still loads.
+	cfg, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("the project no longer loads after the refused write: %v", err)
+	}
+	if len(cfg.Commands) != 1 || cfg.Commands[0].Name != "lint" {
+		t.Fatalf("commands = %+v, want the untouched [lint] entry", cfg.Commands)
+	}
+	if got := cfg.Commands[0].Exec; len(got) != 1 || got[0] != "true" {
+		t.Errorf("argv = %v, want [true]", got)
+	}
+}
