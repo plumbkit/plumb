@@ -191,6 +191,48 @@
   `PLUMB_GIT_*` variable, and that setting one actually makes the row say so.
   Without the guard this recurs the moment a seventh field is registered.
 
+- **The contested-marker tie-break no longer starves on a large non-source
+  tree — above a size threshold it had silently degraded to the pre-#341
+  behaviour, re-attaching jdtls to pure-Kotlin Gradle projects.** #341 made a
+  contested Gradle root follow the language owning the most source files
+  beneath it. But the tie-break's walk shared the content sniff's 2000-file
+  budget, and charged EVERY file examined against it, not only the ones a
+  language claims. The walk is a LIFO over sorted directory listings, so
+  siblings pop in reverse-alphabetical order: `src/main/resources` before
+  `src/main/kotlin`. A resources tree larger than the cap exhausted the budget
+  before a single source file was reached; the truncated count was then
+  discarded — correctly, a truncated count is not evidence — and the tie fell
+  back to the deterministic language order, which is java. So a pure-Kotlin
+  project resolved to java once its resources tree crossed ~2000 files:
+  exactly the misattach #341 fixed, restored by size rather than by shape.
+  This was a degradation to the pre-#341 answer above that threshold, not a
+  regression below it.
+
+  The tie-break now walks with its own budget, ten times the sniff's — ties
+  are rare and a 20k-file contested directory scans in a couple of tens of
+  milliseconds — and prunes the conventional non-source directories of the JVM
+  shape it exists to decide: `resources`, and Android `assets/` and `res/`. By
+  convention they hold no sources the tied candidates contest, and they are
+  exactly the trees large enough to starve a scan. Together these raise the
+  starvation threshold roughly tenfold and eliminate the common JVM shape;
+  they do not close the class — an unpruned tree can still exhaust the budget,
+  and the tie-break still degrades honestly then, falling back to the language
+  order rather than trusting a prefix. The last-resort sniff is untouched: it
+  keeps its tight budget and still answers from a truncated count, because its
+  alternative is no language at all.
+
+  Pinned by `TestStrongLangAt_LargeResourcesTreeDoesNotStarveTheScan` (the
+  exact reported repro: 20 Kotlin sources against a 2500-file resources tree),
+  `TestStrongLangAt_TieBreakBudgetSurvivesAModerateNonSourceTree` and
+  `TestStrongLangAt_TieBreakStillTruncatesAboveItsBudget` (the budget's value,
+  from below and above),
+  `TestStrongLangAt_PrunedResourceTreeCannotStarveTheTieBreak` and
+  `TestStrongLangAt_TieBreakPrunesKnownNonSourceDirs` (pruning, including each
+  pruned name individually), and
+  `TestStrongLangAt_DepthDoesNotReachAssetTrees` (tieScanDepth's upper side on
+  an unpruned tree). Every pinning assertion was mutation-verified: raising or
+  lowering the budget, and dropping any one pruned name, each fails its test.
+
 ### Added
 
 - **The CHANGELOG placement guard now catches an entry moved OUT of the
