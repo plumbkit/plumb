@@ -92,6 +92,9 @@ var extraSetupTargets = []setupTarget{
 	// enforces a strict server schema — setup_zcode.go holds the entry shape and
 	// the reasons there is no --lean here.
 	{use: "zcode", name: "ZCode", pathFn: ZCodeConfigPath, installedFn: zcodeInstalled, intoFn: setupZCodeInto, extractFn: zcodeCommandExtractor, skillsDirFn: zcodeSkillsDir},
+	// DeepSeek Harness writes a YAML patch row into its home-level user patch
+	// layer rather than a server map — see setup_dsh.go for the node-level merge.
+	{use: "dsh", name: "DeepSeek Harness", pathFn: DSHConfigPath, installedFn: dshInstalled, intoFn: setupDSHInto, extractFn: dshCommandExtractor, note: dshSetupNote},
 }
 
 // The four original setup targets, named so that both the bespoke commands in
@@ -421,8 +424,8 @@ func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing boo
 		if c.installedFn == nil || !c.installedFn() {
 			return "not installed", detail, false
 		}
-		// Installed client whose config does not exist yet (Kimi Code) — fall
-		// through as installed-but-unregistered.
+		// Installed client whose config does not exist yet (Kimi Code, DeepSeek
+		// Harness) — fall through as installed-but-unregistered.
 	}
 	hadPlumb := clientHasPlumb(c, cfgPath)
 	if !hadPlumb && !installMissing {

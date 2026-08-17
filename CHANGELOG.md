@@ -310,6 +310,17 @@
   `~/.zcode` and creates it fresh. ZCode also reads `SKILL.md` directory
   bundles from `~/.zcode/skills/` (verified against the app's own bundled
   configuration guide), so it joins the `plumb skills sync` clients.
+- **`plumb setup` now knows DeepSeek Harness.** `plumb setup dsh` registers
+  the current plumb binary as a stdio MCP server in the harness's home-level
+  user patch layer (`$DSH_HOME/cordis.patch.yml`, or `~/.dsh/cordis.patch.yml`)
+  as a row for the in-box `@deepseek-ai/dsh-mcp-client` plugin — no pnpm
+  install needed, and because dsh applies the home layer to every profile, one
+  registration covers the web, headless, and any custom profile. The bridged
+  tools appear as `mcp__plumb__*`. The merge is a node-level YAML round-trip:
+  unrelated patch entries, comments, and `!!js` expressions survive verbatim,
+  and a repoint preserves user-added keys such as `toolCallTimeoutMs`. dsh is
+  also detected via its home dir (`$DSH_HOME`, or `~/.dsh`) by `plumb setup
+  --all` and `plumb doctor`, mirroring Kimi Code's absent-config detection.
 
 - **`workspace_sessions` now shows what you have sent and how busy each
   conversation is.** Two new sections, both observational: *your recent notes*
