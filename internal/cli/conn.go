@@ -243,6 +243,12 @@ type connSession struct {
 	// multiplexing client can be detected before it shares state (PLAN-286).
 	logicalAgents logicalAgentState
 
+	// shards holds the per-logical-agent copies of the mutable facts, keyed by
+	// logical-agent ID. Populated only once the connection is shared; guarded by
+	// shardsMu. See conn_agent_shard.go.
+	shardsMu sync.Mutex
+	shards   map[string]*agentShard
+
 	ctx    context.Context
 	cancel context.CancelFunc
 

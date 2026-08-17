@@ -56,6 +56,23 @@ func (l *logicalAgentState) record(id string, attach bool) bool {
 	return len(l.seen) > 1
 }
 
+// isShared reports whether two or more distinct logical-agent IDs have been
+// observed on this connection. It is the gate for per-agent keying: below it the
+// connection itself is the identity and no shard is ever created.
+func (l *logicalAgentState) isShared() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.seen) > 1
+}
+
+// attachIdentity returns the attach-time session_id fallback identity (last one
+// recorded), or "". It is the attribution for a call carrying no per-call _meta.
+func (l *logicalAgentState) attachIdentity() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attachID
+}
+
 // refuse reports whether a call declaring callID must be refused on this
 // connection: the connection is shared (two or more distinct IDs observed) and
 // the call is unattributable (no per-call ID, and no attach-time session_id to
@@ -92,17 +109,17 @@ func (s *connSession) recordLogicalAgent(id string, attach bool) {
 // markSharedConnectionDetected records the shared-connection condition on the
 // session record so it is visible to an operator, not merely refused per call.
 // It is deliberately NOT "blocked": the hard refusal is reserved for the
-// anonymous call path below. Note the condition is detected, not yet remedied —
-// until step 2 keys state per logical agent, distinct-ID agents still share one
-// pin/trackers.
+// anonymous call path below. Per-agent keying (step 2) is in effect, so
+// distinct-ID agents no longer share pin/trackers; anonymous state-changing
+// calls are still refused because they cannot be attributed.
 func (s *connSession) markSharedConnectionDetected() {
-	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; state is NOT yet keyed per logical agent, so anonymous state-changing calls are refused")
+	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
 	if s.sessionID() == "" {
 		return
 	}
 	session.Patch(s.sessionID(), func(info *session.Info) {
 		info.Health = "shared_connection_detected"
-		info.HealthMessage = "multiple logical agents share this connection; anonymous state-changing calls are refused — run one plumb serve per logical agent"
+		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, anonymous state-changing calls are refused — run one plumb serve per logical agent"
 	})
 }
 
