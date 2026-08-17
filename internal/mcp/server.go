@@ -151,6 +151,10 @@ type Server struct {
 	// call's `_meta` (MetaLogicalAgentKey), or "" when the client supplies none.
 	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage, logicalAgent string)
 
+	// OnToolRefusal is called before a tools/call executes with the canonical
+	// tool name and logical-agent identity; a non-nil error refuses the call.
+	OnToolRefusal func(ctx context.Context, name, logicalAgent string) error
+
 	// OnAfterTool is called synchronously after each tools/call execution.
 	// output is the tool's text result (empty when isError is true). errMsg
 	// is the error string (empty when the call succeeded). The two are kept

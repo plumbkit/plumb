@@ -239,6 +239,22 @@ func stringFromMeta(params json.RawMessage, key string) string {
 	return v
 }
 
+// logicalAgentFromMeta extracts the logical-agent identity from an
+// already-decoded tools/call _meta map, fail-safe: an absent, wrong-type or
+// malformed value yields "". Kept as a helper so handleToolsCall does not pay a
+// gocyclo branch for the extraction.
+func logicalAgentFromMeta(meta map[string]json.RawMessage) string {
+	raw, ok := meta[MetaLogicalAgentKey]
+	if !ok {
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	return v
+}
+
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	type toolDef struct {
 		Name        string          `json:"name"`
@@ -293,6 +309,25 @@ type callResult struct {
 	Meta    map[string]any `json:"_meta,omitempty"`
 }
 
+// refusalResponse asks the OnToolRefusal hook whether a call must be refused
+// and returns the refusal response when it must; nil when the call may proceed.
+// Extracted from handleToolsCall to keep that function under the gocyclo cap:
+// the refusal adds two branches (hook set, hook declined) but no dispatch logic.
+func (s *Server) refusalResponse(ctx context.Context, req mcpRequest, name, logicalAgent string) *mcpResponse {
+	if s.OnToolRefusal == nil {
+		return nil
+	}
+	if refusalErr := s.OnToolRefusal(ctx, name, logicalAgent); refusalErr != nil {
+		slog.Warn("mcp: tool refused", "tool", name, "err", refusalErr)
+		resp := okResp(req.ID, callResult{
+			Content: []content{{Type: "text", Text: "error: " + refusalErr.Error()}},
+			IsError: true,
+		})
+		return &resp
+	}
+	return nil
+}
+
 func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpResponse {
 	var params struct {
 		Name      string                     `json:"name"`
@@ -319,9 +354,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			invalidCallEnvelope(params.Name))
 	}
 
-	var logicalAgent string
-	if raw, ok := params.Meta[MetaLogicalAgentKey]; ok {
-		_ = json.Unmarshal(raw, &logicalAgent)
+	logicalAgent := logicalAgentFromMeta(params.Meta)
+	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
+		return *resp
 	}
 	if s.OnBeforeTool != nil {
 		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments, logicalAgent) })

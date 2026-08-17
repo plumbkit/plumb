@@ -1,25 +1,61 @@
 package cli
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestLogicalAgentStateRecord(t *testing.T) {
+func TestLogicalAgentStateRefuse(t *testing.T) {
 	var l logicalAgentState
-	if l.record("") {
-		t.Fatal("an empty ID must never record, let alone flag a shared connection")
+	if l.refuse("") {
+		t.Fatal("a single-agent connection must never refuse")
 	}
-	if l.record("a") {
-		t.Fatal("a lone ID must not flag a shared connection")
+	l.record("A", true) // attach-time session_id
+	if l.refuse("") {
+		t.Fatal("an anonymous call attributable to the attach ID must not refuse")
 	}
-	if l.record("a") {
-		t.Fatal("re-observing the same ID must not flag a shared connection")
+	if l.refuse("A") {
+		t.Fatal("an explicit call ID must not refuse")
 	}
-	if !l.record("b") {
-		t.Fatal("a second distinct ID must flag the connection as shared")
+	l.record("B", false) // a second agent arrives per-call
+	if l.refuse("B") {
+		t.Fatal("an explicit ID on a shared connection must not refuse")
+	}
+	if l.refuse("") {
+		t.Fatal("an anonymous call with an attach-time fallback must not refuse")
 	}
 }
 
-func TestRecordLogicalAgent(t *testing.T) {
-	var s connSession // zero value: nil logger falls back to slog.Default()
-	s.recordLogicalAgent("agent-1")
-	s.recordLogicalAgent("agent-2") // distinct => shared; must not panic on the nil logger
+func TestLogicalAgentStateRefuseNoAttach(t *testing.T) {
+	var l logicalAgentState
+	l.record("A", false)
+	l.record("B", false) // shared, no attach-time identity
+	if !l.refuse("") {
+		t.Fatal("an anonymous call on a shared, no-attach connection must refuse")
+	}
+	if l.refuse("A") {
+		t.Fatal("an explicit call ID on a shared connection must not refuse")
+	}
+}
+
+func TestRefuseSharedStateChange(t *testing.T) {
+	var s connSession
+	s.recordLogicalAgentCall("agent-1")
+	s.recordLogicalAgentCall("agent-2") // shared, no attach ID
+
+	if err := s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
+		t.Fatalf("a read must never refuse: %v", err)
+	}
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("an anonymous write on a shared connection must refuse")
+	}
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", "agent-1"); err != nil {
+		t.Fatalf("an attributed write must not refuse: %v", err)
+	}
+
+	var s2 connSession
+	s2.recordLogicalAgentCall("only")
+	if err := s2.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Fatalf("a single-agent connection must not refuse an anonymous write: %v", err)
+	}
 }
