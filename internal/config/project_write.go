@@ -44,7 +44,7 @@ func LoadProjectRaw(workspace string) (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("scanning project config %s: %w", path, err)
 		}
-		collapseFolds(m, order)
+		collapseFolds(m, order, nil)
 	case os.IsNotExist(err):
 		// absent → empty map (no overrides)
 	default:
@@ -380,42 +380,75 @@ func recordFoldOrder(root *foldOrder, path []string) {
 // collapseFolds merges every fold variant of m in document order (last wins),
 // recursively, so the surviving value is what the decoder chose from the
 // original bytes — not what sort.Strings order would have chosen on re-marshal.
-func collapseFolds(m map[string]any, order *foldOrder) {
+//
+// It folds only STRUCT-field levels, never map-key levels. go-toml folds a TOML
+// key into a struct field through its byFold map but keeps map[string]… keys
+// verbatim, so a language id under [tasks]/[lsp], an env var name, or a shortcut
+// is a distinct entry the decoder does NOT merge — folding one here would delete
+// the sibling and flip the survivor. path carries the lowercased key segments
+// from the root to this level, so isMapKeyLevel can tell the two apart.
+func collapseFolds(m map[string]any, order *foldOrder, path []string) {
 	if order == nil {
 		return
 	}
-	for _, spellings := range order.variants {
-		var present []string
-		for _, s := range spellings {
-			if _, ok := m[s]; ok {
-				present = append(present, s)
+	if !isMapKeyLevel(path) {
+		for _, spellings := range order.variants {
+			var present []string
+			for _, s := range spellings {
+				if _, ok := m[s]; ok {
+					present = append(present, s)
+				}
 			}
+			if len(present) < 2 {
+				continue
+			}
+			// Never merge array values: an array-of-tables ([[command]]) decodes to
+			// []any just like a plain list, and the decoder treats a fold-variant
+			// spelling as a NEW array (it replaces rather than appends across
+			// spellings) — merging one here would silently drop entries.
+			if hasArrayVariant(m, present) {
+				continue
+			}
+			merged := m[present[0]]
+			for _, k := range present[1:] {
+				merged = mergeValue(merged, m[k])
+			}
+			for _, k := range present {
+				delete(m, k)
+			}
+			m[present[0]] = merged
 		}
-		if len(present) < 2 {
-			continue
-		}
-		// Never merge array values: an array-of-tables ([[command]]) decodes to
-		// []any just like a plain list, but the decoder APPENDS array-of-tables
-		// across fold variants — replacing one here would silently drop entries.
-		if hasArrayVariant(m, present) {
-			continue
-		}
-		merged := m[present[0]]
-		for _, k := range present[1:] {
-			merged = mergeValue(merged, m[k])
-		}
-		for _, k := range present {
-			delete(m, k)
-		}
-		m[present[0]] = merged
 	}
 	for k, v := range m {
 		child, ok := v.(map[string]any)
 		if !ok {
 			continue
 		}
-		collapseFolds(child, order.children[strings.ToLower(k)])
+		collapseFolds(child, order.children[strings.ToLower(k)], append(path, strings.ToLower(k)))
 	}
+}
+
+// mapKeyLevels is the set of lowercased TOML paths whose children are MAP keys
+// rather than struct fields. go-toml folds a TOML key into a struct field via
+// its byFold map but keeps map[string]… keys verbatim, so these children must
+// never be collapsed: each is a distinct entry the decoder does not merge.
+// The lsp.<lang>.env and lsp.<lang>.initialization_options paths — whose <lang>
+// segment is itself a map key — are matched in isMapKeyLevel, not enumerated.
+var mapKeyLevels = map[string]bool{
+	"tasks":                 true, // Config.Tasks
+	"lsp":                   true, // Config.LSP
+	"git.env":               true, // GitConfig.Env
+	"ui.keys":               true, // UIConfig.Keys
+	"tools.client_profiles": true, // ToolsConfig.ClientProfiles
+}
+
+// isMapKeyLevel reports whether the keys at this level are MAP keys, in which
+// case collapseFolds must skip them.
+func isMapKeyLevel(path []string) bool {
+	if len(path) == 3 && path[0] == "lsp" && (path[2] == "env" || path[2] == "initialization_options") {
+		return true
+	}
+	return mapKeyLevels[strings.Join(path, ".")]
 }
 
 // hasArrayVariant reports whether any of present names an array value in m.

@@ -544,6 +544,52 @@ func TestSetProjectValue_CollapsesFoldVariantsInDocumentOrder(t *testing.T) {
 	}
 }
 
+// TestLoadProjectRaw_DoesNotFoldMapKeys pins the reviewer-found regression: a
+// fold-variant collapse must fold STRUCT-field names only, never map keys.
+// Config.Tasks is map[string]TasksConfig, so [tasks.GO] and [tasks.go] are two
+// DISTINCT language entries the decoder keeps separate — collapsing them would
+// delete one entry and flip the survivor's value.
+func TestLoadProjectRaw_DoesNotFoldMapKeys(t *testing.T) {
+	ws := t.TempDir()
+	writeRawProjectConfig(t, ws, `[tasks.GO]
+test = "FIRST"
+
+[tasks.go]
+test = "SECOND"
+`)
+
+	raw, err := LoadProjectRaw(ws)
+	if err != nil {
+		t.Fatalf("LoadProjectRaw: %v", err)
+	}
+	tasks, ok := raw["tasks"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw[tasks] is not a table: %#v", raw)
+	}
+	for _, lang := range []string{"GO", "go"} {
+		if _, ok := tasks[lang]; !ok {
+			t.Errorf("the [tasks.%s] entry was destroyed by the collapse; tasks = %#v", lang, tasks)
+		}
+	}
+	if got := tasks["GO"].(map[string]any)["test"]; got != "FIRST" {
+		t.Errorf("[tasks.GO].test = %v, want FIRST (must not be flipped by the sibling entry)", got)
+	}
+
+	// The typed decode agrees: GO is a DISTINCT entry from go (neither folds into
+	// the other), and neither value is flipped by the sibling. LoadProject merges
+	// with the defaults, so assert the two entries by name, not the total count.
+	cfg, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if got := cfg.Tasks["GO"].Test; got != "FIRST" {
+		t.Errorf("Tasks[GO].Test = %q, want FIRST (the GO entry must survive, not fold into go)", got)
+	}
+	if got := cfg.Tasks["go"].Test; got != "SECOND" {
+		t.Errorf("Tasks[go].Test = %q, want SECOND", got)
+	}
+}
+
 // TestSetProjectValue_RefusesToClobberAnArrayOfTables pins PLAN-331: setNested
 // must REFUSE rather than overwrite when a path segment already exists as
 // something other than a table. Writing command.name over an exact-spelled
