@@ -133,7 +133,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	if err != nil {
 		return "", err
 	}
-	if err := t.txCheckRateLimits(a); err != nil {
+	if err := t.txCheckRateLimits(ctx, a); err != nil {
 		return "", err
 	}
 
@@ -200,10 +200,10 @@ func parseTransactionArgs(raw json.RawMessage) (transactionApplyArgs, error) {
 	return a, nil
 }
 
-func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
+func (t *TransactionApply) txCheckRateLimits(ctx context.Context, a transactionApplyArgs) error {
 	for i := range a.Operations {
-		if !t.deps.Limiter.Allow() {
-			return rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.deps.Limiter)
+		if !t.deps.limiter(ctx).Allow() {
+			return rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.deps.limiter(ctx))
 		}
 	}
 	return nil
@@ -423,7 +423,7 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		t.deps.recordWritten(p.path)
+		t.deps.recordWritten(ctx, p.path)
 	}
 }
 

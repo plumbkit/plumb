@@ -515,8 +515,8 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 	if err != nil {
 		return mutationTarget{}, fmt.Errorf("cannot read: %w", err)
 	}
-	if !t.deps.Limiter.Allow() {
-		return mutationTarget{}, rateLimitError("mutation_test", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return mutationTarget{}, rateLimitError("mutation_test", t.deps.limiter(ctx))
 	}
 	return mutationTarget{
 		spec:     spec,

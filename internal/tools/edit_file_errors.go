@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,8 +24,8 @@ import (
 // content is the current file content; when a sufficiently similar region
 // exists, a labelled closest-match diff is appended so the agent can see the
 // exact whitespace or token drift without a re-read (see closestMatchDiff).
-func (t *EditFile) notFoundError(i int, path, sent, searched, content string, preReadMtime time.Time) error {
-	recorded := t.deps.Reads.Mtime(path)
+func (t *EditFile) notFoundError(ctx context.Context, i int, path, sent, searched, content string, preReadMtime time.Time) error {
+	recorded := t.deps.reads(ctx).Mtime(path)
 
 	sentSnippet := textfmt.Ellipsis(sent, snippetBudget)
 	searchedSnippet := textfmt.Ellipsis(searched, snippetBudget)

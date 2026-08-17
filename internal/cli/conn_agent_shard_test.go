@@ -113,3 +113,43 @@ func TestAgentTrackerIsolation(t *testing.T) {
 		t.Fatalf("agent B workspace = %q, want %q", got, rootB2)
 	}
 }
+
+// TestWriteDepsRoutePerAgent proves the live tool path resolves per-agent state
+// (PLAN-286): buildWriteDeps wires the ctx-aware resolvers, so a read recorded
+// through the resolver the tools use lands in that agent's shard tracker, not a
+// peer's, and distinct agents get distinct trackers and rate limiters.
+func TestWriteDepsRoutePerAgent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	s.recordLogicalAgentAttach("agent-a")
+	s.recordLogicalAgentCall("agent-b")
+
+	wd := s.buildWriteDeps()
+	if wd.ReadsFor == nil || wd.WritesFor == nil || wd.UndoFor == nil || wd.LimiterFor == nil {
+		t.Fatal("buildWriteDeps must wire the per-agent resolvers")
+	}
+
+	ctxA := mcp.WithLogicalAgent(context.Background(), "agent-a")
+	ctxB := mcp.WithLogicalAgent(context.Background(), "agent-b")
+
+	ra, rb := wd.ReadsFor(ctxA), wd.ReadsFor(ctxB)
+	if ra == rb {
+		t.Fatal("agents must have separate read trackers")
+	}
+	if wd.LimiterFor(ctxA) == wd.LimiterFor(ctxB) {
+		t.Fatal("agents must have separate rate limiters")
+	}
+
+	// A read recorded through the resolver the tools use lands only in that
+	// agent's tracker, never a peer's.
+	ra.Record("/ws/a.go", time.Unix(1_700_000_000, 0), "sha-a")
+	if s.readTrackerFor(ctxA).Mtime("/ws/a.go").IsZero() {
+		t.Fatal("read recorded via ReadsFor must land in agent A's tracker")
+	}
+	if !s.readTrackerFor(ctxB).Mtime("/ws/a.go").IsZero() {
+		t.Fatal("agent A's read leaked into agent B's tracker")
+	}
+}

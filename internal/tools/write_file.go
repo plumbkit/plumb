@@ -98,8 +98,8 @@ type writeFileArgs struct {
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("write_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("write_file", t.deps.limiter(ctx))
 	}
 	a, err := parseWriteFileArgs(raw)
 	if err != nil {
@@ -122,7 +122,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	isNew := os.IsNotExist(statErr)
 	uri := "file://" + path
 
-	oldContent, undoBefore, undoOK := t.writeFileCapture(path, isNew)
+	oldContent, undoBefore, undoOK := t.writeFileCapture(ctx, path, isNew)
 	// Baseline must be captured before the bytes change so the cross-file sweep
 	// can tell errors this write introduced from ones already present.
 	baseline := t.deps.capturePreWriteBaseline(uri)
@@ -133,7 +133,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
 	if undoOK {
-		t.deps.recordUndo(path, undoBefore, a.Content, !isNew, "write_file")
+		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
 	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics, baseline)
 	t.deps.notifyTopology(path)
@@ -168,7 +168,7 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	// but this session read the file and it has since changed on disk, a full
 	// overwrite would silently discard that change. Refuse unless overridden.
 	if a.ExpectedMtime == "" && a.ExpectedSha == "" && !a.OverwriteChanged &&
-		changedSinceSessionRead(t.deps.Reads, path) {
+		changedSinceSessionRead(t.deps.reads(ctx), path) {
 		return staleOverride(fmt.Errorf("write_file: %q changed on disk since you read it this session — "+
 			"a peer agent or process edited it after your read, and a full overwrite would discard that change. "+
 			"Re-read to merge, or pass overwrite_changed: true to overwrite anyway", path))
@@ -188,9 +188,9 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 // and the 1 MiB snapshot cap). A new file needs no read: oldContent is empty
 // and the write is undoable by deletion. A read failure or an over-cap file
 // disables undo for this write rather than erroring.
-func (t *WriteFile) writeFileCapture(path string, isNew bool) (oldContent, undoBefore string, undoOK bool) {
+func (t *WriteFile) writeFileCapture(ctx context.Context, path string, isNew bool) (oldContent, undoBefore string, undoOK bool) {
 	wantDiff := t.deps.showWriteDiff()
-	wantUndo := t.deps.Undo != nil
+	wantUndo := t.deps.undo(ctx) != nil
 	if isNew {
 		return "", "", wantUndo
 	}
@@ -225,7 +225,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.recordWritten(path)
+	t.deps.recordWritten(ctx, path)
 }
 
 func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool, baseline *diagBaseline) string {

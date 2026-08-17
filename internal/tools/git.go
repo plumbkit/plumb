@@ -184,8 +184,8 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := checkPushProtection(a, policy, tier); err != nil {
 		return "", err
 	}
-	if tier != tierRead && !t.deps.Limiter.Allow() {
-		return "", rateLimitError("git", t.deps.Limiter)
+	if tier != tierRead && !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("git", t.deps.limiter(ctx))
 	}
 	a.Repo = t.defaultRepo(ctx, a.Repo)
 	if err := t.checkBoundary(ctx, a); err != nil {

@@ -70,8 +70,8 @@ type renameFileArgs struct {
 }
 
 func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("rename_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("rename_file", t.deps.limiter(ctx))
 	}
 	a, err := parseRenameFileArgs(raw)
 	if err != nil {
@@ -170,5 +170,5 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	// processDelete. Then enqueue to so the new path is indexed immediately.
 	t.deps.notifyTopology(from)
 	t.deps.notifyTopology(to)
-	t.deps.recordWritten(to)
+	t.deps.recordWritten(ctx, to)
 }
