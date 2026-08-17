@@ -217,7 +217,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				// refused steal attempt (or a fumbled path), just as the
 				// root-changed branch below does — the victim's own re-pin must
 				// heal the session, not only a forced switch.
-				session.Patch(s.sessID, func(info *session.Info) {
+				session.Patch(s.sessionID(), func(info *session.Info) {
 					info.Health = ""
 					info.HealthMessage = ""
 				})
@@ -270,7 +270,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.warmDepRoots(language)
 		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage

@@ -97,10 +97,10 @@ func (s *connSession) recordLogicalAgent(id string, attach bool) {
 // pin/trackers.
 func (s *connSession) markSharedConnectionDetected() {
 	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; state is NOT yet keyed per logical agent, so anonymous state-changing calls are refused")
-	if s.sessID == "" {
+	if s.sessionID() == "" {
 		return
 	}
-	session.Patch(s.sessID, func(info *session.Info) {
+	session.Patch(s.sessionID(), func(info *session.Info) {
 		info.Health = "shared_connection_detected"
 		info.HealthMessage = "multiple logical agents share this connection; anonymous state-changing calls are refused — run one plumb serve per logical agent"
 	})

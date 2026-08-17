@@ -241,7 +241,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {
-			session.SetExternalID(s.sessID, externalID)
+			session.SetExternalID(s.sessionID(), externalID)
 			s.recordLogicalAgentAttach(externalID)
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
 				// session.Rename refuses a name a live session already holds, so

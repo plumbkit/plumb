@@ -83,7 +83,7 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		s.warmDepRoots(language)
 		recoverWorkspaceTxlog(folder, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = folder
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
@@ -129,7 +129,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 		v.policy = s.buildPathPolicy(v)
 		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
 			info.Language = LanguageNone
 			// detectedLabel, not detectAnyLanguageAt directly, so a home root
@@ -297,7 +297,7 @@ func (s *connSession) appendActiveAdapter(language string) {
 	if adp == "" {
 		return
 	}
-	session.Patch(s.sessID, func(in *session.Info) {
+	session.Patch(s.sessionID(), func(in *session.Info) {
 		if !slices.Contains(in.Adapters, adp) {
 			in.Adapters = append(in.Adapters, adp)
 		}

@@ -339,7 +339,7 @@ func (s *connSession) onClientInfo(name, version string) {
 		v.clientVersion = version
 	})
 	s.log().Info("daemon: client identified", "client", name, "version", version)
-	session.SetClient(s.sessID, name, version)
+	session.SetClient(s.sessionID(), name, version)
 	// Client identity may arrive before or after the workspace is pinned; bind
 	// here too so the shared budget links as soon as both are known.
 	s.bindWriteLimiterParent()
@@ -362,7 +362,7 @@ func (s *connSession) onProtocolNegotiated(offered, answered string, caps json.R
 		s.log().Info("daemon: client offered an MCP protocol revision plumb does not implement; answered with the newest supported",
 			"offered", offered, "answered", answered, "client", s.clientNameStr())
 	}
-	session.SetProtocol(s.sessID, offered, answered, string(caps))
+	session.SetProtocol(s.sessionID(), offered, answered, string(caps))
 }
 
 // protocolStatus returns the initialize-time protocol negotiation snapshot for

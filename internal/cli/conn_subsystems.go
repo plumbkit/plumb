@@ -324,7 +324,7 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 // scored here, at write time: this is the single point where the tool name,
 // client identity, raw sizes and body-free collaboration telemetry all co-exist.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
-	session.Touch(s.sessID)
+	session.Touch(s.sessionID())
 	v := s.view()
 	root := v.acquiredRoot
 	sessionName := v.sessName
@@ -342,7 +342,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	// Scored above from the real output, so redaction costs no savings accuracy.
 	inputJSON, outputText := statsToolData(toolName, args, output)
 	s.statsStore.Record(root, withFailure(stats.Call{
-		SessionID:           s.sessID,
+		SessionID:           s.sessionID(),
 		SessionName:         sessionName,
 		Tool:                toolName,
 		CalledAt:            time.Now(),

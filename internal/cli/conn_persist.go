@@ -48,16 +48,52 @@ func (s *connSession) onProxySession(id string) {
 
 // onSessionID records the stable plumb session ID the serve proxy replayed in
 // the initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting
-// session carried before the daemon restarted. Observability only for now: the
-// ID is logged so a reconnect is visible as one session; adopting it as the
-// live sessID (so stats/memories/collab see continuity) is the next half of
-// PLAN-296.
+// session carried before the daemon restarted — and ADOPTS it as the live
+// sessID so stats/memories/collab see one continuous identity across the
+// restart (PLAN-296).
 func (s *connSession) onSessionID(id string) {
 	if id == "" {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.replayedSessionID = id })
-	s.log().Info("daemon: replayed stable session ID observed", "session_id", id)
+	s.adoptSessionID(id)
+}
+
+// adoptSessionID re-registers this connection under the stable session ID the
+// serve proxy replayed, so a daemon restart does not churn the session identity
+// stats, memories and collab key on. It is the ID counterpart to restoreName's
+// name restoration: the name survives via the persisted mapping, and this makes
+// the ID survive too.
+//
+// The adoption is gated on "the replayed ID is not held by another live
+// session" (session.Adopt's ErrIDTaken): on an overlapping restart the previous
+// daemon may still be running and answering to that ID, so re-registering would
+// overwrite its session file. On a decline the connection keeps its generated
+// ID and the persisted identity is refreshed so the next reconnect — by which
+// time the predecessor has gone — retries with the right ID.
+func (s *connSession) adoptSessionID(id string) {
+	oldID := s.sessionID()
+	if oldID == "" || oldID == id {
+		return
+	}
+	reg, err := session.Adopt(oldID, id)
+	if errors.Is(err, session.ErrIDTaken) {
+		s.log().Debug("daemon: replayed session ID held by another live session; keeping the generated ID",
+			"replayed", id, "using", oldID)
+		s.persistName(s.sessionName())
+		return
+	}
+	if err != nil {
+		s.log().Warn("daemon: adopting replayed session ID failed; keeping the generated ID",
+			"replayed", id, "using", oldID, "err", err)
+		return
+	}
+	s.setSessionID(reg.ID)
+	if s.registry != nil {
+		s.registry.rekey(oldID, reg.ID)
+	}
+	s.persistName(s.sessionName())
+	s.log().Info("daemon: adopted replayed stable session ID", "adopted", reg.ID, "previous", oldID)
 }
 
 // restoreName applies the name persisted under this proxy session ID, so a
@@ -140,7 +176,7 @@ func (s *connSession) restoreName(id string) {
 // unread is therefore orphaned — bounded, rather than an ever-growing set of
 // identities that would slowly widen what one session may read.
 func (s *connSession) inheritSessionID(prevID string) {
-	if prevID == "" || prevID == s.sessID {
+	if prevID == "" || prevID == s.sessionID() {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.inheritedSessionIDs = []string{prevID} })
@@ -166,7 +202,7 @@ func (s *connSession) persistName(name string) {
 	if !s.namePersistEnabled(v) || name == "" {
 		return
 	}
-	if err := s.sessionState.SaveIdentity(v.proxySessionID, name, s.sessID); err != nil {
+	if err := s.sessionState.SaveIdentity(v.proxySessionID, name, s.sessionID()); err != nil {
 		s.log().Debug("daemon: persist session identity failed", "err", err)
 	}
 }
@@ -420,8 +456,8 @@ func (s *connSession) toolResultMeta(_ context.Context, name string, args json.R
 		return nil
 	}
 	meta := map[string]any{mcp.MetaResolvedWorkspaceKey: ws}
-	if s.sessID != "" {
-		meta[mcp.MetaSessionIDKey] = s.sessID
+	if id := s.sessionID(); id != "" {
+		meta[mcp.MetaSessionIDKey] = id
 	}
 	return meta
 }
