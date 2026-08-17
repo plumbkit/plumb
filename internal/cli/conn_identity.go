@@ -16,6 +16,13 @@ func (s *connSession) sessionName() string {
 	return s.view().sessName
 }
 
+// sessionID returns the current plumb session ID. Like sessionName it is read
+// fresh each call, so an adoption during initialize (PLAN-296) is seen by every
+// consumer wired with the accessor rather than a value captured at registration.
+func (s *connSession) sessionID() string {
+	return s.sessID
+}
+
 // addressableName returns the session name only when it is a name peers can
 // safely route to — that is, when this session is registered in the session
 // directory, where every other session's uniqueness check can see it.

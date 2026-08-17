@@ -25,7 +25,7 @@ func intentGitToolWithBudget(ws, id, name string, store *collab.Store, intentsOn
 	return NewGit(
 		WriteDeps{WorkspaceFn: func() string { return ws }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
-	).WithSession(id, func() string { return name }).
+	).WithSession(func() string { return id }, func() string { return name }).
 		WithPeerIntents(func() bool { return intentsOn }, func() *collab.Store { return store },
 			func() int { return hintBudgetBytes })
 }

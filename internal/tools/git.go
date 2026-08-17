@@ -67,7 +67,7 @@ var gitSchema = json.RawMessage(`{
 type Git struct {
 	deps       WriteDeps
 	policy     GitPolicyFn
-	sessID     string
+	sessID     func() string
 	sessNameFn func() string
 	// Peer repo-intent warning wiring (git_intent_warn.go), all nil-safe and
 	// consulted lazily per call: unwired means no warning is ever computed.
@@ -85,7 +85,7 @@ func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 // WithSession wires the connection's session identity for the cross-session
 // ref-movement guard (git_ref_guard.go). Returns the receiver for chaining.
 // Without it the ledger is untracked and only expected_head is enforced.
-func (t *Git) WithSession(id string, name func() string) *Git {
+func (t *Git) WithSession(id func() string, name func() string) *Git {
 	t.sessID = id
 	t.sessNameFn = name
 	return t
@@ -276,11 +276,15 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 // call (reads included), which is what keeps single-session use friction-free:
 // a session's own moves are always its latest observation.
 func (t *Git) armRefGuard(a gitToolArgs, tier gitTier) *gitRefGuard {
-	if t.sessID == "" && a.ExpectedHead == "" {
+	sessID := ""
+	if t.sessID != nil {
+		sessID = t.sessID()
+	}
+	if sessID == "" && a.ExpectedHead == "" {
 		return nil
 	}
 	g := &gitRefGuard{
-		sessID:       t.sessID,
+		sessID:       sessID,
 		expectedHead: a.ExpectedHead,
 		confirm:      a.Confirm,
 		check:        tier == tierWrite || tier == tierDestructive || tier == tierNetwork,

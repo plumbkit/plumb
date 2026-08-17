@@ -134,7 +134,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewUndoEdit(wd))
 	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(boundary))
 	srv.Register(tools.NewFindFiles(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessID, s.sessionName).
+	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessionID, s.sessionName).
 		WithPeerIntents(func() bool { return s.collabConfig().Intents }, s.collabStoreIfExists,
 			func() int { return s.collabConfig().HintBudgetBytes }))
 	srv.Register(tools.NewGitInit(wd))
