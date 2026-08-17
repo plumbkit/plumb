@@ -54,7 +54,7 @@ const (
 	//
 	// Ten times the sniff's budget is cheap: ties are rare (strongLangAt scans
 	// only when several markers claim one directory) and a 20k-file walk takes
-	// a few milliseconds. The budget stays FINITE — it is the work bound on a
+	// a couple of tens of milliseconds. The budget stays FINITE — it is the work bound on a
 	// hostile tree, not a target — and a walk that still hits it reports
 	// truncation, which strongLangAt degrades to the deterministic order on.
 	// Both sides are pinned: the repro tree sits comfortably under it, and a
@@ -122,7 +122,9 @@ func (p *workspacePool) tieBreakCounts(dir string, ignore []string) (counts map[
 // walk: the conventional non-source containers of the ecosystems the tie-break
 // decides between. src/main/resources holds property and asset files by the
 // thousand in a JVM project; Android mirrors the shape with assets/ and res/.
-// None of them holds sources the tied candidates contest, and they are exactly
+// By convention none of them holds sources the tied candidates contest — a
+// module literally named one of these would be invisible to the tie, an
+// accepted trade — and they are exactly
 // the trees large enough to starve the walk's budget before it reaches a
 // source directory. Pruning stays a tie-break-only mercy: the last-resort
 // sniff counts what is actually there, coarsely, and its truncation behaviour
