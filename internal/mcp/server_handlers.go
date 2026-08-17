@@ -265,13 +265,14 @@ func logicalAgentFromMeta(meta map[string]json.RawMessage) string {
 // under it; the only reader is the exported LogicalAgentFromCtx.
 type logicalAgentCtxKey struct{}
 
-// withLogicalAgent derives the per-request ctx for a tools/call: a child ctx
-// carrying the call's logical-agent identity. It is the transport half of the
-// per-agent keying contract (PLAN-286 §3) — the identity must ride ctx because
-// mcp.Serve dispatches requests concurrently and a mutable per-connection field
-// would let two racing requests read each other's agent. An empty id returns the
-// parent ctx unchanged (no value stored), so a non-multiplexing client pays nothing.
-func withLogicalAgent(ctx context.Context, id string) context.Context {
+// WithLogicalAgent derives a per-request ctx carrying the logical-agent identity:
+// a child ctx for a tools/call. It is the transport half of the per-agent keying
+// contract (PLAN-286 §3) — the identity must ride ctx because mcp.Serve dispatches
+// requests concurrently and a mutable per-connection field would let two racing
+// requests read each other's agent. An empty id returns the parent ctx unchanged
+// (no value stored), so a non-multiplexing client pays nothing. Exported so the
+// daemon's per-agent resolvers can build a ctx in-process (tests, nested calls).
+func WithLogicalAgent(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
 	}
@@ -388,7 +389,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 
 	logicalAgent := logicalAgentFromMeta(params.Meta)
-	ctx = withLogicalAgent(ctx, logicalAgent)
+	ctx = WithLogicalAgent(ctx, logicalAgent)
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
 	}
