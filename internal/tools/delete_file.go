@@ -61,8 +61,8 @@ type deleteFileArgs struct {
 }
 
 func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("delete_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("delete_file", t.deps.limiter(ctx))
 	}
 	var a deleteFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {

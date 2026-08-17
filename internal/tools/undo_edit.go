@@ -78,7 +78,11 @@ func (t *UndoEdit) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	unlock := lockPath(path)
 	defer unlock()
 
-	snap, ok := t.deps.Undo.Peek(path)
+	undo := t.deps.undo(ctx)
+	if undo == nil {
+		return "", fmt.Errorf("undo_edit: nothing to undo for %q — plumb has recorded no revertible write to it this session", path)
+	}
+	snap, ok := undo.Peek(path)
 	if !ok {
 		return "", fmt.Errorf("undo_edit: nothing to undo for %q — plumb has recorded no revertible write to it this session", path)
 	}
@@ -89,7 +93,7 @@ func (t *UndoEdit) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	t.deps.Undo.Take(path)
+	undo.Take(path)
 	return out, nil
 }
 
@@ -134,7 +138,7 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 		return "", fmt.Errorf("undo_edit: %w", err)
 	}
 	t.notifyUndo(ctx, path, uri, protocol.FileChanged)
-	t.deps.recordWritten(path)
+	t.deps.recordWritten(ctx, path)
 	t.deps.notifyTopology(path)
 	return t.formatUndoRestore(path, string(current), snap), nil
 }

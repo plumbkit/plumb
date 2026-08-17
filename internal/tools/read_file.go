@@ -97,8 +97,10 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 //
 // Concurrency: Execute is safe for concurrent use.
 type ReadFile struct {
-	tracker      *ReadTracker  // may be nil; strict-mode tracking disabled when nil
-	writes       *WriteTracker // may be nil; powers the concurrent-edit-on-read warning
+	tracker      *ReadTracker                            // may be nil; strict-mode tracking disabled when nil
+	writes       *WriteTracker                           // may be nil; powers the concurrent-edit-on-read warning
+	readsFor     func(ctx context.Context) *ReadTracker  // PLAN-286: per-agent resolver; overrides tracker
+	writesFor    func(ctx context.Context) *WriteTracker // PLAN-286: per-agent resolver; overrides writes
 	guard        BoundaryGuard
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
@@ -116,11 +118,46 @@ func (t *ReadFile) WithWrites(w *WriteTracker) *ReadFile {
 	return t
 }
 
+// WithReadsFor wires a per-call ReadTracker resolver (PLAN-286): on a shared
+// connection each logical agent records its reads against its own tracker. The
+// resolver takes precedence over the tracker passed to NewReadFile.
+func (t *ReadFile) WithReadsFor(fn func(ctx context.Context) *ReadTracker) *ReadFile {
+	t.readsFor = fn
+	return t
+}
+
+// WithWritesFor is the WriteTracker counterpart of WithReadsFor (PLAN-286).
+func (t *ReadFile) WithWritesFor(fn func(ctx context.Context) *WriteTracker) *ReadFile {
+	t.writesFor = fn
+	return t
+}
+
+// readTracker resolves the ReadTracker for this call: the per-logical-agent
+// tracker (readsFor) on a shared connection, else the connection-level tracker.
+func (t *ReadFile) readTracker(ctx context.Context) *ReadTracker {
+	if t.readsFor != nil {
+		if r := t.readsFor(ctx); r != nil {
+			return r
+		}
+	}
+	return t.tracker
+}
+
+// writeTracker resolves the WriteTracker for this call (PLAN-286).
+func (t *ReadFile) writeTracker(ctx context.Context) *WriteTracker {
+	if t.writesFor != nil {
+		if w := t.writesFor(ctx); w != nil {
+			return w
+		}
+	}
+	return t.writes
+}
+
 // concurrentEditNote returns a one-line warning when plumb wrote this file
 // earlier in the session and its on-disk mtime has since advanced — i.e. a peer
 // or external process edited it after plumb's write. Returns "" otherwise.
-func (t *ReadFile) concurrentEditNote(fpath string, mtime time.Time) string {
-	recorded, ok := t.writes.WroteMtime(fpath)
+func (t *ReadFile) concurrentEditNote(ctx context.Context, fpath string, mtime time.Time) string {
+	recorded, ok := t.writeTracker(ctx).WroteMtime(fpath)
 	if !ok || recorded == 0 || mtime.UnixNano() <= recorded {
 		return ""
 	}
@@ -241,7 +278,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("read_file: %q is a directory — use find_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
-	concurrentNote := t.concurrentEditNote(fpath, mtime)
+	concurrentNote := t.concurrentEditNote(ctx, fpath, mtime)
 
 	// Search mode: pattern locates matching lines within the file (streamed
 	// line-by-line, so an over-cap file stays searchable) instead of returning a
@@ -259,7 +296,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
-	t.tracker.Record(fpath, mtime, sha)
+	t.readTracker(ctx).Record(fpath, mtime, sha)
 
 	firstLine := 1
 	if body.start != nil && *body.start > 1 {

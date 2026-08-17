@@ -80,8 +80,8 @@ func (a gitInitArgs) validate() error {
 }
 
 func (t *GitInit) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("git_init", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("git_init", t.deps.limiter(ctx))
 	}
 	a, err := parseGitInitArgs(raw)
 	if err != nil {

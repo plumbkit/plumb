@@ -91,6 +91,17 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		writeLimiter: tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute),
 		pinOrigin:    v.pinOrigin,
 	}
+	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
+	// precedence over the connection's current pin. A pin that no longer verifies
+	// is ignored, so the shard keeps the connection's root rather than resurrecting
+	// a deleted or widened one.
+	if root, language, origin, ok := s.loadPinForAgent(id); ok {
+		if resolved, _, intact := s.restoreRootIntact(root); intact {
+			sh.root = resolved
+			sh.language = language
+			sh.pinOrigin = origin
+		}
+	}
 	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
 	// Mirror every strict-mode read to the durable store under (proxy, agent),
 	// so a shared connection's per-agent reads survive a daemon restart (2e).
@@ -161,6 +172,33 @@ func (s *connSession) readTrackerFor(ctx context.Context) *tools.ReadTracker {
 	return s.readTracker
 }
 
+// writeTrackerFor returns the write tracker for the logical agent in ctx,
+// falling back to the connection's tracker when not shared.
+func (s *connSession) writeTrackerFor(ctx context.Context) *tools.WriteTracker {
+	if sh := s.shardFor(ctx); sh != nil {
+		return sh.writeTracker
+	}
+	return s.writeTracker
+}
+
+// undoStoreFor returns the undo store for the logical agent in ctx, falling back
+// to the connection's store when not shared.
+func (s *connSession) undoStoreFor(ctx context.Context) *tools.UndoStore {
+	if sh := s.shardFor(ctx); sh != nil {
+		return sh.undoStore
+	}
+	return s.undoStore
+}
+
+// rateLimiterFor returns the write rate limiter for the logical agent in ctx,
+// falling back to the connection's limiter when not shared.
+func (s *connSession) rateLimiterFor(ctx context.Context) *tools.RateLimiter {
+	if sh := s.shardFor(ctx); sh != nil {
+		return sh.writeLimiter
+	}
+	return s.writeLimiter
+}
+
 // repinAgent points the logical agent in ctx at a new workspace. It is the
 // per-agent half of the re-pin: on a shared connection the connection-level
 // attachOrRepinTo machinery stays put, and only this agent's shard moves — so a
@@ -197,6 +235,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.writeTracker.Reset()
 	sh.undoStore.Reset()
 	s.rehydrateReadsForAgent(sh, root)
+	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
 }
 
@@ -245,4 +284,34 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 	}
 	sh.readTracker.Hydrate(out)
 	s.log().Info("daemon: rehydrated per-agent read-tracking", "agent", sh.id, "root", root, "count", len(out))
+}
+
+// persistPinForAgent records the logical agent's pin under (proxy session,
+// agent), so a shared connection's per-agent workspace survives a daemon restart
+// (PLAN-286). Mirrors persistPin, scoped to the agent.
+func (s *connSession) persistPinForAgent(sh *agentShard, root, language string, origin sessionstate.PinSource) {
+	if origin == sessionstate.PinSourceUnknown {
+		return
+	}
+	v := s.view()
+	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
+		return
+	}
+	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, sh.id, root, language, origin); err != nil {
+		s.log().Debug("daemon: persist agent pin failed", "err", err)
+	}
+}
+
+// loadPinForAgent returns the pin a logical agent persisted under (proxy session,
+// agent). ok=false when nothing is recorded or persistence is disabled.
+func (s *connSession) loadPinForAgent(id string) (root, language string, origin sessionstate.PinSource, ok bool) {
+	v := s.view()
+	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
+		return "", "", sessionstate.PinSourceUnknown, false
+	}
+	root, language, origin, ok, err := s.sessionState.LoadPinForAgent(v.proxySessionID, id)
+	if err != nil || !ok || root == "" {
+		return "", "", sessionstate.PinSourceUnknown, false
+	}
+	return root, language, origin, true
 }

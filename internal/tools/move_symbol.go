@@ -216,8 +216,10 @@ func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, ds
 	if dryRun {
 		return nil
 	}
-	if deps != nil && deps.Limiter != nil && !deps.Limiter.Allow() {
-		return rateLimitError("move_symbol", deps.Limiter)
+	if deps != nil {
+		if lim := deps.limiter(ctx); lim != nil && !lim.Allow() {
+			return rateLimitError("move_symbol", lim)
+		}
 	}
 	if deps != nil && !dirtyOK {
 		if dirtyBlocksWrite(ctx, *deps, srcPath) {
@@ -254,8 +256,8 @@ func (t *MoveSymbol) applyMove(ctx context.Context, deps *WriteDeps, a moveSymbo
 			return
 		}
 		for _, p := range plans {
-			deps.recordWritten(p.path)
-			deps.recordUndo(p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
+			deps.recordWritten(ctx, p.path)
+			deps.recordUndo(ctx, p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
 		}
 	}
 	if _, err := applyMovePlans(plans, onApplied); err != nil {

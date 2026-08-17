@@ -371,7 +371,9 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	var diagOut strings.Builder
 	if !a.DryRun {
 		baselines := t.captureRenameBaselines(files)
-		modified, plans, applyErr := applyWorkspaceEditDetailed(we, t.recordRenameWrites)
+		modified, plans, applyErr := applyWorkspaceEditDetailed(we, func(plans []workspaceEditPlan) {
+			t.recordRenameWrites(ctx, plans)
+		})
 		if applyErr != nil {
 			if strings.Contains(applyErr.Error(), "out of range") {
 				return "", fmt.Errorf("applying rename: %w%s", applyErr, renameStaleIndexHint)
@@ -421,8 +423,10 @@ func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a r
 		return nil
 	}
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
-	if deps != nil && deps.Limiter != nil && !deps.Limiter.Allow() {
-		return rateLimitError("rename_symbol", deps.Limiter)
+	if deps != nil {
+		if lim := deps.limiter(ctx); lim != nil && !lim.Allow() {
+			return rateLimitError("rename_symbol", lim)
+		}
 	}
 	for _, f := range files {
 		if err := t.guard.check(ctx, f); err != nil {
@@ -477,14 +481,14 @@ func (t *RenameSymbol) captureRenameBaselines(files []string) map[string]*diagBa
 // and recordUndo's held-lock contract — recording after the unlock would let a
 // concurrent session's write slip in between and have its undo snapshot and
 // read-tracker state clobbered by ours.
-func (t *RenameSymbol) recordRenameWrites(plans []workspaceEditPlan) {
+func (t *RenameSymbol) recordRenameWrites(ctx context.Context, plans []workspaceEditPlan) {
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
 	if deps == nil {
 		return
 	}
 	for _, p := range plans {
-		deps.recordWritten(p.path)
-		deps.recordUndo(p.path, string(p.before), string(p.after), true, "rename_symbol")
+		deps.recordWritten(ctx, p.path)
+		deps.recordUndo(ctx, p.path, string(p.before), string(p.after), true, "rename_symbol")
 	}
 }
 

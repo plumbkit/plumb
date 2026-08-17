@@ -62,10 +62,14 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Cache:                 s.sessionCache,
 		Diag:                  s.sessionInv,
 		Limiter:               s.writeLimiter,
+		LimiterFor:            s.rateLimiterFor,
 		Strict:                s.isStrict,
 		Reads:                 s.readTracker,
+		ReadsFor:              s.readTrackerFor,
 		Writes:                s.writeTracker,
+		WritesFor:             s.writeTrackerFor,
 		Undo:                  s.undoStore,
+		UndoFor:               s.undoStoreFor,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
 		DiagWait:              tools.NewDiagWaitEstimator(),
 		CrossFileDiagFn:       func() bool { return s.editsConfig().PostWriteCrossFile },
@@ -121,10 +125,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(readBoundaryFor).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithReadsFor(s.readTrackerFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewReadMultipleFiles().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewFileStatus(s.writeTracker).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewFileStatus(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
 	srv.Register(tools.NewEditFile(wd))

@@ -70,8 +70,8 @@ type copyFileArgs struct {
 }
 
 func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("copy_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("copy_file", t.deps.limiter(ctx))
 	}
 	a, err := parseCopyFileArgs(raw)
 	if err != nil {
@@ -162,5 +162,5 @@ func (t *CopyFile) copyFilePostWrite(ctx context.Context, to string) {
 	}
 	invalidateCache(t.deps.Cache, "file://"+to)
 	t.deps.notifyTopology(to)
-	t.deps.recordWritten(to)
+	t.deps.recordWritten(ctx, to)
 }
