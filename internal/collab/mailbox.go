@@ -13,14 +13,17 @@ import (
 // mailbox.go answers one question in one place: which stored note may be handed
 // to which session.
 //
-// It is separate from store.go because that question has three readers with
-// different jobs — probe (HasPendingNotes), list (PendingNotes) and claim
-// (ClaimNotes) — and they must agree exactly. A probe broader than the claim
-// promises mail that never arrives; a listing broader than the claim advertises
-// a message the reader can never collect, and discloses its sender and body to
-// someone who was never meant to see either. None of those raise an error: the
-// message simply does not show up, or shows up to the wrong agent. So the rule
-// lives here, written once, rather than being copied and kept in step by hand.
+// It is separate from store.go because that question has several readers with
+// different jobs — probe (HasPendingNotes), out-of-session count
+// (ClaimableNotes), list (PendingNotes) and claim (ClaimNotes) — and all but
+// the listing must agree exactly. A probe broader than the claim promises mail
+// that never arrives; a listing broader than the claim advertises a message the
+// reader can never collect, and discloses its sender and body to someone who
+// was never meant to see either. None of those raise an error: the message
+// simply does not show up, or shows up to the wrong agent. So the rule lives
+// here, written once, rather than being copied and kept in step by hand. The
+// listing is the deliberate exception: it narrows the rule by the "next" arm,
+// for the reason its own comment gives.
 
 // Claimant is the session asking for its mail: everything a row is matched
 // against. The fields travel together because all of them are load-bearing and
@@ -131,8 +134,8 @@ func notAuthoredBy(who Claimant) (string, []any) {
 
 // claimable is the FULL predicate for "a note this claimant may be handed":
 // unexpired, unclaimed, addressed to it or to "next", identity-matched, not
-// written by it, and within its workspace scope. ClaimNotes and HasPendingNotes
-// share it verbatim.
+// written by it, and within its workspace scope. ClaimNotes, HasPendingNotes
+// and ClaimableNotes share it verbatim.
 //
 // They must, because HasPendingNotes exists to decide whether ClaimNotes is
 // worth running. A probe that is broader than the claim reports mail that does
@@ -246,10 +249,17 @@ func (s *Store) probeStmt(ctx context.Context, query string) (*sql.Stmt, error) 
 }
 
 // PendingNotes returns the unexpired, NOT YET DELIVERED notes addressed to the
-// claimant, newest first, without claiming them. Used by the listing path
-// (workspace_sessions), which reports what is waiting rather than handing it
-// over. It never returns "next" notes — those are claimed only by ClaimNotes,
-// so listing them would advertise a message the caller may lose the race for.
+// claimant, newest first, without claiming them. Its ONLY caller is the
+// in-session listing in workspace_sessions
+// (internal/tools/workspace_sessions.go), which reports what is waiting rather
+// than handing it over. It never returns "next" notes — those are claimed only
+// by ClaimNotes, so listing them would advertise a message the caller may lose
+// the race for.
+//
+// That narrowing is specific to this caller, which is why it is not in
+// claimable. The other pure reader, `plumb mail`'s wake probe, counts through
+// ClaimableNotes instead: it claims nothing, so there is no race to lose, and
+// excluding "next" there left the default addressing mode invisible to it.
 func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) ([]Row, error) {
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
@@ -269,6 +279,43 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 		append(args, who.Workspace)...)
 	if err != nil {
 		return nil, fmt.Errorf("collab: query notes: %w", err)
+	}
+	defer rows.Close()
+	return scanRows(rows)
+}
+
+// ClaimableNotes returns the notes ClaimNotes would hand this claimant right
+// now — the claimable predicate as a pure read, OLDEST FIRST, claiming nothing.
+// Unlike the claim it carries no LIMIT, so it may count a note an
+// exchange-capped claim would defer; the probe only ever wakes, the claim
+// decides. Its caller is `plumb mail` (internal/cli/mail.go), the wake probe a
+// client-side hook runs from OUTSIDE any session when an agent finishes its
+// turn, which needs the count and ages of what a claim would deliver.
+//
+// PendingNotes cannot answer that. It omits "next" notes for the listing's
+// sake, and "next" is leave_note's default addressee, so a probe built on it is
+// blind to the common-case handoff — the idle agent is never woken for exactly
+// the notes most likely to be waiting for it. The race the listing's exclusion
+// protects against does not exist here: this method claims nothing, so several
+// sessions counting the same "next" note costs some redundant wakes, never a
+// lost message. What MUST carry over from the claim is the author exclusion —
+// a session woken for a note it wrote itself can never claim that note, so the
+// hook would fire, deliver nothing, and fire again at the next turn end.
+func (s *Store) ClaimableNotes(ctx context.Context, who Claimant, now time.Time) ([]Row, error) {
+	if s == nil || s.db == nil || who.Name == "" {
+		return nil, nil
+	}
+	where, args := claimable(who, now)
+	//nolint:gosec // G202: the statement is built from claimable, whose only variable
+	// part is a generated "?" list — no caller data reaches the text and every identity
+	// is bound. TestAddresseeMatch_InterpolatesNoData enforces that.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+rowColumns+`
+		 FROM collab_rows
+		 WHERE `+where+`
+		 ORDER BY created_at ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("collab: list claimable notes: %w", err)
 	}
 	defer rows.Close()
 	return scanRows(rows)

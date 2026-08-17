@@ -412,11 +412,12 @@ non-zero only on error, so "has mail" is never confused with "the check failed"
 
 Scope: the workspace mailbox only. Cross-project messages live in the
 daemon-level store behind the recipient's `[collab] cross_project` opt-in and
-are not reported. Notes addressed to `"next"` are excluded, matching the listing
-path `workspace_sessions` uses: such a note goes to whichever session claims it
-first, so counting it for every candidate would report the same message to
-several sessions that cannot all have it. The cost is that a `"next"` note left
-while a session is idle will not show up here.
+are not reported. Notes addressed to `"next"` — `leave_note`'s default — ARE
+counted, for every session except the author: the probe claims nothing, so
+there is no race to lose, and a session can never claim its own note, so waking
+it for one would fire on every turn end. (The in-session listing in
+`workspace_sessions` still omits them, because it advertises messages the
+reader then has to win the claim race for.)
 
 The `plumb-chat` skill's `references/idle-agent-wake-hook.md` gives the full
 Claude Code Stop-hook recipe built on this command.

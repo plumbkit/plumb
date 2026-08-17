@@ -9,6 +9,22 @@
 
 ### Fixed
 
+- **`plumb mail` now counts notes addressed to `"next"` — the default — so the
+  idle-wake hook fires for the common-case handoff.** The count was built on
+  `collab.PendingNotes`, the in-session listing `workspace_sessions` uses, which
+  omits `"next"` notes by design: a listing advertises a message the reader then
+  races to claim. But `leave_note` defaults to `to: "next"`, so the probe was
+  blind to exactly the notes most likely to be waiting, and an idle agent was
+  never woken for them. The race the exclusion protects against does not exist
+  on this path — `plumb mail` claims nothing, so several sessions counting the
+  same `"next"` note costs redundant wakes, never a lost message.
+
+  The count now comes from a new store method, `collab.ClaimableNotes`, which
+  reads the shared `claimable` predicate — the same one `ClaimNotes` and
+  `HasPendingNotes` use — without touching the watermark. The author exclusion
+  carries over with it: a session can never claim a note it wrote itself, so
+  waking it for one would fire the hook at every turn end and deliver nothing.
+  `PendingNotes` and the `workspace_sessions` listing are unchanged.
 - **The unregistered-session guard on `share_intent` and `share_findings` now
   actually fires.** It tested the session NAME, and a session whose registration
   failed still has one — the daemon logs "continuing unregistered and
