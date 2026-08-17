@@ -153,6 +153,10 @@ type sessionView struct {
 	// once during the initialize exchange, before attach, and preserved across
 	// re-pins. "" when the client is not a session-id-injecting serve proxy.
 	proxySessionID string
+	// replayedSessionID is the stable plumb session ID the serve proxy replayed
+	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
+	// the live sessID equal to it on reconnect.
+	replayedSessionID string
 	// inheritedSessionIDs are predecessor plumb session IDs this connection may
 	// also read mailbox messages for, granted ONLY by the proxy-authenticated
 	// persisted-state path (see inheritSessionID). Nil for every other session.

@@ -96,6 +96,11 @@ func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage)
 			s.OnPinnedWorkspace(ctx, dir)
 		}
 	}
+	if s.OnSessionID != nil {
+		if id := stringFromMeta(params, MetaSessionIDKey); id != "" {
+			s.OnSessionID(ctx, id)
+		}
+	}
 }
 
 // toolSnapshot is an immutable copy of one registered tool's advertised

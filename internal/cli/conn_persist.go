@@ -46,6 +46,20 @@ func (s *connSession) onProxySession(id string) {
 	s.restoreName(id)
 }
 
+// onSessionID records the stable plumb session ID the serve proxy replayed in
+// the initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting
+// session carried before the daemon restarted. Observability only for now: the
+// ID is logged so a reconnect is visible as one session; adopting it as the
+// live sessID (so stats/memories/collab see continuity) is the next half of
+// PLAN-296.
+func (s *connSession) onSessionID(id string) {
+	if id == "" {
+		return
+	}
+	s.mutate(func(v *sessionView) { v.replayedSessionID = id })
+	s.log().Info("daemon: replayed stable session ID observed", "session_id", id)
+}
+
 // restoreName applies the name persisted under this proxy session ID, so a
 // reconnect after a daemon restart keeps the same session name. The gate is
 // namePersistEnabled — deliberately persistEnabled minus the workspace
