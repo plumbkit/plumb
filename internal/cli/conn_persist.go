@@ -89,6 +89,15 @@ func (s *connSession) adoptSessionID(id string) {
 		return
 	}
 	s.setSessionID(reg.ID)
+	// The adopted ID is the predecessor's own, so the mailbox-inheritance
+	// identity — which exists to read a predecessor's mail under its old ID —
+	// is now redundant: the session reads its own mail under its own ID. Clear
+	// it so the session's identity is one ID everywhere (PLAN-286 step 4).
+	s.mutate(func(v *sessionView) {
+		if len(v.inheritedSessionIDs) == 1 && v.inheritedSessionIDs[0] == reg.ID {
+			v.inheritedSessionIDs = nil
+		}
+	})
 	if s.registry != nil {
 		s.registry.rekey(oldID, reg.ID)
 	}
