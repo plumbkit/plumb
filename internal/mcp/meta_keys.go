@@ -27,6 +27,12 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaSessionIDKey is the session_start-result `_meta` key under which the
+// daemon echoes its plumb session ID, so the serve proxy can hold it and replay
+// it in the initialize `_meta` after a daemon restart — the stable session ID
+// across restarts (PLAN-296), distinct from the per-proxy MetaProxySessionKey.
+const MetaSessionIDKey = "dev.plumbkit/session-id"
+
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its own working directory as an ADVISORY workspace
 // attach hint. Unlike a client-reported root it is not authoritative: the

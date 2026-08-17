@@ -401,8 +401,13 @@ func (s *connSession) toolResultMeta(_ context.Context, name string, args json.R
 	if name != sessionStartTool || !workspaceArgPresent(args) {
 		return nil
 	}
-	if ws := s.workspace(); ws != "" {
-		return map[string]any{mcp.MetaResolvedWorkspaceKey: ws}
+	ws := s.workspace()
+	if ws == "" {
+		return nil
 	}
-	return nil
+	meta := map[string]any{mcp.MetaResolvedWorkspaceKey: ws}
+	if s.sessID != "" {
+		meta[mcp.MetaSessionIDKey] = s.sessID
+	}
+	return meta
 }
