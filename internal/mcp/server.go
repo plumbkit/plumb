@@ -147,7 +147,9 @@ type Server struct {
 	OnRootsChanged func(ctx context.Context, request RequestFn)
 
 	// OnBeforeTool is called synchronously before each tools/call execution.
-	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage)
+	// logicalAgent is the client-declared logical-agent identity carried in the
+	// call's `_meta` (MetaLogicalAgentKey), or "" when the client supplies none.
+	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage, logicalAgent string)
 
 	// OnAfterTool is called synchronously after each tools/call execution.
 	// output is the tool's text result (empty when isError is true). errMsg

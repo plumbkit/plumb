@@ -295,8 +295,9 @@ type callResult struct {
 
 func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpResponse {
 	var params struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name      string                     `json:"name"`
+		Arguments json.RawMessage            `json:"arguments"`
+		Meta      map[string]json.RawMessage `json:"_meta"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errRespData(req.ID, codeInvalidParams, "invalid params: "+err.Error(), invalidCallEnvelope(""))
@@ -318,8 +319,12 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			invalidCallEnvelope(params.Name))
 	}
 
+	var logicalAgent string
+	if raw, ok := params.Meta[MetaLogicalAgentKey]; ok {
+		_ = json.Unmarshal(raw, &logicalAgent)
+	}
 	if s.OnBeforeTool != nil {
-		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments) })
+		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments, logicalAgent) })
 	}
 
 	start := time.Now()

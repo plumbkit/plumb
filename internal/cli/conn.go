@@ -224,6 +224,11 @@ type connSession struct {
 
 	sessID string
 
+	// logicalAgents observes the distinct logical-agent identities this
+	// connection declares (session_start.session_id and per-call _meta), so a
+	// multiplexing client can be detected before it shares state (PLAN-286).
+	logicalAgents logicalAgentState
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
