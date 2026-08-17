@@ -158,11 +158,11 @@ func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, 
 //     reasoning applies, since every workspace-relative path is still inside
 //     the (larger) repository, so it is treated the same as rel == ".".
 //   - the repo is nested INSIDE the workspace (rel names a subpath, e.g.
-//     "plumb" for repoRoot <ws>/plumb): a glob covers the repo only when it
-//     matches the repo's own workspace-relative path (e.g. "plumb/**") —
-//     unchanged from before this fix, and the same test for both tiers (a
-//     narrower glob strictly inside such a repo is out of scope for this fix;
-//     see the PR discussion for the destructive-tier case left untouched).
+//     "plumb" for repoRoot <ws>/plumb): a write-tier repo-state op warns only
+//     for a genuinely repo-wide claim (a glob matching rel itself, e.g.
+//     "plumb/**"), while a destructive op warns for any glob whose scope
+//     reaches into the repo subtree (e.g. "plumb/internal/**") — the same tier
+//     split as the two layouts above.
 //
 // A repo outside the workspace tree entirely (neither of the above) can only
 // be covered by an unscoped broadcast, since a workspace-relative glob cannot
@@ -189,8 +189,61 @@ func intentCoversRepo(globs []string, ws, repoRoot string, tier gitTier) bool {
 	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false // repoRoot sits outside the workspace tree entirely
 	}
-	// repo nested under the workspace at rel: unchanged for both tiers.
+	// Repo nested under the workspace at rel: a write-tier repo-state op still
+	// needs a genuinely repo-wide claim (a glob matching rel itself), but a
+	// destructive op can touch any path under rel, so any glob whose scope
+	// reaches into the repo subtree counts — matching the two layouts above.
+	if tier == tierDestructive {
+		return globReachesRepo(globs, rel)
+	}
 	return collab.MatchPath(globs, rel)
+}
+
+// globReachesRepo reports whether any glob's match set intersects the directory
+// subtree rooted at rel — the coverage question for a destructive-tier op in a
+// repo nested under the workspace (rel is the repo's workspace-relative path).
+// It is deliberately conservative: a glob whose scope cannot be pinned outside
+// rel warns rather than under-warns, because a destructive op can touch any
+// path under the repository root.
+func globReachesRepo(globs []string, rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, g := range globs {
+		if globReachesDir(strings.TrimSpace(g), rel) {
+			return true
+		}
+	}
+	return false
+}
+
+// globReachesDir reports whether a single glob can match some path at or under
+// rel. It mirrors matchGlob's three shapes (a "dir/**" prefix, a slashless
+// basename, and a full relative path) but answers intersection with a SUBTREE
+// rather than with a single path.
+func globReachesDir(g, rel string) bool {
+	if g == "" {
+		return false
+	}
+	// "dir/**" matches dir and everything under it: the two subtrees intersect
+	// iff one root sits at-or-under the other.
+	if strings.HasSuffix(g, "/**") {
+		head := strings.TrimSuffix(g, "/**")
+		return head == rel || strings.HasPrefix(head, rel+"/") || strings.HasPrefix(rel, head+"/")
+	}
+	// A slashless glob matches a basename anywhere in the tree, so it can name
+	// a path under rel; the destructive tier treats an unknowable scope as
+	// reaching in.
+	if !strings.Contains(g, "/") {
+		return true
+	}
+	// A slashed glob matches full relative paths. It reaches rel when it
+	// matches rel itself, or when its directory prefix sits at-or-under rel (or
+	// rel sits under that prefix).
+	if collab.MatchPath([]string{g}, rel) {
+		return true
+	}
+	i := strings.LastIndexByte(g, '/')
+	dir := g[:i]
+	return dir == rel || strings.HasPrefix(dir, rel+"/") || strings.HasPrefix(rel, dir+"/")
 }
 
 // pureAncestorRel reports whether rel — a filepath.Rel(ws, repoRoot) result —

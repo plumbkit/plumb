@@ -532,3 +532,32 @@ export function add(a, b) {
 		t.Errorf("body not replaced:\n%s", content)
 	}
 }
+
+// TestReplaceSymbolBody_IncludeDocComment_IndentedMember is the PLAN-288
+// end-to-end pin: replacing an indented Python method with
+// include_doc_comment must start the edit range at column 0 of the comment's
+// line, so replacement content carrying its own four-space indentation lands at
+// column 4 — not column 8, which is what the pre-fix topology path (doc span
+// start at the comment's own column) produced.
+func TestReplaceSymbolBody_IncludeDocComment_IndentedMember(t *testing.T) {
+	store, fpath, uri := docFixture(t, "widget.py",
+		"class Widget:\n    # Does the thing.\n    def run(self):\n        return 1\n",
+		treesitter.NewPython())
+
+	tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{
+		"uri": uri, "name_path": "run",
+		"content":             "    # Does the thing, now faster.\n    def run(self):\n        return 2",
+		"dry_run":             false,
+		"include_doc_comment": true,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("replace with include_doc_comment failed: %v", err)
+	}
+	got, _ := os.ReadFile(fpath)
+	want := "class Widget:\n    # Does the thing, now faster.\n    def run(self):\n        return 2\n"
+	if string(got) != want {
+		t.Errorf("indented member replace mismatch\n got: %q\nwant: %q", got, want)
+	}
+}

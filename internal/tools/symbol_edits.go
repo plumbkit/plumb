@@ -116,7 +116,17 @@ func topologyDocCommentStart(ctx context.Context, topo topologyStoreFn, uri, nam
 	if err != nil {
 		return protocol.Position{}, false
 	}
-	return byteOffsetToPosition(content, node.DocStartByte)
+	pos, ok := byteOffsetToPosition(content, node.DocStartByte)
+	if !ok {
+		return protocol.Position{}, false
+	}
+	// The byte offset names the comment's first content byte (column 4 for an
+	// indented member), but an edit-range start must sit at the START of the
+	// comment's LINE: replacement content carries its own indentation, so
+	// starting at the real column would double-indent it. Zeroing the column
+	// makes this path agree with docCommentStart's line-scan fallback.
+	pos.Character = 0
+	return pos, true
 }
 
 func isCommentLine(trimmed string) bool {

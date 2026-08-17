@@ -371,3 +371,68 @@ func TestSweepGitRefStates(t *testing.T) {
 	}
 	_ = live
 }
+
+// TestArmRefGuard_ArmsNetworkTier pins PLAN-278 item 1 at the unit level: the
+// ref guard's check flag must arm on the network tier as well as write and
+// destructive, so expected_head is enforced on push/fetch/pull. Only read stays
+// unarmed.
+func TestArmRefGuard_ArmsNetworkTier(t *testing.T) {
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{} }).
+		WithSession("sess-a", func() string { return "amber-fox" })
+	for _, tc := range []struct {
+		name string
+		tier gitTier
+		want bool
+	}{
+		{"read", tierRead, false},
+		{"write", tierWrite, true},
+		{"destructive", tierDestructive, true},
+		{"network", tierNetwork, true},
+	} {
+		g := tool.armRefGuard(gitToolArgs{ExpectedHead: "HEAD"}, tc.tier)
+		if g == nil {
+			t.Fatalf("%s: expected a guard when expected_head is set", tc.name)
+		}
+		if g.check != tc.want {
+			t.Errorf("%s: guard.check = %v, want %v", tc.name, g.check, tc.want)
+		}
+	}
+}
+
+// TestGitRefGuard_ExpectedHeadNetworkTier is the PLAN-278 item 1 end-to-end
+// pin: a stale expected_head must refuse a network-tier fetch BEFORE git runs.
+// Pre-fix the network tier never armed the guard, so expected_head was ignored
+// and the fetch reached git — the exact gap a force-push (the highest
+// blast-radius op the tool mediates) leaves open.
+func TestGitRefGuard_ExpectedHeadNetworkTier(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	initial := gitHeadSHA(t, repo)
+	// Move HEAD forward outside plumb so initial is stale relative to HEAD.
+	runGitDirect(t, repo, "commit", "--allow-empty", "-m", "second")
+	// A bare remote so a matching-pin fetch has somewhere to fetch from.
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	runGitDirect(t, repo, "init", "--bare", bare)
+	runGitDirect(t, repo, "remote", "add", "origin", bare)
+	runGitDirect(t, repo, "push", "origin", "HEAD")
+
+	net := NewGit(
+		WriteDeps{WorkspaceFn: func() string { return repo }},
+		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowPush: true} },
+	).WithSession("sess-a", func() string { return "amber-fox" })
+
+	// A stale expected_head refuses the fetch BEFORE git runs.
+	_, err := callGit(t, net, map[string]any{
+		"subcommand": "fetch", "confirm": true, "expected_head": initial,
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected_head mismatch") {
+		t.Fatalf("expected the network-tier expected_head guard to refuse a stale pin, got %v", err)
+	}
+
+	// A matching pin passes the guard and the fetch runs to completion.
+	if _, err := callGit(t, net, map[string]any{
+		"subcommand": "fetch", "confirm": true, "expected_head": "HEAD",
+	}); err != nil {
+		t.Fatalf("fetch with a matching expected_head should succeed, got %v", err)
+	}
+}
