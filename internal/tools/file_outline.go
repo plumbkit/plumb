@@ -147,9 +147,9 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 }
 
 func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResult, error) {
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	path := paths.URIToPath(a.URI)
-	if err := t.guard.check(path); err != nil {
+	if err := t.guard.check(ctx, path); err != nil {
 		return nil, fmt.Errorf("file_outline: %w", err)
 	}
 	lines, err := readSourceLines(path)

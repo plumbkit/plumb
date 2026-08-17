@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 
 // BoundaryGuard rejects paths outside the workspace pinned to this MCP
 // connection. A nil guard is a no-op, preserving simple unit-test setup.
-type BoundaryGuard func(path string) error
+type BoundaryGuard func(ctx context.Context, path string) error
 
 // PinProvenance records how, when, and from where the connection's workspace
 // pin was last set. The zero value means unknown, and renders nothing.
@@ -99,11 +100,11 @@ func (e WorkspaceBoundaryError) Error() string {
 	return msg
 }
 
-func (g BoundaryGuard) check(path string) error {
+func (g BoundaryGuard) check(ctx context.Context, path string) error {
 	if g == nil || path == "" {
 		return nil
 	}
-	return g(path)
+	return g(ctx, path)
 }
 
 func cleanToolPath(path string) string {

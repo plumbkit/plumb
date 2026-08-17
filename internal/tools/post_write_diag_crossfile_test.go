@@ -121,7 +121,7 @@ func TestFormatCrossFileDiagnostics(t *testing.T) {
 
 func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 	f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{}, times: map[string]time.Time{}}
-	d := WriteDeps{Diag: f, CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" }}
+	d := WriteDeps{Diag: f, CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" }}
 
 	baseline := d.capturePreWriteBaseline("file:///ws/edited.go")
 	if baseline == nil {
@@ -144,7 +144,7 @@ func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 		t.Errorf("nil baseline must suppress the sweep, got %q", got)
 	}
 
-	disabled := WriteDeps{Diag: f, CrossFileDiag: false, WorkspaceFn: func() string { return "/ws" }}
+	disabled := WriteDeps{Diag: f, CrossFileDiag: false, WorkspaceFn: func(context.Context) string { return "/ws" }}
 	if got := disabled.crossFileDiagnostics("file:///ws/edited.go", true, baseline); got != "" {
 		t.Errorf("disabled sweep must be silent, got %q", got)
 	}
@@ -163,7 +163,7 @@ func TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote(t *testing.T) {
 			all:   map[string][]protocol.Diagnostic{edited: {errAt("undefined: Foo", 1)}},
 			times: map[string]time.Time{},
 		}
-		d := WriteDeps{Diag: f, WorkspaceFn: func() string { return "/ws" }}
+		d := WriteDeps{Diag: f, WorkspaceFn: func(context.Context) string { return "/ws" }}
 		baseline := d.capturePreWriteBaseline(edited)
 
 		// The edit touches the last line only; the pre-existing error is elsewhere,
@@ -180,7 +180,7 @@ func TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote(t *testing.T) {
 
 	t.Run("clean baseline stays silent", func(t *testing.T) {
 		f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{}, times: map[string]time.Time{}}
-		d := WriteDeps{Diag: f, WorkspaceFn: func() string { return "/ws" }}
+		d := WriteDeps{Diag: f, WorkspaceFn: func(context.Context) string { return "/ws" }}
 		baseline := d.capturePreWriteBaseline(edited)
 
 		out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", false, baseline)

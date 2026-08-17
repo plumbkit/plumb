@@ -55,7 +55,7 @@ func repoStateVerb(sub string, tier gitTier) bool {
 // wired, [collab] intents is off, or the connection has no session identity
 // (without one every intent would look like a peer's).
 func (t *Git) peerIntentWarnFn(sub string, tier gitTier) func(context.Context, string) string {
-	if !repoStateVerb(sub, tier) || t.intentsOn == nil || t.collabStore == nil || t.sessID == "" {
+	if !repoStateVerb(sub, tier) || t.intentsOn == nil || t.collabStore == nil || t.sessID == nil || t.sessID() == "" {
 		return nil
 	}
 	if !t.intentsOn() {
@@ -87,7 +87,7 @@ func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string, tier g
 	}
 	ws := ""
 	if t.deps.WorkspaceFn != nil {
-		ws = t.deps.WorkspaceFn()
+		ws = t.deps.WorkspaceFn(ctx)
 	}
 	qctx, cancel := context.WithTimeout(ctx, peerIntentQueryTimeout)
 	defer cancel()
@@ -96,7 +96,11 @@ func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string, tier g
 	if err != nil {
 		return ""
 	}
-	return formatRepoIntentWarning(intents, ws, repoRoot, t.sessID, now, tier, t.intentWarningBudget())
+	sessID := ""
+	if t.sessID != nil {
+		sessID = t.sessID()
+	}
+	return formatRepoIntentWarning(intents, ws, repoRoot, sessID, now, tier, t.intentWarningBudget())
 }
 
 // formatRepoIntentWarning renders the warning block for the matching claims,

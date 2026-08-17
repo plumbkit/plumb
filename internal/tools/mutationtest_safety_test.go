@@ -62,7 +62,7 @@ func TestMutationTest_UnstartableCommandIsRefusedBeforeMutating(t *testing.T) {
 	const original = "answer = 42\n"
 	env := newMutationEnv(t, original)
 	env.tool = NewMutationTest(
-		WriteDeps{WorkspaceFn: func() string { return env.root }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return env.root }},
 		func(slot, _ string) (TaskCommand, error) {
 			return TaskCommand{Slot: slot, Steps: [][]string{{"/nonexistent/plumb-mutation-binary"}}, Provenance: "default"}, nil
 		})
@@ -139,7 +139,7 @@ func TestMutationTest_RestoresOnPanic(t *testing.T) {
 	// content is what stops this test passing vacuously: WorkspaceFn is first
 	// consulted during preflight, long before anything is written, so an
 	// unconditional panic would "prove" a restore that never had to happen.
-	env.tool.deps.WorkspaceFn = func() string {
+	env.tool.deps.WorkspaceFn = func(context.Context) string {
 		if b, err := os.ReadFile(env.file); err == nil && string(b) != original {
 			panic("boom")
 		}
@@ -192,8 +192,8 @@ func TestMutationTest_RestoresOnCancelledContext(t *testing.T) {
 // WorkspaceFn is read by runStep just before each command launches, so this
 // fires between the mutating write and the compile step — the narrow window a
 // cancellation has to hit for the restore to be the thing under test.
-func cancelOnceMutated(env *mutationEnv, original string, cancel context.CancelFunc) func() string {
-	return func() string {
+func cancelOnceMutated(env *mutationEnv, original string, cancel context.CancelFunc) func(context.Context) string {
+	return func(context.Context) string {
 		if b, err := os.ReadFile(env.file); err == nil && string(b) != original {
 			cancel()
 		}
@@ -319,7 +319,7 @@ func TestMutationTest_RefusesDirtyFileBeforeMutatingAnyOther(t *testing.T) {
 func TestMutationTest_RefusesWithoutACompileGate(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
 	env.tool = NewMutationTest(
-		WriteDeps{WorkspaceFn: func() string { return env.root }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return env.root }},
 		func(slot, _ string) (TaskCommand, error) {
 			if slot == "build" {
 				return TaskCommand{Slot: slot, Provenance: "default"}, nil // no steps

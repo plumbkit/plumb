@@ -121,6 +121,17 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		language = langOverride
 		langForced = true
 	}
+	// On a shared connection the re-pin is PER-AGENT: the agent identified in ctx
+	// moves its own shard (pin, language, boundary policy, fresh trackers/undo),
+	// leaving the connection-level pin and every peer agent untouched — the
+	// actual issue #182 fix. The connection-level attachOrRepinTo below runs only
+	// for an unattributed re-pin (roots, restore) or a non-shared connection.
+	if s.repinShard(ctx) != nil {
+		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
+			return "", refused
+		}
+		return root, nil
+	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
 	// lane: after the root resolution above, so a requested path that resolves
 	// to the current root is never falsely refused, and on the view under
@@ -217,7 +228,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				// refused steal attempt (or a fumbled path), just as the
 				// root-changed branch below does — the victim's own re-pin must
 				// heal the session, not only a forced switch.
-				session.Patch(s.sessID, func(info *session.Info) {
+				session.Patch(s.sessionID(), func(info *session.Info) {
 					info.Health = ""
 					info.HealthMessage = ""
 				})
@@ -270,7 +281,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.warmDepRoots(language)
 		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage

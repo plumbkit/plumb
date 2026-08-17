@@ -464,7 +464,7 @@ func TestStickyPin_RestoredRootsOriginPinNotSticky(t *testing.T) {
 // so these tests exercise the REAL tool surface, not just the daemon API —
 // resolveSessionWorkspace's sameDir routing sits between the two.
 func newSessionStartTool(s *connSession) *tools.SessionStart {
-	return tools.NewSessionStart(s.workspace, nil, nil, nil, func() string { return "" }, nil).
+	return tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace)
 }
 

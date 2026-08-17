@@ -118,7 +118,7 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 	out := formatAffectedResult(result, a)
 	if t.ws != nil {
-		out += relatedMemoriesSection(t.ws(), affectedRefs(a, result))
+		out += relatedMemoriesSection(t.ws(ctx), affectedRefs(a, result))
 	}
 	return out, nil
 }

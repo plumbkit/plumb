@@ -114,8 +114,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 	applyFindReplaceDefaults(&a)
-	a.Path = t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(a.Path); err != nil {
+	a.Path = t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, a.Path); err != nil {
 		return "", fmt.Errorf("find_replace: %w", err)
 	}
 

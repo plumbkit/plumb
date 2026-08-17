@@ -150,7 +150,7 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 	if deps == nil {
 		return nil
 	}
-	if err := deps.checkBoundary(path); err != nil {
+	if err := deps.checkBoundary(ctx, path); err != nil {
 		return fmt.Errorf("%s: %w", toolName, err)
 	}
 	if dryRun {

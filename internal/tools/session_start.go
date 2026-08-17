@@ -100,7 +100,7 @@ type SessionStart struct {
 	lspWarmingFn  func() (bool, time.Duration)                                                      // may be nil; reports whether the primary LSP is still warming + elapsed
 	lspDiagModeFn func() string                                                                     // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
 	purposeFn     func(purpose string)                                                              // may be nil; persists a validated session purpose tag
-	selfSessID    string                                                                            // this session's ID, excluded from the peer digest
+	selfSessID    func() string                                                                     // this session's ID, excluded from the peer digest
 	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
@@ -133,7 +133,7 @@ func (t *SessionStart) WithXcodeHint(fn XcodeHintFn) *SessionStart {
 
 // WithSelfSession records this connection's session ID so the peer digest can
 // exclude it from the active-session list. Returns the receiver for chaining.
-func (t *SessionStart) WithSelfSession(id string) *SessionStart {
+func (t *SessionStart) WithSelfSession(id func() string) *SessionStart {
 	t.selfSessID = id
 	return t
 }
@@ -481,7 +481,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// (seedPathFromArgs reads it) — before Execute runs, so preferring it keeps
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
-		if current := t.ws(); current != "" {
+		if current := t.ws(ctx); current != "" {
 			return t.resolveAttached(ctx, current, a.Workspace, a.Language, a.Force)
 		}
 	}

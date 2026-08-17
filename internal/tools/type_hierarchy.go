@@ -97,7 +97,7 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

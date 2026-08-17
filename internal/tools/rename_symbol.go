@@ -194,13 +194,13 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 // captureRenameBaselines caps this list and postWriteRename caps the plans, and
 // the two prefixes must name the same files or a reported file silently loses
 // its pre-write baseline.
-func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]string, int, error) {
+func (t *RenameSymbol) collectRenameTargets(ctx context.Context, we *protocol.WorkspaceEdit) ([]string, int, error) {
 	totalEdits := 0
 	files := []string{}
 	seen := make(map[string]bool)
 	add := func(uri string, edits int) error {
 		path := paths.URIToPath(uri)
-		if err := t.guard.check(path); err != nil {
+		if err := t.guard.check(ctx, path); err != nil {
 			return fmt.Errorf("rename_symbol: %w", err)
 		}
 		totalEdits += edits
@@ -242,8 +242,8 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
-	if err := t.guard.check(paths.URIToPath(a.URI)); err != nil {
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	if err := t.guard.check(ctx, paths.URIToPath(a.URI)); err != nil {
 		return "", fmt.Errorf("rename_symbol: %w", err)
 	}
 
@@ -338,7 +338,7 @@ func (t *RenameSymbol) renameByPosition(ctx context.Context, a renameSymbolArgs,
 
 // applyOrPreview applies (or previews, in dry-run) a server-computed edit set.
 func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, we *protocol.WorkspaceEdit, note string) (string, error) {
-	files, totalEdits, err := t.collectRenameTargets(we)
+	files, totalEdits, err := t.collectRenameTargets(ctx, we)
 	if err != nil {
 		return "", err
 	}
@@ -425,7 +425,7 @@ func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a r
 		return rateLimitError("rename_symbol", deps.Limiter)
 	}
 	for _, f := range files {
-		if err := t.guard.check(f); err != nil {
+		if err := t.guard.check(ctx, f); err != nil {
 			return fmt.Errorf("rename_symbol: %w", err)
 		}
 		if deps != nil && !a.DirtyOK && dirtyBlocksWrite(ctx, *deps, f) {

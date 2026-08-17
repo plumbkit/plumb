@@ -142,10 +142,10 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	// absolute path (a relative path would otherwise resolve against the daemon
 	// CWD downstream).
 	for i := range a.Operations {
-		a.Operations[i].Path = t.deps.resolvePath(a.Operations[i].Path)
+		a.Operations[i].Path = t.deps.resolvePath(ctx, a.Operations[i].Path)
 	}
 
-	paths, err := t.txCanonicalPaths(a.Operations)
+	paths, err := t.txCanonicalPaths(ctx, a.Operations)
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +171,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 
-	written, err := t.txPhase2Write(prepared)
+	written, err := t.txPhase2Write(ctx, prepared)
 	if err != nil {
 		return "", err
 	}
@@ -216,12 +216,12 @@ func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
 // let both through and the two lockPath calls would take the same
 // non-reentrant mutex twice (self-deadlock), and a raw sort would let two
 // concurrent transactions acquire one key set in opposite orders (cycle).
-func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error) {
+func (t *TransactionApply) txCanonicalPaths(ctx context.Context, ops []txOperation) ([]string, error) {
 	out := make([]string, 0, len(ops))
 	seen := make(map[string]struct{}, len(ops))
 	for _, op := range ops {
 		p := paths.URIToPath(op.Path)
-		if err := t.deps.checkBoundary(p); err != nil {
+		if err := t.deps.checkBoundary(ctx, p); err != nil {
 			return nil, fmt.Errorf("transaction_apply: %w", err)
 		}
 		key := lockPathKey(p)
@@ -366,10 +366,10 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 
 // txPhase2Write writes all prepared operations with an in-memory mtime guard
 // and a durable rollback log. Rolls back already-written files on failure.
-func (t *TransactionApply) txPhase2Write(prepared []txPrepared) ([]txPrepared, error) {
+func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepared) ([]txPrepared, error) {
 	workspace := ""
 	if t.deps.WorkspaceFn != nil {
-		workspace = t.deps.WorkspaceFn()
+		workspace = t.deps.WorkspaceFn(ctx)
 	}
 	txl, txErr := txlog.Begin(workspace)
 	if txErr != nil {

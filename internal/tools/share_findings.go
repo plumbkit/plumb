@@ -37,8 +37,9 @@ type ShareFindingsDeps struct {
 	// Workspace returns the connection's pinned workspace root ("" pre-attach).
 	Workspace func() string
 	// SessionID is this session's stable ID — the provenance author and the seed
-	// for the memory's distinguishing name suffix.
-	SessionID string
+	// for the memory's distinguishing name suffix. An accessor, so an adopted ID
+	// is seen live (PLAN-296).
+	SessionID func() string
 	// Policy returns the resolved [collab] snapshot; KnowledgeHandoff gates the tool.
 	Policy func() CollabPolicy
 	// Index returns the connection's live memory FTS index, or nil when memory
@@ -48,6 +49,14 @@ type ShareFindingsDeps struct {
 	// GeneratedMemoryKeep returns the resolved [memory] generated_memory_keep, the
 	// shared retention cap this finding counts against alongside episodic summaries.
 	GeneratedMemoryKeep func() int
+}
+
+// sessionID returns the session ID, or "" when unwired.
+func (d ShareFindingsDeps) sessionID() string {
+	if d.SessionID == nil {
+		return ""
+	}
+	return d.SessionID()
 }
 
 // NewShareFindings constructs the share_findings tool.
@@ -120,7 +129,7 @@ func parseShareFindingsArgs(raw json.RawMessage) (shareFindingsArgs, error) {
 	return a, nil
 }
 
-func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *ShareFindings) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	args, err := parseShareFindingsArgs(raw)
 	if err != nil {
 		return "", err
@@ -133,7 +142,7 @@ func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	if refusal := unregisteredSessionRefusal("share_findings", t.deps.SessionID); refusal != "" {
+	if refusal := unregisteredSessionRefusal("share_findings", t.deps.sessionID()); refusal != "" {
 		return refusal, nil
 	}
 	return t.run(ws, args)
@@ -146,13 +155,13 @@ func (t *ShareFindings) run(ws string, args shareFindingsArgs) (string, error) {
 	// findings inside the same wall-clock second (e.g. two batched calls in a
 	// single turn) — the store overwrites on name collision, so a second-
 	// resolution timestamp alone would silently clobber the first finding.
-	name := fmt.Sprintf("finding-%s-%09d-%s", now.Format("20060102-150405"), now.Nanosecond(), shortSessionSuffix(t.deps.SessionID))
+	name := fmt.Sprintf("finding-%s-%09d-%s", now.Format("20060102-150405"), now.Nanosecond(), shortSessionSuffix(t.deps.sessionID()))
 	ix := t.deps.Index()
 	// WriteGenerated redacts again before persistence (idempotent) — the belt-and-
 	// braces guarantee no agent-supplied secret reaches durable storage.
 	err := memory.WriteGenerated(ix, ws, name, "Shared finding (agent-generated)", body, memory.Provenance{
 		Confidence:    memory.ConfidenceGenerated,
-		SourceSession: t.deps.SessionID,
+		SourceSession: t.deps.sessionID(),
 		SourcePaths:   args.Paths,
 		CreatedAt:     now,
 	})

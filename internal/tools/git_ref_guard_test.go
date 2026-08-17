@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,9 @@ import (
 // conn_register does for a live connection.
 func sessionGitTool(repo, id, name string) *Git {
 	return NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
-	).WithSession(id, func() string { return name })
+	).WithSession(func() string { return id }, func() string { return name })
 }
 
 // stageFile writes a file into the repo and stages it through the tool.
@@ -168,7 +169,7 @@ func TestGitRefGuard_ExpectedHeadWithoutSession(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true} },
 	)
 	stageFile(t, tool, repo, "one.txt", "one\n", false)
@@ -378,7 +379,7 @@ func TestSweepGitRefStates(t *testing.T) {
 // unarmed.
 func TestArmRefGuard_ArmsNetworkTier(t *testing.T) {
 	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{} }).
-		WithSession("sess-a", func() string { return "amber-fox" })
+		WithSession(func() string { return "sess-a" }, func() string { return "amber-fox" })
 	for _, tc := range []struct {
 		name string
 		tier gitTier
@@ -417,9 +418,9 @@ func TestGitRefGuard_ExpectedHeadNetworkTier(t *testing.T) {
 	runGitDirect(t, repo, "push", "origin", "HEAD")
 
 	net := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowPush: true} },
-	).WithSession("sess-a", func() string { return "amber-fox" })
+	).WithSession(func() string { return "sess-a" }, func() string { return "amber-fox" })
 
 	// A stale expected_head refuses the fetch BEFORE git runs.
 	_, err := callGit(t, net, map[string]any{

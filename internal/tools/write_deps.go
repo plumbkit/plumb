@@ -104,7 +104,7 @@ type WriteDeps struct {
 	// WorkspaceFn returns the resolved workspace root for the current session.
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
-	WorkspaceFn func() string
+	WorkspaceFn func(ctx context.Context) string
 	// ShowWriteDiff, when true, appends a unified diff of the change to
 	// write_file and edit_file responses. Defaults to true (zero value of
 	// bool is false, but callers should set this from the resolved config).
@@ -268,7 +268,7 @@ func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *
 	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
 	root := ""
 	if d.WorkspaceFn != nil {
-		root = d.WorkspaceFn()
+		root = d.WorkspaceFn(context.Background())
 	}
 	return formatCrossFileDiagnostics(breaks, root)
 }
@@ -332,8 +332,8 @@ func (d WriteDeps) recordUndo(path, before, after string, existedBefore bool, to
 	})
 }
 
-func (d WriteDeps) checkBoundary(path string) error {
-	return d.Boundary.check(path)
+func (d WriteDeps) checkBoundary(ctx context.Context, path string) error {
+	return d.Boundary.check(ctx, path)
 }
 
 // resolvePath resolves a path argument against the connection's pinned
@@ -345,14 +345,14 @@ func (d WriteDeps) checkBoundary(path string) error {
 // touching a daemon-CWD-relative file. nil/empty WorkspaceFn is a no-op,
 // preserving WriteDeps{} test setups. The resolved path must feed BOTH the
 // boundary check and the filesystem operation.
-func (d WriteDeps) resolvePath(path string) string {
+func (d WriteDeps) resolvePath(ctx context.Context, path string) string {
 	p := paths.URIToPath(path)
 	if filepath.IsAbs(p) {
 		return p
 	}
 	var base string
 	if d.WorkspaceFn != nil {
-		base = d.WorkspaceFn()
+		base = d.WorkspaceFn(ctx)
 	}
 	if base == "" {
 		return filepath.Clean(p)

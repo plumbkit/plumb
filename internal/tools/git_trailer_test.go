@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,8 +38,8 @@ func TestBuildGitArgv_CommitTrailer(t *testing.T) {
 // a non-commit subcommand, and a missing or blank session name all yield no
 // trailer.
 func TestCommitTrailerToken(t *testing.T) {
-	named := NewGit(WriteDeps{}, nil).WithSession("s1", func() string { return "swift-falcon" })
-	blank := NewGit(WriteDeps{}, nil).WithSession("s2", func() string { return "  " })
+	named := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s1" }, func() string { return "swift-falcon" })
+	blank := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s2" }, func() string { return "  " })
 	anon := NewGit(WriteDeps{}, nil)
 	cases := []struct {
 		name string
@@ -73,7 +74,7 @@ func TestCommitTrailerToken_RejectsNewlineOrColon(t *testing.T) {
 		"evil: injected",
 	}
 	for _, name := range cases {
-		tool := NewGit(WriteDeps{}, nil).WithSession("s1", func() string { return name })
+		tool := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s1" }, func() string { return name })
 		if got := tool.commitTrailerToken(GitPolicy{CommitTrailer: true}, "commit"); got != "" {
 			t.Errorf("name %q: commitTrailerToken = %q, want \"\"", name, got)
 		}
@@ -113,9 +114,9 @@ func TestGit_CommitSessionTrailer(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, CommitTrailer: true} },
-	).WithSession("sess-1", func() string { return "swift-falcon" })
+	).WithSession(func() string { return "sess-1" }, func() string { return "swift-falcon" })
 
 	addAndCommit(t, tool, repo, "a.txt", "attributed commit")
 	if got := gitTrailers(t, repo); !strings.Contains(got, "Plumb-Session: swift-falcon") {
@@ -129,9 +130,9 @@ func TestGit_CommitSessionTrailerDefaultOff(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true} },
-	).WithSession("sess-1", func() string { return "swift-falcon" })
+	).WithSession(func() string { return "sess-1" }, func() string { return "swift-falcon" })
 
 	addAndCommit(t, tool, repo, "a.txt", "unattributed commit")
 	if got := gitTrailers(t, repo); strings.Contains(got, "Plumb-Session") {

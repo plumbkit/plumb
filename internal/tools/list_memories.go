@@ -13,7 +13,7 @@ import (
 // WorkspaceFn returns the daemon's currently-resolved workspace, or "" if
 // none. The memory tools use it as a fallback when the caller doesn't pass
 // an explicit `workspace` argument.
-type WorkspaceFn func() string
+type WorkspaceFn func(ctx context.Context) string
 
 type listMemoriesTool struct {
 	ws    WorkspaceFn
@@ -47,16 +47,16 @@ func (*listMemoriesTool) InputSchema() json.RawMessage {
 }`)
 }
 
-func (t *listMemoriesTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *listMemoriesTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Workspace string `json:"workspace"`
 	}
 	_ = json.Unmarshal(args, &a)
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("list_memories: %w", err)
 	}
 	mems, err := memory.List(ws)
@@ -78,12 +78,12 @@ func (t *listMemoriesTool) Execute(_ context.Context, args json.RawMessage) (str
 	return sb.String(), nil
 }
 
-func resolveWorkspace(explicit string, fallback WorkspaceFn) string {
+func resolveWorkspace(ctx context.Context, explicit string, fallback WorkspaceFn) string {
 	if explicit != "" {
 		return explicit
 	}
 	if fallback != nil {
-		return fallback()
+		return fallback(ctx)
 	}
 	return ""
 }

@@ -228,8 +228,8 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	// Accept absolute paths, file:// URIs, and workspace-relative paths.
-	fpath := resolvePath(a.Path, t.ws)
-	if err := t.guard.check(fpath); err != nil {
+	fpath := resolvePath(ctx, a.Path, t.ws)
+	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}
 

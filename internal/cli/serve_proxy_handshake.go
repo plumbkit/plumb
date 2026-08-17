@@ -33,7 +33,7 @@ func (p *reconnectingProxy) replayHandshake(conn net.Conn) (*frameReader, error)
 	// Layer the caller's chosen workspace onto the captured frame. It cannot be
 	// baked in at capture time: the pin is learned from a session_start that
 	// happens long after the handshake. With no pin the frame is unchanged.
-	initFrame = injectInitMeta(initFrame, pinnedWorkspaceMeta(p.pinnedWorkspace()))
+	initFrame = injectInitMeta(initFrame, p.replayInitMeta())
 	if err := writeFrame(conn, initFrame); err != nil {
 		return nil, fmt.Errorf("replaying initialize: %w", err)
 	}

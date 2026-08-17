@@ -115,11 +115,11 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	return t.run(ctx, cmd)
 }
 
-func (t *Tasks) workspace() string {
+func (t *Tasks) workspace(ctx context.Context) string {
 	if t.deps.WorkspaceFn == nil {
 		return ""
 	}
-	return t.deps.WorkspaceFn()
+	return t.deps.WorkspaceFn(ctx)
 }
 
 // run executes each step in sequence, stopping at the first non-zero exit, and
@@ -127,7 +127,7 @@ func (t *Tasks) workspace() string {
 func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	ws := cmd.WorkingDir
 	if ws == "" {
-		ws = t.workspace()
+		ws = t.workspace(ctx)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run_task %s (source=%s)\n", cmd.Slot, cmd.Provenance)

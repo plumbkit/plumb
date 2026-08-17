@@ -18,7 +18,7 @@ func shareFindingsTestDeps(t *testing.T, policy CollabPolicy, keep int) (ShareFi
 	ws := t.TempDir()
 	deps := ShareFindingsDeps{
 		Workspace:           func() string { return ws },
-		SessionID:           "sess-abcdef01",
+		SessionID:           func() string { return "sess-abcdef01" },
 		Policy:              func() CollabPolicy { return policy },
 		Index:               func() *memory.Index { return nil },
 		GeneratedMemoryKeep: func() int { return keep },

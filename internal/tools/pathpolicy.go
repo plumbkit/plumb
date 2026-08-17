@@ -1,6 +1,9 @@
 package tools
 
-import "path/filepath"
+import (
+	"context"
+	"path/filepath"
+)
 
 // Access is the permission level a PathPolicy root grants. Roots are additive:
 // a path is allowed at the highest access of any root that contains it.
@@ -178,5 +181,5 @@ func (p *PathPolicy) OutsideWorkspaceLabel(path string) string {
 // prefers live per-call closures (the policy is rebuilt on re-pin), but this
 // is convenient for tests and static wiring.
 func (p *PathPolicy) WriteGuard() BoundaryGuard {
-	return func(path string) error { _, err := p.Check(path, AccessReadWrite); return err }
+	return func(ctx context.Context, path string) error { _, err := p.Check(path, AccessReadWrite); return err }
 }

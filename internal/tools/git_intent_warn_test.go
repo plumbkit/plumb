@@ -23,9 +23,9 @@ func intentGitTool(ws, id, name string, store *collab.Store, intentsOn bool) *Gi
 // clamped to it like every other injected peer-signal block.
 func intentGitToolWithBudget(ws, id, name string, store *collab.Store, intentsOn bool, hintBudgetBytes int) *Git {
 	return NewGit(
-		WriteDeps{WorkspaceFn: func() string { return ws }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return ws }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
-	).WithSession(id, func() string { return name }).
+	).WithSession(func() string { return id }, func() string { return name }).
 		WithPeerIntents(func() bool { return intentsOn }, func() *collab.Store { return store },
 			func() int { return hintBudgetBytes })
 }

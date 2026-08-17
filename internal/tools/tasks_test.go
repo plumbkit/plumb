@@ -67,7 +67,7 @@ func TestRunTask_RunsInTheResolvedWorkingDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewTasks(WriteDeps{WorkspaceFn: func() string { return root }},
+	tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return root }},
 		func(slot, _ string) (TaskCommand, error) {
 			return TaskCommand{
 				Slot:       slot,
@@ -122,7 +122,7 @@ func assertSameDir(t *testing.T, got, want, msg string) {
 // simply stopped consulting the workspace at all.
 func TestRunTask_FallsBackToTheWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
-	tool := NewTasks(WriteDeps{WorkspaceFn: func() string { return root }},
+	tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return root }},
 		func(slot, _ string) (TaskCommand, error) {
 			return TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{{"/bin/pwd"}}}, nil
 		})

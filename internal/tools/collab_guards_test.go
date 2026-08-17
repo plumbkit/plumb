@@ -31,7 +31,7 @@ func unregisteredDeps(t *testing.T, policy CollabPolicy) (CollabDeps, *collab.St
 	t.Helper()
 	deps, store, _ := collabTestDeps(t, policy)
 	deps.SessionName = func() string { return "lively-otter" } // generated, non-empty
-	deps.SessionID = ""                                        // registration failed
+	deps.SessionID = nil                                       // registration failed
 	return deps, store
 }
 
@@ -62,7 +62,7 @@ func TestShareFindings_RefusesAnUnregisteredSession(t *testing.T) {
 	// Registration failed: the daemon still assigns a display name, but no ID.
 	// ShareFindingsDeps no longer carries the name at all, since the guard that
 	// was its last reader now keys on the ID.
-	deps.SessionID = ""
+	deps.SessionID = nil
 
 	out, err := NewShareFindings(deps).Execute(context.Background(),
 		json.RawMessage(`{"summary":"the limiter is per-connection, not per-session"}`))

@@ -124,12 +124,12 @@ func writeConversationVolumes(sb *strings.Builder, vols []collab.ConversationSum
 func (t *WorkspaceSessions) collabObservations(
 	ctx context.Context, store *collab.Store, now time.Time,
 ) (sent []collab.Row, vols []collab.ConversationSummary) {
-	if t.selfSessID != "" {
-		if rows, err := store.SentBy(ctx, t.selfSessID, now, collabSentCap); err == nil {
+	if t.selfID() != "" {
+		if rows, err := store.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
 			sent = rows
 		}
 		if g := t.globalStoreIfExists(); g != nil {
-			if rows, err := g.SentBy(ctx, t.selfSessID, now, collabSentCap); err == nil {
+			if rows, err := g.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
 				sent = append(sent, rows...)
 			}
 		}
@@ -155,7 +155,7 @@ func (t *WorkspaceSessions) collabObservations(
 		inherited = t.inheritedIDs()
 	}
 	self := collab.Claimant{
-		Name: t.selfNameOrEmpty(), ID: t.selfSessID,
+		Name: t.selfNameOrEmpty(), ID: t.selfID(),
 		InheritedIDs: inherited, Workspace: t.workspace(),
 	}
 	local, err := store.ConversationSummaries(ctx, self, now, collabVolumeCap)
