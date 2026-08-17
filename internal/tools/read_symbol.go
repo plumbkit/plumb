@@ -135,8 +135,8 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	fpath, uri := resolveReadSymbolPaths(a.Path, t.ws)
-	if err := t.guard.check(fpath); err != nil {
+	fpath, uri := resolveReadSymbolPaths(ctx, a.Path, t.ws)
+	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
@@ -216,8 +216,8 @@ func (t *ReadSymbol) noSymbolMessage(name, fpath string, syms []protocol.Documen
 	return msg
 }
 
-func resolveReadSymbolPaths(path string, ws WorkspaceFn) (fpath, uri string) {
-	fpath = resolvePath(path, ws)
+func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn) (fpath, uri string) {
+	fpath = resolvePath(ctx, path, ws)
 	return fpath, toFileURI(fpath)
 }
 

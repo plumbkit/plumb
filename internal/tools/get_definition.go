@@ -122,7 +122,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("get_definition: uri must not be empty")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

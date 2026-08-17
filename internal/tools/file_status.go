@@ -151,9 +151,9 @@ func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
 	// alone would answer about a different file than the caller named — silently,
 	// as exists=false with no error. That is the outcome ParentTraversalError
 	// exists to refuse; file_status must not be the one exception to it.
-	resolved := resolvePath(raw, t.ws)
+	resolved := resolvePath(ctx, raw, t.ws)
 	res := fileStatusResult{path: resolved}
-	if err := t.guard.check(resolved); err != nil {
+	if err := t.guard.check(ctx, resolved); err != nil {
 		res.err = err.Error()
 		return res
 	}

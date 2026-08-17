@@ -20,7 +20,7 @@ import (
 // storeFn): the diff-only checks need none, and the topology-backed checks then
 // degrade and say so in the limits section.
 func newReviewTool(ws string) *MinimalDiffReview {
-	return NewMinimalDiffReview(nil).WithWorkspace(func() string { return ws })
+	return NewMinimalDiffReview(nil).WithWorkspace(func(context.Context) string { return ws })
 }
 
 func callReview(t *testing.T, tool *MinimalDiffReview, args map[string]any) (string, error) {
@@ -71,7 +71,7 @@ func TestMinimalDiffReview_RejectsOptionBaseRef(t *testing.T) {
 }
 
 func TestMinimalDiffReview_UnattachedWorkspace(t *testing.T) {
-	tool := NewMinimalDiffReview(nil).WithWorkspace(func() string { return "" })
+	tool := NewMinimalDiffReview(nil).WithWorkspace(func(context.Context) string { return "" })
 	_, err := callReview(t, tool, nil)
 	if err == nil || !IsWorkspaceBoundaryError(err) {
 		t.Fatalf("want an UnattachedWorkspaceError, got %v", err)
@@ -295,7 +295,7 @@ func TestMinimalDiffReview_SingleUseFinding_RealTopologyStore(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	tool := NewMinimalDiffReview(func() *topology.Store { return store }).WithWorkspace(func() string { return dir })
+	tool := NewMinimalDiffReview(func() *topology.Store { return store }).WithWorkspace(func(context.Context) string { return dir })
 	out, err := callReview(t, tool, nil)
 	if err != nil {
 		t.Fatalf("review error: %v", err)

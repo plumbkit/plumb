@@ -28,7 +28,7 @@ func initPlumbWorkspace(t *testing.T) string {
 func callTransactionInWorkspace(t *testing.T, ws string, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	deps := WriteDeps{WorkspaceFn: func() string { return ws }}
+	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return ws }}
 	return NewTransactionApply(deps).Execute(context.Background(), raw)
 }
 
@@ -272,7 +272,7 @@ func TestTransaction_DiffGatedByShowWriteDiff(t *testing.T) {
 			},
 		})
 		deps := WriteDeps{
-			WorkspaceFn:     func() string { return dir },
+			WorkspaceFn:     func(context.Context) string { return dir },
 			ShowWriteDiffFn: func() bool { return showDiff },
 		}
 		out, err := NewTransactionApply(deps).Execute(context.Background(), raw)

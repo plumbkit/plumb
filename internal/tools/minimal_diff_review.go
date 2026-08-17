@@ -108,7 +108,7 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	}
 	ws := ""
 	if t.ws != nil {
-		ws = t.ws()
+		ws = t.ws(ctx)
 	}
 	if ws == "" {
 		return "", ClassifyPathRefusal(UnattachedWorkspaceError{Path: "minimal_diff_review"})
@@ -119,8 +119,8 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	// files entry outside the workspace is rejected before any git invocation.
 	resolvedFiles := make([]string, len(a.Files))
 	for i, f := range a.Files {
-		resolved := resolvePath(f, t.ws)
-		if err := t.guard.check(resolved); err != nil {
+		resolved := resolvePath(ctx, f, t.ws)
+		if err := t.guard.check(ctx, resolved); err != nil {
 			return "", fmt.Errorf("minimal_diff_review: %w", err)
 		}
 		resolvedFiles[i] = resolved

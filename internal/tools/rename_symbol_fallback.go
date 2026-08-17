@@ -73,7 +73,7 @@ func (t *RenameSymbol) structuralFallback(ctx context.Context, a renameSymbolArg
 
 	root := ""
 	if t.ws != nil {
-		root = t.ws()
+		root = t.ws(ctx)
 	}
 	if root == "" {
 		root = filepath.Dir(path)

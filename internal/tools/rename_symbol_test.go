@@ -248,7 +248,7 @@ func TestRenameSymbol_StructuralFallback_DryRun(t *testing.T) {
 	}
 	mock := &mockLSP{err: errors.New("no index")}
 	tool := tools.NewRenameSymbol(mock, 0).
-		WithWorkspace(func() string { return dir }).
+		WithWorkspace(func(context.Context) string { return dir }).
 		WithStructuralFallback(tools.WriteDeps{})
 	args, _ := json.Marshal(map[string]any{
 		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Renamed",
@@ -275,7 +275,7 @@ func TestRenameSymbol_StructuralFallback_Applies(t *testing.T) {
 	}
 	mock := &mockLSP{err: errors.New("no index")}
 	tool := tools.NewRenameSymbol(mock, 0).
-		WithWorkspace(func() string { return dir }).
+		WithWorkspace(func(context.Context) string { return dir }).
 		WithStructuralFallback(tools.WriteDeps{})
 	args, _ := json.Marshal(map[string]any{
 		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Renamed",
@@ -303,7 +303,7 @@ func TestRenameSymbol_StructuralFallback_OnEmptyEditSet(t *testing.T) {
 	}
 	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{}} // empty edit set
 	tool := tools.NewRenameSymbol(mock, 0).
-		WithWorkspace(func() string { return dir }).
+		WithWorkspace(func(context.Context) string { return dir }).
 		WithStructuralFallback(tools.WriteDeps{})
 	args, _ := json.Marshal(map[string]any{
 		"uri": "file://" + path, "line": 1, "character": 4, "new_name": "Bar",
@@ -401,7 +401,7 @@ func TestRenameSymbol_AmbiguousNameRefusesStructuralFallback(t *testing.T) {
 	}
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{sym(2), sym(3)}}
 	tool := tools.NewRenameSymbol(mock, 0).
-		WithWorkspace(func() string { return dir }).
+		WithWorkspace(func(context.Context) string { return dir }).
 		WithStructuralFallback(tools.WriteDeps{})
 
 	args, _ := json.Marshal(map[string]any{

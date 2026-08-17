@@ -204,7 +204,7 @@ func parseWorkspaceSessionsArgs(raw json.RawMessage) (workspaceSessionsArgs, err
 // daemon-log directories with thousands of stale session files.
 const wsSessionsTimeout = 500 * time.Millisecond
 
-func (t *WorkspaceSessions) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	args, err := parseWorkspaceSessionsArgs(raw)
 	if err != nil {
 		return "", err

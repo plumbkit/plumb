@@ -87,7 +87,7 @@ func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string, tier g
 	}
 	ws := ""
 	if t.deps.WorkspaceFn != nil {
-		ws = t.deps.WorkspaceFn()
+		ws = t.deps.WorkspaceFn(ctx)
 	}
 	qctx, cancel := context.WithTimeout(ctx, peerIntentQueryTimeout)
 	defer cancel()

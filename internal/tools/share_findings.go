@@ -129,7 +129,7 @@ func parseShareFindingsArgs(raw json.RawMessage) (shareFindingsArgs, error) {
 	return a, nil
 }
 
-func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *ShareFindings) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	args, err := parseShareFindingsArgs(raw)
 	if err != nil {
 		return "", err

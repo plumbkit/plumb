@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,7 +114,7 @@ func TestGit_CommitSessionTrailer(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, CommitTrailer: true} },
 	).WithSession(func() string { return "sess-1" }, func() string { return "swift-falcon" })
 
@@ -129,7 +130,7 @@ func TestGit_CommitSessionTrailerDefaultOff(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true} },
 	).WithSession(func() string { return "sess-1" }, func() string { return "swift-falcon" })
 

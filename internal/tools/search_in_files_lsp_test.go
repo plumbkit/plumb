@@ -52,7 +52,7 @@ func Bar() {
 		},
 	}
 
-	tool := tools.NewSearchInFiles(func() string { return dir }, mock, nil, 0)
+	tool := tools.NewSearchInFiles(func(context.Context) string { return dir }, mock, nil, 0)
 
 	args, _ := json.Marshal(map[string]any{
 		"pattern":                  "x := 1",
@@ -77,7 +77,7 @@ func TestSearchInFiles_IncludeEnclosingSymbol_NilClient(t *testing.T) {
 	}
 
 	// No client — feature silently disabled.
-	tool := tools.NewSearchInFiles(func() string { return dir }, nil, nil, 0)
+	tool := tools.NewSearchInFiles(func(context.Context) string { return dir }, nil, nil, 0)
 
 	args, _ := json.Marshal(map[string]any{
 		"pattern":                  "x := 1",

@@ -247,7 +247,7 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	// the whole tool unusable in exactly the repositories that need it.
 	ws := cmd.WorkingDir
 	if ws == "" && t.deps.WorkspaceFn != nil {
-		ws = t.deps.WorkspaceFn()
+		ws = t.deps.WorkspaceFn(ctx)
 	}
 	for i, argv := range cmd.Steps {
 		out.step = i

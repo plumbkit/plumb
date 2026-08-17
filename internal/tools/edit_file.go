@@ -224,8 +224,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", err
 	}
 
-	path := t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(path); err != nil {
+	path := t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return "", fmt.Errorf("edit_file: %w", err)
 	}
 

@@ -141,6 +141,17 @@ func (s *connSession) workspaceFor(ctx context.Context) string {
 	return s.workspace()
 }
 
+// policyFor returns the PathPolicy for the logical agent in ctx, falling back
+// to the connection's policy when not shared.
+func (s *connSession) policyFor(ctx context.Context) *tools.PathPolicy {
+	if sh := s.shardFor(ctx); sh != nil {
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		return sh.policy
+	}
+	return s.boundaryPolicy()
+}
+
 // readTrackerFor returns the read tracker for the logical agent in ctx, falling
 // back to the connection's tracker when not shared.
 func (s *connSession) readTrackerFor(ctx context.Context) *tools.ReadTracker {

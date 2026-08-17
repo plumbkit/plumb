@@ -70,11 +70,11 @@ func (t *readMemoryTool) Execute(ctx context.Context, args json.RawMessage) (str
 	if a.Name == "" {
 		return "", errors.New("`name` is required")
 	}
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("read_memory: %w", err)
 	}
 	content, err := memory.Read(ws, a.Name)

@@ -440,7 +440,7 @@ func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 	argv := strings.Join(cmd.Steps[step], " ")
 	root := ""
 	if t.deps.WorkspaceFn != nil {
-		root = t.deps.WorkspaceFn()
+		root = t.deps.WorkspaceFn(context.Background())
 	}
 	dir := cmd.WorkingDir
 	if dir == "" {
@@ -496,8 +496,8 @@ func (t *MutationTest) preflight(ctx context.Context, specs []mutantSpec) ([]mut
 }
 
 func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutationTarget, error) {
-	path := t.deps.resolvePath(spec.Path)
-	if err := t.deps.checkBoundary(path); err != nil {
+	path := t.deps.resolvePath(ctx, spec.Path)
+	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return mutationTarget{}, err
 	}
 	info, err := os.Stat(path)
@@ -534,7 +534,7 @@ func (t *MutationTest) displayPath(path string) string {
 	if t.deps.WorkspaceFn == nil {
 		return path
 	}
-	root := t.deps.WorkspaceFn()
+	root := t.deps.WorkspaceFn(context.Background())
 	if root == "" {
 		return path
 	}

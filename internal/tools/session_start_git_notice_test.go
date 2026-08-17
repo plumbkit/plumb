@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -372,7 +373,7 @@ func TestSessionStart_ProjectGitNoticeSection(t *testing.T) {
 	}
 
 	t.Run("wired and untrusted: notice rendered under the policy", func(t *testing.T) {
-		out := render(NewSessionStart(func() string { return ws }, nil, nil, nil, nil, policy).
+		out := render(NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, nil, policy).
 			WithProjectPolicy(func() ProjectGitStatus {
 				return ProjectGitStatus{Keys: gitKeys("git.allow_push", true)}
 			}))
@@ -393,13 +394,13 @@ func TestSessionStart_ProjectGitNoticeSection(t *testing.T) {
 	})
 
 	t.Run("unwired accessor: section unchanged", func(t *testing.T) {
-		if out := render(NewSessionStart(func() string { return ws }, nil, nil, nil, nil, policy)); strings.Contains(out, "IGNORED") {
+		if out := render(NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, nil, policy)); strings.Contains(out, "IGNORED") {
 			t.Errorf("unwired accessor must add nothing, got:\n%s", out)
 		}
 	})
 
 	t.Run("wired but project asks for nothing: section unchanged", func(t *testing.T) {
-		out := render(NewSessionStart(func() string { return ws }, nil, nil, nil, nil, policy).
+		out := render(NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, nil, policy).
 			WithProjectPolicy(func() ProjectGitStatus { return ProjectGitStatus{} }))
 		if strings.Contains(out, "IGNORED") {
 			t.Errorf("a project that asks for nothing must stay quiet, got:\n%s", out)

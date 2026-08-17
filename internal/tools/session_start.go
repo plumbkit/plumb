@@ -481,7 +481,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// (seedPathFromArgs reads it) — before Execute runs, so preferring it keeps
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
-		if current := t.ws(); current != "" {
+		if current := t.ws(ctx); current != "" {
 			return t.resolveAttached(ctx, current, a.Workspace, a.Language, a.Force)
 		}
 	}

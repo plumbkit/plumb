@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 // conn_register does for a live connection.
 func sessionGitTool(repo, id, name string) *Git {
 	return NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
 	).WithSession(func() string { return id }, func() string { return name })
 }
@@ -168,7 +169,7 @@ func TestGitRefGuard_ExpectedHeadWithoutSession(t *testing.T) {
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true} },
 	)
 	stageFile(t, tool, repo, "one.txt", "one\n", false)
@@ -417,7 +418,7 @@ func TestGitRefGuard_ExpectedHeadNetworkTier(t *testing.T) {
 	runGitDirect(t, repo, "push", "origin", "HEAD")
 
 	net := NewGit(
-		WriteDeps{WorkspaceFn: func() string { return repo }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowPush: true} },
 	).WithSession(func() string { return "sess-a" }, func() string { return "amber-fox" })
 

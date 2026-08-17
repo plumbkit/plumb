@@ -268,7 +268,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -369,7 +369,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -471,7 +471,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun

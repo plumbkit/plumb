@@ -187,8 +187,8 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if tier != tierRead && !t.deps.Limiter.Allow() {
 		return "", rateLimitError("git", t.deps.Limiter)
 	}
-	a.Repo = t.defaultRepo(a.Repo)
-	if err := t.checkBoundary(a); err != nil {
+	a.Repo = t.defaultRepo(ctx, a.Repo)
+	if err := t.checkBoundary(ctx, a); err != nil {
 		return "", err
 	}
 	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand), gitChildSpecFor(policy))
@@ -343,17 +343,17 @@ func (t *Git) resolveAddArgv(ctx context.Context, a gitToolArgs, argv []string) 
 // connection has no pinned workspace (WorkspaceFn nil or returning ""), an empty
 // repo stays empty and checkBoundary refuses — fail closed, never fall through to
 // the daemon cwd, which would run git against an unrelated repository.
-func (t *Git) defaultRepo(repo string) string {
+func (t *Git) defaultRepo(ctx context.Context, repo string) string {
 	if repo == "" {
 		if t.deps.WorkspaceFn == nil {
 			return ""
 		}
-		return t.deps.WorkspaceFn()
+		return t.deps.WorkspaceFn(ctx)
 	}
-	return t.deps.resolvePath(repo)
+	return t.deps.resolvePath(ctx, repo)
 }
 
-func (t *Git) checkBoundary(a gitToolArgs) error {
+func (t *Git) checkBoundary(ctx context.Context, a gitToolArgs) error {
 	// A resolved repo is mandatory. An empty repo here means neither an explicit
 	// "repo" arg nor a pinned workspace was available; running git anyway would
 	// fall through to the daemon's cwd (a different connection's project — a
@@ -362,7 +362,7 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 		return errors.New("git: no repository resolved — call session_start to attach a workspace, or pass an explicit \"repo\". " +
 			"If this session was working a moment ago, the daemon may have restarted (e.g. after a rebuild or upgrade), which clears the per-connection workspace pin — re-run session_start to re-attach")
 	}
-	if err := t.deps.checkBoundary(a.Repo); err != nil {
+	if err := t.deps.checkBoundary(ctx, a.Repo); err != nil {
 		return fmt.Errorf("git: %w", err)
 	}
 	for _, f := range a.Files {
@@ -370,7 +370,7 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 		if !filepath.IsAbs(path) && a.Repo != "" {
 			path = filepath.Join(a.Repo, path)
 		}
-		if err := t.deps.checkBoundary(path); err != nil {
+		if err := t.deps.checkBoundary(ctx, path); err != nil {
 			return fmt.Errorf("git: %w", err)
 		}
 	}

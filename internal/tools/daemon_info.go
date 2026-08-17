@@ -219,7 +219,7 @@ func formatUptime(up time.Duration) string {
 	}
 }
 
-func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
 	// The go runtime and os/arch rows are the two facts the retired `version`
 	// tool reported that daemon_info lacked; they are unconditional so a bug
 	// report can be filed from this one call. The source commit joins that set
