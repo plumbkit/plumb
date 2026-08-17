@@ -329,36 +329,61 @@ func TestStrongLangAt_TruncatedScanIsNotEvidence(t *testing.T) {
 	// Sorts between app/ and web/, and is large enough to exhaust the cap.
 	// "docs" pops after "web" and before "app", which is what stops the Java
 	// sources being reached at all.
-	manyFiles(t, dir, "docs", "page", ".png", extScanMaxFiles+1000)
+	manyFiles(t, dir, "docs", "page", ".png", tieScanMaxFiles+1000)
 
 	if got := contestedPool(t).strongLangAt(dir); got != "java" {
 		t.Fatalf("strongLangAt = %q, want java — the project is 200 .java to 3 .kt, "+
 			"and a scan that stopped at the %d-file cap must fall back to the "+
 			"language order rather than trust the prefix it managed to see",
-			got, extScanMaxFiles)
+			got, tieScanMaxFiles)
 	}
 }
 
-// TestStrongLangAt_DepthDoesNotReachAssetTrees pins tieScanDepth's UPPER side.
-// The lower side is pinned by the multi-project cases; nothing pinned the upper
-// side, and an earlier revision of this branch set the constant one level
-// deeper on the reasoning that a spare level was free. It is not free: every
-// level is more directories charged against the same file cap.
-// src/main/resources/static/css/fonts/ sits exactly at the boundary, so one
-// level more descends into the asset directory beneath it and can spend the
-// whole budget there before reaching src/main/kotlin — turning a pure-Kotlin
-// project back into a jdtls one, which is the bug this file exists to prevent.
+// TestStrongLangAt_DepthDoesNotReachAssetTrees pins that a big asset tree
+// under a PRUNED name never votes in the tie-break. It once pinned
+// tieScanDepth's upper side too, but the tie-break now prunes resources/ at
+// ANY depth, which silently un-pinned depth here (a depth-7 mutant survived
+// this test — caught in review); the depth upper side is pinned again, on an
+// UNPRUNED tree, by TestStrongLangAt_UnprunedDeepTreesDoNotStarveTheTieBreak.
+// This test keeps the asset shape honest: the tree sits WITHIN the scan depth,
+// so only pruning — not depth — keeps it out. Without it, the walk charges
+// 20500 files against the budget, truncates, and the fallback hands a
+// pure-Kotlin project to java.
 func TestStrongLangAt_DepthDoesNotReachAssetTrees(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir,
 		"settings.gradle.kts", "build.gradle.kts",
 		"src/main/kotlin/App.kt", "src/main/kotlin/Greeter.kt")
-	manyFiles(t, dir, "src/main/resources/static/css/fonts/files", "f", ".woff", extScanMaxFiles+500)
+	manyFiles(t, dir, "src/main/resources/static", "f", ".woff", tieScanMaxFiles+500)
 
 	if got := contestedPool(t).strongLangAt(dir); got != "kotlin" {
 		t.Fatalf("strongLangAt = %q, want kotlin — a pure-Kotlin project whose "+
-			"assets sit one level below the scan depth must still be decided by "+
-			"its sources", got)
+			"asset tree lives under a pruned name must be decided by its "+
+			"sources, however large the tree", got)
+	}
+}
+
+// TestStrongLangAt_UnprunedDeepTreesDoNotStarveTheTieBreak pins tieScanDepth's
+// UPPER side on a tree pruning cannot remove: a chain of unpruned directories
+// one level deeper than the scan. The asset-tree pin above once held this
+// side, but pruning resources/ at any depth silently un-pinned it (a depth-7
+// mutant survived the whole suite — caught in review), and depth must stay
+// observable: a spare level is not free, every level is more directories
+// charged against the same file cap. At depth 6 the walk cannot descend into
+// junk/.../l6, so its 20500 files stay invisible and the project is decided
+// by its sources; at depth 7 they are charged, exhaust the budget, and the
+// truncated tie degrades to java — which this assertion refuses.
+func TestStrongLangAt_UnprunedDeepTreesDoNotStarveTheTieBreak(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir,
+		"settings.gradle.kts", "build.gradle.kts",
+		"web/src/main/kotlin/com/example/A.kt",
+		"web/src/main/kotlin/com/example/B.kt")
+	manyFiles(t, dir, "junk/l1/l2/l3/l4/l5/l6", "f", ".bin", tieScanMaxFiles+500)
+
+	if got := contestedPool(t).strongLangAt(dir); got != "kotlin" {
+		t.Fatalf("strongLangAt = %q, want kotlin — the unpruned tree sits one level "+
+			"below the scan depth and must stay invisible to the tie-break", got)
 	}
 }
 

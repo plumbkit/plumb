@@ -46,9 +46,10 @@
   regression below it.
 
   The tie-break now walks with its own budget, ten times the sniff's — ties
-  are rare and a 20k-file contested directory scans in a few milliseconds —
+  are rare and a 20k-file contested directory scans in a couple of tens of
+  milliseconds —
   and prunes the conventional non-source directories of the JVM shape it
-  exists to decide: `resources`, and Android `assets/` and `res/`. They hold
+  exists to decide: `resources`, and Android `assets/` and `res/`. By convention they hold
   no sources the tied candidates contest, and they are exactly the trees large
   enough to starve a scan. Together these raise the starvation threshold
   roughly tenfold and eliminate the common JVM shape; they do not close the
@@ -62,12 +63,17 @@
   exact reported repro: 20 Kotlin sources against a 2500-file resources tree),
   `TestStrongLangAt_TieBreakBudgetSurvivesAModerateNonSourceTree` and
   `TestStrongLangAt_TieBreakStillTruncatesAboveItsBudget` (the new budget,
-  from below and above), and `TestStrongLangAt_PrunedResourceTreeCannotStarveTheTieBreak`
+  from below and above), `TestStrongLangAt_PrunedResourceTreeCannotStarveTheTieBreak`
   plus `TestStrongLangAt_TieBreakPrunesKnownNonSourceDirs` (pruning, including
-  each pruned name individually); every assertion was mutation-verified.
+  each pruned name individually), `TestStrongLangAt_UnprunedDeepTreesDoNotStarveTheTieBreak`
+  (tieScanDepth's upper side, which the pruning had silently un-pinned), and a
+  revived `TestStrongLangAt_TruncatedScanIsNotEvidence` (its fixture now
+  actually exceeds the new budget); every pinning assertion was
+  mutation-verified, including the review round that found the first upper pin
+  symbolic and the depth pin gone.
 
-- **A forged home-wide workspace claim is now visible to the operator, and a
-  pre-0.16.7 forged pin is cleaned up instead of living forever.** Two loose
+- **An unrestored home-wide workspace claim is now visible to the operator, and
+  a pre-0.16.7 wide pin is cleaned up instead of living forever.** Two loose
   ends from #318's fix, both found by auditing what that change left behind.
 
   *The alarm.* Refusing the replayed `_meta` pin logs at Info, deliberately — a
