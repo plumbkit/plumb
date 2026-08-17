@@ -36,12 +36,13 @@ const mutationRestoreSuffix = ".plumb-mutation-backup"
 // number, and collapsing them is precisely the false kill this tool exists to
 // prevent — reached from the tooling side instead of the mutant side.
 type stepOutcome struct {
-	ran      bool
-	exitCode int
-	timedOut bool
-	startErr bool
-	elapsed  time.Duration
-	output   string
+	ran       bool
+	exitCode  int
+	timedOut  bool
+	cancelled bool
+	startErr  bool
+	elapsed   time.Duration
+	output    string
 	// step indexes the argv this outcome came from. A composite command (verify
 	// = build then test) stops at its first failure, so the argv worth naming in
 	// a diagnostic is that one — not Steps[0], which may have passed.
@@ -54,15 +55,16 @@ func (s stepOutcome) failed() bool {
 	return s.failure() != stepOK
 }
 
-// stepFailure names WHY a step did not succeed. The three causes are not
+// stepFailure names WHY a step did not succeed. The four causes are not
 // interchangeable and must never be collapsed into "it failed":
 //
 //	"the tests ran and something is red"      → the workspace has a problem
 //	"the command never started"               → the TOOLING has a problem
 //	"the command ran out of time"             → the BUDGET has a problem
+//	"the run was cancelled"                   → the REQUEST went away, no verdict
 //
 // Each needs a different thing done about it, so a message that asserts the
-// first when the truth is the second or third sends the reader to fix something
+// first when the truth is one of the others sends the reader to fix something
 // that was never broken. That is the same false-attribution defect the compile
 // gate exists to prevent, arrived at from the diagnostics side.
 //
@@ -75,20 +77,24 @@ const (
 	stepOK stepFailure = iota
 	stepUnrunnable
 	stepTimedOut
+	stepCancelled
 	stepExited
 )
 
-// failure classifies this outcome. What is load-bearing is that startErr and
-// timedOut are both tested BEFORE exitCode: a command that could not be started
-// carries exitCode -1, and a timeout carries one too, so testing exitCode first
-// would swallow both of the causes that are not about the workspace. Their order
-// relative to EACH OTHER is not — runStep breaks before it can set both.
+// failure classifies this outcome. What is load-bearing is that startErr,
+// timedOut and cancelled are all tested BEFORE exitCode: a command that could
+// not be started carries exitCode -1, a timeout carries one too, and a
+// cancelled command carries one too, so testing exitCode first would swallow
+// all three causes that are not about the workspace. Their order relative to
+// EACH OTHER is not — runStep breaks before it can set more than one.
 func (s stepOutcome) failure() stepFailure {
 	switch {
 	case s.startErr:
 		return stepUnrunnable
 	case s.timedOut:
 		return stepTimedOut
+	case s.cancelled:
+		return stepCancelled
 	case s.exitCode != 0:
 		return stepExited
 	default:
@@ -167,8 +173,9 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 //
 // A test failure is a kill ONLY when the compile gate passed AND the test
 // command actually ran. Every other shape — a mutant that did not compile, a
-// compile that timed out, a test run that timed out, or a command that could
-// not be started at all — is invalid, because none of them distinguishes "the
+// compile that timed out, a test run that timed out, a step that was cancelled,
+// or a command that could not be started at all — is invalid, because none of
+// them distinguishes "the
 // assertion caught the change" from "the toolchain never got far enough to try".
 //
 // The startErr cases are not hypothetical bookkeeping. A test command whose
@@ -185,6 +192,9 @@ func (r *mutationResult) classify(compile, test stepOutcome) {
 	case stepTimedOut:
 		r.outcome, r.reason = MutationInvalid, reasonCompileTimeout
 		return
+	case stepCancelled:
+		r.outcome, r.reason = MutationInvalid, reasonCompileCancelled
+		return
 	case stepExited:
 		r.outcome, r.reason = MutationInvalid, reasonCompileFailed
 		return
@@ -196,6 +206,8 @@ func (r *mutationResult) classify(compile, test stepOutcome) {
 		r.outcome, r.reason = MutationInvalid, reasonTestUnrunnable
 	case stepTimedOut:
 		r.outcome, r.reason = MutationInvalid, reasonTestTimeout
+	case stepCancelled:
+		r.outcome, r.reason = MutationInvalid, reasonTestCancelled
 	case stepExited:
 		r.outcome = MutationKilled
 	case stepOK:
@@ -248,8 +260,9 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 		}
 		out.exitCode = res.ExitCode
 		out.timedOut = res.TimedOut
+		out.cancelled = res.Cancelled
 		out.output = strings.TrimSpace(res.Stdout + "\n" + res.Stderr)
-		if res.ExitCode != 0 || res.TimedOut {
+		if res.ExitCode != 0 || res.TimedOut || res.Cancelled {
 			break
 		}
 	}

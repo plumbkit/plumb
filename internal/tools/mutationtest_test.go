@@ -633,6 +633,8 @@ func TestClassify(t *testing.T) {
 		{"does not compile", stepOutcome{ran: true, exitCode: 2}, stepOutcome{ran: true, exitCode: 1}, MutationInvalid, reasonCompileFailed},
 		{"compile timed out", stepOutcome{ran: true, exitCode: -1, timedOut: true}, ok, MutationInvalid, reasonCompileTimeout},
 		{"tests timed out", ok, stepOutcome{ran: true, exitCode: -1, timedOut: true}, MutationInvalid, reasonTestTimeout},
+		{"compile cancelled", stepOutcome{ran: true, exitCode: -1, cancelled: true}, ok, MutationInvalid, reasonCompileCancelled},
+		{"tests cancelled", ok, stepOutcome{ran: true, exitCode: -1, cancelled: true}, MutationInvalid, reasonTestCancelled},
 		// The two that read as an ordinary failure to anything counting only exit
 		// codes. The TEST one is the dangerous half: without its own branch a
 		// command that never launched is indistinguishable from a caught mutant.

@@ -25,10 +25,11 @@ const (
 
 // ExecResult is the bounded outcome of running one task command.
 type ExecResult struct {
-	ExitCode int    // process exit code; -1 when it timed out
-	Stdout   string // captured, capped
-	Stderr   string // captured, capped
-	TimedOut bool
+	ExitCode  int    // process exit code; -1 when it was killed by a signal (timeout or cancellation)
+	Stdout    string // captured, capped
+	Stderr    string // captured, capped
+	TimedOut  bool
+	Cancelled bool // the request context was cancelled, not a genuine non-zero exit
 }
 
 // RunArgv executes argv[0] with argv[1:] in workdir with NO shell, capturing
@@ -66,12 +67,14 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	cmd.WaitDelay = 5 * time.Second
 
 	runErr := cmd.Run()
+	ctxErr := cctx.Err()
 	res := ExecResult{
-		Stdout:   capTaskOutput(stdout.String()),
-		Stderr:   capTaskOutput(stderr.String()),
-		TimedOut: errors.Is(cctx.Err(), context.DeadlineExceeded),
+		Stdout:    capTaskOutput(stdout.String()),
+		Stderr:    capTaskOutput(stderr.String()),
+		TimedOut:  errors.Is(ctxErr, context.DeadlineExceeded),
+		Cancelled: errors.Is(ctxErr, context.Canceled),
 	}
-	if res.TimedOut {
+	if res.TimedOut || res.Cancelled {
 		res.ExitCode = -1
 		return res, nil
 	}

@@ -66,11 +66,13 @@ const (
 
 // Invalid-outcome reasons, rendered verbatim in the report.
 const (
-	reasonNotApplied     = "old_string not found — nothing was mutated"
-	reasonAmbiguous      = "old_string is ambiguous — nothing was mutated"
-	reasonCompileFailed  = "the mutant does not compile"
-	reasonCompileTimeout = "the compile step timed out"
-	reasonTestTimeout    = "the test step timed out"
+	reasonNotApplied       = "old_string not found — nothing was mutated"
+	reasonAmbiguous        = "old_string is ambiguous — nothing was mutated"
+	reasonCompileFailed    = "the mutant does not compile"
+	reasonCompileTimeout   = "the compile step timed out"
+	reasonTestTimeout      = "the test step timed out"
+	reasonCompileCancelled = "the compile step was cancelled"
+	reasonTestCancelled    = "the test step was cancelled"
 	// The two unrunnable reasons are separate from a non-zero exit on purpose:
 	// a command that never started proves nothing about the mutant, and in the
 	// TEST slot a bare non-zero exit would otherwise read as a kill.
@@ -384,6 +386,10 @@ func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out ste
 			"about whether the workspace is green. Nothing was mutated. Raise timeout_seconds (max %d) if the command "+
 			"legitimately needs longer.%s\n%s",
 			role, cmd.Slot, plan.timeout, maxMutationStepSeconds, where, excerpt(out.output))
+	case stepCancelled:
+		return fmt.Errorf("mutation_test: the %s (%s) was CANCELLED before it finished, so it never returned a verdict — this says nothing "+
+			"about whether the workspace is green. Nothing was mutated.%s\n%s",
+			role, cmd.Slot, where, excerpt(out.output))
 	case stepExited, stepOK:
 	}
 	if role == roleCompile {
