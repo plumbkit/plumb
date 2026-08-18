@@ -55,7 +55,9 @@ func TestRenderStopConfirmationPromptUsesPluralSessionCount(t *testing.T) {
 }
 
 func TestStopConfirmationModelDefaultNo(t *testing.T) {
-	m := newStopConfirmationModel(2, stopActionPrompt)
+	m := yesNoModel{cursor: 1, render: func(cursor int) string {
+		return renderStopConfirmationPrompt(stopActionPrompt.consequence, 2, cursor)
+	}}
 	if m.cursor != 1 {
 		t.Fatalf("default cursor = %d, want No index 1", m.cursor)
 	}
@@ -66,12 +68,17 @@ func TestStopConfirmationModelDefaultNo(t *testing.T) {
 }
 
 func TestStopConfirmationModelKeyboardFlow(t *testing.T) {
-	m := newStopConfirmationModel(2, stopActionPrompt)
+	newModel := func() yesNoModel {
+		return yesNoModel{cursor: 1, render: func(cursor int) string {
+			return renderStopConfirmationPrompt(stopActionPrompt.consequence, 2, cursor)
+		}}
+	}
+	m := newModel()
 	updated, cmd := m.Update(keyPress("up"))
 	if cmd != nil {
 		t.Fatal("navigation should not quit")
 	}
-	m = updated.(stopConfirmationModel)
+	m = updated.(yesNoModel)
 	if m.cursor != 0 {
 		t.Fatalf("after up cursor = %d, want Yes index 0", m.cursor)
 	}
@@ -80,27 +87,24 @@ func TestStopConfirmationModelKeyboardFlow(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("enter should quit")
 	}
-	m = updated.(stopConfirmationModel)
+	m = updated.(yesNoModel)
 	if !m.confirmed {
 		t.Fatal("enter on Yes should confirm")
 	}
 
-	m = newStopConfirmationModel(2, stopActionPrompt)
-	updated, cmd = m.Update(keyPress("enter"))
+	updated, cmd = newModel().Update(keyPress("enter"))
 	if cmd == nil {
 		t.Fatal("enter should quit")
 	}
-	m = updated.(stopConfirmationModel)
-	if m.confirmed {
+	if updated.(yesNoModel).confirmed {
 		t.Fatal("enter on default No should cancel")
 	}
 
-	m = newStopConfirmationModel(2, stopActionPrompt)
-	updated, cmd = m.Update(keyPress("y"))
+	updated, cmd = newModel().Update(keyPress("y"))
 	if cmd == nil {
 		t.Fatal("y should quit")
 	}
-	m = updated.(stopConfirmationModel)
+	m = updated.(yesNoModel)
 	if !m.confirmed || m.cursor != 0 {
 		t.Fatalf("y should select and confirm Yes, got cursor=%d confirmed=%v", m.cursor, m.confirmed)
 	}

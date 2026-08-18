@@ -82,34 +82,50 @@ func TestConfirmTrust_RefusesWithoutTTYOrYes(t *testing.T) {
 		t.Errorf("a non-interactive stdin must be refused with the --yes escape named, got %v", err)
 	}
 
+	// Under the test binary stdin is not a terminal, so the unadorned call is
+	// exactly the refusal path a redirected `plumb trust` takes.
+	if err := confirmTrust("/w"); err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("confirmTrust without a terminal or --yes must refuse, got %v", err)
+	}
+
 	trustAssumeYes = true
 	if err := confirmTrust("/w"); err != nil {
 		t.Errorf("--yes must grant non-interactively, got %v", err)
 	}
 }
 
-// TestTrustAnswerDecision_OnlyExplicitYesGrants pins the prompt's default. Every
-// answer that is not an explicit yes refuses — including an empty line and the
-// empty string a closed or unreadable stdin yields, since a grant obtainable by
-// an absent answer is the silent grant the prompt exists to replace.
-func TestTrustAnswerDecision_OnlyExplicitYesGrants(t *testing.T) {
-	for _, yes := range []string{"y\n", "Y\n", "yes\n", " YES \n", "y"} {
-		if err := trustAnswerDecision(yes); err != nil {
-			t.Errorf("%q should grant, got %v", yes, err)
+// TestTrustConfirmation_OnlyExplicitYesGrants pins the selector's default. The
+// cursor starts on No, so only the y key — or a deliberate move to Yes followed
+// by enter — grants; everything else, including enter on the default cursor,
+// refuses. A grant obtainable without a deliberate yes is the silent grant the
+// prompt exists to replace.
+func TestTrustConfirmation_OnlyExplicitYesGrants(t *testing.T) {
+	newConfirm := func() yesNoModel {
+		return yesNoModel{cursor: 1, render: renderTrustConfirmation}
+	}
+	grant := func(key string) bool {
+		final, _ := newConfirm().Update(keyPress(key))
+		return final.(yesNoModel).confirmed
+	}
+	for _, yes := range []string{"y", "Y"} {
+		if !grant(yes) {
+			t.Errorf("%q should grant", yes)
 		}
 	}
-	for _, no := range []string{"", "\n", "n\n", "no\n", "maybe\n", "ye\n", "1\n", "  \n"} {
-		err := trustAnswerDecision(no)
-		if err == nil {
-			t.Errorf("%q must NOT grant", no)
-			continue
+	for _, no := range []string{"n", "N", "q", "enter"} {
+		if grant(no) {
+			t.Errorf("%q must NOT grant (enter lands on the default No cursor)", no)
 		}
-		// A closed or Ctrl-D'd read at a real prompt yields an empty answer; the
-		// advice must still be there. (Redirected stdin no longer reaches this
-		// path — term.IsTerminal refuses /dev/null at the gate.)
-		if strings.TrimSpace(no) == "" && !strings.Contains(err.Error(), "--yes") {
-			t.Errorf("an empty answer should name the --yes escape, got %q", err)
-		}
+	}
+
+	// Moving to Yes and pressing enter grants; the move alone does not.
+	moved, _ := newConfirm().Update(keyPress("up"))
+	if m := moved.(yesNoModel); m.confirmed || m.cursor != 0 {
+		t.Errorf("moving to Yes = (confirmed %v, cursor %d); the move must not grant by itself", m.confirmed, m.cursor)
+	}
+	final, _ := moved.Update(keyPress("enter"))
+	if !final.(yesNoModel).confirmed {
+		t.Error("enter on the Yes cursor must grant")
 	}
 }
 

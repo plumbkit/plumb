@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
@@ -96,63 +95,9 @@ func confirmDaemonActionWithActiveSessions(p daemonActionPrompt) (bool, bool, er
 }
 
 func runActionConfirmationSelector(sessionCount int, p daemonActionPrompt) (bool, error) {
-	prog := tea.NewProgram(newStopConfirmationModel(sessionCount, p))
-	finalModel, err := prog.Run()
-	if err != nil {
-		return false, fmt.Errorf("confirming %s: %w", p.verb, err)
-	}
-	m, ok := finalModel.(stopConfirmationModel)
-	if !ok {
-		return false, nil
-	}
-	return m.confirmed, nil
-}
-
-type stopConfirmationModel struct {
-	sessionCount int
-	consequence  string
-	cursor       int // 0 yes, 1 no
-	confirmed    bool
-}
-
-func newStopConfirmationModel(sessionCount int, p daemonActionPrompt) stopConfirmationModel {
-	return stopConfirmationModel{
-		sessionCount: sessionCount,
-		consequence:  p.consequence,
-		cursor:       1, // default to No
-	}
-}
-
-func (m stopConfirmationModel) Init() tea.Cmd { return nil }
-
-func (m stopConfirmationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "up", "k", "left", "h", "down", "j", "right", "l", "tab", "shift+tab":
-			if m.cursor == 0 {
-				m.cursor = 1
-			} else {
-				m.cursor = 0
-			}
-		case "y", "Y":
-			m.cursor = 0
-			m.confirmed = true
-			return m, tea.Quit
-		case "n", "N", "q", "esc", "ctrl+c":
-			m.cursor = 1
-			m.confirmed = false
-			return m, tea.Quit
-		case "enter", " ":
-			m.confirmed = m.cursor == 0
-			return m, tea.Quit
-		}
-	}
-	return m, nil
-}
-
-func (m stopConfirmationModel) View() tea.View {
-	return tea.NewView(renderStopConfirmationPrompt(m.consequence, m.sessionCount, m.cursor))
+	return runYesNoSelector(func(cursor int) string {
+		return renderStopConfirmationPrompt(p.consequence, sessionCount, cursor)
+	})
 }
 
 func renderStopConfirmationPrompt(consequence string, sessionCount, cursor int) string {
