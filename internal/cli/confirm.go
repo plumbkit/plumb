@@ -37,7 +37,7 @@ func (m yesNoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 1
 			m.confirmed = false
 			return m, tea.Quit
-		case "enter", " ":
+		case "enter", "space": // v2 names the space key "space", not " "
 			m.confirmed = m.cursor == 0
 			return m, tea.Quit
 		}

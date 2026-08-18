@@ -190,7 +190,10 @@ func (m setupPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = (m.cursor + len(m.rows) - 1) % len(m.rows)
 		case "down", "j":
 			m.cursor = (m.cursor + 1) % len(m.rows)
-		case " ":
+		case "space":
+			// Bubble Tea v2 names the space key "space": Key.String()
+			// skips a " "-valued Text on purpose, so a bare " " case never
+			// fires on a real terminal.
 			m.rows[m.cursor] = togglePickerRow(m.rows[m.cursor])
 		case "a", "A":
 			// Register-all never creates an uninstall: it only lifts the

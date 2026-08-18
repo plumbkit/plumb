@@ -112,9 +112,9 @@ func TestTrustConfirmation_OnlyExplicitYesGrants(t *testing.T) {
 			t.Errorf("%q should grant", yes)
 		}
 	}
-	for _, no := range []string{"n", "N", "q", "enter"} {
+	for _, no := range []string{"n", "N", "q", "enter", " "} {
 		if grant(no) {
-			t.Errorf("%q must NOT grant (enter lands on the default No cursor)", no)
+			t.Errorf("%q must NOT grant (enter and space land on the default No cursor)", no)
 		}
 	}
 
@@ -126,6 +126,11 @@ func TestTrustConfirmation_OnlyExplicitYesGrants(t *testing.T) {
 	final, _ := moved.Update(keyPress("enter"))
 	if !final.(yesNoModel).confirmed {
 		t.Error("enter on the Yes cursor must grant")
+	}
+	// Space confirms like enter — and v2 delivers it as "space", not " ".
+	final, _ = moved.Update(keyPress(" "))
+	if !final.(yesNoModel).confirmed {
+		t.Error("space on the Yes cursor must grant")
 	}
 }
 

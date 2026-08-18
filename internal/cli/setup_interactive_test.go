@@ -146,6 +146,32 @@ func TestNewPickerRows_ClassifiesFromTheFilesystem(t *testing.T) {
 	}
 }
 
+// TestPickerUpdate_SpaceToggles is the regression test for the dead space
+// key: Bubble Tea v2 names the space key "space" (Key.String() skips a
+// " "-valued Text on purpose), so a case matching the literal " " never fires
+// on a real terminal. keyPress(" ") builds exactly the real event — its
+// String() is "space".
+func TestPickerUpdate_SpaceToggles(t *testing.T) {
+	m := setupPickerModel{rows: []pickerRow{
+		{target: pickerTestTarget},
+		{target: pickerTestTarget, registered: true},
+	}}
+
+	final, _ := m.Update(keyPress(" "))
+	if got := final.(setupPickerModel).rows[0].action; got != setupRegister {
+		t.Errorf("space on an unregistered row = %v, want setupRegister", got)
+	}
+	final, _ = final.Update(keyPress(" "))
+	if got := final.(setupPickerModel).rows[0].action; got != setupKeep {
+		t.Errorf("second space should back out to setupKeep, got %v", got)
+	}
+
+	// The cursor stayed on row 0, so row 1 is untouched.
+	if got := final.(setupPickerModel).rows[1].action; got != setupKeep {
+		t.Errorf("uncursored row changed: %v", got)
+	}
+}
+
 func TestRenderSetupPicker_Smoke(t *testing.T) {
 	m := setupPickerModel{rows: []pickerRow{
 		{target: pickerTestTarget, registered: true},
