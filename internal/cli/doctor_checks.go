@@ -73,9 +73,6 @@ func checkMCPClients() []checkResult {
 	for _, c := range allSetupClients() {
 		results = append(results, checkOneClient(c, selfPath))
 	}
-	if r, ok := checkLegacyAntigravityConfigs(selfPath); ok {
-		results = append(results, r)
-	}
 	if r, ok := checkClaudeDesktopExtraProfiles(selfPath); ok {
 		results = append(results, r)
 	}
@@ -122,7 +119,7 @@ func checkClaudeDesktopExtraProfiles(selfPath string) (checkResult, bool) {
 
 // claudeDesktopExtraProfilesResult shapes the check from the scan tallies: a
 // missing binary is a failure, a mismatch-but-present binary a non-fatal
-// warning, all-current a clean pass — mirroring legacyAntigravityResult.
+// warning, all-current a clean pass.
 func claudeDesktopExtraProfilesResult(present int, missing, mismatch []string) checkResult {
 	const name = "Claude Desktop (extra profiles)"
 	const fix = "run `plumb setup claude-desktop` to repoint every detected profile"
@@ -133,56 +130,6 @@ func claudeDesktopExtraProfilesResult(present int, missing, mismatch []string) c
 		return checkResult{name: name, ok: true, warn: true, detail: "stale plumb binary in: " + strings.Join(mismatch, ", "), fix: fix}
 	default:
 		return checkResult{name: name, ok: true, detail: fmt.Sprintf("%d extra profile(s) current (heuristic — not an Anthropic-documented path)", present)}
-	}
-}
-
-// checkLegacyAntigravityConfigs validates the plumb binary in the flat
-// mcp_config.json files Antigravity reads alongside the standalone mcp/plumb.json
-// targets. The per-client checks above see only the standalone files, so a stale
-// entry in a legacy file (the path Antigravity may actually launch) would slip
-// past unflagged. ok is false when no legacy file registers plumb — the result is
-// then omitted rather than shown as a spurious pass.
-func checkLegacyAntigravityConfigs(selfPath string) (checkResult, bool) {
-	cfgPath, err := AntigravityConfigPath()
-	if err != nil {
-		return checkResult{}, false
-	}
-	base := geminiBaseFromStandalone(cfgPath)
-	var missing, mismatch []string
-	present := 0
-	for _, p := range legacyAntigravityConfigPaths(base) {
-		bin, ok := readLegacyAntigravityCommand(p)
-		if !ok {
-			continue
-		}
-		bin = expandRegisteredPath(bin)
-		present++
-		switch {
-		case !binaryExists(bin):
-			missing = append(missing, contractConfigPath(p))
-		case selfPath != "" && !sameBinary(bin, selfPath):
-			mismatch = append(mismatch, contractConfigPath(p))
-		}
-	}
-	if present == 0 {
-		return checkResult{}, false
-	}
-	return legacyAntigravityResult(present, missing, mismatch), true
-}
-
-// legacyAntigravityResult shapes the check from the scan tallies: a missing binary
-// is a failure (Antigravity cannot launch plumb), a mismatch-but-present binary a
-// non-fatal warning, all-current a clean pass.
-func legacyAntigravityResult(present int, missing, mismatch []string) checkResult {
-	const name = "Antigravity (legacy)"
-	const fix = "run `plumb setup antigravity` to repoint legacy configs"
-	switch {
-	case len(missing) > 0:
-		return checkResult{name: name, ok: false, detail: "registered binary missing in: " + strings.Join(missing, ", "), fix: fix}
-	case len(mismatch) > 0:
-		return checkResult{name: name, ok: true, warn: true, detail: "stale plumb binary in: " + strings.Join(mismatch, ", "), fix: fix}
-	default:
-		return checkResult{name: name, ok: true, detail: fmt.Sprintf("%d legacy config(s) current", present)}
 	}
 }
 

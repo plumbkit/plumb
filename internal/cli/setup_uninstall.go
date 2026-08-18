@@ -304,35 +304,17 @@ func withoutNodes(nodes, drop []*yaml.Node) []*yaml.Node {
 	return kept
 }
 
-// setupAntigravityOut reverses setupAntigravityInto: plumb comes out of every
-// flat mcp_config.json it was ensured into (existing files only — an uninstall
-// never materialises a surface), and the standalone mcp/plumb.json plus the
-// IDE mirror — files plumb owns outright — are backed up and deleted.
+// setupAntigravityOut reverses setupAntigravityInto: the target's standalone
+// mcp/plumb.json — a file plumb owns outright — is backed up and deleted.
+// Legacy-era flat mcp_config.json files under ~/.gemini are no longer plumb's
+// to manage (Antigravity no longer reads them), so an uninstall leaves them
+// alone.
 func setupAntigravityOut(cfgPath string) (bool, error) {
-	removed := false
-	base := geminiBaseFromStandalone(cfgPath)
-	for _, d := range legacyAntigravityDirs {
-		r, err := removeServerEntry(filepath.Join(base, d, "mcp_config.json"), "mcpServers", readOrInitClaudeConfig, writeJSON)
-		if err != nil {
-			return removed, err
-		}
-		removed = removed || r
-	}
-	r, err := removeOwnedFile(cfgPath)
-	if err != nil {
-		return removed, err
-	}
-	removed = removed || r
-	// The IDE mirror setupAntigravityInto keeps in step with the standalone.
-	r, err = removeOwnedFile(filepath.Join(base, "antigravity-ide", "mcp", "plumb.json"))
-	if err != nil {
-		return removed, err
-	}
-	return removed || r, nil
+	return removeOwnedFile(cfgPath)
 }
 
 // removeOwnedFile backs up and deletes a file plumb owns outright (the
-// Antigravity standalone and mirror configs). Absent is a no-op.
+// Antigravity standalone configs). Absent is a no-op.
 func removeOwnedFile(path string) (bool, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {

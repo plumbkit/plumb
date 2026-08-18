@@ -221,8 +221,8 @@ changing anything. Without a terminal, bare `plumb setup` prints help.
 | `plumb setup junie` | `~/.junie/mcp/mcp.json` (`mcpServers` key) + `~/.junie/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`; `mcpServers` key — Kimi Desktop reads the same file, so one registration covers both) + `$KIMI_CODE_HOME/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
-| `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads); also repoints existing per-surface `~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/mcp_config.json` |
-| `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config; Antigravity regenerates the per-server `mcp/` dirs from it) |
+| `plumb setup antigravity` | `~/.gemini/antigravity-cli/mcp/plumb.json` (a standalone `{command, args}` entry — Antigravity's per-server config format; the legacy flat `mcp_config.json` layer under `~/.gemini` is no longer written or managed) |
+| `plumb setup antigravity-desktop` | `~/.gemini/antigravity/mcp/plumb.json` (same standalone `{command, args}` entry) |
 | `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
 | `plumb setup crush` | `~/.config/crush/crush.json` (`mcp` key; `type:"stdio"`) |
 | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |

@@ -254,53 +254,43 @@ func TestSetupDSHOut(t *testing.T) {
 
 func TestSetupAntigravityOut(t *testing.T) {
 	base := t.TempDir()
-	sharedFlat := filepath.Join(base, "config", "mcp_config.json")
-	surfaceFlat := filepath.Join(base, "antigravity-cli", "mcp_config.json")
-	standalone := filepath.Join(base, "antigravity", "mcp", "plumb.json")
-	ideMirror := filepath.Join(base, "antigravity-ide", "mcp", "plumb.json")
+	standalone := filepath.Join(base, "antigravity-cli", "mcp", "plumb.json")
 
-	for _, p := range []string{sharedFlat, surfaceFlat} {
-		writeTestConfig(t, p, map[string]any{
-			"mcpServers": map[string]any{
-				"plumb": map[string]any{"command": "/bin/plumb", "args": []any{"serve"}},
-				"other": map[string]any{"command": "/bin/other"},
-			},
-		})
-	}
-	writeTestConfig(t, standalone, map[string]any{"command": "/bin/plumb", "args": []any{"serve"}})
-	writeTestConfig(t, ideMirror, map[string]any{"command": "/bin/plumb", "args": []any{"serve"}})
-
-	if removed, err := setupAntigravityOut(standalone); err != nil || !removed {
-		t.Fatalf("setupAntigravityOut = (%v, %v), want (true, nil)", removed, err)
-	}
-
-	cfg, err := parseJSONConfig(sharedFlat)
+	// A legacy-era flat config with a plumb entry: Antigravity no longer reads
+	// these, so they are not plumb's to manage — uninstall must leave it alone.
+	flat := filepath.Join(base, "config", "mcp_config.json")
+	writeTestConfig(t, flat, map[string]any{
+		"mcpServers": map[string]any{
+			"plumb": map[string]any{"command": "/bin/plumb", "args": []any{"serve"}},
+		},
+	})
+	flatBefore, err := os.ReadFile(flat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	servers := cfg["mcpServers"].(map[string]any)
-	if _, ok := servers["plumb"]; ok {
-		t.Error("plumb still in the shared flat config")
+
+	if _, _, err := setupAntigravityInto(standalone, "/bin/plumb"); err != nil {
+		t.Fatalf("setupAntigravityInto: %v", err)
 	}
-	if _, ok := servers["other"]; !ok {
-		t.Error("sibling server lost from the shared flat config")
+	if removed, err := setupAntigravityOut(standalone); err != nil || !removed {
+		t.Fatalf("setupAntigravityOut = (%v, %v), want (true, nil)", removed, err)
 	}
-	if _, err := os.Stat(surfaceFlat); err != nil {
-		t.Fatalf("surface flat config vanished: %v", err)
-	}
-	if cfg, err = parseJSONConfig(surfaceFlat); err != nil {
-		t.Fatal(err)
-	}
-	servers = cfg["mcpServers"].(map[string]any)
-	if _, ok := servers["plumb"]; ok {
-		t.Error("plumb still in the surface flat config")
-	}
-	for _, gone := range []string{standalone, ideMirror} {
-		if _, err := os.Stat(gone); !os.IsNotExist(err) {
-			t.Errorf("%s should be deleted, stat err = %v", gone, err)
-		}
+	if _, err := os.Stat(standalone); !os.IsNotExist(err) {
+		t.Errorf("standalone should be deleted, stat err = %v", err)
 	}
 	assertHasBackup(t, standalone[:len(standalone)-len(".json")])
+
+	flatAfter, err := os.ReadFile(flat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(flatBefore) != string(flatAfter) {
+		t.Error("a legacy-era flat mcp_config.json must be left untouched by uninstall")
+	}
+
+	if removed, err := setupAntigravityOut(standalone); err != nil || removed {
+		t.Fatalf("repeat setupAntigravityOut = (%v, %v), want (false, nil)", removed, err)
+	}
 }
 
 func TestRemovePlumbSkills(t *testing.T) {

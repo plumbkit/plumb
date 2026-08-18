@@ -40,6 +40,18 @@
 
 ### Changed
 
+- **The Antigravity legacy flat-config layer is gone — registration,
+  repair, and uninstall manage exactly the per-target standalone
+  `mcp/plumb.json`.** Earlier builds also wrote flat `mcp_config.json`
+  files across the `~/.gemini` surfaces (`config/`, `antigravity-cli/`,
+  `antigravity-ide/`, `antigravity/`) and mirrored the Desktop standalone
+  into `antigravity-ide/`. Antigravity no longer reads those files, so
+  `plumb setup antigravity`/`antigravity-desktop` — and the `--all` sweep,
+  and `--uninstall` — now touch only `~/.gemini/antigravity-cli/mcp/plumb.json`
+  and `~/.gemini/antigravity/mcp/plumb.json`; `plumb doctor` no longer grades
+  the legacy files; and legacy-era files already on disk are left alone as
+  inert.
+
 - **`plumb setup --all` is the single bulk flag; `--repair` and
   `--install-missing` are hidden deprecated aliases of it.** `--all` now both
   registers plumb in every installed-but-unregistered client and repoints
