@@ -235,7 +235,7 @@ func printPolicyWarnings(spec config.ProjectPolicySpec, base config.Config) {
 	if len(ws) == 0 {
 		return
 	}
-	fmt.Printf("\n%s\n", tui.WarnStyle.Render(fmt.Sprintf("!! %d of these grant capability:", len(ws))))
+	fmt.Printf("\n%s\n\n", tui.WarnStyle.Render(fmt.Sprintf("!! %d of these grant capability:", len(ws))))
 	for _, w := range ws {
 		fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"), tui.WarnStyle.Render(w.key))
 		fmt.Printf("        %s\n", tui.MutedStyle.Render(w.why))
@@ -310,7 +310,7 @@ func renderTrustConfirmation(cursor int) string {
 		}
 		optionLines = append(optionLines, tui.SepStyle.Render("    ┊ ")+style.Render(marker+option))
 	}
-	return fmt.Sprintf("%s %s\n%s\n%s\n%s\n",
+	return fmt.Sprintf("\n%s %s\n%s\n%s\n%s\n",
 		warnBadge,
 		tui.ItemStyle.Render("Trust these settings?"),
 		tui.MutedStyle.Render("    granting binds plumb to the exact content above; changing any of it re-prompts"),
