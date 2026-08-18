@@ -70,10 +70,10 @@ type proxyDeps struct {
 	// untouched (and the daemon falls back to a fresh, non-rehydrated session).
 	proxySessionID string
 
-	// cwd is the serve proxy's working directory, folded into the captured
-	// initialize frame's _meta as an advisory workspace attach hint for clients
-	// that report no roots. Identical across every handshake replay. Empty ⇒
-	// frame untouched (the daemon then resolves the workspace as before).
+	// cwd is the workspace attach hint folded into the captured initialize
+	// frame's _meta for clients that report no roots: --workspace/PLUMB_WORKSPACE
+	// when set, else the serve proxy's working directory (resolveWorkspaceHint).
+	// Empty ⇒ frame untouched. Identical across every handshake replay.
 	cwd string
 
 	heartbeatInterval time.Duration // 0 disables hang detection

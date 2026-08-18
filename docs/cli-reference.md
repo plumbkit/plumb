@@ -78,6 +78,7 @@ prints a warning to stderr suggesting `plumb restart` to refresh.
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
 | `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the detected workspace and config `extra_roots`; never replaces them. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+| `--workspace <path>` | — | Pin this connection's **workspace attach hint** to `<path>` instead of the serve process's working directory — for MCP clients that spawn `serve` without setting its cwd. Also read from `PLUMB_WORKSPACE`; the flag wins over the env var. The value is `$VAR`-expanded and made absolute, then validated (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
 
 The `--allow-dir` grant is transported to the daemon inside the captured
 `initialize` frame's `params._meta` (`dev.plumbkit/allow-dirs`), so it rides the
@@ -90,8 +91,10 @@ client's session, and it survives a workspace re-pin.
 that report no MCP roots (e.g. Claude Desktop): if nothing stronger resolves
 the workspace — no explicit `session_start` pin, no client root, no persisted
 pin from an earlier reconnect — the daemon attaches from the serve cwd,
-validated against project markers. The hint never overrides an explicit choice
-and is never persisted as the sticky pin.
+validated against project markers. `--workspace`/`PLUMB_WORKSPACE` replace the
+cwd as that hint, so a client that spawns `serve` without controlling its
+directory can still land on the right project. The hint never overrides an
+explicit choice and is never persisted as the sticky pin.
 
 ---
 

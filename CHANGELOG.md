@@ -235,6 +235,22 @@
 
 ### Added
 
+- **`plumb serve --workspace <path>` (or `PLUMB_WORKSPACE`) pins the
+  connection's workspace attach hint.** MCP clients that spawn `plumb serve`
+  as a stdio subprocess (Claude Desktop, harnesses) do not set the child's
+  working directory, so the serve inherited the *client's* launch directory
+  and the daemon auto-attached to whatever that happened to be. An explicit
+  flag now replaces the serve cwd as the advisory hint transported in the
+  initialize frame's `_meta` (`dev.plumbkit/workspace`): the flag wins over
+  the env var, the env var over the cwd, and with neither the cwd-hint
+  behaviour is unchanged. The value is `$VAR`-expanded and made absolute like
+  `--allow-dir`; symlink canonicalisation stays with the daemon's
+  `pool.Detect`, which already resolves the hint like any other candidate
+  root. The hint keeps its advisory rank — it never overrides an explicit
+  `session_start` pin and is never persisted — and it requires the resilient
+  proxy (the default); under `--no-reconnect` serve warns that the flag is
+  ignored, exactly like `--allow-dir`.
+
 - **The CHANGELOG placement guard now catches an entry moved OUT of the
   unreleased section, and covers direct pushes to `main`.** Two gaps were left
   in the guard as it landed. A line whose exact text was also deleted in the
