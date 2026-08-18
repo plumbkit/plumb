@@ -82,9 +82,8 @@ plumb setup gemini              # Gemini CLI
 To register every client already present on the machine in one shot, run
 `plumb setup --all` — it registers plumb in any installed client whose config
 it finds without a plumb entry, and repoints the rest at the current binary.
-(Bare `plumb setup --repair` only *repoints* clients that already use plumb —
-the repair after the binary moves — so on a fresh machine it reports "no
-changes"; use `--all` for first-time setup.)
+(`--repair` still parses but is a deprecated alias of `--all` now — same
+sweep, plus a deprecation warning.)
 
 > **Claude Desktop:** fully quit and reopen the app (Quit, not just close the
 > window) after running setup so it reloads its MCP config.

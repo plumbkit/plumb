@@ -180,7 +180,9 @@ exists, the command reports its location and does nothing else.
 ## `plumb setup`
 
 ```
-plumb setup <client>
+plumb setup <client> [flags]
+plumb setup --all
+plumb setup
 ```
 
 Register the current `plumb` binary as a stdio MCP server in a client's config.
@@ -189,6 +191,20 @@ plumb entry, such as Codex's per-tool approval tables) and back up the config
 before modifying it. Registration is **config-only** — it never installs skill
 files; those come from [`plumb skills sync`](#plumb-skills), and a named
 registration prints a hint when it notices the client's skills missing or stale.
+Subcommand descriptions are one short line each — "Register plumb in <Client>" —
+with the detail living in the tables below.
+
+Bare `plumb setup` (no client, no flag) opens an **interactive client picker**
+on a terminal: one row per client, pre-classified from the filesystem, with
+the registered ones arriving checked. `space` toggles the row under the
+cursor — unchecking a registered client flips it to an explicit uninstall,
+shown in the warn colour, and pressing `space` again backs out, so the
+destructive direction is never a default; `a` marks every unregistered client
+for registration without ever creating an uninstall; `enter` applies the
+selection — registrations go through the `--all` engine (a re-register also
+repoints at the current binary), removals through the `--uninstall` writers —
+and reports the outcomes in one grouped status table; `q` quits without
+changing anything. Without a terminal, bare `plumb setup` prints help.
 
 | Subcommand | Config target |
 |---|---|
@@ -223,10 +239,11 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
-| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 59. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all`/`--repair` sweeps carry no `--lean` state and therefore **preserve** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
+| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 59. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
-| `--repair` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. When installed-but-unregistered clients are found, it prints a hint pointing at `--all`. |
-| `--all` | `plumb setup` | `--repair`, plus **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with four exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine. `--install-missing` survives one release as a hidden, deprecated alias with the same behaviour. |
+| `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with four exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. |
+| `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
+| `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. For a skill-capable client it also removes the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
 ---
 
 ## `plumb skills`
@@ -244,7 +261,10 @@ or `~/.kimi-code/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skil
 binary). A skill-capable client whose config does not register plumb is shown
 as `not registered` — the reason `sync` would skip it. Every other client has
 no skills directory and receives the same routing as the condensed
-`session_start` guidance block instead.
+`session_start` guidance block instead. The table groups its rows per client —
+blocks separated by full-width dotted rules — with each status coloured at the
+render layer: `installed` green, `missing`/`stale` warn, `not registered`
+muted. The status strings themselves are unchanged.
 
 Skill capability is per-client data (`setupTarget.skillsDirFn`,
 `internal/cli/setup_skills.go`), verified against a live install rather than
@@ -302,14 +322,22 @@ non-zero if any check fails. Sections:
 - **Language Servers** — each configured LSP binary is on `PATH` (enabled
   servers that are missing fail; disabled ones are informational), plus a
   Java 21+ runtime check when `java` is configured.
+- **LSP Live** — the language-server sessions actually running in the daemon,
+  one row per live server under its `<server> (live)` name. The section sits
+  directly after Language Servers and is omitted entirely — no header, no
+  rows — when no sessions run. The JSON output shape is unchanged.
 - **MCP Clients** — for each supported client, whether plumb is registered
   **and** that the binary the config launches still exists and matches the
   running executable. A registered binary that no longer exists is a failure; a
   binary that exists but differs from the current one (e.g. after moving or
   rebuilding plumb elsewhere) is a non-fatal **warning** (`!`). Both carry a
-  `plumb setup <client>` fix hint — or run `plumb setup --repair` to repoint every
+  `plumb setup <client>` fix hint — or run `plumb setup --all` to repoint every
   client at once.
-- **Configuration** — global and project `config.toml` parse cleanly.
+- **Configuration** — global and project `config.toml` parse cleanly. Its
+  `capability trust` row reports the project's capability-granting keys with
+  a head count line followed by one key per line — trusted when the project's
+  grant is recorded, a warning with a `plumb trust` fix when the keys are
+  being ignored and the global config's values are in force instead.
 - **Data** — the global stats database is readable.
 - **Indexing** — when `[topology]` is enabled for the workspace, the topology index is present and healthy (passes when topology is disabled — the opt-in default). A *missing* or *corrupt* index fails; an index that exists but is still building (empty, all files skipped, or no symbols extracted yet) is reported as a non-fatal **warning** (`!`) so a freshly enabled workspace does not false-negative. Inspected strictly read-only (`mode=ro`) without starting an indexer or creating sidecar files; warnings and failures carry a fix hint.
 
@@ -708,3 +736,16 @@ trust** and flags any that invoke an interpreter with inline code (`bash -c`,
 `sh -c`, `python -c`, `node -e`, `perl -e`, `ruby -e`) as arbitrary code
 execution by design — review those before trusting. Default- and global-config
 commands always run and never need trusting.
+
+The disclosure prints in the shared CLI presentation style — `●` section
+headers, `┊` row separators, muted values, warn-coloured warnings — with the
+flood-defence ordering unchanged: the key listing is capped and the warnings
+are grouped last, so a padded key set cannot scroll the dangerous lines out of
+view.
+
+Confirmation is the ❯ **Yes/No selector** — the same selector `plumb stop` and
+`plumb restart` use — starting on **No**: press `y` (or move to Yes and press
+enter) to grant; `n`, `q`, `esc`, and `ctrl+c` all decline. `--yes` records
+the grant without asking and is the only way to grant without a terminal —
+non-terminal stdin is refused outright rather than auto-accepted, so a script
+or an agent pipeline cannot acquire the grant by side effect.

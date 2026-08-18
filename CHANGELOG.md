@@ -15,6 +15,70 @@
   dir (`~/.junie`) when no config file exists yet, and `plumb skills sync`
   installs embedded skills into `~/.junie/skills/`.
 
+- **`plumb setup <client> --uninstall` reverses a registration — plumb's entry,
+  and only plumb's, after a backup.** Every setup subcommand takes `--uninstall`:
+  the client's config is backed up, then plumb's server entry is removed and
+  nothing else — sibling MCP servers in the same file survive, and repeating the
+  call on a client plumb is not registered in is a no-op. For a skill-capable
+  client it also removes the skill directories plumb's sync installed, but only
+  those still carrying plumb's provenance marker or exactly matching the
+  embedded content — a skill the user rewrote survives, reported as left in
+  place. Each removed skill directory is backed up to a sibling
+  `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project
+  --uninstall` touches only the project's `.mcp.json`, never user-scoped
+  skills.
+
+- **Bare `plumb setup` on a terminal now opens an interactive client picker.**
+  Every client arrives pre-classified, the registered ones checked: `space`
+  toggles — unchecking a registered client flips it to an explicit,
+  warn-coloured uninstall that must be pressed again to back out of, so the
+  destructive direction is never a default — `a` marks every unregistered
+  client for registration without ever creating an uninstall, `enter` applies
+  the selection through the `--all` engine plus the `--uninstall` writers and
+  reports one grouped status table, and `q` quits. Without a terminal, bare
+  `plumb setup` still prints help.
+
+### Changed
+
+- **`plumb setup --all` is the single bulk flag; `--repair` and
+  `--install-missing` are hidden deprecated aliases of it.** `--all` now both
+  registers plumb in every installed-but-unregistered client and repoints
+  existing registrations at the current binary — formerly two separate flags —
+  so it is the one-shot first-time setup and the repair after the binary moves
+  or is rebuilt elsewhere. The old flags still parse but warn, and the bulk
+  engine moved to its own `internal/cli/setup_bulk.go`. Setup subcommand
+  shorts are now one line each: "Register plumb in <Client>".
+
+- **`plumb skills` groups its status table per client, with colour-coded
+  statuses.** Client blocks are separated by full-width dotted rules, and the
+  status strings are unchanged but coloured at the render layer: `installed`
+  green, `missing`/`stale` warn, `not registered` muted.
+
+- **`plumb doctor` gives live LSP sessions their own section.** Live daemon
+  sessions render in an "LSP Live" group directly after "Language Servers" and
+  are omitted entirely when no sessions run; live rows keep their "(live)"
+  names, and the JSON output shape is unchanged. The Configuration row
+  "project capability config" is renamed "capability trust", its detail now a
+  head count line followed by one capability key per line.
+
+- **`plumb trust` joins the shared CLI presentation, and its confirmation is
+  the ❯ Yes/No selector.** The disclosure renders in the shared section/row
+  style — ● headers, ┊ rows, muted values, warn warnings — with the
+  flood-defence ordering unchanged: the key listing is capped and the warnings
+  grouped last. The typed `[y/N]` prompt became the Yes/No selector that also
+  backs `plumb stop` and `plumb restart`, defaulting to No; `--yes` remains
+  the only non-terminal grant and non-terminal stdin is still refused.
+
+- **The CLI presentation foundations are shared: grouped tables, one status
+  colour vocabulary, terminal-accurate TTY checks.** A new
+  `render.GroupedTable` renders groups separated by full-width dotted rules;
+  a shared `statusStyle` vocabulary colours registered/updated/installed
+  green, missing/stale/error warn, and not installed/not registered/already
+  current/skipped muted; and `stdinIsTerminal`/`stdoutIsTerminal` now use
+  `term.IsTerminal`, which correctly refuses `/dev/null` — the old
+  ModeCharDevice check counted it as a terminal, so a command with stdin
+  redirected there could be offered a prompt it could not answer.
+
 ### Fixed
 
 - **`plumb mail` now counts notes addressed to `"next"` — the default — so the
