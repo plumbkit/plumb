@@ -24,10 +24,21 @@ func TestProjectPolicyTrustResult(t *testing.T) {
 	if !untrusted.warn {
 		t.Error("an untrusted project config must warn — silence is the defect this check exists for")
 	}
-	for _, want := range []string{"NOT in effect", "git.allow_push", "lsp.html.root_markers"} {
-		if !strings.Contains(untrusted.detail, want) {
-			t.Errorf("detail %q missing %q", untrusted.detail, want)
-		}
+	if untrusted.name != "capability trust" {
+		t.Errorf("name = %q, want %q", untrusted.name, "capability trust")
+	}
+	// The detail is a head line plus one key per line: printCheck indents
+	// continuation lines, so the key list stays readable however long it runs.
+	lines := strings.Split(untrusted.detail, "\n")
+	if lines[0] != "NOT in effect — this project's config sets 2 capability-granting key(s) plumb is ignoring:" {
+		t.Errorf("first line = %q, want the ignoring head line", lines[0])
+	}
+	if last := lines[len(lines)-1]; last != "the global config's values are in force instead" {
+		t.Errorf("last line = %q, want the global-values note", last)
+	}
+	keyLines := lines[1 : len(lines)-1]
+	if len(keyLines) != 2 || keyLines[0] != "git.allow_push" || keyLines[1] != "lsp.html.root_markers" {
+		t.Errorf("keys must be one per line, got %v", keyLines)
 	}
 	if !strings.Contains(untrusted.fix, "plumb trust") {
 		t.Errorf("fix %q must name `plumb trust`", untrusted.fix)
@@ -37,8 +48,8 @@ func TestProjectPolicyTrustResult(t *testing.T) {
 	if !trusted.ok || trusted.warn {
 		t.Error("a trusted project config is a clean pass")
 	}
-	if !strings.Contains(trusted.detail, "in effect") {
-		t.Errorf("detail %q should say the keys are in effect", trusted.detail)
+	if want := "trusted — 2 key(s) in effect\ngit.allow_push\nlsp.html.root_markers"; trusted.detail != want {
+		t.Errorf("detail = %q, want %q", trusted.detail, want)
 	}
 }
 

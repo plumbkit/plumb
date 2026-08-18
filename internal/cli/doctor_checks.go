@@ -380,20 +380,20 @@ func checkProjectPolicyTrust(ws string) (checkResult, bool) {
 // that are actually broken. It still gets the attention colour and a fix line,
 // because it is the answer to "why did my project config do nothing".
 func projectPolicyTrustResult(ws string, st config.ProjectPolicyStatus) checkResult {
-	const name = "project capability config"
-	keys := strings.Join(st.Spec.Keys(), ", ")
+	const name = "capability trust"
+	keys := strings.Join(st.Spec.Keys(), "\n")
 	if st.Trusted {
 		return checkResult{
 			name:   name,
 			ok:     true,
-			detail: fmt.Sprintf("trusted — %d key(s) in effect: %s", len(st.Spec), keys),
+			detail: fmt.Sprintf("trusted — %d key(s) in effect\n%s", len(st.Spec), keys),
 		}
 	}
 	return checkResult{
 		name: name,
 		ok:   true,
 		warn: true,
-		detail: fmt.Sprintf("NOT in effect — this project's config sets %d capability-granting key(s) plumb is ignoring: %s\n"+
+		detail: fmt.Sprintf("NOT in effect — this project's config sets %d capability-granting key(s) plumb is ignoring:\n%s\n"+
 			"the global config's values are in force instead", len(st.Spec), keys),
 		fix: "review them with `plumb config show --workspace " + ws + "`, then run `plumb trust " + ws + "` to honour them",
 	}

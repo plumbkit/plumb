@@ -65,7 +65,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 	failures, warnings := 0, 0
 	for _, s := range doctorSections(ws) {
-		checks := runSection(s.title, s.run)
+		checks := runSection(s)
 		for _, c := range checks {
 			switch {
 			case !c.ok:
@@ -89,10 +89,13 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	return silentExitError{}
 }
 
-// doctorSection is one titled group of checks.
+// doctorSection is one titled group of checks. A section marked omitWhenEmpty
+// prints nothing at all — no header, no rows, no blank lines — when its checks
+// produce no results.
 type doctorSection struct {
-	title string
-	run   func() []checkResult
+	title         string
+	run           func() []checkResult
+	omitWhenEmpty bool
 }
 
 // doctorSections is the SINGLE source of truth for which checks run and in what
@@ -104,14 +107,15 @@ type doctorSection struct {
 // disagrees with the terminal.
 func doctorSections(ws string) []doctorSection {
 	return []doctorSection{
-		{"Daemon", checkDaemon},
-		{"Language Servers", func() []checkResult { return checkLSPs(ws) }},
-		{"MCP Clients", checkMCPClients},
-		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
-		{"Dev Tools", checkDevTools},
-		{"Integrations", func() []checkResult { return checkRastro(ws) }},
-		{"Data", func() []checkResult { return checkStatsDB(ws) }},
-		{"Indexing", func() []checkResult { return checkTopology(ws) }},
+		{"Daemon", checkDaemon, false},
+		{"Language Servers", func() []checkResult { return checkLSPs(ws) }, false},
+		{"LSP Live", checkActiveLSPProcesses, true},
+		{"MCP Clients", checkMCPClients, false},
+		{"Configuration", func() []checkResult { return checkConfigs(ws) }, false},
+		{"Dev Tools", checkDevTools, false},
+		{"Integrations", func() []checkResult { return checkRastro(ws) }, false},
+		{"Data", func() []checkResult { return checkStatsDB(ws) }, false},
+		{"Indexing", func() []checkResult { return checkTopology(ws) }, false},
 	}
 }
 
@@ -154,12 +158,20 @@ func runDoctorJSON(ws string) error {
 	return nil
 }
 
-func runSection(title string, run func() []checkResult) []checkResult {
-	fmt.Println(tui.HintStyle.Render("● " + title))
-	fmt.Println()
+// runSection runs a section's checks under the working indicator first, then
+// prints the section — header, blank line, rows, trailing blank — only when it
+// has rows or is not marked omitWhenEmpty. The header lands after the checks
+// rather than before so an omitted section leaves nothing behind; the spinner
+// line is self-clearing, which makes the reorder invisible where it does print.
+func runSection(s doctorSection) []checkResult {
 	stopWorking := startWorkingIndicator()
-	checks := run()
+	checks := s.run()
 	stopWorking()
+	if s.omitWhenEmpty && len(checks) == 0 {
+		return checks
+	}
+	fmt.Println(tui.HintStyle.Render("● " + s.title))
+	fmt.Println()
 	printChecks(checks)
 	fmt.Println()
 	return checks

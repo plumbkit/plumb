@@ -14,10 +14,12 @@ import (
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
 
-// checkLSPs reports install and runtime status for all configured language servers.
-// Enabled languages with a missing binary are failures. Disabled languages are
+// checkLSPs reports install status for all configured language servers. Enabled
+// languages with a missing binary are failures. Disabled languages are
 // informational regardless of install status.
 // For the Java language server, a separate Java runtime check is always included.
+// Live daemon sessions are not part of this list; checkActiveLSPProcesses
+// reports them in their own "LSP Live" section.
 func checkLSPs(ws string) []checkResult {
 	cfg, err := config.Load()
 	if err != nil {
@@ -56,7 +58,6 @@ func checkLSPs(ws string) []checkResult {
 			results = append(results, checkSwiftToolchain())
 		}
 	}
-	results = append(results, checkActiveLSPProcesses()...)
 	if ws != "" {
 		results = append(results, checkXcodeBuildServer(ws, cfg.Xcode)...)
 	}
