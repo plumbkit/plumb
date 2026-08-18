@@ -82,31 +82,84 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 }
 
 // runSkillsSync installs or refreshes skills: the named client when an argument
-// is given, otherwise every registered skill-capable client. Per-skill errors
-// are warnings, not fatal (see installAndPrintSkills) — a sync that partially
-// failed still leaves every other skill correct.
+// is given, otherwise every registered skill-capable client. The report is the
+// same grouped table `plumb skills` shows — one group per client, so every
+// skill row reads under the client it belongs to — with the action taken in
+// the status cell, a summary line per client, and a muted skip note per
+// unregistered client in the sweep. Per-skill errors are rows with an error
+// status, not fatal (see syncClientGroup) — a sync that partially failed still
+// leaves every other skill correct.
 func runSkillsSync(_ *cobra.Command, args []string) error {
+	tui.RebuildStyles()
 	capable := skillCapableClients()
+	var targets []setupTarget
+	var skips []string
 	if len(args) == 1 {
-		t, ok := findSkillCapable(capable, args[0])
+		target, ok := findSkillCapable(capable, args[0])
 		if !ok {
 			return fmt.Errorf("unknown client %q — skill-capable clients: %s", args[0], skillCapableNames(capable))
 		}
-		if !plumbRegisteredIn(t) {
+		if !plumbRegisteredIn(target) {
 			return fmt.Errorf("plumb is not registered in %s — run `plumb setup %s` first, then re-run `plumb skills sync %s`",
-				t.name, t.use, t.use)
+				target.name, target.use, target.use)
 		}
-		fmt.Println(skillSyncSummaryLine(t.name, installAndPrintSkills(t)))
-		return nil
+		targets = []setupTarget{target}
+	} else {
+		for _, c := range capable {
+			if !plumbRegisteredIn(c) {
+				skips = append(skips, fmt.Sprintf("Skipping %s — plumb is not registered (`plumb setup %s`).", c.name, c.use))
+				continue
+			}
+			targets = append(targets, c)
+		}
 	}
-	for _, c := range capable {
-		if !plumbRegisteredIn(c) {
-			fmt.Printf("Skipping %s — plumb is not registered (`plumb setup %s`).\n", c.name, c.use)
-			continue
-		}
-		fmt.Println(skillSyncSummaryLine(c.name, installAndPrintSkills(c)))
+
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	var summaries []string
+	for _, target := range targets {
+		syncClientGroup(t, &summaries, target)
+	}
+	fmt.Println(t.Render())
+	for _, s := range summaries {
+		fmt.Println(s)
+	}
+	for _, s := range skips {
+		fmt.Println(tui.MutedStyle.Render(s))
 	}
 	return nil
+}
+
+// syncClientGroup installs one client's skills and appends their grouped-table
+// rows plus the client's summary line. The status cell carries the action
+// taken — "current" for an unchanged skill, the summary line's vocabulary —
+// and a failed install shows "error" with the reason in place of the dir:
+// errors stay visible without failing the sync.
+func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget) {
+	dir, results := installSkillsFor(target)
+	var tally skillSyncTally
+	t.NextGroup()
+	for i, r := range results {
+		name, shown := target.name, render.ContractPath(dir)
+		if i > 0 {
+			name, shown = "", ""
+		}
+		status := r.action
+		switch {
+		case r.err != nil:
+			status = "error"
+			shown = r.err.Error()
+			tally.failed++
+		case r.action == "unchanged":
+			status = "current"
+			tally.current++
+		case r.action == "installed":
+			tally.installed++
+		default:
+			tally.updated++
+		}
+		t.Row(name, r.name, statusStyle(status).Render(status), shown)
+	}
+	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally))
 }
 
 // findSkillCapable resolves a sync argument against the capable set by command
@@ -132,33 +185,6 @@ func skillCapableNames(capable []setupTarget) string {
 // line runSkillsSync prints per client.
 type skillSyncTally struct {
 	installed, updated, current, failed int
-}
-
-// installAndPrintSkills installs the embedded skills into t's skills directory,
-// prints one line per skill that changed, and tallies the outcome. It is a
-// no-op for a target with no skills directory.
-//
-// Errors are non-fatal by design: a failed skill install must not fail the rest
-// of the sync, because one unwritable directory should not strand the others.
-func installAndPrintSkills(t setupTarget) (tally skillSyncTally) {
-	dir, results := installSkillsFor(t)
-	for _, r := range results {
-		switch {
-		case r.err != nil:
-			tally.failed++
-			fmt.Fprintf(os.Stderr, "warning: installing skill %q: %v\n", r.name, r.err)
-		case r.action == "unchanged":
-			tally.current++
-		default:
-			if r.action == "installed" {
-				tally.installed++
-			} else {
-				tally.updated++
-			}
-			fmt.Printf("Skill %-20s %s → %s\n", r.name, r.action, filepath.Join(dir, r.name, "SKILL.md"))
-		}
-	}
-	return tally
 }
 
 // skillSyncSummaryLine renders one client's sync outcome as a single line. It

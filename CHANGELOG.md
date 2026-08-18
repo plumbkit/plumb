@@ -52,7 +52,12 @@
 - **`plumb skills` groups its status table per client, with colour-coded
   statuses.** Client blocks are separated by full-width dotted rules, and the
   status strings are unchanged but coloured at the render layer: `installed`
-  green, `missing`/`stale` warn, `not registered` muted.
+  green, `missing`/`stale` warn, `not registered` muted. `plumb skills sync`
+  reports through the same grouped table — one group per client with the
+  action taken per skill (`installed`/`updated`/`current`, or `error` with
+  the reason), followed by the per-client summary lines — replacing the old
+  undifferentiated `Skill <name> installed → <path>` lines that named no
+  client until the summary at the very end.
 
 - **`plumb doctor` gives live LSP sessions their own section.** Live daemon
   sessions render in an "LSP Live" group directly after "Language Servers" and

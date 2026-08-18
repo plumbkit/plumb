@@ -20,7 +20,8 @@ func statusStyle(status string) lipgloss.Style {
 	case strings.HasPrefix(status, "not installed"),
 		strings.HasPrefix(status, "not registered"),
 		strings.HasPrefix(status, "already current"),
-		strings.HasPrefix(status, "skipped"):
+		strings.HasPrefix(status, "skipped"),
+		strings.HasPrefix(status, "current"):
 		return tui.MutedStyle
 	case strings.HasPrefix(status, "registered"),
 		strings.HasPrefix(status, "updated"),

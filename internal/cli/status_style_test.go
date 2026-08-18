@@ -32,6 +32,7 @@ func TestStatusStyle(t *testing.T) {
 		{"muted not installed", "not installed", tui.MutedStyle},
 		{"muted not registered", "not registered", tui.MutedStyle},
 		{"muted already current", "already current", tui.MutedStyle},
+		{"muted current", "current", tui.MutedStyle},
 		{"muted skipped", "skipped", tui.MutedStyle},
 		{"plain empty", "", plain},
 		{"plain unknown", "pending", plain},
