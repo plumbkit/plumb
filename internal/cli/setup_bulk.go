@@ -40,7 +40,7 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	fmt.Println(render.ContextBox(tui.MutedStyle.Render("Current binary: "+plumbBin), tui.SepStyle))
+	fmt.Println(tui.MutedStyle.Render("Current binary: " + plumbBin))
 	fmt.Println()
 
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Status", "Config")

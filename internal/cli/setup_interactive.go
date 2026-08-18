@@ -50,7 +50,7 @@ func runSetupPicker() error {
 		return fmt.Errorf("client picker: %w", err)
 	}
 	if !final.applied || pickerChanges(final.rows) == 0 {
-		fmt.Println("\nNo changes — nothing selected.")
+		fmt.Println("No changes — nothing selected.")
 		return nil
 	}
 
@@ -121,7 +121,7 @@ func applyPickerRows(rows []pickerRow, plumbBin string) {
 		}
 	}
 	for _, note := range skillNotes {
-		fmt.Println(note)
+		fmt.Printf("\n%s\n", note)
 	}
 }
 
@@ -282,6 +282,6 @@ func renderSetupPicker(m setupPickerModel) string {
 		}
 		b.WriteString("  " + cursor + checkbox + " " + render.PadRight(name, nameW) + "  " + tag + "\n")
 	}
-	b.WriteString("\n" + tui.HintStyle.Render("  space toggle · a register all · enter apply · q quit") + "\n")
+	b.WriteString("\n" + tui.HintStyle.Render("  space toggle · a register all · enter apply · q quit") + "\n\n")
 	return b.String()
 }
