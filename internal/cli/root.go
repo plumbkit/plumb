@@ -21,15 +21,27 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		tui.Version = Version
-		if cfg, err := config.Load(); err == nil {
-			if t, ok := tui.AvailableThemes[cfg.UI.Theme]; ok {
-				tui.ActiveTheme = t
-				tui.ActiveThemeName = cfg.UI.Theme
-				tui.RebuildStyles()
-			}
-		}
 		return tui.Run(daemonLogPath(), daemonCtrlSocketPath())
 	},
+}
+
+// applyConfiguredTheme switches tui's package styles to the theme saved in the
+// user's [ui] config, if one resolves. The dashboard has always launched this
+// way; every other command renders through the same styles (the logo, ●
+// headings, ┊ rows, status colours), so without this the whole CLI stayed on
+// the default theme while the TUI followed the saved one. A config that fails
+// to load or names an unknown theme keeps the default — a broken config must
+// not take the CLI's colours down with it.
+func applyConfiguredTheme() {
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	if t, ok := tui.AvailableThemes[cfg.UI.Theme]; ok {
+		tui.ActiveTheme = t
+		tui.ActiveThemeName = cfg.UI.Theme
+		tui.RebuildStyles()
+	}
 }
 
 func init() {
@@ -40,6 +52,7 @@ func init() {
 	// idempotent, so the help/error paths never double-print.
 	rootCmd.Annotations = map[string]string{annoSkipLogo: "true"}
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		applyConfiguredTheme()
 		if suppressLogo(cmd) {
 			return
 		}
@@ -47,8 +60,10 @@ func init() {
 	}
 
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		// The help path skips PersistentPreRun, so the theme and the logo
+		// banner need applying here too.
+		applyConfiguredTheme()
 		PrintLogo()
-		tui.RebuildStyles()
 
 		// Print Usage
 		if cmd.UseLine() != "" {

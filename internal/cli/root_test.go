@@ -4,6 +4,9 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 func TestAvailableCommandNameWidthUsesLongestAvailableCommand(t *testing.T) {
@@ -70,5 +73,34 @@ func TestDiagnosticSuggestionsForRecoverableErrors(t *testing.T) {
 	got = diagnosticSuggestions(errors.New("no workspace found"))
 	if len(got) != 2 || got[0] != "plumb init" {
 		t.Fatalf("diagnosticSuggestions no workspace = %#v", got)
+	}
+}
+
+// TestApplyConfiguredTheme pins the CLI-side theme application: the theme the
+// TUI picker saved in [ui] reaches the shared styles every command renders
+// through, and an unknown theme name keeps the active one rather than
+// clearing the styles.
+func TestApplyConfiguredTheme(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	origTheme, origName := tui.ActiveTheme, tui.ActiveThemeName
+	t.Cleanup(func() {
+		tui.ActiveTheme, tui.ActiveThemeName = origTheme, origName
+		tui.RebuildStyles()
+	})
+
+	if err := config.SaveTheme("nordico"); err != nil {
+		t.Fatal(err)
+	}
+	applyConfiguredTheme()
+	if tui.ActiveThemeName != "nordico" || tui.ActiveTheme != tui.AvailableThemes["nordico"] {
+		t.Errorf("saved theme not applied: name = %q", tui.ActiveThemeName)
+	}
+
+	if err := config.SaveTheme("nope"); err != nil {
+		t.Fatal(err)
+	}
+	applyConfiguredTheme()
+	if tui.ActiveThemeName != "nordico" || tui.ActiveTheme != tui.AvailableThemes["nordico"] {
+		t.Errorf("an unloadable theme must keep the active one, got %q", tui.ActiveThemeName)
 	}
 }

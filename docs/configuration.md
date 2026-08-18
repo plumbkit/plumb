@@ -62,7 +62,7 @@ those as restart-needed.
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `theme` | string | `"plumb"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. |
+| `theme` | string | `"plumb"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. Applies to the TUI dashboard and the CLI's styled output alike. |
 | `path_style` | string | `"compact"` | How workspace folder paths are abbreviated in the Sessions sidebar: `compact`, `truncate-middle`, or `full`. |
 | `keys` | table | `{}` | Rebinds TUI keyboard shortcuts — an action-name → key-string map. See below. |
 

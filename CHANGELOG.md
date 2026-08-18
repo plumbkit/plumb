@@ -122,6 +122,16 @@
 
 ### Fixed
 
+- **The saved `[ui]` theme now applies to the whole CLI, not just the
+  dashboard.** Only the bare `plumb` TUI launch read `[ui]` theme before
+  styling; every other command — skills, doctor, trust, the logo banner, the
+  help pages — rendered through the shared `tui` styles on the default theme,
+  so a `nordico` user saw the `plumb` palette everywhere outside the TUI. The
+  root command now applies the configured theme before any output (including
+  the help path, which skips the pre-run hook), and an unloadable config or
+  unknown theme name keeps the default rather than clearing styles. Guarded
+  by `TestApplyConfiguredTheme`.
+
 - **`plumb mail` now counts notes addressed to `"next"` — the default — so the
   idle-wake hook fires for the common-case handoff.** The count was built on
   `collab.PendingNotes`, the in-session listing `workspace_sessions` uses, which
