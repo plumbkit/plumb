@@ -77,7 +77,7 @@ func openStructuralFixture(t *testing.T) (*topology.Store, string) {
 
 func runStructural(t *testing.T, s *topology.Store, ws string, args map[string]any) string {
 	t.Helper()
-	tool := NewStructuralQuery(func() *topology.Store { return s }, func() string { return ws })
+	tool := NewStructuralQuery(func() *topology.Store { return s }, func(context.Context) string { return ws })
 	raw, _ := json.Marshal(args)
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestStructuralQuery_UnusedContext(t *testing.T) {
 }
 
 func TestStructuralQuery_NilStore(t *testing.T) {
-	tool := NewStructuralQuery(func() *topology.Store { return nil }, func() string { return "" })
+	tool := NewStructuralQuery(func() *topology.Store { return nil }, func(context.Context) string { return "" })
 	raw, _ := json.Marshal(map[string]any{"query": "long-functions"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {

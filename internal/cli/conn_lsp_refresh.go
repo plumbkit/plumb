@@ -91,7 +91,7 @@ func (s *connSession) bindRefreshedPrimary(ctx context.Context, root, language s
 		v.policy = s.buildPathPolicy(v)
 		s.warmDepRoots(lang)
 		detectedLanguage := detectedLabel(root, lang, discovered, s.store.Current())
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Language = lang
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter

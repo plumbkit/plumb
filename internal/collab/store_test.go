@@ -192,7 +192,11 @@ func TestPutNote_ThreadsAndMintsConversations(t *testing.T) {
 	if err != nil || first == "" {
 		t.Fatalf("PutNote should mint a conversation id: %q %v", first, err)
 	}
-	second, err := s.PutNote(ctx, NoteInput{AuthorID: "au2", Body: "a", Addressee: "bob", TTL: time.Hour, ConversationID: first}, now)
+	// The reply comes from the note's addressee, which is what makes it a
+	// participant: the seed row is unbound (no addressee_id), so alice's name
+	// speaks for it. A stranger here is refused by the participant guard, which is
+	// covered in participation_test.go.
+	second, err := s.PutNote(ctx, NoteInput{AuthorSession: "alice", AuthorID: "au2", Body: "a", Addressee: "bob", TTL: time.Hour, ConversationID: first}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +655,7 @@ func TestOpenGlobalReadOnly_ReadsWithoutCreatingOrWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	sums, err := r.ConversationSummaries(ctx, now, 0)
+	sums, err := r.ConversationSummaries(ctx, Claimant{Name: "bob", ID: "b"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

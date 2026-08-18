@@ -103,12 +103,15 @@ func (s ProjectPolicySpec) Describe() []string {
 var policyLSPFreeFields = []string{"enabled", "diagnostics", "idle_timeout", "max_workspaces"}
 
 // isFreeLSPField reports whether an [lsp.<lang>] key is one of the provably inert
-// fields. Comparison is case-insensitive to mirror go-toml/v2's own key matching,
-// so `Enabled` is recognised as the free field it decodes to rather than being
-// gated as an unknown.
+// fields. Matching uses strings.ToLower, NOT strings.EqualFold: go-toml/v2 binds a
+// TOML key to a struct field through strings.ToLower (unmarshaler.go byFold), and
+// the two rules disagree on non-ASCII spellings — EqualFold can see a free field
+// the decoder does not bind, or miss one it does. The decoder's rule is the only
+// correct one (see foldKeys in project_write.go).
 func isFreeLSPField(key string) bool {
+	lower := strings.ToLower(key)
 	for _, f := range policyLSPFreeFields {
-		if strings.EqualFold(key, f) {
+		if lower == f {
 			return true
 		}
 	}
@@ -191,7 +194,8 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 }
 
 // rawValues returns every top-level value in the parsed project config whose key
-// matches want case-insensitively, WHATEVER its type.
+// matches want by strings.ToLower (the decoder's fold, not EqualFold), WHATEVER
+// its type.
 //
 // It returns a SLICE, not one value, because a lookup by exact name is a gate
 // bypass. go-toml/v2 binds a table name to a struct field case-insensitively
@@ -215,9 +219,10 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 // is HASHED rather than ignored, so the gate fails closed on shapes nobody
 // anticipated.
 func rawValues(raw map[string]any, want string) []any {
+	lower := strings.ToLower(want)
 	var out []any
 	for k, v := range raw {
-		if strings.EqualFold(k, want) {
+		if strings.ToLower(k) == lower {
 			out = append(out, v)
 		}
 	}
@@ -319,12 +324,14 @@ func (st ProjectPolicyStatus) NeedsTrust() bool {
 // per-row display (`plumb config show`) can distinguish "this is the value in
 // effect" from "the project asked for something else here, untrusted".
 //
-// The comparison is case-insensitive because the spec stores the spelling the
-// project used, while a caller asks with the canonical one — and the two differ
-// for exactly the fold variants that must not slip past a display surface.
+// The comparison uses strings.ToLower (the decoder's fold, not EqualFold) because
+// the spec stores the spelling the project used, while a caller asks with the
+// canonical one — and the two differ for exactly the fold variants that must not
+// slip past a display surface.
 func (st ProjectPolicyStatus) Asked(key string) bool {
+	lower := strings.ToLower(key)
 	for _, e := range st.Spec {
-		if strings.EqualFold(e.Key, key) {
+		if strings.ToLower(e.Key) == lower {
 			return true
 		}
 	}

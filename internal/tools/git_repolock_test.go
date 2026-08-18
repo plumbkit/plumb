@@ -175,7 +175,7 @@ func TestGit_ConcurrentCommitsSerialise(t *testing.T) {
 				errs <- err
 				return
 			}
-			tool := NewGit(WriteDeps{WorkspaceFn: func() string { return dir }}, nil)
+			tool := NewGit(WriteDeps{WorkspaceFn: func(context.Context) string { return dir }}, nil)
 			if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{fname}}); err != nil {
 				errs <- fmt.Errorf("add %s: %w", fname, err)
 				return

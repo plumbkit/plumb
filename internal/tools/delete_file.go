@@ -61,8 +61,8 @@ type deleteFileArgs struct {
 }
 
 func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("delete_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("delete_file", t.deps.limiter(ctx))
 	}
 	var a deleteFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -71,8 +71,8 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if a.Path == "" {
 		return "", errors.New("delete_file: file_path is required")
 	}
-	path := t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(path); err != nil {
+	path := t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return "", fmt.Errorf("delete_file: %w", err)
 	}
 

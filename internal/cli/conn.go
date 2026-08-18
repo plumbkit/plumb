@@ -153,6 +153,10 @@ type sessionView struct {
 	// once during the initialize exchange, before attach, and preserved across
 	// re-pins. "" when the client is not a session-id-injecting serve proxy.
 	proxySessionID string
+	// replayedSessionID is the stable plumb session ID the serve proxy replayed
+	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
+	// the live sessID equal to it on reconnect.
+	replayedSessionID string
 	// inheritedSessionIDs are predecessor plumb session IDs this connection may
 	// also read mailbox messages for, granted ONLY by the proxy-authenticated
 	// persisted-state path (see inheritSessionID). Nil for every other session.
@@ -222,7 +226,28 @@ type connSession struct {
 	// started this run.
 	daemonStartedAt time.Time
 
-	sessID string
+	// sessID is the plumb session ID this connection is registered under. It is
+	// mutable: onSessionID may ADOPT the stable ID the serve proxy replayed
+	// (PLAN-296), which re-keys the session file and the connRegistry. Every
+	// read goes through sessionID(); the only writer is setSessionID.
+	sessIDMu sync.RWMutex
+	sessID   string
+
+	// registry is the daemon's live-connection registry, keyed by session ID.
+	// onSessionID re-keys it when the stable replayed ID is adopted (PLAN-296).
+	// nil in tests that construct connSession directly rather than via handleConn.
+	registry *connRegistry
+
+	// logicalAgents observes the distinct logical-agent identities this
+	// connection declares (session_start.session_id and per-call _meta), so a
+	// multiplexing client can be detected before it shares state (PLAN-286).
+	logicalAgents logicalAgentState
+
+	// shards holds the per-logical-agent copies of the mutable facts, keyed by
+	// logical-agent ID. Populated only once the connection is shared; guarded by
+	// shardsMu. See conn_agent_shard.go.
+	shardsMu sync.Mutex
+	shards   map[string]*agentShard
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -412,7 +437,7 @@ func (s *connSession) close() {
 	if budgetKey != "" {
 		s.budgets.release(budgetKey)
 	}
-	session.Unregister(s.sessID)
+	session.Unregister(s.sessionID())
 }
 
 // log returns the session-scoped logger, falling back to the process-global
@@ -504,7 +529,7 @@ func (s *connSession) markBoundaryViolation(message string) {
 	if message == "" {
 		return
 	}
-	session.Patch(s.sessID, func(info *session.Info) {
+	session.Patch(s.sessionID(), func(info *session.Info) {
 		info.Health = "blocked"
 		info.HealthMessage = message
 	})

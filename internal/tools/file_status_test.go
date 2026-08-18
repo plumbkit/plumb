@@ -151,7 +151,7 @@ func TestFileStatus_BoundaryViolationReported(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	guard := BoundaryGuard(func(string) error {
+	guard := BoundaryGuard(func(_ context.Context, _ string) error {
 		return NewWorkspaceBoundaryError("/some/workspace", f)
 	})
 	tool := NewFileStatus(nil).WithBoundary(guard)

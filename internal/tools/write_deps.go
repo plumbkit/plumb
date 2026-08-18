@@ -49,6 +49,10 @@ type WriteDeps struct {
 	// Limiter caps how many write operations a session may issue per
 	// minute. nil disables rate limiting.
 	Limiter *RateLimiter
+	// LimiterFor, when set, resolves the rate limiter for the logical agent
+	// carried in the call ctx (PLAN-286: a shared connection budgets each agent
+	// independently). It takes precedence over Limiter when it returns non-nil.
+	LimiterFor func(ctx context.Context) *RateLimiter
 	// Strict, when non-nil, reports whether strict mode applies to this
 	// call (per the resolved per-workspace [edits].strict config and the
 	// PLUMB_STRICT_EDITS env var). nil falls back to env-only.
@@ -57,12 +61,18 @@ type WriteDeps struct {
 	// edit_file consults in strict mode. nil disables per-session
 	// tracking (strict mode becomes a no-op for the requires-read check).
 	Reads *ReadTracker
+	// ReadsFor, when set, resolves the ReadTracker for the logical agent in the
+	// call ctx (PLAN-286). Takes precedence over Reads when it returns non-nil.
+	ReadsFor func(ctx context.Context) *ReadTracker
 	// Writes is the per-session WriteTracker recording paths plumb has written
 	// this session. The dirty-guard consults it so re-editing a file plumb
 	// itself wrote is never blocked, while pre-existing uncommitted work still
 	// requires dirty_ok. nil disables session-awareness (every dirty file then
 	// blocks unless dirty_ok is set).
 	Writes *WriteTracker
+	// WritesFor, when set, resolves the WriteTracker for the logical agent in
+	// the call ctx (PLAN-286). Takes precedence over Writes when non-nil.
+	WritesFor func(ctx context.Context) *WriteTracker
 	// Boundary rejects paths outside the workspace pinned to this MCP
 	// connection. nil disables boundary checks (tests / unattached sessions).
 	Boundary BoundaryGuard
@@ -104,7 +114,7 @@ type WriteDeps struct {
 	// WorkspaceFn returns the resolved workspace root for the current session.
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
-	WorkspaceFn func() string
+	WorkspaceFn func(ctx context.Context) string
 	// ShowWriteDiff, when true, appends a unified diff of the change to
 	// write_file and edit_file responses. Defaults to true (zero value of
 	// bool is false, but callers should set this from the resolved config).
@@ -137,6 +147,54 @@ type WriteDeps struct {
 	// Undo, when non-nil, records the single most recent revertible write per
 	// path so undo_edit can safely revert it. nil disables undo capture.
 	Undo *UndoStore
+	// UndoFor, when set, resolves the UndoStore for the logical agent in the
+	// call ctx (PLAN-286). Takes precedence over Undo when it returns non-nil.
+	UndoFor func(ctx context.Context) *UndoStore
+}
+
+// limiter resolves the rate limiter for this call: the per-logical-agent limiter
+// (LimiterFor) on a shared connection, else the connection-level Limiter
+// (PLAN-286). nil-safe — a bare WriteDeps{} has neither and disables limiting.
+func (d WriteDeps) limiter(ctx context.Context) *RateLimiter {
+	if d.LimiterFor != nil {
+		if l := d.LimiterFor(ctx); l != nil {
+			return l
+		}
+	}
+	return d.Limiter
+}
+
+// reads resolves the ReadTracker for this call: per-logical-agent (ReadsFor) on
+// a shared connection, else the connection-level Reads (PLAN-286).
+func (d WriteDeps) reads(ctx context.Context) *ReadTracker {
+	if d.ReadsFor != nil {
+		if r := d.ReadsFor(ctx); r != nil {
+			return r
+		}
+	}
+	return d.Reads
+}
+
+// writes resolves the WriteTracker for this call: per-logical-agent (WritesFor)
+// on a shared connection, else the connection-level Writes (PLAN-286).
+func (d WriteDeps) writes(ctx context.Context) *WriteTracker {
+	if d.WritesFor != nil {
+		if w := d.WritesFor(ctx); w != nil {
+			return w
+		}
+	}
+	return d.Writes
+}
+
+// undo resolves the UndoStore for this call: per-logical-agent (UndoFor) on a
+// shared connection, else the connection-level Undo (PLAN-286).
+func (d WriteDeps) undo(ctx context.Context) *UndoStore {
+	if d.UndoFor != nil {
+		if u := d.UndoFor(ctx); u != nil {
+			return u
+		}
+	}
+	return d.Undo
 }
 
 func (d WriteDeps) postWriteDiagWindow() time.Duration {
@@ -268,7 +326,7 @@ func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *
 	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
 	root := ""
 	if d.WorkspaceFn != nil {
-		root = d.WorkspaceFn()
+		root = d.WorkspaceFn(context.Background())
 	}
 	return formatCrossFileDiagnostics(breaks, root)
 }
@@ -316,15 +374,17 @@ func (d WriteDeps) notifyTopology(path string) {
 // the file content prior to the write ("" with existedBefore=false for a
 // creation); after is the content plumb wrote. A before larger than the
 // snapshot cap is skipped, so undo is simply unavailable for very large files.
-// nil-safe (no-op when Undo is unwired).
-func (d WriteDeps) recordUndo(path, before, after string, existedBefore bool, tool string) {
-	if d.Undo == nil {
+// nil-safe (no-op when no UndoStore resolves). The UndoStore is resolved per
+// logical agent (PLAN-286), so one agent's snapshot never overwrites another's.
+func (d WriteDeps) recordUndo(ctx context.Context, path, before, after string, existedBefore bool, tool string) {
+	u := d.undo(ctx)
+	if u == nil {
 		return
 	}
 	if len(before) > maxUndoSnapshotBytes {
 		return
 	}
-	d.Undo.Record(path, undoSnapshot{
+	u.Record(path, undoSnapshot{
 		before:        before,
 		existedBefore: existedBefore,
 		afterSHA:      sha256OfString(after),
@@ -332,8 +392,8 @@ func (d WriteDeps) recordUndo(path, before, after string, existedBefore bool, to
 	})
 }
 
-func (d WriteDeps) checkBoundary(path string) error {
-	return d.Boundary.check(path)
+func (d WriteDeps) checkBoundary(ctx context.Context, path string) error {
+	return d.Boundary.check(ctx, path)
 }
 
 // resolvePath resolves a path argument against the connection's pinned
@@ -345,14 +405,14 @@ func (d WriteDeps) checkBoundary(path string) error {
 // touching a daemon-CWD-relative file. nil/empty WorkspaceFn is a no-op,
 // preserving WriteDeps{} test setups. The resolved path must feed BOTH the
 // boundary check and the filesystem operation.
-func (d WriteDeps) resolvePath(path string) string {
+func (d WriteDeps) resolvePath(ctx context.Context, path string) string {
 	p := paths.URIToPath(path)
 	if filepath.IsAbs(p) {
 		return p
 	}
 	var base string
 	if d.WorkspaceFn != nil {
-		base = d.WorkspaceFn()
+		base = d.WorkspaceFn(ctx)
 	}
 	if base == "" {
 		return filepath.Clean(p)
@@ -374,13 +434,17 @@ func (d WriteDeps) resolvePath(path string) string {
 //     session's own consecutive writes (read → edit → edit no longer warns).
 //
 // Both calls stat under the caller's held per-path lock, so they observe the
-// same post-write mtime. nil-safe on both trackers.
-func (d WriteDeps) recordWritten(path string) {
-	d.Writes.Record(path)
-	if d.Reads != nil {
+// same post-write mtime. nil-safe on both trackers. Both trackers resolve per
+// logical agent (PLAN-286), so a write is recorded against the calling agent's
+// own read/write state.
+func (d WriteDeps) recordWritten(ctx context.Context, path string) {
+	if w := d.writes(ctx); w != nil {
+		w.Record(path)
+	}
+	if r := d.reads(ctx); r != nil {
 		if info, err := os.Stat(path); err == nil {
 			sha, _ := fileSHA256(path) // best-effort; empty on error
-			d.Reads.Record(path, info.ModTime(), sha)
+			r.Record(path, info.ModTime(), sha)
 		}
 	}
 }

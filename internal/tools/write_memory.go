@@ -53,7 +53,7 @@ func (*writeMemoryTool) InputSchema() json.RawMessage {
 }`)
 }
 
-func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *writeMemoryTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name        string   `json:"name"`
 		Content     string   `json:"content"`
@@ -70,11 +70,11 @@ func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (stri
 	if a.Content == "" {
 		return "", errors.New("`content` is required")
 	}
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("write_memory: %w", err)
 	}
 	if err := memory.WriteIndexedWithOptions(resolveMemoryIndex(t.indexFn, ws), ws, a.Name, a.Content, memory.WriteOptions{Description: a.Description, Paths: a.Paths}); err != nil {

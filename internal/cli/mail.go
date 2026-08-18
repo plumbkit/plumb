@@ -102,8 +102,11 @@ Exit status is 0 whether or not mail is waiting, and non-zero only on error, so
 
 Scope: the workspace mailbox only. Cross-project messages live in a
 daemon-level store behind the recipient's [collab] cross_project opt-in (off by
-default) and are not counted. Notes addressed to "next" are excluded too — they
-go to whichever session claims first.`,
+default) and are not counted. Notes addressed to "next" — the default — ARE
+counted, for every session except the one that wrote them: the probe claims
+nothing, so there is no race to lose, and a session can never claim its own
+note, so waking it for one would fire again at every turn end until the note
+expired.`,
 	Args:        cobra.NoArgs,
 	RunE:        runMail,
 	Annotations: map[string]string{annoSkipLogo: "true"},
@@ -284,16 +287,17 @@ func mailNames(matches []session.Info) []string {
 // mailWaiting returns the age in seconds of every message waiting for name in
 // the workspace's mailbox, oldest first.
 //
-// It goes through collab.PendingNotes, the same listing path workspace_sessions
-// uses, rather than a query written here, so the delivery predicate stays
-// defined in one place.
-//
-// That inherits PendingNotes' exclusion of notes addressed to "next", which is
-// the right trade rather than a free one. A "next" note goes to whichever
-// session claims it first, so counting it for every candidate would wake several
-// agents for one message that all but one of them will lose the race for. The
-// cost is real: a "next" note left while a session sits idle will not wake it,
-// and it arrives whenever that session next makes a call of its own.
+// It goes through collab.ClaimableNotes — the claim predicate as a pure read —
+// rather than collab.PendingNotes, so the probe counts exactly what a claim
+// would hand over while touching no watermark. PendingNotes is the
+// workspace_sessions listing and deliberately omits "next" notes; "next" is
+// leave_note's default addressee, so a probe built on it was blind to the
+// common-case handoff and the wake hook never fired for it. The race the
+// listing's exclusion protects against does not exist here — the probe claims
+// nothing, so several sessions counting the same "next" note costs redundant
+// wakes, never a lost message. The author exclusion DOES carry over, via the
+// shared predicate: a session must not be woken for a note it wrote itself and
+// can never claim.
 //
 // It reads the WORKSPACE mailbox only. A cross-project message lands in the
 // daemon-level store, which a recipient reads only when its own project sets
@@ -331,7 +335,7 @@ func mailWaiting(who collab.Claimant) ([]int, error) {
 	defer cancel()
 
 	now := time.Now()
-	rows, err := store.PendingNotes(ctx, who, now)
+	rows, err := store.ClaimableNotes(ctx, who, now)
 	if err != nil {
 		return nil, fmt.Errorf("reading the mailbox: %w", err)
 	}

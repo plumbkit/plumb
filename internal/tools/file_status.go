@@ -42,9 +42,10 @@ const maxFileStatusPaths = 50
 //
 // Concurrency: Execute is safe for concurrent use.
 type FileStatus struct {
-	writes *WriteTracker // may be nil; without it last_writer is always "unknown"
-	guard  BoundaryGuard
-	ws     WorkspaceFn
+	writes    *WriteTracker                           // may be nil; without it last_writer is always "unknown"
+	writesFor func(ctx context.Context) *WriteTracker // PLAN-286: per-agent resolver; overrides writes
+	guard     BoundaryGuard
+	ws        WorkspaceFn
 }
 
 // NewFileStatus constructs the tool. The WriteTracker is the per-connection
@@ -52,6 +53,23 @@ type FileStatus struct {
 // reports "unknown" for every path).
 func NewFileStatus(writes *WriteTracker) *FileStatus {
 	return &FileStatus{writes: writes}
+}
+
+// WithWritesFor wires a per-call WriteTracker resolver (PLAN-286): on a shared
+// connection each logical agent tracks its own writes.
+func (t *FileStatus) WithWritesFor(fn func(ctx context.Context) *WriteTracker) *FileStatus {
+	t.writesFor = fn
+	return t
+}
+
+// writeTracker resolves the WriteTracker for this call (PLAN-286).
+func (t *FileStatus) writeTracker(ctx context.Context) *WriteTracker {
+	if t.writesFor != nil {
+		if w := t.writesFor(ctx); w != nil {
+			return w
+		}
+	}
+	return t.writes
 }
 
 // WithBoundary wires the per-connection boundary guard so a path outside the
@@ -151,9 +169,9 @@ func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
 	// alone would answer about a different file than the caller named — silently,
 	// as exists=false with no error. That is the outcome ParentTraversalError
 	// exists to refuse; file_status must not be the one exception to it.
-	resolved := resolvePath(raw, t.ws)
+	resolved := resolvePath(ctx, raw, t.ws)
 	res := fileStatusResult{path: resolved}
-	if err := t.guard.check(resolved); err != nil {
+	if err := t.guard.check(ctx, resolved); err != nil {
 		res.err = err.Error()
 		return res
 	}
@@ -172,7 +190,7 @@ func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
 	res.mtime = info.ModTime()
 	res.size = info.Size()
 	res.gitDirty = pathIsDirty(ctx, resolved)
-	res.changedSince, res.lastWriter = t.writerStatus(resolved, info.ModTime())
+	res.changedSince, res.lastWriter = t.writerStatus(ctx, resolved, info.ModTime())
 	return res
 }
 
@@ -180,8 +198,8 @@ func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
 // per-session WriteTracker. A file plumb never wrote this session is "unknown";
 // one whose on-disk mtime advanced past plumb's recorded write was changed by
 // someone else ("external"); otherwise plumb is the last writer.
-func (t *FileStatus) writerStatus(path string, mtime time.Time) (changed bool, writer string) {
-	recorded, wrote := t.writes.WroteMtime(path)
+func (t *FileStatus) writerStatus(ctx context.Context, path string, mtime time.Time) (changed bool, writer string) {
+	recorded, wrote := t.writeTracker(ctx).WroteMtime(path)
 	if !wrote {
 		return false, "unknown"
 	}

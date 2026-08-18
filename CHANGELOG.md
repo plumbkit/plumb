@@ -7,7 +7,107 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Added
+
+- **`plumb setup junie` registers plumb in JetBrains Junie.** Junie stores its
+  MCP configuration in `~/.junie/mcp/mcp.json` (`mcpServers` key) and loads
+  skills from `~/.junie/skills/`. `plumb setup --all` detects Junie via its home
+  dir (`~/.junie`) when no config file exists yet, and `plumb skills sync`
+  installs embedded skills into `~/.junie/skills/`.
+
 ### Fixed
+
+- **`plumb mail` now counts notes addressed to `"next"` — the default — so the
+  idle-wake hook fires for the common-case handoff.** The count was built on
+  `collab.PendingNotes`, the in-session listing `workspace_sessions` uses, which
+  omits `"next"` notes by design: a listing advertises a message the reader then
+  races to claim. But `leave_note` defaults to `to: "next"`, so the probe was
+  blind to exactly the notes most likely to be waiting, and an idle agent was
+  never woken for them. The race the exclusion protects against does not exist
+  on this path — `plumb mail` claims nothing, so several sessions counting the
+  same `"next"` note costs redundant wakes, never a lost message.
+
+  The count now comes from a new store method, `collab.ClaimableNotes`, which
+  reads the shared `claimable` predicate — the same one `ClaimNotes` and
+  `HasPendingNotes` use — without touching the watermark. The author exclusion
+  carries over with it: a session can never claim a note it wrote itself, so
+  waking it for one would fire the hook at every turn end and deliver nothing.
+  `PendingNotes` and the `workspace_sessions` listing are unchanged.
+- **The unregistered-session guard on `share_intent` and `share_findings` now
+  actually fires.** It tested the session NAME, and a session whose registration
+  failed still has one — the daemon logs "continuing unregistered and
+  unaddressable" and then assigns a generated display name anyway, for the TUI
+  and the logs. What is empty in that state is the session ID. The guard read the
+  one field that is never empty, so it shipped inert.
+
+  The consequences it was written to prevent were therefore all still live:
+  `share_intent` stored an empty author id, which `ClearSessionIntents` skips, so
+  the claim was never cleared at session end and lingered for the whole TTL — and
+  because `PutIntent` replaces via `DELETE ... WHERE author_id = ?`, one
+  unregistered session's intent deleted every other unregistered session's.
+  `share_findings` wrote a project memory whose provenance nothing could trace.
+
+  Every other gate in the daemon already keys on the session ID; this one now
+  matches them.
+- **A conversation id is an address, not a capability: only a thread's
+  participants can write into it.** Nothing checked membership, so any session
+  holding an id could insert into an exchange between two other agents — landing
+  agent-authored text in the middle of what the participants believe is their own
+  conversation — and could repeat that until the thread hit `max_exchanges`,
+  permanently severing an exchange it was never part of. The id had been an
+  unguessable token held only by participants, which made this unreachable in
+  practice; `workspace_sessions` then began printing live ids, which is what
+  turned it into a real hole.
+
+  Both halves are closed. `PutNote` refuses to thread onto a conversation the
+  author is not in, enforced inside the insert for the same reason the exchange
+  budget is — checking in the caller and then inserting is two steps, and a rule
+  in the store cannot be forgotten by a future caller. And the conversation
+  volume listing is now scoped to the caller's own threads, so an uninvolved
+  session cannot enumerate other agents' exchanges in the first place.
+
+  Membership admits names as well as session ids, because a note to a peer that
+  was not live stores no addressee id and its recipient must still be able to
+  reply — the same concession delivery already makes. It deliberately ignores
+  expiry: having been in a thread is a historical fact, so a long exchange whose
+  opening notes have aged out does not lock out its own participants. Once the
+  reaper deletes those rows the id stops working entirely.
+
+- **An in-thread reply now resolves by session identity, not by name.** After a
+  `rename_session` the caller saw its own former name among the participants and
+  its reply was refused as ambiguous — naming the caller as one of the two
+  parties. In the other direction, a session that later drew a departed peer's
+  name was treated as that peer. Rows carry author and addressee ids; names are
+  consulted only where a row has none.
+
+  The same path no longer answers "who is in this thread?" for a thread the
+  caller is not in — it refused to send, but named the participants while doing
+  so, which made it an enumeration oracle for other agents' exchanges. It also
+  reads the daemon-level store only when this workspace has opted in to
+  cross-project mail, matching the gate the observability path already applied.
+
+- **`workspace_sessions` no longer renders twice as many sent notes as it says,
+  in the wrong order.** The section takes the caller's outbox from the workspace
+  store and the daemon-level one; each returns its own rows newest-first, so
+  concatenating them yielded up to double the documented cap with a note sent
+  seconds ago printed below one sent hours ago — under a heading that says
+  "recent". Sorted across both, then capped.
+- **A project config that fails to load no longer writes an Xcode build-server
+  configuration from the wrong settings.** Making an unreadable config fall back
+  to the global one also made it fall through to the Xcode start, which the
+  earlier `return` had skipped. So a bare Xcode project with a typo in its
+  `.plumb/config.toml` had its `buildServer.json` written from the **global**
+  scheme — and `xcodebsp.Configure` short-circuits once that file exists, so it
+  is never regenerated by any session on any daemon until someone deletes it.
+  Fixing the TOML does not undo it.
+
+  Falling back to the global config is right for policy, which has an answer
+  either way and is revisited on the next watcher pass. It is wrong for an
+  irreversible on-disk action, which is better not taken than taken on a guess.
+  A *deleted* config still starts the flow, deliberately: "there is no project
+  config" is a knowable state whose answer really is the global one, while
+  "the config says something we could not read" is a guess about content that
+  exists.
 
 - **An unrestored home-wide workspace claim is now visible to the operator, and
   a pre-0.16.7 wide pin is cleaned up instead of living forever.** Two loose
@@ -99,7 +199,65 @@
   `PLUMB_GIT_*` variable, and that setting one actually makes the row say so.
   Without the guard this recurs the moment a seventh field is registered.
 
+- **The contested-marker tie-break no longer starves on a large non-source
+  tree — above a size threshold it had silently degraded to the pre-#341
+  behaviour, re-attaching jdtls to pure-Kotlin Gradle projects.** #341 made a
+  contested Gradle root follow the language owning the most source files
+  beneath it. But the tie-break's walk shared the content sniff's 2000-file
+  budget, and charged EVERY file examined against it, not only the ones a
+  language claims. The walk is a LIFO over sorted directory listings, so
+  siblings pop in reverse-alphabetical order: `src/main/resources` before
+  `src/main/kotlin`. A resources tree larger than the cap exhausted the budget
+  before a single source file was reached; the truncated count was then
+  discarded — correctly, a truncated count is not evidence — and the tie fell
+  back to the deterministic language order, which is java. So a pure-Kotlin
+  project resolved to java once its resources tree crossed ~2000 files:
+  exactly the misattach #341 fixed, restored by size rather than by shape.
+  This was a degradation to the pre-#341 answer above that threshold, not a
+  regression below it.
+
+  The tie-break now walks with its own budget, ten times the sniff's — ties
+  are rare and a 20k-file contested directory scans in a couple of tens of
+  milliseconds — and prunes the conventional non-source directories of the JVM
+  shape it exists to decide: `resources`, and Android `assets/` and `res/`. By
+  convention they hold no sources the tied candidates contest, and they are
+  exactly the trees large enough to starve a scan. Together these raise the
+  starvation threshold roughly tenfold and eliminate the common JVM shape;
+  they do not close the class — an unpruned tree can still exhaust the budget,
+  and the tie-break still degrades honestly then, falling back to the language
+  order rather than trusting a prefix. The last-resort sniff is untouched: it
+  keeps its tight budget and still answers from a truncated count, because its
+  alternative is no language at all.
+
+  Pinned by `TestStrongLangAt_LargeResourcesTreeDoesNotStarveTheScan` (the
+  exact reported repro: 20 Kotlin sources against a 2500-file resources tree),
+  `TestStrongLangAt_TieBreakBudgetSurvivesAModerateNonSourceTree` and
+  `TestStrongLangAt_TieBreakStillTruncatesAboveItsBudget` (the budget's value,
+  from below and above),
+  `TestStrongLangAt_PrunedResourceTreeCannotStarveTheTieBreak` and
+  `TestStrongLangAt_TieBreakPrunesKnownNonSourceDirs` (pruning, including each
+  pruned name individually), and
+  `TestStrongLangAt_DepthDoesNotReachAssetTrees` (tieScanDepth's upper side on
+  an unpruned tree). Every pinning assertion was mutation-verified: raising or
+  lowering the budget, and dropping any one pruned name, each fails its test.
+
 ### Added
+
+- **`plumb serve --workspace <path>` (or `PLUMB_WORKSPACE`) pins the
+  connection's workspace attach hint.** MCP clients that spawn `plumb serve`
+  as a stdio subprocess (Claude Desktop, harnesses) do not set the child's
+  working directory, so the serve inherited the *client's* launch directory
+  and the daemon auto-attached to whatever that happened to be. An explicit
+  flag now replaces the serve cwd as the advisory hint transported in the
+  initialize frame's `_meta` (`dev.plumbkit/workspace`): the flag wins over
+  the env var, the env var over the cwd, and with neither the cwd-hint
+  behaviour is unchanged. The value is `$VAR`-expanded and made absolute like
+  `--allow-dir`; symlink canonicalisation stays with the daemon's
+  `pool.Detect`, which already resolves the hint like any other candidate
+  root. The hint keeps its advisory rank — it never overrides an explicit
+  `session_start` pin and is never persisted — and it requires the resilient
+  proxy (the default); under `--no-reconnect` serve warns that the flag is
+  ignored, exactly like `--allow-dir`.
 
 - **The CHANGELOG placement guard now catches an entry moved OUT of the
   unreleased section, and covers direct pushes to `main`.** Two gaps were left
@@ -234,6 +392,17 @@
   `~/.zcode` and creates it fresh. ZCode also reads `SKILL.md` directory
   bundles from `~/.zcode/skills/` (verified against the app's own bundled
   configuration guide), so it joins the `plumb skills sync` clients.
+- **`plumb setup` now knows DeepSeek Harness.** `plumb setup dsh` registers
+  the current plumb binary as a stdio MCP server in the harness's home-level
+  user patch layer (`$DSH_HOME/cordis.patch.yml`, or `~/.dsh/cordis.patch.yml`)
+  as a row for the in-box `@deepseek-ai/dsh-mcp-client` plugin — no pnpm
+  install needed, and because dsh applies the home layer to every profile, one
+  registration covers the web, headless, and any custom profile. The bridged
+  tools appear as `mcp__plumb__*`. The merge is a node-level YAML round-trip:
+  unrelated patch entries, comments, and `!!js` expressions survive verbatim,
+  and a repoint preserves user-added keys such as `toolCallTimeoutMs`. dsh is
+  also detected via its home dir (`$DSH_HOME`, or `~/.dsh`) by `plumb setup
+  --all` and `plumb doctor`, mirroring Kimi Code's absent-config detection.
 
 - **`workspace_sessions` now shows what you have sent and how busy each
   conversation is.** Two new sections, both observational: *your recent notes*
@@ -1045,10 +1214,15 @@
   expiry-driven pruning — and the stats database has none of it and is never
   pruned, so the second copy silently outlived every guarantee the first was
   given. Bodies are now stripped before the row is written; byte counts,
-  timings, savings and the routing metadata that makes a row queryable (`to`,
-  `conversation_id`, `paths`, `wait_seconds`) are all preserved, and every
-  other tool is untouched — notably `git`, whose output `workspace_sessions`
-  reads back for commit attribution.
+  timings, savings and the routing metadata present in the ARGUMENTS (`to`,
+  `paths`, `wait_seconds`, and a quoted `conversation_id`) are all preserved,
+  and every other tool is untouched — notably `git`, whose output
+  `workspace_sessions` reads back for commit attribution.
+
+  One limit worth stating plainly: a note that OPENS a thread carries no
+  `conversation_id` in its arguments — the id is minted during the call and
+  appears only in the reply, which is dropped — so the first message of a thread
+  is unattributable to that thread in telemetry, while replies into one are not.
 
   Stats schema **v17** scrubs the rows earlier builds already wrote. It is the
   first migration that deletes data, deliberately: leaving those bodies in
@@ -1517,9 +1691,15 @@
   longer lands on exactly the stored root, is **dropped** — logged, deleted
   from the persisted store, and left for the normal attach ladder (client
   roots, cwd hint) rather than attached at an ancestor. The same check covers
-  alias-spelled pins (never attached under either spelling, so no shadow pins)
-  and markerless synthetic roots (the `SynthesiseRoot` walk no longer climbs to
-  a `.git` that appeared above the pin). In the same stroke, `session_start`
+  alias-spelled pins (never attached under either spelling, so no shadow pins),
+  a raw subdirectory spelling replayed by an old `plumb serve` proxy that
+  predates the canonical echo (dropped on reconnect, where it previously
+  re-resolved to the project root and attached — the session falls through to
+  the client's roots), a legacy pin row persisted before #263's canonicalisation
+  (dropped once at its first restore after upgrade, Warn-logged and self-healed
+  by the ladder), and markerless synthetic roots (the `SynthesiseRoot` walk no
+  longer climbs to a `.git` that appeared above the pin). In the same stroke,
+  `session_start`
   results now echo the daemon-canonical root in `_meta`
   (`dev.plumbkit/resolved-workspace`), and the `plumb serve` proxy commits that
   spelling as the pin it replays on reconnect — closing the raw-spelling replay

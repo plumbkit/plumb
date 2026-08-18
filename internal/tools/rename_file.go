@@ -70,15 +70,15 @@ type renameFileArgs struct {
 }
 
 func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("rename_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("rename_file", t.deps.limiter(ctx))
 	}
 	a, err := parseRenameFileArgs(raw)
 	if err != nil {
 		return "", err
 	}
-	from := t.deps.resolvePath(a.From)
-	to := t.deps.resolvePath(a.To)
+	from := t.deps.resolvePath(ctx, a.From)
+	to := t.deps.resolvePath(ctx, a.To)
 	// Same-place by canonical IDENTITY, not raw spelling: renaming a file onto
 	// itself under a second spelling is a no-op request that must be refused —
 	// left alone, lockPaths collapses both spellings into one lock and the call
@@ -88,10 +88,10 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if lockPathKey(from) == lockPathKey(to) {
 		return "", errors.New("rename_file: from and to are the same path")
 	}
-	if err := t.deps.checkBoundary(from); err != nil {
+	if err := t.deps.checkBoundary(ctx, from); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
-	if err := t.deps.checkBoundary(to); err != nil {
+	if err := t.deps.checkBoundary(ctx, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
 
@@ -170,5 +170,5 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	// processDelete. Then enqueue to so the new path is indexed immediately.
 	t.deps.notifyTopology(from)
 	t.deps.notifyTopology(to)
-	t.deps.recordWritten(to)
+	t.deps.recordWritten(ctx, to)
 }

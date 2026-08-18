@@ -111,7 +111,16 @@ const benchP99MinSamples = 1000
 // that: one identity means one "?" in the addressee_id IN list, fixed for the
 // life of the cached statement.
 func benchClaimant(sessionName, workspace string) Claimant {
-	return Claimant{Name: sessionName, Workspace: workspace}
+	// The ID is not decoration. A production claimant always has one, and without
+	// it every id-derived column here is '' on both sides of the mirror test — so
+	// a prepared statement that forgot to SET delivered_to_id compared equal to
+	// ClaimNotes and the drift guard passed. identities() returns one element
+	// either way, so the statement shape and placeholder count are unchanged and
+	// the benchmark numbers stay comparable across this.
+	if sessionName == "" {
+		return Claimant{Workspace: workspace}
+	}
+	return Claimant{Name: sessionName, ID: "bench-" + sessionName, Workspace: workspace}
 }
 
 // pendingProbeSQL is the v2 candidate: the cheapest read that answers "is
@@ -133,7 +142,12 @@ func pendingProbeSQL() string {
 
 func preparedClaimSQL() string {
 	where, _ := claimable(benchClaimant("", ""), time.Time{})
-	return `UPDATE collab_rows SET delivered_at = ?, delivered_to = ?
+	// The SET list must match ClaimNotes column for column, not just the WHERE.
+	// It drifted once already — delivered_to_id arrived in production and this
+	// kept setting two columns, so the benchmark was timing a cheaper statement
+	// than the one it claims to mirror. The comparator below now checks
+	// DeliveredToID for that reason.
+	return `UPDATE collab_rows SET delivered_at = ?, delivered_to = ?, delivered_to_id = ?
 			 WHERE id IN (SELECT id FROM collab_rows
 				 WHERE ` + where + `
 				 ORDER BY created_at ASC LIMIT ?)
@@ -149,8 +163,11 @@ func pendingProbeArgs(sessionName, workspace string, now time.Time) []any {
 }
 
 func preparedClaimArgs(sessionName, workspace string, now time.Time, limit int) []any {
-	_, whereArgs := claimable(benchClaimant(sessionName, workspace), now)
-	args := append([]any{now.UnixNano(), sessionName}, whereArgs...)
+	who := benchClaimant(sessionName, workspace)
+	_, whereArgs := claimable(who, now)
+	// Three SET values, matching preparedClaimSQL and ClaimNotes: delivered_at,
+	// delivered_to, delivered_to_id.
+	args := append([]any{now.UnixNano(), sessionName, who.ID}, whereArgs...)
 	return append(args, limit)
 }
 
@@ -716,8 +733,12 @@ func TestMailprobePreparedClaim_MirrorsClaimNotes(t *testing.T) {
 		t.Fatalf("prepared claim returned %d rows, ClaimNotes returned %d", len(got), len(want))
 	}
 	for i := range want {
+		// DeliveredToID is compared as well as DeliveredTo: without it, a prepared
+		// statement that forgot to set the id column would return identical-looking
+		// rows and this guard would pass while the two statements diverged.
 		if got[i].ID != want[i].ID || got[i].Body != want[i].Body ||
-			got[i].Addressee != want[i].Addressee || got[i].DeliveredTo != want[i].DeliveredTo {
+			got[i].Addressee != want[i].Addressee || got[i].DeliveredTo != want[i].DeliveredTo ||
+			got[i].DeliveredToID != want[i].DeliveredToID {
 			t.Fatalf("row %d differs:\n prepared: %+v\n ClaimNotes: %+v", i, got[i], want[i])
 		}
 	}

@@ -202,8 +202,9 @@ func checkOneClient(c setupTarget, selfPath string) checkResult {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if c.installedFn != nil && c.installedFn() {
 			// The client is installed but has never materialised its MCP config
-			// (Kimi Code's mcp.json only appears once a server is configured), so
-			// an absent file is "not registered", not "not installed".
+			// (Kimi Code's mcp.json, or DeepSeek Harness's home patch — both only
+			// appear once an entry is configured), so an absent file is
+			// "not registered", not "not installed".
 			return checkResult{
 				name:   c.name,
 				ok:     false,

@@ -53,7 +53,7 @@ func (s *connSession) generateEpisodicSummary() {
 	if err != nil || ro == nil {
 		return
 	}
-	calls, err := ro.ToolCallsForSession(ws, s.sessID, time.Now().Add(-24*time.Hour))
+	calls, err := ro.ToolCallsForSession(ws, s.sessionID(), time.Now().Add(-24*time.Hour))
 	if err != nil || len(calls) == 0 {
 		return
 	}
@@ -65,7 +65,7 @@ func (s *connSession) generateEpisodicSummary() {
 	summary = textfmt.ClampBytes(summary, episodicBudget(mcfg))
 	s.statsStore.RecordEpisodic(stats.Episodic{
 		Workspace:    ws,
-		SessionID:    s.sessID,
+		SessionID:    s.sessionID(),
 		SessionName:  s.view().sessName,
 		GeneratedAt:  time.Now(),
 		Summary:      summary,
@@ -81,13 +81,13 @@ func (s *connSession) writeGeneratedEpisodicMemory(ws string, mcfg config.Memory
 		return
 	}
 	now := time.Now().UTC()
-	name := fmt.Sprintf("episodic-%s-%s", now.Format("20060102-150405"), shortSessionID(s.sessID))
+	name := fmt.Sprintf("episodic-%s-%s", now.Format("20060102-150405"), shortSessionID(s.sessionID()))
 	description := "Generated session summary"
 	body := summary + "\n"
 	ix := s.memoryIndexLive()
 	err := memory.WriteGenerated(ix, ws, name, description, body, memory.Provenance{
 		Confidence:    memory.ConfidenceGenerated,
-		SourceSession: s.sessID,
+		SourceSession: s.sessionID(),
 		SourcePaths:   detail.SourcePaths,
 		SourceSymbols: detail.SourceSymbols,
 		SourceCalls:   detail.SourceCalls,

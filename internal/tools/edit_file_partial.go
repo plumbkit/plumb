@@ -40,7 +40,7 @@ func (t *EditFile) executePartial(
 	if writeErr == nil && applied > 0 {
 		_ = res
 		t.executePartialPostWrite(ctx, path, uri, original, content, awaitFresh, &sb, baseline)
-		t.deps.recordUndo(path, original, content, true, "edit_file")
+		t.deps.recordUndo(ctx, path, original, content, true, "edit_file")
 	}
 	return sb.String()
 }
@@ -118,14 +118,14 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, befor
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.recordWritten(path)
+	t.deps.recordWritten(ctx, path)
 	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, awaitFresh, baseline))
 }
 
 // applyPartialEdit applies a single edit to content and returns the (possibly
 // unchanged) content plus the per-edit outcome. It never mutates shared state —
 // the caller advances content only when res.applied is true.
-func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path string, preReadMtime time.Time) (string, partialEditResult) {
+func (t *EditFile) applyPartialEdit(ctx context.Context, content string, edit strEdit, i int, path string, preReadMtime time.Time) (string, partialEditResult) {
 	if edit.StartLine != 0 {
 		newStr := matchLineEndings(edit.NewStr, content)
 		updated, rerr := applyRangeEdit(content, edit.StartLine, edit.EndLine, newStr)
@@ -139,7 +139,7 @@ func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path st
 	}
 	oldStr, newStr, count, stripped := resolveStrMatch(content, edit)
 	if count == 0 {
-		return content, partialEditResult{index: i, err: t.notFoundError(i, path, edit.OldStr, oldStr, content, preReadMtime)}
+		return content, partialEditResult{index: i, err: t.notFoundError(ctx, i, path, edit.OldStr, oldStr, content, preReadMtime)}
 	}
 	if !edit.ReplaceAll && count > 1 {
 		return content, partialEditResult{index: i, err: ambiguousError(i, count, path, edit.OldStr, oldStr)}
@@ -183,7 +183,7 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 
 	results := make([]partialEditResult, len(edits))
 	for i, edit := range edits {
-		updated, res := t.applyPartialEdit(content, edit, i, path, preReadMtime)
+		updated, res := t.applyPartialEdit(ctx, content, edit, i, path, preReadMtime)
 		results[i] = res
 		if res.applied {
 			content = updated

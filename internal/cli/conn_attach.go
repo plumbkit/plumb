@@ -83,7 +83,7 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		s.warmDepRoots(language)
 		recoverWorkspaceTxlog(folder, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = folder
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
@@ -129,7 +129,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 		v.policy = s.buildPathPolicy(v)
 		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
 			info.Language = LanguageNone
 			// detectedLabel, not detectAnyLanguageAt directly, so a home root
@@ -169,6 +169,14 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 		}
 	}
 	return s.rootFromHint()
+}
+
+// explicitOrAutoAttach reports whether root synthesis is permitted for a
+// directory the detector could not place: an explicit session_start workspace
+// arg always pins (even a markerless directory), and auto_attach is the opt-in
+// that lets an incidental tool path synthesise a root.
+func explicitOrAutoAttach(explicit, autoAttach bool) bool {
+	return explicit || autoAttach
 }
 
 // onBeforeTool resolves the workspace root from the tool arguments when the
@@ -236,7 +244,11 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	}
 	root, _, err := s.pool.Detect(startDir)
 	if err != nil {
-		if !s.store.Current().Workspace.AutoAttach {
+		// A deliberate session_start workspace arg always pins — even a markerless
+		// directory — mirroring repinWorkspaceFrom's SynthesiseRoot fallback, so the
+		// sticky contract is unconditional. auto_attach stays the opt-in that lets an
+		// incidental tool path (file_path/path/uri) synthesise a root.
+		if !explicitOrAutoAttach(explicit, s.store.Current().Workspace.AutoAttach) {
 			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
@@ -285,7 +297,7 @@ func (s *connSession) appendActiveAdapter(language string) {
 	if adp == "" {
 		return
 	}
-	session.Patch(s.sessID, func(in *session.Info) {
+	session.Patch(s.sessionID(), func(in *session.Info) {
 		if !slices.Contains(in.Adapters, adp) {
 			in.Adapters = append(in.Adapters, adp)
 		}

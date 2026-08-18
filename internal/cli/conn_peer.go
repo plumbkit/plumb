@@ -159,7 +159,7 @@ func (s *connSession) peerHint(args []byte, ws string) string {
 	}
 	abs := filepath.Join(ws, rel)
 	now := time.Now()
-	pw, ok := s.peerWrites.lookup(ws, s.sessID, abs, now, s.peerRecencyWindow())
+	pw, ok := s.peerWrites.lookup(ws, s.sessionID(), abs, now, s.peerRecencyWindow())
 	if !ok {
 		return ""
 	}

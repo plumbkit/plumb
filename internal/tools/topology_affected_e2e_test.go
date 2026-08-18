@@ -223,7 +223,7 @@ func TestSessionStart_TopologyLedGuidance(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	tool := tools.NewSessionStart(
-		func() string { return ws }, nil, nil,
+		func(context.Context) string { return ws }, nil, nil,
 		func() bool { return false },
 		func() string { return "claude-code" },
 		nil,
@@ -245,7 +245,7 @@ func TestSessionStart_TopologyLedGuidance(t *testing.T) {
 func TestSessionStart_LSPLedGuidanceWhenTopologyOff(t *testing.T) {
 	ws := t.TempDir()
 	tool := tools.NewSessionStart(
-		func() string { return ws }, nil, nil,
+		func(context.Context) string { return ws }, nil, nil,
 		func() bool { return false },
 		func() string { return "claude-code" },
 		nil,
@@ -280,7 +280,7 @@ var editLaneWarningSubstrings = []string{
 func TestSessionStart_EditLaneWarning_ClaudeCode(t *testing.T) {
 	newTool := func(ws string, topoOn bool) *tools.SessionStart {
 		tool := tools.NewSessionStart(
-			func() string { return ws }, nil, nil,
+			func(context.Context) string { return ws }, nil, nil,
 			func() bool { return false },
 			func() string { return "claude-code" },
 			nil,
@@ -326,7 +326,7 @@ func TestSessionStart_EditLaneWarning_ClaudeCode(t *testing.T) {
 func TestSessionStart_EditLaneWarning_AbsentForDesktop(t *testing.T) {
 	ws := t.TempDir()
 	tool := tools.NewSessionStart(
-		func() string { return ws }, nil, nil,
+		func(context.Context) string { return ws }, nil, nil,
 		func() bool { return false },
 		func() string { return "claude-ai" },
 		nil,

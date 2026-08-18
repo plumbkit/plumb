@@ -34,7 +34,7 @@ func TestFindReplace_SkipsSymlinkEscapingWorkspace(t *testing.T) {
 
 	// A real, symlink-resolving boundary guard (mirrors the production policy).
 	pol := NewPathPolicy(ws, []AllowedRoot{{Path: ws, Access: AccessReadWrite, Label: "workspace"}})
-	guard := BoundaryGuard(func(path string) error { _, err := pol.Check(path, AccessReadWrite); return err })
+	guard := BoundaryGuard(func(_ context.Context, path string) error { _, err := pol.Check(path, AccessReadWrite); return err })
 	tool := NewFindReplace(WriteDeps{Boundary: guard})
 
 	args, _ := json.Marshal(map[string]any{

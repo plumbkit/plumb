@@ -81,12 +81,12 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if a.FileA == "" || a.FileB == "" {
 		return "", errors.New("file_diff: file_a and file_b are required")
 	}
-	a.FileA = resolvePath(a.FileA, t.ws)
-	a.FileB = resolvePath(a.FileB, t.ws)
-	if err := t.guard.check(a.FileA); err != nil {
+	a.FileA = resolvePath(ctx, a.FileA, t.ws)
+	a.FileB = resolvePath(ctx, a.FileB, t.ws)
+	if err := t.guard.check(ctx, a.FileA); err != nil {
 		return "", fmt.Errorf("file_diff: %w", err)
 	}
-	if err := t.guard.check(a.FileB); err != nil {
+	if err := t.guard.check(ctx, a.FileB); err != nil {
 		return "", fmt.Errorf("file_diff: %w", err)
 	}
 

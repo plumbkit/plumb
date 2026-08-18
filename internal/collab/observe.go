@@ -43,10 +43,20 @@ type ConversationSummary struct {
 	LastAt time.Time
 }
 
-// ConversationSummaries counts every live conversation in this store, busiest
+// ConversationSummaries counts the live conversations WHO takes part in, busiest
 // first. limit caps the result (non-positive means no cap).
-func (s *Store) ConversationSummaries(ctx context.Context, now time.Time, limit int) ([]ConversationSummary, error) {
-	return s.conversationSummaries(ctx, now, limit, "")
+//
+// It used to count every thread in the store, which meant the listing printed
+// the id of exchanges between two other agents to a session with no part in
+// them. The id is not decoration: a thread is addressed by it, so publishing it
+// to an uninvolved session handed out the routing token for someone else's
+// conversation. PutNote's participantGuard is what makes that harmless now, and
+// this is the second half of the same rule — a session should not be able to
+// enumerate exchanges it is not in, whether or not it could act on them.
+func (s *Store) ConversationSummaries(
+	ctx context.Context, who Claimant, now time.Time, limit int,
+) ([]ConversationSummary, error) {
+	return s.conversationSummaries(ctx, now, limit, "", &who)
 }
 
 // ConversationSummariesForWorkspace counts the live conversations in the
@@ -60,17 +70,26 @@ func (s *Store) ConversationSummaries(ctx context.Context, now time.Time, limit 
 // The workspace filter is what makes recipient consent enforceable by the
 // caller: a project can be shown the cross-project volume aimed AT it, having
 // opted in, without being shown any other project's traffic.
+//
+// Note what it does NOT do: unlike ConversationSummaries it is not scoped to the
+// caller's own threads, so every cross-project note aimed at this workspace is
+// counted, including exchanges between two other sessions here. That is
+// deliberate — the question it answers is "how much traffic is aimed at this
+// project", a property of the project rather than of one session in it — and it
+// is why the caller must gate it on the workspace's own cross_project consent.
 func (s *Store) ConversationSummariesForWorkspace(
 	ctx context.Context, workspace string, now time.Time, limit int,
 ) ([]ConversationSummary, error) {
 	if s == nil || workspace == "" || !s.IsGlobal() {
 		return nil, nil
 	}
-	return s.conversationSummaries(ctx, now, limit, workspace)
+	return s.conversationSummaries(ctx, now, limit, workspace, nil)
 }
 
+// conversationSummaries aggregates counts, optionally narrowed to a target
+// workspace and/or to the threads one claimant takes part in.
 func (s *Store) conversationSummaries(
-	ctx context.Context, now time.Time, limit int, workspace string,
+	ctx context.Context, now time.Time, limit int, workspace string, who *Claimant,
 ) ([]ConversationSummary, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -84,6 +103,31 @@ func (s *Store) conversationSummaries(
 	if workspace != "" {
 		where += ` AND target_workspace = ?`
 		args = append(args, workspace)
+	}
+	if who != nil {
+		// Membership is a property of the THREAD, not of the row, so this selects
+		// conversations containing at least one row the claimant is in — not only
+		// those rows. Counting only the caller's own rows would report a two-sided
+		// exchange as half its real length, which is the opposite of what a volume
+		// view is for. Names are admitted alongside identities for the same reason
+		// participantGuard admits them: an unbound row addressed by name is the
+		// common case.
+		// The same predicate the write guard uses, so what a session may SEE and
+		// what it may WRITE INTO cannot drift apart — including its inherited
+		// identities, and including the delivered_to arm that is a "next" recipient's
+		// only evidence of membership. An anonymous claimant yields `0 = 1` and
+		// therefore sees nothing, which is the direction to fail in.
+		//
+		// No expiry filter on the subquery, matching participantGuard: membership is
+		// historical, so a live thread whose opening notes have aged out is still the
+		// caller's. The OUTER query already restricts what is COUNTED to unexpired
+		// rows.
+		member, memberArgs := membershipPredicate(who.identities(), who.Name)
+		where += ` AND conversation_id IN (
+		              SELECT conversation_id FROM collab_rows
+		              WHERE kind = ? AND ` + member + `)`
+		args = append(args, string(KindNote))
+		args = append(args, memberArgs...)
 	}
 	query := `SELECT conversation_id, COUNT(*),
 	                 SUM(CASE WHEN delivered_at = 0 THEN 1 ELSE 0 END),
@@ -206,7 +250,11 @@ func (s *Store) FilterDaemonWideConversations(
 	if fetch > 0 {
 		fetch *= daemonWideOverfetch
 	}
-	all, err := s.ConversationSummaries(ctx, now, fetch)
+	// Unscoped on purpose — the exported ConversationSummaries is narrowed to one
+	// session's own threads, which is the wrong question here. This view is the
+	// daemon operator's, and its access rule is the unanimous-consent filter below
+	// rather than session membership.
+	all, err := s.conversationSummaries(ctx, now, fetch, "", nil)
 	if err != nil {
 		return nil, err
 	}

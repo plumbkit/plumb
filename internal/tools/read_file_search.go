@@ -84,7 +84,7 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.F
 	if err != nil {
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
-	t.tracker.Record(fpath, mtime, sha)
+	t.readTracker(ctx).Record(fpath, mtime, sha)
 
 	return t.formatSearchOutput(fpath, mtime, sha, info.Size(), concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
 }

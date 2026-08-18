@@ -53,7 +53,7 @@ func (t *renameSession) InputSchema() json.RawMessage {
 }`, session.MaxNameLength, sessionNamePattern, session.MaxNameLength))
 }
 
-func (t *renameSession) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *renameSession) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name string `json:"name"`
 	}

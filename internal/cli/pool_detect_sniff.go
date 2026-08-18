@@ -38,6 +38,15 @@ const (
 	// before reaching src/main/kotlin. Deeper is not safer; it is a wider
 	// surface for the cap to be hit on the wrong files.
 	tieScanDepth = 6
+
+	// tieScanMaxFiles is the tie-break's own file budget, an order of
+	// magnitude above extScanMaxFiles for the same reason tieScanDepth is
+	// deeper than extScanDepth: the tie-break must see past a JVM project's
+	// non-source tree (src/main/resources) to its sources, where the
+	// last-resort sniff is happy with a shallow, coarse sample.
+	// skipTieBreakDir prunes the convention dirs outright, so this bound is
+	// a backstop rather than the only guard.
+	tieScanMaxFiles = 20000
 )
 
 // extLangAt is the last-resort content sniff for a resolved LanguageNone root:
@@ -62,13 +71,14 @@ func (p *workspacePool) extLangAt(dir string) string {
 	// guess off the first 2000 files beats no language at all; the tie-break is
 	// choosing between two specific candidates, where a partial count is not a
 	// weaker answer but a differently-wrong one.
-	counts, _ := p.sniffCounts(dir, extScanDepth, nil)
+	counts, _ := p.sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
 	return bestSniffedLang(counts)
 }
 
 // sniffCounts counts source files per ACTIVE language in a bounded shallow scan
 // of dir, descending at most maxDepth levels and examining at most
-// extScanMaxFiles files. Shared by the last-resort language sniff (extLangAt)
+// maxFiles files, pruning any directory skipDir declines. Shared by the
+// last-resort language sniff (extLangAt)
 // and the contested-root-marker tie-break (strongLangAt), which want the same
 // evidence at different depths. Defensive throughout — any read error skips that
 // entry rather than failing, so detection never crashes on an odd filesystem.
@@ -99,7 +109,7 @@ func (p *workspacePool) extLangAt(dir string) string {
 // the syscall must name the same file. There is nothing to gain by resolving
 // here: the count is a heuristic about what a project holds, and a link's target
 // is by definition not part of the tree being measured.
-func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (counts map[string]int, truncated bool) {
+func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignore []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
 	counts = map[string]int{}
 	if len(p.langsSnapshot()) == 0 {
 		return counts, false
@@ -110,7 +120,7 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (
 	}
 	scanned := 0
 	stack := []item{{dir: dir, depth: 0}}
-	for len(stack) > 0 && scanned < extScanMaxFiles {
+	for len(stack) > 0 && scanned < maxFiles {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		entries, err := os.ReadDir(it.dir)
@@ -123,12 +133,12 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (
 				continue
 			}
 			if de.IsDir() {
-				if it.depth < maxDepth && !skipChildDir(de.Name()) {
+				if it.depth < maxDepth && !skipDir(de.Name()) {
 					stack = append(stack, item{dir: filepath.Join(it.dir, de.Name()), depth: it.depth + 1})
 				}
 				continue
 			}
-			if scanned >= extScanMaxFiles {
+			if scanned >= maxFiles {
 				break
 			}
 			scanned++
@@ -144,9 +154,9 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth int, ignore []string) (
 	// order, not the tree. Reported rather than swallowed because the caller
 	// cannot otherwise tell that from a complete count, and for the tie-break
 	// the difference decides the answer. Conservative: a tree of exactly
-	// extScanMaxFiles files reports truncated with nothing actually missed,
+	// maxFiles files reports truncated with nothing actually missed,
 	// which costs only a fall back to the deterministic order.
-	return counts, scanned >= extScanMaxFiles
+	return counts, scanned >= maxFiles
 }
 
 // bestSniffedLang picks the dominant language from a sniff count map with a

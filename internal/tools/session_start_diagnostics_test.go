@@ -79,7 +79,7 @@ func TestSessionStart_ColdCacheGoModDiagnostics(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tool := NewSessionStart(
-				func() string { return t.TempDir() },
+				func(context.Context) string { return t.TempDir() },
 				&stubDiagnostics{all: tc.diags},
 				nil,
 				nil,

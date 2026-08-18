@@ -516,7 +516,7 @@ func dirtyBlocksWrite(ctx context.Context, d WriteDeps, path string) bool {
 	if !d.blockDirty() {
 		return false
 	}
-	if d.Writes.Wrote(path) {
+	if d.writes(ctx).Wrote(path) {
 		return false
 	}
 	return pathIsDirty(ctx, path)
@@ -529,7 +529,7 @@ func dirtyBlocksMove(ctx context.Context, d WriteDeps, path string) bool {
 	if !d.blockDirty() {
 		return false
 	}
-	if d.Writes.Wrote(path) {
+	if d.writes(ctx).Wrote(path) {
 		return false
 	}
 	return pathIsDirtyIgnoringUntracked(ctx, path)

@@ -12,6 +12,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,18 +124,41 @@ func writeConversationVolumes(sb *strings.Builder, vols []collab.ConversationSum
 func (t *WorkspaceSessions) collabObservations(
 	ctx context.Context, store *collab.Store, now time.Time,
 ) (sent []collab.Row, vols []collab.ConversationSummary) {
-	if t.selfSessID != "" {
-		if rows, err := store.SentBy(ctx, t.selfSessID, now, collabSentCap); err == nil {
+	if t.selfID() != "" {
+		if rows, err := store.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
 			sent = rows
 		}
 		if g := t.globalStoreIfExists(); g != nil {
-			if rows, err := g.SentBy(ctx, t.selfSessID, now, collabSentCap); err == nil {
+			if rows, err := g.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
 				sent = append(sent, rows...)
 			}
 		}
+		// Each store returns its own rows newest-first, so concatenating two of
+		// them is neither sorted nor capped: the section would render up to twice
+		// collabSentCap, with a note sent seconds ago printed below one sent hours
+		// ago, under a heading that says "recent". Sort across the two, THEN cap —
+		// the same order of operations MergeConversationSummaries uses below, and
+		// for the same reason.
+		sort.SliceStable(sent, func(i, j int) bool {
+			return sent[i].CreatedAt.After(sent[j].CreatedAt)
+		})
+		if len(sent) > collabSentCap {
+			sent = sent[:collabSentCap]
+		}
 	}
 
-	local, err := store.ConversationSummaries(ctx, now, collabVolumeCap)
+	// Scoped to the caller's own threads. An uninvolved session has no business
+	// enumerating exchanges between two other agents, and the id it would print is
+	// the thread's address, not decoration.
+	var inherited []string
+	if t.inheritedIDs != nil {
+		inherited = t.inheritedIDs()
+	}
+	self := collab.Claimant{
+		Name: t.selfNameOrEmpty(), ID: t.selfID(),
+		InheritedIDs: inherited, Workspace: t.workspace(),
+	}
+	local, err := store.ConversationSummaries(ctx, self, now, collabVolumeCap)
 	if err != nil {
 		local = nil
 	}
@@ -162,6 +186,16 @@ func (t *WorkspaceSessions) globalStoreIfExists() *collab.Store {
 		return nil
 	}
 	return t.collabGlobalStore()
+}
+
+// selfNameOrEmpty is the caller's addressable name, or "" when it has none.
+// Nil-safe so conversation scoping degrades to "no threads" rather than to "all
+// threads" when the accessor was never wired.
+func (t *WorkspaceSessions) selfNameOrEmpty() string {
+	if t.selfName == nil {
+		return ""
+	}
+	return t.selfName()
 }
 
 // crossProjectOn reports this workspace's [collab] cross_project consent.
