@@ -23,9 +23,13 @@ import (
 // `plumb doctor` reports, as well as the one-shot first-time setup in a single
 // command. --repair and --install-missing are deprecated hidden aliases of
 // --all with the same effect; any of the three flags triggers the bulk run,
-// and bare `plumb setup` (no flags) prints help.
+// and bare `plumb setup` (no flags) opens the interactive picker on a
+// terminal (setup_interactive.go) or prints help without one.
 func runSetupAll(cmd *cobra.Command, _ []string) error {
 	if !setupRepairFlag && !setupAllFlag && !setupInstallMissingFlag {
+		if stdinIsTerminal() && stdoutIsTerminal() {
+			return runSetupPicker()
+		}
 		return cmd.Help()
 	}
 	PrintLogo()

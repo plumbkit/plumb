@@ -37,7 +37,11 @@ via its home dir (~/.zcode), and DeepSeek Harness, detected via its home dir
 configured, so --all creates them fresh.
 
 --repair and --install-missing are deprecated hidden aliases of --all with
-the same effect. Bare ` + "`plumb setup`" + ` (no flags) prints this help.
+the same effect. Bare ` + "`plumb setup`" + ` (no flags) opens an interactive
+picker on a terminal: registered clients arrive checked, space toggles —
+unchecking a registered client marks it for uninstall, shown in the warn
+colour — and enter applies the selection. Without a terminal it prints this
+help.
 
 Every subcommand also takes --uninstall, which reverses its registration:
 plumb's entry — and only plumb's — is removed from the client's config
