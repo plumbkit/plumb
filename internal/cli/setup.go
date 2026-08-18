@@ -37,7 +37,13 @@ via its home dir (~/.zcode), and DeepSeek Harness, detected via its home dir
 configured, so --all creates them fresh.
 
 --repair and --install-missing are deprecated hidden aliases of --all with
-the same effect. Bare ` + "`plumb setup`" + ` (no flags) prints this help.`, RunE: runSetupAll,
+the same effect. Bare ` + "`plumb setup`" + ` (no flags) prints this help.
+
+Every subcommand also takes --uninstall, which reverses its registration:
+plumb's entry — and only plumb's — is removed from the client's config
+(after a backup), and the skill files plumb itself installed in that client
+are taken too. A skill the user rewrote keeps no provenance marker and is
+left in place, reported.`, RunE: runSetupAll,
 }
 
 var (
@@ -83,13 +89,13 @@ directory instead, scoping plumb to that project only.`,
 var setupGeminiCmd = &cobra.Command{
 	Use:   "gemini",
 	Short: "Register plumb in Gemini CLI",
-	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(geminiTarget) },
+	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTargetOrUninstall(geminiTarget) },
 }
 
 var setupCodexCmd = &cobra.Command{
 	Use:   "codex",
 	Short: "Register plumb in Codex",
-	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(codexTarget) },
+	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTargetOrUninstall(codexTarget) },
 }
 
 func init() {
@@ -106,15 +112,22 @@ func init() {
 	_ = setupCmd.Flags().MarkHidden("install-missing")
 	_ = setupCmd.Flags().MarkDeprecated("install-missing", "use --all instead")
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
+	registerUninstallFlag(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
+	registerUninstallFlag(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupClaudeCodeCmd)
 	registerTargetFlags(setupGeminiCmd, geminiTarget)
+	registerUninstallFlag(setupGeminiCmd)
 	setupCmd.AddCommand(setupGeminiCmd)
 	registerTargetFlags(setupCodexCmd, codexTarget)
+	registerUninstallFlag(setupCodexCmd)
 	setupCmd.AddCommand(setupCodexCmd)
 }
 
 func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
+	if setupUninstallFlag {
+		return runSetupUninstall(claudeDesktopTarget)
+	}
 	PrintLogo()
 	cfgPaths, err := claudeDesktopConfigPaths()
 	if err != nil {
@@ -176,24 +189,16 @@ func setupClaudeDesktopInto(cfgPath, plumbBin string) (added bool, preserved []s
 }
 
 func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
-	PrintLogo()
-	var cfgPath string
-	var scope string
-	if setupClaudeCodeProjectFlag {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getting working directory: %w", err)
-		}
-		cfgPath = filepath.Join(cwd, ".mcp.json")
-		scope = "project"
-	} else {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("locating home directory: %w", err)
-		}
-		cfgPath = filepath.Join(home, ".claude.json")
-		scope = "user"
+	cfgPath, scope, err := claudeCodeConfigTarget()
+	if err != nil {
+		return err
 	}
+	if setupUninstallFlag {
+		// Skills are user-scoped, so only the user-scope uninstall takes them;
+		// a --project uninstall touches just the project's .mcp.json.
+		return uninstallTargetAt(claudeCodeTarget, []string{cfgPath}, scope == "user")
+	}
+	PrintLogo()
 
 	plumbBin, err := os.Executable()
 	if err != nil {
@@ -220,6 +225,24 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 
 	printSkillsDriftHint(claudeCodeTarget)
 	return nil
+}
+
+// claudeCodeConfigTarget resolves the config file and scope label the
+// claude-code command acts on: the user-level ~/.claude.json, or .mcp.json in
+// the current directory under --project.
+func claudeCodeConfigTarget() (cfgPath, scope string, err error) {
+	if setupClaudeCodeProjectFlag {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("getting working directory: %w", err)
+		}
+		return filepath.Join(cwd, ".mcp.json"), "project", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("locating home directory: %w", err)
+	}
+	return filepath.Join(home, ".claude.json"), "user", nil
 }
 
 // setupClaudeCodeInto merges the plumb entry into a Claude Code config file.

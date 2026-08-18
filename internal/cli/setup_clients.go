@@ -41,6 +41,9 @@ import (
 // nil means the client has no verified skill channel — its steering arrives as
 // the condensed session_start guidance block instead. See setup_skills.go, which
 // holds the resolvers and the per-client verification evidence.
+// outFn is intoFn's removal counterpart: it takes plumb's entry back out of
+// one config path (and only that entry — siblings always survive). See
+// setup_uninstall.go, which holds every implementation.
 type setupTarget struct {
 	use         string
 	name        string
@@ -49,6 +52,7 @@ type setupTarget struct {
 	installedFn func() bool
 	intoFn      func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
 	extractFn   func(cfgPath string) (binPath string, registered bool, err error)
+	outFn       func(cfgPath string) (removed bool, err error)
 	flags       func(cmd *cobra.Command)
 	note        func() string
 	skillsDirFn func() (string, error)
@@ -64,10 +68,10 @@ var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, 
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
-	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-	{use: "junie", name: "Junie", pathFn: JunieConfigPath, installedFn: junieInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: junieSkillsDir},
+	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
+	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
+	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
+	{use: "junie", name: "Junie", pathFn: JunieConfigPath, installedFn: junieInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: junieSkillsDir},
 	{
 		use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled,
 		// Kimi Code is the one target with an option: --lean additionally writes a
@@ -78,23 +82,24 @@ var extraSetupTargets = []setupTarget{
 			return kimiCodeInto(cfgPath, plumbBin, setupKimiLeanFlag)
 		},
 		extractFn:   claudeDesktopCommandExtractor,
+		outFn:       removeMcpServersJSON,
 		flags:       registerKimiLeanFlag,
 		note:        kimiLeanNote,
 		skillsDirFn: kimiCodeSkillsDir,
 	},
-	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
-	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
-	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
-	{use: "crush", name: "Crush", pathFn: CrushConfigPath, intoFn: setupCrushInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
-	{use: "goose", name: "Goose", pathFn: GooseConfigPath, intoFn: setupGooseInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd")},
-	{use: "hermes", name: "Hermes", pathFn: HermesConfigPath, intoFn: setupHermesInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
+	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor, outFn: setupAntigravityOut},
+	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor, outFn: setupAntigravityOut},
+	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command"), outFn: removeMcpJSON},
+	{use: "crush", name: "Crush", pathFn: CrushConfigPath, intoFn: setupCrushInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command"), outFn: removeMcpJSON},
+	{use: "goose", name: "Goose", pathFn: GooseConfigPath, intoFn: setupGooseInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd"), outFn: removeGooseYAML},
+	{use: "hermes", name: "Hermes", pathFn: HermesConfigPath, intoFn: setupHermesInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command"), outFn: removeHermesYAML},
 	// ZCode nests its servers under mcp.servers in ~/.zcode/cli/config.json and
 	// enforces a strict server schema — setup_zcode.go holds the entry shape and
 	// the reasons there is no --lean here.
-	{use: "zcode", name: "ZCode", pathFn: ZCodeConfigPath, installedFn: zcodeInstalled, intoFn: setupZCodeInto, extractFn: zcodeCommandExtractor, skillsDirFn: zcodeSkillsDir},
+	{use: "zcode", name: "ZCode", pathFn: ZCodeConfigPath, installedFn: zcodeInstalled, intoFn: setupZCodeInto, extractFn: zcodeCommandExtractor, outFn: setupZCodeOut, skillsDirFn: zcodeSkillsDir},
 	// DeepSeek Harness writes a YAML patch row into its home-level user patch
 	// layer rather than a server map — see setup_dsh.go for the node-level merge.
-	{use: "dsh", name: "DeepSeek Harness", pathFn: DSHConfigPath, installedFn: dshInstalled, intoFn: setupDSHInto, extractFn: dshCommandExtractor, note: dshSetupNote},
+	{use: "dsh", name: "DeepSeek Harness", pathFn: DSHConfigPath, installedFn: dshInstalled, intoFn: setupDSHInto, extractFn: dshCommandExtractor, outFn: setupDSHOut, note: dshSetupNote},
 }
 
 // The four original setup targets, named so that both the bespoke commands in
@@ -106,20 +111,22 @@ var extraSetupTargets = []setupTarget{
 // geminiTarget and codexTarget do not — their commands were line-for-line
 // copies of runSetupTarget and now call it directly.
 var (
-	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: claudeSkillsDir}
-	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
+	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: claudeSkillsDir}
+	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON}
 	// Gemini CLI shares Claude Desktop's mcpServers shape but has its own writer
 	// (setup_lean.go): --lean writes an includeTools allowlist Claude Desktop
 	// does not read.
 	geminiTarget = setupTarget{
 		use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupGeminiInto,
 		extractFn: claudeDesktopCommandExtractor,
+		outFn:     removeMcpServersJSON,
 		flags:     leanFlagRegistrar(&setupGeminiLeanFlag, geminiLeanClient),
 		note:      func() string { return leanSetupNote(geminiLeanClient, leanChoiceOf(setupGeminiLeanFlag)) },
 	}
 	codexTarget = setupTarget{
 		use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto,
 		extractFn:   mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
+		outFn:       removeCodexTOML,
 		flags:       leanFlagRegistrar(&setupCodexLeanFlag, codexLeanClient),
 		note:        func() string { return leanSetupNote(codexLeanClient, leanChoiceOf(setupCodexLeanFlag)) },
 		skillsDirFn: codexSkillsDir,
@@ -200,9 +207,10 @@ func init() {
 		cmd := &cobra.Command{
 			Use:   t.use,
 			Short: "Register plumb in " + t.name,
-			RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(t) },
+			RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTargetOrUninstall(t) },
 		}
 		registerTargetFlags(cmd, t)
+		registerUninstallFlag(cmd)
 		setupCmd.AddCommand(cmd)
 	}
 }
