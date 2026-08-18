@@ -94,6 +94,14 @@ var registry = []Capabilities{
 		Tokeniser: FamilyClaude,
 	},
 	{
+		Name:           "junie",
+		Prefixes:       []string{"junie-client", "junie"},
+		NativeFileRead: true,
+		NativeSearch:   true,
+		NativeShell:    true,
+		Tokeniser:      FamilyGPT,
+	},
+	{
 		// Claude Code builds its tool list (and its ToolSearch deferred-tool list)
 		// only from tools/list, so a lean-hidden tool has no schema to load and
 		// cannot be invoked — it therefore needs the full profile regardless of

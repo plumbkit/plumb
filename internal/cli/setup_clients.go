@@ -61,13 +61,14 @@ type setupTarget struct {
 var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
-// MCP servers and therefore make sense as `plumb setup` targets. The first four
+// MCP servers and therefore make sense as `plumb setup` targets. The first five
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "junie", name: "Junie", pathFn: JunieConfigPath, installedFn: junieInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: junieSkillsDir},
 	{
 		use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled,
 		// Kimi Code is the one target with an option: --lean additionally writes a

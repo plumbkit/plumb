@@ -14,6 +14,9 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 		{"claude-desktop", "claude-desktop", false},
 		{"claude-ai", "claude-desktop", false},
 		{"claude", "claude-desktop", false}, // bare claude is the thin client
+		{"junie-client", "junie", true},
+		{"junie", "junie", true},
+		{"Junie", "junie", true},
 		{"codex", "codex", true},
 		{"gemini-cli", "gemini", true},
 		{"kimi-code", "kimi-code", true},

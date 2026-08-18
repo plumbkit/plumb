@@ -23,7 +23,7 @@ import (
 // session_start guidance block, never as files written into a directory plumb
 // guessed at.
 func TestSkillCapableClients_ArePinned(t *testing.T) {
-	want := []string{"claude-code", "codex", "kimi-code", "zcode"}
+	want := []string{"claude-code", "codex", "junie", "kimi-code", "zcode"}
 
 	capable := skillCapableClients()
 	got := make([]string, 0, len(capable))
@@ -80,6 +80,11 @@ func TestSkillsDirs_HonourClientHomeOverrides(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		assertDir(t, zcodeSkillsDir, filepath.Join(home, ".zcode", "skills"))
+	})
+	t.Run("junie is ~/.junie/skills", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		assertDir(t, junieSkillsDir, filepath.Join(home, ".junie", "skills"))
 	})
 }
 
