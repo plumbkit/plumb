@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 )
 
 // project_write.go implements SPARSE writes to a workspace's project config
@@ -34,6 +36,15 @@ func LoadProjectRaw(workspace string) (map[string]any, error) {
 		if err := toml.Unmarshal(data, &m); err != nil {
 			return nil, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
+		// Collapse fold variants in DOCUMENT order here, not in setNested: the raw
+		// map does not carry the variants' source order, and collapsing only the
+		// path being written lets duplicate variants elsewhere keep flipping on the
+		// next unrelated write (PLAN-330).
+		order, err := buildFoldOrder(data)
+		if err != nil {
+			return nil, fmt.Errorf("scanning project config %s: %w", path, err)
+		}
+		collapseFolds(m, order, nil)
 	case os.IsNotExist(err):
 		// absent → empty map (no overrides)
 	default:
@@ -84,7 +95,9 @@ func SetProjectValue(workspace string, path []string, value any) error {
 	if err != nil {
 		return err
 	}
-	setNested(m, path, value)
+	if err := setNested(m, path, value); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return fmt.Errorf("creating .plumb dir: %w", err)
 	}
@@ -175,18 +188,12 @@ func foldDelete(m map[string]any, want string) {
 // decode into one field and the LAST one wins, so updating `[GIT]` in a file
 // that also says `[git]` would store a value the decoder then discards.
 //
-// Precedence follows that same last-wins rule, applied to the order plumb will
-// re-marshal the file in (go-toml sorts map keys), so the surviving value is
-// the one the decoder chooses from the file this write produces. Tables are
-// merged recursively; a scalar variant alongside a table is dropped in favour
-// of the winner.
-//
-// What it does NOT promise: that the value in force BEFORE the write survives
-// it. That one comes from the variants' order in the source document, which the
-// raw map does not carry, so when document order and marshal order disagree a
-// write to one key can change another. Pre-existing — re-marshalling reorders
-// the variants regardless — and tracked as its own change rather than smuggled
-// in here, because fixing it means collapsing in document order at load.
+// Tables are merged recursively; a scalar variant alongside a table is dropped
+// in favour of the winner. The merge runs in sort.Strings order, so on its own
+// it reproduces the decode of the file the write produces, not the value in
+// force beforehand — LoadProjectRaw collapses in document order first, making
+// this a single-variant no-op for project config, and leaving the sorted merge
+// only for maps not collapsed at load (loadGlobalRaw, ApplyKeyToRaw).
 func foldCollapse(m map[string]any, want string) string {
 	keys := foldKeys(m, want)
 	if len(keys) == 0 {
@@ -217,11 +224,8 @@ func foldCollapse(m map[string]any, want string) string {
 // array of tables: `[[command]]` decodes to []any, not map[string]any) is left
 // strictly alone and its spelling is not reused, so a sparse write of
 // `command.name` cannot replace a VARIANT-spelled allow-list with an empty
-// table. The exact spelling is not covered: setNested still writes over a
-// `[[command]]` array under the very key it was asked for, which destroys the
-// allow-list and leaves a file that fails validation. That needs setNested to
-// refuse rather than clobber — an error path it has not got — and no live
-// caller reaches it, so it is filed rather than fixed here.
+// table. The exact spelling is covered by setNested, which refuses to descend
+// through a segment that holds a non-table value rather than clobbering it.
 //
 // Such a file is already incoherent — `command` cannot be both an array and a
 // table — and the caller's own spelling is where the new table goes, matching
@@ -276,6 +280,187 @@ func foldMergeValue(prev, next any) any {
 	return prevTable
 }
 
+// mergeValue merges next over prev the way go-toml merges two fold variants in
+// document order: two tables merge key-by-key (next winning on conflict),
+// anything else is replaced outright. It is foldMergeValue without the trailing
+// collapse — collapseFolds drives that itself in document order, and folding
+// here would merge in sort.Strings order, re-introducing the very bug this file
+// fixes.
+func mergeValue(prev, next any) any {
+	prevTable, prevOK := prev.(map[string]any)
+	nextTable, nextOK := next.(map[string]any)
+	if !prevOK || !nextOK {
+		return next
+	}
+	for k, v := range nextTable {
+		if existing, ok := prevTable[k]; ok {
+			prevTable[k] = mergeValue(existing, v)
+			continue
+		}
+		prevTable[k] = v
+	}
+	return prevTable
+}
+
+// foldOrder records the document order of fold-variant key spellings at every
+// level of the TOML document, so collapseFolds can merge variants the way the
+// decoder does — last in DOCUMENT order wins — instead of the sort.Strings order
+// the raw map would otherwise force. Keyed by strings.ToLower(name), matching
+// foldKeys.
+type foldOrder struct {
+	variants map[string][]string // lowercased key -> spellings in first-appearance document order
+	children map[string]*foldOrder
+}
+
+func newFoldOrder() *foldOrder {
+	return &foldOrder{
+		variants: map[string][]string{},
+		children: map[string]*foldOrder{},
+	}
+}
+
+// buildFoldOrder walks data with go-toml's unstable parser, recording the order
+// each key spelling first appears at each level. LoadProjectRaw already read and
+// decoded these exact bytes, so a successful decode guarantees this walk
+// succeeds; the parser error path is still surfaced rather than silently
+// skipping the collapse.
+func buildFoldOrder(data []byte) (*foldOrder, error) {
+	var p unstable.Parser
+	p.Reset(data)
+	root := newFoldOrder()
+	var current []string // table context set by the most recent header
+	for p.NextExpression() {
+		expr := p.Expression()
+		var path []string
+		switch expr.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			path = exprKeyPath(expr)
+			current = path
+		case unstable.KeyValue:
+			path = append(append([]string{}, current...), exprKeyPath(expr)...)
+		default:
+			continue
+		}
+		recordFoldOrder(root, path)
+	}
+	if err := p.Error(); err != nil {
+		return nil, err
+	}
+	return root, nil
+}
+
+// exprKeyPath returns the decoded key segments of a Table, ArrayTable or
+// KeyValue expression.
+func exprKeyPath(expr *unstable.Node) []string {
+	var segs []string
+	for it := expr.Key(); it.Next(); {
+		segs = append(segs, string(it.Node().Data))
+	}
+	return segs
+}
+
+// recordFoldOrder records path's segments in first-appearance document order at
+// each level of the order tree.
+func recordFoldOrder(root *foldOrder, path []string) {
+	cur := root
+	for _, seg := range path {
+		lower := strings.ToLower(seg)
+		if !slices.Contains(cur.variants[lower], seg) {
+			cur.variants[lower] = append(cur.variants[lower], seg)
+		}
+		child, ok := cur.children[lower]
+		if !ok {
+			child = newFoldOrder()
+			cur.children[lower] = child
+		}
+		cur = child
+	}
+}
+
+// collapseFolds merges every fold variant of m in document order (last wins),
+// recursively, so the surviving value is what the decoder chose from the
+// original bytes — not what sort.Strings order would have chosen on re-marshal.
+//
+// It folds only STRUCT-field levels, never map-key levels. go-toml folds a TOML
+// key into a struct field through its byFold map but keeps map[string]… keys
+// verbatim, so a language id under [tasks]/[lsp], an env var name, or a shortcut
+// is a distinct entry the decoder does NOT merge — folding one here would delete
+// the sibling and flip the survivor. path carries the lowercased key segments
+// from the root to this level, so isMapKeyLevel can tell the two apart.
+func collapseFolds(m map[string]any, order *foldOrder, path []string) {
+	if order == nil {
+		return
+	}
+	if !isMapKeyLevel(path) {
+		for _, spellings := range order.variants {
+			var present []string
+			for _, s := range spellings {
+				if _, ok := m[s]; ok {
+					present = append(present, s)
+				}
+			}
+			if len(present) < 2 {
+				continue
+			}
+			// Never merge array values: an array-of-tables ([[command]]) decodes to
+			// []any just like a plain list, and the decoder treats a fold-variant
+			// spelling as a NEW array (it replaces rather than appends across
+			// spellings) — merging one here would silently drop entries.
+			if hasArrayVariant(m, present) {
+				continue
+			}
+			merged := m[present[0]]
+			for _, k := range present[1:] {
+				merged = mergeValue(merged, m[k])
+			}
+			for _, k := range present {
+				delete(m, k)
+			}
+			m[present[0]] = merged
+		}
+	}
+	for k, v := range m {
+		child, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		collapseFolds(child, order.children[strings.ToLower(k)], append(path, strings.ToLower(k)))
+	}
+}
+
+// mapKeyLevels is the set of lowercased TOML paths whose children are MAP keys
+// rather than struct fields. go-toml folds a TOML key into a struct field via
+// its byFold map but keeps map[string]… keys verbatim, so these children must
+// never be collapsed: each is a distinct entry the decoder does not merge.
+// The lsp.<lang>.env and lsp.<lang>.initialization_options paths — whose <lang>
+// segment is itself a map key — are matched in isMapKeyLevel, not enumerated.
+var mapKeyLevels = map[string]bool{
+	"tasks":                 true, // Config.Tasks
+	"lsp":                   true, // Config.LSP
+	"git.env":               true, // GitConfig.Env
+	"ui.keys":               true, // UIConfig.Keys
+	"tools.client_profiles": true, // ToolsConfig.ClientProfiles
+}
+
+// isMapKeyLevel reports whether the keys at this level are MAP keys, in which
+// case collapseFolds must skip them.
+func isMapKeyLevel(path []string) bool {
+	if len(path) == 3 && path[0] == "lsp" && (path[2] == "env" || path[2] == "initialization_options") {
+		return true
+	}
+	return mapKeyLevels[strings.Join(path, ".")]
+}
+
+// hasArrayVariant reports whether any of present names an array value in m.
+func hasArrayVariant(m map[string]any, present []string) bool {
+	for _, k := range present {
+		if _, ok := m[k].([]any); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // tableKeys returns m's keys in sorted order, so a collapse pass over a table
 // does not itself depend on map iteration order.
 func tableKeys(m map[string]any) []string {
@@ -316,11 +501,19 @@ func lookupNested(m map[string]any, path []string) bool {
 // key is updated in place) rather than duplicated — writing `git.allow_writes`
 // into a file that says [GIT] must not leave two tables that both decode into
 // Config.Git.
-func setNested(m map[string]any, path []string, value any) {
+//
+// It REFUSES to overwrite an intermediate segment that already holds a non-table
+// value: writing `command.name` must not replace an exact-spelled `[[command]]`
+// allow-list with an empty table, which would destroy the list and leave a
+// config that fails validation.
+func setNested(m map[string]any, path []string, value any) error {
 	for _, k := range path[:len(path)-1] {
 		key := foldCollapseTable(m, k)
 		next, ok := m[key].(map[string]any)
 		if !ok {
+			if _, exists := m[key]; exists {
+				return fmt.Errorf("cannot set %q: %q already exists and is not a table", strings.Join(path, "."), key)
+			}
 			next = map[string]any{}
 			m[key] = next
 		}
@@ -329,6 +522,7 @@ func setNested(m map[string]any, path []string, value any) {
 	leaf := path[len(path)-1]
 	key := foldCollapse(m, leaf)
 	m[key] = value
+	return nil
 }
 
 // deleteNested removes path from m and prunes any table it leaves empty. Keys

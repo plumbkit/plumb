@@ -70,10 +70,10 @@ type proxyDeps struct {
 	// untouched (and the daemon falls back to a fresh, non-rehydrated session).
 	proxySessionID string
 
-	// cwd is the serve proxy's working directory, folded into the captured
-	// initialize frame's _meta as an advisory workspace attach hint for clients
-	// that report no roots. Identical across every handshake replay. Empty ⇒
-	// frame untouched (the daemon then resolves the workspace as before).
+	// cwd is the workspace attach hint folded into the captured initialize
+	// frame's _meta for clients that report no roots: --workspace/PLUMB_WORKSPACE
+	// when set, else the serve proxy's working directory (resolveWorkspaceHint).
+	// Empty ⇒ frame untouched. Identical across every handshake replay.
 	cwd string
 
 	heartbeatInterval time.Duration // 0 disables hang detection
@@ -92,15 +92,15 @@ type reconnectingProxy struct {
 	fr     *frameReader
 	gen    uint64
 
-	// pinMu guards the workspace the caller chose via session_start. `pending` is
-	// written by the client pump and read by the daemon pump; `pinned` is written
-	// by the daemon pump and read by replayHandshake, which runs on whichever pump
-	// noticed the failure. See serve_proxy_pin.go. Deliberately its own mutex:
-	// hsMu's critical sections stay tight, and `outstanding` cannot be reused here
-	// (it is swept on reconnect, and the pin must survive that).
-	pinMu   sync.Mutex
-	pending map[string]string // in-flight session_start id → requested workspace
-	pinned  string            // last workspace the daemon accepted
+	// pinMu guards the caller's chosen workspace and the daemon-echoed session ID
+	// (PLAN-296). `pending` is written by the client pump; `pinned`/`heldSessionID`
+	// by the daemon pump, read by replayHandshake on whichever pump noticed the
+	// failure. Deliberately its own mutex: it must survive a reconnect's sweep,
+	// and hsMu's critical sections stay tight.
+	pinMu         sync.Mutex
+	pending       map[string]string // in-flight session_start id → requested workspace
+	pinned        string            // last workspace the daemon accepted
+	heldSessionID string            // last plumb session ID the daemon echoed (PLAN-296)
 
 	reconnectMu   sync.Mutex
 	daemonWriteMu sync.Mutex

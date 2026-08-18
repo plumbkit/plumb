@@ -35,10 +35,10 @@ client, or use a bulk flag:
             tell an absent config from an uninstalled client, so use the
             client's named subcommand to create one. The exceptions are Kimi
             Code, detected via its data dir ($KIMI_CODE_HOME, or
-            ~/.kimi-code), and ZCode, detected via its home dir (~/.zcode):
-            their MCP configs only exist once a server is configured, so
-            --all creates them fresh.`,
-	RunE: runSetupAll,
+            ~/.kimi-code), ZCode, detected via its home dir (~/.zcode), and
+            DeepSeek Harness, detected via its home dir ($DSH_HOME, or ~/.dsh):
+            their MCP configs only exist once an entry is configured, so
+            --all creates them fresh.`, RunE: runSetupAll,
 }
 
 var (

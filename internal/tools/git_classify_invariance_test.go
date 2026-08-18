@@ -119,7 +119,7 @@ var gitArgBattery = []struct {
 // tier that skips the allow_destructive/confirm gate (gateGit), the write-rate
 // limiter, the per-repo serialisation lock (beginSerialisedGit runs only for
 // tier != tierRead), and the expected_head plus cross-session ref guard
-// (armRefGuard sets check only for write and destructive) — and routes the argv
+// (armRefGuard sets check only for write, destructive, and network) — and routes the argv
 // through gitReadArgv. One arg-keyed arm would hand all of that to a verb that
 // rewrites history.
 //

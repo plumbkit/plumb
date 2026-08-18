@@ -48,7 +48,7 @@ func (*relevantMemoriesTool) InputSchema() json.RawMessage {
 }`)
 }
 
-func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *relevantMemoriesTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Path      string `json:"path"`
 		Workspace string `json:"workspace"`
@@ -59,18 +59,18 @@ func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) 
 	if a.Path == "" {
 		return "", errors.New("`path` is required")
 	}
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("relevant_memories: %w", err)
 	}
 
 	// Normalise to a workspace-relative path.
 	rel := a.Path
 	if filepath.IsAbs(a.Path) {
-		if err := t.guard.check(a.Path); err != nil {
+		if err := t.guard.check(ctx, a.Path); err != nil {
 			return "", fmt.Errorf("relevant_memories: %w", err)
 		}
 		// WorkspaceRel, not filepath.Rel: the guard above admitted this path by

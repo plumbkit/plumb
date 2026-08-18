@@ -121,6 +121,17 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		language = langOverride
 		langForced = true
 	}
+	// On a shared connection the re-pin is PER-AGENT: the agent identified in ctx
+	// moves its own shard (pin, language, boundary policy, fresh trackers/undo),
+	// leaving the connection-level pin and every peer agent untouched — the
+	// actual issue #182 fix. The connection-level attachOrRepinTo below runs only
+	// for an unattributed re-pin (roots, restore) or a non-shared connection.
+	if s.repinShard(ctx) != nil {
+		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
+			return "", refused
+		}
+		return root, nil
+	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
 	// lane: after the root resolution above, so a requested path that resolves
 	// to the current root is never falsely refused, and on the view under
@@ -217,7 +228,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				// refused steal attempt (or a fumbled path), just as the
 				// root-changed branch below does — the victim's own re-pin must
 				// heal the session, not only a forced switch.
-				session.Patch(s.sessID, func(info *session.Info) {
+				session.Patch(s.sessionID(), func(info *session.Info) {
 					info.Health = ""
 					info.HealthMessage = ""
 				})
@@ -225,6 +236,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			return
 		}
 		changed = true
+		s.logLanguageOverrideBreadcrumb(v, prev, root, language, langForced)
 		// The pinned LS reference (if any) for the workspace we are leaving;
 		// released at the end once the new root is acquired, so the pool can reclaim
 		// the old server after its idle grace if no other session holds it.
@@ -269,7 +281,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.warmDepRoots(language)
 		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
 		cn, cv := v.clientName, v.clientVersion
-		session.Patch(s.sessID, func(info *session.Info) {
+		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
@@ -287,4 +299,16 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			"source", pinSourceLabel(origin), "trigger", string(trigger))
 	})
 	return changed, refused
+}
+
+// logLanguageOverrideBreadcrumb emits the distinguishing signal for a same-root
+// language override on a sticky session_start pin (issue #182). The generic
+// "session re-pinned" line below also covers a project switch and cannot tell the
+// two apart, but this case tears down and re-acquires the language server —
+// resetting the read/write/undo trackers a peer on a multiplexed connection may
+// be relying on.
+func (s *connSession) logLanguageOverrideBreadcrumb(v *sessionView, prev, root, language string, langForced bool) {
+	if root == prev && langForced && v.pinOrigin == sessionstate.PinSourceSessionStart {
+		s.log().Warn("daemon: primary language overridden on a sticky pin — read/write/undo trackers reset (issue #182)", "pinned", prev, "language", language, "previous", v.acquiredLanguage)
+	}
 }

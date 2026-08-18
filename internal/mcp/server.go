@@ -147,7 +147,13 @@ type Server struct {
 	OnRootsChanged func(ctx context.Context, request RequestFn)
 
 	// OnBeforeTool is called synchronously before each tools/call execution.
-	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage)
+	// logicalAgent is the client-declared logical-agent identity carried in the
+	// call's `_meta` (MetaLogicalAgentKey), or "" when the client supplies none.
+	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage, logicalAgent string)
+
+	// OnToolRefusal is called before a tools/call executes with the canonical
+	// tool name and logical-agent identity; a non-nil error refuses the call.
+	OnToolRefusal func(ctx context.Context, name, logicalAgent string) error
 
 	// OnAfterTool is called synchronously after each tools/call execution.
 	// output is the tool's text result (empty when isError is true). errMsg
@@ -206,18 +212,18 @@ type Server struct {
 	// not called.
 	OnProxySession func(ctx context.Context, id string)
 
-	// OnWorkspaceHint is called once during the initialize exchange with the
-	// serve proxy's working directory transported in _meta[MetaWorkspaceKey] —
-	// an advisory attach hint, not an authoritative root. It runs synchronously,
-	// before OnInit attaches the workspace, so the hint is available as the
-	// lowest attach fallback before path seeding. Absent/empty ⇒ never called.
+	// OnWorkspaceHint is called once during initialize with the serve proxy's
+	// working directory (_meta[MetaWorkspaceKey]) — an advisory attach hint, not
+	// an authoritative root. Absent/empty ⇒ never called.
 	OnWorkspaceHint func(ctx context.Context, dir string)
 
-	// OnPinnedWorkspace is called once during the initialize exchange with the
-	// workspace the caller last chose via an explicit session_start, replayed by
-	// the serve proxy in _meta[MetaPinnedWorkspaceKey]. Empty or absent on a first
-	// connect, and on any proxy that predates the key.
+	// OnPinnedWorkspace is called once during initialize with the workspace the
+	// caller last chose via session_start, replayed in _meta[MetaPinnedWorkspaceKey].
 	OnPinnedWorkspace func(ctx context.Context, dir string)
+
+	// OnSessionID is called once during initialize with the replayed stable
+	// plumb session ID (_meta[MetaSessionIDKey]) for adoption (PLAN-296).
+	OnSessionID func(ctx context.Context, id string)
 
 	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
 	// name it rejects is hidden from the advertised set but STAYS CALLABLE via

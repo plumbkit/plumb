@@ -17,7 +17,7 @@ func TestSearchMemories_FTSAndGrepFallback(t *testing.T) {
 	}
 	defer ix.Close()
 
-	tool := NewSearchMemories(func() string { return ws }).
+	tool := NewSearchMemories(func(context.Context) string { return ws }).
 		WithIndex(func() *memory.Index { return ix })
 
 	if err := memory.WriteIndexed(ix, ws, "auth-notes",
@@ -57,7 +57,7 @@ func TestSearchMemories_StaleIndexFallsBackToGrep(t *testing.T) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer ix.Close()
-	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	tool := NewSearchMemories(func(context.Context) string { return ws }).WithIndex(func() *memory.Index { return ix })
 
 	// Index one memory so the index is non-empty...
 	if err := memory.WriteIndexed(ix, ws, "indexed", "alpha beta", "d"); err != nil {
@@ -89,7 +89,7 @@ func TestSearchMemories_FtsModeReindexesStale(t *testing.T) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer ix.Close()
-	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	tool := NewSearchMemories(func(context.Context) string { return ws }).WithIndex(func() *memory.Index { return ix })
 
 	// File on disk, never indexed ⇒ the index is stale.
 	if err := memory.Write(ws, "fresh-mem", "delta-unique-token notes", "d"); err != nil {
@@ -117,7 +117,7 @@ func TestSearchMemories_AutoZeroFtsHitFallsToGrep(t *testing.T) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer ix.Close()
-	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	tool := NewSearchMemories(func(context.Context) string { return ws }).WithIndex(func() *memory.Index { return ix })
 	if err := memory.WriteIndexed(ix, ws, "user-session-notes", "the UserSession lifecycle", "d"); err != nil {
 		t.Fatalf("WriteIndexed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSearchMemories_CaseSensitiveForcesGrep(t *testing.T) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer ix.Close()
-	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	tool := NewSearchMemories(func(context.Context) string { return ws }).WithIndex(func() *memory.Index { return ix })
 	if err := memory.WriteIndexed(ix, ws, "notes", "UserSession lifecycle", "d"); err != nil {
 		t.Fatalf("WriteIndexed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSearchMemories_FtsModeKeepsEmptyResult(t *testing.T) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer ix.Close()
-	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	tool := NewSearchMemories(func(context.Context) string { return ws }).WithIndex(func() *memory.Index { return ix })
 	if err := memory.WriteIndexed(ix, ws, "notes", "UserSession lifecycle", "d"); err != nil {
 		t.Fatalf("WriteIndexed: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSearchMemories_NilIndexUsesGrep(t *testing.T) {
 	if err := memory.Write(ws, "n", "zebra-unique-token", "d"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	tool := NewSearchMemories(func() string { return ws }) // no index wired
+	tool := NewSearchMemories(func(context.Context) string { return ws }) // no index wired
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"zebra-unique-token"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

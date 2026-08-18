@@ -168,7 +168,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 	return tools.CollabDeps{
 		Workspace:                s.workspace,
 		SessionName:              s.sessionName,
-		SessionID:                s.sessID,
+		SessionID:                s.sessionID,
 		Policy:                   s.collabPolicy,
 		Store:                    s.collabStoreCreate,
 		StoreIfExists:            s.collabStoreIfExists,
@@ -193,7 +193,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 func (s *connSession) inbox() tools.Inbox {
 	return tools.Inbox{
 		Self:         s.addressableName(),
-		SelfID:       s.sessID,
+		SelfID:       s.sessionID(),
 		InheritedIDs: s.inheritedSessionIDs(),
 		Root:         s.workspace(),
 		Policy:       s.collabPolicy(),
@@ -232,7 +232,7 @@ func (s *connSession) intentHint(args []byte, ws string) string {
 		return ""
 	}
 	for _, r := range intents {
-		if r.AuthorID == s.sessID { // never hint a session about its own intent
+		if r.AuthorID == s.sessionID() { // never hint a session about its own intent
 			continue
 		}
 		if !collab.MatchPath(r.PathGlobs, rel) {
@@ -257,7 +257,7 @@ func (s *connSession) clearSessionIntents() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := store.ClearSessionIntents(ctx, s.sessID); err != nil {
+	if err := store.ClearSessionIntents(ctx, s.sessionID()); err != nil {
 		s.log().Debug("collab: clear session intents on close", "err", err)
 	}
 }

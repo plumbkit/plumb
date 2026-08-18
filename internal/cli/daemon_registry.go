@@ -71,6 +71,29 @@ func (r *connRegistry) add(sessID string, h connHandle) {
 	r.mu.Unlock()
 }
 
+// rekey moves a connection's handle from oldID to newID, preserving the
+// summarisedAt timestamp. Called when a connection adopts the stable session ID
+// the serve proxy replayed (PLAN-296): the registry is keyed by session ID so
+// summariseIdle/evictIdle — which look up handles by session.List()'s file ID —
+// must follow the re-key. oldID == newID or an absent oldID is a no-op.
+func (r *connRegistry) rekey(oldID, newID string) {
+	if oldID == newID {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h, ok := r.conns[oldID]
+	if !ok {
+		return
+	}
+	delete(r.conns, oldID)
+	r.conns[newID] = h
+	if ts, ok := r.summarisedAt[oldID]; ok {
+		delete(r.summarisedAt, oldID)
+		r.summarisedAt[newID] = ts
+	}
+}
+
 // reloadProject re-applies the project config to every live session pinned to
 // workspace ws — and only those — so a per-workspace config change takes effect
 // immediately for that project and never touches a session in another. The

@@ -194,8 +194,11 @@ docker-cleanroom:
 	docker build $(DOCKER_PLATFORM_FLAG) -f build/docker/cleanroom.Dockerfile -t plumb-cleanroom --build-arg VERSION=$(VERSION) .
 	docker run --rm $(DOCKER_PLATFORM_FLAG) plumb-cleanroom
 
+# lint runs golangci-lint through scripts/lint-with-retry.sh, which retries
+# with bounded backoff on the shared-cache lock ("parallel golangci-lint is
+# running") so a peer agent's lint does not read as a failure of this one.
 lint:
-	golangci-lint run
+	./scripts/lint-with-retry.sh
 
 # lint-cross lints the OTHER supported OS's tree. golangci-lint only analyses
 # files that match the current GOOS, so a Linux `make lint` never sees

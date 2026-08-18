@@ -12,7 +12,7 @@ import (
 )
 
 // wsFn returns a WorkspaceFn that always resolves to root.
-func wsFn(root string) WorkspaceFn { return func() string { return root } }
+func wsFn(root string) WorkspaceFn { return func(context.Context) string { return root } }
 
 func TestResolvePath(t *testing.T) {
 	ws := "/work/space"
@@ -32,7 +32,7 @@ func TestResolvePath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolvePath(tc.in, tc.ws); got != tc.want {
+			if got := resolvePath(context.Background(), tc.in, tc.ws); got != tc.want {
 				t.Errorf("resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -55,7 +55,7 @@ func TestWriteDepsResolvePath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.deps.resolvePath(tc.in); got != tc.want {
+			if got := tc.deps.resolvePath(context.Background(), tc.in); got != tc.want {
 				t.Errorf("WriteDeps.resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -79,7 +79,7 @@ func TestToFileURIAnchored(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := toFileURIAnchored(tc.in, tc.ws); got != tc.want {
+			if got := toFileURIAnchored(context.Background(), tc.in, tc.ws); got != tc.want {
 				t.Errorf("toFileURIAnchored(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})

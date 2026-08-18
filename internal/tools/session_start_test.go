@@ -111,7 +111,7 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(ws, markerFile), []byte(markerContent), 0o644); err != nil {
 			t.Fatalf("write %s: %v", markerFile, err)
 		}
-		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -146,7 +146,7 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module test\ngo 1.21\n"), 0o644); err != nil {
 			t.Fatalf("write go.mod: %v", err)
 		}
-		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -180,7 +180,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
 			"file:///ws/main.go": {makeDiag(0, 0, "undefined: foo", protocol.SevError)},
 		}}
-		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return ws }, diag, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -193,7 +193,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	t.Run("LSP available no errors suggests workspace_symbols", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
 		diag := &stubDiagnostics{all: nil}
-		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, diag, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "go" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -207,7 +207,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	t.Run("no LSP with Go language names binary path guidance", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
 		// No LSP attached, no topology — topology is wired but returns nil store.
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -231,7 +231,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	// stopped asking.
 	t.Run("no primary but routed names the LSP tools", func(t *testing.T) {
 		ws := t.TempDir()
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "" }).
 			WithLSPRouted(func() []string { return []string{"html"} })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -250,7 +250,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 
 	t.Run("an attached primary outranks the routed advisory", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
-		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{}, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{}, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "go" }).
 			WithLSPRouted(func() []string { return []string{"html"} })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -264,7 +264,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 
 	t.Run("no LSP no language uses default", func(t *testing.T) {
 		ws := t.TempDir()
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -279,7 +279,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
 			"file:///ws/main.go": {makeDiag(1, 0, "unused variable", protocol.SevWarning)},
 		}}
-		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return ws }, diag, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "go" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -306,7 +306,7 @@ func TestSessionStart_WorkspaceScale(t *testing.T) {
 		t.Fatalf("write README.md: %v", err)
 	}
 
-	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -346,7 +346,7 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			name := tc.clientName
 			tool := NewSessionStart(
-				func() string { return t.TempDir() },
+				func(context.Context) string { return t.TempDir() },
 				nil,
 				nil,
 				nil,
@@ -374,7 +374,7 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 func TestSessionStart_DesktopGuidance(t *testing.T) {
 	for _, name := range []string{"claude-ai", "claude-ai/0.1.0", "claude-desktop"} {
 		t.Run(name, func(t *testing.T) {
-			tool := NewSessionStart(func() string { return t.TempDir() }, nil, nil, nil, func() string { return name }, nil)
+			tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return name }, nil)
 			out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
@@ -396,7 +396,7 @@ func TestSessionStart_DesktopGuidance(t *testing.T) {
 func TestSessionStart_LanguageOverride(t *testing.T) {
 	attached := t.TempDir()
 	var gotWs, gotLang string
-	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithLSPLanguage(func() string { return "swift" }). // server attached after the forced pin
 		WithRepin(func(_ context.Context, ws, lang string, _ bool) (string, error) {
 			gotWs, gotLang = ws, lang
@@ -428,7 +428,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	t.Run("mismatch without repin callback falls back to error", func(t *testing.T) {
 		attached := t.TempDir()
 		var conflict string
-		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 			WithPinConflict(func(requested string) { conflict = requested })
 		_, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"/some/other/path"}`))
 		if err == nil {
@@ -446,7 +446,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		attached := t.TempDir()
 		target := t.TempDir()
 		var got string
-		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 			WithRepin(func(_ context.Context, ws, _ string, _ bool) (string, error) {
 				got = ws
 				return ws, nil
@@ -468,7 +468,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 
 	t.Run("attached root returned when explicit arg matches", func(t *testing.T) {
 		attached := t.TempDir()
-		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+attached+`"}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -480,7 +480,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 
 	t.Run("explicit arg used when nothing attached", func(t *testing.T) {
 		explicit := t.TempDir()
-		tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+explicit+`"}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -491,7 +491,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 
 	t.Run("nothing resolves errors (no cwd guess)", func(t *testing.T) {
-		tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil)
 		if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
 			t.Fatal("want noWorkspaceError when nothing resolves, got nil")
 		}
@@ -503,7 +503,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 func TestSameDir_TrailingSlash(t *testing.T) {
 	attached := t.TempDir()
 	trailing := attached + "/"
-	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil)
+	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+trailing+`"}`))
 	if err != nil {
 		t.Fatalf("trailing slash should not trigger re-pin; got error: %v", err)
@@ -521,7 +521,7 @@ func TestSameDir_SymlinkAlias(t *testing.T) {
 	if err := os.Symlink(realDir, linkDir); err != nil {
 		t.Skipf("symlink creation failed (likely Windows without privilege): %v", err)
 	}
-	tool := NewSessionStart(func() string { return realDir }, nil, nil, nil, func() string { return "" }, nil)
+	tool := NewSessionStart(func(context.Context) string { return realDir }, nil, nil, nil, func() string { return "" }, nil)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+linkDir+`"}`))
 	if err != nil {
 		t.Fatalf("symlink alias should not trigger re-pin; got error: %v", err)
@@ -614,7 +614,7 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 
 	t.Run("rendered in a git repo when policy wired", func(t *testing.T) {
 		ws := gitInit(t)
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -629,7 +629,7 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 
 	t.Run("omitted when gitPolicyFn is nil", func(t *testing.T) {
 		ws := gitInit(t)
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -645,7 +645,7 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 		// won't do — in this repo the test temp root lives inside the worktree,
 		// so git would resolve the enclosing plumb repo and report a branch.
 		ws := filepath.Join(t.TempDir(), "no-such-dir")
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
+		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -721,7 +721,7 @@ func TestSessionStart_UnwiredProfileSilent(t *testing.T) {
 func TestSessionStart_PurposeValidAndPersisted(t *testing.T) {
 	ws := t.TempDir()
 	var got string
-	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 		WithPurpose(func(p string) { got = p })
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"purpose":"deploy-fix"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -734,7 +734,7 @@ func TestSessionStart_PurposeValidAndPersisted(t *testing.T) {
 func TestSessionStart_PurposeInvalidRejected(t *testing.T) {
 	ws := t.TempDir()
 	called := false
-	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 		WithPurpose(func(string) { called = true })
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"purpose":"bad purpose!"}`))
 	if err == nil {
@@ -751,7 +751,7 @@ func TestSessionStart_PurposeInvalidRejected(t *testing.T) {
 func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
 	ws := t.TempDir()
 	called := false
-	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 		WithPurpose(func(string) { called = true })
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -772,7 +772,7 @@ func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
 func TestSessionStart_Idempotent(t *testing.T) {
 	ws := t.TempDir()
 	var purposeCalls, externalIDCalls int
-	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 		WithPurpose(func(string) { purposeCalls++ }).
 		WithExternalID(func(string) string { externalIDCalls++; return "" })
 
@@ -808,7 +808,7 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 	attached := t.TempDir()
 	target := t.TempDir()
 	var gotForce []bool
-	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(func(_ context.Context, ws, _ string, force bool) (string, error) {
 			gotForce = append(gotForce, force)
 			return ws, nil
@@ -831,7 +831,7 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
 	target := t.TempDir()
 	var gotForce bool
-	tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(func(_ context.Context, _, _ string, force bool) (string, error) {
 			gotForce = force
 			return target, nil
@@ -855,7 +855,7 @@ func TestSessionStart_LSPSkipNoteInIdentity(t *testing.T) {
 	ws := t.TempDir()
 	const note = "LSP skipped: the workspace root is the home directory"
 
-	tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+	tool := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
 		WithLSPLanguage(func() string { return "" }).
 		WithLSPSkipNote(func() string { return note })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -866,7 +866,7 @@ func TestSessionStart_LSPSkipNoteInIdentity(t *testing.T) {
 		t.Errorf("orientation packet must name why no LSP is attached for a home pin\n%s", out)
 	}
 
-	tool2 := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil)
+	tool2 := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil)
 	out2, err := tool2.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute (no accessor): %v", err)

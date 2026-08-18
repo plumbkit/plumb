@@ -34,7 +34,7 @@ func chatTestDeps(t *testing.T, policy CollabPolicy, self string) (CollabDeps, *
 		Workspace:           func() string { return ws },
 		ResolvePeer:         func(string) (PeerSession, bool) { return PeerSession{}, false },
 		SessionName:         func() string { return self },
-		SessionID:           "sess-" + self,
+		SessionID:           func() string { return "sess-" + self },
 		Policy:              func() CollabPolicy { return policy },
 		Store:               func() *collab.Store { return local },
 		StoreIfExists:       func() *collab.Store { return local },
@@ -341,7 +341,7 @@ func TestLeaveNote_ExchangeBudgetRefusesReply(t *testing.T) {
 // the single lane around that gate.
 func TestCheckMessages_UnregisteredSessionHasNoAddress(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
-	deps.SessionID = "" // session.Register failed
+	deps.SessionID = nil // session.Register failed
 	put(t, local, "bob", "alice", "meant for the real alice", "", "", "")
 
 	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{}`))
@@ -374,7 +374,7 @@ func TestCheckMessages_DeliversABoundMessageToItsOwnSession(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	if _, err := local.PutNote(context.Background(), collab.NoteInput{
 		AuthorSession: "bob", AuthorID: "id-bob", Body: "bound and addressed to me",
-		Addressee: "alice", AddresseeID: deps.SessionID, TTL: time.Hour,
+		Addressee: "alice", AddresseeID: deps.sessionID(), TTL: time.Hour,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestCheckMessages_ReportsTheSendersOwnUnreadMail(t *testing.T) {
 	// neither read. The cross-project one is the case that matters most: the
 	// recipient's cross_project defaults off, so it expires unread by default.
 	mine := collab.NoteInput{
-		AuthorSession: "alice", AuthorID: deps.SessionID, Body: "same project",
+		AuthorSession: "alice", AuthorID: deps.sessionID(), Body: "same project",
 		Addressee: "bob", TTL: time.Hour,
 	}
 	if _, err := local.PutNote(context.Background(), mine, time.Now().Add(-12*time.Minute)); err != nil {
@@ -439,7 +439,7 @@ func TestCheckMessages_ReportsTheSendersOwnUnreadMail(t *testing.T) {
 func TestCheckMessages_ReceiptIsSilentWhenEverythingWasRead(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	if _, err := local.PutNote(context.Background(), collab.NoteInput{
-		AuthorSession: "alice", AuthorID: deps.SessionID, Body: "hello bob",
+		AuthorSession: "alice", AuthorID: deps.sessionID(), Body: "hello bob",
 		Addressee: "bob", TTL: time.Hour,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -536,7 +536,7 @@ func TestCheckMessages_ReceiptMergesStoresOldestFirst(t *testing.T) {
 	send := func(s *collab.Store, to string, age time.Duration, target string) {
 		t.Helper()
 		in := collab.NoteInput{
-			AuthorSession: "alice", AuthorID: deps.SessionID, Body: "to " + to,
+			AuthorSession: "alice", AuthorID: deps.sessionID(), Body: "to " + to,
 			Addressee: to, TTL: 24 * time.Hour,
 		}
 		if target != "" {

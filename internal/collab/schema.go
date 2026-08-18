@@ -51,6 +51,20 @@ var chatColumns = []struct{ name, ddl string }{
 	{"origin_workspace", `ALTER TABLE collab_rows ADD COLUMN origin_workspace TEXT NOT NULL DEFAULT ''`},
 	{"target_workspace", `ALTER TABLE collab_rows ADD COLUMN target_workspace TEXT NOT NULL DEFAULT ''`},
 	{"addressee_id", `ALTER TABLE collab_rows ADD COLUMN addressee_id TEXT NOT NULL DEFAULT ''`},
+	// delivered_to_id is what makes a claim's record of its recipient an IDENTITY
+	// rather than a name. delivered_to alone is a name, and names are reusable, so
+	// using it to decide conversation membership let a session that later took a
+	// departed claimant's name inherit that claimant's place in the thread. An
+	// existing row backfills to '', which membershipPredicate reads as "this claim
+	// predates identity" and falls back to the name for — the same shape
+	// addressee_id already uses.
+	//
+	// That fallback is a bounded, deliberate concession: on a row claimed BEFORE
+	// this column existed, a session taking the old claimant's name still passes
+	// the membership check. Locking those rows out instead would refuse real
+	// claimants their own threads, and every such row ages out at
+	// intent_ttl_minutes, so the exposure ends with the TTL rather than persisting.
+	{"delivered_to_id", `ALTER TABLE collab_rows ADD COLUMN delivered_to_id TEXT NOT NULL DEFAULT ''`},
 }
 
 // chatIndexes accelerate the two hot chat queries: "what is unread for me" and

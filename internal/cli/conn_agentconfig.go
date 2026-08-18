@@ -55,7 +55,7 @@ func (s *connSession) applyAgentConfig(_ context.Context, pairs map[string]any) 
 	}
 	prov := config.ProvenanceEntry{
 		Source:    "agent",
-		SessionID: s.sessID,
+		SessionID: s.sessionID(),
 		Client:    s.view().clientName,
 		Timestamp: time.Now(),
 	}

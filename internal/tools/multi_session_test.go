@@ -29,7 +29,7 @@ func newSessionDeps(t *testing.T, ws string) WriteDeps {
 		Reads:       NewReadTracker(),
 		Writes:      NewWriteTracker(),
 		Limiter:     NewRateLimiter(10000, time.Minute),
-		WorkspaceFn: func() string { return ws },
+		WorkspaceFn: func(context.Context) string { return ws },
 	}
 }
 

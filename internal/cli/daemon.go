@@ -555,14 +555,19 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	s.memoryPool = memPool
 	s.collabPool = collabPool
 	s.daemonStartedAt = daemonStartedAt
-	registry.add(s.sessID, connHandle{
+	// The registry is keyed by session ID, which onSessionID may ADOPT (re-key)
+	// during initialize; give the session the registry so the re-key follows.
+	s.registry = registry
+	registry.add(s.sessionID(), connHandle{
 		cancel:         s.cancel,
 		workspace:      s.workspace,
 		proxySessionID: func() string { return s.view().proxySessionID },
 		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
 		summarise:      s.generateEpisodicSummary,
 	})
-	defer registry.remove(s.sessID)
+	// Read the ID at close time, not here: an adoption re-keys the entry under
+	// the new ID and the deferred remove must delete that key, not the stale one.
+	defer func() { registry.remove(s.sessionID()) }()
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	writeTimeout := serverWriteTimeout()

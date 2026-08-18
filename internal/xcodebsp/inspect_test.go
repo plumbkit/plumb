@@ -23,9 +23,16 @@ func TestInspectWorkspaceCommand(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "App.xcworkspace"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	i := Inspect(root)
-	if got := i.GenerateCommand(); !strings.Contains(got, "-workspace") || strings.Contains(got, "-project") {
-		t.Fatalf("command = %q", got)
+	// Assert on the marker flag — the command's argv element — not the rendered
+	// command, whose `cd` prefix embeds root. A checkout path containing
+	// "-project" (GOTMPDIR is pinned to the checkout by `make test`) would
+	// otherwise satisfy a substring match on the command as if it were a flag.
+	marker, err := Inspect(root).SelectMarker()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marker.Flag != "-workspace" {
+		t.Fatalf("marker = %#v, want flag -workspace", marker)
 	}
 }
 

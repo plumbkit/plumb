@@ -151,8 +151,8 @@ func (t *MoveSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
 
-	src := toFileURIAnchored(a.SourceURI, t.ws)
-	dst := toFileURIAnchored(a.DestinationURI, t.ws)
+	src := toFileURIAnchored(ctx, a.SourceURI, t.ws)
+	dst := toFileURIAnchored(ctx, a.DestinationURI, t.ws)
 	srcPath := paths.URIToPath(src)
 	dstPath := paths.URIToPath(dst)
 
@@ -199,10 +199,10 @@ func (t *MoveSymbol) moveOrPreview(ctx context.Context, a moveSymbolArgs, src, s
 // question does not apply. The dirty guard is what protects unreviewed work.
 func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, dstPath string, dryRun, dirtyOK bool) error {
 	if deps != nil {
-		if err := deps.checkBoundary(srcPath); err != nil {
+		if err := deps.checkBoundary(ctx, srcPath); err != nil {
 			return fmt.Errorf("move_symbol: %w", err)
 		}
-		if err := deps.checkBoundary(dstPath); err != nil {
+		if err := deps.checkBoundary(ctx, dstPath); err != nil {
 			return fmt.Errorf("move_symbol: %w", err)
 		}
 	}
@@ -216,8 +216,10 @@ func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, ds
 	if dryRun {
 		return nil
 	}
-	if deps != nil && deps.Limiter != nil && !deps.Limiter.Allow() {
-		return rateLimitError("move_symbol", deps.Limiter)
+	if deps != nil {
+		if lim := deps.limiter(ctx); lim != nil && !lim.Allow() {
+			return rateLimitError("move_symbol", lim)
+		}
 	}
 	if deps != nil && !dirtyOK {
 		if dirtyBlocksWrite(ctx, *deps, srcPath) {
@@ -254,8 +256,8 @@ func (t *MoveSymbol) applyMove(ctx context.Context, deps *WriteDeps, a moveSymbo
 			return
 		}
 		for _, p := range plans {
-			deps.recordWritten(p.path)
-			deps.recordUndo(p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
+			deps.recordWritten(ctx, p.path)
+			deps.recordUndo(ctx, p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
 		}
 	}
 	if _, err := applyMovePlans(plans, onApplied); err != nil {

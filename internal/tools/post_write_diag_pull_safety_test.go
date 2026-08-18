@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestPullPostWrite_UnknownWorkspaceUnchangedIsNotExhaustive(t *testing.T) {
 	}
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)

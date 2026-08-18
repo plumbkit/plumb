@@ -161,7 +161,9 @@ func SetGlobalValue(path []string, value any) error {
 	if err != nil {
 		return err
 	}
-	setNested(m, path, value)
+	if err := setNested(m, path, value); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}

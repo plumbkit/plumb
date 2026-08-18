@@ -200,6 +200,39 @@ func TestAttachOnInit_DroppedPinFallsThroughToRoots(t *testing.T) {
 	}
 }
 
+func TestAttachOnInit_ReplayedSubdirectorySpellingDropped(t *testing.T) {
+	// An old plumb serve proxy that predates the canonical echo replays the RAW
+	// subdirectory spelling it captured. The restore must DROP it — never attach
+	// the subdirectory verbatim, and never silently re-resolve it up to the
+	// enclosing project root (the wider write surface the caller never chose) —
+	// and the ladder falls through to the client's own roots.
+	store, ss := newOriginStore(t)
+	parent := freshTempDir(t)
+	mustGitDir(t, parent)
+	sub := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rootA := freshTempDir(t) // the client's honest launch root
+	mustGitDir(t, rootA)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(sub) // as an old proxy replaying the raw spelling would
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got == sub {
+		t.Fatalf("a replayed subdirectory spelling was attached verbatim: %q", got)
+	}
+	if got := s.workspace(); got == parent {
+		t.Fatalf("a replayed subdirectory spelling re-resolved to the enclosing repo %q; want a drop, never a silent widen", got)
+	}
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("after the drop the ladder should land on client roots %q, got %q", rootA, got)
+	}
+}
+
 // TestToolResultMeta_EchoesCanonicalRoot: the daemon echoes the resolved root
 // on a session_start(workspace=…) result so the proxy can commit the canonical
 // spelling; anything else gets no _meta.

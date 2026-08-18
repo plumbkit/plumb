@@ -16,7 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string) {
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
 		fmt.Fprintf(sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
@@ -43,6 +43,13 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	}
 	if inheritedName != "" {
 		fmt.Fprintf(sb, "Session:  %s (resumed)\n", inheritedName)
+	}
+	// An unlinked session is addressable by neither plumb mail (leave_note is
+	// addressed by session name) nor the peer wake hook (its stamp is keyed by
+	// the conversation id the caller never supplied). This is the one section
+	// every agent reads, so say so plainly before the first query.
+	if !linked {
+		sb.WriteString("NOTE: this session has no external id — plumb mail and the peer wake hook cannot address it by name; pass session_id to session_start to link it.\n")
 	}
 	if note := uncoveredPrimaryLanguageNote(lang); note != "" {
 		sb.WriteString(note)

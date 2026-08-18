@@ -224,7 +224,17 @@ jq -n --argjson n "$count" '{
   condition self-resolves once the agent calls `check_messages`, which claims
   the rows — but this runs on every turn of every session, and the conservative
   reading is the one to ship. The 8-block cap is a backstop for the other
-  choice, not a licence to skip the guard.
+  choice, not a licence to skip the guard. If one wake per chain is too blunt —
+  a back-and-forth exchange stalls after the first message — the safe
+  refinement is re-arm-on-consumption: when the woken turn's `Stop` runs under
+  `stop_hook_active`, probe again and re-arm only if the pending count DROPPED
+  since the wake (the turn read its mail), never on an unconsumed wake. Stamp a
+  chain counter and cap the total wakes per chain at something small (10 works)
+  as defence in depth, reset it on any non-woken turn end, and treat every
+  ambiguous reading — no stamp, no drop, a failed probe — as "not consumed". A
+  count drop is strong evidence of consumption, not proof: a note expiring
+  mid-turn, or a peer winning the claim race on a `"next"` note, drops the
+  count too and buys one duplicate wake before the chain stands down.
 - **`ages_seconds` is there if you want a staleness rule.** Messages expire
   after `[collab] intent_ttl_minutes` (default 120), and one a few minutes from
   expiry may not be worth an interruption. `ages_seconds[0]` is the oldest.
@@ -235,11 +245,11 @@ jq -n --argjson n "$count" '{
   only by a project that set `[collab] cross_project` (off by default).
   `plumb mail` reads the workspace mailbox only, so a cross-project message
   will not wake anyone.
-- **Notes addressed to `"next"`.** `plumb mail` excludes them, matching plumb's
-  own listing path: a `"next"` note goes to whichever session claims it first,
-  so counting it for every candidate would wake several agents for a message all
-  but one of them will lose the race for. The cost is real — a `"next"` note
-  left while a session sits idle will not wake it, and arrives whenever that
-  session next makes a call of its own.
+- **A session's own notes.** `plumb mail` counts `"next"` notes (the default
+  addressing) for every session except the one that wrote them: the probe
+  claims nothing, so there is no race to lose, but a session can never claim
+  its own note, so counting it would wake the one agent with nothing to
+  collect. Several idle sessions may still wake for the same `"next"` note —
+  all but one lose the claim race and go quiet on their next probe.
 - **Subagents.** A subagent's `Stop` is converted to `SubagentStop`, which takes
   the same decision-control format. The recipe is not wired for it.

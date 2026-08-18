@@ -24,7 +24,7 @@ they reach the tree.
 | `make build` | Compile to `./plumb`, version stamped from git/`VERSION`. |
 | `make test` | `go test ./...` |
 | `make test-race` | `go test -race ./...` |
-| `make lint` | `golangci-lint run` |
+| `make lint` | `golangci-lint run` via `scripts/lint-with-retry.sh` — retries with bounded backoff on the shared-cache lock ("parallel golangci-lint is running"), so a peer agent's lint does not read as a failure of this one. |
 | `make verify` | build + test + lint — the **definition of "ready to commit"**. |
 | `make tidy` | `go mod tidy` |
 | `make clean` | Remove build artefacts. |

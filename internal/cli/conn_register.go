@@ -62,17 +62,21 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Cache:                 s.sessionCache,
 		Diag:                  s.sessionInv,
 		Limiter:               s.writeLimiter,
+		LimiterFor:            s.rateLimiterFor,
 		Strict:                s.isStrict,
 		Reads:                 s.readTracker,
+		ReadsFor:              s.readTrackerFor,
 		Writes:                s.writeTracker,
+		WritesFor:             s.writeTrackerFor,
 		Undo:                  s.undoStore,
+		UndoFor:               s.undoStoreFor,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
 		DiagWait:              tools.NewDiagWaitEstimator(),
 		CrossFileDiagFn:       func() bool { return s.editsConfig().PostWriteCrossFile },
 		CrossFileSettleFn:     func() time.Duration { return crossFileSettle(s.editsConfig()) },
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
-		WorkspaceFn:           s.workspace,
-		Boundary:              s.writeBoundaryGuard,
+		WorkspaceFn:           s.workspaceFor,
+		Boundary:              s.writeBoundaryGuardFor,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		BlockDirtyFn:          func() bool { return s.editsConfig().BlockDirtyWrites },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
@@ -88,7 +92,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	// Read tools (reads/searches) admit any allowed root including read-only
 	// dependency roots; write/semantic-write tools demand read-write access.
 	boundary := s.readBoundaryGuard
-	writeBoundary := s.writeBoundaryGuard
+	readBoundaryFor := s.readBoundaryGuardFor
+	writeBoundary := s.writeBoundaryGuardFor
 	// The LSP routing proxies guard cross-workspace diagnostics queries, which
 	// are reads.
 	s.sessionProxy.setBoundaryGuard(boundary)
@@ -112,18 +117,18 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			s.pool.markXcodeSemanticProven(s.workspace())
 		}
 	}
-	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
-	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
-	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(boundary).WithWorkspace(s.workspace))
-	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
-	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspace))
-	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspace))
-	srv.Register(tools.NewReadMultipleFiles().WithBoundary(boundary).WithWorkspace(s.workspace))
-	srv.Register(tools.NewFileStatus(s.writeTracker).WithBoundary(boundary).WithWorkspace(s.workspace))
+	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspaceFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
+	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
+	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
+	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(readBoundaryFor).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithReadsFor(s.readTrackerFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadMultipleFiles().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewFileStatus(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
 	srv.Register(tools.NewEditFile(wd))
@@ -132,9 +137,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCopyFile(wd))
 	srv.Register(tools.NewTransactionApply(wd))
 	srv.Register(tools.NewUndoEdit(wd))
-	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(boundary))
-	srv.Register(tools.NewFindFiles(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessID, s.sessionName).
+	srv.Register(tools.NewSearchInFiles(s.workspaceFor, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewFindFiles(s.workspaceFor).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessionID, s.sessionName).
 		WithPeerIntents(func() bool { return s.collabConfig().Intents }, s.collabStoreIfExists,
 			func() int { return s.collabConfig().HintBudgetBytes }))
 	srv.Register(tools.NewGitInit(wd))
@@ -143,10 +148,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewExecuteShellCommand(s.shellResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
-	srv.Register(tools.NewFileDiff().WithBoundary(boundary).WithWorkspace(s.workspace))
+	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewFindReplace(wd))
 	prov := Provenance()
-	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt).
+	srv.Register(tools.NewDaemonInfoFunc(s.sessionID, s.sessionName, Version, daemonStartedAt).
 		WithSourceRevision(prov.Revision, prov.Dirty, prov.DirtyKnown).
 		WithConfigStatus(func() tools.ConfigStatus {
 			return tools.ConfigStatus{
@@ -176,7 +181,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPinProvenance(s.pinProvenance).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
 		WithInheritedSessions(s.inheritedSessionIDs).
 		WithTopology(topoFn).
 		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).
@@ -203,13 +208,12 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCheckMessages(collabDeps))
 	srv.Register(tools.NewShareFindings(tools.ShareFindingsDeps{
 		Workspace:           s.workspace,
-		SessionName:         s.sessionName,
-		SessionID:           s.sessID,
+		SessionID:           s.sessionID,
 		Policy:              s.collabPolicy,
 		Index:               s.memoryIndexLive,
 		GeneratedMemoryKeep: func() int { return s.memoryConfig().GeneratedMemoryKeep },
 	}))
-	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
+	srv.Register(tools.NewSessionStart(s.workspaceFor, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int, string) {
 			p, reason := s.resolveToolProfile()
@@ -219,7 +223,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv), reason
 		}).
 		WithEpisodic(s.latestEpisodic).
-		WithSelfSession(s.sessID).
+		WithSelfSession(s.sessionID).
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
@@ -242,7 +246,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {
-			session.SetExternalID(s.sessID, externalID)
+			session.SetExternalID(s.sessionID(), externalID)
+			s.recordLogicalAgentAttach(externalID)
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
 				// session.Rename refuses a name a live session already holds, so
 				// two resumes racing on one external ID inside the grace window
@@ -260,32 +265,32 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return ""
 		}))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
-	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewMoveSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewListMemories(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewReadMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary).WithTopology(topoFn))
-	srv.Register(tools.NewWriteMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
-	srv.Register(tools.NewDeleteMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
-	srv.Register(tools.NewSearchMemories(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
-	srv.Register(tools.NewRelevantMemories(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewMoveSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewListMemories(s.workspaceFor).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewReadMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithTopology(topoFn))
+	srv.Register(tools.NewWriteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewDeleteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewSearchMemories(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewRelevantMemories(s.workspaceFor).WithBoundary(readBoundaryFor))
 	srv.Resources = memory.NewResourceProvider(s.workspace)
 	srv.RegisterPrompt(mcp.NewOrientPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewSelftestPrompt(s.workspace))
-	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace).WithBoundary(readBoundaryFor))
 	srv.Register(tools.NewTopologySearch(topoFn).WithSemantics(s.semanticRerank))
-	srv.Register(tools.NewTopologyExplore(topoFn).WithMemories(s.workspace))
+	srv.Register(tools.NewTopologyExplore(topoFn).WithMemories(s.workspaceFor))
 	srv.Register(tools.NewTopologyImpact(topoFn).WithCrossFileCallers(tools.NewLSPCrossFileCallers(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace)))
-	srv.Register(tools.NewTopologyAffected(topoFn).WithMemories(s.workspace))
+	srv.Register(tools.NewTopologyAffected(topoFn).WithMemories(s.workspaceFor))
 	srv.Register(tools.NewTopologyRoutes(topoFn))
-	srv.Register(tools.NewStructuralQuery(topoFn, s.workspace))
-	srv.Register(tools.NewWorkspaceSearch(s.workspace, topoFn).WithMemoryIndex(s.memoryIndexLive))
-	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
+	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))
+	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.
@@ -308,6 +313,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnPinnedWorkspace = func(_ context.Context, dir string) {
 		s.onPinnedWorkspace(dir)
 	}
+	srv.OnSessionID = func(_ context.Context, id string) {
+		s.onSessionID(id)
+	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure)
 	}
@@ -327,9 +335,11 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.handleRootsListChanged(initCtx, request)
 	}
-	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {
+	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage, logicalAgent string) {
+		s.recordLogicalAgentCall(logicalAgent)
 		s.onBeforeTool(toolCtx, name, args)
 	}
+	srv.OnToolRefusal = s.refuseSharedStateChange
 	srv.EnrichToolOutput = s.enrichToolOutput
 	// Echo the canonical pinned root back on a session_start(workspace=…) result,
 	// so the serve proxy commits the resolved spelling as its replay pin.

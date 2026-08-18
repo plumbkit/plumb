@@ -134,7 +134,7 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	uri := toFileURIAnchored(a.URI, t.ws)
+	uri := toFileURIAnchored(ctx, a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

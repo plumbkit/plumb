@@ -80,8 +80,8 @@ func (a gitInitArgs) validate() error {
 }
 
 func (t *GitInit) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("git_init", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("git_init", t.deps.limiter(ctx))
 	}
 	a, err := parseGitInitArgs(raw)
 	if err != nil {
@@ -90,8 +90,8 @@ func (t *GitInit) Execute(ctx context.Context, raw json.RawMessage) (string, err
 	if err := a.validate(); err != nil {
 		return "", err
 	}
-	a.Path = t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(a.Path); err != nil {
+	a.Path = t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, a.Path); err != nil {
 		return "", fmt.Errorf("git_init: %w", err)
 	}
 	return t.run(ctx, a)

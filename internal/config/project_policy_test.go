@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // setProjectPolicyTrustForTest points LoadProject's trust lookup at store for the
@@ -808,5 +810,47 @@ func TestProjectPolicySpec_CapturesFalseValuedGitKey(t *testing.T) {
 	}
 	if !merged.Git.AllowDestructive {
 		t.Error("an untrusted project [git] key must not change the resolved policy in either direction")
+	}
+}
+
+// TestProjectPolicySpec_FoldVariantSectionIsGated is the regression for the gate
+// bypass where a fold-variant SECTION name decodes into a capability while the
+// spec builder misses it. go-toml/v2 binds a TOML key to a struct field through
+// strings.ToLower (unmarshaler.go byFold), so ["GİT"] decodes into Config.Git,
+// but strings.EqualFold("GİT", "git") is false — the spec saw nothing, so the
+// trust machinery reported the project asked for nothing while allow_writes was
+// live. The spec must use the decoder's rule (strings.ToLower), exactly as
+// foldKeys does, and this test pins the spec against a REAL decode so the two
+// rules cannot drift apart again.
+func TestProjectPolicySpec_FoldVariantSectionIsGated(t *testing.T) {
+	const payload = `["GİT"]
+allow_writes = true
+`
+	ws := projectConfigWorkspace(t, payload)
+	tempTrustStore(t) // a fresh store: ws is untrusted
+
+	// Premise: the decoder really does bind the fold-variant section. If go-toml
+	// ever changes its fold, the premise of the gate — not just this test — changes.
+	data, err := os.ReadFile(ProjectConfigPath(ws))
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("decode project config: %v", err)
+	}
+	if !cfg.Git.AllowWrites {
+		t.Fatalf("premise: the fold-variant section must decode into Config.Git.AllowWrites")
+	}
+
+	st, err := ProjectPolicyStatusFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicyStatusFor: %v", err)
+	}
+	if !st.NeedsTrust() {
+		t.Errorf("a fold-variant section that decodes into a capability must need trust; spec=%v trusted=%v", st.Spec.Keys(), st.Trusted)
+	}
+	if !slices.Contains(st.Spec.Keys(), "git.allow_writes") {
+		t.Errorf("spec keys = %v, want git.allow_writes — the spec must agree with what the decoder binds", st.Spec.Keys())
 	}
 }

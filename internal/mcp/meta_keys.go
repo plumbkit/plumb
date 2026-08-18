@@ -27,6 +27,12 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaSessionIDKey is the session_start-result `_meta` key under which the
+// daemon echoes its plumb session ID, so the serve proxy can hold it and replay
+// it in the initialize `_meta` after a daemon restart — the stable session ID
+// across restarts (PLAN-296), distinct from the per-proxy MetaProxySessionKey.
+const MetaSessionIDKey = "dev.plumbkit/session-id"
+
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its own working directory as an ADVISORY workspace
 // attach hint. Unlike a client-reported root it is not authoritative: the
@@ -84,3 +90,12 @@ const MetaAlwaysLoadKey = "anthropic/alwaysLoad"
 // deliberately NOT emitted as `structuredContent`, which is a 2025-06-18 field.
 // Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaToolErrorKey = "dev.plumbkit/error"
+
+// MetaLogicalAgentKey is the tools/call-params `_meta` key under which a client
+// declares which LOGICAL AGENT issued the call. A multiplexing client runs
+// several logical agents over one `plumb serve` connection; the daemon keys
+// mutable state by this ID (alongside session_start's session_id) so one agent's
+// pin/trackers/rate budget/undo state cannot be reset by a peer's call. A client
+// that cannot supply one fails closed on state-changing calls (PLAN-286 §3).
+// Reverse-DNS namespaced per the MCP `_meta` convention.
+const MetaLogicalAgentKey = "dev.plumbkit/logical-agent"

@@ -252,26 +252,90 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 // Refusing is the right failure. A reply the caller believes is addressed is
 // worse than a reply the caller is told it must address, because only the second
 // one is visible.
+//
+// It resolves by session IDENTITY, not by name. Names are reusable and a live
+// session can rename to any free one, so a name comparison gets both directions
+// wrong: after a supported rename_session the caller sees its OWN former name
+// among the participants and its reply is refused as ambiguous, while a session
+// that later draws a departed peer's name is treated as that peer. The rows
+// carry AuthorID and AddresseeID; names are consulted only for rows that predate
+// attribution, or that were addressed to a peer which was not live — the same
+// concession claimable makes for delivery.
+//
+// It also REFUSES a thread the caller is not in, and names no one when it does.
+// A conversation id is the thread's address, so answering "who is in this
+// thread?" for any id presented would make this an enumeration oracle for
+// exchanges between other agents — the metadata the observability path goes to
+// length to withhold.
 func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (to, refusal string) {
-	self := t.deps.SessionName()
-	seen := map[string]bool{}
-	var others []string
+	participant, others := t.threadParticipants(ctx, convID)
 
-	note := func(name string) {
+	// Not our thread — or no thread at all. One message for both, deliberately:
+	// distinguishing "does not exist" from "exists but is not yours" would tell a
+	// caller which conversation ids are real.
+	if !participant {
+		return "", fmt.Sprintf(
+			"Not sent: conversation %s is not one of yours, so there is nobody to reply to.\n\n"+
+				"Either the id is wrong, or the thread expired ([collab] intent_ttl_minutes "+
+				"prunes it). Name the recipient explicitly with `to`, or start a new thread by "+
+				"omitting conversation_id.", convID)
+	}
+
+	switch len(others) {
+	case 1:
+		return others[0], ""
+	case 0:
+		return "", fmt.Sprintf(
+			"Not sent: conversation %s has no other participant on record — every note "+
+				"in it is yours.\n\nName the recipient explicitly with `to`.", convID)
+	default:
+		// Safe to name them: the caller is a participant, so these are peers it is
+		// already in a thread with.
+		slices.Sort(others)
+		return "", fmt.Sprintf(
+			"Not sent: conversation %s has %d other participants (%s), so \"reply to the "+
+				"other one\" is ambiguous.\n\nName the recipient explicitly with `to`.",
+			convID, len(others), strings.Join(others, ", "))
+	}
+}
+
+// threadParticipants reads the thread and reports whether the caller is in it,
+// plus the distinct other participants by name.
+//
+// Identity is what decides "is this me": the row's author/addressee ID when it
+// carries one, and the name only when it does not. That ordering is the whole
+// point — a name comparison gets it wrong in both directions, treating the
+// caller as a stranger after a rename and a name-reuser as the caller.
+func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (participant bool, others []string) {
+	isSelf := t.selfMatcher()
+	seen := map[string]bool{}
+	consider := func(id, name string) {
 		name = strings.TrimSpace(name)
-		if name == "" || name == collab.AddresseeNext || name == self || seen[name] {
+		if name == "" || name == collab.AddresseeNext {
 			return
 		}
-		seen[name] = true
-		others = append(others, name)
+		if isSelf(id, name) {
+			participant = true
+			return
+		}
+		if !seen[name] {
+			seen[name] = true
+			others = append(others, name)
+		}
 	}
 
 	// A cross-project thread lives in the daemon-level store, a same-project one
-	// in the workspace's own, and the caller does not say which. Read both rather
-	// than guess; the global store is consulted only if it already exists, so this
-	// never brings it into being.
+	// in the workspace's own, and the caller does not say which. The global store
+	// is read only if it already exists AND this workspace has opted in to
+	// cross-project mail: without that gate a session here could learn the
+	// participants of a thread between two OTHER projects, which is precisely what
+	// the consent setting exists to prevent.
+	stores := []*collab.Store{t.deps.Store()}
+	if t.deps.Policy().CrossProject {
+		stores = append(stores, t.globalIfExists())
+	}
 	now := time.Now()
-	for _, store := range []*collab.Store{t.deps.Store(), t.globalIfExists()} {
+	for _, store := range stores {
 		if store == nil {
 			continue
 		}
@@ -280,26 +344,47 @@ func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (
 			continue
 		}
 		for _, r := range rows {
-			note(r.AuthorSession)
-			note(r.Addressee)
+			consider(r.AuthorID, r.AuthorSession)
+			consider(r.AddresseeID, r.Addressee)
+			// A note addressed to "next" names nobody, so its recipient appears only
+			// in the claim — and "next" is the DEFAULT addressee, with RenderMessages
+			// handing the claimant a ready-made reply quoting this thread. Without
+			// this the ordinary reply flow would tell the recipient it is not theirs.
+			// Passing the claimant's ID, not just its name, is what stops a later
+			// session that took that name inheriting its place — and what keeps a
+			// recipient that renamed itself from being listed as its own peer.
+			consider(r.DeliveredToID, r.DeliveredTo)
 		}
 	}
+	return participant, others
+}
 
-	switch len(others) {
-	case 1:
-		return others[0], ""
-	case 0:
-		return "", fmt.Sprintf(
-			"Not sent: conversation %s has no other participant on record, so there is "+
-				"nobody to reply to.\n\nThe thread may have expired ([collab] intent_ttl_minutes "+
-				"prunes it), or the id may be wrong. Name the recipient explicitly with `to`, "+
-				"or start a new thread by omitting conversation_id.", convID)
-	default:
-		slices.Sort(others)
-		return "", fmt.Sprintf(
-			"Not sent: conversation %s has %d other participants (%s), so \"reply to the "+
-				"other one\" is ambiguous.\n\nName the recipient explicitly with `to`.",
-			convID, len(others), strings.Join(others, ", "))
+// selfMatcher answers "is this row me?" for one row's (id, name) pair.
+//
+// It trusts the ID when the row carries one and falls back to the name only
+// when it does not. A name comparison alone is wrong in both directions: after a
+// rename_session the caller stops recognising its own earlier notes, and a
+// session that later draws a departed peer's name starts matching that peer's.
+// Inherited predecessor identities count as self, so a restarted session still
+// recognises the threads it was in before the restart.
+func (t *LeaveNote) selfMatcher() func(id, name string) bool {
+	selfName := t.deps.SessionName()
+	selfIDs := map[string]bool{}
+	if id := t.deps.sessionID(); id != "" {
+		selfIDs[id] = true
+	}
+	if t.deps.InheritedSessionIDs != nil {
+		for _, id := range t.deps.InheritedSessionIDs() {
+			if id != "" {
+				selfIDs[id] = true
+			}
+		}
+	}
+	return func(id, name string) bool {
+		if id != "" {
+			return selfIDs[id]
+		}
+		return selfName != "" && name == selfName
 	}
 }
 
@@ -344,17 +429,25 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	ttl := resolveTTL(policy.IntentTTLMinutes, 0)
 	now := time.Now()
 	limit := policy.maxExchanges()
+	var inherited []string
+	if t.deps.InheritedSessionIDs != nil {
+		inherited = t.deps.InheritedSessionIDs()
+	}
 	in := collab.NoteInput{
-		AuthorSession:   t.deps.SessionName(),
-		AuthorID:        t.deps.SessionID,
-		Body:            body,
-		Addressee:       args.To,
-		AddresseeID:     target.addresseeID,
-		TTL:             ttl,
-		ConversationID:  args.ConversationID,
-		OriginWorkspace: target.origin,
-		TargetWorkspace: target.peerWorkspace,
-		MaxExchanges:    limit,
+		AuthorSession: t.deps.SessionName(),
+		AuthorID:      t.deps.sessionID(),
+		// A restarted session must still be able to reply into the threads its
+		// predecessor was in; the store's membership guard keys on identity, and
+		// these are the identities this session provably continues.
+		AuthorInheritedIDs: inherited,
+		Body:               body,
+		Addressee:          args.To,
+		AddresseeID:        target.addresseeID,
+		TTL:                ttl,
+		ConversationID:     args.ConversationID,
+		OriginWorkspace:    target.origin,
+		TargetWorkspace:    target.peerWorkspace,
+		MaxExchanges:       limit,
 	}
 	// The exchange budget is the backstop against two agents answering each other
 	// forever, and the store applies it as part of the insert. Counting here first
@@ -363,6 +456,15 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// exactly the case that slips through it. Opening a new conversation is still
 	// always allowed — a fresh thread holds nothing.
 	conv, err := target.store.PutNote(ctx, in, now)
+	if errors.Is(err, collab.ErrNotAParticipant) {
+		return fmt.Sprintf(
+			"Not sent: conversation %s is not one of yours, so the note was NOT written to "+
+				"it.\n\nA conversation id addresses a thread, and only its participants may "+
+				"write into one — otherwise anyone holding an id could insert text into two "+
+				"other agents' exchange, or spend its budget and sever it. Check the id you "+
+				"quoted, or omit conversation_id to start a thread of your own.",
+			args.ConversationID), nil
+	}
 	if errors.Is(err, collab.ErrConversationFull) {
 		return fmt.Sprintf(
 			"This conversation has reached its %d-message limit ([collab] max_exchanges), so the "+

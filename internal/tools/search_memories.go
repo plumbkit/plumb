@@ -82,11 +82,11 @@ func (t *searchMemoriesTool) Execute(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("search_memories: %w", err)
 	}
 	if res, handled := t.searchFTS(ctx, resolveMemoryIndex(t.indexFn, ws), ws, a); handled {

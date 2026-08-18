@@ -86,7 +86,7 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("explain_symbol: uri must not be empty")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 
 	key := fmt.Sprintf("%s:hover:%d:%d", a.URI, a.Line, a.Character)
 	if t.cache != nil {

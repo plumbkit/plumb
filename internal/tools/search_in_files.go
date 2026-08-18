@@ -165,7 +165,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	ctx, cancel := applySearchDeadline(ctx)
 	defer cancel()
 
-	root, onlyFile, pathNote, err := resolveSearchRoot(a, t.ws, t.guard)
+	root, onlyFile, pathNote, err := resolveSearchRoot(ctx, a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -245,9 +245,9 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 // the absolute path; root is its parent so relative paths still resolve) — a
 // file path is more specific than its directory, so scoping to it is what the
 // caller almost always meant (from dogfooding feedback).
-func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, onlyFile, note string, err error) {
-	root = resolvePath(a.Path, ws)
-	if checkErr := guard.check(root); checkErr != nil {
+func resolveSearchRoot(ctx context.Context, a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, onlyFile, note string, err error) {
+	root = resolvePath(ctx, a.Path, ws)
+	if checkErr := guard.check(ctx, root); checkErr != nil {
 		return "", "", "", fmt.Errorf("search_in_files: %w", checkErr)
 	}
 	info, statErr := os.Stat(root)

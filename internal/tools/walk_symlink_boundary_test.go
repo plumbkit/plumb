@@ -55,7 +55,7 @@ func symlinkEscapeTree(t *testing.T) string {
 // per-connection policy the daemon installs.
 func readGuard(ws string) BoundaryGuard {
 	pol := NewPathPolicy(ws, []AllowedRoot{{Path: ws, Access: AccessReadWrite, Label: "workspace"}})
-	return func(path string) error { _, err := pol.Check(path, AccessRead); return err }
+	return func(_ context.Context, path string) error { _, err := pol.Check(path, AccessRead); return err }
 }
 
 // resultBody strips the trailing withheld advisory, which necessarily names the

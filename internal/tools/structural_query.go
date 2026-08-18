@@ -214,7 +214,7 @@ func spanOf(f structFinding) int {
 func (t *StructuralQuery) queryUnusedContext(ctx context.Context, store *topology.Store, a structuralQueryArgs) ([]structFinding, error) {
 	root := ""
 	if t.ws != nil {
-		root = t.ws()
+		root = t.ws(ctx)
 	}
 	if root == "" {
 		return nil, errors.New("structural_query: unused-context needs a resolved workspace to read function bodies")

@@ -25,7 +25,7 @@ func collabTestDeps(t *testing.T, policy CollabPolicy) (CollabDeps, *collab.Stor
 	deps := CollabDeps{
 		Workspace:   func() string { return ws },
 		SessionName: func() string { return "test-session" },
-		SessionID:   "sess-1",
+		SessionID:   func() string { return "sess-1" },
 		Policy:      func() CollabPolicy { return policy },
 		Store: func() *collab.Store {
 			created = true

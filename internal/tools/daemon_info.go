@@ -50,7 +50,7 @@ type ProtocolStatus struct {
 
 // daemonInfo returns session and daemon metadata to the calling agent.
 type daemonInfo struct {
-	sessID        string
+	sessID        func() string
 	name          func() string
 	daemonVersion string
 	startedAt     time.Time
@@ -158,12 +158,12 @@ func (t *daemonInfo) WithProtocol(fn func() ProtocolStatus) *daemonInfo {
 // sessID and sessName identify the current MCP connection; daemonVersion and
 // startedAt describe the daemon process itself.
 func NewDaemonInfo(sessID, sessName, daemonVersion string, startedAt time.Time) *daemonInfo {
-	return NewDaemonInfoFunc(sessID, func() string { return sessName }, daemonVersion, startedAt)
+	return NewDaemonInfoFunc(func() string { return sessID }, func() string { return sessName }, daemonVersion, startedAt)
 }
 
 // NewDaemonInfoFunc creates a daemon_info tool whose session name can change
 // during the session.
-func NewDaemonInfoFunc(sessID string, name func() string, daemonVersion string, startedAt time.Time) *daemonInfo {
+func NewDaemonInfoFunc(sessID func() string, name func() string, daemonVersion string, startedAt time.Time) *daemonInfo {
 	return &daemonInfo{
 		sessID:        sessID,
 		name:          name,
@@ -219,7 +219,7 @@ func formatUptime(up time.Duration) string {
 	}
 }
 
-func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
 	// The go runtime and os/arch rows are the two facts the retired `version`
 	// tool reported that daemon_info lacked; they are unconditional so a bug
 	// report can be filed from this one call. The source commit joins that set
@@ -229,7 +229,7 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	out := fmt.Sprintf(
 		"session name:   %s\nsession id:     %s\ndaemon version: %s\nsource commit:  %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
-		t.sessID,
+		t.sessID(),
 		t.daemonVersion,
 		t.sourceRev,
 		runtime.Version(),
@@ -283,7 +283,7 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 			out += fmt.Sprintf(", %d tools hidden", hidden)
 		}
 	}
-	out += formatSessionLatency(t.sessID)
+	out += formatSessionLatency(t.sessID())
 	return out, nil
 }
 

@@ -90,7 +90,7 @@ func TestDaemonInfo_ReportsSourceCommit(t *testing.T) {
 // would underreport wall-clock elapsed. time.Time's == compares the monotonic
 // reading, so equality with its own Round(0) proves none is present.
 func TestDaemonInfo_UptimeSpansSuspend(t *testing.T) {
-	d := NewDaemonInfoFunc("sess-1", func() string { return "swift-falcon" }, "0.15.x", time.Now())
+	d := NewDaemonInfoFunc(func() string { return "sess-1" }, func() string { return "swift-falcon" }, "0.15.x", time.Now())
 	if d.startedAt != d.startedAt.Round(0) {
 		t.Errorf("startedAt carries a monotonic reading; uptime would exclude suspend time")
 	}

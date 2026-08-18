@@ -118,6 +118,9 @@ func (p *reconnectingProxy) commitSessionStartPin(frame []byte) {
 			ws = resolved
 		}
 		p.pinned = ws
+		if id := sessionIDMeta(frame); id != "" {
+			p.heldSessionID = id
+		}
 	}
 	p.pinMu.Unlock()
 }
@@ -146,6 +149,30 @@ func resolvedWorkspaceMeta(frame []byte) string {
 	return ws
 }
 
+// sessionIDMeta extracts the plumb session ID the daemon echoed in a
+// session_start result's _meta (mcp.MetaSessionIDKey), or "" when absent or
+// malformed. Mirrors resolvedWorkspaceMeta: fail-safe, so anything it cannot
+// parse yields "" and the proxy holds no stale identity.
+func sessionIDMeta(frame []byte) string {
+	var resp struct {
+		Result *struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &resp); err != nil || resp.Result == nil {
+		return ""
+	}
+	raw, ok := resp.Result.Meta[mcp.MetaSessionIDKey]
+	if !ok {
+		return ""
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return ""
+	}
+	return id
+}
+
 // toolCallSucceeded reports whether a JSON-RPC response carries a tool result
 // that did not fail. Fail-safe: anything it cannot parse is treated as a
 // failure, so an unrecognised shape never commits a pin.
@@ -171,6 +198,32 @@ func (p *reconnectingProxy) pinnedWorkspace() string {
 	p.pinMu.Lock()
 	defer p.pinMu.Unlock()
 	return p.pinned
+}
+
+// sessionID returns the plumb session ID the daemon last echoed, or "" when the
+// proxy has not learned it yet (no successful session_start has completed).
+func (p *reconnectingProxy) sessionID() string {
+	p.pinMu.Lock()
+	defer p.pinMu.Unlock()
+	return p.heldSessionID
+}
+
+// replayInitMeta builds the _meta folded into a replayed initialize frame: the
+// pinned workspace (when one was chosen) and the stable session ID the daemon
+// echoed (PLAN-296). Both are learned from a session_start result after the
+// handshake, so neither can be baked in at capture time; nil means no meta to
+// fold, leaving a first connect byte-identical.
+func (p *reconnectingProxy) replayInitMeta() map[string]json.RawMessage {
+	meta := pinnedWorkspaceMeta(p.pinnedWorkspace())
+	if id := p.sessionID(); id != "" {
+		if raw, err := json.Marshal(id); err == nil {
+			if meta == nil {
+				meta = map[string]json.RawMessage{}
+			}
+			meta[mcp.MetaSessionIDKey] = raw
+		}
+	}
+	return meta
 }
 
 // pinnedWorkspaceMeta is the _meta fragment folded into a REPLAYED initialize

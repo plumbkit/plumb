@@ -216,16 +216,16 @@ func (a editFileArgs) validateMode() error {
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.deps.Limiter.Allow() {
-		return "", rateLimitError("edit_file", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("edit_file", t.deps.limiter(ctx))
 	}
 	a, err := parseEditFileArgs(raw)
 	if err != nil {
 		return "", err
 	}
 
-	path := t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(path); err != nil {
+	path := t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return "", fmt.Errorf("edit_file: %w", err)
 	}
 
@@ -256,7 +256,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	uri := "file://" + path
 	// Captured before the write (which bumps the mtime): warn if the file moved
 	// on disk since this session read it and no explicit version guard governs it.
-	staleNote := t.staleReadNote(path, a)
+	staleNote := t.staleReadNote(ctx, path, a)
 
 	if a.ApplyPartial {
 		t.deps.notifyTopology(path)
@@ -277,11 +277,11 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 // the surrounding file may have moved under the caller (e.g. an entry landing in
 // a section a peer just re-versioned). Returns "" when nothing changed, the file
 // was never read this session, or an explicit guard already governs staleness.
-func (t *EditFile) staleReadNote(path string, a editFileArgs) string {
+func (t *EditFile) staleReadNote(ctx context.Context, path string, a editFileArgs) string {
 	if a.ExpectedMtime != "" || a.ExpectedSha != "" || a.Reconcile {
 		return ""
 	}
-	if !changedSinceSessionRead(t.deps.Reads, path) {
+	if !changedSinceSessionRead(t.deps.reads(ctx), path) {
 		return ""
 	}
 	return "\n# plumb-warn: this file changed on disk since your session last read it — " +
@@ -346,7 +346,7 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 	if err := checkExpectedVersion(path, a, t.isStrict()); err != nil {
 		return err
 	}
-	return t.checkStrictRead(path)
+	return t.checkStrictRead(ctx, path)
 }
 
 // checkExpectedVersion enforces the optional optimistic-concurrency guards
@@ -398,11 +398,11 @@ func allAnchorBased(edits []strEdit) bool {
 // checkStrictRead enforces strict mode: the file must have been read in this
 // session and not changed since. A no-op when strict mode is off. The failure is
 // wrapped as an edit-logic error so the retry loop never re-attempts it.
-func (t *EditFile) checkStrictRead(path string) error {
+func (t *EditFile) checkStrictRead(ctx context.Context, path string) error {
 	if !t.isStrict() {
 		return nil
 	}
-	if err := requireStrictRead(t.deps.Reads, "edit_file", path); err != nil {
+	if err := requireStrictRead(t.deps.reads(ctx), "edit_file", path); err != nil {
 		return &editLogicErr{err}
 	}
 	return nil

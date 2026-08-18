@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	    so a reconnect can inherit its predecessor's mailbox identity
 //	5 — meta: a tiny key/value table for one-shot maintenance flags, so a
 //	    sweep that must run exactly once per database can record that it did
-const SchemaVersion = 5
+//	6 — logical_agent_id on read_tracking + pinned_workspace: a shared connection
+//	    persists each logical agent's reads and pin independently (PLAN-286)
+const SchemaVersion = 6
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -219,6 +221,50 @@ func migrate(db *sql.DB, from int) error {
 			return fmt.Errorf("sessionstate: migrate v5 (meta): %w", err)
 		}
 	}
+	if from < 6 {
+		// PLAN-286: a shared connection keys mutable state per logical agent, so
+		// both persisted tables gain a logical_agent_id dimension. SQLite cannot
+		// alter a WITHOUT-ROWID primary key, so each table is recreated with the
+		// new column folded into its key; pre-existing rows back-fill to "" (the
+		// connection-level agent), so an upgrade changes no behaviour until a
+		// shared connection actually persists per-agent rows.
+		const addReadAgent = `
+CREATE TABLE read_tracking_v6 (
+    proxy_session_id TEXT    NOT NULL,
+    logical_agent_id TEXT    NOT NULL DEFAULT '',
+    workspace        TEXT    NOT NULL,
+    path             TEXT    NOT NULL,
+    mtime_unix_nano  INTEGER NOT NULL,
+    sha              TEXT    NOT NULL DEFAULT '',
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (proxy_session_id, logical_agent_id, workspace, path)
+) WITHOUT ROWID;
+INSERT INTO read_tracking_v6 (proxy_session_id, logical_agent_id, workspace, path, mtime_unix_nano, sha, updated_at)
+    SELECT proxy_session_id, '', workspace, path, mtime_unix_nano, sha, updated_at FROM read_tracking;
+DROP TABLE read_tracking;
+ALTER TABLE read_tracking_v6 RENAME TO read_tracking;
+CREATE INDEX IF NOT EXISTS idx_rt_updated ON read_tracking(updated_at);`
+		if _, err := db.Exec(addReadAgent); err != nil {
+			return fmt.Errorf("sessionstate: migrate v6 (read_tracking.logical_agent_id): %w", err)
+		}
+		const addPinAgent = `
+CREATE TABLE pinned_workspace_v6 (
+    proxy_session_id TEXT    NOT NULL,
+    logical_agent_id TEXT    NOT NULL DEFAULT '',
+    workspace        TEXT    NOT NULL,
+    language         TEXT    NOT NULL DEFAULT '',
+    source           TEXT    NOT NULL DEFAULT '',
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (proxy_session_id, logical_agent_id)
+);
+INSERT INTO pinned_workspace_v6 (proxy_session_id, logical_agent_id, workspace, language, source, updated_at)
+    SELECT proxy_session_id, '', workspace, language, source, updated_at FROM pinned_workspace;
+DROP TABLE pinned_workspace;
+ALTER TABLE pinned_workspace_v6 RENAME TO pinned_workspace;`
+		if _, err := db.Exec(addPinAgent); err != nil {
+			return fmt.Errorf("sessionstate: migrate v6 (pinned_workspace.logical_agent_id): %w", err)
+		}
+	}
 	return nil
 }
 
@@ -239,20 +285,27 @@ func (s *Store) Close() {
 }
 
 // UpsertRead records the mtime and content SHA read_file observed for a path,
-// scoped by (proxySessionID, workspace). nil-safe; a no-op when any key field is
-// empty (an unidentified proxy or unpinned workspace cannot be rehydrated).
+// scoped by (proxySessionID, workspace) — the connection-level agent ("").
+// nil-safe; a no-op when any key field is empty (an unidentified proxy or
+// unpinned workspace cannot be rehydrated).
 func (s *Store) UpsertRead(proxySessionID, workspace, path string, mtime time.Time, sha string) error {
+	return s.UpsertReadForAgent(proxySessionID, "", workspace, path, mtime, sha)
+}
+
+// UpsertReadForAgent is UpsertRead scoped to one logical agent on a shared
+// connection (PLAN-286): logicalAgentID "" is the connection-level agent.
+func (s *Store) UpsertReadForAgent(proxySessionID, logicalAgentID, workspace, path string, mtime time.Time, sha string) error {
 	if s == nil || proxySessionID == "" || workspace == "" || path == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO read_tracking (proxy_session_id, workspace, path, mtime_unix_nano, sha, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(proxy_session_id, workspace, path)
+		`INSERT INTO read_tracking (proxy_session_id, logical_agent_id, workspace, path, mtime_unix_nano, sha, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(proxy_session_id, logical_agent_id, workspace, path)
 		 DO UPDATE SET mtime_unix_nano=excluded.mtime_unix_nano, sha=excluded.sha, updated_at=excluded.updated_at`,
-		proxySessionID, workspace, path, mtime.UnixNano(), sha, time.Now().UnixMilli(),
+		proxySessionID, logicalAgentID, workspace, path, mtime.UnixNano(), sha, time.Now().UnixMilli(),
 	)
 	if err != nil {
 		return fmt.Errorf("sessionstate: upsert read: %w", err)
@@ -260,9 +313,16 @@ func (s *Store) UpsertRead(proxySessionID, workspace, path string, mtime time.Ti
 	return nil
 }
 
-// LoadReads returns every persisted read record for (proxySessionID, workspace).
-// nil-safe; returns nil when any key field is empty.
+// LoadReads returns every persisted read record for (proxySessionID, workspace)
+// — the connection-level agent (""). nil-safe; returns nil when any key field is
+// empty.
 func (s *Store) LoadReads(proxySessionID, workspace string) ([]ReadRecord, error) {
+	return s.LoadReadsForAgent(proxySessionID, "", workspace)
+}
+
+// LoadReadsForAgent is LoadReads scoped to one logical agent on a shared
+// connection (PLAN-286): logicalAgentID "" is the connection-level agent.
+func (s *Store) LoadReadsForAgent(proxySessionID, logicalAgentID, workspace string) ([]ReadRecord, error) {
 	if s == nil || proxySessionID == "" || workspace == "" {
 		return nil, nil
 	}
@@ -270,8 +330,8 @@ func (s *Store) LoadReads(proxySessionID, workspace string) ([]ReadRecord, error
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT path, mtime_unix_nano, sha FROM read_tracking
-		 WHERE proxy_session_id=? AND workspace=?`,
-		proxySessionID, workspace,
+		 WHERE proxy_session_id=? AND logical_agent_id=? AND workspace=?`,
+		proxySessionID, logicalAgentID, workspace,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sessionstate: load reads: %w", err)
@@ -297,18 +357,24 @@ func (s *Store) LoadReads(proxySessionID, workspace string) ([]ReadRecord, error
 // a restart. source records why it was pinned — see PinSource. nil-safe; a no-op
 // when proxySessionID or workspace is empty.
 func (s *Store) UpsertPin(proxySessionID, workspace, language string, source PinSource) error {
+	return s.UpsertPinForAgent(proxySessionID, "", workspace, language, source)
+}
+
+// UpsertPinForAgent is UpsertPin scoped to one logical agent on a shared
+// connection (PLAN-286): logicalAgentID "" is the connection-level agent.
+func (s *Store) UpsertPinForAgent(proxySessionID, logicalAgentID, workspace, language string, source PinSource) error {
 	if s == nil || proxySessionID == "" || workspace == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO pinned_workspace (proxy_session_id, workspace, language, source, updated_at)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(proxy_session_id)
+		`INSERT INTO pinned_workspace (proxy_session_id, logical_agent_id, workspace, language, source, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(proxy_session_id, logical_agent_id)
 		 DO UPDATE SET workspace=excluded.workspace, language=excluded.language,
 		               source=excluded.source, updated_at=excluded.updated_at`,
-		proxySessionID, workspace, language, string(source), time.Now().UnixMilli(),
+		proxySessionID, logicalAgentID, workspace, language, string(source), time.Now().UnixMilli(),
 	)
 	if err != nil {
 		return fmt.Errorf("sessionstate: upsert pin: %w", err)
@@ -320,14 +386,20 @@ func (s *Store) UpsertPin(proxySessionID, workspace, language string, source Pin
 // proxySessionID. ok is false when no pin is recorded. A row written before the
 // source column existed reads as PinSourceUnknown. nil-safe (returns ok=false).
 func (s *Store) LoadPin(proxySessionID string) (workspace, language string, source PinSource, ok bool, err error) {
+	return s.LoadPinForAgent(proxySessionID, "")
+}
+
+// LoadPinForAgent is LoadPin scoped to one logical agent on a shared connection
+// (PLAN-286): logicalAgentID "" is the connection-level agent.
+func (s *Store) LoadPinForAgent(proxySessionID, logicalAgentID string) (workspace, language string, source PinSource, ok bool, err error) {
 	if s == nil || proxySessionID == "" {
 		return "", "", PinSourceUnknown, false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT workspace, language, source FROM pinned_workspace WHERE proxy_session_id=?`,
-		proxySessionID,
+		`SELECT workspace, language, source FROM pinned_workspace WHERE proxy_session_id=? AND logical_agent_id=?`,
+		proxySessionID, logicalAgentID,
 	)
 	var src string
 	switch err := row.Scan(&workspace, &language, &src); err {
@@ -346,12 +418,18 @@ func (s *Store) LoadPin(proxySessionID string) (workspace, language string, sour
 // same drop on every reconnect and every unpinned tool call. nil-safe; a no-op
 // when proxySessionID is empty or no row exists.
 func (s *Store) DeletePin(proxySessionID string) error {
+	return s.DeletePinForAgent(proxySessionID, "")
+}
+
+// DeletePinForAgent is DeletePin scoped to one logical agent on a shared
+// connection (PLAN-286): logicalAgentID "" is the connection-level agent.
+func (s *Store) DeletePinForAgent(proxySessionID, logicalAgentID string) error {
 	if s == nil || proxySessionID == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE proxy_session_id=?`, proxySessionID); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE proxy_session_id=? AND logical_agent_id=?`, proxySessionID, logicalAgentID); err != nil {
 		return fmt.Errorf("sessionstate: delete pin: %w", err)
 	}
 	return nil

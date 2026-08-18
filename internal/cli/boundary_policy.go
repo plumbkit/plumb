@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,8 +24,17 @@ func (s *connSession) readBoundaryGuard(path string) error {
 	return s.checkBoundary(path, tools.AccessRead)
 }
 
-func (s *connSession) writeBoundaryGuard(path string) error {
-	return s.checkBoundary(path, tools.AccessReadWrite)
+// readBoundaryGuardFor / writeBoundaryGuardFor are the ctx-aware (per-logical-
+// agent) boundary guards wired into the path-bearing tools. On a shared
+// connection each agent's own shard policy is consulted; on a single-agent
+// connection they resolve to the connection policy exactly like the ctx-less
+// guards (which the routing proxies and background paths keep using).
+func (s *connSession) readBoundaryGuardFor(ctx context.Context, path string) error {
+	return s.checkBoundaryFor(ctx, path, tools.AccessRead)
+}
+
+func (s *connSession) writeBoundaryGuardFor(ctx context.Context, path string) error {
+	return s.checkBoundaryFor(ctx, path, tools.AccessReadWrite)
 }
 
 // txlogReplayGuard adapts a freshly built PathPolicy into the guard txlog.Scan
@@ -66,10 +76,21 @@ func txlogReplayGuard(pol *tools.PathPolicy) txlog.PathGuard {
 // "Health: blocked" long after it attached. A real out-of-bounds path on an
 // attached session is still recorded, exactly as before.
 func (s *connSession) checkBoundary(path string, want tools.Access) error {
+	return s.boundaryCheck(s.boundaryPolicy(), path, want)
+}
+
+// checkBoundaryFor is checkBoundary against the logical agent in ctx's policy
+// (the connection policy when the connection is not shared).
+func (s *connSession) checkBoundaryFor(ctx context.Context, path string, want tools.Access) error {
+	return s.boundaryCheck(s.policyFor(ctx), path, want)
+}
+
+// boundaryCheck is the shared body: an empty path is a no-op, a nil policy fails
+// closed (unattached), and a policy verdict records a violation and refuses.
+func (s *connSession) boundaryCheck(pol *tools.PathPolicy, path string, want tools.Access) error {
 	if path == "" {
 		return nil
 	}
-	pol := s.boundaryPolicy()
 	if pol == nil {
 		return tools.ClassifyPathRefusal(tools.UnattachedWorkspaceError{Path: path})
 	}

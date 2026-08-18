@@ -23,9 +23,9 @@ func intentGitTool(ws, id, name string, store *collab.Store, intentsOn bool) *Gi
 // clamped to it like every other injected peer-signal block.
 func intentGitToolWithBudget(ws, id, name string, store *collab.Store, intentsOn bool, hintBudgetBytes int) *Git {
 	return NewGit(
-		WriteDeps{WorkspaceFn: func() string { return ws }},
+		WriteDeps{WorkspaceFn: func(context.Context) string { return ws }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
-	).WithSession(id, func() string { return name }).
+	).WithSession(func() string { return id }, func() string { return name }).
 		WithPeerIntents(func() bool { return intentsOn }, func() *collab.Store { return store },
 			func() int { return hintBudgetBytes })
 }
@@ -503,5 +503,24 @@ func TestIntentCoversRepo_NarrowVsDestructive_FailsPreFix(t *testing.T) {
 	}
 	if got := intentCoversRepo(narrow, ws, ws, tierDestructive); !got {
 		t.Error("the same narrow glob must still cover a destructive-tier op — the broad behaviour is intentionally kept there")
+	}
+}
+
+// TestIntentCoversRepo_NestedNarrowVsDestructive closes PLAN-278 item 2: in a
+// repo nested under the workspace, a narrowly scoped glob strictly inside the
+// repo (plumb/internal/**) must NOT cover a write-tier repo-state op (which
+// needs a genuinely repo-wide claim) but MUST cover a destructive-tier op,
+// which can touch any path under the repo root. Pre-fix both tiers ran the same
+// MatchPath(globs, rel) test, so the destructive op did not warn on a narrow
+// claim inside the nested repo.
+func TestIntentCoversRepo_NestedNarrowVsDestructive(t *testing.T) {
+	ws := t.TempDir()
+	nested := ws + "/plumb"
+	narrow := []string{"plumb/internal/**"}
+	if got := intentCoversRepo(narrow, ws, nested, tierWrite); got {
+		t.Error("a narrow glob strictly inside a nested repo must NOT cover a write-tier repo-state op")
+	}
+	if got := intentCoversRepo(narrow, ws, nested, tierDestructive); !got {
+		t.Error("a narrow glob strictly inside a nested repo must cover a destructive-tier op — a destructive op can clobber it")
 	}
 }

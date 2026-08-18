@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -16,14 +17,14 @@ import (
 // os.Getwd(). The daemon is a singleton whose working directory is unrelated to
 // any workspace, so resolving against it would silently touch the wrong file;
 // leaving the path relative lets the boundary check reject it honestly instead.
-func resolvePath(path string, ws WorkspaceFn) string {
+func resolvePath(ctx context.Context, path string, ws WorkspaceFn) string {
 	p := paths.URIToPath(path)
 	if filepath.IsAbs(p) {
 		return p
 	}
 	base := ""
 	if ws != nil {
-		base = ws()
+		base = ws(ctx)
 	}
 	if base == "" {
 		return filepath.Clean(p)
@@ -62,13 +63,13 @@ func toFileURI(s string) string {
 // An absolute path or existing file:// URI round-trips unchanged; when ws is
 // nil or resolves to "" a relative s is left relative (cleaned), so the
 // boundary check rejects it rather than producing a bogus file://app/... URI.
-func toFileURIAnchored(s string, ws WorkspaceFn) string {
+func toFileURIAnchored(ctx context.Context, s string, ws WorkspaceFn) string {
 	if s == "" || strings.HasPrefix(s, "file://") {
 		return s
 	}
 	if !filepath.IsAbs(s) {
 		if ws != nil {
-			if base := ws(); base != "" {
+			if base := ws(ctx); base != "" {
 				s = filepath.Join(base, s)
 			}
 		}

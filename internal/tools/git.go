@@ -40,11 +40,11 @@ var gitSchema = json.RawMessage(`{
     },
     "confirm": {
       "type": "boolean",
-      "description": "Required (true) for destructive and network subcommands. Also required to override the cross-session ref-movement guard: when a DIFFERENT plumb session moved this repo's HEAD/branch since this session last observed it, a write/destructive op is refused until re-run with confirm:true."
+      "description": "Required (true) for destructive and network subcommands. Also required to override the cross-session ref-movement guard: when a DIFFERENT plumb session moved this repo's HEAD/branch since this session last observed it, a write/destructive/network op is refused until re-run with confirm:true."
     },
     "expected_head": {
       "type": "string",
-      "description": "Optimistic-concurrency guard for write/destructive subcommands (mirrors edit_file's expected_mtime): any git revision (full/short SHA, branch, tag) naming the commit HEAD must be at. When supplied and HEAD resolves elsewhere — or resolves to nothing — the operation is refused before running, regardless of which session (or external tool) moved it. Ignored by read and network subcommands. Omit for no check."
+      "description": "Optimistic-concurrency guard for write, destructive, and network subcommands (mirrors edit_file's expected_mtime): any git revision (full/short SHA, branch, tag) naming the commit HEAD must be at. When supplied and HEAD resolves elsewhere — or resolves to nothing — the operation is refused before running, regardless of which session (or external tool) moved it. Ignored by read subcommands only. Omit for no check."
     }
   },
   "required": ["subcommand"],
@@ -67,7 +67,7 @@ var gitSchema = json.RawMessage(`{
 type Git struct {
 	deps       WriteDeps
 	policy     GitPolicyFn
-	sessID     string
+	sessID     func() string
 	sessNameFn func() string
 	// Peer repo-intent warning wiring (git_intent_warn.go), all nil-safe and
 	// consulted lazily per call: unwired means no warning is ever computed.
@@ -85,7 +85,7 @@ func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 // WithSession wires the connection's session identity for the cross-session
 // ref-movement guard (git_ref_guard.go). Returns the receiver for chaining.
 // Without it the ledger is untracked and only expected_head is enforced.
-func (t *Git) WithSession(id string, name func() string) *Git {
+func (t *Git) WithSession(id func() string, name func() string) *Git {
 	t.sessID = id
 	t.sessNameFn = name
 	return t
@@ -122,11 +122,11 @@ func (t *Git) Description() string {
 		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
 		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
 		"worktree); every other subcommand uses args. " +
-		"Cross-session guard: before a write/destructive op, if a DIFFERENT plumb session moved this repo's " +
+		"Cross-session guard: before a write/destructive/network op, if a DIFFERENT plumb session moved this repo's " +
 		"HEAD/branch since this session last observed it, the op is refused unless re-run with confirm:true, and the " +
 		"response names the peer session and the old→new refs (movement by this session, an external tool, or an " +
 		"unknown mover adds no friction). " +
-		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright. " +
+		"expected_head pins the exact HEAD commit for write/destructive/network ops — a mismatch refuses the call outright. " +
 		"Attribution: with [git] commit_trailer = true (default off) every plumb commit is stamped with a " +
 		"Plumb-Session: <session-name> trailer; either way, workspace_sessions lists recent commits per " +
 		"session (short SHA, subject, repository). " +
@@ -184,11 +184,11 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := checkPushProtection(a, policy, tier); err != nil {
 		return "", err
 	}
-	if tier != tierRead && !t.deps.Limiter.Allow() {
-		return "", rateLimitError("git", t.deps.Limiter)
+	if tier != tierRead && !t.deps.limiter(ctx).Allow() {
+		return "", rateLimitError("git", t.deps.limiter(ctx))
 	}
-	a.Repo = t.defaultRepo(a.Repo)
-	if err := t.checkBoundary(a); err != nil {
+	a.Repo = t.defaultRepo(ctx, a.Repo)
+	if err := t.checkBoundary(ctx, a); err != nil {
 		return "", err
 	}
 	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand), gitChildSpecFor(policy))
@@ -270,19 +270,24 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 // armRefGuard builds the per-call ref-movement guard (git_ref_guard.go). It
 // returns nil — the zero-overhead path — only when the call has neither a
 // session identity to track nor an expected_head to enforce. The guard checks
-// write/destructive tiers before they run and records this session's
-// HEAD/branch observation after every successful call (reads included), which
-// is what keeps single-session use friction-free: a session's own moves are
-// always its latest observation.
+// the write, destructive, and network tiers before they run — network included
+// because a force-push is the highest blast-radius operation the tool mediates
+// — and records this session's HEAD/branch observation after every successful
+// call (reads included), which is what keeps single-session use friction-free:
+// a session's own moves are always its latest observation.
 func (t *Git) armRefGuard(a gitToolArgs, tier gitTier) *gitRefGuard {
-	if t.sessID == "" && a.ExpectedHead == "" {
+	sessID := ""
+	if t.sessID != nil {
+		sessID = t.sessID()
+	}
+	if sessID == "" && a.ExpectedHead == "" {
 		return nil
 	}
 	g := &gitRefGuard{
-		sessID:       t.sessID,
+		sessID:       sessID,
 		expectedHead: a.ExpectedHead,
 		confirm:      a.Confirm,
-		check:        tier == tierWrite || tier == tierDestructive,
+		check:        tier == tierWrite || tier == tierDestructive || tier == tierNetwork,
 	}
 	if t.sessNameFn != nil {
 		g.sessName = t.sessNameFn()
@@ -338,17 +343,17 @@ func (t *Git) resolveAddArgv(ctx context.Context, a gitToolArgs, argv []string) 
 // connection has no pinned workspace (WorkspaceFn nil or returning ""), an empty
 // repo stays empty and checkBoundary refuses — fail closed, never fall through to
 // the daemon cwd, which would run git against an unrelated repository.
-func (t *Git) defaultRepo(repo string) string {
+func (t *Git) defaultRepo(ctx context.Context, repo string) string {
 	if repo == "" {
 		if t.deps.WorkspaceFn == nil {
 			return ""
 		}
-		return t.deps.WorkspaceFn()
+		return t.deps.WorkspaceFn(ctx)
 	}
-	return t.deps.resolvePath(repo)
+	return t.deps.resolvePath(ctx, repo)
 }
 
-func (t *Git) checkBoundary(a gitToolArgs) error {
+func (t *Git) checkBoundary(ctx context.Context, a gitToolArgs) error {
 	// A resolved repo is mandatory. An empty repo here means neither an explicit
 	// "repo" arg nor a pinned workspace was available; running git anyway would
 	// fall through to the daemon's cwd (a different connection's project — a
@@ -357,7 +362,7 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 		return errors.New("git: no repository resolved — call session_start to attach a workspace, or pass an explicit \"repo\". " +
 			"If this session was working a moment ago, the daemon may have restarted (e.g. after a rebuild or upgrade), which clears the per-connection workspace pin — re-run session_start to re-attach")
 	}
-	if err := t.deps.checkBoundary(a.Repo); err != nil {
+	if err := t.deps.checkBoundary(ctx, a.Repo); err != nil {
 		return fmt.Errorf("git: %w", err)
 	}
 	for _, f := range a.Files {
@@ -365,7 +370,7 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 		if !filepath.IsAbs(path) && a.Repo != "" {
 			path = filepath.Join(a.Repo, path)
 		}
-		if err := t.deps.checkBoundary(path); err != nil {
+		if err := t.deps.checkBoundary(ctx, path); err != nil {
 			return fmt.Errorf("git: %w", err)
 		}
 	}

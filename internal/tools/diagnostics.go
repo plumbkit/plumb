@@ -131,9 +131,9 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("diagnostics: invalid arguments: %w", err)
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	for i := range a.URIs {
-		a.URIs[i] = toFileURIAnchored(a.URIs[i], t.ws)
+		a.URIs[i] = toFileURIAnchored(ctx, a.URIs[i], t.ws)
 	}
 
 	// Backward-compat: scalar uri field is treated as uris:[uri].
@@ -141,7 +141,7 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 		a.URIs = []string{a.URI}
 	}
 	for _, uri := range a.URIs {
-		if err := t.guard.check(paths.URIToPath(uri)); err != nil {
+		if err := t.guard.check(ctx, paths.URIToPath(uri)); err != nil {
 			return "", fmt.Errorf("diagnostics: %w", err)
 		}
 	}
