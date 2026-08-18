@@ -40,6 +40,24 @@
 
 ### Changed
 
+- **`plumb skills sync` collects its per-client outcome lines under a
+  `● Summary` heading.** The summary now rides the shared CLI section style —
+  one blank line below the grouped table, the heading, then one `┊`-guttered
+  line per client — with any unregistered-client skip notes a further blank
+  line below, instead of the lines printing bare directly after the table.
+
+- **`plumb doctor`'s MCP Clients section lists clients alphabetically and
+  folds each client's extra diagnostics into an indented `╰─` branch beneath
+  it.** The per-client sub-checks — Claude Desktop's extra profiles, the lean
+  clients' tool surface, and skill drift — used to land as rows of their own
+  after the client list, in whatever order their producers ran; they now read
+  as clearly-secondary branches under their client, with the branch glyphs and
+  labels in the hint colour (structure, not status) and the clients themselves
+  sorted by name for scanning. A branch detail too long for the terminal flows
+  as a hanging paragraph — breaking at a " — `…`" separator so a command span
+  starts its own line — rather than printing past the edge. `plumb doctor --json` is unchanged: every check
+  still appears flat in the array under its full "<client> (…)" name.
+
 - **The Antigravity legacy flat-config layer is gone — registration,
   repair, and uninstall manage exactly the per-target standalone
   `mcp/plumb.json`.** Earlier builds also wrote flat `mcp_config.json`
@@ -63,8 +81,11 @@
 
 - **`plumb skills` groups its status table per client, with colour-coded
   statuses.** Client blocks are separated by full-width dotted rules, and the
-  status strings are unchanged but coloured at the render layer: `installed`
-  green, `missing`/`stale` warn, `not registered` muted. `plumb skills sync`
+  status strings are coloured at the render layer: `installed` green,
+  `missing`/`stale`/`unregistered` warn. A skill-capable client that does not
+  register plumb shows as `unregistered`, with its skip reason and fix on
+  their own rows under the skills directory — not one long parenthesised tail
+  on the directory cell that stretched every dotted rule. `plumb skills sync`
   reports through the same grouped table — one group per client with the
   action taken per skill (`installed`/`updated`/`current`, or `error` with
   the reason), followed by the per-client summary lines — replacing the old
@@ -84,7 +105,10 @@
   flood-defence ordering unchanged: the key listing is capped and the warnings
   grouped last. The typed `[y/N]` prompt became the Yes/No selector that also
   backs `plumb stop` and `plumb restart`, defaulting to No; `--yes` remains
-  the only non-terminal grant and non-terminal stdin is still refused.
+  the only non-terminal grant and non-terminal stdin is still refused. The
+  post-grant record joins the same style — a `● Trusted <workspace>` heading
+  over `┊`-guttered coverage lines, a blank gutter row between the paragraphs
+  — replacing the old boxed summary.
 
 - **The CLI presentation foundations are shared: grouped tables, one status
   colour vocabulary, terminal-accurate TTY checks.** A new

@@ -50,9 +50,11 @@ func init() {
 }
 
 // runSkillsStatus renders the per-client, per-skill freshness table. A
-// skill-capable client that does not register plumb is shown as "not
-// registered" rather than as a pile of missing skills, so the user understands
-// why sync would skip it.
+// skill-capable client that does not register plumb is shown as "unregistered"
+// rather than as a pile of missing skills, so the user understands why sync
+// would skip it — with the skip reason and its fix on their own rows under
+// the skills directory, not one long parenthesised tail on the directory
+// cell (the widest cell in the table, which stretched every dotted rule).
 func runSkillsStatus(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
@@ -64,8 +66,9 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 			continue
 		}
 		if !plumbRegisteredIn(c) {
-			t.Row(c.name, "—", statusStyle("not registered").Render("not registered"),
-				render.ContractPath(dir)+" (sync skips it — run `plumb setup "+c.use+"`)")
+			t.Row(c.name, "—", statusStyle("unregistered").Render("unregistered"), render.ContractPath(dir))
+			t.Row("", "", "", "sync skips it, run:")
+			t.Row("", "", "", "`plumb setup "+c.use+"`")
 			continue
 		}
 		for i, s := range embeddedSkills() {
@@ -85,10 +88,11 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 // is given, otherwise every registered skill-capable client. The report is the
 // same grouped table `plumb skills` shows — one group per client, so every
 // skill row reads under the client it belongs to — with the action taken in
-// the status cell, a summary line per client, and a muted skip note per
-// unregistered client in the sweep. Per-skill errors are rows with an error
-// status, not fatal (see syncClientGroup) — a sync that partially failed still
-// leaves every other skill correct.
+// the status cell, a ● Summary section collecting one ┊-guttered line per
+// client, and a muted skip note per unregistered client in the sweep.
+// Per-skill errors are rows with an error status, not fatal (see
+// syncClientGroup) — a sync that partially failed still leaves every other
+// skill correct.
 func runSkillsSync(_ *cobra.Command, args []string) error {
 	tui.RebuildStyles()
 	capable := skillCapableClients()
@@ -120,8 +124,16 @@ func runSkillsSync(_ *cobra.Command, args []string) error {
 		syncClientGroup(t, &summaries, target)
 	}
 	fmt.Println(t.Render())
-	for _, s := range summaries {
-		fmt.Println(s)
+	if len(summaries) > 0 {
+		fmt.Println()
+		fmt.Println(tui.HintStyle.Render("● Summary"))
+		fmt.Println()
+		for _, s := range summaries {
+			fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"), s)
+		}
+	}
+	if len(skips) > 0 {
+		fmt.Println()
 	}
 	for _, s := range skips {
 		fmt.Println(tui.MutedStyle.Render(s))

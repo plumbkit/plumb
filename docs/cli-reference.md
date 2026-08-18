@@ -259,12 +259,12 @@ verified skills directory (Claude Code `~/.claude/skills/`, Codex
 or `~/.kimi-code/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
 `missing`, or `stale` (content differs from the copy compiled into this
 binary). A skill-capable client whose config does not register plumb is shown
-as `not registered` — the reason `sync` would skip it. Every other client has
+as `unregistered`, with the reason `sync` skips it and the `plumb setup` fix
+on their own rows under the skills directory. Every other client has
 no skills directory and receives the same routing as the condensed
 `session_start` guidance block instead. The table groups its rows per client —
-blocks separated by full-width dotted rules — with each status coloured at the
-render layer: `installed` green, `missing`/`stale` warn, `not registered`
-muted. The status strings themselves are unchanged.
+blocks separated by full-width dotted rules — with each status coloured at
+the render layer: `installed` green, `missing`/`stale`/`unregistered` warn.
 
 Skill capability is per-client data (`setupTarget.skillsDirFn`,
 `internal/cli/setup_skills.go`), verified against a live install rather than
@@ -280,7 +280,9 @@ only the named client with `plumb skills sync <client>` (an unknown name is a
 usage error listing the valid ones; naming an unregistered client is an error
 pointing at `plumb setup <client>`). A changed skill is backed up before being
 overwritten, an unchanged one is left alone, and a per-skill error is a
-warning, not a failure. Sync is the only writer of skill files —
+warning, not a failure. The report ends with a `● Summary` section — one
+`┊`-guttered line per synced client, with any unregistered-client skip notes
+a blank line below. Sync is the only writer of skill files —
 `plumb setup` is config-only.
 
 Re-run `plumb skills sync` after upgrading plumb to pick up new skill content;
@@ -326,13 +328,17 @@ non-zero if any check fails. Sections:
   one row per live server under its `<server> (live)` name. The section sits
   directly after Language Servers and is omitted entirely — no header, no
   rows — when no sessions run. The JSON output shape is unchanged.
-- **MCP Clients** — for each supported client, whether plumb is registered
-  **and** that the binary the config launches still exists and matches the
-  running executable. A registered binary that no longer exists is a failure; a
-  binary that exists but differs from the current one (e.g. after moving or
-  rebuilding plumb elsewhere) is a non-fatal **warning** (`!`). Both carry a
-  `plumb setup <client>` fix hint — or run `plumb setup --all` to repoint every
-  client at once.
+- **MCP Clients** — for each supported client, alphabetically by name, whether
+  plumb is registered **and** that the binary the config launches still exists
+  and matches the running executable. A registered binary that no longer
+  exists is a failure; a binary that exists but differs from the current one
+  (e.g. after moving or rebuilding plumb elsewhere) is a non-fatal **warning**
+  (`!`). Both carry a `plumb setup <client>` fix hint — or run `plumb setup
+  --all` to repoint every client at once. Per-client diagnostics (extra
+  profiles, tool surface, skills) render as `╰─` branches indented under their
+  client rather than rows of their own; `--json` still lists them flat in the
+  array, under their full "(extra profiles)"/"(tool surface)"/"(skills)"
+  names.
 - **Configuration** — global and project `config.toml` parse cleanly. Its
   `capability trust` row reports the project's capability-granting keys with
   a head count line followed by one key per line — trusted when the project's

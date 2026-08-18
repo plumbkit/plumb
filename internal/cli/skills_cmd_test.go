@@ -264,6 +264,68 @@ func TestRunSkillsSync_NeverSilent(t *testing.T) {
 	}
 }
 
+// TestRunSkillsSync_SummaryBlock pins the summary section's presentation: it
+// sits one blank line below the table under a ● Summary heading, and every
+// per-client line rides the ┊ gutter — the shared CLI section style — rather
+// than printing bare directly after the table.
+func TestRunSkillsSync_SummaryBlock(t *testing.T) {
+	root := pointClientHomesAt(t)
+	codexCfg := filepath.Join(root, "codex-home", "config.toml")
+	if _, _, err := setupCodexInto(codexCfg, "/opt/plumb"); err != nil {
+		t.Fatal(err)
+	}
+
+	n := strconv.Itoa(len(embeddedSkills()))
+	out := captureStdout(t, func() {
+		if err := runSkillsSync(nil, nil); err != nil {
+			t.Errorf("sync: %v", err)
+		}
+	})
+	plain := ansiStripForCLITest(out)
+
+	if !strings.Contains(plain, "\n\n● Summary\n\n") {
+		t.Errorf("summary section must sit one blank line below the table, under its own heading with a blank line after it:\n%s", plain)
+	}
+	if want := "  ┊ Codex: " + n + " skills — " + n + " installed"; !strings.Contains(plain, want) {
+		t.Errorf("summary lines must ride the ┊ gutter (%q):\n%s", want, plain)
+	}
+	if strings.Contains(plain, "\nCodex: ") {
+		t.Errorf("a summary line escaped the gutter:\n%s", plain)
+	}
+	if want := "skills — " + n + " installed\n\nSkipping Claude Code"; !strings.Contains(plain, want) {
+		t.Errorf("skip notes must sit one blank line below the summary block (%q):\n%s", want, plain)
+	}
+}
+
+// TestRunSkillsStatus_UnregisteredBlock pins how the status table renders a
+// skill-capable client that does not register plumb: the warn-coloured
+// "unregistered" word, with the skip reason and its fix on their own rows
+// under the skills directory rather than one long parenthesised tail on the
+// directory cell.
+func TestRunSkillsStatus_UnregisteredBlock(t *testing.T) {
+	pointClientHomesAt(t)
+
+	out := captureStdout(t, func() {
+		if err := runSkillsStatus(nil, nil); err != nil {
+			t.Errorf("status: %v", err)
+		}
+	})
+	plain := ansiStripForCLITest(out)
+
+	for _, want := range []string{
+		"unregistered",
+		"sync skips it, run:",
+		"`plumb setup claude-code`",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("status table missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "not registered") || strings.Contains(plain, "(sync skips it") {
+		t.Errorf("the old one-line parenthesised note must be gone:\n%s", plain)
+	}
+}
+
 // TestPrintSkillsDriftHint pins the post-registration hint to its trigger: it
 // fires on missing or stale skills with the sync command named, and stays
 // silent when the skills are current or the client has no skill channel —

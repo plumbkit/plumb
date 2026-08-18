@@ -134,6 +134,25 @@ func TestTrustConfirmation_OnlyExplicitYesGrants(t *testing.T) {
 	}
 }
 
+// TestPrintTrustGrantSummary pins the post-grant record's shape: a ●
+// heading over the workspace, then the ┊-guttered coverage lines with a blank
+// gutter row separating the two paragraphs — the shared section style, not a
+// boxed summary.
+func TestPrintTrustGrantSummary(t *testing.T) {
+	out := captureStdout(t, func() { printTrustGrantSummary("/w") })
+	plain := ansiStripForCLITest(out)
+
+	if !strings.HasPrefix(plain, "● Trusted /w\n\n   ┊ This grant covers the project's task commands,\n") {
+		t.Errorf("the record must open with the heading, a blank line, and the first guttered row:\n%s", plain)
+	}
+	if !strings.Contains(plain, "   ┊ \n") {
+		t.Errorf("the coverage and re-trust paragraphs must be separated by a blank gutter row:\n%s", plain)
+	}
+	if !strings.HasSuffix(plain, "which will show you what changed before you approve it again.\n") {
+		t.Errorf("the record must close on the re-trust sentence:\n%s", plain)
+	}
+}
+
 // TestPrintPolicyWarnings_SurvivesAPaddedKeySet pins the flooding defence. The
 // key set is attacker-chosen — [git] is taken whole, deliberately — so a
 // repository can pad it to push the dangerous line out of the scrollback. The

@@ -96,13 +96,29 @@ func runTrust(_ *cobra.Command, args []string) error {
 	// Trust is bound to the exact content above: changing any of it invalidates
 	// that binding and re-prompts. A trust.json upgraded from the old boolean
 	// format re-confirms here once.
-	fmt.Println(render.ContextBox(tui.MutedStyle.Render(trustGrantSummary(root)), tui.SepStyle))
+	printTrustGrantSummary(root)
 	return nil
 }
 
-// trustGrantSummary is the post-grant record of what "trusted <root>" covered.
-func trustGrantSummary(root string) string {
-	return fmt.Sprintf("trusted %s\n\nthis grant covers the project's task commands, its [[command]] allow-list, its [commands] shell\npolicy, its [xcode] build-server settings, its [lsp.<lang>] server command/args/env, its [git]\ntier policy and its [collab] channel switches.\nevery one of them is bound to the content shown above; changing any of it requires re-running\n`plumb trust`, which will show you what changed before you approve it again.", root)
+// printTrustGrantSummary is the post-grant record: what the grant covers, and
+// that it is bound to the content shown above — on the shared section style
+// (● heading, ┊ rows) so the disclosure and the record read as one surface.
+func printTrustGrantSummary(root string) {
+	fmt.Println(tui.HintStyle.Render("● Trusted " + root))
+	fmt.Println()
+	for _, line := range []string{
+		"This grant covers the project's task commands,",
+		"its [[command]] allow-list, its [commands] shell policy,",
+		"its [xcode] build-server settings,",
+		"its [lsp.<lang>] server command/args/env,",
+		"its [git] tier policy and its [collab] channel switches.",
+		"",
+		"Every one of them is bound to the content shown above;",
+		"changing any of it requires re-running `plumb trust`,",
+		"which will show you what changed before you approve it again.",
+	} {
+		fmt.Printf("   %s %s\n", tui.SepStyle.Render("┊"), tui.MutedStyle.Render(line))
+	}
 }
 
 // policyDisclosureLimit caps the per-key listing. The key set is attacker-chosen

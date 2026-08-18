@@ -209,7 +209,7 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 		if col(plain[0], "~/Library") != 26 || col(plain[3], "~/gemini") != 26 {
 			t.Errorf("parent detail must sit at column 26:\n%q\n%q", plain[0], plain[3])
 		}
-		if !strings.HasPrefix(plain[1], "      ╰─ Extra profiles") {
+		if !strings.HasPrefix(plain[1], "     ╰─ Extra profiles") {
 			t.Errorf("branch line = %q, want the glyph at the parent's name column with the derived label", plain[1])
 		}
 		if col(plain[1], "1 extra profile(s) current") != 26 {
@@ -229,7 +229,7 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 		if len(plain) != 5 {
 			t.Fatalf("want parent, parent, branch + two stacked lines — got %d lines:\n%s", len(plain), strings.Join(plain, "\n"))
 		}
-		if plain[2] != "      ╰─ Tool surface     head" {
+		if plain[2] != "     ╰─ Tool surface      head" {
 			t.Errorf("branch line = %q, want the first detail at column 26", plain[2])
 		}
 		if plain[3] != strings.Repeat(" ", 26)+"middle" {
@@ -237,6 +237,41 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 		}
 		if want := strings.Repeat(" ", 26) + "╰─ tail"; plain[4] != want {
 			t.Errorf("last line = %q, want %q", plain[4], want)
+		}
+	})
+
+	t.Run("a too-long detail flows as a hanging paragraph with the command set off", func(t *testing.T) {
+		lines := subDetailLines("no client-side allowlist, so Codex loads whatever plumb advertises — `plumb setup codex --lean` writes an enabled_tools allowlist trimming it to the 21-tool lean set\n(every tool under the default profile)", 26, 100)
+		want := []subDetailLine{
+			{text: "no client-side allowlist, so Codex loads whatever plumb advertises"},
+			{text: "`plumb setup codex --lean`"},
+			{text: "writes an enabled_tools allowlist trimming it to the 21-tool lean set", off: 3},
+			{text: "(every tool under the default profile)", off: 3},
+		}
+		if len(lines) != len(want) {
+			t.Fatalf("subDetailLines gave %d lines, want %d:\n%+v", len(lines), len(want), lines)
+		}
+		for i := range want {
+			if lines[i] != want[i] {
+				t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+			}
+		}
+	})
+
+	t.Run("a fitted stacked detail keeps its shape and closes on a glyph", func(t *testing.T) {
+		lines := subDetailLines("head\nmiddle\ntail", 26, 100)
+		want := []subDetailLine{
+			{text: "head"},
+			{text: "middle"},
+			{text: "tail", close: true},
+		}
+		if len(lines) != len(want) {
+			t.Fatalf("subDetailLines gave %d lines, want %d:\n%+v", len(lines), len(want), lines)
+		}
+		for i := range want {
+			if lines[i] != want[i] {
+				t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+			}
 		}
 	})
 
@@ -253,8 +288,13 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 		if col(plain[1], "stale plumb binary") != 26 {
 			t.Errorf("branch detail must sit at column 26, got %q", plain[1])
 		}
-		if want := strings.Repeat(" ", 26) + "→ run `plumb setup claude-desktop` to repoint every detected profile"; plain[2] != want {
-			t.Errorf("fix line = %q, want %q", plain[2], want)
+		// The detail overflows the 80-column fallback here, so it flows: the
+		// path's tail moves onto the hanging indent before the fix line.
+		if want := strings.Repeat(" ", 29) + "Support/Claude.2"; plain[2] != want {
+			t.Errorf("wrapped continuation = %q, want %q", plain[2], want)
+		}
+		if want := strings.Repeat(" ", 26) + "→ run `plumb setup claude-desktop` to repoint every detected profile"; plain[3] != want {
+			t.Errorf("fix line = %q, want %q", plain[3], want)
 		}
 		// Structure carries the hint colour whatever the status: the same Render
 		// call as the printer, so this holds whether or not the profile emits colour.

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/term"
+	"github.com/muesli/reflow/wordwrap"
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/tui"
@@ -255,41 +257,131 @@ func printCheck(c checkResult, nameW int) {
 	}
 }
 
+// subDetailLine is one laid-out line of a branch detail: the text, its extra
+// indent past the detail column (0 flush, 3 for a wrapped continuation), and
+// whether it closes the detail with its own "╰─" glyph.
+type subDetailLine struct {
+	text  string
+	off   int
+	close bool
+}
+
 // printSubCheck renders one sub-check as a branch beneath its parent row. The
 // glyph and label carry structure and print in the hint colour whatever the
 // sub's status; the detail keeps the table's status colouring — muted on a
-// clean pass, the attention colour throughout when the sub is not clean — and
-// the last line of a stacked detail closes with its own "╰─" so a multi-line
-// sub reads as one unit.
+// clean pass, the attention colour throughout when the sub is not clean. A
+// detail whose lines all fit keeps its stacked shape, closing on its own
+// "╰─" so a multi-line sub reads as one unit; a line that does not fit
+// flows as a hanging paragraph instead (see subDetailLines).
 func printSubCheck(c checkResult, nameW int) {
 	attention := !c.ok || c.warn
 	detailStyle := tui.MutedStyle
 	if attention {
 		detailStyle = tui.WarnStyle
 	}
-	indent := strings.Repeat(" ", 7+nameW)
-	// Six leading spaces put the glyph under the parent's name; "╰─ " ends
-	// three columns later, so the label starts nine columns in and pads out to
-	// the parent's detail column.
-	pad := 7 + nameW - 9 - len(subLabel(c))
+	detailCol := 7 + nameW
+	// Five leading spaces put the glyph under the parent's name column; "╰─ "
+	// ends three columns later, so the label starts eight columns in and pads
+	// out to the parent's detail column.
+	pad := detailCol - 8 - len(subLabel(c))
 	if pad < 1 {
 		pad = 1
 	}
-	detailLines := strings.Split(c.detail, "\n")
-	fmt.Printf("      %s%s%s\n",
+	lines := subDetailLines(c.detail, detailCol, terminalWidth(os.Stdout))
+	fmt.Printf("     %s%s%s\n",
 		tui.HintStyle.Render("╰─ "+subLabel(c)),
 		strings.Repeat(" ", pad),
-		detailStyle.Render(detailLines[0]))
-	for i, line := range detailLines[1:] {
-		if i == len(detailLines)-2 {
-			fmt.Printf("%s%s%s\n", indent, tui.HintStyle.Render("╰─ "), detailStyle.Render(line))
+		detailStyle.Render(lines[0].text))
+	for _, line := range lines[1:] {
+		prefix := strings.Repeat(" ", detailCol+line.off)
+		if line.close {
+			fmt.Printf("%s%s%s\n", prefix, tui.HintStyle.Render("╰─ "), detailStyle.Render(line.text))
 			continue
 		}
-		fmt.Printf("%s%s\n", indent, detailStyle.Render(line))
+		fmt.Printf("%s%s\n", prefix, detailStyle.Render(line.text))
 	}
 	if attention && c.fix != "" {
-		fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
+		fmt.Printf("%s%s\n", strings.Repeat(" ", detailCol), tui.WarnStyle.Render("→ "+c.fix))
 	}
+}
+
+// subDetailLines lays out a branch detail against the terminal width. While
+// every stacked line fits, the detail keeps its shape — one flush line per
+// stacked line, the last one closing on its own "╰─". The first line that
+// does not fit turns the detail into a flowing paragraph with a three-column
+// hanging indent, and nothing closes on a glyph — the shared indent already
+// makes the block read as one unit.
+func subDetailLines(detail string, detailCol, width int) []subDetailLine {
+	limit := max(width-detailCol, 20)
+	hangLimit := max(limit-3, 20)
+	stacked := strings.Split(detail, "\n")
+	out := make([]subDetailLine, 0, len(stacked))
+	flowed := false
+	for _, seg := range stacked {
+		if !flowed && lipgloss.Width(seg) <= limit {
+			out = append(out, subDetailLine{text: seg})
+			continue
+		}
+		out = append(out, flowSubDetail(seg, limit, hangLimit, !flowed)...)
+		flowed = true
+	}
+	if !flowed && len(out) > 1 {
+		out[len(out)-1].close = true
+	}
+	return out
+}
+
+// flowSubDetail wraps one too-long stacked segment into hanging-paragraph
+// lines. A " — `…`" suggestion separator becomes the first break — the dash
+// is dropped and the command span starts its own flush line — so a span the
+// user is meant to read (or copy) whole survives the wrap; the text after it
+// and any later stacked segment are pure continuations at the hanging indent.
+func flowSubDetail(seg string, limit, hangLimit int, firstFlush bool) []subDetailLine {
+	if !firstFlush {
+		wrapped := wrapLines(seg, hangLimit)
+		out := make([]subDetailLine, 0, len(wrapped))
+		for _, line := range wrapped {
+			out = append(out, subDetailLine{text: line, off: 3})
+		}
+		return out
+	}
+	intro, span, rest := seg, "", ""
+	if before, after, ok := strings.Cut(seg, " — `"); ok && strings.Contains(after, "`") {
+		spanEnd := strings.Index(after, "`")
+		intro = before
+		span = "`" + after[:spanEnd+1]
+		rest = strings.TrimPrefix(after[spanEnd+1:], " ")
+	}
+	var out []subDetailLine
+	for i, line := range wrapLines(intro, limit) {
+		out = append(out, subDetailLine{text: line, off: hangOff(i)})
+	}
+	if span != "" {
+		for i, line := range wrapLines(span, limit) {
+			out = append(out, subDetailLine{text: line, off: hangOff(i)})
+		}
+	}
+	if rest != "" {
+		for _, line := range wrapLines(rest, hangLimit) {
+			out = append(out, subDetailLine{text: line, off: 3})
+		}
+	}
+	return out
+}
+
+// hangOff keeps a wrapped block's first line flush and indents its
+// continuations onto the hanging indent.
+func hangOff(i int) int {
+	if i == 0 {
+		return 0
+	}
+	return 3
+}
+
+// wrapLines word-wraps one plain-text segment; empty input stays one empty
+// line so a blank stacked line still renders.
+func wrapLines(s string, limit int) []string {
+	return strings.Split(wordwrap.String(s, limit), "\n")
 }
 
 // subLabel derives the branch label from a sub's "<parent> (<label>)" name —
