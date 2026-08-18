@@ -15,30 +15,29 @@ import (
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Configure plumb with external tools",
-	Long: `Register plumb as an MCP server in an external client's config.
+	Long: `Register plumb as an MCP server in a client's config: run a subcommand
+(e.g. ` + "`plumb setup claude-code`" + `) to register a single client, or ` + "`plumb setup --all`" + ` to
+sweep every one.
 
 Registration is config-only: it never installs skill files. Skill-capable
 clients (claude-code, codex, junie, kimi-code, zcode) get their skills from
 ` + "`plumb skills sync`" + ` — setup prints a hint when it notices them missing or
 stale, and bare ` + "`plumb skills`" + ` shows the full status table.
 
-Run a subcommand (e.g. ` + "`plumb setup claude-code`" + `) to register a single
-client, or use a bulk flag:
+--all is the single bulk flag: it registers plumb in every installed client
+and repoints existing registrations at this binary — the one-shot first-time
+setup, and the repair after the binary moves or is rebuilt elsewhere (see the
+registered-binary check in ` + "`plumb doctor`" + `). Clients with no config file at
+all are left untouched — plumb cannot tell an absent config from an
+uninstalled client, so use the client's named subcommand to create one. The
+exceptions are Junie, detected via its home dir (~/.junie), Kimi Code,
+detected via its data dir ($KIMI_CODE_HOME, or ~/.kimi-code), ZCode, detected
+via its home dir (~/.zcode), and DeepSeek Harness, detected via its home dir
+($DSH_HOME, or ~/.dsh): their MCP configs only exist once an entry is
+configured, so --all creates them fresh.
 
-  --repair  Repoint every already-registered client at the current plumb
-            binary — the repair after the binary moves or is rebuilt
-            elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).
-            It never adds plumb to a client that lacked it.
-  --all     --repair, plus register plumb in installed clients that do not
-            have it yet (config file present but no plumb entry). Clients
-            with no config file at all are left untouched — plumb cannot
-            tell an absent config from an uninstalled client, so use the
-            client's named subcommand to create one. The exceptions are Junie,
-            detected via its home dir (~/.junie), Kimi Code, detected via its
-            data dir ($KIMI_CODE_HOME, or ~/.kimi-code), ZCode, detected via
-            its home dir (~/.zcode), and DeepSeek Harness, detected via its
-            home dir ($DSH_HOME, or ~/.dsh): their MCP configs only exist once
-            an entry is configured, so --all creates them fresh.`, RunE: runSetupAll,
+--repair and --install-missing are deprecated hidden aliases of --all with
+the same effect. Bare ` + "`plumb setup`" + ` (no flags) prints this help.`, RunE: runSetupAll,
 }
 
 var (
@@ -49,7 +48,7 @@ var (
 
 var setupClaudeDesktopCmd = &cobra.Command{
 	Use:   "claude-desktop",
-	Short: "Register plumb as an MCP server in Claude Desktop's config",
+	Short: "Register plumb in Claude Desktop",
 	Long: `Register plumb as an MCP server in Claude Desktop's config.
 
 Writes the one config path Anthropic documents (` + "`~/Library/Application Support/Claude/claude_desktop_config.json`" + ` on
@@ -66,7 +65,7 @@ var setupClaudeCodeProjectFlag bool
 
 var setupClaudeCodeCmd = &cobra.Command{
 	Use:   "claude-code",
-	Short: "Register plumb as an MCP server in Claude Code's config",
+	Short: "Register plumb in Claude Code",
 	Long: `Register plumb as an MCP server in Claude Code (the CLI tool).
 
 By default writes to the user-level config (~/.claude.json), which makes plumb
@@ -83,25 +82,27 @@ directory instead, scoping plumb to that project only.`,
 // the option travels with the target description rather than the command.
 var setupGeminiCmd = &cobra.Command{
 	Use:   "gemini",
-	Short: "Register plumb as an MCP server in Gemini CLI's config",
+	Short: "Register plumb in Gemini CLI",
 	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(geminiTarget) },
 }
 
 var setupCodexCmd = &cobra.Command{
 	Use:   "codex",
-	Short: "Register plumb as an MCP server in Codex's config",
+	Short: "Register plumb in Codex",
 	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(codexTarget) },
 }
 
 func init() {
-	setupCmd.Flags().BoolVar(&setupRepairFlag, "repair", false,
-		"Repoint every already-registered client at the current plumb binary (no new registrations)")
+	setupCmd.Flags().BoolVar(&setupRepairFlag, "repair", false, "Deprecated alias of --all")
 	setupCmd.Flags().BoolVar(&setupAllFlag, "all", false,
-		"--repair, plus register plumb in installed clients that don't have it yet")
+		"Register plumb in every installed client, and repoint existing registrations at this binary")
 	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
 		"Also register plumb in installed clients that don't have it yet")
-	// One-release bridge: --install-missing used to be the only way to get the
-	// behaviour --all now has. It still works but warns and stays out of help.
+	// One-release bridge: --repair used to be the repoint-only sweep and
+	// --install-missing the only way to register missing clients; --all now does
+	// both. The old flags still parse but warn and stay out of help.
+	_ = setupCmd.Flags().MarkHidden("repair")
+	_ = setupCmd.Flags().MarkDeprecated("repair", "use --all instead — it also repoints, and registers clients that lack plumb")
 	_ = setupCmd.Flags().MarkHidden("install-missing")
 	_ = setupCmd.Flags().MarkDeprecated("install-missing", "use --all instead")
 	setupCmd.AddCommand(setupClaudeDesktopCmd)

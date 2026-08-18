@@ -294,33 +294,32 @@ func TestPrintSkillsDriftHint(t *testing.T) {
 	}
 }
 
-// TestSetupBulkFlags pins the new bulk-flag surface on `plumb setup`: --repair
-// is the repoint-only sweep, --all additionally registers missing clients, and
-// --install-missing survives one release as a hidden, deprecated alias.
+// TestSetupBulkFlags pins the bulk-flag surface on `plumb setup`: --all is the
+// single bulk flag (register and repoint), and --repair and --install-missing
+// survive one release as hidden, deprecated aliases of it.
 func TestSetupBulkFlags(t *testing.T) {
-	t.Run("--install-missing is a hidden deprecated alias", func(t *testing.T) {
-		f := setupCmd.Flags().Lookup("install-missing")
-		if f == nil {
-			t.Fatal("--install-missing must still parse during the deprecation window")
-		}
-		if !f.Hidden {
-			t.Error("--install-missing must be hidden from help")
-		}
-		if f.Deprecated == "" {
-			t.Error("--install-missing must carry a deprecation message")
+	t.Run("--repair and --install-missing are hidden deprecated aliases", func(t *testing.T) {
+		for _, name := range []string{"repair", "install-missing"} {
+			f := setupCmd.Flags().Lookup(name)
+			if f == nil {
+				t.Fatalf("--%s must still parse during the deprecation window", name)
+			}
+			if !f.Hidden {
+				t.Errorf("--%s must be hidden from help", name)
+			}
+			if f.Deprecated == "" {
+				t.Errorf("--%s must carry a deprecation message", name)
+			}
 		}
 	})
 
-	t.Run("--repair and --all are registered", func(t *testing.T) {
-		if setupCmd.Flags().Lookup("repair") == nil {
-			t.Fatal("--repair must exist — it is what doctor's repair advice points at")
-		}
+	t.Run("--all is registered", func(t *testing.T) {
 		all := setupCmd.Flags().Lookup("all")
 		if all == nil {
 			t.Fatal("--all must exist")
 		}
-		if !strings.Contains(all.Usage, "register") {
-			t.Errorf("--all's help must say it registers missing clients, got %q", all.Usage)
+		if !strings.Contains(strings.ToLower(all.Usage), "register") {
+			t.Errorf("--all's help must say it registers clients, got %q", all.Usage)
 		}
 	})
 
@@ -332,46 +331,34 @@ func TestSetupBulkFlags(t *testing.T) {
 		}
 	})
 
-	t.Run("bulkRegistersMissing follows --all and the alias, not --repair", func(t *testing.T) {
+	t.Run("bulkRegistersMissing is true under --all and both aliases", func(t *testing.T) {
 		t.Cleanup(func() { setupRepairFlag, setupAllFlag, setupInstallMissingFlag = false, false, false })
-		setupRepairFlag = true
-		if bulkRegistersMissing() {
-			t.Error("--repair must not register missing clients")
-		}
-		setupAllFlag = true
-		if !bulkRegistersMissing() {
-			t.Error("--all must register missing clients")
-		}
-		setupAllFlag = false
-		setupInstallMissingFlag = true
-		if !bulkRegistersMissing() {
-			t.Error("--install-missing must keep its old behaviour during the deprecation window")
+		for _, bulk := range []*bool{&setupAllFlag, &setupRepairFlag, &setupInstallMissingFlag} {
+			*bulk = true
+			if !bulkRegistersMissing() {
+				t.Error("--repair and --install-missing are aliases of --all — every bulk flag must register missing clients")
+			}
+			*bulk = false
 		}
 	})
 }
 
-// TestPrintSetupAllSummary_PointsRepairAtAll pins the trailing hint: a
-// repair-only run that finds installed-but-unregistered clients points at
-// --all, and a run that already registers them says nothing about it.
-func TestPrintSetupAllSummary_PointsRepairAtAll(t *testing.T) {
-	t.Cleanup(func() { setupRepairFlag, setupAllFlag, setupInstallMissingFlag = false, false, false })
-
-	setupRepairFlag = true
-	out := captureStdout(t, func() { printSetupAllSummary(0, 2) })
-	if !strings.Contains(out, "plumb setup --all") {
-		t.Errorf("a repair-only run with unregistered clients must point at --all, got %q", out)
+// TestPrintSetupAllSummary pins the trailing summary: a sweep that changed
+// nothing says every installed client is already registered, a sweep that
+// changed some counts them, and neither hints at --all — every bulk run
+// already runs under it.
+func TestPrintSetupAllSummary(t *testing.T) {
+	out := captureStdout(t, func() { printSetupAllSummary(0) })
+	if !strings.Contains(out, "No changes") {
+		t.Errorf("a no-change sweep must say so, got %q", out)
+	}
+	if strings.Contains(out, "plumb setup --all") {
+		t.Errorf("the summary must not point at the flag the sweep already ran under, got %q", out)
 	}
 
-	setupAllFlag = true
-	out = captureStdout(t, func() { printSetupAllSummary(0, 2) })
-	if strings.Contains(out, "run `plumb setup --all`") {
-		t.Errorf("a registering run must not hint at the flag it already is, got %q", out)
-	}
-
-	setupAllFlag = false
-	out = captureStdout(t, func() { printSetupAllSummary(0, 0) })
-	if strings.Contains(out, "run `plumb setup --all`") {
-		t.Errorf("no unregistered clients, no hint, got %q", out)
+	out = captureStdout(t, func() { printSetupAllSummary(3) })
+	if !strings.Contains(out, "Updated 3 client(s)") {
+		t.Errorf("a changing sweep must count its clients, got %q", out)
 	}
 }
 
