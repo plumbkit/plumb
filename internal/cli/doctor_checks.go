@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -69,8 +70,13 @@ func checkDaemon() []checkResult {
 // executable.
 func checkMCPClients() []checkResult {
 	selfPath, _ := os.Executable()
-	results := make([]checkResult, 0, len(allSetupClients())+2)
-	for _, c := range allSetupClients() {
+	// allSetupClients' order is deliberate for the setup tables (the four
+	// originals first); doctor reads better alphabetically, so sort a copy and
+	// leave the shared order alone.
+	clients := append([]setupTarget(nil), allSetupClients()...)
+	sort.Slice(clients, func(i, j int) bool { return clients[i].name < clients[j].name })
+	results := make([]checkResult, 0, len(clients)+2)
+	for _, c := range clients {
 		results = append(results, checkOneClient(c, selfPath))
 	}
 	if r, ok := checkClaudeDesktopExtraProfiles(selfPath); ok {
@@ -125,11 +131,16 @@ func claudeDesktopExtraProfilesResult(present int, missing, mismatch []string) c
 	const fix = "run `plumb setup claude-desktop` to repoint every detected profile"
 	switch {
 	case len(missing) > 0:
-		return checkResult{name: name, ok: false, detail: "registered binary missing in: " + strings.Join(missing, ", "), fix: fix}
+		return checkResult{name: name, subOf: claudeDesktopTarget.name, ok: false, detail: "registered binary missing in: " + strings.Join(missing, ", "), fix: fix}
 	case len(mismatch) > 0:
-		return checkResult{name: name, ok: true, warn: true, detail: "stale plumb binary in: " + strings.Join(mismatch, ", "), fix: fix}
+		return checkResult{name: name, subOf: claudeDesktopTarget.name, ok: true, warn: true, detail: "stale plumb binary in: " + strings.Join(mismatch, ", "), fix: fix}
 	default:
-		return checkResult{name: name, ok: true, detail: fmt.Sprintf("%d extra profile(s) current (heuristic — not an Anthropic-documented path)", present)}
+		// The heuristic caveat gets its own detail line so the rendered branch
+		// reads "N extra profile(s) current" with the caveat tucked beneath it.
+		return checkResult{
+			name: name, subOf: claudeDesktopTarget.name, ok: true,
+			detail: fmt.Sprintf("%d extra profile(s) current\n(heuristic — not an Anthropic-documented path)", present),
+		}
 	}
 }
 

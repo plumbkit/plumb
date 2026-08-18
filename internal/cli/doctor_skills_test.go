@@ -51,6 +51,9 @@ func TestSkillFreshnessResult(t *testing.T) {
 		if !res.ok || res.warn || res.fix != "" {
 			t.Errorf("skill drift must be informational (clean pass, no fix): %+v", res)
 		}
+		if res.subOf != target.name {
+			t.Errorf("subOf = %q, want the client row %q — an unlinked sub renders as a stray top-level row", res.subOf, target.name)
+		}
 		if !strings.Contains(res.detail, "plumb skills sync test-client") {
 			t.Errorf("detail must name the fix: %q", res.detail)
 		}

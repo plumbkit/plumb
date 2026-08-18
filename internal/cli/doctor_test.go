@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 // TestClientConfigThatWillNotParseFails pins the one config fault every doctor
@@ -164,6 +166,154 @@ func TestParseJavaMajorVersion(t *testing.T) {
 		got := parseJavaMajorVersion(tc.line)
 		if got != tc.want {
 			t.Errorf("parseJavaMajorVersion(%q) = %d, want %d", tc.line, got, tc.want)
+		}
+	}
+}
+
+// TestPrintChecksBranchesSubChecksUnderParent pins the branch layout: a sub
+// row folds beneath its parent, the name column is sized by parent rows alone,
+// and every branch detail line lands in the parent's detail column. The fold is
+// driven by the explicit subOf link — never by the "(…)" in a name — which is
+// what keeps Language Servers' "go (live)" rows top-level.
+func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
+	capture := func(checks []checkResult) (raw string, plain []string) {
+		t.Helper()
+		raw = captureStdout(t, func() { printChecks(checks) })
+		plain = strings.Split(strings.TrimSuffix(stripANSI(raw), "\n"), "\n")
+		return raw, plain
+	}
+	// Column, not byte offset: the markers and branch glyphs are multi-byte
+	// runes, and the layout arithmetic is in visible columns.
+	col := func(line, sub string) int {
+		i := strings.Index(line, sub)
+		if i < 0 {
+			return -1
+		}
+		return len([]rune(line[:i]))
+	}
+
+	t.Run("a clean branch aligns with the parent's columns", func(t *testing.T) {
+		_, plain := capture([]checkResult{
+			{name: "Claude Desktop", ok: true, detail: "~/Library/Application Support/Claude/claude_desktop_config.json"},
+			{
+				name: "Claude Desktop (extra profiles)", subOf: "Claude Desktop", ok: true,
+				detail: "1 extra profile(s) current\n(heuristic — not an Anthropic-documented path)",
+			},
+			{name: "Antigravity Desktop", ok: true, detail: "~/gemini/antigravity/mcp/plumb.json"},
+		})
+		// nameW comes from the widest parent ("Antigravity Desktop", 19), so the
+		// detail column is 7+19 = 26.
+		if len(plain) != 4 {
+			t.Fatalf("want parent, branch, branch tail, parent — got %d lines:\n%s", len(plain), strings.Join(plain, "\n"))
+		}
+		if col(plain[0], "~/Library") != 26 || col(plain[3], "~/gemini") != 26 {
+			t.Errorf("parent detail must sit at column 26:\n%q\n%q", plain[0], plain[3])
+		}
+		if !strings.HasPrefix(plain[1], "      ╰─ Extra profiles") {
+			t.Errorf("branch line = %q, want the glyph at the parent's name column with the derived label", plain[1])
+		}
+		if col(plain[1], "1 extra profile(s) current") != 26 {
+			t.Errorf("branch first detail must sit in the parent's detail column (26), got %q", plain[1])
+		}
+		if want := strings.Repeat(" ", 26) + "╰─ (heuristic — not an Anthropic-documented path)"; plain[2] != want {
+			t.Errorf("branch tail = %q, want %q", plain[2], want)
+		}
+	})
+
+	t.Run("a stacked detail keeps middle lines plain and closes on the last", func(t *testing.T) {
+		_, plain := capture([]checkResult{
+			{name: "Antigravity Desktop", ok: true, detail: "p"},
+			{name: "Kimi Code", ok: true, detail: "k"},
+			{name: "Kimi Code (tool surface)", subOf: "Kimi Code", ok: true, detail: "head\nmiddle\ntail"},
+		})
+		if len(plain) != 5 {
+			t.Fatalf("want parent, parent, branch + two stacked lines — got %d lines:\n%s", len(plain), strings.Join(plain, "\n"))
+		}
+		if plain[2] != "      ╰─ Tool surface     head" {
+			t.Errorf("branch line = %q, want the first detail at column 26", plain[2])
+		}
+		if plain[3] != strings.Repeat(" ", 26)+"middle" {
+			t.Errorf("middle line = %q, want it plain at the detail column", plain[3])
+		}
+		if want := strings.Repeat(" ", 26) + "╰─ tail"; plain[4] != want {
+			t.Errorf("last line = %q, want %q", plain[4], want)
+		}
+	})
+
+	t.Run("an attention sub carries its fix at the detail column", func(t *testing.T) {
+		raw, plain := capture([]checkResult{
+			{name: "Claude Desktop", ok: true, detail: "~/Library/Application Support/Claude/claude_desktop_config.json"},
+			{name: "Antigravity Desktop", ok: true, detail: "~/gemini/antigravity/mcp/plumb.json"},
+			{
+				name: "Claude Desktop (extra profiles)", subOf: "Claude Desktop", ok: true, warn: true,
+				detail: "stale plumb binary in: ~/Library/Application Support/Claude.2",
+				fix:    "run `plumb setup claude-desktop` to repoint every detected profile",
+			},
+		})
+		if col(plain[1], "stale plumb binary") != 26 {
+			t.Errorf("branch detail must sit at column 26, got %q", plain[1])
+		}
+		if want := strings.Repeat(" ", 26) + "→ run `plumb setup claude-desktop` to repoint every detected profile"; plain[2] != want {
+			t.Errorf("fix line = %q, want %q", plain[2], want)
+		}
+		// Structure carries the hint colour whatever the status: the same Render
+		// call as the printer, so this holds whether or not the profile emits colour.
+		if !strings.Contains(raw, tui.HintStyle.Render("╰─ Extra profiles")) {
+			t.Errorf("glyph and label must render in HintStyle, got:\n%s", raw)
+		}
+	})
+
+	t.Run("a sub whose parent row is absent renders top-level", func(t *testing.T) {
+		_, plain := capture([]checkResult{
+			{name: "Claude Desktop (extra profiles)", subOf: "Claude Desktop", ok: true, detail: "1 extra profile(s) current"},
+		})
+		if len(plain) != 1 || !strings.HasPrefix(plain[0], "  ✓  Claude Desktop (extra profiles)") {
+			t.Errorf("an orphaned sub must render top-level rather than vanish, got %q", strings.Join(plain, "\n"))
+		}
+	})
+}
+
+// TestClaudeDesktopExtraProfilesResultBranchesUnderClaudeDesktop pins the
+// parent link and the clean-pass detail shape: the heuristic caveat moved onto
+// its own line so the rendered branch reads "N extra profile(s) current" with
+// the caveat tucked beneath it.
+func TestClaudeDesktopExtraProfilesResultBranchesUnderClaudeDesktop(t *testing.T) {
+	res := claudeDesktopExtraProfilesResult(2, nil, nil)
+	if res.subOf != claudeDesktopTarget.name {
+		t.Errorf("subOf = %q, want the parent row %q — an unlinked sub renders as a stray top-level row", res.subOf, claudeDesktopTarget.name)
+	}
+	if want := "2 extra profile(s) current\n(heuristic — not an Anthropic-documented path)"; res.detail != want {
+		t.Errorf("clean-pass detail = %q, want %q", res.detail, want)
+	}
+	if res.name != "Claude Desktop (extra profiles)" {
+		t.Errorf("name = %q — the full name is the --json contract and must not change", res.name)
+	}
+}
+
+// TestCheckMCPClients_TopLevelClientsAlphabetical pins the section's client
+// order. allSetupClients is deliberately NOT alphabetical (the four originals
+// first, for the setup tables) and doctor used to inherit that order; the
+// section reads better sorted, so checkMCPClients sorts a copy and this test
+// holds it there. Sub rows are excluded — they fold under their parent wherever
+// it lands.
+func TestCheckMCPClients_TopLevelClientsAlphabetical(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var names []string
+	for _, r := range checkMCPClients() {
+		if r.subOf == "" {
+			names = append(names, r.name)
+		}
+	}
+	if len(names) != len(allSetupClients()) {
+		t.Fatalf("every client earns exactly one top-level row, got %d rows for %d clients", len(names), len(allSetupClients()))
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Errorf("top-level client rows must ascend: %q comes before %q", names[i-1], names[i])
 		}
 	}
 }

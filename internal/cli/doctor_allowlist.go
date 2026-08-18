@@ -151,11 +151,12 @@ func leanAllowlistResult(c leanClient, g allowlistGrade) (checkResult, bool) {
 // pass; fix lines only render on attention.
 func leanFullSurfaceHint(c leanClient) checkResult {
 	return checkResult{
-		name: c.checkName(),
-		ok:   true,
-		detail: fmt.Sprintf("no client-side allowlist, so %s loads whatever plumb advertises "+
-			"(every tool under the default profile) — %s writes an "+
-			"%s allowlist trimming it to the %d-tool lean set",
+		name:  c.checkName(),
+		subOf: c.name,
+		ok:    true,
+		detail: fmt.Sprintf("no client-side allowlist, so %s loads whatever plumb advertises — "+
+			"%s writes an %s allowlist trimming it to the %d-tool lean set\n"+
+			"(every tool under the default profile)",
 			c.name, c.leanCmd(), c.key, len(tools.LeanToolNames())),
 	}
 }
@@ -179,7 +180,7 @@ func leanFullSurfaceHint(c leanClient) checkResult {
 //   - NOT A LIST — plumb cannot verify how the client parses a value of the
 //     wrong type at all: ignored, coerced, or the whole server entry rejected.
 func degenerateAllowlistResult(c leanClient, g allowlistGrade) checkResult {
-	res := checkResult{name: c.checkName(), ok: true, warn: true, fix: leanAllowlistFix(c)}
+	res := checkResult{name: c.checkName(), subOf: c.name, ok: true, warn: true, fix: leanAllowlistFix(c)}
 	switch g.shape {
 	case shapeNull:
 		res.detail = c.key + " is null — a client most likely reads that as no allowlist at all " +
@@ -203,9 +204,10 @@ func degenerateAllowlistResult(c leanClient, g allowlistGrade) checkResult {
 // cannot see it from the outside.
 func unknownAllowlistResult(c leanClient, g allowlistGrade) checkResult {
 	return checkResult{
-		name: c.checkName(),
-		ok:   true,
-		warn: true,
+		name:  c.checkName(),
+		subOf: c.name,
+		ok:    true,
+		warn:  true,
 		detail: fmt.Sprintf("%s lists %d name(s), none of which plumb registers (%s) — "+
 			"%s loads NO plumb tools at all; the server connects but nothing it offers is callable",
 			c.key, len(g.names), strings.Join(capNames(g.unknown, 3), ", "), c.name),
@@ -232,7 +234,7 @@ func staleAllowlistResult(c leanClient, g allowlistGrade) checkResult {
 		fmt.Fprintf(&b, "; no longer registered: %s", strings.Join(capNames(g.unknown, 3), ", "))
 	}
 	fmt.Fprintf(&b, " — re-run %s to refresh it", c.leanCmd())
-	return checkResult{name: c.checkName(), ok: true, detail: b.String()}
+	return checkResult{name: c.checkName(), subOf: c.name, ok: true, detail: b.String()}
 }
 
 func leanAllowlistFix(c leanClient) string {

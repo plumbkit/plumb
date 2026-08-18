@@ -41,8 +41,9 @@ func skillFreshnessResult(t setupTarget) (checkResult, bool) {
 		detail += " (" + strings.Join(info, ", ") + ")"
 	}
 	return checkResult{
-		name: t.name + " (skills)",
-		ok:   true,
+		name:  t.name + " (skills)",
+		subOf: t.name,
+		ok:    true,
 		detail: fmt.Sprintf("%s in %s — run `plumb skills sync %s`",
 			detail, render.ContractPath(dir), t.use),
 	}, true

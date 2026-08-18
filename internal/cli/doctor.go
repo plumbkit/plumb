@@ -47,6 +47,12 @@ type checkResult struct {
 	warn   bool // ok=true but with a non-fatal caveat — rendered "!", never a failure
 	detail string
 	fix    string // one-line hint printed when the check is not a clean pass
+	// subOf names the parent row this result renders as a branch under; empty
+	// means a top-level row. The link is explicit rather than parsed out of
+	// names because sections with parenthesised rows of their own (Language
+	// Servers' "go (live)") must never fold. jsonCheckResult maps its own
+	// fields, so the --json schema is unaffected.
+	subOf string
 }
 
 func runDoctor(_ *cobra.Command, _ []string) error {
@@ -177,16 +183,41 @@ func runSection(s doctorSection) []checkResult {
 	return checks
 }
 
-// printChecks prints checks aligned by name column.
+// printChecks prints checks aligned by name column. A check whose subOf names
+// another row renders as an indented branch directly beneath that parent, in
+// its original position among the other subs; the name column is sized by
+// parent rows only, so a branch label never widens it.
 func printChecks(checks []checkResult) {
 	nameW := 0
+	parents := make(map[string]bool, len(checks))
 	for _, c := range checks {
+		if c.subOf != "" {
+			continue
+		}
+		parents[c.name] = true
 		if len(c.name) > nameW {
 			nameW = len(c.name)
 		}
 	}
 	for _, c := range checks {
+		if c.subOf != "" {
+			continue
+		}
 		printCheck(c, nameW)
+		for _, sub := range checks {
+			if sub.subOf == c.name {
+				printSubCheck(sub, nameW)
+			}
+		}
+	}
+	// A sub whose parent row is absent renders top-level rather than silently
+	// disappearing: the MCP Clients section appends subs from producers that run
+	// independently of the parent's check, and a dropped parent must not take the
+	// sub's diagnostics with it.
+	for _, c := range checks {
+		if c.subOf != "" && !parents[c.subOf] {
+			printCheck(c, nameW)
+		}
 	}
 }
 
@@ -222,6 +253,57 @@ func printCheck(c checkResult, nameW int) {
 	if attention && c.fix != "" {
 		fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
 	}
+}
+
+// printSubCheck renders one sub-check as a branch beneath its parent row. The
+// glyph and label carry structure and print in the hint colour whatever the
+// sub's status; the detail keeps the table's status colouring — muted on a
+// clean pass, the attention colour throughout when the sub is not clean — and
+// the last line of a stacked detail closes with its own "╰─" so a multi-line
+// sub reads as one unit.
+func printSubCheck(c checkResult, nameW int) {
+	attention := !c.ok || c.warn
+	detailStyle := tui.MutedStyle
+	if attention {
+		detailStyle = tui.WarnStyle
+	}
+	indent := strings.Repeat(" ", 7+nameW)
+	// Six leading spaces put the glyph under the parent's name; "╰─ " ends
+	// three columns later, so the label starts nine columns in and pads out to
+	// the parent's detail column.
+	pad := 7 + nameW - 9 - len(subLabel(c))
+	if pad < 1 {
+		pad = 1
+	}
+	detailLines := strings.Split(c.detail, "\n")
+	fmt.Printf("      %s%s%s\n",
+		tui.HintStyle.Render("╰─ "+subLabel(c)),
+		strings.Repeat(" ", pad),
+		detailStyle.Render(detailLines[0]))
+	for i, line := range detailLines[1:] {
+		if i == len(detailLines)-2 {
+			fmt.Printf("%s%s%s\n", indent, tui.HintStyle.Render("╰─ "), detailStyle.Render(line))
+			continue
+		}
+		fmt.Printf("%s%s\n", indent, detailStyle.Render(line))
+	}
+	if attention && c.fix != "" {
+		fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
+	}
+}
+
+// subLabel derives the branch label from a sub's "<parent> (<label>)" name —
+// "Claude Desktop (extra profiles)" branches as "Extra profiles". The full
+// name stays on the result for --json, so the label is a rendering concern
+// here rather than another field every producer must keep in sync.
+func subLabel(c checkResult) string {
+	prefix := c.subOf + " ("
+	if strings.HasPrefix(c.name, prefix) && strings.HasSuffix(c.name, ")") {
+		if s := c.name[len(prefix) : len(c.name)-1]; s != "" {
+			return strings.ToUpper(s[:1]) + s[1:]
+		}
+	}
+	return c.name
 }
 
 func startWorkingIndicator() func() {

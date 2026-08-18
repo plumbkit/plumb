@@ -329,6 +329,9 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 				if !ok {
 					t.Fatal("a registration with no allowlist must still say the flag exists")
 				}
+				if res.subOf != c.name {
+					t.Errorf("subOf = %q, want the client row %q — an unlinked sub renders as a stray top-level row", res.subOf, c.name)
+				}
 				if !res.ok || res.warn {
 					t.Errorf("no allowlist is a valid default, not a fault: %+v", res)
 				}
@@ -353,6 +356,9 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 				if !ok {
 					t.Fatal("a snapshot that no longer equals the lean set must surface — that is the allowlist's one failure mode")
 				}
+				if res.subOf != c.name {
+					t.Errorf("subOf = %q, want the client row %q", res.subOf, c.name)
+				}
 				if !res.ok || res.warn {
 					t.Errorf("drift is a hint, not a misconfiguration: %+v", res)
 				}
@@ -367,6 +373,9 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, []string{"not_a_plumb_tool", "nope"}, true))
 				if !ok {
 					t.Fatal("an allowlist matching no plumb tool leaves the server inert — doctor must not stay silent")
+				}
+				if res.subOf != c.name {
+					t.Errorf("subOf = %q, want the client row %q", res.subOf, c.name)
 				}
 				if !res.ok || !res.warn {
 					t.Errorf("want a non-fatal warning (ok=true warn=true), got %+v", res)
@@ -411,6 +420,9 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 				res, ok := leanHintAt(c, leanAllowlistFixture(t, c, []string{}, true))
 				if !ok {
 					t.Fatal("an empty allowlist disables every plumb tool — doctor must not stay silent")
+				}
+				if res.subOf != c.name {
+					t.Errorf("subOf = %q, want the client row %q", res.subOf, c.name)
 				}
 				if !res.ok || !res.warn || res.fix == "" {
 					t.Errorf("want a non-fatal warning carrying a fix, got %+v", res)
