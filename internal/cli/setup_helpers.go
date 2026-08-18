@@ -128,6 +128,21 @@ func zcodeInstalled() bool {
 	return dirExists(filepath.Join(home, ".zcode"))
 }
 
+// JunieConfigPath returns the Junie user config (~/.junie/mcp/mcp.json).
+func JunieConfigPath() (string, error) {
+	return homeRelConfigPath(".junie", "mcp", "mcp.json")
+}
+
+// junieInstalled reports whether Junie looks installed: its home dir (~/.junie)
+// exists.
+func junieInstalled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return dirExists(filepath.Join(home, ".junie"))
+}
+
 // AntigravityConfigPath returns the global Antigravity CLI MCP config
 // (~/.gemini/antigravity-cli/mcp/plumb.json).
 func AntigravityConfigPath() (string, error) {

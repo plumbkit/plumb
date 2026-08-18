@@ -7,6 +7,14 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Added
+
+- **`plumb setup junie` registers plumb in JetBrains Junie.** Junie stores its
+  MCP configuration in `~/.junie/mcp/mcp.json` (`mcpServers` key) and loads
+  skills from `~/.junie/skills/`. `plumb setup --all` detects Junie via its home
+  dir (`~/.junie`) when no config file exists yet, and `plumb skills sync`
+  installs embedded skills into `~/.junie/skills/`.
+
 ### Fixed
 
 - **`plumb mail` now counts notes addressed to `"next"` — the default — so the
