@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/tui"
@@ -248,7 +249,9 @@ func startWorkingIndicator() func() {
 	}
 }
 
+// stdoutIsTerminal reports whether stdout is an interactive terminal.
+// term.IsTerminal rather than a ModeCharDevice stat, which also counts
+// /dev/null — a character device, but never a terminal.
 func stdoutIsTerminal() bool {
-	info, err := os.Stdout.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(os.Stdout.Fd())
 }

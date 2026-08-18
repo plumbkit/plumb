@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -285,10 +286,11 @@ func nonInteractiveTrustError(root string) error {
 // The read error is deliberately not distinguished from a blank line: there is no
 // answer either way, and the outcome must not differ.
 //
-// An empty answer names --yes, because that is what a redirected stdin produces.
-// `/dev/null` is a character device, so it satisfies the terminal check and
-// reaches this path rather than the explicit non-interactive refusal; the outcome
-// is the same refusal, and the advice should be too.
+// An empty answer names --yes, because that is what an ended read at a real
+// prompt (Ctrl-D) produces. Redirected stdin no longer reaches this path:
+// `/dev/null` is a character device, so the old ModeCharDevice check passed it
+// as a terminal, and stdinIsTerminal now uses term.IsTerminal to refuse it at
+// the gate with the explicit non-interactive error.
 func trustAnswerDecision(answer string) error {
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "y", "yes":
@@ -300,11 +302,11 @@ func trustAnswerDecision(answer string) error {
 	}
 }
 
-// stdinIsTerminal reports whether stdin is an interactive terminal rather than a
-// pipe or file.
+// stdinIsTerminal reports whether stdin is an interactive terminal rather than
+// a pipe, file, or /dev/null — the last is a character device, so the
+// ModeCharDevice heuristic it replaced counted it as a terminal.
 func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(os.Stdin.Fd())
 }
 
 // printTrustedTaskCommands lists every project-supplied task command in cmds

@@ -93,9 +93,9 @@ func TestTrustAnswerDecision_OnlyExplicitYesGrants(t *testing.T) {
 			t.Errorf("%q must NOT grant", no)
 			continue
 		}
-		// A redirected stdin yields an empty answer — including from /dev/null,
-		// which is a character device and so passes the terminal check. The advice
-		// must still be there.
+		// A closed or Ctrl-D'd read at a real prompt yields an empty answer; the
+		// advice must still be there. (Redirected stdin no longer reaches this
+		// path — term.IsTerminal refuses /dev/null at the gate.)
 		if strings.TrimSpace(no) == "" && !strings.Contains(err.Error(), "--yes") {
 			t.Errorf("an empty answer should name the --yes escape, got %q", err)
 		}
