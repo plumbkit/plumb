@@ -55,16 +55,16 @@ func init() {
 // why sync would skip it.
 func runSkillsStatus(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
-	t := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
-		Headers("Client", "Skill", "Status", "Skills dir")
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
 	for _, c := range skillCapableClients() {
+		t.NextGroup()
 		dir, err := c.skillsDirFn()
 		if err != nil {
-			t.Row(c.name, "—", "error", err.Error())
+			t.Row(c.name, "—", statusStyle("error").Render("error"), err.Error())
 			continue
 		}
 		if !plumbRegisteredIn(c) {
-			t.Row(c.name, "—", "not registered",
+			t.Row(c.name, "—", statusStyle("not registered").Render("not registered"),
 				render.ContractPath(dir)+" (sync skips it — run `plumb setup "+c.use+"`)")
 			continue
 		}
@@ -73,7 +73,8 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 			if i > 0 {
 				name, shown = "", ""
 			}
-			t.Row(name, s.Name, skillStateAt(dir, s.Name, s.Content, s.References), shown)
+			state := skillStateAt(dir, s.Name, s.Content, s.References)
+			t.Row(name, s.Name, statusStyle(state).Render(state), shown)
 		}
 	}
 	fmt.Println(t.Render())
