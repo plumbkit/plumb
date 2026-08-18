@@ -104,7 +104,7 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	if refusal := unregisteredSessionRefusal("share_intent", t.deps.SessionName()); refusal != "" {
+	if refusal := unregisteredSessionRefusal("share_intent", t.deps.sessionID()); refusal != "" {
 		return refusal, nil
 	}
 	store := t.deps.Store()
@@ -120,7 +120,7 @@ func (t *ShareIntent) run(ctx context.Context, store *collab.Store, policy Colla
 	now := time.Now()
 	in := collab.IntentInput{
 		AuthorSession: t.deps.SessionName(),
-		AuthorID:      t.deps.SessionID,
+		AuthorID:      t.deps.sessionID(),
 		Body:          body,
 		PathGlobs:     args.PathGlobs,
 		TTL:           ttl,

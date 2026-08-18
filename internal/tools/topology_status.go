@@ -54,7 +54,7 @@ type topologyStatusArgs struct {
 	Workspace string `json:"workspace"`
 }
 
-func (t *TopologyStatus) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *TopologyStatus) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	a, err := parseTopologyStatusArgs(raw)
 	if err != nil {
 		return "", err
@@ -63,7 +63,7 @@ func (t *TopologyStatus) Execute(_ context.Context, raw json.RawMessage) (string
 	if ws == "" && t.workspace != nil {
 		ws = t.workspace()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("topology_status: %w", err)
 	}
 	store := t.storeFn()

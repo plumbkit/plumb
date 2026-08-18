@@ -117,7 +117,7 @@ func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (str
 	out := formatTopologyNeighbourhood(nb, a, alts)
 	if t.ws != nil {
 		nodes := append([]topology.Node{nb.Centre}, nb.Nodes...)
-		out += relatedMemoriesSection(t.ws(), nodesToRefs(nodes))
+		out += relatedMemoriesSection(t.ws(ctx), nodesToRefs(nodes))
 	}
 	return out, nil
 }

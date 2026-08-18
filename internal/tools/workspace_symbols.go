@@ -165,7 +165,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", errors.New("workspace_symbols: query must not be empty")
 	}
 	if a.URI != "" {
-		return t.inFile(ctx, toFileURIAnchored(a.URI, t.ws), a.Query)
+		return t.inFile(ctx, toFileURIAnchored(ctx, a.URI, t.ws), a.Query)
 	}
 
 	key := "wsSymbols:" + a.Query
@@ -188,7 +188,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 	// Drop dependency-cache and stdlib hits so results stay focused on the
 	// user's own code.
 	if t.ws != nil {
-		ws := t.ws()
+		ws := t.ws(ctx)
 		filtered := syms[:0]
 		for _, s := range syms {
 			if isInWorkspace(s.Location.URI, ws) {

@@ -239,7 +239,7 @@ func TestPullPostWrite_CrossFile_WorkspacePullWhenAdvertised(t *testing.T) {
 	}
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
@@ -272,7 +272,7 @@ func TestPullPostWrite_CrossFile_RelatedDocsWithHonestNote(t *testing.T) {
 	}
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
@@ -296,7 +296,7 @@ func TestPullPostWrite_CrossFile_WorkspacePullFailureIsExplicit(t *testing.T) {
 	}
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
@@ -320,7 +320,7 @@ func TestPullPostWrite_CrossFile_CleanPullEmitsCleanPassNoHedge(t *testing.T) {
 	client := &pullModeLSP{mode: "pull", interFile: true, wsPull: false} // gopls-like: no workspaceDiagnostics
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
@@ -354,7 +354,7 @@ func TestPullPostWrite_CrossFile_NonEmptyDeltaKeepsHedgeNote(t *testing.T) {
 	}
 	d := WriteDeps{
 		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
-		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)

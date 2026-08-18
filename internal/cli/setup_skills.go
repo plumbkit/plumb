@@ -90,6 +90,11 @@ func zcodeSkillsDir() (string, error) {
 	return homeRelConfigPath(".zcode", "skills")
 }
 
+// junieSkillsDir returns the user-scoped Junie skills directory (~/.junie/skills).
+func junieSkillsDir() (string, error) {
+	return homeRelConfigPath(".junie", "skills")
+}
+
 // skillResult is one skill's outcome: the action installSkill reported
 // ("installed"/"updated"/"unchanged"), or the error that stopped it.
 type skillResult struct {

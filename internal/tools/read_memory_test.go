@@ -25,7 +25,7 @@ func TestReadMemory_ProvenanceFooterAndRedaction(t *testing.T) {
 		t.Fatalf("WriteGenerated: %v", err)
 	}
 
-	tool := NewReadMemory(func() string { return ws })
+	tool := NewReadMemory(func(context.Context) string { return ws })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"last-session"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -49,7 +49,7 @@ func TestReadMemory_UserMemoryHasNoFooter(t *testing.T) {
 	if err := memory.Write(ws, "notes", "plain user note", "my notes"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	tool := NewReadMemory(func() string { return ws })
+	tool := NewReadMemory(func(context.Context) string { return ws })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"notes"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -61,7 +61,7 @@ func TestReadMemory_UserMemoryHasNoFooter(t *testing.T) {
 
 func TestWriteMemory_PathsFrontmatterFeedsRelevantMemories(t *testing.T) {
 	ws := t.TempDir()
-	tool := NewWriteMemory(func() string { return ws })
+	tool := NewWriteMemory(func(context.Context) string { return ws })
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{
 		"name":"auth-notes",
 		"content":"Auth flow notes.",

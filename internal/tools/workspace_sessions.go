@@ -53,7 +53,7 @@ var writeToolNames = []string{
 // involved in any Go mutex ordering.
 type WorkspaceSessions struct {
 	workspace     func() string
-	selfSessID    string
+	selfSessID    func() string
 	inheritedIDs  func() []string
 	boundaryCheck func(string) error // read boundary guard
 	topo          topologyStoreFn    // may be nil; live topology store for write annotation
@@ -77,8 +77,16 @@ type WorkspaceSessions struct {
 // workspace returns the session's pinned workspace root.
 // selfSessID is the current session's ID (excluded from the peer list).
 // boundary is the per-connection read boundary guard.
-func NewWorkspaceSessions(workspace func() string, selfSessID string) *WorkspaceSessions {
+func NewWorkspaceSessions(workspace func() string, selfSessID func() string) *WorkspaceSessions {
 	return &WorkspaceSessions{workspace: workspace, selfSessID: selfSessID}
+}
+
+// selfID returns the session ID, or "" when unwired (tests / pre-registration).
+func (t *WorkspaceSessions) selfID() string {
+	if t.selfSessID == nil {
+		return ""
+	}
+	return t.selfSessID()
 }
 
 // WithInheritedSessions wires the predecessor identities this session provably
@@ -196,7 +204,7 @@ func parseWorkspaceSessionsArgs(raw json.RawMessage) (workspaceSessionsArgs, err
 // daemon-log directories with thousands of stale session files.
 const wsSessionsTimeout = 500 * time.Millisecond
 
-func (t *WorkspaceSessions) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	args, err := parseWorkspaceSessionsArgs(raw)
 	if err != nil {
 		return "", err
@@ -263,7 +271,7 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 	writes = feedRecentWrites(writes, recentLimit)
 
 	annotations := t.annotateWrites(workspace, writes)
-	base := formatWorkspaceSessions(workspace, t.selfSessID, peers, writes, annotations, now)
+	base := formatWorkspaceSessions(workspace, t.selfID(), peers, writes, annotations, now)
 	return base + t.collabBlock(now)
 }
 
@@ -308,7 +316,7 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 	if intentsOn {
 		intents, err := store.LiveIntents(ctx, now)
 		if err == nil {
-			writeCollabIntents(&sb, t.selfSessID, intents, now)
+			writeCollabIntents(&sb, t.selfID(), intents, now)
 		}
 	}
 	// selfSessID is checked as well as the name because this block PRINTS the
@@ -318,14 +326,14 @@ func (t *WorkspaceSessions) collabBlock(now time.Time) string {
 	// even though it consumes nothing. The caller wires addressableName, which is
 	// already empty in that case; this is the tool refusing to depend on its
 	// caller having done so.
-	if mailboxOn && t.selfName != nil && t.selfSessID != "" {
+	if mailboxOn && t.selfName != nil && t.selfID() != "" {
 		if name := t.selfName(); name != "" {
 			var inherited []string
 			if t.inheritedIDs != nil {
 				inherited = t.inheritedIDs()
 			}
 			who := collab.Claimant{
-				Name: name, ID: t.selfSessID, InheritedIDs: inherited, Workspace: t.workspace(),
+				Name: name, ID: t.selfID(), InheritedIDs: inherited, Workspace: t.workspace(),
 			}
 			notes, err := store.PendingNotes(ctx, who, now)
 			if err == nil {

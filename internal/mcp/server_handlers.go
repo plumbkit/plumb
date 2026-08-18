@@ -96,6 +96,11 @@ func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage)
 			s.OnPinnedWorkspace(ctx, dir)
 		}
 	}
+	if s.OnSessionID != nil {
+		if id := stringFromMeta(params, MetaSessionIDKey); id != "" {
+			s.OnSessionID(ctx, id)
+		}
+	}
 }
 
 // toolSnapshot is an immutable copy of one registered tool's advertised
@@ -239,6 +244,51 @@ func stringFromMeta(params json.RawMessage, key string) string {
 	return v
 }
 
+// logicalAgentFromMeta extracts the logical-agent identity from an
+// already-decoded tools/call _meta map, fail-safe: an absent, wrong-type or
+// malformed value yields "". Kept as a helper so handleToolsCall does not pay a
+// gocyclo branch for the extraction.
+func logicalAgentFromMeta(meta map[string]json.RawMessage) string {
+	raw, ok := meta[MetaLogicalAgentKey]
+	if !ok {
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// logicalAgentCtxKey is the context key under which a tools/call's logical-agent
+// identity travels. Unexported, so nothing outside this package can forge a value
+// under it; the only reader is the exported LogicalAgentFromCtx.
+type logicalAgentCtxKey struct{}
+
+// WithLogicalAgent derives a per-request ctx carrying the logical-agent identity:
+// a child ctx for a tools/call. It is the transport half of the per-agent keying
+// contract (PLAN-286 §3) — the identity must ride ctx because mcp.Serve dispatches
+// requests concurrently and a mutable per-connection field would let two racing
+// requests read each other's agent. An empty id returns the parent ctx unchanged
+// (no value stored), so a non-multiplexing client pays nothing. Exported so the
+// daemon's per-agent resolvers can build a ctx in-process (tests, nested calls).
+func WithLogicalAgent(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, logicalAgentCtxKey{}, id)
+}
+
+// LogicalAgentFromCtx returns the logical-agent identity carried in a tools/call
+// ctx (set by handleToolsCall), or "" when the call declared none. It is the
+// single source the daemon's per-agent state resolvers key on.
+func LogicalAgentFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(logicalAgentCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	type toolDef struct {
 		Name        string          `json:"name"`
@@ -293,10 +343,30 @@ type callResult struct {
 	Meta    map[string]any `json:"_meta,omitempty"`
 }
 
+// refusalResponse asks the OnToolRefusal hook whether a call must be refused
+// and returns the refusal response when it must; nil when the call may proceed.
+// Extracted from handleToolsCall to keep that function under the gocyclo cap:
+// the refusal adds two branches (hook set, hook declined) but no dispatch logic.
+func (s *Server) refusalResponse(ctx context.Context, req mcpRequest, name, logicalAgent string) *mcpResponse {
+	if s.OnToolRefusal == nil {
+		return nil
+	}
+	if refusalErr := s.OnToolRefusal(ctx, name, logicalAgent); refusalErr != nil {
+		slog.Warn("mcp: tool refused", "tool", name, "err", refusalErr)
+		resp := okResp(req.ID, callResult{
+			Content: []content{{Type: "text", Text: "error: " + refusalErr.Error()}},
+			IsError: true,
+		})
+		return &resp
+	}
+	return nil
+}
+
 func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpResponse {
 	var params struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name      string                     `json:"name"`
+		Arguments json.RawMessage            `json:"arguments"`
+		Meta      map[string]json.RawMessage `json:"_meta"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return errRespData(req.ID, codeInvalidParams, "invalid params: "+err.Error(), invalidCallEnvelope(""))
@@ -318,8 +388,13 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			invalidCallEnvelope(params.Name))
 	}
 
+	logicalAgent := logicalAgentFromMeta(params.Meta)
+	ctx = WithLogicalAgent(ctx, logicalAgent)
+	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
+		return *resp
+	}
 	if s.OnBeforeTool != nil {
-		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments) })
+		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments, logicalAgent) })
 	}
 
 	start := time.Now()

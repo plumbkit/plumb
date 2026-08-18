@@ -21,6 +21,7 @@ import (
 var (
 	serveFlagNoReconnect bool
 	serveFlagAllowDirs   []string
+	serveFlagWorkspace   string
 )
 
 var serveCmd = &cobra.Command{
@@ -35,6 +36,8 @@ func init() {
 		"disable transparent daemon reconnect; exit on daemon failure (legacy byte-pump proxy)")
 	serveCmd.Flags().StringArrayVar(&serveFlagAllowDirs, "allow-dir", nil,
 		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the detected workspace and config extra_roots.")
+	serveCmd.Flags().StringVar(&serveFlagWorkspace, "workspace", "",
+		"pin this connection's workspace attach hint to a path (also PLUMB_WORKSPACE). Overrides the default serve-cwd hint for clients that report no roots; never overrides an explicit session_start pin.")
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
@@ -53,15 +56,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	allowDirs := resolveAllowDirs(serveFlagAllowDirs, os.Getenv("PLUMB_ALLOWED_DIRS"))
 
-	// The serve proxy's working directory, transported as an advisory attach
-	// hint for clients that report no roots (e.g. Claude Desktop). Getwd returns
-	// an absolute path; on error the hint is simply omitted.
+	// The workspace attach hint transported in the initialize frame's _meta:
+	// an explicit --workspace/PLUMB_WORKSPACE wins over the serve proxy's
+	// working directory, the historical advisory hint for clients that report
+	// no roots (e.g. Claude Desktop). Getwd returns an absolute path; on error
+	// the hint is the explicit value alone, or omitted entirely.
 	cwd, _ := os.Getwd()
+	workspace := resolveWorkspaceHint(serveFlagWorkspace, os.Getenv("PLUMB_WORKSPACE"), cwd)
 
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
 		if len(allowDirs) > 0 {
 			slog.Warn("serve: --allow-dir is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
+		}
+		if workspace != cwd {
+			slog.Warn("serve: --workspace is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
 		}
 		return proxyStdio(ctx, conn)
 	}
@@ -75,7 +84,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
 		proxySessionID:    newProxySessionID(),
-		cwd:               cwd,
+		cwd:               workspace,
 	})
 	return p.run(ctx)
 }
@@ -104,6 +113,30 @@ func resolveAllowDirs(flags []string, env string) []string {
 		out = append(out, d)
 	}
 	return out
+}
+
+// resolveWorkspaceHint picks the workspace attach hint the proxy transports in
+// the initialize frame's _meta: an explicit --workspace flag wins over
+// PLUMB_WORKSPACE, which wins over the serve process's working directory; ""
+// means no attach hint at all. Like resolveAllowDirs, an explicit value is
+// $VAR-expanded in the serve process's environment and made absolute, so the
+// daemon — a separate, possibly differently-rooted process — receives a
+// canonical-ready path; blank values are treated as unset. Symlink
+// canonicalisation is deliberately left to the daemon's pool.Detect, which
+// already resolves the hint exactly as it resolves any other candidate root —
+// canonicalising here as well could diverge from what Detect actually attaches.
+func resolveWorkspaceHint(flag, env, cwd string) string {
+	v := strings.TrimSpace(os.ExpandEnv(flag))
+	if v == "" {
+		v = strings.TrimSpace(os.ExpandEnv(env))
+	}
+	if v == "" {
+		return cwd
+	}
+	if abs, err := filepath.Abs(v); err == nil {
+		v = abs
+	}
+	return v
 }
 
 // newProxySessionID returns a fresh, process-stable proxy session ID (a random

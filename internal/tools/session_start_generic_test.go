@@ -25,7 +25,7 @@ func genericGuidance(clientName, profile string, topologyOn bool) string {
 }
 
 // TestGenericGuidance_CoversEveryClientWithNoBespokeBlock is the point of the
-// block. Eleven of plumb's fourteen setup targets used to fall through
+// block. Twelve of plumb's sixteen setup targets used to fall through
 // writeSessionGuidance's switch and receive nothing but the profile note — and
 // they are exactly the clients that install no skills, so when the routing left
 // the tool descriptions they were left with no steering channel at all.
@@ -34,11 +34,11 @@ func genericGuidance(clientName, profile string, topologyOn bool) string {
 // the generic block is a fallback, not an addition, and emitting both would pay
 // for the same advice twice in every session.
 func TestGenericGuidance_CoversEveryClientWithNoBespokeBlock(t *testing.T) {
-	// The eleven `plumb setup` targets with no bespoke block, then the two
+	// The twelve `plumb setup` targets with no bespoke block, then the two
 	// no-client cases: an empty clientInfo.name and one plumb does not know.
 	fallsThrough := []string{
 		"codex", "gemini", "cursor", "augment", "qwen",
-		"antigravity", "antigravity-desktop", "opencode", "crush", "goose", "hermes",
+		"antigravity", "antigravity-desktop", "opencode", "crush", "goose", "hermes", "dsh",
 		"", "some-agent-nobody-has-heard-of",
 	}
 	for _, name := range fallsThrough {

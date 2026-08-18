@@ -58,7 +58,7 @@ func newMutationEnv(t *testing.T, content string) *mutationEnv {
 	env.installScript(t, env.compileScript, "exit 0")
 	env.installScript(t, env.testScript, "exit 0")
 
-	deps := WriteDeps{WorkspaceFn: func() string { return root }}
+	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return root }}
 	env.tool = NewMutationTest(deps, func(slot, target string) (TaskCommand, error) {
 		script := env.testScript
 		if slot == "build" {
@@ -633,6 +633,8 @@ func TestClassify(t *testing.T) {
 		{"does not compile", stepOutcome{ran: true, exitCode: 2}, stepOutcome{ran: true, exitCode: 1}, MutationInvalid, reasonCompileFailed},
 		{"compile timed out", stepOutcome{ran: true, exitCode: -1, timedOut: true}, ok, MutationInvalid, reasonCompileTimeout},
 		{"tests timed out", ok, stepOutcome{ran: true, exitCode: -1, timedOut: true}, MutationInvalid, reasonTestTimeout},
+		{"compile cancelled", stepOutcome{ran: true, exitCode: -1, cancelled: true}, ok, MutationInvalid, reasonCompileCancelled},
+		{"tests cancelled", ok, stepOutcome{ran: true, exitCode: -1, cancelled: true}, MutationInvalid, reasonTestCancelled},
 		// The two that read as an ordinary failure to anything counting only exit
 		// codes. The TEST one is the dangerous half: without its own branch a
 		// command that never launched is indistinguishable from a caught mutant.
@@ -726,7 +728,7 @@ func TestMutateContent_AmbiguousNamesTheCount(t *testing.T) {
 func TestRestoreFailed_EscalatesAndSavesASidecar(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "src.go")
-	tool := NewMutationTest(WriteDeps{WorkspaceFn: func() string { return root }}, nil)
+	tool := NewMutationTest(WriteDeps{WorkspaceFn: func(context.Context) string { return root }}, nil)
 	tgt := mutationTarget{path: path, display: "src.go", original: []byte("original\n"), mode: 0o644}
 
 	err := tool.restoreFailed(tgt, "disk on fire")
@@ -756,7 +758,7 @@ func TestRestore_DetectsAnUnverifiableRestore(t *testing.T) {
 	if err := os.WriteFile(path, []byte("whatever\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewMutationTest(WriteDeps{WorkspaceFn: func() string { return root }}, nil)
+	tool := NewMutationTest(WriteDeps{WorkspaceFn: func(context.Context) string { return root }}, nil)
 	tgt := mutationTarget{
 		path: path, display: "src.go", original: []byte("original\n"), mode: 0o644,
 		sha: "not-the-real-sha",

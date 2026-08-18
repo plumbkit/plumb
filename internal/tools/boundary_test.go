@@ -12,7 +12,7 @@ import (
 )
 
 func testBoundaryGuard(workspace string) BoundaryGuard {
-	return func(path string) error {
+	return func(_ context.Context, path string) error {
 		if PathWithinWorkspace(workspace, path) {
 			return nil
 		}

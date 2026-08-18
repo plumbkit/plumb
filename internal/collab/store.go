@@ -150,6 +150,13 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 // storage failure.
 var ErrConversationFull = errors.New("collab: conversation has reached its exchange limit")
 
+// ErrNotAParticipant reports that a note was refused because its author is not
+// in the conversation it named. Distinct from ErrConversationFull because the
+// two call for opposite responses: a full thread means summarise and stop, while
+// this means the caller quoted a thread that is not theirs — most often a typo,
+// and otherwise a session reaching into an exchange it only knows the id of.
+var ErrNotAParticipant = errors.New("collab: not a participant in that conversation")
+
 // insertNote writes the row through a SELECT rather than a VALUES list so the
 // exchange budget can be appended to the SAME statement as a WHERE clause.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
@@ -162,8 +169,7 @@ const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, bo
 // not the reaper has run — pruning deletes exactly the rows this excludes, and
 // counting them would let a prune silently hand an exhausted thread a fresh
 // allowance.
-const budgetGuard = `
-	 WHERE (SELECT COUNT(*) FROM collab_rows
+const budgetGuard = `(SELECT COUNT(*) FROM collab_rows
 	        WHERE kind = ? AND conversation_id = ? AND expires_at > ?) < ?`
 
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
@@ -223,29 +229,76 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
 		in.TargetWorkspace, addrID,
 	}
+
+	// Membership is checked only when THREADING onto an exchange the caller named.
+	// A freshly minted conversation has no rows to be a member of, and demanding
+	// membership of one would refuse every opening note.
+	threading := strings.TrimSpace(in.ConversationID) != ""
 	capped := in.MaxExchanges > 0
+	var conds []string
+	if threading {
+		guard, guardArgs := participantGuard(in.authorIdentities(), in.AuthorSession)
+		conds = append(conds, guard)
+		// guardArgs[0] is the kind; the conversation is bound between it and the
+		// membership values, matching the order they appear in the guard's SELECT.
+		args = append(args, guardArgs[0], conv)
+		args = append(args, guardArgs[1:]...)
+	}
 	if capped {
-		stmt += budgetGuard
+		conds = append(conds, budgetGuard)
 		args = append(args, string(KindNote), conv, now.UnixNano(), in.MaxExchanges)
 	}
+	if len(conds) > 0 {
+		stmt += "\n\t WHERE " + strings.Join(conds, "\n\t   AND ")
+	}
+
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return "", fmt.Errorf("collab: insert note: %w", err)
 	}
-	if capped {
-		// The guard is a WHERE clause, so a refusal is an insert that matched
-		// nothing rather than an error the driver reports. A RowsAffected error is
-		// surfaced rather than ignored: treating "cannot tell" as "accepted" would
-		// report a note as sent that may never have been written.
-		n, err := res.RowsAffected()
-		if err != nil {
-			return "", fmt.Errorf("collab: insert note: rows affected: %w", err)
-		}
-		if n == 0 {
-			return "", ErrConversationFull
+	if len(conds) > 0 {
+		if err := s.guardOutcome(ctx, res, conv, in, threading, capped); err != nil {
+			return "", err
 		}
 	}
 	return conv, nil
+}
+
+// guardOutcome turns a guarded insert's row count into the right error, or nil.
+//
+// The guards are WHERE clauses, so a refusal is an insert that matched nothing
+// rather than an error the driver reports. A RowsAffected error is surfaced
+// rather than ignored: treating "cannot tell" as "accepted" would report a note
+// as sent that may never have been written.
+func (s *Store) guardOutcome(ctx context.Context, res sql.Result, conv string, in NoteInput, threading, capped bool) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("collab: insert note: rows affected: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// Two guards can suppress the same insert and the caller needs to know which:
+	// "the thread is full" and "this is not your thread" call for opposite
+	// responses. Asked only on the refusal path, so the common case still costs
+	// one statement.
+	if threading {
+		ok, mErr := s.isParticipant(ctx, conv, in)
+		if mErr != nil {
+			return mErr
+		}
+		if !ok {
+			return ErrNotAParticipant
+		}
+		if !capped {
+			// Membership held and no budget was configured, so nothing here could
+			// have refused the row — a concurrent insert landed between the guarded
+			// statement and this check. Reporting a limit that was never set would
+			// render to the agent as "reached its 0-message limit".
+			return ErrNotAParticipant
+		}
+	}
+	return ErrConversationFull
 }
 
 // newConversationID mints an opaque thread identifier. Short enough to quote
@@ -381,7 +434,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // from the scanner.
 const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
 	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
-	 target_workspace, addressee_id`
+	 target_workspace, addressee_id, delivered_to_id`
 
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	var out []Row
@@ -395,7 +448,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
 			&globs, &r.Addressee, &createdNs, &expNs,
 			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace,
-			&r.TargetWorkspace, &r.AddresseeID); err != nil {
+			&r.TargetWorkspace, &r.AddresseeID, &r.DeliveredToID); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)
 		}
 		r.Kind = Kind(kind)

@@ -48,7 +48,7 @@ func (*deleteMemoryTool) InputSchema() json.RawMessage {
 }`)
 }
 
-func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *deleteMemoryTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name      string `json:"name"`
 		Workspace string `json:"workspace"`
@@ -59,11 +59,11 @@ func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (str
 	if a.Name == "" {
 		return "", errors.New("`name` is required")
 	}
-	ws := resolveWorkspace(a.Workspace, t.ws)
+	ws := resolveWorkspace(ctx, a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
-	if err := t.guard.check(ws); err != nil {
+	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("delete_memory: %w", err)
 	}
 	if err := memory.DeleteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name); err != nil {

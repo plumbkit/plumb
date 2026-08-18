@@ -65,7 +65,7 @@ func openWorkspaceSearchFixture(t *testing.T) (*WorkspaceSearch, string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	tool := NewWorkspaceSearch(func() string { return ws }, func() *topology.Store { return store }).
+	tool := NewWorkspaceSearch(func(context.Context) string { return ws }, func() *topology.Store { return store }).
 		WithMemoryIndex(func() *memory.Index { return ix })
 	return tool, ws
 }
@@ -134,7 +134,7 @@ func TestWorkspaceSearch_DocsNotStarvedByCode(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	tool := NewWorkspaceSearch(func() string { return ws }, func() *topology.Store { return store })
+	tool := NewWorkspaceSearch(func(context.Context) string { return ws }, func() *topology.Store { return store })
 	out := runWorkspaceSearch(t, tool, map[string]any{"query": "daemon", "limit": 6, "corpora": []string{"code", "docs"}})
 	if !strings.Contains(out, "[docs]") {
 		t.Errorf("docs corpus starved by code hits — expected a [docs] result:\n%s", out)
@@ -156,7 +156,7 @@ func TestWorkspaceSearch_MemoryOnlyDegradation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewWorkspaceSearch(func() string { return ws }, func() *topology.Store { return nil }).
+	tool := NewWorkspaceSearch(func(context.Context) string { return ws }, func() *topology.Store { return nil }).
 		WithMemoryIndex(func() *memory.Index { return ix })
 	out := runWorkspaceSearch(t, tool, map[string]any{"query": "daemon locking"})
 
@@ -206,7 +206,7 @@ func TestWorkspaceSearch_EmptyPointsAtExactScan(t *testing.T) {
 }
 
 func TestWorkspaceSearch_RejectsBadArgs(t *testing.T) {
-	tool := NewWorkspaceSearch(func() string { return "" }, func() *topology.Store { return nil })
+	tool := NewWorkspaceSearch(func(context.Context) string { return "" }, func() *topology.Store { return nil })
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query": ""}`)); err == nil {
 		t.Error("empty query must be rejected")
 	}

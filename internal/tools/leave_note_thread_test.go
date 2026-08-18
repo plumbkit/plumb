@@ -32,6 +32,103 @@ func seedThread(t *testing.T, store *collab.Store, peer, self string) string {
 	return conv
 }
 
+// TestLeaveNote_ReplyToANextNoteWorksAsInstructed is the end-to-end version of
+// the default reply flow, and the regression an independent review caught.
+//
+// "next" is the DEFAULT addressee, and RenderMessages prints the recipient a
+// literal, copy-pasteable `leave_note({to: ..., conversation_id: ...})`. A
+// "next" note is stored unbound and names nobody, so the claimant's only trace
+// is delivered_to — and while membership ignored that column, following the
+// tool's own printed instruction was answered with "not one of yours".
+func TestLeaveNote_ReplyToANextNoteWorksAsInstructed(t *testing.T) {
+	deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+
+	conv, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "sess-alice",
+		Body: "for whoever arrives", Addressee: collab.AddresseeNext, TTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This session is the one that picks it up.
+	if got, cErr := store.ClaimNotes(context.Background(),
+		collab.Claimant{Name: "test-session", ID: "sess-1"}, time.Now(), 0); cErr != nil {
+		t.Fatal(cErr)
+	} else if len(got) != 1 {
+		t.Fatalf("claimed %d notes, want 1", len(got))
+	}
+
+	// Exactly what RenderMessages tells the recipient to send back.
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"to":"alice","conversation_id":`+jsonStr(conv)+`,"body":"got it"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Not sent") {
+		t.Fatalf("the reply the tool itself instructed was refused:\n%s", out)
+	}
+
+	pending, err := store.PendingNotes(context.Background(),
+		collab.Claimant{Name: "alice"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered bool
+	for _, r := range pending {
+		delivered = delivered || strings.Contains(r.Body, "got it")
+	}
+	if !delivered {
+		t.Error("the reply never reached the original sender")
+	}
+}
+
+// TestLeaveNote_InThreadReplySurvivesARename is why resolution keys on session
+// identity rather than name.
+//
+// rename_session is a supported single call. A caller that used it mid-thread
+// compared its NEW name against the name recorded on its OWN earlier notes,
+// failed to recognise itself, and counted itself as a second participant — so a
+// legitimate reply was refused as ambiguous, in a message that named the caller
+// as one of the two parties.
+func TestLeaveNote_InThreadReplySurvivesARename(t *testing.T) {
+	deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+
+	// This session opened the thread under its former name, but the same id.
+	conv, err := store.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "old-name", AuthorID: "sess-1",
+		Body: "opening", Addressee: "alice", TTL: time.Hour,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.SessionName = func() string { return "new-name" }
+
+	out, err := NewLeaveNote(deps).Execute(context.Background(),
+		json.RawMessage(`{"body":"following up","conversation_id":`+jsonStr(conv)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "ambiguous") {
+		t.Errorf("a rename made the caller a second participant in its own thread:\n%s", out)
+	}
+	if strings.Contains(out, "old-name") {
+		t.Errorf("the caller's former name was reported back to it as a peer:\n%s", out)
+	}
+
+	pending, err := store.PendingNotes(context.Background(),
+		collab.Claimant{Name: "alice"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered bool
+	for _, r := range pending {
+		delivered = delivered || strings.Contains(r.Body, "following up")
+	}
+	if !delivered {
+		t.Error("the reply never reached the thread's other participant")
+	}
+}
+
 // TestLeaveNote_InThreadReplyReachesTheOtherParticipant is the fix: no `to`, but
 // a conversation_id, resolves to the peer on the other side of that thread.
 func TestLeaveNote_InThreadReplyReachesTheOtherParticipant(t *testing.T) {
@@ -105,9 +202,9 @@ func TestLeaveNote_InThreadReplyIsNeverClaimedByItsAuthor(t *testing.T) {
 	}
 }
 
-// TestLeaveNote_InThreadReplyRefusesWhenTheThreadIsUnknown: a conversation with
-// no other participant on record cannot be replied to, so the caller is told,
-// rather than having the note quietly filed for the next arrival.
+// TestLeaveNote_InThreadReplyRefusesWhenTheThreadIsUnknown: an id that names no
+// thread the caller is in cannot be replied to, so the caller is told, rather
+// than having the note quietly filed for the next arrival.
 func TestLeaveNote_InThreadReplyRefusesWhenTheThreadIsUnknown(t *testing.T) {
 	deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
 
@@ -117,7 +214,7 @@ func TestLeaveNote_InThreadReplyRefusesWhenTheThreadIsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a refusal must not be an error: %v", err)
 	}
-	if !strings.Contains(out, "Not sent") || !strings.Contains(out, "no other participant") {
+	if !strings.Contains(out, "Not sent") || !strings.Contains(out, "not one of yours") {
 		t.Errorf("expected an explicit refusal naming the problem; got %q", out)
 	}
 	if !strings.Contains(out, "`to`") {
@@ -141,10 +238,13 @@ func TestLeaveNote_InThreadReplyRefusesWhenTheThreadIsUnknown(t *testing.T) {
 func TestLeaveNote_InThreadReplyRefusesWhenAmbiguous(t *testing.T) {
 	deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
 	conv := seedThread(t, store, "alice", "test-session")
-	// A third party joins the same thread.
+	// A third participant, brought in LEGITIMATELY — by this session, which is
+	// already in the thread. Having bob write himself in is now refused by
+	// PutNote's participant guard, which is the point of that guard: an outsider
+	// cannot join a thread by quoting its id.
 	if _, err := store.PutNote(context.Background(), collab.NoteInput{
-		AuthorSession: "bob", AuthorID: "sess-bob",
-		Body: "me too", Addressee: "test-session", ConversationID: conv, TTL: time.Hour,
+		AuthorSession: "test-session", AuthorID: "sess-1",
+		Body: "bob, joining you in", Addressee: "bob", ConversationID: conv, TTL: time.Hour,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}

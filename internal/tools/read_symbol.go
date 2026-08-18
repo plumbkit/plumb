@@ -47,6 +47,7 @@ type ReadSymbol struct {
 	ttl          time.Duration
 	timeout      time.Duration
 	tracker      *ReadTracker
+	readsFor     func(ctx context.Context) *ReadTracker // PLAN-286: per-agent resolver; overrides tracker
 	topo         topologyStoreFn
 	warmup       LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	guard        BoundaryGuard
@@ -57,6 +58,23 @@ type ReadSymbol struct {
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
 	return &ReadSymbol{client: client, cache: c, ttl: ttl, timeout: timeout, tracker: tracker}
+}
+
+// WithReadsFor wires a per-call ReadTracker resolver (PLAN-286): on a shared
+// connection each logical agent records its reads against its own tracker.
+func (t *ReadSymbol) WithReadsFor(fn func(ctx context.Context) *ReadTracker) *ReadSymbol {
+	t.readsFor = fn
+	return t
+}
+
+// readTracker resolves the ReadTracker for this call (PLAN-286).
+func (t *ReadSymbol) readTracker(ctx context.Context) *ReadTracker {
+	if t.readsFor != nil {
+		if r := t.readsFor(ctx); r != nil {
+			return r
+		}
+	}
+	return t.tracker
 }
 
 // WithTopologyFallback wires the topology index so read_symbol can locate the
@@ -135,8 +153,8 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	fpath, uri := resolveReadSymbolPaths(a.Path, t.ws)
-	if err := t.guard.check(fpath); err != nil {
+	fpath, uri := resolveReadSymbolPaths(ctx, a.Path, t.ws)
+	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
@@ -159,7 +177,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		return t.noSymbolMessage(a.Name, fpath, syms), nil
 	}
-	return t.formatReadSymbolResult(fpath, a.Name, matches)
+	return t.formatReadSymbolResult(ctx, fpath, a.Name, matches)
 }
 
 // topologyReadFallback locates the named symbol from a fresh tree-sitter parse
@@ -180,7 +198,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name 
 	for _, n := range matchNodes {
 		matches = append(matches, nodeToDocSymbol(n, lines))
 	}
-	out, err := t.formatReadSymbolResult(fpath, name, matches)
+	out, err := t.formatReadSymbolResult(ctx, fpath, name, matches)
 	if err != nil {
 		return "", false
 	}
@@ -216,8 +234,8 @@ func (t *ReadSymbol) noSymbolMessage(name, fpath string, syms []protocol.Documen
 	return msg
 }
 
-func resolveReadSymbolPaths(path string, ws WorkspaceFn) (fpath, uri string) {
-	fpath = resolvePath(path, ws)
+func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn) (fpath, uri string) {
+	fpath = resolvePath(ctx, path, ws)
 	return fpath, toFileURI(fpath)
 }
 
@@ -240,7 +258,7 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]
 	return syms, nil
 }
 
-func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protocol.DocumentSymbol) (string, error) {
+func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name string, matches []protocol.DocumentSymbol) (string, error) {
 	info, err := os.Stat(fpath)
 	if err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
@@ -250,7 +268,7 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 	if err != nil {
 		slog.Warn("read_symbol: computing sha256", "path", fpath, "err", err)
 	}
-	t.tracker.Record(fpath, mtime, sha)
+	t.readTracker(ctx).Record(fpath, mtime, sha)
 
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)

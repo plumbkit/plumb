@@ -95,7 +95,7 @@ func TestPathPolicy_RefusesAbsoluteParentTraversal(t *testing.T) {
 
 func TestWriteFile_ParentTraversalCannotEscape(t *testing.T) {
 	ws, victim, payload, pol := traversalScene(t)
-	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func() string { return ws }}
+	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func(context.Context) string { return ws }}
 	raw, _ := json.Marshal(map[string]any{"file_path": payload, "content": "PWNED\n"})
 
 	if _, err := NewWriteFile(deps).Execute(context.Background(), raw); err == nil {
@@ -109,9 +109,9 @@ func TestReadFile_ParentTraversalCannotDisclose(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("SECRET MATERIAL\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
 	rf := NewReadFile(nil).WithBoundary(guard)
-	rf.ws = func() string { return ws }
+	rf.ws = func(context.Context) string { return ws }
 	raw, _ := json.Marshal(map[string]any{"file_path": payload})
 
 	out, err := rf.Execute(context.Background(), raw)
@@ -125,12 +125,12 @@ func TestReadFile_ParentTraversalCannotDisclose(t *testing.T) {
 
 func TestFindFiles_ParentTraversalCannotList(t *testing.T) {
 	ws, _, _, pol := traversalScene(t)
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
 	// Pattern "*.txt", never "victim*": asserting on a string the tool echoes
 	// back from the arguments would pass whether or not it walked anywhere.
 	raw, _ := json.Marshal(map[string]any{"path": ws + "/sub/..", "pattern": "*.txt"})
 
-	out, err := NewFindFiles(func() string { return ws }).WithBoundary(guard).
+	out, err := NewFindFiles(func(context.Context) string { return ws }).WithBoundary(guard).
 		Execute(context.Background(), raw)
 	if err == nil {
 		t.Error("find_files accepted a traversal root")
@@ -145,10 +145,10 @@ func TestSearchInFiles_ParentTraversalCannotEscape(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("SECRET MATERIAL\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
 	raw, _ := json.Marshal(map[string]any{"pattern": "SECRET MATERIAL", "path": ws + "/sub/.."})
 
-	out, err := NewSearchInFiles(func() string { return ws }, nil, nil, time.Minute).
+	out, err := NewSearchInFiles(func(context.Context) string { return ws }, nil, nil, time.Minute).
 		WithBoundary(guard).Execute(context.Background(), raw)
 	if err == nil {
 		t.Error("search_in_files accepted a traversal root")
@@ -162,7 +162,7 @@ func TestSearchInFiles_ParentTraversalCannotEscape(t *testing.T) {
 
 func TestFindReplace_ParentTraversalCannotEscape(t *testing.T) {
 	ws, victim, _, pol := traversalScene(t)
-	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func() string { return ws }}
+	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func(context.Context) string { return ws }}
 	raw, _ := json.Marshal(map[string]any{
 		"path": ws + "/sub/..", "pattern": "ORIGINAL", "replacement": "PWNED", "dry_run": false,
 	})
@@ -186,9 +186,9 @@ func TestReadFile_RootSymlinkCannotAddressTheFilesystem(t *testing.T) {
 		t.Skipf("symlinks unsupported on this filesystem: %v", err)
 	}
 	pol := NewPathPolicy(ws, []AllowedRoot{{Path: ws, Access: AccessReadWrite, Label: "workspace"}})
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
 	rf := NewReadFile(nil).WithBoundary(guard)
-	rf.ws = func() string { return ws }
+	rf.ws = func(context.Context) string { return ws }
 	raw, _ := json.Marshal(map[string]any{"file_path": ws + "/sub/../etc/hosts"})
 
 	out, err := rf.Execute(context.Background(), raw)
@@ -207,8 +207,8 @@ func TestReadFile_RootSymlinkCannotAddressTheFilesystem(t *testing.T) {
 // error, which is exactly the silent retargeting this refusal exists to prevent.
 func TestFileStatus_ParentTraversalIsRefused(t *testing.T) {
 	ws, _, payload, pol := traversalScene(t)
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
-	fs := NewFileStatus(nil).WithWorkspace(func() string { return ws }).WithBoundary(guard)
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
+	fs := NewFileStatus(nil).WithWorkspace(func(context.Context) string { return ws }).WithBoundary(guard)
 	raw, _ := json.Marshal(map[string]any{"paths": []string{payload}})
 
 	out, err := fs.Execute(context.Background(), raw)
@@ -232,7 +232,7 @@ func TestFileStatus_ParentTraversalIsRefused(t *testing.T) {
 // no divergence to refuse, and refusing it would break ordinary calls.
 func TestRelativeTraversalStillResolves(t *testing.T) {
 	ws, victim, _, pol := traversalScene(t)
-	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func() string { return ws }}
+	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func(context.Context) string { return ws }}
 	raw, _ := json.Marshal(map[string]any{"file_path": "sub/../inside.txt", "content": "ok\n"})
 
 	if _, err := NewWriteFile(deps).Execute(context.Background(), raw); err != nil {
@@ -249,7 +249,7 @@ func TestRelativeTraversalStillResolves(t *testing.T) {
 // against a policy that simply denied all access.
 func TestOrdinaryAbsolutePathStillWrites(t *testing.T) {
 	ws, _, _, pol := traversalScene(t)
-	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func() string { return ws }}
+	deps := WriteDeps{Boundary: pol.WriteGuard(), WorkspaceFn: func(context.Context) string { return ws }}
 	target := filepath.Join(ws, "ordinary.txt")
 	raw, _ := json.Marshal(map[string]any{"file_path": target, "content": "ok\n"})
 
@@ -268,10 +268,10 @@ func TestWalkFindsInWorkspaceFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "inside.txt"), []byte("SECRET MATERIAL\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	guard := BoundaryGuard(func(p string) error { _, err := pol.Check(p, AccessRead); return err })
+	guard := BoundaryGuard(func(_ context.Context, p string) error { _, err := pol.Check(p, AccessRead); return err })
 	raw, _ := json.Marshal(map[string]any{"pattern": "SECRET MATERIAL", "path": ws})
 
-	out, err := NewSearchInFiles(func() string { return ws }, nil, nil, time.Minute).
+	out, err := NewSearchInFiles(func(context.Context) string { return ws }, nil, nil, time.Minute).
 		WithBoundary(guard).Execute(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("control failed: %v", err)

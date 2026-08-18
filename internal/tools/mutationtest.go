@@ -66,11 +66,13 @@ const (
 
 // Invalid-outcome reasons, rendered verbatim in the report.
 const (
-	reasonNotApplied     = "old_string not found — nothing was mutated"
-	reasonAmbiguous      = "old_string is ambiguous — nothing was mutated"
-	reasonCompileFailed  = "the mutant does not compile"
-	reasonCompileTimeout = "the compile step timed out"
-	reasonTestTimeout    = "the test step timed out"
+	reasonNotApplied       = "old_string not found — nothing was mutated"
+	reasonAmbiguous        = "old_string is ambiguous — nothing was mutated"
+	reasonCompileFailed    = "the mutant does not compile"
+	reasonCompileTimeout   = "the compile step timed out"
+	reasonTestTimeout      = "the test step timed out"
+	reasonCompileCancelled = "the compile step was cancelled"
+	reasonTestCancelled    = "the test step was cancelled"
 	// The two unrunnable reasons are separate from a non-zero exit on purpose:
 	// a command that never started proves nothing about the mutant, and in the
 	// TEST slot a bare non-zero exit would otherwise read as a kill.
@@ -384,6 +386,10 @@ func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out ste
 			"about whether the workspace is green. Nothing was mutated. Raise timeout_seconds (max %d) if the command "+
 			"legitimately needs longer.%s\n%s",
 			role, cmd.Slot, plan.timeout, maxMutationStepSeconds, where, excerpt(out.output))
+	case stepCancelled:
+		return fmt.Errorf("mutation_test: the %s (%s) was CANCELLED before it finished, so it never returned a verdict — this says nothing "+
+			"about whether the workspace is green. Nothing was mutated.%s\n%s",
+			role, cmd.Slot, where, excerpt(out.output))
 	case stepExited, stepOK:
 	}
 	if role == roleCompile {
@@ -434,7 +440,7 @@ func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 	argv := strings.Join(cmd.Steps[step], " ")
 	root := ""
 	if t.deps.WorkspaceFn != nil {
-		root = t.deps.WorkspaceFn()
+		root = t.deps.WorkspaceFn(context.Background())
 	}
 	dir := cmd.WorkingDir
 	if dir == "" {
@@ -490,8 +496,8 @@ func (t *MutationTest) preflight(ctx context.Context, specs []mutantSpec) ([]mut
 }
 
 func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutationTarget, error) {
-	path := t.deps.resolvePath(spec.Path)
-	if err := t.deps.checkBoundary(path); err != nil {
+	path := t.deps.resolvePath(ctx, spec.Path)
+	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return mutationTarget{}, err
 	}
 	info, err := os.Stat(path)
@@ -509,8 +515,8 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 	if err != nil {
 		return mutationTarget{}, fmt.Errorf("cannot read: %w", err)
 	}
-	if !t.deps.Limiter.Allow() {
-		return mutationTarget{}, rateLimitError("mutation_test", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return mutationTarget{}, rateLimitError("mutation_test", t.deps.limiter(ctx))
 	}
 	return mutationTarget{
 		spec:     spec,
@@ -528,7 +534,7 @@ func (t *MutationTest) displayPath(path string) string {
 	if t.deps.WorkspaceFn == nil {
 		return path
 	}
-	root := t.deps.WorkspaceFn()
+	root := t.deps.WorkspaceFn(context.Background())
 	if root == "" {
 		return path
 	}

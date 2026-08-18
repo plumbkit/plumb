@@ -78,6 +78,7 @@ prints a warning to stderr suggesting `plumb restart` to refresh.
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
 | `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the detected workspace and config `extra_roots`; never replaces them. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+| `--workspace <path>` | — | Pin this connection's **workspace attach hint** to `<path>` instead of the serve process's working directory — for MCP clients that spawn `serve` without setting its cwd. Also read from `PLUMB_WORKSPACE`; the flag wins over the env var. The value is `$VAR`-expanded and made absolute, then validated (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
 
 The `--allow-dir` grant is transported to the daemon inside the captured
 `initialize` frame's `params._meta` (`dev.plumbkit/allow-dirs`), so it rides the
@@ -90,8 +91,10 @@ client's session, and it survives a workspace re-pin.
 that report no MCP roots (e.g. Claude Desktop): if nothing stronger resolves
 the workspace — no explicit `session_start` pin, no client root, no persisted
 pin from an earlier reconnect — the daemon attaches from the serve cwd,
-validated against project markers. The hint never overrides an explicit choice
-and is never persisted as the sticky pin.
+validated against project markers. `--workspace`/`PLUMB_WORKSPACE` replace the
+cwd as that hint, so a client that spawns `serve` without controlling its
+directory can still land on the right project. The hint never overrides an
+explicit choice and is never persisted as the sticky pin.
 
 ---
 
@@ -199,6 +202,7 @@ registration prints a hint when it notices the client's skills missing or stale.
 | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
 | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
+| `plumb setup junie` | `~/.junie/mcp/mcp.json` (`mcpServers` key) + `~/.junie/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`; `mcpServers` key — Kimi Desktop reads the same file, so one registration covers both) + `$KIMI_CODE_HOME/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
 | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads); also repoints existing per-surface `~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/mcp_config.json` |
@@ -208,7 +212,7 @@ registration prints a hint when it notices the client's skills missing or stale.
 | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |
 | `plumb setup hermes` | `~/.hermes/config.yaml` (`mcp_servers` key; YAML) |
 | `plumb setup zcode` | `~/.zcode/cli/config.json` (nested `mcp.servers` key; strict server schema — `command` must be a plain string, unknown keys are dropped) + `~/.zcode/skills/` (skills via `plumb skills sync`) |
-
+| `plumb setup dsh` | DeepSeek Harness's home-level user patch layer (`$DSH_HOME/cordis.patch.yml`, or `~/.dsh/cordis.patch.yml`) — a YAML patch row for the in-box `@deepseek-ai/dsh-mcp-client` plugin. The home layer applies to **every** dsh profile (web, headless, custom), so one registration covers all of them; the bridged tools appear as `mcp__plumb__*`. |
 All clients funnel through one format-agnostic merge (`mergeServerEntry`)
 backed by JSON, TOML, or YAML serialisers; config locations are resolved via
 OS/user-home helpers — no hardcoded paths. (Aider is intentionally absent — it
@@ -222,8 +226,7 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 59. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all`/`--repair` sweeps carry no `--lean` state and therefore **preserve** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
 | `--repair` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. When installed-but-unregistered clients are found, it prints a hint pointing at `--all`. |
-| `--all` | `plumb setup` | `--repair`, plus **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with two exceptions: Kimi Code is detected via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`) and ZCode via its home dir (`~/.zcode`), because their MCP configs only exist once a server is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine. `--install-missing` survives one release as a hidden, deprecated alias with the same behaviour. |
-
+| `--all` | `plumb setup` | `--repair`, plus **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with four exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine. `--install-missing` survives one release as a hidden, deprecated alias with the same behaviour. |
 ---
 
 ## `plumb skills`
@@ -235,7 +238,7 @@ plumb skills sync [client]
 
 Bare `plumb skills` is **read-only**: a status table over the clients with a
 verified skills directory (Claude Code `~/.claude/skills/`, Codex
-`$CODEX_HOME/skills/` or `~/.codex/skills/`, Kimi Code `$KIMI_CODE_HOME/skills/`
+`$CODEX_HOME/skills/` or `~/.codex/skills/`, Junie `~/.junie/skills/`, Kimi Code `$KIMI_CODE_HOME/skills/`
 or `~/.kimi-code/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
 `missing`, or `stale` (content differs from the copy compiled into this
 binary). A skill-capable client whose config does not register plumb is shown
@@ -413,11 +416,12 @@ non-zero only on error, so "has mail" is never confused with "the check failed"
 
 Scope: the workspace mailbox only. Cross-project messages live in the
 daemon-level store behind the recipient's `[collab] cross_project` opt-in and
-are not reported. Notes addressed to `"next"` are excluded, matching the listing
-path `workspace_sessions` uses: such a note goes to whichever session claims it
-first, so counting it for every candidate would report the same message to
-several sessions that cannot all have it. The cost is that a `"next"` note left
-while a session is idle will not show up here.
+are not reported. Notes addressed to `"next"` — `leave_note`'s default — ARE
+counted, for every session except the author: the probe claims nothing, so
+there is no race to lose, and a session can never claim its own note, so waking
+it for one would fire on every turn end. (The in-session listing in
+`workspace_sessions` still omits them, because it advertises messages the
+reader then has to win the claim race for.)
 
 The `plumb-chat` skill's `references/idle-agent-wake-hook.md` gives the full
 Claude Code Stop-hook recipe built on this command.

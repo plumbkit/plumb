@@ -46,8 +46,8 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		t.deps.recordWritten(path)
-		t.deps.recordUndo(path, before, content, true, "edit_file")
+		t.deps.recordWritten(ctx, path)
+		t.deps.recordUndo(ctx, path, before, content, true, "edit_file")
 		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics, notes, baseline), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
@@ -91,7 +91,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 // gutter forgiveness via resolveStrMatch (literal match always first), the
 // exactly-once / replace_all contract, and a non-empty advisory note when the
 // display-only read_file line-number gutter was stripped before matching.
-func (t *EditFile) applyStrEdit(content string, edit strEdit, i int, path string, preReadMtime time.Time) (string, string, error) {
+func (t *EditFile) applyStrEdit(ctx context.Context, content string, edit strEdit, i int, path string, preReadMtime time.Time) (string, string, error) {
 	if edit.OldStr == "" {
 		return "", "", &editLogicErr{
 			fmt.Errorf("edit_file: edit[%d]: old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range", i),
@@ -103,7 +103,7 @@ func (t *EditFile) applyStrEdit(content string, edit strEdit, i int, path string
 		note = fmt.Sprintf("note: edit[%d] %s", i, gutterStrippedNote)
 	}
 	if count == 0 {
-		return "", "", &editLogicErr{t.notFoundError(i, path, edit.OldStr, oldStr, content, preReadMtime)}
+		return "", "", &editLogicErr{t.notFoundError(ctx, i, path, edit.OldStr, oldStr, content, preReadMtime)}
 	}
 	if edit.ReplaceAll {
 		return strings.ReplaceAll(content, oldStr, newStr), note, nil
@@ -157,7 +157,7 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 			}
 			continue
 		}
-		updated, note, serr := t.applyStrEdit(content, edit, i, path, preReadMtime)
+		updated, note, serr := t.applyStrEdit(ctx, content, edit, i, path, preReadMtime)
 		if serr != nil {
 			return writeResult{}, "", "", nil, serr
 		}

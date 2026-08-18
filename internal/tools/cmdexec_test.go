@@ -49,6 +49,24 @@ func TestRunArgv_Timeout(t *testing.T) {
 	}
 }
 
+func TestRunArgv_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	res, err := RunArgv(ctx, "", []string{"sleep", "5"}, time.Minute)
+	if err != nil {
+		t.Fatalf("RunArgv: %v", err)
+	}
+	if !res.Cancelled {
+		t.Error("expected Cancelled=true for a command whose context was cancelled")
+	}
+	if res.TimedOut {
+		t.Error("expected TimedOut=false when the context is cancelled, not expired")
+	}
+	if res.ExitCode != -1 {
+		t.Errorf("expected ExitCode=-1, got %d", res.ExitCode)
+	}
+}
+
 func TestRunArgv_OutputCapped(t *testing.T) {
 	res, err := RunArgv(context.Background(), "", []string{"seq", "1", "500"}, time.Minute)
 	if err != nil {

@@ -114,8 +114,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 	applyFindReplaceDefaults(&a)
-	a.Path = t.deps.resolvePath(a.Path)
-	if err := t.deps.checkBoundary(a.Path); err != nil {
+	a.Path = t.deps.resolvePath(ctx, a.Path)
+	if err := t.deps.checkBoundary(ctx, a.Path); err != nil {
 		return "", fmt.Errorf("find_replace: %w", err)
 	}
 
@@ -305,8 +305,8 @@ func applyFindReplace(data []byte, a findReplaceArgs, re *regexp.Regexp) (int, [
 // findReplaceProcessFile writes newData to path, checking the rate limiter,
 // dirty state, and notifying the LSP after a successful write.
 func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, newData []byte, a findReplaceArgs) error {
-	if !t.deps.Limiter.Allow() {
-		return rateLimitError("find_replace", t.deps.Limiter)
+	if !t.deps.limiter(ctx).Allow() {
+		return rateLimitError("find_replace", t.deps.limiter(ctx))
 	}
 	unlock := lockPath(path)
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
@@ -322,7 +322,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
-	t.deps.recordWritten(path)
+	t.deps.recordWritten(ctx, path)
 	return nil
 }
 

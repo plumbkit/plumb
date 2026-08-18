@@ -76,6 +76,12 @@ type Row struct {
 	// DeliveredTo is the display name of the session that claimed the note. For
 	// an AddresseeNext note this records who won the race.
 	DeliveredTo string
+	// DeliveredToID is the stable session ID of the claimant, recorded alongside
+	// DeliveredTo so a claim identifies WHO received the note rather than only
+	// what they were called. Empty on rows claimed before the column existed,
+	// which membershipPredicate treats as "fall back to the name" — the same
+	// concession AddresseeID makes.
+	DeliveredToID string
 	// OriginWorkspace is the sender's workspace root, stamped only on a
 	// cross-project note so the recipient can see which project it came from.
 	// Empty for a same-project note.
@@ -110,6 +116,14 @@ type NoteInput struct {
 	Body          string
 	Addressee     string
 	TTL           time.Duration
+
+	// AuthorInheritedIDs are predecessor session IDs this author provably
+	// continues. They count as the author's own for CONVERSATION MEMBERSHIP, so a
+	// session that came back through the authenticated reconnect path can still
+	// reply into the threads its predecessor was in. Same reasoning as
+	// Claimant.InheritedIDs on the delivery side; optional and empty for a session
+	// that inherited nothing.
+	AuthorInheritedIDs []string
 
 	// AddresseeID binds the note to the one session that answered to Addressee at
 	// send time. Set it ONLY for a peer that is live and resolves to exactly one

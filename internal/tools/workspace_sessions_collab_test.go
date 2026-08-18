@@ -22,7 +22,7 @@ func observabilityTool(
 	t *testing.T, ws, selfID, selfName string, local, global *collab.Store, crossProject bool,
 ) *WorkspaceSessions {
 	t.Helper()
-	return NewWorkspaceSessions(func() string { return ws }, selfID).
+	return NewWorkspaceSessions(func() string { return ws }, func() string { return selfID }).
 		WithCollab(
 			func() (bool, bool) { return false, true },
 			func() *collab.Store { return local },
@@ -265,7 +265,7 @@ func TestWorkspaceSessions_UnwiredConsentDisclosesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewWorkspaceSessions(func() string { return ws }, "sess-alice").
+	tool := NewWorkspaceSessions(func() string { return ws }, func() string { return "sess-alice" }).
 		WithCollab(
 			func() (bool, bool) { return false, true },
 			func() *collab.Store { return local },
@@ -295,7 +295,7 @@ func TestWorkspaceSessions_ObservabilityUnwiredChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewWorkspaceSessions(func() string { return ws }, "sess-alice").
+	tool := NewWorkspaceSessions(func() string { return ws }, func() string { return "sess-alice" }).
 		WithCollab(
 			func() (bool, bool) { return false, true },
 			func() *collab.Store { return store },

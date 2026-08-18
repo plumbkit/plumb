@@ -25,8 +25,9 @@ func ValidateKeyValue(key string, value any) error {
 
 // ApplyKeyToRaw coerces value to the field's type and sets it at the dotted key
 // in a sparse nested map (LoadProjectRaw shape), so a batch can be staged and
-// validated before any disk write. An unknown or ill-typed value is rejected
-// and the map is left untouched.
+// validated before any disk write. An unknown or ill-typed value is rejected,
+// as is a key whose path collides with a non-table value, and the map is left
+// untouched.
 func ApplyKeyToRaw(m map[string]any, key string, value any) error {
 	f, ok := Lookup(key)
 	if !ok {
@@ -36,7 +37,9 @@ func ApplyKeyToRaw(m map[string]any, key string, value any) error {
 	if err != nil {
 		return err
 	}
-	setNested(m, keyPath(key), coerced)
+	if err := setNested(m, keyPath(key), coerced); err != nil {
+		return err
+	}
 	return nil
 }
 

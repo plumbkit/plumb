@@ -59,7 +59,7 @@ func (t *SessionStart) activePeers(ws string) []session.Info {
 	}
 	var peers []session.Info
 	for _, p := range all {
-		if p.ID == t.selfSessID {
+		if t.selfSessID != nil && p.ID == t.selfSessID() {
 			continue
 		}
 		if filepath.Clean(p.Folder) == filepath.Clean(ws) {

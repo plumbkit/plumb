@@ -227,7 +227,7 @@ func (t *WorkspaceSearch) searchMemory(ctx context.Context, a workspaceSearchArg
 	}
 	ws := ""
 	if t.ws != nil {
-		ws = t.ws()
+		ws = t.ws(ctx)
 	}
 	ix := resolveMemoryIndex(t.memFn, ws)
 	if ix == nil {

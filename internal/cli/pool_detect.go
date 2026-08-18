@@ -221,7 +221,7 @@ func (p *workspacePool) strongLangAt(dir string) string {
 	if len(matched) == 1 {
 		return names[0]
 	}
-	counts, truncated := p.sniffCounts(dir, tieScanDepth, contestedMarkerPatterns(matched))
+	counts, truncated := p.sniffCounts(dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir)
 	// A truncated count is not weaker evidence, it is evidence about the wrong
 	// thing: the walk stopped at a file cap, so the counts describe whichever
 	// prefix of the tree it happened to reach first — and the order is a LIFO
@@ -304,6 +304,25 @@ func skipChildDir(name string) bool {
 	}
 	switch name {
 	case "node_modules", "vendor", "dist", "build", "zig-cache", "zig-out", "target":
+		return true
+	}
+	return false
+}
+
+// skipTieBreakDir is skipChildDir plus the JVM non-source convention dirs the
+// tie-break must not spend its file budget on. resources/assets/res never hold a
+// language's source files, and a JVM project's src/main/resources is exactly the
+// tree that starves the scan: its entries are charged against the cap even though
+// none of them is a source file. Pruned ONLY for the tie-break — the last-resort
+// sniff (extLangAt) keeps plain skipChildDir, because a truncated answer is still
+// evidence there (pinned by TestExtLangAt_StillAnswersFromATruncatedScan) whereas
+// the tie-break must reach the actual sources.
+func skipTieBreakDir(name string) bool {
+	if skipChildDir(name) {
+		return true
+	}
+	switch name {
+	case "resources", "assets", "res":
 		return true
 	}
 	return false

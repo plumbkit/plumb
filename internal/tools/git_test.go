@@ -405,7 +405,7 @@ func TestGit_CommitRequiresMessage(t *testing.T) {
 // is shared across connections and may be another project's repository.
 func TestGit_RefusesWhenNoRepoResolved(t *testing.T) {
 	calls := 0
-	deps := WriteDeps{WorkspaceFn: func() string { calls++; return "" }}
+	deps := WriteDeps{WorkspaceFn: func(context.Context) string { calls++; return "" }}
 	tool := NewGit(deps, nil)
 	out, err := callGit(t, tool, map[string]any{"subcommand": "status"})
 	if err == nil || !strings.Contains(err.Error(), "no repository resolved") {
@@ -435,7 +435,7 @@ func TestNoWorkspaceError_SelfExplaining(t *testing.T) {
 func TestGit_DefaultRepoFollowsWorkspace(t *testing.T) {
 	requireGit(t)
 	dir := initTestRepo(t)
-	deps := WriteDeps{WorkspaceFn: func() string { return dir }}
+	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return dir }}
 	tool := NewGit(deps, nil)
 	if _, err := callGit(t, tool, map[string]any{"subcommand": "status"}); err != nil {
 		t.Fatalf("status against pinned workspace should succeed, got %v", err)
@@ -448,8 +448,8 @@ func TestGit_DefaultRepoFollowsWorkspace(t *testing.T) {
 func TestGit_DefaultRepoBoundaryEnforced(t *testing.T) {
 	outside := t.TempDir()
 	deps := WriteDeps{
-		WorkspaceFn: func() string { return outside },
-		Boundary:    func(string) error { return errors.New("workspace boundary violation") },
+		WorkspaceFn: func(context.Context) string { return outside },
+		Boundary:    func(_ context.Context, _ string) error { return errors.New("workspace boundary violation") },
 	}
 	tool := NewGit(deps, nil)
 	_, err := callGit(t, tool, map[string]any{"subcommand": "status"})

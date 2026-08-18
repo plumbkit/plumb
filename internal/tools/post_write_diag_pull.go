@@ -136,7 +136,7 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 	}
 	root := ""
 	if d.WorkspaceFn != nil {
-		root = d.WorkspaceFn()
+		root = d.WorkspaceFn(context.Background())
 	}
 	out := formatCrossFileDiagnostics(computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI), root)
 	if failNote != "" {

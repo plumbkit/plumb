@@ -109,7 +109,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	unlock := lockPath(path)
 	defer unlock()
 
-	if err := semanticStrictGate(deps, toolName, path); err != nil {
+	if err := semanticStrictGate(ctx, deps, toolName, path); err != nil {
 		return "", err
 	}
 	edit, sym, fallbackNote, err := resolve(ctx)
@@ -150,14 +150,14 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 	if deps == nil {
 		return nil
 	}
-	if err := deps.checkBoundary(path); err != nil {
+	if err := deps.checkBoundary(ctx, path); err != nil {
 		return fmt.Errorf("%s: %w", toolName, err)
 	}
 	if dryRun {
 		return nil
 	}
-	if deps.Limiter != nil && !deps.Limiter.Allow() {
-		return rateLimitError(toolName, deps.Limiter)
+	if lim := deps.limiter(ctx); lim != nil && !lim.Allow() {
+		return rateLimitError(toolName, lim)
 	}
 	if !dirtyOK && dirtyBlocksWrite(ctx, *deps, path) {
 		return fmt.Errorf("%s: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", toolName, path)
@@ -178,11 +178,11 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 // refuse. Re-resolving the range under the lock protects the WHERE of the edit,
 // not the WHAT. rename_symbol is the deliberate exemption — see preflightTargets
 // in rename_symbol.go. A dry run authors nothing and is never gated.
-func semanticStrictGate(deps *WriteDeps, toolName, path string) error {
+func semanticStrictGate(ctx context.Context, deps *WriteDeps, toolName, path string) error {
 	if deps == nil || !strictEnabled(deps.Strict) {
 		return nil
 	}
-	return requireStrictRead(deps.Reads, toolName, path)
+	return requireStrictRead(deps.reads(ctx), toolName, path)
 }
 
 func captureSemanticBaseline(deps *WriteDeps, uri string) *diagBaseline {
@@ -200,8 +200,8 @@ func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, 
 		notifySymbolEditWritten(ctx, client, c, path, uri)
 		return ""
 	}
-	deps.recordWritten(path)
-	deps.recordUndo(path, before, after, true, toolName)
+	deps.recordWritten(ctx, path)
+	deps.recordUndo(ctx, path, before, after, true, toolName)
 	return semanticNotifyPostWrite(ctx, deps, client, c, path, uri, before, after, toolName, baseline)
 }
 

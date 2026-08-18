@@ -257,7 +257,7 @@ func TestWorkspaceSessions_ExecuteFiltersAndMarks(t *testing.T) {
 		}
 	}
 
-	tool := NewWorkspaceSessions(func() string { return ws }, selfID)
+	tool := NewWorkspaceSessions(func() string { return ws }, func() string { return selfID })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

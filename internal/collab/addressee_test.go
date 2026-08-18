@@ -341,6 +341,74 @@ func TestHasPendingNotes_GoesQuietOnceTheMessageIsClaimed(t *testing.T) {
 	}
 }
 
+// TestClaimableNotes_ListsWhatTheClaimWouldHandOver pins the out-of-session
+// probe's contract against BOTH of its neighbours. It must be broader than
+// PendingNotes by exactly the "next" arm — the listing omits those because it
+// advertises messages the reader then races to claim, while the probe claims
+// nothing and has no race to lose — and it must be exactly as strict as the
+// claim everywhere else, in particular on the author exclusion: a session
+// counted for its own "next" note would be woken for mail it can never claim,
+// at every turn end.
+func TestClaimableNotes_ListsWhatTheClaimWouldHandOver(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "for the next arrival", Addressee: AddresseeNext}, now)
+	mustPut(t, s, NoteInput{AuthorID: "id-bob", Body: "for alice by name", Addressee: "alice"}, now)
+
+	// The "next" arm: visible to any non-author through the probe…
+	stranger := Claimant{Name: "carol", ID: "sess-carol"}
+	listed, err := s.ClaimableNotes(ctx, stranger, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Body != "for the next arrival" {
+		t.Fatalf("a non-author's ClaimableNotes = %v, want the one \"next\" note", bodies(listed))
+	}
+	// …and still absent from the in-session listing, whose reader races to claim.
+	pending, err := s.PendingNotes(ctx, stranger, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("PendingNotes listed %v — the workspace_sessions view must keep omitting "+
+			"\"next\" notes", bodies(pending))
+	}
+
+	// The author exclusion: the note's writer can never claim it, so the probe
+	// must not count it for them either.
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "bob", ID: "id-bob"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("the author's ClaimableNotes = %v, want nothing — self-authored mail is "+
+			"undeliverable", bodies(listed))
+	}
+
+	// Ordinary addressed mail still counts for its recipient — alongside the
+	// "next" note, which she too could claim.
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "alice", ID: "sess-alice"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("the recipient's ClaimableNotes = %v, want both the \"next\" note and her own", bodies(listed))
+	}
+	// …and once the "next" note is genuinely claimed, the probe goes quiet for
+	// everyone else.
+	if _, err := s.ClaimNotes(ctx, stranger, now, 0); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "dan", ID: "sess-dan"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("a third session's ClaimableNotes after the claim = %v, want nothing", bodies(listed))
+	}
+}
+
 // TestClaimant_InheritedIDsReadTheirPredecessorAndNothingWider is the store's
 // half of the inheritance contract. An inherited identity must do exactly one
 // thing — let a reconnected session collect mail bound to the session it

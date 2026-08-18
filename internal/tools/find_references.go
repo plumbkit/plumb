@@ -119,7 +119,7 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("find_references: uri is required")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 
 	includeDecl := true
 	if a.IncludeDeclaration != nil {

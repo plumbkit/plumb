@@ -39,7 +39,7 @@ func TestConversationSummaries_CountsTotalAndPendingSeparately(t *testing.T) {
 		t.Fatalf("claimed %d notes, want 1", len(got))
 	}
 
-	sums, err := s.ConversationSummaries(ctx, now, 0)
+	sums, err := s.ConversationSummaries(ctx, Claimant{Name: "bob", ID: "sess-bob"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestConversationSummaries_ExcludesExpired(t *testing.T) {
 		Body: "ancient", Addressee: "bob", TTL: time.Minute,
 	}, now.Add(-time.Hour))
 
-	sums, err := s.ConversationSummaries(ctx, now, 0)
+	sums, err := s.ConversationSummaries(ctx, Claimant{Name: "bob", ID: "sess-bob"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

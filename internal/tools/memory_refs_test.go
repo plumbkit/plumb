@@ -53,7 +53,7 @@ func TestTopologyExplore_RelatedMemories(t *testing.T) {
 	}
 
 	tool := NewTopologyExplore(func() *topology.Store { return store }).
-		WithMemories(func() string { return ws })
+		WithMemories(func(context.Context) string { return ws })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"DocumentedExport"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -83,7 +83,7 @@ func TestTopologyAffected_KnownContext(t *testing.T) {
 	}
 
 	tool := NewTopologyAffected(func() *topology.Store { return store }).
-		WithMemories(func() string { return ws })
+		WithMemories(func(context.Context) string { return ws })
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"files":["demo.go"]}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

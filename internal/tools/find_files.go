@@ -166,7 +166,7 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	ctx, cancel := applyFindFilesDeadline(ctx)
 	defer cancel()
 
-	cfg, err := buildFindFilesConfig(a, t.ws, t.guard)
+	cfg, err := buildFindFilesConfig(ctx, a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -236,9 +236,9 @@ func applyFindFilesDeadline(ctx context.Context) (context.Context, context.Cance
 	return ctx, func() {}
 }
 
-func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (findFilesConfig, error) {
-	root := resolvePath(a.Path, ws)
-	if err := guard.check(root); err != nil {
+func buildFindFilesConfig(ctx context.Context, a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (findFilesConfig, error) {
+	root := resolvePath(ctx, a.Path, ws)
+	if err := guard.check(ctx, root); err != nil {
 		return findFilesConfig{}, fmt.Errorf("find_files: %w", err)
 	}
 	info, err := os.Stat(root)

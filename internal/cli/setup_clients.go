@@ -61,13 +61,14 @@ type setupTarget struct {
 var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
-// MCP servers and therefore make sense as `plumb setup` targets. The first four
+// MCP servers and therefore make sense as `plumb setup` targets. The first five
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "junie", name: "Junie", pathFn: JunieConfigPath, installedFn: junieInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: junieSkillsDir},
 	{
 		use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled,
 		// Kimi Code is the one target with an option: --lean additionally writes a
@@ -92,6 +93,9 @@ var extraSetupTargets = []setupTarget{
 	// enforces a strict server schema — setup_zcode.go holds the entry shape and
 	// the reasons there is no --lean here.
 	{use: "zcode", name: "ZCode", pathFn: ZCodeConfigPath, installedFn: zcodeInstalled, intoFn: setupZCodeInto, extractFn: zcodeCommandExtractor, skillsDirFn: zcodeSkillsDir},
+	// DeepSeek Harness writes a YAML patch row into its home-level user patch
+	// layer rather than a server map — see setup_dsh.go for the node-level merge.
+	{use: "dsh", name: "DeepSeek Harness", pathFn: DSHConfigPath, installedFn: dshInstalled, intoFn: setupDSHInto, extractFn: dshCommandExtractor, note: dshSetupNote},
 }
 
 // The four original setup targets, named so that both the bespoke commands in
@@ -421,8 +425,8 @@ func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing boo
 		if c.installedFn == nil || !c.installedFn() {
 			return "not installed", detail, false
 		}
-		// Installed client whose config does not exist yet (Kimi Code) — fall
-		// through as installed-but-unregistered.
+		// Installed client whose config does not exist yet (Kimi Code, DeepSeek
+		// Harness) — fall through as installed-but-unregistered.
 	}
 	hadPlumb := clientHasPlumb(c, cfgPath)
 	if !hadPlumb && !installMissing {

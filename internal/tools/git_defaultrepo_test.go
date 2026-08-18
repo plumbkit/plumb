@@ -3,7 +3,10 @@ package tools
 // git_defaultrepo_test.go — the repo argument is resolved against the pinned
 // workspace, never against the daemon's working directory.
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestDefaultRepo_AnchorsRelativeToWorkspace covers the field report where
 // `git diff -- ism-viewer.html` with repo:"ism-viewer.html" was refused as "in a
@@ -26,8 +29,8 @@ func TestDefaultRepo_AnchorsRelativeToWorkspace(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			g := &Git{deps: WriteDeps{WorkspaceFn: func() string { return c.workspace }}}
-			if got := g.defaultRepo(c.repo); got != c.want {
+			g := &Git{deps: WriteDeps{WorkspaceFn: func(context.Context) string { return c.workspace }}}
+			if got := g.defaultRepo(context.Background(), c.repo); got != c.want {
 				t.Fatalf("defaultRepo(%q) with workspace %q = %q, want %q", c.repo, c.workspace, got, c.want)
 			}
 		})
@@ -38,10 +41,10 @@ func TestDefaultRepo_AnchorsRelativeToWorkspace(t *testing.T) {
 // used across the tools unit tests.
 func TestDefaultRepo_NilWorkspaceFn(t *testing.T) {
 	g := &Git{deps: WriteDeps{}}
-	if got := g.defaultRepo(""); got != "" {
+	if got := g.defaultRepo(context.Background(), ""); got != "" {
 		t.Fatalf("defaultRepo(\"\") with nil WorkspaceFn = %q, want \"\"", got)
 	}
-	if got := g.defaultRepo("/abs/repo"); got != "/abs/repo" {
+	if got := g.defaultRepo(context.Background(), "/abs/repo"); got != "/abs/repo" {
 		t.Fatalf("absolute repo mangled to %q", got)
 	}
 }

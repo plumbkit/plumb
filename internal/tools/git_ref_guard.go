@@ -169,17 +169,17 @@ func resolveGitRev(ctx context.Context, repoRoot, rev string) (string, bool) {
 // enforce.
 //
 // Lifecycle inside runGit: repoRoot is assigned once the repository root is
-// resolved; preExec runs while the per-repo serialisation lock is held
-// (write/destructive tiers), so a peer's in-flight commit cannot slip between
-// the check and this operation; postExec records the post-op observation after
-// a successful run.
+// resolved; preExec runs while the per-repo serialisation lock is held (every
+// non-read tier), so a peer's in-flight commit cannot slip between the check
+// and this operation; postExec records the post-op observation after a
+// successful run.
 type gitRefGuard struct {
 	repoRoot     string
 	sessID       string
 	sessName     string
 	expectedHead string
 	confirm      bool
-	check        bool // write/destructive tier: compare baseline + enforce expected_head
+	check        bool // write/destructive/network tier: compare baseline + enforce expected_head
 	pre          gitRefObservation
 	preSet       bool
 	warning      string

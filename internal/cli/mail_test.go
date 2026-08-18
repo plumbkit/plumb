@@ -142,15 +142,72 @@ func TestMailWaiting_NoMailboxIsNotAnError(t *testing.T) {
 func TestMailWaiting_ExcludesOtherAddressees(t *testing.T) {
 	ws := t.TempDir()
 	putTestNote(t, ws, "peer-two", "someone-else", "not for peer-one")
-	putTestNote(t, ws, "peer-two", collab.AddresseeNext, "for whoever arrives")
 
 	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
 	if len(ages) != 0 {
-		t.Errorf("got %d waiting for peer-one, want 0 — a note to another session, or to %q, is "+
-			"not this session's mail", len(ages), collab.AddresseeNext)
+		t.Errorf("got %d waiting for peer-one, want 0 — a note addressed to another session is "+
+			"not this session's mail", len(ages))
+	}
+}
+
+// TestMailWaiting_CountsNextNotesFromOtherAuthors is the regression test for
+// the wake hook never firing on the default addressing mode.
+//
+// leave_note defaults to addressee "next", and the probe used to count through
+// PendingNotes — the workspace_sessions listing, which omits "next" notes so it
+// never advertises a message the reader might lose the claim race for. That
+// made the common-case handoff invisible to `plumb mail`, and the probe claims
+// nothing, so there was no race to protect it from: the idle agent simply never
+// woke. The count must come from the claim predicate instead.
+//
+// Note the author is a DIFFERENT session from the claimant throughout: with a
+// shared name the author exclusion would (correctly) hide the note and the test
+// would pin nothing.
+func TestMailWaiting_CountsNextNotesFromOtherAuthors(t *testing.T) {
+	ws := t.TempDir()
+	putTestNote(t, ws, "peer-two", collab.AddresseeNext, "for whoever arrives")
+
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 1 {
+		t.Fatalf("got %d waiting, want 1 — a %q note from another session is exactly the mail the "+
+			"wake hook exists to surface", len(ages), collab.AddresseeNext)
+	}
+
+	// And a third session sees it too: nothing has been claimed, so the note is
+	// still every non-author's potential mail.
+	ages, err = mailWaiting(collab.Claimant{Name: "peer-three", ID: "id-peer-three", Workspace: ws})
+	if err != nil {
+		t.Fatalf("probe as a third session: %v", err)
+	}
+	if len(ages) != 1 {
+		t.Errorf("got %d waiting for a second candidate, want 1 — a read-only probe must not "+
+			"consume the note it counts", len(ages))
+	}
+}
+
+// TestMailWaiting_IgnoresOwnNextNote pins the author exclusion in the probe
+// path. A session can never claim a note it wrote itself — the claim predicate
+// excludes self-authored rows because exactly-once delivery would otherwise let
+// the author consume the message before its intended recipient — so waking that
+// session for its own "next" note would fire the hook, deliver nothing, and
+// fire again at every turn end.
+func TestMailWaiting_IgnoresOwnNextNote(t *testing.T) {
+	ws := t.TempDir()
+	putTestNote(t, ws, "peer-one", collab.AddresseeNext, "note to self, effectively")
+
+	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(ages) != 0 {
+		t.Errorf("got %d waiting for the note's own author, want 0 — the probe must share the "+
+			"claim's author exclusion or the wake hook spins on undeliverable mail", len(ages))
 	}
 }
 

@@ -85,7 +85,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(a.URI, t.ws)
+	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun

@@ -302,12 +302,12 @@ func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
 // the walk falls back to its own root and fails closed: no daemon-wired tool
 // passes a nil guard, but a future caller that forgets to should under-report,
 // never over-disclose.
-func escapesBoundary(absPath string, d fs.DirEntry, opts walkOptions) bool {
+func escapesBoundary(ctx context.Context, absPath string, d fs.DirEntry, opts walkOptions) bool {
 	if d.Type()&fs.ModeSymlink == 0 {
 		return false
 	}
 	if opts.boundary != nil {
-		return opts.boundary.check(absPath) != nil
+		return opts.boundary.check(ctx, absPath) != nil
 	}
 	return !PathWithinWorkspace(opts.root, absPath)
 }
@@ -378,7 +378,7 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 		if !shouldVisitEntry(name, absPath, d.IsDir(), opts, st) {
 			continue
 		}
-		if escapesBoundary(absPath, d, opts) {
+		if escapesBoundary(ctx, absPath, d, opts) {
 			if opts.onWithheld != nil {
 				opts.onWithheld(absPath)
 			}
