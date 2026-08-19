@@ -104,11 +104,13 @@ func runTrust(_ *cobra.Command, args []string) error {
 // that it is bound to the content shown above — on the shared section style
 // (● heading, ┊ rows) so the disclosure and the record read as one surface.
 func printTrustGrantSummary(root string) {
+	fmt.Println()
 	fmt.Println(tui.HintStyle.Render("● Trusted " + root))
 	fmt.Println()
 	for _, line := range []string{
 		"This grant covers the project's task commands,",
-		"its [[command]] allow-list, its [commands] shell policy,",
+		"its [[command]] allow-list,",
+		"its [commands] shell policy,",
 		"its [xcode] build-server settings,",
 		"its [lsp.<lang>] server command/args/env,",
 		"its [git] tier policy and its [collab] channel switches.",
@@ -117,7 +119,7 @@ func printTrustGrantSummary(root string) {
 		"changing any of it requires re-running `plumb trust`,",
 		"which will show you what changed before you approve it again.",
 	} {
-		fmt.Printf("   %s %s\n", tui.SepStyle.Render("┊"), tui.MutedStyle.Render(line))
+		fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"), tui.MutedStyle.Render(line))
 	}
 }
 
