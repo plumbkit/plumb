@@ -77,18 +77,6 @@ linters:
       - legacy
       - std-error-handling
     rules:
-      # SA5011 false-positives on the canonical test guard `if x == nil {
-      # t.Fatal(...) }` followed by a dereference: this staticcheck build
-      # (golangci-lint 2.12.2, built with go1.26.2) does not recognise t.Fatal
-      # as no-return when analysing against the go1.26.5 toolchain, so every
-      # such guard in the tree is flagged. The guard-then-deref idiom is the
-      # house standard for tests; the exclusion is scoped to _test.go so
-      # production code keeps full SA5011 coverage. Revisit when golangci-lint
-      # is rebuilt on the running toolchain.
-      - linters:
-          - staticcheck
-        text: "SA5011"
-        path: _test\.go
       - linters:
           - gosec
           - unparam

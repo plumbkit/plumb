@@ -44,7 +44,11 @@ fi
 # SILENT, and saying so out loud is what fixes that. Every step is guarded
 # against `set -e`: an unreadable or restructured workflow file must not be
 # able to block a commit.
-PINNED_LINT_VERSION="$(sed -n 's/^[[:space:]]*GOLANGCI_LINT_VERSION:[[:space:]]*v\{0,1\}\([0-9][^[:space:]]*\).*/\1/p' .github/workflows/ci.yml 2>/dev/null | head -1 || true)"
+# The version character class stops at whitespace AND at '#', so a trailing
+# comment written without a space before it (`v2.13.0# pinned`) yields the
+# version rather than "2.13.0#" — a WRONG value would warn on a matching pair,
+# where an empty one merely skips the check.
+PINNED_LINT_VERSION="$(sed -n 's/^[[:space:]]*GOLANGCI_LINT_VERSION:[[:space:]]*v\{0,1\}\([0-9][^[:space:]#]*\).*/\1/p' .github/workflows/ci.yml 2>/dev/null | head -1 || true)"
 LOCAL_LINT_VERSION="$("$GOLANGCI_LINT" --version 2>/dev/null | sed -n 's/.*has version v\{0,1\}\([0-9][^[:space:]]*\).*/\1/p' | head -1 || true)"
 if [ -n "$PINNED_LINT_VERSION" ] && [ -n "$LOCAL_LINT_VERSION" ] &&
 	[ "$PINNED_LINT_VERSION" != "$LOCAL_LINT_VERSION" ]; then

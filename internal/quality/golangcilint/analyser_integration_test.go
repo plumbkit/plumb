@@ -135,7 +135,7 @@ func TestIntegration_BelowModuleRootFindingSurvives(t *testing.T) {
 }
 
 // TestIntegration_PathPrefixDoesNotSurviveAbsPathMode pins the interaction the
-// pathModeAbs doc comment relies on: golangci-lint v2.12.2 IGNORES
+// pathModeAbs doc comment relies on: golangci-lint IGNORES
 // output.path-prefix once --path-mode=abs is set, so Analyse's findings carry
 // the real absolute source path rather than an absolute-looking but bogus one
 // (e.g. "/myprefix/…"). If a future golangci-lint ever applied the prefix on
@@ -171,7 +171,7 @@ func TestIntegration_PathPrefixDoesNotSurviveAbsPathMode(t *testing.T) {
 		if got[0] != src {
 			t.Fatalf("path = %q, want the real absolute source path %q — output.path-prefix leaked into "+
 				"--path-mode=abs output; this is the interaction pathModeAbs's doc comment says was measured "+
-				"to NOT happen with golangci-lint v2.12.2", got[0], src)
+				"to NOT happen", got[0], src)
 		}
 		t.Logf("measured: golangci-lint reported %q with output.path-prefix=myprefix set — unaffected", got[0])
 	})
