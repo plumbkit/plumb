@@ -13,8 +13,9 @@ import (
 // session B's guard; it is never process-global.
 //
 // Paths are canonicalised through lockPathKey (file:// strip, then
-// paths.Canonical) so a path and its symlink/relative spellings collapse to
-// the same key — matching the per-path write lock.
+// paths.CanonicalKey) so a path and its symlink, relative, and — where the
+// filesystem folds case — case-variant spellings collapse to the same key,
+// matching the per-path write lock.
 //
 // Concurrency: all methods are safe for concurrent use.
 type WriteTracker struct {

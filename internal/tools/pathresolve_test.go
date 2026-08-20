@@ -282,6 +282,40 @@ func TestRenameFileCaseOnlyRenameIsPerformed(t *testing.T) {
 	}
 }
 
+// The precondition on the case-only rename, pinned so the CHANGELOG's claim is
+// checkable rather than merely asserted: it needs overwrite: true. Where the
+// filesystem folds case, renameFilePreconditions' os.Stat(to) finds the SOURCE
+// through the fold and reports the destination as already existing. That check
+// predates issue #346 and is left alone — it is the honest answer to "does
+// something already live at this name?" on such a volume — but it means the
+// obvious two-argument call does not do a casing fix.
+func TestRenameFileCaseOnlyRenameNeedsOverwrite(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	from := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(from, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deps := WriteDeps{Boundary: testBoundaryGuard(dir), WorkspaceFn: wsFn(dir)}
+	raw := mustBoundaryJSON(t, map[string]string{"from": from, "to": filepath.Join(dir, "FILE.TXT")})
+	_, err := NewRenameFile(deps).Execute(context.Background(), raw)
+
+	if !caseVariantsAreOneFile(t, dir) {
+		if err != nil {
+			t.Fatalf("case-sensitive filesystem: the destination does not exist, so no overwrite is needed: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("want the destination-exists refusal without overwrite on a case-folding filesystem")
+	}
+	// Specifically the destination-exists refusal, NOT the same-path guard: that
+	// guard firing here is the #346 regression this PR's fix removed, and a bare
+	// "an error was returned" assertion would pass under it.
+	if !strings.Contains(err.Error(), "exists") || strings.Contains(err.Error(), "same path") {
+		t.Fatalf("want a destination-exists refusal, got %v", err)
+	}
+}
+
 // TestCopyFileTwoSpellingsOfOneFileRefused is the copy_file half of the same
 // regression — see TestRenameFileTwoSpellingsOfOneFileRefused.
 func TestCopyFileTwoSpellingsOfOneFileRefused(t *testing.T) {
