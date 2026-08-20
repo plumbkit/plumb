@@ -88,6 +88,51 @@ func ContractHome(s string) string {
 	return strings.ReplaceAll(s, home, "~")
 }
 
+// ShortenPath abbreviates p to at most max display columns by replacing whole
+// interior segments with a single …, keeping the root and as many trailing
+// segments as fit — the end of a config path is what identifies it, and cutting
+// on a separator keeps the result readable as a path rather than as a cut
+// string. A path that already fits comes back untouched, and maxW <= 0 disables
+// shortening entirely.
+//
+// It exists because a table column is sized to its widest cell: one deeply
+// nested config path sets the width of every row beside it, so the cap has to
+// be applied per cell before layout, not after.
+func ShortenPath(p string, maxW int) string {
+	if maxW <= 0 || lipgloss.Width(p) <= maxW {
+		return p
+	}
+	// segs[0] is "~", "" for an absolute path, or a relative first segment —
+	// either way it is the anchor a reader places the rest against, so it is
+	// always kept. Widest-first means the result keeps as much context as fits.
+	segs := strings.Split(p, "/")
+	for keep := len(segs) - 2; keep >= 1; keep-- {
+		candidate := segs[0] + "/…/" + strings.Join(segs[len(segs)-keep:], "/")
+		if lipgloss.Width(candidate) <= maxW {
+			return candidate
+		}
+	}
+	return TruncatePathLeft(p, maxW)
+}
+
+// TruncatePathLeft keeps the rightmost maxW runes of p, prefixed with …. It is
+// the opposite end from textfmt.Ellipsis on purpose: the discriminating part of
+// a path is its tail, so a display cut has to come off the front.
+//
+// ShortenPath falls back to it when no segment boundary yields a short enough
+// path — a single very long filename, or a path with no separator to cut on —
+// and the TUI's own path-style strategies use it directly.
+func TruncatePathLeft(p string, maxW int) string {
+	r := []rune(p)
+	if len(r) <= maxW {
+		return p
+	}
+	if maxW <= 1 {
+		return "…"
+	}
+	return "…" + string(r[len(r)-(maxW-1):])
+}
+
 // HumanAge formats a past time as a concise human-readable age string.
 // Times within the last minute show seconds; within an hour show minutes;
 // within a day show hours; older times show the date as "Jan 2".

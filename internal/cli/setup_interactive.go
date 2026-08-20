@@ -116,7 +116,7 @@ func applyPickerRows(rows []pickerRow, plumbBin string) {
 		}
 		t.NextGroup()
 		for _, cr := range clientRows {
-			t.Row(cr.name, statusStyle(cr.status).Render(cr.status), cr.detail)
+			t.Row(cr.name, statusStyle(cr.status).Render(cr.status), render.ShortenPath(cr.detail, setupPathWidth))
 		}
 		failures = appendSetupFailures(failures, r.target.name, clientRows)
 	}

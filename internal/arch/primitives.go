@@ -58,9 +58,9 @@ var PrimitiveRules = []PrimitiveRule{
 		Prefixes:  []string{"truncate"},
 		Exact:     []string{"clampbytes", "clamptobytes", "ellipsis"},
 		Allowed: map[string]string{
-			"internal/tools.truncateLines":          "caps output by LINE count with a caller-supplied suffix — a different budget from textfmt's rune and byte helpers, and it never splits a line",
-			"internal/tui.contractPathTruncateLeft": "path abbreviation: keeps the RIGHTMOST runes and prefixes the ellipsis, the opposite end from textfmt.Ellipsis",
-			"cmd/clientsmoke.truncate":              "operates on []byte for harness log output, in a build-tagged test-only package that ships in no binary",
+			"internal/tools.truncateLines":     "caps output by LINE count with a caller-supplied suffix — a different budget from textfmt's rune and byte helpers, and it never splits a line",
+			"internal/render.TruncatePathLeft": "path abbreviation: keeps the RIGHTMOST runes and prefixes the ellipsis, the opposite end from textfmt.Ellipsis. Shared — the TUI's path styles and the CLI's setup table both call it",
+			"cmd/clientsmoke.truncate":         "operates on []byte for harness log output, in a build-tagged test-only package that ships in no binary",
 		},
 	},
 	{

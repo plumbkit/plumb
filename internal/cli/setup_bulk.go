@@ -54,7 +54,7 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 		failures = appendSetupFailures(failures, c.name, rows)
 		t.NextGroup()
 		for _, r := range rows {
-			t.Row(r.name, statusStyle(r.status).Render(r.status), r.detail)
+			t.Row(r.name, statusStyle(r.status).Render(r.status), render.ShortenPath(r.detail, setupPathWidth))
 		}
 	}
 	fmt.Println(t.Render())
@@ -135,6 +135,14 @@ func printSetupFailures(failures []setupFailure) {
 		fmt.Printf("  %s: %s\n", f.client, render.ContractHome(f.err.Error()))
 	}
 }
+
+// setupPathWidth caps the Config column. A grouped table sizes each column to
+// its widest cell, so the one deeply nested config on the list (Kimi Work's
+// bundled kernel home, three times the width of any other) would otherwise set
+// the table's width for every client. Shortening is display-only: the paths
+// quoted inside an error keep their full form in the block below the table,
+// which is where a reader copies one from.
+const setupPathWidth = 60
 
 // clientRow is one row in the `plumb setup --all` table: a client name (blank on
 // the continuation rows of a multi-path client, so the paths group visually), a

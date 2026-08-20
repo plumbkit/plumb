@@ -177,24 +177,12 @@ func contractPath(p string, maxW int, style string) string {
 	p = render.ContractPath(p)
 	switch style {
 	case "truncate-middle":
-		return contractPathTruncateLeft(p, maxW)
+		return render.TruncatePathLeft(p, maxW)
 	case "full":
 		return contractPathFull(p, maxW)
 	default: // "compact" and empty/unrecognised
 		return contractPathCompact(p, maxW)
 	}
-}
-
-// contractPathTruncateLeft keeps the rightmost maxW runes, prefixed with "…".
-func contractPathTruncateLeft(p string, maxW int) string {
-	r := []rune(p)
-	if len(r) <= maxW {
-		return p
-	}
-	if maxW <= 1 {
-		return "…"
-	}
-	return "…" + string(r[len(r)-(maxW-1):])
 }
 
 // contractPathFull preserves the full path and falls back to "…/<last>" when
@@ -209,7 +197,7 @@ func contractPathFull(p string, maxW int) string {
 	if len([]rune(fallback)) <= maxW {
 		return fallback
 	}
-	return contractPathTruncateLeft(base, maxW)
+	return render.TruncatePathLeft(base, maxW)
 }
 
 // contractPathCompact abbreviates every intermediate directory component to
@@ -229,7 +217,7 @@ func contractPathCompact(p string, maxW int) string {
 		parts = parts[:len(parts)-1]
 	}
 	if len(parts) < 2 {
-		return contractPathTruncateLeft(p, maxW)
+		return render.TruncatePathLeft(p, maxW)
 	}
 	last := parts[len(parts)-1]
 	heads := make([]string, len(parts)-1)
@@ -249,7 +237,7 @@ func contractPathCompact(p string, maxW int) string {
 	if len([]rune(fallback)) <= maxW {
 		return fallback
 	}
-	return contractPathTruncateLeft(last, maxW)
+	return render.TruncatePathLeft(last, maxW)
 }
 
 func daemonRunning() bool {

@@ -245,6 +245,18 @@
   `TestSearchInFiles_ContextLinesCapEnforcedServerSide`, and
   `TestSearchInFiles_OutputBudget`.
 
+- **A deeply nested config path no longer sets the width of the whole
+  `plumb setup --all` table.** A grouped table sizes each column to its widest
+  cell, so Kimi Work's bundled kernel config (`~/Library/Application
+  Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/mcp.json`,
+  three times the width of any other row) padded every client's row out to
+  match it. The Config column now caps paths at 60 columns, eliding whole
+  interior segments — `~/…/daimon-share/daimon/runtime/kimi-code/home/mcp.json`
+  — so the result still reads as a path and its identifying tail survives. The
+  shortening is display-only: paths quoted inside an error keep their full form
+  in the block below the table. The truncate-left strategy the TUI's
+  `path_style` already used moved to `internal/render` and is now shared rather
+  than reimplemented.
 - **One unreadable client config no longer wraps the whole `plumb setup --all`
   table.** An errored client put the writer's full message in the table's
   Config cell, and the column is sized to its widest entry — so a single

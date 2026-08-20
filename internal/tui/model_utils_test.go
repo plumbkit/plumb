@@ -5,25 +5,21 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/plumbkit/plumb/internal/render"
 )
 
-func TestContractPathTruncateLeft(t *testing.T) {
-	cases := []struct {
-		p    string
-		n    int
-		want string
-	}{
-		{"abcde", 10, "abcde"},     // fits
-		{"abcde", 5, "abcde"},      // fits exactly
-		{"abcdefghij", 5, "…ghij"}, // maxW=5: "…" + last 4 = r[6:]
-		{"ab", 1, "…"},             // maxW≤1 fallback
-		{"a", 1, "a"},              // fits exactly at 1
-		{"abc", 2, "…c"},           // maxW=2: "…" + last 1
+// The truncate-left strategy itself now lives in internal/render (shared with
+// the CLI's setup table); this pins that `path_style = "truncate-middle"`
+// still routes to it, which is the part the TUI owns.
+func TestContractPath_TruncateMiddleStyle(t *testing.T) {
+	const p = "/home/someone/projects/deeply/nested/thing.json"
+	got := contractPath(p, 20, "truncate-middle")
+	if want := render.TruncatePathLeft(render.ContractPath(p), 20); got != want {
+		t.Errorf("contractPath(..., \"truncate-middle\") = %q, want %q", got, want)
 	}
-	for _, tc := range cases {
-		if got := contractPathTruncateLeft(tc.p, tc.n); got != tc.want {
-			t.Errorf("contractPathTruncateLeft(%q, %d) = %q, want %q", tc.p, tc.n, got, tc.want)
-		}
+	if lipgloss.Width(got) > 20 {
+		t.Errorf("result is %d columns, over the 20 cap: %q", lipgloss.Width(got), got)
 	}
 }
 

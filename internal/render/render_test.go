@@ -1,8 +1,11 @@
 package render_test
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/plumbkit/plumb/internal/render"
 )
@@ -52,6 +55,90 @@ func TestContractHome(t *testing.T) {
 			t.Errorf("got %q, want %q", got, msg)
 		}
 	})
+}
+
+func TestShortenPath(t *testing.T) {
+	const deep = "~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/mcp.json"
+
+	cases := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{"a fitting path is untouched", "~/.codex/config.toml", 60, "~/.codex/config.toml"},
+		{"exactly at the cap is untouched", "~/abc", 5, "~/abc"},
+		{"max 0 disables shortening", deep, 0, deep},
+		{
+			"elides interior segments, keeping the root and as much tail as fits",
+			deep, 60,
+			"~/…/daimon-share/daimon/runtime/kimi-code/home/mcp.json",
+		},
+		{
+			"an absolute path keeps its leading separator",
+			"/usr/local/share/some/deeply/nested/place/config.json", 30,
+			"/…/nested/place/config.json",
+		},
+		{
+			"no usable separator falls back to cutting from the left",
+			strings.Repeat("x", 40), 10,
+			"…" + strings.Repeat("x", 9),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := render.ShortenPath(tc.in, tc.max)
+			if got != tc.want {
+				t.Errorf("ShortenPath(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+			}
+			if tc.max > 0 && lipgloss.Width(got) > tc.max {
+				t.Errorf("result is %d columns, over the %d cap: %q", lipgloss.Width(got), tc.max, got)
+			}
+		})
+	}
+}
+
+// Carried over from internal/tui when the strategy moved here, so the edge
+// cases the TUI had pinned keep their guard.
+func TestTruncatePathLeft(t *testing.T) {
+	cases := []struct {
+		p    string
+		n    int
+		want string
+	}{
+		{"abcde", 10, "abcde"},     // fits
+		{"abcde", 5, "abcde"},      // fits exactly
+		{"abcdefghij", 5, "…ghij"}, // maxW=5: "…" + last 4
+		{"ab", 1, "…"},             // maxW≤1 fallback
+		{"a", 1, "a"},              // fits exactly at 1
+		{"abc", 2, "…c"},           // maxW=2: "…" + last 1
+	}
+	for _, tc := range cases {
+		if got := render.TruncatePathLeft(tc.p, tc.n); got != tc.want {
+			t.Errorf("TruncatePathLeft(%q, %d) = %q, want %q", tc.p, tc.n, got, tc.want)
+		}
+	}
+}
+
+// The cap exists to stop one path setting a whole column's width, so what has
+// to hold for every input is the width bound — not any particular elision.
+func TestShortenPath_NeverExceedsTheCap(t *testing.T) {
+	paths := []string{
+		"~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/mcp.json",
+		"/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z/config.yaml",
+		"~/" + strings.Repeat("averylongsegmentname/", 8) + "mcp.json",
+		strings.Repeat("x", 200),
+		"~",
+		"",
+	}
+	for _, max := range []int{10, 20, 40, 60} {
+		for _, p := range paths {
+			if got := render.ShortenPath(p, max); lipgloss.Width(got) > max {
+				t.Errorf("ShortenPath(%q, %d) = %q (%d columns) — over the cap", p, max, got, lipgloss.Width(got))
+			}
+		}
+	}
 }
 
 func TestHumanAge(t *testing.T) {
