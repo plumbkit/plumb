@@ -99,7 +99,24 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 	}
 
-	targets, err := t.validateDeleteTargets(ctx, a, requested)
+	// Resolve and boundary-check first, so the locks can be taken BEFORE the
+	// stat/dirty checks that decide whether each path may go.
+	resolved, err := t.resolveDeletePaths(ctx, requested)
+	if err != nil {
+		return "", err
+	}
+	// Hold every path's lock across validation AND removal. Taking it per-path
+	// inside removeTarget left the stat + dirty check outside the lock: in a batch
+	// the gap between checking a later path and removing it is real wall-clock
+	// time (each earlier removal reads its file to summarise it), so a peer's
+	// edit_file could write uncommitted content into a path already judged clean
+	// and have it deleted anyway, despite dirty_ok being false. lockPaths dedups
+	// by canonical key and sorts, so a batch cannot deadlock against another.
+	for _, unlock := range lockPaths(resolved) {
+		defer unlock()
+	}
+
+	targets, err := t.classifyDeleteTargets(ctx, a, resolved)
 	if err != nil {
 		return "", err
 	}
@@ -135,14 +152,12 @@ func deleteRequestedPaths(a deleteFileArgs) ([]string, error) {
 	return a.Paths, nil
 }
 
-// validateDeleteTargets resolves and checks EVERY path before any is removed, so
-// a batch that is going to be refused is refused whole rather than part-applied.
-// The returned order puts files first, then directories deepest-first, so a
-// caller can name a tree's files and its directories in one call and each
-// directory is empty by the time its turn comes.
-func (t *DeleteFile) validateDeleteTargets(ctx context.Context, a deleteFileArgs, requested []string) ([]deleteTarget, error) {
+// resolveDeletePaths resolves each requested path and boundary-checks it,
+// dropping duplicates. Split from classification so the caller can take every
+// lock before any stat or dirty check runs.
+func (t *DeleteFile) resolveDeletePaths(ctx context.Context, requested []string) ([]string, error) {
 	seen := make(map[string]bool, len(requested))
-	targets := make([]deleteTarget, 0, len(requested))
+	out := make([]string, 0, len(requested))
 	for _, p := range requested {
 		if p == "" {
 			return nil, errors.New("delete_file: paths must not contain an empty string")
@@ -155,7 +170,22 @@ func (t *DeleteFile) validateDeleteTargets(ctx context.Context, a deleteFileArgs
 			continue // the same path named twice is not an error, just redundant
 		}
 		seen[path] = true
+		out = append(out, path)
+	}
+	return out, nil
+}
 
+// classifyDeleteTargets checks EVERY path before any is removed, so a batch that
+// is going to be refused is refused whole rather than part-applied. The caller
+// must already hold each path's lock, so the checks here and the removal that
+// follows see the same state.
+//
+// The returned order puts files first, then directories deepest-first, so a
+// caller can name a tree's files and its directories in one call and each
+// directory is empty by the time its turn comes.
+func (t *DeleteFile) classifyDeleteTargets(ctx context.Context, a deleteFileArgs, resolved []string) ([]deleteTarget, error) {
+	targets := make([]deleteTarget, 0, len(resolved))
+	for _, path := range resolved {
 		info, err := os.Stat(path)
 		if err != nil {
 			return nil, fmt.Errorf("delete_file: %w", err)
@@ -185,12 +215,9 @@ func (t *DeleteFile) validateDeleteTargets(ctx context.Context, a deleteFileArgs
 }
 
 // removeTarget deletes one already-validated path and runs the post-delete
-// notifications. Per-path locking is taken and released per path rather than
-// held across the batch, so a large batch cannot stall every concurrent writer.
+// notifications. The caller holds every path's lock for the whole batch, so the
+// state checked in classifyDeleteTargets still holds here.
 func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string, error) {
-	unlock := lockPath(tgt.path)
-	defer unlock()
-
 	if tgt.isDir {
 		if err := os.Remove(tgt.path); err != nil {
 			return "", fmt.Errorf("delete_file: %w (directory must be empty)", err)

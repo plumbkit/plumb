@@ -47,19 +47,23 @@ type TaskCommand struct {
 // noCommandError explains an unconfigured slot in terms the caller can act on:
 // which language was resolved, what is configured for it, and how to fix it.
 func noCommandError(cmd TaskCommand, slot string) error {
-	lang := cmd.Language
-	if lang == "" {
-		lang = "this workspace"
-	}
 	have := "no slots are configured for it"
 	if len(cmd.Configured) > 0 {
 		have = "configured slots: " + strings.Join(cmd.Configured, ", ")
+	}
+	// The subject and the config KEY are separate strings on purpose. Reusing one
+	// variable for both produced `[tasks.this workspace]` when the language was
+	// unknown — not valid TOML, and not actionable, in the one case where the
+	// caller most needs telling what to do.
+	subject, key := cmd.Language, cmd.Language
+	if subject == "" {
+		subject, key = "this workspace", "<lang>"
 	}
 	return fmt.Errorf(
 		"run_task: no %s command configured for %s (%s). "+
 			"Set one with [tasks.%s] %s = \"...\" in .plumb/config.toml, "+
 			"or via agent_config op=set when the user has enabled [agent_config_writes]",
-		slot, lang, have, lang, slot)
+		slot, subject, have, key, slot)
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for

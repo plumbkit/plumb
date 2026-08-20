@@ -88,17 +88,25 @@ func (s *connSession) taskState() tools.TaskState {
 }
 
 // configuredSlots lists the task slots that actually have a command, in a fixed
-// order. verify is included when both of its halves are present, since that is
-// exactly when it runs.
+// order.
+//
+// It answers by asking buildTaskSteps — the same function run_task uses — rather
+// than by re-deriving the condition. Two hand-written predicates disagreed with
+// it in opposite directions: `tc.Build != "" && tc.Test != ""` was stricter than
+// the verify branch, which happily runs whichever half is set, so a
+// build-only config reported "verify: not configured" for a call that in fact
+// runs; and `tc.Get(slot) != ""` was looser than ParseTaskCommand, which trims
+// first, so a whitespace-only command reported as configured for a call that is
+// refused. A session_start section that contradicts the tool it describes is
+// worse than no section, so there is now one source of truth.
 func configuredSlots(tc config.TasksConfig) []string {
 	var out []string
-	for _, slot := range []string{"build", "lint", "test", "e2e"} {
-		if tc.Get(slot) != "" {
-			out = append(out, slot)
+	for _, slot := range []string{"build", "lint", "test", "e2e", "verify"} {
+		steps, err := buildTaskSteps(tc, slot, "")
+		if err != nil || len(steps) == 0 {
+			continue
 		}
-	}
-	if tc.Build != "" && tc.Test != "" {
-		out = append(out, "verify")
+		out = append(out, slot)
 	}
 	return out
 }

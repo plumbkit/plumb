@@ -127,8 +127,17 @@ func TestNoCommandError_NamesLanguageAndSlots(t *testing.T) {
 		t.Errorf("expected the no-slots phrasing, got: %s", bare)
 	}
 	// A resolver that supplied no context must still produce a usable message.
+	// The earlier assertion here only checked for "this workspace", which was
+	// satisfied while the REMEDY line read `[tasks.this workspace]` — invalid TOML
+	// and not actionable. Assert the remedy specifically.
 	unknown := noCommandError(TaskCommand{}, "build").Error()
 	if !strings.Contains(unknown, "this workspace") {
-		t.Errorf("expected a graceful fallback with no language, got: %s", unknown)
+		t.Errorf("expected a graceful subject with no language, got: %s", unknown)
+	}
+	if strings.Contains(unknown, "[tasks.this workspace]") {
+		t.Errorf("the remedy must not interpolate the prose subject as a config key, got: %s", unknown)
+	}
+	if !strings.Contains(unknown, "[tasks.<lang>]") {
+		t.Errorf("expected a placeholder config key when the language is unknown, got: %s", unknown)
 	}
 }
