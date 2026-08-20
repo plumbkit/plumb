@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -369,6 +370,16 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 			s.log().Warn("daemon: not restoring persisted pin — it names the home directory and was not set by an explicit session_start", "root", resolved, "source", string(source))
 			return
 		}
+		// issue #347: SynthesiseRoot walks up to the nearest .git same as Detect
+		// does, so a marker appearing above `resolved` between restoreRootIntact's
+		// call and this one climbs synth to that ancestor. resolved == root here
+		// (restoreRootIntact only keeps a markerless root when it synthesises to
+		// itself), so synth != resolved IS the drift — refuse rather than attach
+		// an ancestor nothing verified.
+		if err := restoreDriftErr(resolved, synth, pinTriggerRestore); err != nil {
+			s.log().Warn("daemon: not restoring persisted pin — re-synthesising it drifted to a different root than the one verified", "verified", resolved, "resolved", synth, "source", string(source))
+			return
+		}
 		s.attachSynthetic(ctx, synth, source, pinTriggerRestore)
 	} else {
 		s.attachWorkspacePinFrom(ctx, "file://"+resolved, source, pinTriggerRestore)
@@ -419,6 +430,27 @@ func (s *connSession) restoreRootIntact(root string) (resolved string, synthetic
 		return synth, true, true
 	}
 	return "", false, false
+}
+
+// restoreDriftErr reports a restore whose re-resolution landed somewhere other
+// than the root restoreRootIntact already verified. restoreRootIntact answers
+// "does this root still resolve to itself?" and then THROWS THE ANSWER AWAY —
+// every restore-path caller re-runs pool.Detect or pool.SynthesiseRoot on the
+// verified root to recover the language or the synthetic/non-synthetic split,
+// a second uncached filesystem walk that can disagree with the first if a
+// marker is added or removed above the root in the interval between the two
+// (issue #347). undeclaredWideRootErr exempts PinSourceSessionStart entirely,
+// so on the restore path nothing else stands between that second answer and
+// attach — the premise "the string checked is the string attached" holds only
+// because restoreRootIntact refuses drift; this closes the gap where a
+// caller re-derives instead of reusing its answer. A live trigger has no such
+// premise to protect and is never gated: rung 1b's whole purpose is a
+// caller-declared WIDE root, so this refuses DRIFT, not width.
+func restoreDriftErr(verified, resolved string, trigger pinTrigger) error {
+	if trigger != pinTriggerRestore || resolved == verified {
+		return nil
+	}
+	return fmt.Errorf("restore: re-resolving %s landed on %s instead of the root that was verified — refusing rather than attaching a root nothing checked (issue #347)", verified, resolved)
 }
 
 // dropPin refuses to restore a pin whose root failed verification, deletes the

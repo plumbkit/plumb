@@ -122,6 +122,21 @@
 
 ### Fixed
 
+- **A restored workspace pin could re-resolve to a different, wider root than
+  the one just verified, silently bypassing the home-containment guard
+  (issue #347).** `restoreRootIntact` verifies a persisted or replayed pin by
+  running `pool.Detect` and keeping the answer only when it lands back on the
+  exact same root — but three restore-path callers then threw that verified
+  answer away and ran `pool.Detect`/`pool.SynthesiseRoot` again, a second
+  uncached filesystem walk that can disagree with the first if a marker was
+  added or removed above the root in between. The second result reached
+  `undeclaredWideRootErr` under `PinSourceSessionStart`, the one origin it
+  exempts outright, so nothing else caught the drift. A new `restoreDriftErr`
+  helper refuses — rather than attaches — whenever a restore-triggered
+  re-resolution lands somewhere other than the root that was verified, at all
+  three sites: `repinWorkspaceFrom`, `attachWorkspacePinFrom`, and
+  `rehydratePin`'s synthetic-root branch. A live re-pin is unaffected.
+
 - **`plumb stats --failures` no longer tells you to raise `--limit` when that
   provably cannot help, and no longer lets a blank-kind row carry a stray
   retryable claim.** Two deferred nits from the #242 round-3 review. The

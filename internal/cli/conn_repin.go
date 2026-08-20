@@ -103,6 +103,19 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		}
 		language = LanguageNone
 	}
+	// Drift guard (issue #347): on the restore path, `folder` here is exactly
+	// the root restoreRootIntact already verified resolves to itself — but this
+	// Detect/SynthesiseRoot call is a SECOND, uncached filesystem walk, run only
+	// to recover the language and synthetic split restoreRootIntact does not
+	// return. If a marker was added or removed above `folder` in the interval
+	// between the two calls, `root` here can differ from what was verified, and
+	// undeclaredWideRootErr below never catches it — it exempts
+	// PinSourceSessionStart outright, which is exactly the origin every restore
+	// carries. Refuse the drift here, before that exemption ever applies. A live
+	// trigger is untouched: rung 1b's declared-wide-root restore still works.
+	if err := restoreDriftErr(folder, root, trigger); err != nil {
+		return "", err
+	}
 	// Containment guard (issue #306): SynthesiseRoot above refuses a
 	// home-IDENTITY root for a non-explicit origin, but a root CONTAINING a
 	// home directory synthesises to itself — and a detected wide root (the
