@@ -408,9 +408,10 @@ func TestSetupBulkFlags(t *testing.T) {
 // TestPrintSetupAllSummary pins the trailing summary: a sweep that changed
 // nothing says every installed client is already registered, a sweep that
 // changed some counts them, and neither hints at --all — every bulk run
-// already runs under it.
+// already runs under it. A sweep that failed on a client must not claim every
+// installed client is current: it could not read one, so it says so.
 func TestPrintSetupAllSummary(t *testing.T) {
-	out := captureStdout(t, func() { printSetupAllSummary(0) })
+	out := captureStdout(t, func() { printSetupAllSummary(0, 0) })
 	if !strings.Contains(out, "No changes") {
 		t.Errorf("a no-change sweep must say so, got %q", out)
 	}
@@ -418,9 +419,17 @@ func TestPrintSetupAllSummary(t *testing.T) {
 		t.Errorf("the summary must not point at the flag the sweep already ran under, got %q", out)
 	}
 
-	out = captureStdout(t, func() { printSetupAllSummary(3) })
+	out = captureStdout(t, func() { printSetupAllSummary(3, 0) })
 	if !strings.Contains(out, "Updated 3 client(s)") {
 		t.Errorf("a changing sweep must count its clients, got %q", out)
+	}
+
+	out = captureStdout(t, func() { printSetupAllSummary(0, 1) })
+	if strings.Contains(out, "every installed client") {
+		t.Errorf("a sweep that could not read a client must not vouch for every installed one, got %q", out)
+	}
+	if !strings.Contains(out, "No changes") {
+		t.Errorf("a no-change sweep must still say so when a client failed, got %q", out)
 	}
 }
 

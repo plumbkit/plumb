@@ -35,6 +35,25 @@ func TestContractPath(t *testing.T) {
 	})
 }
 
+func TestContractHome(t *testing.T) {
+	t.Run("contracts every embedded occurrence", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		got := render.ContractHome("reading " + home + "/a.yaml: parsing " + home + "/a.yaml: bad")
+		if got != "reading ~/a.yaml: parsing ~/a.yaml: bad" {
+			t.Errorf("got %q, want both occurrences contracted", got)
+		}
+	})
+
+	t.Run("leaves text without the home dir unchanged", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		const msg = "reading /etc/plumb.yaml: permission denied"
+		if got := render.ContractHome(msg); got != msg {
+			t.Errorf("got %q, want %q", got, msg)
+		}
+	})
+}
+
 func TestHumanAge(t *testing.T) {
 	now := time.Now()
 	cases := []struct {

@@ -245,6 +245,18 @@
   `TestSearchInFiles_ContextLinesCapEnforcedServerSide`, and
   `TestSearchInFiles_OutputBudget`.
 
+- **One unreadable client config no longer wraps the whole `plumb setup --all`
+  table.** An errored client put the writer's full message in the table's
+  Config cell, and the column is sized to its widest entry — so a single
+  unparseable config (a YAML parser naming the file, the line and the syntax it
+  choked on) stretched every row well past the terminal width and left the
+  report unreadable. The failure still appears in the list as an `error` status
+  against its own config path, exactly like every other status; its reason now
+  prints in a counted block below the table, after the summary, with home
+  directories contracted to `~` to match the paths above it. A sweep that could
+  not read a client also stops claiming that every installed client is
+  registered. The interactive picker shares the engine and the fix, in both the
+  register and uninstall directions.
 - **A restored workspace pin could re-resolve to a different, wider root than
   the one just verified, silently bypassing the home-containment guard
   (issue #347).** `restoreRootIntact` verifies a persisted or replayed pin by

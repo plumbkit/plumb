@@ -101,18 +101,24 @@ func pickerChanges(rows []pickerRow) int {
 func applyPickerRows(rows []pickerRow, plumbBin string) {
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Status", "Config")
 	var skillNotes []string
+	var failures []setupFailure
 	for _, r := range rows {
+		var clientRows []clientRow
 		switch r.action {
 		case setupRegister:
-			clientRows, _ := refreshClient(r.target, plumbBin, true)
-			t.NextGroup()
-			for _, cr := range clientRows {
-				t.Row(cr.name, statusStyle(cr.status).Render(cr.status), cr.detail)
-			}
+			clientRows, _ = refreshClient(r.target, plumbBin, true)
 		case setupUninstall:
-			t.NextGroup()
-			skillNotes = append(skillNotes, uninstallPickerRows(t, r.target)...)
+			var notes []string
+			clientRows, notes = uninstallPickerRows(r.target)
+			skillNotes = append(skillNotes, notes...)
+		default:
+			continue
 		}
+		t.NextGroup()
+		for _, cr := range clientRows {
+			t.Row(cr.name, statusStyle(cr.status).Render(cr.status), cr.detail)
+		}
+		failures = appendSetupFailures(failures, r.target.name, clientRows)
 	}
 	fmt.Println(t.Render())
 	for _, r := range rows {
@@ -123,42 +129,43 @@ func applyPickerRows(rows []pickerRow, plumbBin string) {
 	for _, note := range skillNotes {
 		fmt.Printf("\n%s\n", note)
 	}
+	printSetupFailures(failures)
 }
 
-// uninstallPickerRows removes plumb from one target, appending one table row
-// per managed path (refreshClient's shape), and returns a note per client
-// whose plumb-installed skills were taken with it.
-func uninstallPickerRows(t *render.GroupedTable, c setupTarget) []string {
+// uninstallPickerRows removes plumb from one target, returning one row per
+// managed path (refreshClient's shape, so the caller renders and reports both
+// directions identically) plus a note per client whose plumb-installed skills
+// were taken with it. A failure travels on the row's err, not in its detail
+// cell, for printing below the table.
+func uninstallPickerRows(c setupTarget) (rows []clientRow, notes []string) {
 	paths, err := resolveTargetPaths(c)
 	if err != nil {
-		t.Row(c.name, statusStyle("error").Render("error"), err.Error())
-		return nil
+		return []clientRow{{name: c.name, status: "error", err: err}}, nil
 	}
 	removedAny := false
 	for i, cfgPath := range paths {
 		removed, err := c.outFn(cfgPath)
-		status, detail := "not registered", render.ContractPath(cfgPath)
+		row := clientRow{status: "not registered", detail: render.ContractPath(cfgPath)}
 		switch {
 		case err != nil:
-			status, detail = "error", err.Error()
+			row.status, row.err = "error", err
 		case removed:
 			removedAny = true
-			status = "unregistered"
+			row.status = "unregistered"
 		}
-		name := ""
 		if i == 0 {
-			name = c.name
+			row.name = c.name
 		}
-		t.Row(name, statusStyle(status).Render(status), detail)
+		rows = append(rows, row)
 	}
 	if removedAny && c.skillsDirFn != nil {
 		if dir, err := c.skillsDirFn(); err == nil {
 			if removed, _ := removePlumbSkills(dir); len(removed) > 0 {
-				return []string{fmt.Sprintf("Removed %d plumb skill(s) from %s", len(removed), render.ContractPath(dir))}
+				notes = append(notes, fmt.Sprintf("Removed %d plumb skill(s) from %s", len(removed), render.ContractPath(dir)))
 			}
 		}
 	}
-	return nil
+	return rows, notes
 }
 
 // runSetupPickerSelector runs the picker program and returns the final model.

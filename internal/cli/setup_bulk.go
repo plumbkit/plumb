@@ -45,11 +45,13 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Status", "Config")
 	changed := 0
+	var failures []setupFailure
 	for _, c := range allSetupClients() {
 		rows, didChange := refreshClient(c, plumbBin, bulkRegistersMissing())
 		if didChange {
 			changed++
 		}
+		failures = appendSetupFailures(failures, c.name, rows)
 		t.NextGroup()
 		for _, r := range rows {
 			t.Row(r.name, statusStyle(r.status).Render(r.status), r.detail)
@@ -57,7 +59,8 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Println(t.Render())
 
-	printSetupAllSummary(changed)
+	printSetupAllSummary(changed, len(failures))
+	printSetupFailures(failures)
 	return nil
 }
 
@@ -83,21 +86,71 @@ func bulkRegistersMissing() bool {
 }
 
 // printSetupAllSummary prints the trailing summary line for the bulk run.
-func printSetupAllSummary(changed int) {
-	if changed == 0 {
-		fmt.Println("\nNo changes — every installed client already has this binary registered.")
-	} else {
+// failed is how many clients printSetupFailures will name below it, so a sweep
+// that could not read a client stops short of claiming every one is current.
+func printSetupAllSummary(changed, failed int) {
+	switch {
+	case changed > 0:
 		fmt.Printf("\nUpdated %d client(s). Restart them to apply.\n", changed)
+	case failed > 0:
+		fmt.Println("\nNo changes — every client plumb could read already has this binary registered.")
+	default:
+		fmt.Println("\nNo changes — every installed client already has this binary registered.")
+	}
+}
+
+// setupFailure is one client's failure, held out of the status table so its
+// reason prints below it. A parser message names the file, the line and the
+// syntax it choked on, which is far wider than any config path — inlined in the
+// Config column it stretched every row past the terminal width and wrapped the
+// table into unreadability.
+type setupFailure struct {
+	client string // the client's display name; the table row itself may have blanked it
+	err    error
+}
+
+// appendSetupFailures appends one setupFailure per errored row in rows. The
+// name is taken from client rather than the row because a multi-path client
+// blanks it on every row but the first.
+func appendSetupFailures(dst []setupFailure, client string, rows []clientRow) []setupFailure {
+	for _, r := range rows {
+		if r.err != nil {
+			dst = append(dst, setupFailure{client: client, err: r.err})
+		}
+	}
+	return dst
+}
+
+// printSetupFailures prints the reasons held back from the table — last, after
+// the summary, because they are the only part of the report the reader has to
+// act on. Home directories are contracted to ~ so the paths quoted inside an
+// error read the same as the ones in the table above. Nothing is printed when
+// there were no failures.
+func printSetupFailures(failures []setupFailure) {
+	if len(failures) == 0 {
+		return
+	}
+	fmt.Printf("\n%s\n", tui.WarnStyle.Render(fmt.Sprintf("%d error(s):", len(failures))))
+	for _, f := range failures {
+		fmt.Printf("  %s: %s\n", f.client, render.ContractHome(f.err.Error()))
 	}
 }
 
 // clientRow is one row in the `plumb setup --all` table: a client name (blank on
 // the continuation rows of a multi-path client, so the paths group visually), a
-// short status word, and the config path or error the status refers to.
+// short status word, and the config path the status refers to.
+//
+// err is set exactly when status is "error", and carries the reason the detail
+// cell deliberately does not: an error is reported in the table as a status
+// against its config path like any other, and its text prints below the table
+// (printSetupFailures) so a long message cannot stretch the Config column.
+// detail is empty on the one error that has no path to report — a client whose
+// config path would not resolve at all.
 type clientRow struct {
 	name   string
 	status string
 	detail string
+	err    error
 }
 
 // refreshClient repoints one client's plumb registration at plumbBin. It repoints
@@ -116,19 +169,18 @@ func refreshClient(c setupTarget, plumbBin string, installMissing bool) (rows []
 	}
 	paths, err := resolveTargetPaths(c)
 	if err != nil {
-		return []clientRow{{name: c.name, status: "error", detail: err.Error()}}, false
+		return []clientRow{{name: c.name, status: "error", err: err}}, false
 	}
 
 	for i, cfgPath := range paths {
-		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin, installMissing)
+		row, didChange := refreshClientAt(c, cfgPath, plumbBin, installMissing)
 		if didChange {
 			changed = true
 		}
-		name := c.name
-		if i > 0 {
-			name = ""
+		if i == 0 {
+			row.name = c.name
 		}
-		rows = append(rows, clientRow{name: name, status: status, detail: detail})
+		rows = append(rows, row)
 	}
 	return rows, changed
 }
@@ -146,38 +198,45 @@ func resolveTargetPaths(c setupTarget) ([]string, error) {
 	return []string{p}, nil
 }
 
-// refreshClientAt is refreshClient's single-path body. It returns a short status
-// word plus a detail cell — the contracted config path, or the error text when
-// status is "error". A config-present client without a plumb entry is only
+// refreshClientAt is refreshClient's single-path body. It returns the row for
+// this config path with its name left blank for the caller to fill, and whether
+// the path changed. A config-present client without a plumb entry is only
 // registered ("registered") when installMissing is set; otherwise it is reported
 // "not registered" and left untouched. A repointed existing entry reports
 // "updated". An absent config means "not installed" — unless the target's
 // installedFn detects the client anyway, in which case it is treated as
-// installed-but-unregistered (and installMissing creates the config).
-func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing bool) (status, detail string, changed bool) {
-	detail = render.ContractPath(cfgPath)
+// installed-but-unregistered (and installMissing creates the config). A writer
+// that fails reports "error" against the same path every other status uses,
+// with the reason on the row's err for printing below the table.
+func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing bool) (row clientRow, changed bool) {
+	row.detail = render.ContractPath(cfgPath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		if c.installedFn == nil || !c.installedFn() {
-			return "not installed", detail, false
+			row.status = "not installed"
+			return row, false
 		}
 		// Installed client whose config does not exist yet (Kimi Code, DeepSeek
 		// Harness) — fall through as installed-but-unregistered.
 	}
 	hadPlumb := clientHasPlumb(c, cfgPath)
 	if !hadPlumb && !installMissing {
-		return "not registered", detail, false
+		row.status = "not registered"
+		return row, false
 	}
 	added, _, err := c.intoFn(cfgPath, plumbBin)
-	if err != nil {
-		return "error", err.Error(), false
+	switch {
+	case err != nil:
+		row.status, row.err = "error", err
+		return row, false
+	case !added:
+		row.status = "already current"
+		return row, false
+	case hadPlumb:
+		row.status = "updated"
+	default:
+		row.status = "registered"
 	}
-	if !added {
-		return "already current", detail, false
-	}
-	if hadPlumb {
-		return "updated", detail, true
-	}
-	return "registered", detail, true
+	return row, true
 }
 
 // clientHasPlumb reports whether cfgPath already registers a plumb server, using

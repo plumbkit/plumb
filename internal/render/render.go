@@ -76,6 +76,18 @@ func ContractPath(p string) string {
 	return p
 }
 
+// ContractHome is ContractPath's whole-string sibling: it replaces every
+// occurrence of the home directory in s with ~, for text that embeds absolute
+// paths rather than being one — an error message quoting the file it failed on,
+// typically, which a caller wants to read the same way as the paths beside it.
+func ContractHome(s string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, home, "~")
+}
+
 // HumanAge formats a past time as a concise human-readable age string.
 // Times within the last minute show seconds; within an hour show minutes;
 // within a day show hours; older times show the date as "Jan 2".
