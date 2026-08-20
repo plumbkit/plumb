@@ -368,6 +368,29 @@ func TestBlankKindClearsClassSilently(t *testing.T) {
 	}
 }
 
+// TestBlankKindWithUndeclaredClassIsStillReported is the regression guard for
+// the fix above: silently clearing a blank kind's class must not swallow the
+// case where the class was already undeclared — that still needs to reach the
+// callers that log "dropped", or a future typo in a classified seam goes
+// unnoticed. Blank kind + undeclared class is the one input where BOTH the
+// silent-blank-kind path and the loud-undeclared-class path could fire; the
+// loud one must win.
+func TestBlankKindWithUndeclaredClassIsStillReported(t *testing.T) {
+	in := Call{
+		SessionID: "s", Workspace: "/w", Tool: "edit_file",
+		RemediationClass: "do_a_barrel_roll",
+		ErrorRetryable:   true,
+	}
+	got, dropped := normaliseCall(in)
+	if got.ErrorKind != "" || got.RemediationClass != "" || got.ErrorRetryable {
+		t.Errorf("got (kind=%q, remediation_class=%q, retryable=%v), want all cleared",
+			got.ErrorKind, got.RemediationClass, got.ErrorRetryable)
+	}
+	if !strings.Contains(dropped, "do_a_barrel_roll") {
+		t.Errorf("dropped = %q, want it to name the undeclared class even though the kind was blank", dropped)
+	}
+}
+
 // TestUndeclaredKindClearsTheWholeClassification pins the invariant the two
 // surfaces depend on: a row in the `unclassified` bucket carries no retryable
 // call. The CLI renders that bucket's retryability as unknown while the TUI sums
