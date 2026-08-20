@@ -64,7 +64,7 @@ type setupTarget struct {
 var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
-// MCP servers and therefore make sense as `plumb setup` targets. The first five
+// MCP servers and therefore make sense as `plumb setup` targets. The first six
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
@@ -86,6 +86,21 @@ var extraSetupTargets = []setupTarget{
 		flags:       registerKimiLeanFlag,
 		note:        kimiLeanNote,
 		skillsDirFn: kimiCodeSkillsDir,
+	},
+	{
+		use: "kimi-work", name: "Kimi Work", pathFn: KimiWorkConfigPath, installedFn: kimiWorkInstalled,
+		// The daimon-based desktop app bundles its own kimi-code kernel home
+		// (KimiWorkConfigPath), so it needs a registration separate from the
+		// CLI's. No --lean flag (enabledTools is unverified against the app —
+		// kimiWorkInto) and no skillsDirFn: the app's kernel reads the CLI's
+		// user skills dir (~/.kimi-code/skills) — verified on a live Kimi Work
+		// session (2026-08-20), where skills synced by `plumb skills sync
+		// kimi-code` appeared in the app's session — so the kimi-code target
+		// already covers skill delivery, and declaring the same dir here would
+		// double-list it in `plumb skills`.
+		intoFn:    kimiWorkInto,
+		extractFn: claudeDesktopCommandExtractor,
+		outFn:     removeMcpServersJSON,
 	},
 	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor, outFn: setupAntigravityOut},
 	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor, outFn: setupAntigravityOut},

@@ -42,3 +42,13 @@ func kimiCodeInto(cfgPath, plumbBin string, lean bool) (added bool, preserved []
 		func(existing map[string]any) bool { return existing["command"] == plumbBin },
 	)
 }
+
+// kimiWorkInto registers plumb in Kimi Work's bundled kernel mcp.json — the
+// same mcpServers shape as the CLI's, so it rides kimiCodeInto with lean
+// forced off: the enabledTools allowlist is unverified against the desktop
+// app, so the kimi-work target offers no --lean flag and always registers the
+// full surface. A hand-written allowlist already on disk is still preserved —
+// that is kimiLeanChoice(false) == leanKeep, Kimi's keep contract.
+func kimiWorkInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
+	return kimiCodeInto(cfgPath, plumbBin, false)
+}

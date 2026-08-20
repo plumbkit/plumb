@@ -54,9 +54,11 @@ func QwenConfigPath() (string, error) {
 }
 
 // KimiCodeConfigPath returns the Kimi Code MCP config path (~/.kimi-code/mcp.json),
-// the plain mcpServers JSON shape Kimi Code shares with Claude Desktop. Kimi
-// Desktop reads the same file, so a single registration covers both products.
-// KIMI_CODE_HOME overrides the config directory, mirroring Codex's CODEX_HOME.
+// the plain mcpServers JSON shape Kimi Code shares with Claude Desktop. The
+// legacy Kimi Desktop read the same file, but Kimi Work (the daimon-based
+// desktop app) does NOT — it reads the mcp.json inside its own bundled kernel
+// home, so it takes a separate target (KimiWorkConfigPath). KIMI_CODE_HOME
+// overrides the config directory, mirroring Codex's CODEX_HOME.
 func KimiCodeConfigPath() (string, error) {
 	if home := os.Getenv("KIMI_CODE_HOME"); home != "" {
 		return filepath.Join(home, "mcp.json"), nil
@@ -79,6 +81,51 @@ func kimiCodeInstalled() bool {
 		return false
 	}
 	return dirExists(filepath.Join(home, ".kimi-code"))
+}
+
+// kimiWorkKernelHome returns the kimi-code kernel home the Kimi Work desktop
+// app bundles inside its own data dir
+// (~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home
+// on macOS — verified against the live app, 2026-08). The app spawns its agent
+// kernel with this as home, so this — not ~/.kimi-code — is where its mcp.json
+// lives and why the kimi-code target can never register it. KIMI_WORK_HOME
+// overrides the home, mirroring KIMI_CODE_HOME (and giving tests a temp dir).
+// Non-macOS platforms get an explicit error: the app's data layout there is
+// unverified, so plumb names the override rather than guessing a path.
+func kimiWorkKernelHome() (string, error) {
+	if home := os.Getenv("KIMI_WORK_HOME"); home != "" {
+		return home, nil
+	}
+	if runtime.GOOS != "darwin" {
+		return "", errors.New("the Kimi Work data layout is verified on macOS only — set KIMI_WORK_HOME to the app's kernel home to register it on this platform")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Library", "Application Support", "kimi-desktop",
+		"daimon-share", "daimon", "runtime", "kimi-code", "home"), nil
+}
+
+// KimiWorkConfigPath returns the Kimi Work desktop app's MCP config
+// (<kernel home>/mcp.json), the plain mcpServers JSON shape the app shares
+// with the CLI. It does not check whether the file exists.
+func KimiWorkConfigPath() (string, error) {
+	home, err := kimiWorkKernelHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "mcp.json"), nil
+}
+
+// kimiWorkInstalled reports whether Kimi Work looks installed: its bundled
+// kernel home exists. The app creates that tree on first run, but mcp.json
+// only appears once an MCP server is configured — the same absent-file
+// ambiguity as Kimi Code — so the bulk paths and doctor use the dir to tell
+// "installed, nothing configured yet" from "not installed".
+func kimiWorkInstalled() bool {
+	home, err := kimiWorkKernelHome()
+	return err == nil && dirExists(home)
 }
 
 // dirExists reports whether path exists and is a directory.

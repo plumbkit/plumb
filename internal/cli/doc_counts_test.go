@@ -100,8 +100,8 @@ func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
 // TestLanguageAndClientSourceCountsPinned pins the source-of-truth counts for
 // supported languages and `plumb setup` clients. The website restates these as
 // exact figures, but the displayed numbers are editorial: the language stat folds
-// the .tsx alias into TypeScript (supported 18 → shown 17). The client stat now
-// shows all 14 setup targets (the two Antigravity entries are listed separately).
+// the .tsx alias into TypeScript (supported 18 → shown 17). The client stat shows all 18
+// setup targets (the two Antigravity entries are listed separately).
 // Encoding display rules in code would be brittle, so this test pins
 // the source counts instead — change a count and CI goes red here, pointing at
 // the exact display strings to revisit.
@@ -117,7 +117,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	const (
 		wantLanguages = 32 // indexed languages; site shows 28 (.tsx folds into TypeScript), README says "15+"
 		wantUncovered = 0  // langsupport rows recognised but not yet indexed — decreases as extractors land
-		wantClients   = 17 // plumb setup targets; site shows 17 ("Seventeen agents")
+		wantClients   = 18 // plumb setup targets; site shows 18 ("Eighteen agents")
 	)
 	var supported int
 	for _, l := range langsupport.All() {
@@ -140,7 +140,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	if got := len(allSetupClients()); got != wantClients {
 		t.Errorf("plumb has %d setup clients, pinned at %d.\n"+
 			"If intended, update the website's client count (site/index.html — the \"AI clients\" "+
-			"stat and the \"Seventeen agents\" heading/chips, currently 17) "+
+			"stat and the \"Eighteen agents\" heading/chips, currently 18) "+
 			"and the docs/cli-reference.md setup table, then bump wantClients.", got, wantClients)
 	}
 }

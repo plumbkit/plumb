@@ -9,6 +9,19 @@
 
 ### Added
 
+- **`plumb setup kimi-work` registers plumb in the Kimi Work desktop app.**
+  Kimi Work bundles its own kimi-code kernel home under its data dir
+  (`~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home`
+  on macOS; `KIMI_WORK_HOME` overrides, and is the only route on other
+  platforms — the layout there is unverified) and reads its MCP config only
+  from that home's `mcp.json` — not from `~/.kimi-code/mcp.json` — so the
+  `kimi-code` registration never covered it. `plumb setup --all` and
+  `plumb doctor` detect the app via that kernel home when no config exists
+  yet. The target takes no `--lean` flag (`enabledTools` is unverified against
+  the app) and no skills directory of its own: the app's kernel reads the
+  CLI's `~/.kimi-code/skills`, which `plumb skills sync kimi-code` already
+  populates.
+
 - **`plumb setup junie` registers plumb in JetBrains Junie.** Junie stores its
   MCP configuration in `~/.junie/mcp/mcp.json` (`mcpServers` key) and loads
   skills from `~/.junie/skills/`. `plumb setup --all` detects Junie via its home

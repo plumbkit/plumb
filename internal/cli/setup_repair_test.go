@@ -387,3 +387,46 @@ func TestCheckOneClientKimiInstalledNoConfig(t *testing.T) {
 		t.Errorf("detector-negative client should report not installed: got %+v", res)
 	}
 }
+
+func TestKimiWorkInstalled(t *testing.T) {
+	t.Run("kernel home present", func(t *testing.T) {
+		t.Setenv("KIMI_WORK_HOME", t.TempDir())
+		if !kimiWorkInstalled() {
+			t.Error("expected installed=true when the kernel home exists")
+		}
+	})
+	t.Run("kernel home absent", func(t *testing.T) {
+		t.Setenv("KIMI_WORK_HOME", filepath.Join(t.TempDir(), "nope"))
+		if kimiWorkInstalled() {
+			t.Error("expected installed=false when the kernel home does not exist")
+		}
+	})
+	t.Run("kernel home path is a file", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "kimi-work")
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("KIMI_WORK_HOME", f)
+		if kimiWorkInstalled() {
+			t.Error("expected installed=false when the kernel home path is a file, not a dir")
+		}
+	})
+}
+
+// TestCheckOneClientKimiWorkFixNamesKimiWork pins that the desktop target's
+// doctor fix points at `plumb setup kimi-work`, not the CLI's subcommand — the
+// two registrations are independent, so sending the user to kimi-code would
+// leave the app unregistered.
+func TestCheckOneClientKimiWorkFixNamesKimiWork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json") // never created
+	c := newRefreshKimiTarget(path, true)
+	c.use = "kimi-work"
+	c.name = "Kimi Work"
+	res := checkOneClient(c, "")
+	if res.ok {
+		t.Error("expected ok=false for an installed-but-unregistered client")
+	}
+	if res.fix != "run `plumb setup kimi-work`" {
+		t.Errorf("unexpected fix: %q", res.fix)
+	}
+}

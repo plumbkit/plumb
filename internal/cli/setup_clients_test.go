@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -258,5 +260,61 @@ func TestSetupHermesInto_MergesNonDestructively(t *testing.T) {
 	}
 	if backups == 0 {
 		t.Error("expected a .bak backup before modifying existing config")
+	}
+}
+
+func TestKimiWorkConfigPath(t *testing.T) {
+	t.Run("KIMI_WORK_HOME honoured", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("KIMI_WORK_HOME", dir)
+		path, err := KimiWorkConfigPath()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := filepath.Join(dir, "mcp.json"); path != want {
+			t.Errorf("got %q, want %q", path, want)
+		}
+	})
+	t.Run("default location is darwin-only", func(t *testing.T) {
+		t.Setenv("KIMI_WORK_HOME", "")
+		path, err := KimiWorkConfigPath()
+		if runtime.GOOS != "darwin" {
+			if err == nil {
+				t.Errorf("expected an unverified-platform error off macOS, got path %q", path)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		wantSuffix := filepath.Join("kimi-desktop", "daimon-share", "daimon",
+			"runtime", "kimi-code", "home", "mcp.json")
+		if !strings.HasSuffix(path, wantSuffix) {
+			t.Errorf("got %q, want suffix %q", path, wantSuffix)
+		}
+	})
+}
+
+// TestKimiWorkInto_FullSurfaceOnly pins the desktop target's no-lean contract:
+// registration is the plain {command, args} entry and never carries the
+// enabledTools allowlist, which is unverified against Kimi Work.
+func TestKimiWorkInto_FullSurfaceOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	added, _, err := kimiWorkInto(path, "/usr/local/bin/plumb")
+	if err != nil || !added {
+		t.Fatalf("kimiWorkInto: added=%v err=%v", added, err)
+	}
+	cfg, err := parseJSONConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, ok := registeredCommand(cfg, "mcpServers", "command")
+	if !ok || bin != "/usr/local/bin/plumb" {
+		t.Errorf("plumb entry: bin=%q ok=%v", bin, ok)
+	}
+	servers, _ := cfg["mcpServers"].(map[string]any)
+	entry, _ := servers["plumb"].(map[string]any)
+	if _, has := entry["enabledTools"]; has {
+		t.Error("kimi-work must never write enabledTools — unverified against the desktop app")
 	}
 }
