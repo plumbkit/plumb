@@ -56,7 +56,7 @@ func expandBraces(pattern string) ([]string, error) {
 	if !strings.ContainsAny(pattern, "{}") {
 		return []string{pattern}, nil
 	}
-	if n := strings.Count(pattern, "{"); n > maxBraceGroups {
+	if n := countBraceGroups(pattern); n > maxBraceGroups {
 		return nil, fmt.Errorf("glob %q contains %d brace groups; the maximum is %d", pattern, n, maxBraceGroups)
 	}
 	return expandBracesDepth(pattern, 0)
@@ -110,6 +110,25 @@ func expandBracesDepth(pattern string, depth int) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// countBraceGroups counts opening braces that are not escaped. A plain
+// strings.Count would also count `\{`, so a pattern built entirely of ESCAPED
+// groups — which by design expands to nothing and costs nothing — could trip the
+// cap meant for the expensive unescaped kind.
+func countBraceGroups(pattern string) int {
+	n := 0
+	for i := 0; i < len(pattern); {
+		if pattern[i] == '\\' {
+			i += 2
+			continue
+		}
+		if pattern[i] == '{' {
+			n++
+		}
+		i++
+	}
+	return n
 }
 
 // findBraceGroup locates the first UNESCAPED brace group and its MATCHING close

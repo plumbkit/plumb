@@ -101,6 +101,18 @@ func TestExpandBraces_GroupCountBound(t *testing.T) {
 	if got, err := expandBraces("{a,b}/{c,d}.go"); err != nil || len(got) != 4 {
 		t.Errorf("ordinary multi-group pattern broke: %v %v", got, err)
 	}
+
+	// ESCAPED groups expand to nothing and cost nothing, so they must not count
+	// against the cap — counting them would defeat the escape hatch, which exists
+	// precisely so a literal-brace pattern behaves as it did before brace support.
+	escaped := strings.Repeat(`\{x\}`, maxBraceGroups+8)
+	got, err := expandBraces(escaped)
+	if err != nil {
+		t.Errorf("escaped braces must not count against the group cap, got: %v", err)
+	}
+	if len(got) != 1 || got[0] != escaped {
+		t.Errorf("an all-escaped pattern must pass through unchanged, got %v", got)
+	}
 }
 
 // TestExpandBraces_EscapedBracesStayLiteral is the regression test for the

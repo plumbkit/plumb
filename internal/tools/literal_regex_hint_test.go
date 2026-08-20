@@ -56,6 +56,12 @@ func TestLiteralRegexHint_Tiers(t *testing.T) {
 		{"boolean or, no match", "err != nil || retry", false, false, ""},
 		{"single bar still flagged", "foo|bar", true, true, "| alternation"},
 		{"mixed bars flag the single one", "a||b|c", true, true, "| alternation"},
+		// Odd-length runs of three or more: a scanning implementation swallowed
+		// these, because after consuming a pair it treated the next bar's left
+		// neighbour (the tail of that pair) as evidence it was already paired.
+		{"triple bar has an unpaired one", "a|||b", true, true, "| alternation"},
+		{"quintuple bar has an unpaired one", "a|||||b", true, true, "| alternation"},
+		{"quadruple bar is all pairs", "a||||b", true, false, ""},
 		{"empty braces", "map[string]struct{}", true, false, ""},
 		// An EMPTY group is how ordinary code reads, not how a regex is written;
 		// flagging it would send the agent chasing a false lead.

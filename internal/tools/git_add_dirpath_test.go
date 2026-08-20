@@ -203,3 +203,63 @@ func TestRecordTrackedDirs_StopsAtRoot(t *testing.T) {
 		t.Errorf("expected exactly 3 recorded dirs, got %d: %v", len(dirs), dirs)
 	}
 }
+
+// TestRecordTrackedDirs_BoundaryCases covers the pitfall class the raw
+// strings.HasPrefix version had. The walk-stops-at-root test above passes under
+// EITHER implementation — its fixture never has a sibling sharing a textual
+// prefix, nor a trailing separator on the root — so it could not catch a
+// regression to the very bug dirWithinRoot was written to fix.
+func TestRecordTrackedDirs_BoundaryCases(t *testing.T) {
+	t.Run("sibling sharing a textual prefix is not admitted", func(t *testing.T) {
+		dirs := map[string]bool{}
+		// "/tmp/repository" merely starts with "/tmp/repo"; nothing under it is
+		// inside the repo, so nothing may be recorded.
+		recordTrackedDirs(dirs, filepath.Join("/tmp", "repository", "x.txt"), filepath.Join("/tmp", "repo"))
+		if len(dirs) != 0 {
+			t.Errorf("a sibling sharing a prefix must record nothing, got %v", dirs)
+		}
+	})
+
+	t.Run("root with a trailing separator still records the root", func(t *testing.T) {
+		root := filepath.Join("/tmp", "repo")
+		dirs := map[string]bool{}
+		recordTrackedDirs(dirs, filepath.Join(root, "a", "c.txt"), root+string(filepath.Separator))
+		if !dirs[root] {
+			t.Errorf("the root itself must be recorded even when given with a trailing separator, got %v", dirs)
+		}
+		if !dirs[filepath.Join(root, "a")] {
+			t.Errorf("the intermediate directory must be recorded, got %v", dirs)
+		}
+	})
+
+	t.Run("file directly in the root records only the root", func(t *testing.T) {
+		root := filepath.Join("/tmp", "repo")
+		dirs := map[string]bool{}
+		recordTrackedDirs(dirs, filepath.Join(root, "c.txt"), root)
+		if len(dirs) != 1 || !dirs[root] {
+			t.Errorf("expected only the root recorded, got %v", dirs)
+		}
+	})
+}
+
+func TestDirWithinRoot(t *testing.T) {
+	root := filepath.Join("/tmp", "repo")
+	cases := []struct {
+		dir  string
+		want bool
+	}{
+		{root, true},
+		{filepath.Join(root, "a"), true},
+		{filepath.Join(root, "a", "b"), true},
+		{filepath.Join("/tmp", "repository"), false},         // sibling sharing a prefix
+		{filepath.Join("/tmp", "repository", "deep"), false}, // and below it
+		{"/tmp", false},
+		{"/", false},
+		{filepath.Join("/other", "repo"), false},
+	}
+	for _, tc := range cases {
+		if got := dirWithinRoot(tc.dir, root); got != tc.want {
+			t.Errorf("dirWithinRoot(%q, %q) = %v, want %v", tc.dir, root, got, tc.want)
+		}
+	}
+}
