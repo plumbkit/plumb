@@ -30,7 +30,10 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		return tools.TaskCommand{}, err
 	}
 	if len(steps) == 0 {
-		return tools.TaskCommand{Slot: slot}, nil // no command configured; the tool reports it
+		// No command for this slot. Hand back the context the tool needs to say
+		// WHICH language it resolved for and what that language does have, rather
+		// than a bare "not configured for this workspace".
+		return tools.TaskCommand{Slot: slot, Language: lang, Configured: configuredSlots(tc)}, nil
 	}
 	workdir, err := commandWorkdir(ws, tc.WorkingDir)
 	if err != nil {
@@ -49,7 +52,55 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 					"review them, then run `plumb trust` in %s to allow this project's task commands", slot, lang, ws)
 		}
 	}
-	return tools.TaskCommand{Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir}, nil
+	return tools.TaskCommand{
+		Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir,
+		Language: lang, Configured: configuredSlots(tc),
+	}, nil
+}
+
+// taskState reports the resolved run_task / run_command surface for this
+// session, for the session_start orientation section. It answers from the same
+// view the resolvers read, so the report and the behaviour cannot disagree.
+//
+// Unreachable is the point of it: task resolution keys on the single primary
+// language, so in a monorepo the other detected languages' commands — including
+// the shipped defaults — cannot be run through run_task at all. That was
+// invisible, while the identity line happily listed every language.
+func (s *connSession) taskState() tools.TaskState {
+	v := s.view()
+	lang := v.acquiredLanguage
+	if lang == "none" {
+		lang = ""
+	}
+	st := tools.TaskState{Language: lang}
+	if lang != "" {
+		st.Configured = configuredSlots(v.tasks[lang])
+	}
+	for _, other := range v.discoveredLangs {
+		if other != lang && other != "" && other != "none" {
+			st.Unreachable = append(st.Unreachable, other)
+		}
+	}
+	for _, c := range v.commands {
+		st.Commands = append(st.Commands, c.Name)
+	}
+	return st
+}
+
+// configuredSlots lists the task slots that actually have a command, in a fixed
+// order. verify is included when both of its halves are present, since that is
+// exactly when it runs.
+func configuredSlots(tc config.TasksConfig) []string {
+	var out []string
+	for _, slot := range []string{"build", "lint", "test", "e2e"} {
+		if tc.Get(slot) != "" {
+			out = append(out, slot)
+		}
+	}
+	if tc.Build != "" && tc.Test != "" {
+		out = append(out, "verify")
+	}
+	return out
 }
 
 // buildTaskSteps turns a slot into the argv steps to run. verify is the

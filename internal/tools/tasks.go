@@ -34,6 +34,32 @@ type TaskCommand struct {
 	// boundary-checked by the resolver. Empty falls back to the workspace root,
 	// which is what every caller got before [tasks.<lang>] working_dir existed.
 	WorkingDir string
+	// Language and Configured describe the resolution CONTEXT, and are set even
+	// when Steps is empty — that is the case they exist for. "no test command
+	// configured for this workspace" named neither the language it resolved for
+	// nor which slots do have commands, so an agent that hit it had no way to tell
+	// an unconfigured slot from an unconfigured workspace, and fell back to raw
+	// shell for every build and test.
+	Language   string
+	Configured []string // slots that DO have a command, for the empty-slot message
+}
+
+// noCommandError explains an unconfigured slot in terms the caller can act on:
+// which language was resolved, what is configured for it, and how to fix it.
+func noCommandError(cmd TaskCommand, slot string) error {
+	lang := cmd.Language
+	if lang == "" {
+		lang = "this workspace"
+	}
+	have := "no slots are configured for it"
+	if len(cmd.Configured) > 0 {
+		have = "configured slots: " + strings.Join(cmd.Configured, ", ")
+	}
+	return fmt.Errorf(
+		"run_task: no %s command configured for %s (%s). "+
+			"Set one with [tasks.%s] %s = \"...\" in .plumb/config.toml, "+
+			"or via agent_config op=set when the user has enabled [agent_config_writes]",
+		slot, lang, have, lang, slot)
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -110,7 +136,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 		return "", err
 	}
 	if len(cmd.Steps) == 0 {
-		return "", fmt.Errorf("run_task: no %s command configured for this workspace", a.Slot)
+		return "", noCommandError(cmd, a.Slot)
 	}
 	return t.run(ctx, cmd)
 }

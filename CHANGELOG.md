@@ -172,6 +172,65 @@
   write (measured at ~10 ms and essentially size-independent — inherent
   durability), and `AllDiagnostics()` being deep-copied three times per edit
   under `diagsMu`, which scales with workspace size rather than edit size.
+- **`session_start` now reports what `run_task` and `run_command` can actually
+  do here, instead of asserting they work.** The client guidance told agents to
+  "prefer `run_task` over shelling out" unconditionally, while the capability is
+  conditional — so an agent on a Zig/TypeScript workspace tried it, was refused,
+  and fell back to raw shell (pnpm, playwright, zig) for a whole session. A new
+  **Tasks & commands (live)** section, modelled on the git-policy section, names
+  the resolved language, the slots that have commands, the slots that will be
+  refused, and the `[[command]]` allow-list. Crucially it also names the
+  **unreachable** languages: task resolution keys on the single primary language
+  (`acquiredLanguage`), so in a monorepo the other detected languages' commands —
+  **including the shipped defaults for typescript and zig** — cannot be run
+  through `run_task` at all, while the identity line happily lists them. That
+  limitation was previously invisible. Both guidance lines are now qualified
+  rather than absolute. Guarded by `TestWriteSessionTasks_*` and
+  `TestMissingTaskSlots`.
+
+- **`run_task` and `run_command` refusals say what is configured and how to fix
+  it.** `run_task: no test command configured for this workspace` named neither
+  the language it resolved for nor which slots *do* have commands, so there was
+  no way to tell an unconfigured slot from an unconfigured workspace. It now
+  reads `no lint command configured for typescript (configured slots: build,
+  test)` and points at both `[tasks.<lang>]` and `agent_config op=set`.
+  `run_command`'s empty-allow-list message likewise now mentions the trust
+  requirement and redirects ordinary build/lint/test work to `run_task`, which
+  ships with defaults. Guarded by `TestNoCommandError_NamesLanguageAndSlots`.
+
+- **`delete_file` takes a `paths` batch, so clearing a tree is 2 calls instead of
+  41.** Deleting a 40-file directory previously meant 40 `delete_file` calls plus
+  one per directory, which is why a live session reached for a shell `rm -rf`
+  instead. `paths` (max 100) batches the round-trips **without changing the
+  semantics**: no recursion, no `os.RemoveAll`, every path still must be a file
+  or an EMPTY directory with `allow_dir`. All paths are validated — boundary,
+  existence, `allow_dir`, dirty — before any is removed, so a batch that will be
+  refused is refused whole; removal is files first then directories
+  deepest-first, so naming a tree's files and its directories together works in
+  one call; each path consumes its own rate-limit token, so a batch cannot spend
+  one token on a hundred deletions; and a partial failure reports what already
+  went rather than failing silently. The single-`file_path` response is
+  byte-identical to before. Guarded by
+  `TestDeleteFile_BatchRemovesTreeInOneCall`,
+  `TestDeleteFile_BatchValidatesBeforeRemoving`,
+  `TestDeleteFile_NonEmptyDirStillRefused`, `TestDeleteFile_BatchArgValidation`,
+  and `TestDeleteFile_SinglePathResponseUnchanged`.
+
+- **`context_lines` goes up to 50, and `search_in_files` finally enforces its own
+  ceiling.** The 0–10 cap was declared **only in the JSON schema** —
+  `internal/mcp/argguard.go` never reads `minimum`/`maximum` — so it was enforced
+  by whichever MCP client validated the schema and not by plumb at all, and
+  reading around a hit cost several calls. The ceiling is raised to 50 for
+  `search_in_files` and `read_file`'s pattern mode, and `search_in_files` now
+  rejects an out-of-range value server-side the way `read_file` already did. The
+  safety half: `formatSearchOutput` gains a **200 KiB output budget** with a
+  labelled truncation notice — `search_in_files` was the one search tool with no
+  total-output bound (size was `max_results × (2·context_lines + 1)` lines, with
+  no de-duplication of overlapping context windows), which is what made the low
+  ceiling load-bearing in the first place. Guarded by
+  `TestSearchInFiles_ContextLinesAboveOldCap`,
+  `TestSearchInFiles_ContextLinesCapEnforcedServerSide`, and
+  `TestSearchInFiles_OutputBudget`.
 
 - **A restored workspace pin could re-resolve to a different, wider root than
   the one just verified, silently bypassing the home-containment guard

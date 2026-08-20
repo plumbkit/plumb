@@ -40,7 +40,10 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 	if !ok {
 		avail := config.CommandNames(v.commands)
 		if len(avail) == 0 {
-			return tools.ResolvedCommand{}, errors.New("run_command: no commands are configured for this workspace; add a [[command]] entry to your global config or .plumb/config.toml")
+			return tools.ResolvedCommand{}, errors.New("run_command: no commands are configured for this workspace; add a [[command]] entry to your global config " +
+				"or .plumb/config.toml (a project-supplied entry also needs `plumb trust`). " +
+				"For an ordinary build/lint/test, prefer run_task and its [tasks.<lang>] slots — those ship with defaults " +
+				"and agent_config can set them when the user has enabled [agent_config_writes]")
 		}
 		return tools.ResolvedCommand{}, fmt.Errorf("run_command: unknown command %q; available: %s", name, strings.Join(avail, ", "))
 	}

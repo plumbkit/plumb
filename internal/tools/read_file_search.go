@@ -31,7 +31,10 @@ import (
 const (
 	readSearchDefaultMaxMatches = 200
 	readSearchMaxMaxMatches     = 2000
-	readSearchMaxContextLines   = 10
+	// Raised from 10 alongside search_in_files'. read_file's search output is
+	// already bounded by maxReadFileBytes (matchCollector.budget), so the ceiling
+	// was never the thing keeping the response small.
+	readSearchMaxContextLines = 50
 )
 
 // matchLine is one emitted line in a search result: a match or a context line.

@@ -60,7 +60,7 @@ var readFileSchema = json.RawMessage(`{
       "type": "integer",
       "description": "Lines of context to show before and after each match (like rg -C). Default 0. Only consulted when pattern is set.",
       "minimum": 0,
-      "maximum": 10
+      "maximum": 50
     },
     "max_matches": {
       "type": "integer",
