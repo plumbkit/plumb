@@ -73,6 +73,16 @@
 
 ### Fixed
 
+- **`plumb setup --all` and `plumb doctor` no longer report a permanent error
+  for Kimi Work off macOS.** `KimiWorkConfigPath` returns an error on any
+  platform whose layout plumb has not verified, and the sweep turned that into
+  an `error` row — on every run, for a client the user very likely does not
+  have, and now prominently, in the error block below the table. plumb cannot
+  tell an unverified layout from an absent client, so both surfaces report
+  "not installed", the same answer they give for any client they cannot find.
+  The named `plumb setup kimi-work` still fails loudly and still names
+  `KIMI_WORK_HOME`, which is the one place the distinction matters.
+
 - **`plumb setup` no longer re-indents a YAML client's whole config, which can
   corrupt it.** `yaml.Marshal` always emits 4-space indentation, so registering
   plumb in a 2-space config (Hermes, Goose, DeepSeek Harness) silently restyled

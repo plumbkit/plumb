@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -155,6 +156,18 @@ func binaryExists(path string) bool {
 func checkOneClient(c setupTarget, selfPath string) checkResult {
 	path, err := c.pathFn()
 	if err != nil {
+		if errors.Is(err, errPlatformUnverified) {
+			// plumb has no verified layout for this client on this OS. That is
+			// indistinguishable from "not installed" here, and grading it as a
+			// broken config would leave every Linux run permanently un-green
+			// over a client the user may not even want.
+			return checkResult{
+				name:   c.name,
+				ok:     false,
+				detail: "not installed or config not found",
+				fix:    fmt.Sprintf("install %s, then set its home in the environment and run `plumb setup %s`", c.name, c.use),
+			}
+		}
 		return checkResult{name: c.name, ok: false, detail: "cannot locate config: " + err.Error()}
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {

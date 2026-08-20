@@ -15,6 +15,19 @@ import (
 	"github.com/plumbkit/plumb/internal/fsync"
 )
 
+// errPlatformUnverified marks a config path plumb cannot resolve because it has
+// not verified that client's on-disk layout for this OS — not because anything
+// went wrong. The bulk sweep and the doctor report it as "not installed", the
+// same as any other client they cannot find: a Linux machine has no more reason
+// to see a permanent error row for a macOS-only desktop app than for a client
+// that simply is not there, and an error the reader cannot act on trains them to
+// ignore the ones they can.
+//
+// A NAMED subcommand (`plumb setup kimi-work`) still surfaces the full text,
+// including the environment override that makes it work anyway — there the user
+// asked for this client specifically, so silence would be the wrong answer.
+var errPlatformUnverified = errors.New("client layout unverified on this platform")
+
 // claudeCodeConfigPath returns the user-level Claude Code config path.
 func claudeCodeConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -89,14 +102,14 @@ func kimiCodeInstalled() bool {
 // kernel with this as home, so this — not ~/.kimi-code — is where its mcp.json
 // lives and why the kimi-code target can never register it. KIMI_WORK_HOME
 // overrides the home, mirroring KIMI_CODE_HOME (and giving tests a temp dir).
-// Non-macOS platforms get an explicit error: the app's data layout there is
+// Non-macOS platforms get errPlatformUnverified: the app's data layout there is
 // unverified, so plumb names the override rather than guessing a path.
 func kimiWorkKernelHome() (string, error) {
 	if home := os.Getenv("KIMI_WORK_HOME"); home != "" {
 		return home, nil
 	}
 	if runtime.GOOS != "darwin" {
-		return "", errors.New("the Kimi Work data layout is verified on macOS only — set KIMI_WORK_HOME to the app's kernel home to register it on this platform")
+		return "", fmt.Errorf("%w: the Kimi Work data layout is verified on macOS only — set KIMI_WORK_HOME to the app's kernel home to register it on this platform", errPlatformUnverified)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

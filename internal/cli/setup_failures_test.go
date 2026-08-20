@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -107,6 +108,97 @@ func TestAppendSetupFailures_LabelsContinuationRows(t *testing.T) {
 	}
 	if got[0].client != "Claude Desktop" {
 		t.Errorf("client = %q, want the target's name", got[0].client)
+	}
+}
+
+// A client whose on-disk layout plumb has not verified for this OS is not a
+// failure: it is indistinguishable from "not installed", and reporting it as an
+// error puts a row the reader cannot act on in front of them on EVERY run,
+// which is how people learn to ignore the rows that matter.
+func TestRefreshClient_UnverifiedPlatformIsNotAnError(t *testing.T) {
+	c := setupTarget{
+		name:   "Kimi Work",
+		pathFn: func() (string, error) { return "", fmt.Errorf("%w: set KIMI_WORK_HOME", errPlatformUnverified) },
+		intoFn: func(string, string) (bool, []string, error) { return true, nil, nil },
+	}
+	rows, changed := refreshClient(c, "/new/plumb", true)
+	if changed || len(rows) != 1 {
+		t.Fatalf("got (%+v, %v), want one unchanged row", rows, changed)
+	}
+	if rows[0].status != "not installed" {
+		t.Errorf("status = %q, want \"not installed\"", rows[0].status)
+	}
+	if rows[0].err != nil {
+		t.Errorf("an unverified platform must not reach the error block, got %v", rows[0].err)
+	}
+}
+
+func TestCheckOneClient_UnverifiedPlatformReadsAsNotInstalled(t *testing.T) {
+	c := setupTarget{
+		use:    "kimi-work",
+		name:   "Kimi Work",
+		pathFn: func() (string, error) { return "", fmt.Errorf("%w: set KIMI_WORK_HOME", errPlatformUnverified) },
+	}
+	res := checkOneClient(c, "/opt/plumb")
+	if res.detail != "not installed or config not found" {
+		t.Errorf("detail = %q, want the not-installed wording", res.detail)
+	}
+	if res.fix == "" {
+		t.Error("doctor must still say what would make this client work")
+	}
+}
+
+// The sentinel has to be on the error kimiWorkKernelHome actually returns, or
+// the two classifications above never fire in production. GOOS-gated: on macOS
+// the layout is verified and the path resolves, so there is nothing to assert.
+func TestKimiWorkKernelHome_UnverifiedPlatformCarriesTheSentinel(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS has a verified layout; this pins the every-other-platform contract")
+	}
+	t.Setenv("KIMI_WORK_HOME", "")
+	_, err := kimiWorkKernelHome()
+	if !errors.Is(err, errPlatformUnverified) {
+		t.Errorf("kimiWorkKernelHome() error = %v, want it to wrap errPlatformUnverified", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "KIMI_WORK_HOME") {
+		t.Errorf("the error must still name the override that makes it work here: %v", err)
+	}
+}
+
+// The whole chain, through the REAL registry entry rather than a stand-in:
+// kimiWorkKernelHome -> KimiWorkConfigPath -> resolveTargetPaths -> the row a
+// user sees. The unit tests above each hold one link; this is what actually
+// stops a Linux `plumb setup --all` printing a permanent error for a macOS-only
+// desktop app. GOOS-gated for the same reason as the test above.
+func TestSetupAll_KimiWorkIsNotAnErrorOnAnUnverifiedPlatform(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS resolves a real Kimi Work path; this pins every other platform")
+	}
+	t.Setenv("KIMI_WORK_HOME", "")
+
+	var target setupTarget
+	for _, c := range allSetupClients() {
+		if c.use == "kimi-work" {
+			target = c
+			break
+		}
+	}
+	if target.use == "" {
+		t.Fatal("kimi-work is no longer a registered setup client")
+	}
+
+	rows, changed := refreshClient(target, "/new/plumb", true)
+	if changed {
+		t.Error("an unresolvable client must not count as changed")
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %+v, want one row", rows)
+	}
+	if rows[0].status == "error" {
+		t.Errorf("Kimi Work must not report an error on %s: %+v", runtime.GOOS, rows[0])
+	}
+	if rows[0].status != "not installed" {
+		t.Errorf("status = %q, want \"not installed\"", rows[0].status)
 	}
 }
 

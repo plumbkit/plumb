@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -177,6 +179,11 @@ func refreshClient(c setupTarget, plumbBin string, installMissing bool) (rows []
 	}
 	paths, err := resolveTargetPaths(c)
 	if err != nil {
+		if errors.Is(err, errPlatformUnverified) {
+			// Not a failure to report: plumb has no verified path for this
+			// client on this OS, which is the same answer as "not here".
+			return []clientRow{{name: c.name, status: "not installed", detail: "no verified config path on " + runtime.GOOS}}, false
+		}
 		return []clientRow{{name: c.name, status: "error", err: err}}, false
 	}
 
