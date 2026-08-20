@@ -221,6 +221,69 @@
   added for cannot return. `copy_file`'s
   refusal does move to the folded key, matching `cp`, which likewise declines
   to copy a file onto itself under a second spelling.
+- **`git add` with a DIRECTORY path now stages the deletions under it, instead
+  of reporting "nothing staged".** After a bulk `rm -rf <dir>`, staging that
+  directory answered `nothing staged` with `warning: no working-tree or index
+  entry for: <dir> (skipped — check for a typo)` and left every deletion
+  unstaged — a silent, confident wrong answer, reported from a live session that
+  had just deleted a 40-file tree. `partitionAddPaths` decided a path was real in
+  two ways and both were file-shaped: `git ls-files -- somedir` prints the files
+  *under* somedir and never somedir itself, so a directory could never be a key
+  in the tracked-file map; and the `os.Stat` fallback — the only clause that had
+  ever matched a directory — fails once the directory is gone. The uncovered
+  intersection was *directory AND deleted*, so the path was filed as an unmatched
+  typo and `resolveAddArgv` short-circuited **without invoking git at all**, even
+  though the `git add -A -- <dir>` it builds stages exactly those deletions. The
+  new `recordTrackedDirs` marks every ancestor of each tracked file as holding
+  tracked content, so a directory pathspec matches on the strength of what is
+  under it. A path holding nothing tracked is still reported as unmatched, which
+  is what keeps a typo from hard-failing the whole call. Guarded by
+  `TestGit_AddStagesDeletionsUnderDeletedDirectory`,
+  `TestGit_AddStagesDeletionsUnderDeletedSubdirectory`,
+  `TestGit_AddRelativeDeletedDirectoryPathspec`,
+  `TestGit_AddTypoedDirectoryStillWarns`, and `TestRecordTrackedDirs_StopsAtRoot`.
+
+- **Glob patterns support brace alternation (`*.{ts,tsx}`) instead of silently
+  matching nothing.** `filepath.Match`, which every glob path bottoms out in, has
+  no brace syntax: it treats `{`, `}` and `,` as literal characters and returns
+  **no error**, so `find_files` answered a clean `No files found matching
+  "*.{ts,js}"` and `find_replace` reported `0 file(s)` — the failure mode the
+  0.13.0 notes called "the worst possible". `search_in_files` had already refused
+  braces outright for this reason; the other two still failed silently. A shared
+  `expandBraces` now expands groups — nested (`{a,b{c,d}}`) and repeated
+  (`{a,b}{c,d}`) — for all three tools, matching when any alternative matches,
+  and `search_in_files`' refusal is lifted. An unbalanced brace (`a{b`) or a group
+  with no comma (`{x}`) stays literal, as in a shell. Expansion past 256
+  alternatives or 10 levels of nesting is **refused rather than truncated** — a
+  silently shortened list would be the same class of bug. `globLiteralPrefix` now
+  treats `{` as a wildcard, so a braced glob with a directory prefix
+  (`{alpha,beta}/x.go`) is no longer pruned away before it can match. Expansion
+  deliberately does **not** reach `.gitignore` matching, which genuinely has no
+  brace syntax — guarded by `TestGitignore_BracesStayLiteral`. Also guarded by
+  `TestExpandBraces`, `TestExpandBraces_Bounds`, `TestFindFiles_BraceGlob`,
+  `TestFindFiles_BraceGlobWithDirPrefix`, `TestFindReplace_BraceGlob`, and
+  `TestSearchInFiles_BraceGlobMatchesEveryAlternative`.
+
+- **The literal-vs-regex nudge is wider, fires on a non-empty result, and now
+  covers `find_replace`.** These tools default to `use_regex:false` and
+  `QuoteMeta` the pattern, so `foo\.bar` searches for a literal backslash. The
+  old hint looked only for `|`, `.*` and `.+`, and only ever fired when the search
+  found **nothing** — so an escaped-metacharacter pattern triggered it never, and
+  a literal pattern that happened to match something was never questioned.
+  `find_replace` had no hint at all: a zero-change run printed a confident `0
+  file(s), 0 replacement(s) would change`. One shared `literalRegexHint` replaces
+  the two byte-identical copies (`search_in_files`, `read_file` pattern mode) and
+  is wired into `find_replace`. It has two tiers, because firing on a successful
+  search means a broad detector would flag ordinary literal searches constantly:
+  unambiguous syntax (`|`, `.*`, `.+`, a leading `^`, and the regex-only escapes
+  `\.` `\d` `\D` `\w` `\W` `\s` `\S` `\b` `\B`) is flagged either way, while
+  shapes that are also ordinary code (`[...]`, `(...)`, `{n,m}`, a trailing `$`)
+  are flagged only on a zero-match result, where there is no noise cost. A bare
+  `.`, `+`, `?` or `*`, a string-literal escape like `\n`, and an EMPTY `()` or
+  `[]` never trigger it. `find_replace`'s `use_regex` also gains the schema
+  description it was missing. Guarded by `TestLiteralRegexHint_Tiers` (25 cases),
+  `TestSearchInFiles_HintFiresOnNonZeroResult`, `TestFindReplace_LiteralRegexHint`,
+  and `TestReadFileSearch_LiteralRegexHint`.
 
 - **`plumb stats --failures` no longer tells you to raise `--limit` when that
   provably cannot help, and no longer lets a blank-kind row carry a stray

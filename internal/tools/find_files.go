@@ -422,8 +422,38 @@ func buildMatcher(pattern string, useRegex bool) (func(string) bool, error) {
 		return re.MatchString, nil
 	}
 
-	// Glob mode: if the pattern contains **, use doubleStarMatch.
-	// Otherwise use filepath.Match which handles *, ?, [...].
+	// Glob mode. Brace alternation is expanded first (filepath.Match has none of
+	// its own and would match "*.{ts,js}" against a file literally named that),
+	// then each alternative gets the ** or plain matcher. A name matches when ANY
+	// alternative does.
+	alts, err := expandBraces(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("find_files: %w", err)
+	}
+	matchers := make([]func(string) bool, 0, len(alts))
+	for _, alt := range alts {
+		m, err := buildGlobMatcher(alt)
+		if err != nil {
+			return nil, err
+		}
+		matchers = append(matchers, m)
+	}
+	if len(matchers) == 1 {
+		return matchers[0], nil
+	}
+	return func(name string) bool {
+		for _, m := range matchers {
+			if m(name) {
+				return true
+			}
+		}
+		return false
+	}, nil
+}
+
+// buildGlobMatcher returns a matcher for a single brace-free glob: doubleStarMatch
+// when it contains **, filepath.Match otherwise.
+func buildGlobMatcher(pattern string) (func(string) bool, error) {
 	if strings.Contains(pattern, "**") {
 		return func(name string) bool {
 			return doubleStarMatch(pattern, name)

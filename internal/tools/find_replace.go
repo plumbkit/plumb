@@ -75,7 +75,7 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 			"path":{"type":"string","description":"Directory to walk, or a single file. Absolute path, file:// URI, or workspace-relative path; defaults relative to the workspace root."},
 			"pattern":{"type":"string","description":"Search pattern. Plain text by default; regex if use_regex=true."},
 			"replacement":{"type":"string","description":"Replacement text. With regex, supports $1, $2 backreferences."},
-			"use_regex":{"type":"boolean","default":false},
+			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as a regular expression (Go RE2). Default false — pattern is literal text, so regex syntax such as | or \\. matches itself."},
 			"glob":{"type":"string","description":"File glob filter, e.g. '*.go' or '**/*.md'. Empty = all non-binary files."},
 			"case_sensitive":{"type":"boolean","description":"Default: smart-case (case-insensitive iff pattern is all lowercase)."},
 			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write files."},
@@ -452,6 +452,10 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 		sb.WriteString("\nformat warning: ")
 		sb.WriteString(fe.Error())
 	}
+	// find_replace had no literal-vs-regex nudge at all, so a pattern like
+	// "foo\.bar" reported a confident "0 file(s), 0 replacement(s)" that reads as
+	// "nothing to change" rather than "you meant a regex".
+	sb.WriteString(literalRegexHint(a.Pattern, a.UseRegex, len(changes) > 0))
 	return sb.String()
 }
 

@@ -498,17 +498,48 @@ func BenchmarkSearchInFiles_WarmCall(b *testing.B) {
 	}
 }
 
-func TestSearchInFiles_BraceGlobReturnsError(t *testing.T) {
+// TestSearchInFiles_BraceGlobMatchesEveryAlternative replaces the former
+// TestSearchInFiles_BraceGlobReturnsError. Brace alternation was refused
+// outright because filepath.Match has no brace syntax; it is now expanded, so a
+// braced glob searches every extension it names in one call.
+func TestSearchInFiles_BraceGlobMatchesEveryAlternative(t *testing.T) {
 	dir := t.TempDir()
+	for _, name := range []string{"a.go", "b.ts", "c.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("hello\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	tool := NewSearchInFiles(nil, nil, nil, 0)
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "hello",
 		"path":    dir,
 		"glob":    "*.{go,ts}",
 	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("braced glob should be supported, got: %v", err)
+	}
+	if !strings.Contains(out, "a.go") || !strings.Contains(out, "b.ts") {
+		t.Errorf("expected both braced alternatives to match, got:\n%s", out)
+	}
+	if strings.Contains(out, "c.md") {
+		t.Errorf("an extension outside the braces must not match, got:\n%s", out)
+	}
+}
+
+// TestSearchInFiles_RunawayBraceGlobRefused guards the bound: an expansion that
+// would blow up combinatorially is refused, not silently truncated.
+func TestSearchInFiles_RunawayBraceGlobRefused(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "hello",
+		"path":    dir,
+		"glob":    strings.Repeat("{a,b}", 9) + "*.go",
+	})
 	_, err := tool.Execute(context.Background(), args)
-	if err == nil || !strings.Contains(err.Error(), "brace alternation") {
-		t.Fatalf("expected brace-alternation error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "alternatives") {
+		t.Fatalf("expected a runaway-expansion refusal, got: %v", err)
 	}
 }
 

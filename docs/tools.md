@@ -540,9 +540,11 @@ Glob/regex file or directory finder, and plumb's directory lister. **Inputs:**
 | `any`, default `file`), `extension`, `max_depth` (`1` lists one level, like
 `ls`), `max_results` (default 500), `include_hidden`, `include_details`,
 `sort_by` (`name` | `size` | `modified`, default `name`), `use_regex`. Honours
-`.gitignore`. `include_details` renders each entry with a
-`[FILE]`/`[DIR]`/`[LINK]` marker, its size and modified time (symlinks as
-`name -> target`) instead of a bare path list.
+`.gitignore`. Glob patterns support brace alternation (`*.{ts,tsx}`), including
+nested and repeated groups; an expansion past 256 alternatives or 10 levels of
+nesting is refused rather than truncated. `include_details` renders each entry
+with a `[FILE]`/`[DIR]`/`[LINK]` marker, its size and modified time (symlinks
+as `name -> target`) instead of a bare path list.
 
 `list_files` and `list_directory` were merged into this tool: the old names
 still work as unadvertised aliases (`list_files`' `root` is mapped to `path`
@@ -553,10 +555,20 @@ of `list_files`' hardcoded exclude list.
 
 ### `search_in_files`
 ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**
-`pattern` (required, regex), `path`, `glob`, `exclude` (array of globs),
-`case_sensitive`, `context_lines` (0–10), `max_results` (default 200),
-`include_hidden`, `max_file_bytes`, `include_enclosing_symbol` (bool —
-annotates each hit with the deepest enclosing LSP symbol; requires LSP).
+`pattern` (required — **literal text by default**, a Go RE2 regex only when
+`use_regex` is true), `use_regex`, `path`, `glob` (supports brace alternation,
+e.g. `**/*.{go,md}`), `exclude` (array of globs), `case_sensitive`,
+`context_lines` (0–10), `max_results` (default 200), `include_hidden`,
+`max_file_bytes`, `include_enclosing_symbol` (bool — annotates each hit with the
+deepest enclosing LSP symbol; requires LSP).
+
+A literal-mode search whose pattern contains regex syntax appends a one-line
+note saying so, since the alternative reading of a clean "No matches" is "these
+don't exist". Unambiguous syntax (`|`, `.*`, `.+`, a leading `^`, and regex
+escapes such as `\.`/`\d`/`\w`/`\s`) is flagged whether or not the search
+matched; shapes that are also ordinary code (`[...]`, `(...)`, `{n,m}`, a
+trailing `$`) are flagged only when nothing matched. `find_replace` and
+`read_file`'s pattern mode carry the same note.
 
 ### `file_status`
 Lightweight, read-only "did this file change under me?" probe — no content
