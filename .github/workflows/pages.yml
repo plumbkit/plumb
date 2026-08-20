@@ -34,7 +34,11 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          # build-blog.py needs 3.11+ (stdlib tomllib); markdown and pygments
+          # both publish 3.14 support. 3.14 is supported until 2030-10, against
+          # 3.12's 2028-10. Dependabot cannot see this — it tracks the
+          # actions/setup-python version, not this input.
+          python-version: "3.14"
 
       # Render the Markdown blog posts into styled HTML before publishing.
       # Markdown under site/blog/posts/ is the source of truth; the generated
