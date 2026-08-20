@@ -18,6 +18,13 @@ import (
 // Expansion happens one layer above filepath.Match so that .gitignore matching
 // (ignorePattern.matchesPath) is untouched — gitignore genuinely has no brace
 // syntax, and giving it one here would silently change which files are ignored.
+//
+// A brace can be ESCAPED to keep it literal: `notes\{draft,final\}.md` matches
+// the file of that exact name. Without an opt-out, a pattern that relied on
+// braces being ordinary characters — which they were before this existed — would
+// silently start matching different files: the same class of silent wrong answer
+// brace support was added to remove. filepath.Match already treats a backslash
+// as an escape, so the escaped brace passes straight through to it.
 
 const (
 	// maxBraceExpansions bounds the combinatorial blow-up of nested groups:
@@ -28,6 +35,13 @@ const (
 	// maxBraceDepth bounds nesting independently of the total, so a pathological
 	// pattern is rejected before it is expanded rather than after.
 	maxBraceDepth = 10
+	// maxBraceGroups bounds the NUMBER of groups, counted before any recursion.
+	// The other two caps constrain real alternation only, so a long run of
+	// comma-less groups ("{x}{x}{x}…") slipped past both and cost O(n²) — 200k
+	// groups took ~20s — and doubleStarMatchFile re-expands once per file visited,
+	// multiplying that by the file count of a walk. Counting first makes the
+	// refusal O(n) and immediate.
+	maxBraceGroups = 32
 )
 
 // expandBraces expands shell-style brace alternation into the concrete glob
@@ -41,6 +55,9 @@ const (
 func expandBraces(pattern string) ([]string, error) {
 	if !strings.ContainsAny(pattern, "{}") {
 		return []string{pattern}, nil
+	}
+	if n := strings.Count(pattern, "{"); n > maxBraceGroups {
+		return nil, fmt.Errorf("glob %q contains %d brace groups; the maximum is %d", pattern, n, maxBraceGroups)
 	}
 	return expandBracesDepth(pattern, 0)
 }
@@ -95,35 +112,46 @@ func expandBracesDepth(pattern string, depth int) ([]string, error) {
 	return out, nil
 }
 
-// findBraceGroup locates the first brace group and its MATCHING close brace,
-// tracking depth so a nested group does not terminate its parent early.
+// findBraceGroup locates the first UNESCAPED brace group and its MATCHING close
+// brace, tracking depth so a nested group does not terminate its parent early.
 // ok is false when there is no group, or the braces are unbalanced.
 func findBraceGroup(pattern string) (start, end int, ok bool) {
-	start = strings.IndexByte(pattern, '{')
-	if start < 0 {
-		return 0, 0, false
-	}
-	depth := 0
-	for i := start; i < len(pattern); i++ {
+	start, depth := -1, 0
+	for i := 0; i < len(pattern); {
+		if pattern[i] == '\\' {
+			i += 2 // skip the escaped byte; filepath.Match unescapes it later
+			continue
+		}
 		switch pattern[i] {
 		case '{':
+			if start < 0 {
+				start = i
+			}
 			depth++
 		case '}':
-			depth--
-			if depth == 0 {
-				return start, i, true
+			if start >= 0 {
+				depth--
+				if depth == 0 {
+					return start, i, true
+				}
 			}
 		}
+		i++
 	}
-	return 0, 0, false // unbalanced — caller treats the pattern as literal
+	return 0, 0, false // no group, or unbalanced — the caller treats it as literal
 }
 
-// splitTopLevelCommas splits on commas at brace depth zero, so the comma inside
-// "{a,{b,c}}" belongs to the inner group and does not split the outer one.
+// splitTopLevelCommas splits on UNESCAPED commas at brace depth zero, so the
+// comma inside "{a,{b,c}}" belongs to the inner group and does not split the
+// outer one, and an escaped "\," is data rather than a separator.
 func splitTopLevelCommas(inner string) []string {
 	var parts []string
 	depth, last := 0, 0
-	for i := range len(inner) {
+	for i := 0; i < len(inner); {
+		if inner[i] == '\\' {
+			i += 2
+			continue
+		}
 		switch inner[i] {
 		case '{':
 			depth++
@@ -135,6 +163,7 @@ func splitTopLevelCommas(inner string) []string {
 				last = i + 1
 			}
 		}
+		i++
 	}
 	parts = append(parts, inner[last:])
 	return parts

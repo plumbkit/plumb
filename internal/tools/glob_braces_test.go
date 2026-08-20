@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpandBraces(t *testing.T) {
@@ -66,6 +67,97 @@ func TestExpandBraces_Bounds(t *testing.T) {
 	}
 }
 
+// TestExpandBraces_GroupCountBound is the regression test for the cost defect an
+// independent review found: a long run of comma-less groups ("{x}{x}{x}…")
+// hit neither the alternation cap nor the depth cap, because neither counts a
+// group that does not alternate. 200k of them took ~20s, re-run per file visited
+// during a walk. The group count is now checked up front, in O(n).
+func TestExpandBraces_GroupCountBound(t *testing.T) {
+	runaway := strings.Repeat("{x}", maxBraceGroups+1)
+	start := time.Now()
+	_, err := expandBraces(runaway)
+	if err == nil {
+		t.Fatal("expected a refusal for too many brace groups")
+	}
+	if !strings.Contains(err.Error(), "brace groups") {
+		t.Errorf("expected the group-count message, got: %v", err)
+	}
+	// The point of counting first is that the refusal is immediate.
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("refusal took %s; it should be O(n) and immediate", elapsed)
+	}
+
+	// A pathological input that previously took ~20s must now be refused fast.
+	huge := strings.Repeat("{x}", 50_000)
+	start = time.Now()
+	if _, err := expandBraces(huge); err == nil {
+		t.Error("expected a refusal for a huge group run")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("huge-input refusal took %s; the count guard did not short-circuit", elapsed)
+	}
+
+	// And a normal pattern with a handful of groups still works.
+	if got, err := expandBraces("{a,b}/{c,d}.go"); err != nil || len(got) != 4 {
+		t.Errorf("ordinary multi-group pattern broke: %v %v", got, err)
+	}
+}
+
+// TestExpandBraces_EscapedBracesStayLiteral is the regression test for the
+// silent behaviour change an independent review found: before brace support,
+// `filepath.Match` treated braces as ordinary characters, so a file literally
+// named "notes{draft,final}.md" was matchable. Expansion took that away with no
+// opt-out — the same silent-wrong-answer class the feature exists to remove.
+func TestExpandBraces_EscapedBracesStayLiteral(t *testing.T) {
+	got, err := expandBraces(`notes\{draft,final\}.md`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != `notes\{draft,final\}.md` {
+		t.Fatalf("escaped braces must not expand, got %v", got)
+	}
+
+	// An escaped group next to a real one: only the real one expands.
+	got, err = expandBraces(`a\{x,y\}.{go,md}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`a\{x,y\}.go`, `a\{x,y\}.md`}
+	if len(got) != len(want) {
+		t.Fatalf("expandBraces = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("expandBraces[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestFindFiles_EscapedBraceMatchesLiteralFilename proves the escape works
+// end-to-end: filepath.Match unescapes the brace, so the literal file matches.
+func TestFindFiles_EscapedBraceMatchesLiteralFilename(t *testing.T) {
+	dir := t.TempDir()
+	literal := "notes{draft,final}.md"
+	if err := os.WriteFile(filepath.Join(dir, literal), []byte("x\n"), 0o644); err != nil {
+		t.Skipf("filesystem will not hold a braced filename: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notesdraft.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewFindFiles(nil)
+	args, _ := json.Marshal(map[string]any{"pattern": `notes\{draft,final\}.md`, "path": dir})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("an escaped braced pattern should be supported, got: %v", err)
+	}
+	if !strings.Contains(out, literal) {
+		t.Errorf("expected the literal braced filename to match, got:\n%s", out)
+	}
+	if strings.Contains(out, "notesdraft.md") {
+		t.Errorf("an escaped pattern must not expand into alternatives, got:\n%s", out)
+	}
+}
+
 // TestFindFiles_BraceGlob is the F2 regression test: "*.{go,md}" returned a
 // clean "No files found" because filepath.Match treats the braces as literal
 // characters and reports no error for them.
@@ -96,26 +188,38 @@ func TestFindFiles_BraceGlob(t *testing.T) {
 // TestFindFiles_BraceGlobWithDirPrefix covers the pruning half of the fix:
 // globLiteralPrefix must stop at a brace segment, or the walk prunes away the
 // very directories the braced glob was meant to reach.
+//
+// The file names deliberately do NOT share a substring with the directory names
+// in the pattern. An earlier version of this test asserted on "alpha"/"beta",
+// which the tool's own no-match message satisfies because it echoes the pattern
+// back (`No files found matching "{alpha,beta}/x.go".`) — so it passed with the
+// fix reverted, and the pruning half of the fix had no real coverage at all.
 func TestFindFiles_BraceGlobWithDirPrefix(t *testing.T) {
 	dir := t.TempDir()
-	for _, sub := range []string{"alpha", "beta", "gamma"} {
+	for sub, leaf := range map[string]string{
+		"alpha": "first.go", "beta": "second.go", "gamma": "third.go",
+	} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, sub, "x.go"), []byte("x\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, sub, leaf), []byte("x\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	tool := NewFindFiles(nil)
-	args, _ := json.Marshal(map[string]any{"pattern": "{alpha,beta}/x.go", "path": dir})
+	args, _ := json.Marshal(map[string]any{"pattern": "{alpha,beta}/*.go", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
 	if err != nil {
 		t.Fatalf("braced directory pattern should be supported, got: %v", err)
 	}
-	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
-		t.Errorf("expected both braced directories, got:\n%s", out)
+	if strings.Contains(out, "No files found") {
+		t.Fatalf("braced directory pattern matched nothing:\n%s", out)
 	}
-	if strings.Contains(out, "gamma") {
+	// These names appear only in real results, never in the echoed pattern.
+	if !strings.Contains(out, "first.go") || !strings.Contains(out, "second.go") {
+		t.Errorf("expected both braced directories' files, got:\n%s", out)
+	}
+	if strings.Contains(out, "third.go") {
 		t.Errorf("gamma is outside the braces and must not match, got:\n%s", out)
 	}
 }

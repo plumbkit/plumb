@@ -450,7 +450,8 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 // short-circuited without invoking git at all. `git add -A -- <dir>` stages
 // those deletions perfectly well; they simply never reached it.
 func recordTrackedDirs(trackedDirs map[string]bool, file, root string) {
-	for dir := filepath.Dir(file); strings.HasPrefix(dir, root); {
+	root = filepath.Clean(root)
+	for dir := filepath.Dir(file); dirWithinRoot(dir, root); {
 		if trackedDirs[dir] {
 			return // this ancestor chain is already recorded
 		}
@@ -464,6 +465,22 @@ func recordTrackedDirs(trackedDirs map[string]bool, file, root string) {
 		}
 		dir = parent
 	}
+}
+
+// dirWithinRoot reports whether dir is root or lies beneath it, comparing whole
+// path SEGMENTS. A raw strings.HasPrefix would admit a sibling that merely
+// shares a textual prefix (root "/repo" vs dir "/repository"), and would drop
+// the root itself when root carried a trailing separator — the exact pitfall
+// class boundary.go documents.
+func dirWithinRoot(dir, root string) bool {
+	if dir == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func canonicalAddPaths(repoRoot string, files []string) (string, []string, []string) {

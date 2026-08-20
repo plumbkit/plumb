@@ -253,10 +253,15 @@
   `expandBraces` now expands groups — nested (`{a,b{c,d}}`) and repeated
   (`{a,b}{c,d}`) — for all three tools, matching when any alternative matches,
   and `search_in_files`' refusal is lifted. An unbalanced brace (`a{b`) or a group
-  with no comma (`{x}`) stays literal, as in a shell. Expansion past 256
-  alternatives or 10 levels of nesting is **refused rather than truncated** — a
-  silently shortened list would be the same class of bug. `globLiteralPrefix` now
-  treats `{` as a wildcard, so a braced glob with a directory prefix
+  with no comma (`{x}`) stays literal, as in a shell, and a **backslash-escaped**
+  brace (`notes\{draft,final\}.md`) keeps its pre-expansion literal meaning —
+  without an opt-out, a pattern that relied on braces being ordinary characters
+  would silently start matching different files. Expansion past 256 alternatives,
+  32 brace groups, or 10 levels of nesting is **refused rather than truncated** —
+  a silently shortened list would be the same class of bug. (The group count is
+  checked first, in O(n): a long run of comma-less groups alternates nothing, so
+  it slipped past the other two caps and cost O(n²), re-run per file visited.)
+  `globLiteralPrefix` now treats `{` as a wildcard, so a braced glob with a directory prefix
   (`{alpha,beta}/x.go`) is no longer pruned away before it can match. Expansion
   deliberately does **not** reach `.gitignore` matching, which genuinely has no
   brace syntax — guarded by `TestGitignore_BracesStayLiteral`. Also guarded by
@@ -275,7 +280,8 @@
   the two byte-identical copies (`search_in_files`, `read_file` pattern mode) and
   is wired into `find_replace`. It has two tiers, because firing on a successful
   search means a broad detector would flag ordinary literal searches constantly:
-  unambiguous syntax (`|`, `.*`, `.+`, a leading `^`, and the regex-only escapes
+  unambiguous syntax (a single `|` — `||` is excluded, since boolean-or is
+  ubiquitous and as a regex means something else entirely — `.*`, `.+`, a leading `^`, and the regex-only escapes
   `\.` `\d` `\D` `\w` `\W` `\s` `\S` `\b` `\B`) is flagged either way, while
   shapes that are also ordinary code (`[...]`, `(...)`, `{n,m}`, a trailing `$`)
   are flagged only on a zero-match result, where there is no noise cost. A bare
