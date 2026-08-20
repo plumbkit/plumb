@@ -47,10 +47,12 @@ import (
 // an unresolved ".." outright; Canonical is an identity function, not an
 // authorisation check.
 //
-// It normalises symlinks only. Two spellings that differ solely in case still
-// compare unequal on a case-insensitive filesystem, because resolving that
-// would need a per-component directory read and would be wrong on the
-// case-sensitive filesystems plumb also runs on.
+// It normalises symlinks only, and it must stay that way: the result is a PATH
+// that callers write to (safeWrite creates files under it), so it has to name a
+// real file on the volume it came from. Two spellings differing solely in case
+// therefore still compare unequal here even where the filesystem folds them
+// into one file. That question belongs to CanonicalKey, whose result is an
+// opaque identity key rather than a path and may be lowercased freely.
 func Canonical(p string) string {
 	if p == "" {
 		return ""

@@ -102,6 +102,56 @@ func TestTransactionTwoSpellingsOfOnePathRefused(t *testing.T) {
 	}
 }
 
+// The #346 half of the same shape: two operations naming one file by spellings
+// that differ only in case. txCanonicalPaths deduplicates by lock key, so
+// before CanonicalKey folded case the pair survived as two operations and
+// lockPaths took one non-reentrant mutex twice — the deadlock this dedup exists
+// to prevent, reachable on any case-insensitive volume. The timeout turns that
+// regression into a failure rather than a hung suite.
+//
+// On a case-sensitive filesystem they are two files and must be applied.
+func TestTransactionCaseVariantSpellingsOfOnePathRefused(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	folds := caseVariantsAreOneFile(t, dir)
+	lower := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(lower, []byte("v"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	upper := filepath.Join(dir, "A.TXT")
+	if !folds {
+		if err := os.WriteFile(upper, []byte("v"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	args := map[string]any{"operations": []map[string]any{
+		{"file_path": lower, "edits": []map[string]any{{"old_string": "v", "new_string": "w"}}},
+		{"file_path": upper, "edits": []map[string]any{{"old_string": "v", "new_string": "x"}}},
+	}}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := NewTransactionApply(WriteDeps{}).Execute(context.Background(), raw); done <- err }()
+	select {
+	case err := <-done:
+		if !folds {
+			if err != nil {
+				t.Fatalf("case-sensitive filesystem: two distinct files were refused: %v", err)
+			}
+			return
+		}
+		if err == nil || !strings.Contains(err.Error(), "multiple operations") {
+			t.Fatalf("want a duplicate-path refusal for two case spellings of one file, got %v", err)
+		}
+		if got, _ := os.ReadFile(lower); string(got) != "v" {
+			t.Fatalf("file was written despite the refusal: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transaction_apply deadlocked on two case spellings of one path — it took one non-reentrant mutex twice")
+	}
+}
+
 func TestTransaction_AllOrNothing_OnValidationFailure(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")

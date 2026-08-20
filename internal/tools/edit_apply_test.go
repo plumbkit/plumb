@@ -291,6 +291,118 @@ func TestApplyWorkspaceEdit_RefusesOneSpellingInBothForms(t *testing.T) {
 	}
 }
 
+// caseVariantsAreOneFile reports whether dir's filesystem folds case, from
+// direct evidence rather than from the code under test.
+func caseVariantsAreOneFile(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "casefold-ground-truth")
+	if err := os.WriteFile(probe, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(probe) })
+	seeded, err := os.Lstat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped, err := os.Lstat(filepath.Join(dir, "CASEFOLD-GROUND-TRUTH"))
+	if err != nil {
+		return false
+	}
+	return os.SameFile(seeded, flipped)
+}
+
+// Issue #346, end to end: the reproduction the issue carries. Two URIs
+// differing only in CASE name one file wherever the filesystem folds case, and
+// used to produce two lock keys — so this guard did not fire, lockPaths took
+// two mutexes for one file, and the apply wrote both targets in turn from the
+// same pre-edit bytes. The observed result was err=nil, modified listing BOTH
+// spellings, and the second edit gone: the #314 lost update, still live for
+// this spelling class after #314's own fix.
+//
+// On a case-sensitive filesystem the two really are two files and must still
+// be applied. Both branches are asserted, and CI runs the suite on
+// ubuntu-latest and macos-latest, so both are executed for real.
+func TestApplyWorkspaceEdit_CaseVariantSpellingsOfOneFile(t *testing.T) {
+	dir := t.TempDir()
+	folds := caseVariantsAreOneFile(t, dir)
+	lower := filepath.Join(dir, "file.txt")
+	upper := filepath.Join(dir, "FILE.TXT")
+	const original = "alpha\nbeta\n"
+	if err := os.WriteFile(lower, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !folds {
+		// Two distinct files here, and the apply must find both on disk.
+		if err := os.WriteFile(upper, []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Two DIFFERENT edits, so a lost update shows up in the bytes: line 0 via the
+	// lowercase spelling, line 1 via the uppercase one.
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + lower: {{
+			Range:   protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 5}},
+			NewText: "ALPHA",
+		}},
+		"file://" + upper: {{
+			Range:   protocol.Range{Start: protocol.Position{Line: 1, Character: 0}, End: protocol.Position{Line: 1, Character: 4}},
+			NewText: "BETA",
+		}},
+	}}
+
+	modified, err := applyWorkspaceEdit(we)
+
+	if !folds {
+		// Two genuinely distinct files: refusing them would be the wrong answer.
+		if err != nil {
+			t.Fatalf("case-sensitive filesystem: two distinct files were refused: %v", err)
+		}
+		if len(modified) != 2 {
+			t.Fatalf("case-sensitive filesystem: want both files modified, got %v", modified)
+		}
+		return
+	}
+
+	if err == nil {
+		got, _ := os.ReadFile(lower)
+		t.Fatalf("two case spellings of ONE file were applied, not refused: modified=%v, content=%q", modified, got)
+	}
+	if len(modified) != 0 {
+		t.Errorf("a refused apply must report no modified files, got %v", modified)
+	}
+	if !isEditLogicError(err) {
+		t.Errorf("refusal is not marked editLogicErr, so callers will retry it: %v", err)
+	}
+	if !strings.Contains(err.Error(), "same file under two paths") {
+		t.Errorf("error does not name the defect: %v", err)
+	}
+	if got, _ := os.ReadFile(lower); string(got) != original {
+		t.Fatalf("file was written despite the refusal: %q, want %q", got, original)
+	}
+}
+
+// lockPaths is the concurrency primitive under both guards, and its promise is
+// one mutex per FILE. Two case spellings of one file used to take two, which is
+// the property the guards are built on rather than a consequence of them.
+func TestLockPaths_CaseVariantSpellingsTakeOneLock(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := 2
+	if caseVariantsAreOneFile(t, dir) {
+		want = 1
+	}
+	unlocks := lockPaths([]string{p, filepath.Join(dir, "F.TXT")})
+	defer unlockAll(unlocks)
+
+	if len(unlocks) != want {
+		t.Fatalf("lockPaths took %d locks for the pair, want %d", len(unlocks), want)
+	}
+}
+
 // A bare DocumentChanges entry carrying NO edits alongside a real Changes entry
 // is the compatibility shape servers actually emit, and it cannot lose or
 // duplicate anything — so it must still MERGE rather than trip the guard.

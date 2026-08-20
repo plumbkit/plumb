@@ -141,12 +141,11 @@ type workspaceEditTarget struct {
 // TestRenameSymbol_DeduplicatesTargetsAcrossEditForms pins that such a file is
 // still counted once rather than refused.
 //
-// KNOWN GAP: two spellings differing only in CASE on a case-insensitive
-// filesystem are one file but two lock keys, so they are neither refused here
-// nor collapsed by lockPaths. That is a property of paths.Canonical, which
-// deliberately does not case-fold (see internal/paths/canonical.go), and it is
-// shared with transaction_apply's txCanonicalPaths — not something this guard
-// introduces or can fix on its own.
+// "Two spellings" includes two that differ only in CASE on a filesystem that
+// folds case: lockPathKey routes through paths.CanonicalKey, which probes the
+// volume and lowercases the key where it folds (issue #346), so such a pair
+// arrives here as one key and is refused like any other. It used to arrive as
+// two, which made this guard miss precisely the lost update it exists to stop.
 func workspaceEditTargets(we *protocol.WorkspaceEdit) ([]workspaceEditTarget, error) {
 	targets := make([]workspaceEditTarget, 0, len(we.Changes)+len(we.DocumentChanges))
 	byKey := make(map[string]int, cap(targets))
@@ -228,11 +227,11 @@ func workspaceEditEntries(we *protocol.WorkspaceEdit) []workspaceEditEntry {
 
 // lockPaths locks every distinct path and returns the unlock funcs. Paths are
 // deduplicated and ordered by their canonical lock key (lockPathKey —
-// paths.Canonical), not their raw spelling: two spellings of the same file
-// (e.g. /tmp/x vs /private/tmp/x on macOS) map to one non-reentrant mutex, so
-// a raw-string dedup would self-deadlock on the second acquisition, and
-// canonical ordering keeps the acquisition order consistent across callers
-// regardless of spelling.
+// paths.CanonicalKey), not their raw spelling: two spellings of the same file
+// (/tmp/x vs /private/tmp/x on macOS, or x.txt vs X.txt wherever the volume
+// folds case) map to one non-reentrant mutex, so a raw-string dedup would
+// self-deadlock on the second acquisition, and canonical ordering keeps the
+// acquisition order consistent across callers regardless of spelling.
 func lockPaths(paths []string) []func() {
 	if len(paths) == 0 {
 		return nil

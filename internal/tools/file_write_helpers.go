@@ -192,23 +192,33 @@ func lockPath(path string) func() {
 
 // lockPathKey is the key every per-path bookkeeping agrees on: the write lock
 // (pathLocks), the concurrent-change write tracker, the undo store, and
-// edit_apply's lock-ordering dedup. It routes through paths.Canonical — the
-// tree's one "same place?" answer (issue #273) — rather than open-coding a
-// resolution. Two properties matter:
+// edit_apply's lock-ordering dedup. It routes through paths.CanonicalKey —
+// the tree's one "same file?" answer — rather than open-coding a resolution.
+// Three properties matter:
 //
 //   - A not-yet-existing path resolves by its nearest LIVE ancestor (the
 //     missing-ancestor walk Canonical adds on top of EvalSymlinks). The
 //     creation case is exactly where a path does not exist yet, so two
 //     writers naming one file about to be created under a symlinked parent
 //     by two different spellings take ONE mutex, not two.
+//   - Two spellings differing only in CASE take one key on a filesystem that
+//     folds case, which APFS, HFS+ and NTFS do by default (issue #346).
+//     CanonicalKey probes the filesystem rather than guessing from GOOS,
+//     because a case-sensitive volume of each kind exists and folding two
+//     genuinely distinct files together is worse than not folding at all.
 //   - A relative path is cleaned, never anchored to the daemon's working
 //     directory. Callers anchor relative arguments at the WORKSPACE before
 //     the boundary check (resolvePath / WriteDeps.resolvePath), and the
 //     daemon's cwd belongs to whichever client happened to spawn the
 //     singleton (issue #181) — anchoring here would be a second, silent
 //     answer to a question the boundary already decided.
+//
+// The result is an identity KEY, not a path: on a folding filesystem it is
+// lowercased, so it names the right file there and no file anywhere else.
+// Every caller uses it as a map key or an equality test, and the one place
+// that needs a spelling to write to — safeWrite — calls paths.Canonical.
 func lockPathKey(path string) string {
-	return paths.Canonical(paths.URIToPath(path))
+	return paths.CanonicalKey(paths.URIToPath(path))
 }
 
 // writeResult is returned by safeWrite and carries metadata about the write

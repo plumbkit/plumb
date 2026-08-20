@@ -161,6 +161,41 @@
   stripping C0/C1 control bytes including ESC — a legal byte in a POSIX path —
   so every reader (the dashboard alert, the session detail pane, the web API)
   gets already-clean text rather than each needing its own defence.
+- **Two spellings of one file that differ only in case are now one write lock,
+  one undo slot and one refusal — not two of each
+  ([#346](https://github.com/plumbkit/plumb/issues/346)).** On a filesystem
+  that folds case — APFS, HFS+ and NTFS, so the default on macOS and Windows —
+  `dir/file.txt` and `dir/FILE.txt` are one file, but `lockPathKey` routed
+  through `paths.Canonical`, which resolves symlinks and not spellings, so the
+  pair produced two distinct keys. Everything keyed on it then treated one file
+  as two: `lockPaths` took two non-reentrant mutexes where its whole promise is
+  one per file, the undo store held two snapshots, the write tracker recorded
+  only one of the spellings, and — the visible symptom — a `WorkspaceEdit`
+  naming both was neither refused by #314's guard nor deduplicated by
+  `transaction_apply`'s, so both targets were prepared from the same pre-edit
+  bytes and written in turn. The second write silently discarded the first and
+  the apply reported success, listing both spellings as modified: the #314 lost
+  update, still live for this spelling class after #314's own fix.
+
+  The key now routes through a new `paths.CanonicalKey`, which is `Canonical`
+  plus a lowercase where the volume folds case. `Canonical` itself is
+  deliberately unchanged — its result is a **path** that `safeWrite` creates
+  files under, and a folded string names no file on a case-sensitive volume, so
+  folding there would have been a bug rather than a fix. `CanonicalKey`'s result
+  is an opaque identity key that every caller uses as a map key or an equality
+  test, never as a path.
+
+  Case sensitivity is **probed**, never inferred from `GOOS`: it is a property
+  of the mount, not the OS — a case-sensitive APFS volume is a supported macOS
+  configuration and NTFS has been per-directory since Windows 10. The probe
+  stats a case-flipped spelling of the nearest existing ancestor directory and
+  compares identity with `os.SameFile`, memoised per directory behind a bounded
+  cache. Every failure path declines to fold, because over-folding is the
+  dangerous direction: merging two files that really are distinct would put them
+  in one undo slot, which is a wrong answer rather than a missed merge. Two
+  residual imprecisions — a path whose ancestors span mounts of both kinds, and
+  `strings.ToLower` not being APFS's exact fold — are documented on
+  `CanonicalKey`; both can only fail to merge a pair, never merge a wrong one.
 
 - **`plumb stats --failures` no longer tells you to raise `--limit` when that
   provably cannot help, and no longer lets a blank-kind row carry a stray
