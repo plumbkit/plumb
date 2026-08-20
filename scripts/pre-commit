@@ -30,6 +30,33 @@ if [ -z "$GOLANGCI_LINT" ]; then
 	exit 1
 fi
 
+# Warn when this binary disagrees with the version CI pins.
+#
+# The line below runs `--fix`: it REWRITES files in the working tree. A binary
+# newer than the pin brings newer gofumpt rules with it, so it silently
+# reformats files the commit never touched — they sit there as unstaged
+# modifications until someone's `git add -A` sweeps them into an unrelated PR.
+# That is not hypothetical: two test files drifted this way and had to be
+# cleaned up in a separate commit before lint would pass.
+#
+# A warning, not a failure. Being mid-upgrade is legitimate and blocking every
+# commit over it would be disproportionate — the defect was that the drift was
+# SILENT, and saying so out loud is what fixes that. Every step is guarded
+# against `set -e`: an unreadable or restructured workflow file must not be
+# able to block a commit.
+PINNED_LINT_VERSION="$(sed -n 's/^[[:space:]]*GOLANGCI_LINT_VERSION:[[:space:]]*v\{0,1\}\([0-9][^[:space:]]*\).*/\1/p' .github/workflows/ci.yml 2>/dev/null | head -1 || true)"
+LOCAL_LINT_VERSION="$("$GOLANGCI_LINT" --version 2>/dev/null | sed -n 's/.*has version v\{0,1\}\([0-9][^[:space:]]*\).*/\1/p' | head -1 || true)"
+if [ -n "$PINNED_LINT_VERSION" ] && [ -n "$LOCAL_LINT_VERSION" ] &&
+	[ "$PINNED_LINT_VERSION" != "$LOCAL_LINT_VERSION" ]; then
+	echo "pre-commit: WARNING — golangci-lint $LOCAL_LINT_VERSION does not match the CI pin v$PINNED_LINT_VERSION." >&2
+	echo "  This hook runs 'golangci-lint run --fix', so a mismatched binary can reformat" >&2
+	echo "  files this commit never touched. Check 'git status' before staging, and never" >&2
+	echo "  use 'git add -A' after a mismatched run." >&2
+	echo "  Match it:  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$PINNED_LINT_VERSION" >&2
+	echo "  Or, if the newer version is the one we want, bump GOLANGCI_LINT_VERSION in" >&2
+	echo "  .github/workflows/ci.yml and commit the reformatting deliberately." >&2
+fi
+
 # Use golangci-lint's embedded gofumpt, not the standalone binary.
 # The two can pin different versions and produce phantom diffs.
 "$GOLANGCI_LINT" run --fix ./...
