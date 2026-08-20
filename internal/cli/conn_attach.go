@@ -50,6 +50,19 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		return
 	}
 	if projectRoot != folder {
+		// Drift guard (issue #347): under pinTriggerRestore, folder arrives here
+		// as the root restoreRootIntact already verified resolves to itself.
+		// This Detect call is a second, uncached filesystem walk over the same
+		// path — if a marker appeared or vanished above it in the interval, this
+		// widening is exactly the one restoreRootIntact exists to prevent, and
+		// undeclaredWideRootErr below cannot catch it: PinSourceSessionStart,
+		// which every restore carries, is the one origin it exempts outright.
+		// Refuse instead of widening; a live trigger is untouched — this is the
+		// normal subdirectory-to-root resolution every fresh attach relies on.
+		if err := restoreDriftErr(folder, projectRoot, trigger); err != nil {
+			s.log().Warn("daemon: restore drifted to a different root than the one verified — refusing rather than widening", "verified", folder, "resolved", projectRoot, "err", err)
+			return
+		}
 		folder = projectRoot
 	}
 
