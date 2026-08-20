@@ -225,9 +225,15 @@ func dshEmptyPatchDoc() *yaml.Node {
 
 // writeDSHPatch writes a patch document node back to path atomically, through
 // the shared setup writer. The node round-trip preserves every comment and
-// !!js tag in entries plumb does not own.
+// !!js tag in entries plumb does not own, and marshalYAMLLike keeps their
+// indentation too — a plain yaml.Marshal re-indents the whole layer to 4
+// spaces, which is how plumb has corrupted a client's config before (see
+// marshalYAMLLike).
 func writeDSHPatch(path string, doc *yaml.Node) error {
-	data, err := yaml.Marshal(doc)
+	// Read failure is not fatal: an absent or unreadable file reveals no indent
+	// and marshalYAMLLike falls back to the default.
+	existing, _ := os.ReadFile(path)
+	data, err := marshalYAMLLike(doc, existing)
 	if err != nil {
 		return err
 	}

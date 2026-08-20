@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
-	"gopkg.in/yaml.v3"
 
 	"github.com/plumbkit/plumb/internal/fsync"
 )
@@ -441,41 +440,8 @@ func writeTOML(path string, m map[string]any) error {
 	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.toml"))
 }
 
-// readOrInitYAMLConfig reads cfgPath as YAML into a generic map.
-// isNew is true when the file did not exist.
-func readOrInitYAMLConfig(path string) (m map[string]any, isNew bool, err error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, false, fmt.Errorf("creating directory: %w", err)
-		}
-		return map[string]any{}, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if len(data) == 0 {
-		return map[string]any{}, false, nil
-	}
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, false, fmt.Errorf("parsing %s as YAML: %w — will not overwrite", path, err)
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-	return m, false, nil
-}
-
-// writeYAML writes m to path as YAML, creating the file if needed.
-// It writes to a temp file in the same directory and renames atomically.
-func writeYAML(path string, m map[string]any) error {
-	data, err := yaml.Marshal(m)
-	if err != nil {
-		return err
-	}
-
-	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.yaml"))
-}
+// The YAML side of this file lives in setup_yaml.go: reading a client's YAML
+// config, and the indent-preserving writer that puts it back.
 
 // removeKey is the entry VALUE meaning "delete this key from the existing
 // server entry". mergeServerEntry merges rather than replaces, so deletion is

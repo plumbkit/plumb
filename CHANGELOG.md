@@ -71,6 +71,21 @@
   `@implementation`, C++'s Catch2 `TEST_CASE`, and the five SCSS constructs — all
   still pin their defects as live on v0.51.0.
 
+### Fixed
+
+- **`plumb setup` no longer re-indents a YAML client's whole config, which can
+  corrupt it.** `yaml.Marshal` always emits 4-space indentation, so registering
+  plumb in a 2-space config (Hermes, Goose, DeepSeek Harness) silently restyled
+  every line plumb does not own. The client's own writer then did not recognise
+  its own keys at their new depth and appended a second copy beside them —
+  observed on a real `~/.hermes/config.yaml`, where `plugins.enabled` ended up
+  present twice at two depths and the file stopped parsing, which
+  `plumb setup --all` then reported as an error against a config plumb itself
+  had broken. Both YAML writers now detect the indentation already in the file
+  and encode to match; a file plumb creates fresh is byte-identical to what it
+  produced before. plumb owns one entry in these files and has no business
+  restyling the rest.
+
 ## 0.17.0 (2026-08-20)
 
 ### Added
