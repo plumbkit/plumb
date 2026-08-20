@@ -382,8 +382,10 @@ func (t *Git) checkBoundary(ctx context.Context, a gitToolArgs) error {
 // almost always a typo). A path counts as matched when it is tracked (`git
 // ls-files` reports index content regardless of working-tree state, so a
 // tracked file deleted from disk but not yet staged as a deletion still
-// counts) or when it exists on disk (os.Stat succeeds — covers new untracked
-// files and existing directories). Only meaningful for the "add" subcommand.
+// counts), when it is a directory holding tracked content (see
+// recordTrackedDirs — ls-files never prints a directory itself), or when it
+// exists on disk (os.Stat succeeds — covers new untracked files and empty or
+// untracked directories). Only meaningful for the "add" subcommand.
 //
 // Costs at most one extra git invocation: a single batched `git ls-files --
 // <files>` (unlike `add`, ls-files does not hard-fail on an unmatched
@@ -408,11 +410,14 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 		return a.Files, nil
 	}
 	tracked := map[string]bool{}
+	trackedDirs := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
-		tracked[filepath.Clean(filepath.Join(canonicalRoot, line))] = true
+		abs := filepath.Clean(filepath.Join(canonicalRoot, line))
+		tracked[abs] = true
+		recordTrackedDirs(trackedDirs, abs, canonicalRoot)
 	}
 	for i, f := range a.Files {
 		// Relative inputs resolve against the git toplevel, not a.Repo, which may
@@ -420,7 +425,7 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 		// leaf was deleted, so macOS /var and /private/var aliases compare equal to
 		// git ls-files output.
 		abs := canonicalFiles[i]
-		if tracked[abs] {
+		if tracked[abs] || trackedDirs[abs] {
 			valid = append(valid, f)
 			continue
 		}
@@ -431,6 +436,34 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 		unmatched = append(unmatched, f)
 	}
 	return valid, unmatched
+}
+
+// recordTrackedDirs marks every ancestor of file, up to and including root, as
+// holding tracked content — so a DIRECTORY pathspec can be matched.
+//
+// `git ls-files -- somedir` prints the files under somedir, never somedir
+// itself, so a directory can never be a key in the tracked-FILE set. That left
+// os.Stat as the only clause matching a directory, which in turn matched it
+// only while it still existed. The uncovered intersection — directory AND
+// deleted, exactly what a bulk `rm -rf` produces — reported a real, stageable
+// tree of deletions as an unmatched typo, and resolveAddArgv then
+// short-circuited without invoking git at all. `git add -A -- <dir>` stages
+// those deletions perfectly well; they simply never reached it.
+func recordTrackedDirs(trackedDirs map[string]bool, file, root string) {
+	for dir := filepath.Dir(file); strings.HasPrefix(dir, root); {
+		if trackedDirs[dir] {
+			return // this ancestor chain is already recorded
+		}
+		trackedDirs[dir] = true
+		if dir == root {
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return // reached the filesystem root; cannot ascend further
+		}
+		dir = parent
+	}
 }
 
 func canonicalAddPaths(repoRoot string, files []string) (string, []string, []string) {

@@ -251,7 +251,7 @@ func (t *ReadFile) formatSearchOutput(fpath string, mtime time.Time, sha string,
 	if matchCount == 0 {
 		fmt.Fprintf(&sb, "# plumb-search: no matches for %q (scanned %d %s%s)\n\n", a.Pattern, scanned, textfmt.Plural(scanned, "line", "lines"), rangeNote)
 		fmt.Fprintf(&sb, "No matches for %q in %s%s.", a.Pattern, filepath.Base(fpath), rangeNote)
-		sb.WriteString(readFileLiteralHint(a.Pattern, a.UseRegex))
+		sb.WriteString(literalRegexHint(a.Pattern, a.UseRegex, false))
 		return sb.String()
 	}
 
@@ -264,6 +264,7 @@ func (t *ReadFile) formatSearchOutput(fpath string, mtime time.Time, sha string,
 	if truncated {
 		fmt.Fprintf(&sb, "\n… (search output truncated at %d %s — narrow the pattern, or restrict the scan with start_line/end_line)", matchCount, textfmt.Plural(matchCount, "match", "matches"))
 	}
+	sb.WriteString(literalRegexHint(a.Pattern, a.UseRegex, true))
 	return sb.String()
 }
 
@@ -310,17 +311,4 @@ func searchRangeLabel(start, end int) string {
 	default:
 		return fmt.Sprintf("1–%d", end)
 	}
-}
-
-// readFileLiteralHint mirrors search_in_files' nudge: on a zero-match literal
-// search whose pattern contains obvious regex syntax (| alternation or .*/.+),
-// point out it was matched literally so a clean "no matches" is not misread.
-func readFileLiteralHint(pattern string, useRegex bool) string {
-	if useRegex {
-		return ""
-	}
-	if !strings.Contains(pattern, "|") && !strings.Contains(pattern, ".*") && !strings.Contains(pattern, ".+") {
-		return ""
-	}
-	return "\nNote: the pattern contains regex syntax (| alternation or .*) but use_regex is false, so it was matched literally. Pass use_regex: true to treat it as a pattern."
 }

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -196,11 +195,13 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		if cancelled {
 			return "", walkErr
 		}
-		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern) + literalMetacharHint(a) + withheldNote, nil
+		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern) +
+			literalRegexHint(a.Pattern, a.UseRegex, false) + withheldNote, nil
 	}
 
 	ann := t.annotateWithSymbols(ctx, a, results)
-	return pathNote + formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped) + withheldNote, nil
+	return pathNote + formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped) +
+		literalRegexHint(a.Pattern, a.UseRegex, true) + withheldNote, nil
 }
 
 func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
@@ -211,12 +212,11 @@ func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
 	if a.Pattern == "" {
 		return a, errors.New("search_in_files: pattern must not be empty")
 	}
-	if strings.ContainsAny(a.Glob, "{}") {
-		return a, fmt.Errorf(
-			"search_in_files: glob %q contains brace alternation {...} which filepath.Match does not support; "+
-				"run separate searches for each extension instead (e.g. two calls with \"*.go\" and \"*.ts\")",
-			a.Glob,
-		)
+	// Brace alternation used to be refused here because filepath.Match has none;
+	// doubleStarMatchFile now expands it, so "**/*.{go,md}" works. A malformed or
+	// runaway group is still rejected, with the expander's own message.
+	if _, err := expandBraces(a.Glob); err != nil {
+		return a, fmt.Errorf("search_in_files: %w", err)
 	}
 	return a, nil
 }
@@ -259,22 +259,6 @@ func resolveSearchRoot(ctx context.Context, a searchInFilesArgs, ws WorkspaceFn,
 		return filepath.Dir(root), root, note, nil
 	}
 	return root, "", "", nil
-}
-
-// literalMetacharHint returns a one-line nudge when a literal-mode (use_regex
-// false) search used a pattern containing unambiguous regex syntax — `|`
-// alternation or `.*`/`.+` — which was therefore matched literally. It only
-// fires on a zero-match result, the false-negative the feedback log flagged
-// (e.g. searching "A|B|C" literally and reading the clean "No matches" as
-// "these don't exist"). Conservative on purpose: a bare `.` does not trigger it.
-func literalMetacharHint(a searchInFilesArgs) string {
-	if a.UseRegex {
-		return ""
-	}
-	if !strings.Contains(a.Pattern, "|") && !strings.Contains(a.Pattern, ".*") && !strings.Contains(a.Pattern, ".+") {
-		return ""
-	}
-	return "\nNote: the pattern contains regex syntax (| alternation or .*) but use_regex is false, so it was matched literally. Pass use_regex: true to treat it as a pattern."
 }
 
 func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {

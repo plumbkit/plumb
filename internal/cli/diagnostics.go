@@ -103,9 +103,12 @@ func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) erro
 	globs, langLabel := detectDiagnosticsLang(cwd)
 
 	// Walk every source file in the workspace via find_files. A language may map
-	// to several globs (e.g. *.ts and *.tsx) because find_files has no brace
-	// expansion; scan each and concatenate. The extensions are disjoint, so the
-	// combined list needs no de-duplication.
+	// to several globs (e.g. *.ts and *.tsx); scan each and concatenate. The
+	// extensions are disjoint, so the combined list needs no de-duplication.
+	// find_files now supports brace alternation, so these could collapse into one
+	// "*.{ts,tsx}" call — deliberately not done, because max_results is a PER-CALL
+	// budget and merging them would quietly shrink the scan for multi-glob
+	// languages from 500 files per extension to 500 in total.
 	var srcFiles []string
 	for _, glob := range globs {
 		listOut, err := cli.CallTool("find_files", map[string]any{
@@ -169,9 +172,8 @@ func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) erro
 // weak co-located marker (a package.json from frontend tooling, a static
 // index.html). Falls back to Go when no recognised marker is found.
 //
-// A language can map to several globs because find_files matches with
-// filepath.Match, which has no brace expansion — so .ts and .tsx are separate
-// patterns the caller scans in turn.
+// A language can map to several globs, which the caller scans in turn so each
+// gets its own max_results budget.
 func detectDiagnosticsLang(ws string) (globs []string, label string) {
 	markers := []struct {
 		file  string

@@ -304,8 +304,28 @@ func allLower(s string) bool {
 	return true
 }
 
-// doubleStarMatchFile matches a glob that may contain ** against a slash-separated path.
+// doubleStarMatchFile matches a glob that may contain ** — and, since
+// filepath.Match has no brace syntax of its own, brace alternation — against a
+// slash-separated path. The path matches when ANY expanded alternative matches.
 func doubleStarMatchFile(glob, path string) (bool, error) {
+	alts, err := expandBraces(glob)
+	if err != nil {
+		return false, err
+	}
+	for _, alt := range alts {
+		m, matchErr := doubleStarMatchOne(alt, path)
+		if matchErr != nil {
+			return false, matchErr
+		}
+		if m {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// doubleStarMatchOne matches a single brace-free glob against a path.
+func doubleStarMatchOne(glob, path string) (bool, error) {
 	// Try base name first for simple globs.
 	base := path
 	if idx := strings.LastIndex(path, "/"); idx >= 0 {

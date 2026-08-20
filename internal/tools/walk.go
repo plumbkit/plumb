@@ -197,6 +197,10 @@ const binarySniffBytes = 8000
 // globLiteralPrefix returns the longest leading slash-delimited segment of
 // glob that contains no wildcard metacharacters. Used for directory-level
 // pruning: a glob like "src/**/*.go" can never match files outside "src/".
+//
+// Brace alternation counts as a metacharacter: "pkg/{a,b}/x.go" may match under
+// either branch, so the prefix must stop at "pkg". Omitting `{` here pruned away
+// the very directories a braced glob was meant to reach.
 func globLiteralPrefix(glob string) string {
 	if glob == "" {
 		return ""
@@ -204,7 +208,7 @@ func globLiteralPrefix(glob string) string {
 	parts := strings.Split(filepath.ToSlash(glob), "/")
 	var lit []string
 	for _, p := range parts {
-		if strings.ContainsAny(p, "*?[") {
+		if strings.ContainsAny(p, "*?[{}") {
 			break
 		}
 		lit = append(lit, p)
