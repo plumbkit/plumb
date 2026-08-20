@@ -106,7 +106,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 ## Code style rules
 
 - **Australian English** in all prose: docs, comments, log messages, error strings. Use -ise/-isation, behaviour, colour, honour, favour. **Exception:** identifiers from external specs keep their canonical spelling — LSP method names (`initialize`, `publishDiagnostics`), MCP protocol fields, Go standard library names.
-- **`gofumpt`** on save. `golangci-lint` v2.12.2 before every commit; CI enforces.
+- **`gofumpt`** on save. `golangci-lint` before every commit; CI enforces. The version is pinned by `GOLANGCI_LINT_VERSION` in `.github/workflows/ci.yml` — match it locally, because the pre-commit hook runs `--fix` off PATH and a newer binary reformats files CI never asked to change.
 - **`log/slog`** exclusively. Never `log` package or `fmt.Println` for logging.
 - **Errors wrap context:** `fmt.Errorf("loading config: %w", err)`.
 - **Context everywhere:** every blocking/I/O operation takes `context.Context` first.
