@@ -136,6 +136,31 @@
   re-resolution lands somewhere other than the root that was verified, at all
   three sites: `repinWorkspaceFrom`, `attachWorkspacePinFrom`, and
   `rehydratePin`'s synthetic-root branch. A live re-pin is unaffected.
+- **The dashboard's blocked-session alert now shows the session's own remedy,
+  instead of a fixed string that was wrong (and looped) for two of its three
+  causes.** `Health: blocked` covers a boundary violation, the #182 sticky
+  re-pin refusal, and the #318 wide-claim refusal, each with a different next
+  step, and `HealthMessage` already carried the right one — but
+  `dashboardWorkspaceStateAlert` ignored it in favour of "start a new MCP
+  connection", which loops for a refused re-pin: reconnecting replays the same
+  pin and is refused again. The alert now renders `HealthMessage` directly,
+  falling back to the fixed string only when it is empty. Two writers
+  (`conn_repin.go`'s sticky-pin refusal and `conn_register.go`'s
+  `WithPinConflict` hook) recorded no remedy at all; both now do, the first via
+  a `repinStickyRemedy` const shared with the error text returned to the
+  caller so the two cannot drift apart.
+
+  Two more fixes needed for the message to render safely: `wrapText`
+  (`internal/tui/model_utils.go`) now hard-breaks any whitespace-free token
+  wider than the target width (client-supplied paths are unbounded) instead of
+  letting it overflow and corrupt the box's borders, and the Alerts widget
+  caps each message at 8 wrapped lines, eliding the *middle* rather than the
+  tail so a remedy sitting at the end of a long message survives. And
+  `HealthMessage` is now sanitised once, at the `internal/session` write
+  boundary (`Register`/`Patch` both funnel through `writeSessionFileAtomic`),
+  stripping C0/C1 control bytes including ESC — a legal byte in a POSIX path —
+  so every reader (the dashboard alert, the session detail pane, the web API)
+  gets already-clean text rather than each needing its own defence.
 
 - **`plumb stats --failures` no longer tells you to raise `--limit` when that
   provably cannot help, and no longer lets a blank-kind row carry a stray

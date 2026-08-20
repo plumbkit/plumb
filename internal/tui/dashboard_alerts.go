@@ -2,6 +2,35 @@ package tui
 
 import "fmt"
 
+// maxAlertLines caps how many wrapped lines a single alert may occupy in the
+// Alerts widget. Without a cap, a HealthMessage embedding a long
+// client-supplied path (issue #358) can hard-wrap into dozens of lines and
+// push every other dashboard widget below the fold, even though each line
+// individually fits the box (that corruption is wrapText's job, see
+// model_utils.go).
+const maxAlertLines = 8
+
+// capAlertLines caps lines at maxAlertLines, eliding the MIDDLE rather than
+// the tail: it keeps the first lines, one "…" line, and the last two. A prior
+// attempt at this same problem (issue #358) truncated the tail, which is
+// exactly where a boundary-violation message's remedy sentence sits — that
+// attempt's cap fell squarely on the remedy and its own test could not catch
+// it because it compared against the constant under test rather than a real
+// message. Keeping the last two lines here is what a widget-level test can
+// assert against: the final sentence of a long message must still appear.
+func capAlertLines(lines []string) []string {
+	if len(lines) <= maxAlertLines {
+		return lines
+	}
+	const tail = 2
+	head := maxAlertLines - tail - 1 // 1 line reserved for the "…" marker
+	out := make([]string, 0, maxAlertLines)
+	out = append(out, lines[:head]...)
+	out = append(out, "…")
+	out = append(out, lines[len(lines)-tail:]...)
+	return out
+}
+
 func (m Model) dashAlertsWidget(width int) []string {
 	inner := width - 2
 	alerts := m.dashboardAlerts()
@@ -22,7 +51,7 @@ func (m Model) dashAlertsWidget(width int) []string {
 			if i > 0 {
 				content = append(content, "") // blank line between alerts
 			}
-			for j, line := range wrapText(msg, textWidth) {
+			for j, line := range capAlertLines(wrapText(msg, textWidth)) {
 				if j == 0 {
 					content = append(content, lpad+WarnStyle.Render("✗")+" "+WarnStyle.Render(line)+rpad)
 				} else {
@@ -82,6 +111,16 @@ func (m Model) dashboardWorkspaceStateAlert() string {
 	}
 	for _, s := range m.sessions {
 		if s.Health == "blocked" {
+			// Render the session's own remedy (issue #358): Health == "blocked"
+			// now covers several causes (a boundary violation, a refused sticky
+			// re-pin issue #182, a refused wide claim issue #318) with different
+			// remedies, and HealthMessage already carries the right one — the
+			// writers in internal/cli (markBoundaryViolation callers) are
+			// responsible for naming it. Fall back to the fixed string only when
+			// nothing was recorded.
+			if s.HealthMessage != "" {
+				return s.HealthMessage
+			}
 			return "Workspace boundary violation blocked; start a new MCP connection"
 		}
 	}

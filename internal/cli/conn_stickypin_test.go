@@ -307,6 +307,73 @@ func TestStickyPin_RefusalMarksSessionHealth(t *testing.T) {
 	}
 }
 
+// TestStickyPin_RefusalHealthMessageNamesTheForceRemedy is issue #358, change
+// 1a: the sticky-pin refusal's HealthMessage — what the dashboard alert now
+// renders directly — must carry the SAME actionable remedy as the refusal
+// error returned to the caller (force: true), not just say "sticky" and stop.
+// repinStickyRemedy (conn_repin.go) is the shared const both are built from,
+// so this also guards against the two drifting apart later.
+func TestStickyPin_RefusalHealthMessageNamesTheForceRemedy(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("precondition: the conflicting re-pin should have been refused")
+	}
+	health, msg := sessionHealth(t, s.sessID)
+	if health != "blocked" {
+		t.Fatalf("health = %q, want blocked", health)
+	}
+	if !strings.Contains(msg, "force: true") {
+		t.Errorf("HealthMessage should name the force: true remedy, got %q", msg)
+	}
+}
+
+// TestPinConflict_HealthMessageNamesTheNewConnectionRemedy is issue #358,
+// change 1b: the OTHER remedy-less markBoundaryViolation caller —
+// conn_register.go's onPinConflict, wired as session_start's WithPinConflict
+// hook. It fires only when no re-pin callback is wired at all
+// (tools.SessionStart.repinExplicit, internal/tools/session_start.go:565),
+// whose OWN returned error already names the correct remedy for this exact
+// caller: there is no force flag to retry with here (unlike the sticky-pin
+// guard above), so the only escape is a new connection. The HealthMessage
+// must repeat that, not leave the operator with nothing actionable.
+func TestPinConflict_HealthMessageNamesTheNewConnectionRemedy(t *testing.T) {
+	store, ss := newOriginStore(t)
+	root, other := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, root)
+	mustGitDir(t, other)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+
+	// Deliberately no WithRepin: this is the no-repin-callback fallback branch
+	// registerAllTools never actually exercises in production (it always wires
+	// WithRepin(s.repinWorkspace)), but it is the one that reaches onPinConflict.
+	tool := tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
+		WithPinConflict(s.onPinConflict)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+other+`"}`)); err == nil {
+		t.Fatal("expected the no-repin-callback fallback to refuse the switch")
+	}
+	health, msg := sessionHealth(t, s.sessID)
+	if health != "blocked" {
+		t.Fatalf("health = %q, want blocked", health)
+	}
+	if !strings.Contains(msg, "new MCP connection") {
+		t.Errorf("HealthMessage should name the \"start a new MCP connection\" remedy, got %q", msg)
+	}
+}
+
 func TestStickyPin_ConcurrentExplicitPins_ExactlyOneLands(t *testing.T) {
 	// The check-then-act hardening: the guard runs on the view under mutation,
 	// so two explicit re-pins racing on an unpinned connection serialise —

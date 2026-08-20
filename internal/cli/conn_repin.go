@@ -17,6 +17,13 @@ import (
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
+// repinStickyRemedy is the actionable next step for a refused sticky re-pin
+// (issue #182). It is shared, word-for-word, between the refusal error
+// returned to the caller and the HealthMessage recorded for the dashboard
+// (issue #358) — extracted into one const so a future edit to either surface
+// cannot silently leave the other stale.
+const repinStickyRemedy = "If you are a new conversation deliberately switching this connection to a different project, call session_start again with force: true; if several agents share this connection, run a dedicated plumb serve process per agent instead."
+
 // repinWorkspace deliberately switches the connection to a different workspace.
 // Unlike attachWorkspace (idempotent, first-wins — the safe default for
 // auto-resolution), this is driven only by an explicit session_start workspace
@@ -196,9 +203,12 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			if origin == sessionstate.PinSourceSessionStart {
 				s.log().Warn("daemon: session_start re-pin refused — explicit pin held (sticky, issue #182)", "pinned", prev, "requested", root)
 				// Surface the refused steal attempt to the operator (TUI /
-				// dashboard); a later successful re-pin clears Health below.
-				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182)", prev, root))
-				refused = fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. If you are a new conversation deliberately switching this connection to a different project, call session_start again with force: true; if several agents share this connection, run a dedicated plumb serve process per agent instead", prev, root, pinProvenanceOf(v))
+				// dashboard); a later successful re-pin clears Health below. The
+				// remedy is appended here too (issue #358) — the dashboard alert
+				// renders HealthMessage directly, so a message with no next step
+				// left the operator with nothing actionable but a loop.
+				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182). %s", prev, root, repinStickyRemedy))
+				refused = fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), repinStickyRemedy)
 				return
 			}
 			// A roots-driven re-pin (the client dropped our root from its

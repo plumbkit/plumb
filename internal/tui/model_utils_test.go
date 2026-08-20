@@ -1,6 +1,11 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+)
 
 func TestContractPathTruncateLeft(t *testing.T) {
 	cases := []struct {
@@ -65,5 +70,53 @@ func TestPathStyleValue(t *testing.T) {
 	}
 	if got := pathStyleValue("full"); got != "full" {
 		t.Errorf("pathStyleValue(\"full\") = %q, want \"full\"", got)
+	}
+}
+
+// TestWrapText_HardBreaksAnUnbreakableToken is issue #358's change 3: a
+// whitespace-free token (a client-supplied path is the common case) used to
+// pass through wrapText untouched no matter how long it was, producing a line
+// wider than width that corrupted the caller's box (see
+// TestDashAlertsWidget_LongPathNeverExceedsWidth for the widget-level version
+// of this same assertion). Every line must fit, and no rune may be lost —
+// concatenating the lines must reproduce the input exactly.
+func TestWrapText_HardBreaksAnUnbreakableToken(t *testing.T) {
+	input := strings.Repeat("a", 500)
+	lines := wrapText(input, 40)
+	if len(lines) == 0 {
+		t.Fatal("wrapText returned no lines")
+	}
+	var rebuilt strings.Builder
+	for _, l := range lines {
+		if w := lipgloss.Width(l); w > 40 {
+			t.Errorf("line %q has width %d, want <= 40", l, w)
+		}
+		rebuilt.WriteString(l)
+	}
+	if rebuilt.String() != input {
+		t.Fatalf("hard-wrapped lines do not reconstruct the input: got %d runes, want %d",
+			len([]rune(rebuilt.String())), len([]rune(input)))
+	}
+}
+
+// TestWrapText_ShortTextStillWrapsOnWordBoundaries is the regression guard for
+// the ordinary case: hardBreak must be a no-op for words that already fit, so
+// normal prose keeps wrapping on spaces rather than being chopped mid-word.
+func TestWrapText_ShortTextStillWrapsOnWordBoundaries(t *testing.T) {
+	got := wrapText("the quick brown fox jumps", 12)
+	want := []string{"the quick", "brown fox", "jumps"}
+	if len(got) != len(want) {
+		t.Fatalf("wrapText lines = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestHardBreak_FitsUnchanged(t *testing.T) {
+	if got := hardBreak("short", 40); len(got) != 1 || got[0] != "short" {
+		t.Fatalf("hardBreak(\"short\", 40) = %v, want [\"short\"] unchanged", got)
 	}
 }
