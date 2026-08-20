@@ -513,7 +513,7 @@ optional context), so an over-cap file stays searchable in one tool. The whole
 file is scanned line-by-line regardless of size; only the *output* is bounded.
 **Search inputs:** `pattern` (literal text by default; a Go RE2 regex when
 `use_regex`), `case_sensitive` (default smart-case — case-insensitive when the
-pattern is all lowercase), `context_lines` (0–10, like `rg -C`; disjoint groups
+pattern is all lowercase), `context_lines` (0–50, like `rg -C`; disjoint groups
 get an `--` separator), `max_matches` (1–2000, default 200; output is truncated
 and labelled beyond it). `pattern` may be combined with `start_line`/`end_line`
 (or `offset`) to **restrict the search to that line window**, but not with
@@ -558,17 +558,19 @@ ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**
 `pattern` (required — **literal text by default**, a Go RE2 regex only when
 `use_regex` is true), `use_regex`, `path`, `glob` (supports brace alternation,
 e.g. `**/*.{go,md}`), `exclude` (array of globs), `case_sensitive`,
-`context_lines` (0–10), `max_results` (default 200), `include_hidden`,
+`context_lines` (0–50), `max_results` (default 200), `include_hidden`,
 `max_file_bytes`, `include_enclosing_symbol` (bool — annotates each hit with the
-deepest enclosing LSP symbol; requires LSP).
+deepest enclosing LSP symbol; requires LSP). Total output is capped at 200 KiB;
+truncation is labelled.
 
 A literal-mode search whose pattern contains regex syntax appends a one-line
 note saying so, since the alternative reading of a clean "No matches" is "these
-don't exist". Unambiguous syntax (`|`, `.*`, `.+`, a leading `^`, and regex
-escapes such as `\.`/`\d`/`\w`/`\s`) is flagged whether or not the search
-matched; shapes that are also ordinary code (`[...]`, `(...)`, `{n,m}`, a
-trailing `$`) are flagged only when nothing matched. `find_replace` and
-`read_file`'s pattern mode carry the same note.
+don't exist". Unambiguous syntax (a single `|` — `||` is excluded, since
+boolean-or is ubiquitous — `.*`, `.+`, a leading `^`, and regex escapes such as
+`\.`/`\d`/`\w`/`\s`) is flagged whether or not the search matched; shapes that
+are also ordinary code (`[...]`, `(...)`, `{n,m}`, a trailing `$`) are flagged
+only when nothing matched. `find_replace` and `read_file`'s pattern mode carry
+the same note.
 
 ### `file_status`
 Lightweight, read-only "did this file change under me?" probe — no content
@@ -629,9 +631,19 @@ rewriting a block whose interior changes but whose boundary lines are stable.
 `include_anchors` (bool, default false).
 
 ### `delete_file`
-Delete a file (refuses directories unless `allow_dir` and the directory is empty).
-The response reports the line and byte count removed (bytes only for a binary or
-oversized file). **Inputs:** `file_path` (required), `dirty_ok`, `allow_dir`.
+Delete files and empty directories (refuses directories unless `allow_dir`, and
+even then only when empty — there is no recursive delete). The response reports
+the line and byte count removed (bytes only for a binary or oversized file).
+**Inputs:** `file_path` **or** `paths` (array, max 100 — not both), `dirty_ok`,
+`allow_dir`.
+
+`paths` batches round-trips, not semantics: every path obeys the same per-path
+rules. All paths are validated — boundary, existence, `allow_dir`, dirty —
+**before any is removed**, so a batch that will be refused is refused whole.
+Removal order is files first, then directories deepest-first, so listing a tree's
+files together with its directories works in one call. Each path consumes a
+rate-limit token. To clear a tree: `find_files` its contents, then one
+`delete_file` batch with `allow_dir: true`.
 
 ### `rename_file`
 **Primary move tool.** Atomic move/rename. **Inputs:** `from`, `to` (required),

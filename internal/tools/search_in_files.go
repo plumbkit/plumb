@@ -32,6 +32,12 @@ const searchDefaultDeadline = 30 * time.Second
 // file is still scanned.
 const searchMaxLineBytes = 1 << 20 // 1 MiB
 
+// searchMaxContextLines is the ceiling for context_lines. Raised from 10 once
+// formatSearchOutput gained a total-output budget: the old value existed because
+// the response size was otherwise unbounded, and it was declared only in the
+// JSON schema, so it was enforced by the client rather than by plumb.
+const searchMaxContextLines = 50
+
 // searchDefaultMaxFileBytes guards against a single multi-hundred-MB text
 // file (a log, a JSON dump, generated SQL) stalling the walk. Files larger
 // than this are skipped before opening. Callers can override via max_file_bytes.
@@ -68,9 +74,9 @@ var searchInFilesSchema = json.RawMessage(`{
     },
     "context_lines": {
       "type": "integer",
-      "description": "Number of lines of context to show before and after each match (like rg -C). Default 0.",
+      "description": "Number of lines of context to show before and after each match (like rg -C). Default 0. Total output is capped at 200 KiB regardless, and truncation is labelled.",
       "minimum": 0,
-      "maximum": 10
+      "maximum": 50
     },
     "max_results": {
       "type": "integer",
@@ -211,6 +217,13 @@ func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
 	}
 	if a.Pattern == "" {
 		return a, errors.New("search_in_files: pattern must not be empty")
+	}
+	// The declared maximum was schema-only — nothing server-side ever read it, so
+	// the ceiling was enforced by whichever MCP client validated the schema and
+	// not by plumb. Enforce it here too, the way read_file's search mode does.
+	if a.ContextLines > searchMaxContextLines {
+		return a, fmt.Errorf("search_in_files: context_lines must be between 0 and %d (got %d)",
+			searchMaxContextLines, a.ContextLines)
 	}
 	// Brace alternation used to be refused here because filepath.Match has none;
 	// doubleStarMatchFile now expands it, so "**/*.{go,md}" works. A malformed or

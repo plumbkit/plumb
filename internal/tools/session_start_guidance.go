@@ -75,7 +75,7 @@ func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 		"text find-and-replace cannot.\n")
 	sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n")
 	sb.WriteString("- **run_task** — the project's stored `[tasks.<lang>]` build/test/lint command, no shell " +
-		"and bounded output.\n\n")
+		"and bounded output; the Tasks section above says which slots this workspace actually has.\n\n")
 
 	if !t.topologyActive() {
 		sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) " +
@@ -206,7 +206,8 @@ func (t *SessionStart) writeKimiCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
 	sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
 	sb.WriteString("**run_task** runs the project's stored `[tasks.<lang>]` build/test/lint command with no " +
-		"shell and bounded output — prefer it over shelling out to `go test`/`npm test`.\n\n")
+		"shell and bounded output — prefer it over shelling out to `go test`/`npm test`, for the slots the " +
+		"Tasks section above lists as configured.\n\n")
 	sb.WriteString("If plumb's full tool surface feels heavy, `plumb setup kimi-code --lean` writes a " +
 		"client-side allowlist into Kimi's own mcp.json, trimming the loaded schemas to plumb's lean set.\n\n")
 }

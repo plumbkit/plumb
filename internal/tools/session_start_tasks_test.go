@@ -1,0 +1,134 @@
+package tools
+
+import (
+	"strings"
+	"testing"
+)
+
+func renderTaskSection(t *testing.T, st TaskState) string {
+	t.Helper()
+	tool := &SessionStart{tasksFn: func() TaskState { return st }}
+	var sb strings.Builder
+	tool.writeSessionTasks(&sb, "/ws")
+	return sb.String()
+}
+
+// TestWriteSessionTasks_ReportsEmptySlots is the core of the F3 fix: an agent
+// must learn at orientation that run_task has nothing to run, instead of being
+// told to "prefer it over shelling out" and finding out via a refused call.
+func TestWriteSessionTasks_ReportsEmptySlots(t *testing.T) {
+	out := renderTaskSection(t, TaskState{Language: "zig"})
+	if !strings.Contains(out, "no commands configured for zig") {
+		t.Errorf("expected the empty-slot report, got:\n%s", out)
+	}
+	if !strings.Contains(out, "[tasks.zig]") {
+		t.Errorf("expected the remedy to name the config key, got:\n%s", out)
+	}
+	if !strings.Contains(out, "agent_config") {
+		t.Errorf("expected the remedy to mention agent_config, got:\n%s", out)
+	}
+}
+
+// TestWriteSessionTasks_NamesUnreachableLanguages pins the finding that made F3
+// more than a config gap: task resolution keys on the single primary language,
+// so a monorepo's other languages cannot be reached even though their defaults
+// exist and the identity line lists them.
+func TestWriteSessionTasks_NamesUnreachableLanguages(t *testing.T) {
+	out := renderTaskSection(t, TaskState{
+		Language:    "zig",
+		Configured:  []string{"build", "test"},
+		Unreachable: []string{"typescript"},
+	})
+	if !strings.Contains(out, "typescript") {
+		t.Errorf("expected the unreachable sibling language to be named, got:\n%s", out)
+	}
+	if !strings.Contains(out, "primary language only") {
+		t.Errorf("expected the reason to be stated, got:\n%s", out)
+	}
+}
+
+// TestWriteSessionTasks_ListsConfiguredAndMissing: when commands DO exist, the
+// section must still say which slots will be refused.
+func TestWriteSessionTasks_ListsConfiguredAndMissing(t *testing.T) {
+	out := renderTaskSection(t, TaskState{Language: "go", Configured: []string{"build", "test", "verify"}})
+	if !strings.Contains(out, "build, test, verify") {
+		t.Errorf("expected the configured slots, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Not configured: lint, e2e") {
+		t.Errorf("expected the missing slots named, got:\n%s", out)
+	}
+}
+
+// TestWriteSessionTasks_ReportsEmptyCommandAllowList: run_command ships with no
+// [[command]] entries at all, so a fresh workspace cannot use it either.
+func TestWriteSessionTasks_ReportsEmptyCommandAllowList(t *testing.T) {
+	out := renderTaskSection(t, TaskState{Language: "go", Configured: []string{"build"}})
+	if !strings.Contains(out, "no `[[command]]` entries configured") {
+		t.Errorf("expected the empty allow-list report, got:\n%s", out)
+	}
+	withCmds := renderTaskSection(t, TaskState{Language: "go", Configured: []string{"build"}, Commands: []string{"e2e"}})
+	if !strings.Contains(withCmds, "`run_command`: e2e") {
+		t.Errorf("expected the configured commands listed, got:\n%s", withCmds)
+	}
+}
+
+// TestWriteSessionTasks_NilSafe: the section must vanish when unwired, the same
+// way every other injected section does.
+func TestWriteSessionTasks_NilSafe(t *testing.T) {
+	var sb strings.Builder
+	(&SessionStart{}).writeSessionTasks(&sb, "/ws")
+	if sb.String() != "" {
+		t.Errorf("unwired tasksFn must emit nothing, got:\n%s", sb.String())
+	}
+	sb.Reset()
+	tool := &SessionStart{tasksFn: func() TaskState { return TaskState{} }}
+	tool.writeSessionTasks(&sb, "")
+	if sb.String() != "" {
+		t.Errorf("empty workspace must emit nothing, got:\n%s", sb.String())
+	}
+	sb.Reset()
+	tool.writeSessionTasks(&sb, "/ws")
+	if sb.String() != "" {
+		t.Errorf("a wholly empty TaskState must emit nothing, got:\n%s", sb.String())
+	}
+}
+
+func TestMissingTaskSlots(t *testing.T) {
+	got := missingTaskSlots([]string{"build", "test"})
+	want := []string{"lint", "e2e", "verify"}
+	if len(got) != len(want) {
+		t.Fatalf("missingTaskSlots = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("missingTaskSlots[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if n := len(missingTaskSlots(allTaskSlots)); n != 0 {
+		t.Errorf("a fully configured language should report nothing missing, got %d", n)
+	}
+}
+
+// TestNoCommandError_NamesLanguageAndSlots pins the improved run_task refusal.
+// The old text ("no test command configured for this workspace") named neither
+// the language it resolved for nor what that language does have.
+func TestNoCommandError_NamesLanguageAndSlots(t *testing.T) {
+	err := noCommandError(TaskCommand{Language: "typescript", Configured: []string{"build", "test"}}, "lint")
+	msg := err.Error()
+	for _, want := range []string{"typescript", "build, test", "[tasks.typescript]", "agent_config"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("expected %q in the refusal, got: %s", want, msg)
+		}
+	}
+
+	// And the degenerate case, where nothing at all is configured.
+	bare := noCommandError(TaskCommand{Language: "zig"}, "lint").Error()
+	if !strings.Contains(bare, "no slots are configured") {
+		t.Errorf("expected the no-slots phrasing, got: %s", bare)
+	}
+	// A resolver that supplied no context must still produce a usable message.
+	unknown := noCommandError(TaskCommand{}, "build").Error()
+	if !strings.Contains(unknown, "this workspace") {
+		t.Errorf("expected a graceful fallback with no language, got: %s", unknown)
+	}
+}

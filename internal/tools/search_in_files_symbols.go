@@ -37,14 +37,34 @@ func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFiles
 	return fileAnnotations
 }
 
+// searchMaxOutputBytes bounds the rendered result. search_in_files was the one
+// search tool with no total-output budget: its size was max_results ×
+// (2·context_lines + 1) lines with no de-duplication of overlapping context
+// windows, so raising the context_lines ceiling without this would have let a
+// single call emit an unbounded response. read_file's search mode already
+// bounds itself the same way (matchCollector.budget).
+const searchMaxOutputBytes = 200 * 1024
+
 func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]string, a searchInFilesArgs, timedOut, truncated bool, totalLines, totalSkipped int) string {
 	var sb strings.Builder
+	budgetHit := false
+	filesShown := 0
+files:
 	for _, fm := range results {
+		if sb.Len() >= searchMaxOutputBytes {
+			budgetHit = true
+			break
+		}
 		sb.WriteString(fm.relPath)
 		sb.WriteByte('\n')
+		filesShown++
 		fileAnn := ann[fm.absPath] // nil when feature off or no symbols
 		hitIdx := 0
 		for _, l := range fm.lines {
+			if sb.Len() >= searchMaxOutputBytes {
+				budgetHit = true
+				break files
+			}
 			sb.WriteString(l)
 			sb.WriteByte('\n')
 			// After a hit line (marker ":> "), append the enclosing symbol.
@@ -70,6 +90,10 @@ func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]strin
 	}
 	if totalSkipped > 0 {
 		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkipped)
+	}
+	if budgetHit {
+		summary += fmt.Sprintf("\n⚠ output truncated at %d KiB after %d of %d file(s) — lower context_lines or max_results, or narrow with glob/path.",
+			searchMaxOutputBytes/1024, filesShown, len(results))
 	}
 	sb.WriteString(summary)
 	return sb.String()
