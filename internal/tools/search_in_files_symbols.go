@@ -45,10 +45,11 @@ func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFiles
 // bounds itself the same way (matchCollector.budget).
 const searchMaxOutputBytes = 200 * 1024
 
-func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]string, a searchInFilesArgs, timedOut, truncated bool, totalLines, totalSkipped int) string {
-	var sb strings.Builder
-	budgetHit := false
-	filesShown := 0
+// renderSearchFiles writes each file's hits into sb, stopping once the output
+// budget is spent. Returns how many files were actually shown and whether the
+// budget cut the rendering short. Split out of formatSearchOutput to keep that
+// function under the complexity gate.
+func renderSearchFiles(sb *strings.Builder, results []*searchFileMatch, ann map[string]map[int]string) (filesShown int, budgetHit bool) {
 files:
 	for _, fm := range results {
 		if sb.Len() >= searchMaxOutputBytes {
@@ -57,27 +58,52 @@ files:
 		}
 		sb.WriteString(fm.relPath)
 		sb.WriteByte('\n')
-		filesShown++
 		fileAnn := ann[fm.absPath] // nil when feature off or no symbols
-		hitIdx := 0
+		hitIdx, linesShown := 0, 0
 		for _, l := range fm.lines {
-			if sb.Len() >= searchMaxOutputBytes {
+			// Bound the LINE against the remaining budget. Checking only BETWEEN
+			// lines made the cap advisory: searchMaxLineBytes allows a 1 MiB line,
+			// so a single long match passed every check and carried total output to
+			// ~4.5x the 200 KiB the schema documents as absolute.
+			remaining := searchMaxOutputBytes - sb.Len()
+			if remaining <= 0 {
 				budgetHit = true
+				// Count this file only if some of it was actually shown, so the
+				// "K of N file(s)" tally never credits a file whose header was
+				// written and whose content was not.
+				if linesShown > 0 {
+					filesShown++
+				}
+				break files
+			}
+			if len(l) > remaining {
+				sb.WriteString(l[:remaining])
+				sb.WriteString("…\n")
+				budgetHit = true
+				filesShown++
 				break files
 			}
 			sb.WriteString(l)
 			sb.WriteByte('\n')
+			linesShown++
 			// After a hit line (marker ":> "), append the enclosing symbol.
 			if fileAnn != nil && strings.Contains(l, ":> ") && hitIdx < len(fm.hitLineNums) {
 				lineNo := fm.hitLineNums[hitIdx]
 				hitIdx++
 				if name, ok := fileAnn[lineNo]; ok {
-					fmt.Fprintf(&sb, "  [in: %s]\n", name)
+					fmt.Fprintf(sb, "  [in: %s]\n", name)
 				}
 			}
 		}
+		filesShown++
 		sb.WriteByte('\n')
 	}
+	return filesShown, budgetHit
+}
+
+func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]string, a searchInFilesArgs, timedOut, truncated bool, totalLines, totalSkipped int) string {
+	var sb strings.Builder
+	filesShown, budgetHit := renderSearchFiles(&sb, results, ann)
 
 	var summary string
 	switch {
@@ -92,8 +118,14 @@ files:
 		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkipped)
 	}
 	if budgetHit {
-		summary += fmt.Sprintf("\n⚠ output truncated at %d KiB after %d of %d file(s) — lower context_lines or max_results, or narrow with glob/path.",
-			searchMaxOutputBytes/1024, filesShown, len(results))
+		// Say "also" when the max_results cap already reported a truncation, so the
+		// two lines read as one story rather than as contradicting counts.
+		also := ""
+		if truncated {
+			also = "also "
+		}
+		summary += fmt.Sprintf("\n⚠ output %struncated at %d KiB after %d of %d file(s) — lower context_lines or max_results, or narrow with glob/path.",
+			also, searchMaxOutputBytes/1024, filesShown, len(results))
 	}
 	sb.WriteString(summary)
 	return sb.String()

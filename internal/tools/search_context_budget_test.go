@@ -84,6 +84,36 @@ func TestSearchInFiles_OutputBudget(t *testing.T) {
 	}
 }
 
+// TestSearchInFiles_OutputBudgetIsHardForOneLongLine is the regression test for
+// a defect an independent review found: the budget was checked only BEFORE each
+// line write, so a single long match (searchMaxLineBytes allows 1 MiB) sailed
+// past every check and carried total output to ~5x the documented 200 KiB cap.
+// The cap is documented in the schema as absolute, so it must actually be one.
+func TestSearchInFiles_OutputBudgetIsHardForOneLongLine(t *testing.T) {
+	dir := t.TempDir()
+	// One matching line of ~900 KiB — under the per-line skip threshold, so it is
+	// scanned and emitted rather than skipped.
+	long := "NEEDLE" + strings.Repeat("x", 900*1024)
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(long+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+	args, _ := json.Marshal(map[string]any{"pattern": "NEEDLE", "path": dir})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Allow the summary and path note past the budget, but nothing like a 900 KiB
+	// overshoot.
+	if len(out) > searchMaxOutputBytes+8*1024 {
+		t.Errorf("output was %d bytes against a %d-byte cap — the budget is not hard",
+			len(out), searchMaxOutputBytes)
+	}
+	if !strings.Contains(out, "output truncated") {
+		t.Errorf("truncation must be labelled, got tail:\n%s", out[max(0, len(out)-300):])
+	}
+}
+
 // TestSearchInFiles_SmallResultNotLabelledTruncated guards the blast radius: an
 // ordinary search must not gain a truncation notice.
 func TestSearchInFiles_SmallResultNotLabelledTruncated(t *testing.T) {

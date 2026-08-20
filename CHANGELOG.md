@@ -179,8 +179,12 @@
   and fell back to raw shell (pnpm, playwright, zig) for a whole session. A new
   **Tasks & commands (live)** section, modelled on the git-policy section, names
   the resolved language, the slots that have commands, the slots that will be
-  refused, and the `[[command]]` allow-list. Crucially it also names the
-  **unreachable** languages: task resolution keys on the single primary language
+  refused, and the `[[command]]` allow-list. "Configured" is answered by asking
+  `buildTaskSteps` — the same function `run_task` runs — rather than by a second
+  hand-written predicate, which disagreed with it in both directions (calling
+  `verify` unconfigured on a build-only config that does run, and calling a
+  whitespace-only command configured when `ParseTaskCommand` trims it away).
+  Crucially it also names the **unreachable** languages: task resolution keys on the single primary language
   (`acquiredLanguage`), so in a monorepo the other detected languages' commands —
   **including the shipped defaults for typescript and zig** — cannot be run
   through `run_task` at all, while the identity line happily lists them. That
@@ -208,13 +212,20 @@
   refused is refused whole; removal is files first then directories
   deepest-first, so naming a tree's files and its directories together works in
   one call; each path consumes its own rate-limit token, so a batch cannot spend
-  one token on a hundred deletions; and a partial failure reports what already
-  went rather than failing silently. The single-`file_path` response is
+  one token on a hundred deletions; and a partial failure reports **how many**
+  deletions already landed (on failure the dispatcher returns only the error
+  text, so the per-path list does not survive — the count does). Every path's
+  lock is held across validation **and** removal rather than taken per-path at
+  the moment of removal: in a batch the gap between checking a later path and
+  removing it is real wall-clock time, so a peer's `edit_file` could otherwise
+  write uncommitted content into a path already judged clean and have it deleted
+  anyway despite `dirty_ok:false`. The single-`file_path` response is
   byte-identical to before. Guarded by
   `TestDeleteFile_BatchRemovesTreeInOneCall`,
   `TestDeleteFile_BatchValidatesBeforeRemoving`,
   `TestDeleteFile_NonEmptyDirStillRefused`, `TestDeleteFile_BatchArgValidation`,
-  and `TestDeleteFile_SinglePathResponseUnchanged`.
+  `TestDeleteFile_SinglePathResponseUnchanged`, and
+  `TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove`.
 
 - **`context_lines` goes up to 50, and `search_in_files` finally enforces its own
   ceiling.** The 0–10 cap was declared **only in the JSON schema** —
@@ -224,7 +235,9 @@
   `search_in_files` and `read_file`'s pattern mode, and `search_in_files` now
   rejects an out-of-range value server-side the way `read_file` already did. The
   safety half: `formatSearchOutput` gains a **200 KiB output budget** with a
-  labelled truncation notice — `search_in_files` was the one search tool with no
+  labelled truncation notice, enforced per line rather than only between them (a
+  single 900 KiB match would otherwise pass every check and carry the response to
+  ~4.5x the documented cap) — `search_in_files` was the one search tool with no
   total-output bound (size was `max_results × (2·context_lines + 1)` lines, with
   no de-duplication of overlapping context windows), which is what made the low
   ceiling load-bearing in the first place. Guarded by

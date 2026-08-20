@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func deleteBatchTool() *DeleteFile { return NewDeleteFile(WriteDeps{}) }
@@ -32,7 +33,7 @@ func TestDeleteFile_BatchRemovesTreeInOneCall(t *testing.T) {
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var paths []string
+	paths := make([]string, 0, 4)
 	for _, rel := range []string{"pkg/a.go", "pkg/b.go", "pkg/deep/c.go"} {
 		p := filepath.Join(root, rel)
 		if err := os.WriteFile(p, []byte("package x\n"), 0o644); err != nil {
@@ -174,6 +175,65 @@ func TestDeleteFile_SinglePathResponseUnchanged(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "deleted "+p) {
 		t.Errorf("unexpected single-path response: %q", out)
+	}
+}
+
+// TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove is the regression test
+// for a data-loss defect an independent review found. The batch refactor moved
+// lockPath from covering stat + dirty-check + remove down to covering only the
+// remove, so a peer's edit_file could write uncommitted content into a path
+// already judged clean and have it deleted anyway despite dirty_ok:false.
+//
+// Proved by contention rather than by timing: a peer goroutine tries to take the
+// same path's lock while the batch is mid-flight. If the batch holds the lock
+// from validation through removal, the peer cannot acquire it until the batch is
+// done — which is exactly the guarantee that closes the window.
+func TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove(t *testing.T) {
+	root := t.TempDir()
+	paths := make([]string, 0, 4)
+	for i := range 4 {
+		p := filepath.Join(root, fmt.Sprintf("f%d.txt", i))
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	target := paths[len(paths)-1]
+
+	acquired := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		unlock := lockPath(target)
+		close(acquired)
+		<-release
+		unlock()
+	}()
+	<-acquired // the peer now holds the last path's lock
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = runDelete(t, deleteBatchTool(), map[string]any{"paths": paths, "dirty_ok": true})
+	}()
+
+	// The batch must BLOCK: it cannot have validated-and-removed anything while a
+	// peer holds a lock it needs, because it takes every lock up front.
+	select {
+	case <-done:
+		t.Fatal("batch completed while a peer held one of its path locks — validation and removal are not both covered")
+	case <-time.After(150 * time.Millisecond):
+	}
+	// Nothing may have been removed yet either.
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Errorf("batch removed a path before acquiring every lock: %v", err)
+	}
+
+	close(release)
+	<-done
+	for _, p := range paths {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("expected %s removed once the lock was free, stat err = %v", p, err)
+		}
 	}
 }
 
