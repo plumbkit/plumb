@@ -79,13 +79,23 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	from := t.deps.resolvePath(ctx, a.From)
 	to := t.deps.resolvePath(ctx, a.To)
-	// Same-place by canonical IDENTITY, not raw spelling: renaming a file onto
+	// Same-place by canonical PATH, not raw spelling: renaming a file onto
 	// itself under a second spelling is a no-op request that must be refused —
 	// left alone, lockPaths collapses both spellings into one lock and the call
 	// would proceed as a self-rename. Under the old keying (two spellings, two
 	// keys, raw-sorted double locking) this exact shape was a self-deadlock on
 	// one non-reentrant mutex, no concurrency needed.
-	if lockPathKey(from) == lockPathKey(to) {
+	//
+	// paths.Canonical, deliberately NOT the folding lockPathKey: the question
+	// here is whether the rename would be a no-op, which is about the directory
+	// ENTRY, and "file.txt" -> "FILE.txt" is not one. A case-preserving
+	// filesystem stores the new spelling and `mv` performs exactly this rename,
+	// so keying the check by file identity would refuse a real operation — with
+	// a "same path" message naming something the caller did not ask for — and
+	// leave no way to correct a file's casing through this tool. Locking below
+	// still uses the folded key, so the pair takes ONE mutex and the deadlock
+	// this guard was added for cannot come back through the gap.
+	if paths.Canonical(from) == paths.Canonical(to) {
 		return "", errors.New("rename_file: from and to are the same path")
 	}
 	if err := t.deps.checkBoundary(ctx, from); err != nil {

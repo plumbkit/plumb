@@ -42,6 +42,14 @@ import (
 //     mount nested under a case-insensitive ancestor is probed correctly for
 //     its own files, but a path whose ancestors span both kinds is lowercased
 //     whole, including components the probe never tested.
+//   - A directory that does not exist yet is answered by its nearest live
+//     ancestor, and that answer is cached under the missing directory's own
+//     name. If the directory is then created with a case sensitivity differing
+//     from its parent's — possible on NTFS, whose per-directory flag is set
+//     after creation — the cached verdict stays until the cache is dropped.
+//     The window needs a probe before creation and a deliberate flag flip
+//     after it; no POSIX filesystem can reach it, since case sensitivity there
+//     is fixed at mount.
 //   - strings.ToLower is simple Unicode lowering, not the exact fold APFS
 //     applies. A pair it disagrees with fails to merge, which is the behaviour
 //     that already exists today; it never merges a pair that should not be.

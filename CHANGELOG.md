@@ -197,6 +197,15 @@
   `strings.ToLower` not being APFS's exact fold — are documented on
   `CanonicalKey`; both can only fail to merge a pair, never merge a wrong one.
 
+  `rename_file` keeps its same-path guard on `paths.Canonical` rather than the
+  folded key, so **renaming a file to fix its casing still works**: `file.txt`
+  → `FILE.txt` is a real operation a case-preserving filesystem performs, not a
+  self-rename, and the guard's question is whether the directory ENTRY would
+  change. Locking still uses the folded key, so the pair takes one mutex and
+  the self-deadlock that guard was added for cannot return. `copy_file`'s
+  refusal does move to the folded key, matching `cp`, which likewise declines
+  to copy a file onto itself under a second spelling.
+
 - **`plumb stats --failures` no longer tells you to raise `--limit` when that
   provably cannot help, and no longer lets a blank-kind row carry a stray
   retryable claim.** Two deferred nits from the #242 round-3 review. The
