@@ -1,11 +1,13 @@
 # Changelog
-## 0.16.7 (unreleased)
+## 0.17.1 (unreleased)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
      stamped heading, so a clean rebase is not evidence your entry is in the
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
+
+## 0.17.0 (2026-08-20)
 
 ### Added
 
