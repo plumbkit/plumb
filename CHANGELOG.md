@@ -135,6 +135,44 @@
 
 ### Fixed
 
+- **`edit_file` no longer runs an unbounded Myers diff, nor sleeps out a fixed
+  grace on every write.** A workspace reporting ~683 ms average / ~5 s p95 for
+  `edit_file` turned out to have two separable causes, now both measured — the
+  write path previously had **no benchmarks at all**, despite `[edits] fsync =
+  false` being documented as existing "for benchmarks".
+
+  *The diff was unbounded.* `computeEditScript` keeps one trace snapshot per
+  round, each of length `2*maxD+1`, so time and memory are O(D²) in the edit
+  distance with `maxD = n+m` — and it runs on **every** edit, because
+  `show_write_diff` gates only the *rendering* while `summariseEditScript` needs
+  the same script. Measured on a 3000-line full rewrite: **76 ms and 590 MB of
+  transient garbage per call**, growing quadratically. `maxMyersDistance` (1500)
+  now bounds it, falling back to a whole-file replacement script past that — a
+  shape the summary and unified-diff renderers already accept unchanged. Same
+  workload after: **6 ms and 37 MB**, flat rather than quadratic. Edits inside
+  the bound are byte-for-byte identical to before.
+
+  *The cross-file settle grace was a literal sleep.* `<-time.After(settle)` ran
+  unconditionally on every edit whose file re-published fresh, with
+  `post_write_cross_file` on by default — a flat 200 ms which, together with the
+  adaptive publish wait, put a ~275–500 ms floor under `edit_file` before any
+  I/O. It is now a *ceiling*: the new `Invalidator.WaitForAnyDiagnostics` wakes
+  the sweep as soon as any dependent file actually re-publishes. The default, the
+  ceiling, and the behaviour of a source that cannot signal are all unchanged.
+
+  Guarded by `TestComputeEditScript_BoundedFallsBackToWholeFile`,
+  `TestComputeEditScript_ExactBelowBound`,
+  `TestComputeEditScript_BoundIsMemoryBounded`, `TestWaitForCrossFileSettle_*`,
+  `TestWaitForAnyDiagnostics_WokenByAnyURI`, and
+  `TestWaitNextDiagnostics_StillPerURI` (the blast-radius guard: a per-URI waiter
+  must not fire for an unrelated file), plus new benchmarks for `safeWrite`,
+  `computeEditScript` and `summariseEditScript`.
+
+  Two tail contributors are **reported, not changed**: the two `fsync` calls per
+  write (measured at ~10 ms and essentially size-independent — inherent
+  durability), and `AllDiagnostics()` being deep-copied three times per edit
+  under `diagsMu`, which scales with workspace size rather than edit size.
+
 - **A restored workspace pin could re-resolve to a different, wider root than
   the one just verified, silently bypassing the home-containment guard
   (issue #347).** `restoreRootIntact` verifies a persisted or replayed pin by

@@ -311,7 +311,8 @@ func (d WriteDeps) capturePreWriteBaseline(uri string) *diagBaseline {
 // file itself re-published fresh (else the server is lagging and any delta is
 // unreliable). The settle grace lets dependent files re-publish before the
 // comparison; the single-file result is already built and is never delayed or
-// dropped by this step.
+// dropped by this step. The grace is a CEILING, not a fixed sleep — see
+// waitForCrossFileSettle.
 func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *diagBaseline) string {
 	if baseline == nil || !fresh || !d.crossFileEnabled() {
 		return ""
@@ -321,7 +322,7 @@ func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *
 		return ""
 	}
 	if settle := d.crossFileSettleWindow(); settle > 0 {
-		<-time.After(settle)
+		waitForCrossFileSettle(d.Diag, settle)
 	}
 	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
 	root := ""
@@ -329,6 +330,32 @@ func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *
 		root = d.WorkspaceFn(context.Background())
 	}
 	return formatCrossFileDiagnostics(breaks, root)
+}
+
+// anyDiagnosticsWaiter is the optional capability that lets the settle grace end
+// as soon as a dependent file actually re-publishes.
+type anyDiagnosticsWaiter interface {
+	WaitForAnyDiagnostics(ctx context.Context) error
+}
+
+// waitForCrossFileSettle waits up to settle for a dependent file to re-publish
+// its diagnostics, returning as soon as one does.
+//
+// This used to be a flat `<-time.After(settle)` — an unconditional 200 ms sleep
+// on every edit whose file re-published fresh, with post_write_cross_file on by
+// default. Together with the adaptive publish wait it put a ~275-500 ms floor
+// under edit_file before any I/O, which is most of the measured ~683 ms average.
+// The ceiling and the default are unchanged; only the common case gets shorter,
+// and a source that cannot signal falls back to the original sleep.
+func waitForCrossFileSettle(src postWriteDiagSource, settle time.Duration) {
+	waiter, ok := src.(anyDiagnosticsWaiter)
+	if !ok {
+		<-time.After(settle)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), settle)
+	defer cancel()
+	_ = waiter.WaitForAnyDiagnostics(ctx)
 }
 
 func (d WriteDeps) concurrentWriteSkew() time.Duration {

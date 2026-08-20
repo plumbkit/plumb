@@ -82,14 +82,25 @@ func (inv *Invalidator) Handle(method string, params json.RawMessage) {
 	inv.diagsMu.Lock()
 	inv.diags[p.URI] = p.Diagnostics
 	inv.diagTimes[p.URI] = time.Now()
-	for _, ch := range inv.subs[p.URI] {
+	inv.wakeSubscribersLocked(p.URI)
+	// AnyURI waiters are woken by a publish for ANY file, which is what the
+	// cross-file sweep needs: it cares that SOMETHING re-published, not which.
+	if p.URI != AnyURI {
+		inv.wakeSubscribersLocked(AnyURI)
+	}
+	inv.diagsMu.Unlock()
+}
+
+// wakeSubscribersLocked signals and clears every one-shot waiter on key. The
+// caller must hold diagsMu.
+func (inv *Invalidator) wakeSubscribersLocked(key string) {
+	for _, ch := range inv.subs[key] {
 		select {
 		case ch <- struct{}{}:
 		default:
 		}
 	}
-	delete(inv.subs, p.URI)
-	inv.diagsMu.Unlock()
+	delete(inv.subs, key)
 }
 
 // Diagnostics returns a copy of the latest diagnostics for the given URI: the
@@ -130,6 +141,33 @@ func (inv *Invalidator) WaitDiagnostics(ctx context.Context, uri string) ([]prot
 		return nil, ctx.Err()
 	case <-ch:
 		return inv.Diagnostics(uri), nil
+	}
+}
+
+// AnyURI is the sentinel key for a waiter that should be woken by the next
+// diagnostics publish for ANY file. It cannot collide with a real URI: every
+// real one carries a scheme, and an empty p.URI is rejected before it reaches
+// the subscriber wake-up.
+const AnyURI = ""
+
+// WaitForAnyDiagnostics blocks until any file's diagnostics are republished, or
+// ctx expires. It exists so the post-write cross-file sweep can wait for the
+// dependent files to re-publish and then proceed IMMEDIATELY, instead of
+// sleeping out a fixed grace period on every single edit.
+func (inv *Invalidator) WaitForAnyDiagnostics(ctx context.Context) error {
+	ch := make(chan struct{}, 1)
+
+	inv.diagsMu.Lock()
+	inv.subscribeLocked(AnyURI, ch)
+	inv.diagsMu.Unlock()
+
+	defer inv.unsubscribe(AnyURI, ch)
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ch:
+		return nil
 	}
 }
 

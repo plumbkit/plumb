@@ -78,24 +78,65 @@ func diffSplitLines(s string) []string {
 // editScript is a sequence of diffLines encoding the shortest edit script.
 type editScript []diffLine
 
+// maxMyersDistance bounds the edit distance the exact algorithm will explore.
+//
+// The forward pass keeps one trace snapshot per round, each of length
+// 2*maxD+1 — so memory and time are O(D²) in the edit distance, unbounded by
+// anything else. With maxD left at n+m, a large range-mode replacement in a
+// multi-thousand-line file allocated on the order of 10⁷ ints (~80 MB of
+// transient garbage) inside a single edit_file call, and it ran on EVERY edit:
+// show_write_diff gates only the rendering, because summariseEditScript needs
+// the same script.
+//
+// Beyond this distance the exact script buys nothing a caller can see: the diff
+// is truncated at maxDiffLines (80) and the summary collapses after five ranges,
+// so an edit that large is already reported in aggregate.
+const maxMyersDistance = 1500
+
 // computeEditScript runs Myers' O(ND) shortest-edit-script algorithm and
 // returns the full edit script as a flat sequence of diffLines.
 //
 // Myers' algorithm builds a greedy forward pass (finding the furthest-
 // reaching d-path on each diagonal k) and then backtracks through saved
-// snapshots to reconstruct the exact edit sequence.
+// snapshots to reconstruct the exact edit sequence. Past maxMyersDistance it
+// gives up and describes the change as a whole-file replacement instead.
 func computeEditScript(oldLines, newLines []string) editScript {
 	n, m := len(oldLines), len(newLines)
 	if n == 0 && m == 0 {
 		return nil
 	}
-	maxD := n + m  // worst-case edit distance
+	maxD := n + m // worst-case edit distance
+	bounded := false
+	if maxD > maxMyersDistance {
+		maxD = maxMyersDistance
+		bounded = true
+	}
 	offset := maxD // offset so index k+offset is always ≥0
 	trace, endD, found := myersForward(oldLines, newLines, n, m, maxD, offset)
 	if !found {
-		return nil // should never happen for finite inputs
+		if bounded {
+			// The real distance exceeds the budget. Fall back to the coarse
+			// whole-file script rather than spending O(D²) to describe an edit
+			// whose rendering is capped anyway.
+			return wholeFileEditScript(oldLines, newLines)
+		}
+		return nil // should never happen for finite inputs within budget
 	}
 	return myersBacktrack(oldLines, newLines, n, m, trace, endD, offset)
+}
+
+// wholeFileEditScript describes the change as a full replacement: every old line
+// removed, every new line added. It is a valid editScript, so the summary and
+// unified-diff renderers need no special case.
+func wholeFileEditScript(oldLines, newLines []string) editScript {
+	script := make(editScript, 0, len(oldLines)+len(newLines))
+	for _, l := range oldLines {
+		script = append(script, diffLine{kind: '-', text: l})
+	}
+	for _, l := range newLines {
+		script = append(script, diffLine{kind: '+', text: l})
+	}
+	return script
 }
 
 // myersForward runs the greedy forward pass of Myers' O(ND) algorithm.
