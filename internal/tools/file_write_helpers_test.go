@@ -458,6 +458,12 @@ func TestLockPathKeyResolvesSymlinkTarget(t *testing.T) {
 // assertion pins the key to the resolved spelling itself, not merely to the
 // other spelling: an implementation that agreed with itself while leaving
 // both spellings unresolved would pass an equality-only check.
+//
+// The expected key is the resolved spelling LOWERCASED where the filesystem
+// folds case (issue #346), established here from direct filesystem evidence.
+// The key stops being a path at that point, but the property this test exists
+// for is unchanged: it still has to name the real directory rather than the
+// link, which an unresolved implementation would fail on either kind of volume.
 func TestLockPathKey_MissingFileTwoSpellings(t *testing.T) {
 	dir := paths.Canonical(t.TempDir())
 	realDir := filepath.Join(dir, "real")
@@ -469,9 +475,13 @@ func TestLockPathKey_MissingFileTwoSpellings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := filepath.Join(realDir, "new.txt") // does not exist yet
-	if got := lockPathKey(want); got != want {
-		t.Fatalf("lockPathKey(%q) = %q, want the same resolved spelling for a not-yet-created file", want, got)
+	resolved := filepath.Join(realDir, "new.txt") // does not exist yet
+	want := resolved
+	if caseVariantsAreOneFile(t, realDir) {
+		want = strings.ToLower(resolved)
+	}
+	if got := lockPathKey(resolved); got != want {
+		t.Fatalf("lockPathKey(%q) = %q, want %q — the key of a not-yet-created file must come from its resolved spelling", resolved, got, want)
 	}
 	if got := lockPathKey(filepath.Join(link, "new.txt")); got != want {
 		t.Fatalf("lockPathKey(%q) = %q, want %q — two spellings of one not-yet-created file must take the same key, and it must name the real location", filepath.Join(link, "new.txt"), got, want)
