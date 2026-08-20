@@ -198,17 +198,10 @@ func TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove(t *testing.T) {
 		}
 		paths = append(paths, p)
 	}
-	target := paths[len(paths)-1]
-
-	acquired := make(chan struct{})
-	release := make(chan struct{})
-	go func() {
-		unlock := lockPath(target)
-		close(acquired)
-		<-release
-		unlock()
-	}()
-	<-acquired // the peer now holds the last path's lock
+	// Hold the LAST path's lock. lockPaths acquires in sorted order, so the batch
+	// gets the earlier paths and then blocks here — with none of them yet removed,
+	// which is the property under test.
+	unlock := lockPath(paths[len(paths)-1])
 
 	done := make(chan struct{})
 	go func() {
@@ -216,19 +209,23 @@ func TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove(t *testing.T) {
 		_, _ = runDelete(t, deleteBatchTool(), map[string]any{"paths": paths, "dirty_ok": true})
 	}()
 
-	// The batch must BLOCK: it cannot have validated-and-removed anything while a
-	// peer holds a lock it needs, because it takes every lock up front.
+	// Give the batch time to get as far as it can, then assert on STATE rather
+	// than on a select race: nothing may be gone while the lock is held.
+	time.Sleep(250 * time.Millisecond)
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			unlock()
+			<-done
+			t.Fatalf("batch removed %s while a peer held a lock it needs — validation and removal are not both covered (%v)", p, err)
+		}
+	}
 	select {
 	case <-done:
-		t.Fatal("batch completed while a peer held one of its path locks — validation and removal are not both covered")
-	case <-time.After(150 * time.Millisecond):
-	}
-	// Nothing may have been removed yet either.
-	if _, err := os.Stat(paths[0]); err != nil {
-		t.Errorf("batch removed a path before acquiring every lock: %v", err)
+		t.Fatal("batch completed while a peer held one of its path locks")
+	default:
 	}
 
-	close(release)
+	unlock()
 	<-done
 	for _, p := range paths {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {

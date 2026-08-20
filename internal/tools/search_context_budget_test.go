@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestSearchInFiles_ContextLinesAboveOldCap is the F5 fix. The 0–10 ceiling was
@@ -111,6 +112,52 @@ func TestSearchInFiles_OutputBudgetIsHardForOneLongLine(t *testing.T) {
 	}
 	if !strings.Contains(out, "output truncated") {
 		t.Errorf("truncation must be labelled, got tail:\n%s", out[max(0, len(out)-300):])
+	}
+}
+
+// TestSearchInFiles_TruncatedLineStaysValidUTF8 guards the budget fix's own
+// blast radius: cutting a long line to fit the byte budget must not split a
+// rune. A raw byte slice does exactly that on any non-ASCII line, emitting an
+// invalid sequence into the response.
+func TestSearchInFiles_TruncatedLineStaysValidUTF8(t *testing.T) {
+	dir := t.TempDir()
+	// Multi-byte runes throughout, so a byte-offset cut almost certainly lands
+	// mid-rune.
+	long := "NEEDLE" + strings.Repeat("éü→", 100*1024)
+	if err := os.WriteFile(filepath.Join(dir, "utf8.txt"), []byte(long+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+	args, _ := json.Marshal(map[string]any{"pattern": "NEEDLE", "path": dir})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(out) {
+		t.Error("truncating a long line produced invalid UTF-8")
+	}
+	if !strings.Contains(out, "output truncated") {
+		t.Errorf("expected the truncation label, got tail:\n%s", out[max(0, len(out)-200):])
+	}
+}
+
+func TestRuneSafeCut(t *testing.T) {
+	s := "aéb" // 1 + 2 + 1 bytes
+	cases := []struct{ n, want int }{
+		{0, 0},
+		{1, 1}, // after 'a'
+		{2, 1}, // mid-'é' → back off to 1
+		{3, 3}, // after 'é'
+		{4, 4}, // whole string
+		{99, 4},
+	}
+	for _, tc := range cases {
+		if got := runeSafeCut(s, tc.n); got != tc.want {
+			t.Errorf("runeSafeCut(%q, %d) = %d, want %d", s, tc.n, got, tc.want)
+		}
+		if !utf8.ValidString(s[:runeSafeCut(s, tc.n)]) {
+			t.Errorf("runeSafeCut(%q, %d) produced invalid UTF-8", s, tc.n)
+		}
 	}
 }
 

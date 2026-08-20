@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
@@ -45,6 +46,20 @@ func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFiles
 // bounds itself the same way (matchCollector.budget).
 const searchMaxOutputBytes = 200 * 1024
 
+// runeSafeCut returns the largest offset <= n that does not split a UTF-8 rune.
+// Slicing a matched line by raw byte count to fit the output budget would emit
+// an invalid byte sequence whenever the cut landed mid-rune — which any
+// non-ASCII source line makes likely.
+func runeSafeCut(s string, n int) int {
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
 // renderSearchFiles writes each file's hits into sb, stopping once the output
 // budget is spent. Returns how many files were actually shown and whether the
 // budget cut the rendering short. Split out of formatSearchOutput to keep that
@@ -77,7 +92,7 @@ files:
 				break files
 			}
 			if len(l) > remaining {
-				sb.WriteString(l[:remaining])
+				sb.WriteString(l[:runeSafeCut(l, remaining)])
 				sb.WriteString("…\n")
 				budgetHit = true
 				filesShown++
