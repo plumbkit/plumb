@@ -166,10 +166,17 @@ func (t *DeleteFile) resolveDeletePaths(ctx context.Context, requested []string)
 		if err := t.deps.checkBoundary(ctx, path); err != nil {
 			return nil, fmt.Errorf("delete_file: %w", err)
 		}
-		if seen[path] {
-			continue // the same path named twice is not an error, just redundant
+		// Dedup on the CANONICAL key, not the resolved string: on a case-insensitive
+		// filesystem "A.txt" and "a.txt" resolve to different strings but one file,
+		// so a raw-string dedup let both through as separate targets and the second
+		// removal failed "no such file" after the first succeeded — a partial failure
+		// for a batch that did exactly what was asked. This is the same key lockPaths
+		// dedups by, so the lock set and the target set now agree.
+		key := lockPathKey(path)
+		if seen[key] {
+			continue // the same file named twice is not an error, just redundant
 		}
-		seen[path] = true
+		seen[key] = true
 		out = append(out, path)
 	}
 	return out, nil

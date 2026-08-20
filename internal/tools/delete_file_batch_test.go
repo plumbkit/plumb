@@ -234,6 +234,34 @@ func TestDeleteFile_BatchHoldsLocksAcrossValidateAndRemove(t *testing.T) {
 	}
 }
 
+// TestDeleteFile_CaseVariantSpellingsAreOneTarget: on a case-insensitive
+// filesystem two spellings of one file resolve to different strings but the same
+// file. Deduping by the raw string let both through as separate targets, so the
+// second removal failed "no such file" after the first succeeded — a partial
+// failure for a batch that did exactly what was asked. Skipped where the
+// filesystem is genuinely case-sensitive, since there the two ARE distinct files.
+func TestDeleteFile_CaseVariantSpellingsAreOneTarget(t *testing.T) {
+	root := t.TempDir()
+	lower := filepath.Join(root, "casetest.txt")
+	upper := filepath.Join(root, "CASETEST.txt")
+	if err := os.WriteFile(lower, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("case-sensitive filesystem: the two spellings are different files")
+	}
+
+	out, err := runDelete(t, deleteBatchTool(), map[string]any{
+		"paths": []string{lower, upper}, "dirty_ok": true,
+	})
+	if err != nil {
+		t.Fatalf("two spellings of one file must collapse to one target, got: %v\n%s", err, out)
+	}
+	if _, statErr := os.Stat(lower); !os.IsNotExist(statErr) {
+		t.Errorf("the file should be gone, stat err = %v", statErr)
+	}
+}
+
 // TestDeleteFile_DuplicatePathIsNotAnError: naming the same path twice is
 // redundant, not fatal — the second occurrence would otherwise fail its stat
 // after the first removal and abort a batch that did exactly what was asked.
