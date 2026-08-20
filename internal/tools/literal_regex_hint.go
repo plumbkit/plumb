@@ -39,19 +39,26 @@ var weakQuantifier = regexp.MustCompile(`\{\d+(,\d*)?\}`)
 // something quite different from what such a search asked for — so nudging
 // towards use_regex there is not just noisy, it is wrong advice. A lone `|` is
 // still flagged: that is the alternation the original hint existed for.
+// Implemented by run PARITY rather than by pairing bars as it scans. The
+// scanning version swallowed odd runs of three or more ("|||" reported false):
+// after consuming a pair it saw the next bar's left neighbour was also a bar and
+// skipped it as "already paired", even though that neighbour was the tail of the
+// pair just consumed. A run of odd length always contains one bar that is not
+// part of a `||`, which is the whole question.
 func hasSingleBar(pattern string) bool {
-	for i := 0; i < len(pattern); i++ {
+	for i := 0; i < len(pattern); {
 		if pattern[i] != '|' {
+			i++
 			continue
 		}
-		if i+1 < len(pattern) && pattern[i+1] == '|' {
-			i++ // consume the pair
-			continue
+		run := 0
+		for i < len(pattern) && pattern[i] == '|' {
+			run++
+			i++
 		}
-		if i > 0 && pattern[i-1] == '|' {
-			continue
+		if run%2 == 1 {
+			return true
 		}
-		return true
 	}
 	return false
 }
