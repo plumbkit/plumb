@@ -257,7 +257,18 @@ func withSessionDirLock(dir string, fn func() error) error {
 // in .tmp, so List and FindEnded (which match *.json) ignore it. The temp file
 // is fsynced before the rename and the directory after it, so a crash cannot
 // resurrect a stale session file (the directory fsync is best-effort).
+//
+// It is also the single choke point every writer of HealthMessage passes
+// through (Register directly, Patch — and so markBoundaryViolation — via its
+// own call below), so sanitizeHealthMessage is applied here rather than in
+// any one reader. HealthMessage embeds client-supplied text (a boundary
+// violation quotes the offending path), and ESC is a legal byte in a POSIX
+// path; a prior attempt (issue #358) stripped escapes inside one TUI renderer
+// only, so the raw text still reached the terminal through the session detail
+// pane and the web API, which read the same field without going through that
+// renderer.
 func writeSessionFileAtomic(path string, info Info) error {
+	info.HealthMessage = sanitizeHealthMessage(info.HealthMessage)
 	out, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err

@@ -85,6 +85,22 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 	}
 }
 
+// onPinConflict is session_start's WithPinConflict hook: it fires only from
+// tools.SessionStart.repinExplicit's no-repin-callback branch
+// (internal/tools/session_start.go:565), which is the fallback used when no
+// re-pin callback is wired at all — registerAllTools below always wires one
+// (WithRepin(s.repinWorkspace)), so in production this fires only for a
+// caller using an older/bare tools.SessionStart wiring. That branch's own
+// returned error already names the correct remedy for this specific caller
+// ("To switch projects, start a new MCP connection" — there is no force flag
+// to retry with here, unlike the sticky-pin guard in conn_repin.go), so the
+// HealthMessage recorded for the dashboard (issue #358) repeats it verbatim
+// rather than leaving the operator with no next step.
+func (s *connSession) onPinConflict(requested string) {
+	ws := s.workspace()
+	s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s. To switch projects, start a new MCP connection.", ws, requested))
+}
+
 // registerAllTools registers every MCP tool with srv.
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
 	lspTimeout := s.store.Current().LSPQuery.Timeout.Duration
@@ -240,10 +256,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithXcodeHint(xcodeHintFn).
 		WithProjectPolicy(s.projectGitStatus).
 		WithRepin(s.repinWorkspace).
-		WithPinConflict(func(requested string) {
-			ws := s.workspace()
-			s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s", ws, requested))
-		}).
+		WithPinConflict(s.onPinConflict).
 		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessionID(), externalID)

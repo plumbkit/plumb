@@ -112,14 +112,25 @@ func wrapText(s string, width int) []string {
 		width = 8
 	}
 	s = strings.ReplaceAll(s, "\n", " ")
-	words := strings.Fields(s)
-	if len(words) == 0 {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
 		return nil
+	}
+	// A whitespace-free token (most commonly a client-supplied path embedded
+	// in a session HealthMessage, issue #358) has unbounded, caller-controlled
+	// length. Left alone it produces a line wider than width, which the
+	// caller's box-drawing then cannot pad correctly — lipgloss re-wraps the
+	// composed line and the overflow rows arrive with no left border. Breaking
+	// every over-wide field into width-wide chunks up front, before packing,
+	// guarantees every returned line fits.
+	words := make([]string, 0, len(fields))
+	for _, f := range fields {
+		words = append(words, hardBreak(f, width)...)
 	}
 	var lines []string
 	cur := words[0]
 	for _, w := range words[1:] {
-		if len(cur)+1+len(w) > width {
+		if lipgloss.Width(cur)+1+lipgloss.Width(w) > width {
 			lines = append(lines, cur)
 			cur = w
 		} else {
@@ -127,6 +138,35 @@ func wrapText(s string, width int) []string {
 		}
 	}
 	return append(lines, cur)
+}
+
+// hardBreak splits a single whitespace-free token into width-wide chunks at
+// rune boundaries, measuring with lipgloss.Width (display width) rather than
+// byte or rune count — this text is unstyled at wrap time, so display width is
+// exactly what the caller's box needs. Returns []string{s} unchanged when s
+// already fits, so the common case allocates nothing extra. Concatenating the
+// returned chunks reproduces s exactly: no rune is dropped or altered.
+func hardBreak(s string, width int) []string {
+	if lipgloss.Width(s) <= width {
+		return []string{s}
+	}
+	var chunks []string
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > width && b.Len() > 0 {
+			chunks = append(chunks, b.String())
+			b.Reset()
+			w = 0
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
 }
 
 func detailRow(k, v string) string { return "  " + KeyStyle.Render(k) + ValStyle.Render(v) }
