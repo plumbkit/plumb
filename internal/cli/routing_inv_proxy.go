@@ -208,6 +208,54 @@ func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
 	return out
 }
 
+// WaitForAnyDiagnostics blocks until ANY language server under this session
+// republishes diagnostics for any file, or ctx expires.
+//
+// The post-write cross-file sweep uses this to end its settle grace early
+// instead of sleeping it out. Without this passthrough the optional-interface
+// assertion in waitForCrossFileSettle fails for every real session — WriteDeps.Diag
+// is always this proxy, never a bare *cache.Invalidator — so the fix silently
+// degraded to the fixed sleep it was written to remove, with the unit tests
+// passing because they construct an Invalidator directly.
+//
+// Fans out over the same set AllDiagnostics folds (the primary plus any sibling
+// server under the same root), because a cross-file break in a multi-language
+// workspace can be published by a server other than the primary. The first wake
+// wins; cancelling the derived context unsubscribes the rest.
+func (r *routingInvProxy) WaitForAnyDiagnostics(ctx context.Context) error {
+	r.mu.RLock()
+	p := r.primary
+	root := r.primaryRoot
+	r.mu.RUnlock()
+	if p == nil {
+		<-ctx.Done() // nothing to wait on; honour the caller's ceiling
+		return ctx.Err()
+	}
+
+	invs := []*cache.Invalidator{p}
+	for _, e := range r.pool.entriesUnderRoot(root) {
+		if e.inv != nil && e.inv != p {
+			invs = append(invs, e.inv)
+		}
+	}
+	if len(invs) == 1 {
+		return p.WaitForAnyDiagnostics(ctx)
+	}
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, len(invs)) // buffered: no waiter goroutine can leak
+	for _, inv := range invs {
+		go func(i *cache.Invalidator) { done <- i.WaitForAnyDiagnostics(waitCtx) }(inv)
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // AllDiagnosticTimes returns the last-received diagnostic timestamp for each
 // tracked URI under the primary workspace root.
 func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
