@@ -494,7 +494,10 @@ answer is "unknown" rather than zero. They are fetched outside the `--limit`, so
 raising or lowering it never makes them disappear, and the note beneath the table
 counts **every** unclassified failure the filter matched, not just the rows on
 screen. Nothing is inferred from the stored error text, so that bucket is honest
-about what is unknown rather than folded into `internal`.
+about what is unknown rather than folded into `internal`. The unclassified
+buckets themselves are still bounded, independently of `--limit` — capped at 10
+rows — since raising `--limit` only ever widens the classified side of the
+split; the count in the note is unaffected either way.
 
 A bounded view says so: when `--limit` cuts buckets, a footer reports how many
 buckets and failed calls the table is leaving out.

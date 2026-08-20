@@ -91,6 +91,39 @@ func TestUnclassifiedBucketsAreThemselvesBounded(t *testing.T) {
 		t.Errorf("UnclassifiedCalls = %d, want %d even though the buckets were capped",
 			report.UnclassifiedCalls, want)
 	}
+	if report.ClassifiedTruncated() {
+		t.Error("ClassifiedTruncated() = true with zero classified buckets; the unclassified cap is what cut this view")
+	}
+}
+
+// TestClassifiedTruncatedNamesTheLimitedSide is PLAN-290's first nit at its
+// source: a caller must be able to tell whether --limit (the classified side)
+// or the unclassified side's own fixed cap is what shrank a bounded view,
+// since only one of the two responds to raising --limit.
+func TestClassifiedTruncatedNamesTheLimitedSide(t *testing.T) {
+	db := openFailuresDB(t)
+	seedFailures(t, db, "edit_file", toolerror.KindDirtyFile, 20)
+
+	report, err := db.FailureSummary(3, Filter{})
+	if err != nil {
+		t.Fatalf("FailureSummary: %v", err)
+	}
+	if !report.ClassifiedTruncated() {
+		t.Error("ClassifiedTruncated() = false with 3 of 20 classified buckets shown")
+	}
+	if report.ClassifiedBuckets != 20 {
+		t.Errorf("ClassifiedBuckets = %d, want 20", report.ClassifiedBuckets)
+	}
+
+	// The same 20 classified buckets with room to spare: not truncated on
+	// either side.
+	report, err = db.FailureSummary(0, Filter{})
+	if err != nil {
+		t.Fatalf("FailureSummary: %v", err)
+	}
+	if report.ClassifiedTruncated() {
+		t.Error("ClassifiedTruncated() = true with every classified bucket shown")
+	}
 }
 
 // TestReportIsNotTruncatedWhenEverythingFits keeps the footer honest in the

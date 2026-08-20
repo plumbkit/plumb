@@ -230,6 +230,34 @@ func TestPrintStatsFailures_TruncationIsAnnounced(t *testing.T) {
 	}
 }
 
+// TestPrintStatsFailures_TruncationNoteNamesTheRightSide is PLAN-290's first
+// nit: --limit only governs the classified side of the split, so a footer
+// recommending it when only the unclassified side's own fixed cap shrank the
+// view is telling the reader to do something that provably cannot help.
+func TestPrintStatsFailures_TruncationNoteNamesTheRightSide(t *testing.T) {
+	calls := make([]stats.Call, 0, 40)
+	for i := range 40 {
+		calls = append(calls, stats.Call{
+			Tool: "git", ClientName: "claude-code", ClientVersion: strconv.Itoa(i), ErrorMsg: "old prose",
+		})
+	}
+	db := failuresDB(t, calls...)
+
+	var out bytes.Buffer
+	// A high --limit: the classified side (empty) is nowhere near cut, so only
+	// the unclassified side's own cap of 10 can be why the view is bounded.
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w", limit: 1000}); err != nil {
+		t.Fatalf("printStatsFailures: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "raise --limit") {
+		t.Errorf("footer recommended raising --limit when the unclassified cap is what truncated the view:\n%s", got)
+	}
+	if !strings.Contains(got, "capped independently of --limit") {
+		t.Errorf("footer did not name the unclassified cap as the real cause:\n%s", got)
+	}
+}
+
 // TestPrintStatsFailures_UnclassifiedNoteCountsBeyondTheLimit is the CLI half of
 // the same guarantee: the note must report every unclassified failure, not just
 // the ones whose buckets survived the cap.

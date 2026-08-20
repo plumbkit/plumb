@@ -331,12 +331,40 @@ func TestDeclaredClassificationsAllSurvive(t *testing.T) {
 	}
 	for _, c := range toolerror.AllRemediationClasses() {
 		in := base
+		// Paired with a declared kind: a blank kind now clears the class by
+		// design (TestBlankKindClearsClassSilently), so testing the class's own
+		// survival needs a row that carries a real kind too.
+		in.ErrorKind = toolerror.KindDirtyFile
 		in.RemediationClass = c
 		in.ErrorRetryable = c.Retryable()
 		got, dropped := normaliseCall(in)
 		if dropped != "" || got.RemediationClass != c || got.ErrorRetryable != c.Retryable() {
 			t.Errorf("declared class %q was blanked (dropped=%q)", c, dropped)
 		}
+	}
+}
+
+// TestBlankKindClearsClassSilently pins PLAN-290's second nit: a blank kind is
+// the normal shape for every successful call, so a stray remediation class or
+// retryable flag riding along with it must be cleared before the row reaches
+// a bucket — and cleared SILENTLY, since a blank kind is not itself a fault
+// and must not be reported as a dropped label the way an undeclared value is.
+func TestBlankKindClearsClassSilently(t *testing.T) {
+	in := Call{
+		SessionID: "s", Workspace: "/w", Tool: "edit_file",
+		RemediationClass: toolerror.ClassPassDirtyOk, // declared, and retryable
+		ErrorRetryable:   true,
+	}
+	got, dropped := normaliseCall(in)
+	if got.ErrorKind != "" {
+		t.Errorf("blank kind became %q", got.ErrorKind)
+	}
+	if got.RemediationClass != "" || got.ErrorRetryable {
+		t.Errorf("blank kind kept (remediation_class=%q, retryable=%v); a kindless row makes no "+
+			"structured claim at all", got.RemediationClass, got.ErrorRetryable)
+	}
+	if dropped != "" {
+		t.Errorf("dropped = %q, want silent — a blank kind is the normal shape for a successful call", dropped)
 	}
 }
 
