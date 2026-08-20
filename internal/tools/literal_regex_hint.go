@@ -34,11 +34,33 @@ var strongRegexEscapes = []string{`\.`, `\d`, `\D`, `\w`, `\W`, `\s`, `\S`, `\b`
 // digits so an ordinary brace in code ("{}", "${VAR}") does not qualify.
 var weakQuantifier = regexp.MustCompile(`\{\d+(,\d*)?\}`)
 
+// hasSingleBar reports a `|` that is not part of a `||`. Boolean-or is ubiquitous
+// in Go, C, JS and shell (`err != nil || retry`), and as a REGEX it means
+// something quite different from what such a search asked for — so nudging
+// towards use_regex there is not just noisy, it is wrong advice. A lone `|` is
+// still flagged: that is the alternation the original hint existed for.
+func hasSingleBar(pattern string) bool {
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] != '|' {
+			continue
+		}
+		if i+1 < len(pattern) && pattern[i+1] == '|' {
+			i++ // consume the pair
+			continue
+		}
+		if i > 0 && pattern[i-1] == '|' {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // strongRegexSyntax names the first unambiguous regex construct in pattern, or
 // "" if there is none.
 func strongRegexSyntax(pattern string) string {
 	switch {
-	case strings.Contains(pattern, "|"):
+	case hasSingleBar(pattern):
 		return "| alternation"
 	case strings.Contains(pattern, ".*"), strings.Contains(pattern, ".+"):
 		return ".* wildcard"

@@ -49,6 +49,13 @@ func TestLiteralRegexHint_Tiers(t *testing.T) {
 		{"bare plus", "a+b", false, false, ""},
 		{"bare question", "a?", false, false, ""},
 		{"string-literal escapes", `line\nnext`, false, false, ""},
+		// Boolean-or is ubiquitous in Go/C/JS/shell, and as a regex it means
+		// something quite different from what such a search asked for — nudging
+		// towards use_regex there is not merely noisy, it is wrong advice.
+		{"boolean or, with matches", "err != nil || retry", true, false, ""},
+		{"boolean or, no match", "err != nil || retry", false, false, ""},
+		{"single bar still flagged", "foo|bar", true, true, "| alternation"},
+		{"mixed bars flag the single one", "a||b|c", true, true, "| alternation"},
 		{"empty braces", "map[string]struct{}", true, false, ""},
 		// An EMPTY group is how ordinary code reads, not how a regex is written;
 		// flagging it would send the agent chasing a false lead.
