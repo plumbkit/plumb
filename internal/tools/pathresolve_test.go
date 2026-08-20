@@ -235,6 +235,53 @@ func TestRenameFileTwoSpellingsOfOneFileRefused(t *testing.T) {
 	}
 }
 
+// A case-only rename is a REAL operation, not a self-rename, and rename_file
+// must still perform it. On a case-preserving filesystem `mv file.txt FILE.txt`
+// stores the new spelling — correcting a file's casing is the whole point — so
+// the same-path guard is keyed by paths.Canonical (the directory ENTRY) rather
+// than by the case-folding lock key (the FILE). Keying it by the lock key would
+// refuse this with a "same path" message naming something the caller never
+// asked for, and leave no way to do it through the tool at all.
+//
+// The timeout still matters: locking uses the FOLDED key, so the pair takes one
+// mutex, and letting the call through must not resurrect the double-acquisition
+// TestRenameFileTwoSpellingsOfOneFileRefused pins.
+func TestRenameFileCaseOnlyRenameIsPerformed(t *testing.T) {
+	dir := paths.Canonical(t.TempDir())
+	from := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(from, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(dir, "FILE.TXT")
+	deps := WriteDeps{Boundary: testBoundaryGuard(dir), WorkspaceFn: wsFn(dir)}
+	raw := mustBoundaryJSON(t, map[string]any{"from": from, "to": to, "overwrite": true})
+	done := make(chan error, 1)
+	go func() { _, err := NewRenameFile(deps).Execute(context.Background(), raw); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a case-only rename must be performed, not refused: %v", err)
+		}
+		if _, err := os.Lstat(to); err != nil {
+			t.Fatalf("destination %q does not exist after the rename: %v", to, err)
+		}
+		// On a case-preserving filesystem the old spelling is gone because the
+		// entry was renamed; on a case-sensitive one it is gone because it was
+		// moved. Either way it must not still be there.
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			if e.Name() == "file.txt" {
+				t.Fatalf("the old spelling survived the rename: %v", ents)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rename_file deadlocked on a case-only rename — it took one non-reentrant mutex twice")
+	}
+}
+
 // TestCopyFileTwoSpellingsOfOneFileRefused is the copy_file half of the same
 // regression — see TestRenameFileTwoSpellingsOfOneFileRefused.
 func TestCopyFileTwoSpellingsOfOneFileRefused(t *testing.T) {
