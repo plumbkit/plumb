@@ -7,6 +7,70 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Changed
+
+- **gotreesitter bumped v0.48.1 → v0.51.0, and the C enum recovery workaround is
+  deleted — upstream fixed the defect plumb filed.** v0.48.1 arrived in a blanket
+  dependency sweep with no entry of its own, so this is the first deliberate bump
+  since v0.48.0. Four releases land at once. The one that changes production
+  behaviour is **v0.50.0's TypeScript/TSX right-shift fix**: `splitCompactCloseAngleToken`
+  narrowed any `>>` whose next byte was one of `( ) [ ] { } , . ; : ?` into a
+  single `>` to close nested generics, a split Java gates behind an
+  "unclosed `<` precedes this run" check that TypeScript and TSX never had — so
+  `x = a >> (b)` failed to parse while `x = a >> b` succeeded. TS/TSX have indexed
+  through the pure-Go extractor since 0.15.x, so that was plumb's own parse
+  quality, not a fallback path. v0.49.0 additionally rebinds the JavaScript,
+  TypeScript and TSX external scanners through each language's positional symbol
+  table (regenerated blobs no longer mistype shifted external symbols) and bounds
+  the C-recovery missing-token search, which previously cloned the whole GSS stack
+  with no work limit and drove heap past 2 GB on a 4-byte erlang and a 56-byte
+  jsdoc input. v0.50.1 restores single-language `grammar_subset` builds (broken by
+  v0.50.0). v0.51.0 bounds pending fork-stack retention, dropping oversized
+  storage at parse **and parser-pool** boundaries — which is the boundary plumb's
+  own `sync.Pool[*tsg.Parser]` uses.
+
+- **`c_enum_recovery.go` (252 lines) is deleted, and its tripwire is inverted into
+  a guard.** The defect it existed for was filed from here as
+  [odvcencio/gotreesitter#667](https://github.com/odvcencio/gotreesitter/issues/667)
+  and fixed in v0.49.0. Measured on both pins to be sure the removal is safe
+  rather than merely green: on **v0.48.1**, `enum Colour { RED, GREEN, BLUE };`
+  parses to `(enumerator_list { (enumerator identifier) , (enumerator identifier) ,
+  ERROR( (enumerator identifier) ) })` — the third enumerator is inside an ERROR
+  node rather than a direct child of the list, so `cWalk.addEnumerators`, which
+  reads direct children, emitted two constants and dropped `BLUE`. On **v0.51.0**
+  the same source parses with three direct `enumerator` children and no ERROR or
+  MISSING node anywhere, and the extractor emits all three unaided. (The original
+  report described the enumerator as absent from the tree; it was present, wrapped
+  in ERROR. Same outcome for any consumer reading the list.)
+
+  `TestC_EnumRecovery_TripwireForUpstreamFix` asserted the defect was still there
+  so the workaround could not be carried silently forever; its successor
+  `TestC_ThreeEnumeratorsParseWithoutRecoveryNodes` asserts the opposite, and
+  checks **two** things rather than one — that the parse carries no ERROR/MISSING
+  node, **and** that `enumerator_list` has three direct `enumerator` children.
+  The second is not redundant: a clean tree that nested the third enumerator
+  somewhere else would still lose it, and the ERROR/MISSING check alone would not
+  notice. Both new guards were confirmed to go red when the pin is moved back to
+  v0.48.1, so neither is vacuous. `TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect`,
+  `..._NeverFabricatesASymbol` and `..._LineRangeIsTheEnumeratorsOwn` are renamed
+  and kept: the fabrication cases in particular (a comma inside a comment, a macro
+  argument list, a character or string literal, a parenthesised expression) stay
+  pinned so a future recovery shim cannot quietly reintroduce the invented
+  symbols the deleted scanner once produced. `hasMissingOrError` moves to
+  `common.go`, since the C++ Catch2 probe still uses it.
+
+- **Swift stays on `wasmts`; this bump does not move that gate.** Re-verified
+  against every release since the last check: upstream issue #576 (Swift recovery
+  divergence) is still open and is listed under "Open work" in v0.51.0's own
+  release notes, and gotreesitter's Swift corpus ratchet still marks
+  `swift-algorithms_Chunked.swift`, `_FlattenCollection.swift` and `_Stride.swift`
+  as known-failing — three of the six files that gate the flip. The remaining
+  Swift issues (#574–#578) are classified upstream as tree-sitter-swift grammar
+  gaps rather than gotreesitter divergences, so no gotreesitter release will clear
+  them. The other per-grammar defect probes — Objective-C's macro-guarded
+  `@implementation`, C++'s Catch2 `TEST_CASE`, and the five SCSS constructs — all
+  still pin their defects as live on v0.51.0.
+
 ## 0.17.0 (2026-08-20)
 
 ### Added

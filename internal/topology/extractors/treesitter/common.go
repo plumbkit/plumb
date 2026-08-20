@@ -192,6 +192,23 @@ func extractWith(
 	return nodes, edges, nil
 }
 
+// hasMissingOrError reports whether n's subtree carries a parse defect. A
+// MISSING node is zero-width and is NOT an ERROR, so a check for errors alone
+// misses this entire class — the same blind spot that hid three Swift failures
+// until the probe was taught to look for both. Used by the per-grammar probes
+// that pin which upstream defect shapes are still live.
+func hasMissingOrError(n *tsg.Node) bool {
+	if n.IsError() || n.IsMissing() {
+		return true
+	}
+	for _, c := range n.Children() {
+		if hasMissingOrError(c) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendTest emits a KindTest node spanning call, stamped with its byte span.
 // Shared by the JavaScript and TypeScript walks, whose test emission is
 // otherwise identical clone code.

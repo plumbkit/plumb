@@ -324,26 +324,32 @@ func TestC_Extensions(t *testing.T) {
 	}
 }
 
-// TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect is the regression for a
-// measured gotreesitter v0.48.1 defect: an enum with exactly three enumerators
-// and no trailing comma loses its THIRD enumerator entirely, with only a
-// zero-width MISSING token to show for it. One, two, four and five are clean, as
-// is the same enum with a trailing comma.
+// TestC_EnumeratorsSurviveEveryArity pins that no enumerator is silently
+// dropped at any arity.
 //
-// Silently dropping a declaration is the failure mode that makes a Map worse
-// than no Map, so the extractor recovers the names from source text.
-func TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect(t *testing.T) {
+// It succeeds a source-text recovery workaround. On gotreesitter v0.48.1 an
+// enum with exactly three enumerators and no trailing comma parsed with its
+// THIRD enumerator wrapped in an ERROR node rather than sitting in the
+// enumerator_list, so a walk reading direct children saw only two and
+// `enum Colour { RED, GREEN, BLUE }` silently lost BLUE. That was filed
+// upstream as odvcencio/gotreesitter#667 and fixed in v0.49.0; the workaround
+// (c_enum_recovery.go) was deleted at the v0.51.0 bump.
+//
+// A silently short enum is the failure that makes a Map worse than no Map — an
+// agent trusts the two it sees and never learns of the third — so the shapes
+// stay pinned here even though the recovery is gone.
+func TestC_EnumeratorsSurviveEveryArity(t *testing.T) {
 	for _, tc := range []struct {
 		src  string
 		want []string
 	}{
 		{"enum E { A };\n", []string{"A"}},
 		{"enum E { A, B };\n", []string{"A", "B"}},
-		{"enum Colour { RED, GREEN, BLUE };\n", []string{"RED", "GREEN", "BLUE"}}, // the defect
+		{"enum Colour { RED, GREEN, BLUE };\n", []string{"RED", "GREEN", "BLUE"}}, // was #667
 		{"enum E { A, B, C, D };\n", []string{"A", "B", "C", "D"}},
 		{"enum E { A = 1, B = 2, C = 3 };\n", []string{"A", "B", "C"}},
-		{"typedef enum { RED, GREEN, BLUE } Colour;\n", []string{"RED", "GREEN", "BLUE"}},
-		{"enum E { A, B, C, };\n", []string{"A", "B", "C"}}, // trailing comma parses cleanly
+		{"typedef enum { RED, GREEN, BLUE } Colour;\n", []string{"RED", "GREEN", "BLUE"}}, // was #667
+		{"enum E { A, B, C, };\n", []string{"A", "B", "C"}},
 	} {
 		nodes, _, err := NewC().Extract(context.Background(), "a.c", []byte(tc.src))
 		if err != nil {
@@ -361,8 +367,8 @@ func TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect(t *testing.T) {
 				t.Errorf("Extract(%q) lost enumerator %q; got %d constants", tc.src, want, len(got))
 				continue
 			}
-			// A recovered node must be indistinguishable from a parsed one:
-			// consumers slice source with these spans.
+			// Consumers slice source with these spans, so every enumerator must
+			// carry one and it must start at the name.
 			if !n.HasBytes {
 				t.Errorf("enumerator %q in %q has no byte span", want, tc.src)
 				continue
@@ -377,18 +383,18 @@ func TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect(t *testing.T) {
 	}
 }
 
-// TestC_EnumRecovery_NeverFabricatesASymbol is the counterweight to the
-// recovery: reading names out of raw source must not INVENT one.
+// TestC_EnumeratorsNeverFabricated keeps the counterweight the deleted recovery
+// needed: a comma inside a comment, a macro argument list, a character or string
+// literal, or a parenthesised expression does NOT separate enumerators.
 //
-// Every source below is valid C that trips the three-enumerator defect, so the
-// recovery runs on it; each also carries a comma that does NOT separate
-// enumerators. Splitting the body on raw commas turned those into symbols —
-// `/* red, green */` became a constant named `green` spanning "green */ B", and
-// `MAX(x, y)` became one named `y` — each with a confidence-1.0 containment edge
-// claiming membership of the enum. A fabricated declaration is the same failure
-// as a missing one with the sign flipped, and a corpus sweep that counts parse
-// errors and span validity sees neither.
-func TestC_EnumRecovery_NeverFabricatesASymbol(t *testing.T) {
+// Reading enumerator names out of raw source once turned each of these into an
+// INVENTED constant — `/* red, green */` became one named `green` spanning
+// "green */ B", `MAX(x, y)` became one named `y` — each with a confidence-1.0
+// containment edge claiming membership of the enum. A fabricated declaration is
+// a missing one with the sign flipped, and a sweep counting parse errors and
+// span validity sees neither. The grammar handles these now; the cases stay so
+// that a future recovery shim cannot quietly reintroduce the fabrication.
+func TestC_EnumeratorsNeverFabricated(t *testing.T) {
 	for _, src := range []string{
 		"enum E { A, /* red, green */ B, C };\n",
 		"enum E { A, // one, two\n  B, C };\n",
@@ -423,11 +429,10 @@ func TestC_EnumRecovery_NeverFabricatesASymbol(t *testing.T) {
 	}
 }
 
-// A recovered enumerator must report ITS OWN lines, not the enclosing enum's.
-// Reporting L1-5 beside siblings that report L2-2 is precisely the tell the
-// workaround promises not to leave, and it falsifies the claim that a recovered
-// node is indistinguishable from a parsed one.
-func TestC_EnumRecovery_LineRangeIsTheEnumeratorsOwn(t *testing.T) {
+// An enumerator reports ITS OWN lines, not the enclosing enum's. This caught the
+// deleted recovery giving a recovered node the whole enum's L1-5 while its
+// parsed siblings reported L2-2; it stays as an ordinary span guard.
+func TestC_EnumeratorLineRangeIsItsOwn(t *testing.T) {
 	src := []byte("enum E {\n  A,\n  B,\n  C\n};\n")
 	nodes, _, err := NewC().Extract(context.Background(), "a.c", src)
 	if err != nil {
@@ -441,43 +446,55 @@ func TestC_EnumRecovery_LineRangeIsTheEnumeratorsOwn(t *testing.T) {
 	}
 }
 
-// TestC_EnumRecovery_TripwireForUpstreamFix fails when gotreesitter starts
-// parsing the three-enumerator form cleanly. That is the signal to delete
-// recoverEnumerators and this test, exactly as recoverIUOBangs was deleted once
-// the Swift IUO parse was fixed upstream. It asserts the defect still exists so
-// the workaround is not carried silently forever.
-func TestC_EnumRecovery_TripwireForUpstreamFix(t *testing.T) {
-	nodes, _, err := NewC().Extract(context.Background(), "a.c", []byte("enum E { A, B, C };\n"))
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	var constants int
-	for _, n := range nodes {
-		if n.Kind == topology.KindConstant {
-			constants++
+// TestC_ThreeEnumeratorsParseWithoutRecoveryNodes is the direct successor to the
+// old TestC_EnumRecovery_TripwireForUpstreamFix. That tripwire asserted the
+// defect was still present so the workaround could not be carried silently
+// forever; this asserts the opposite — that the raw parse is clean — so a
+// gotreesitter regression that brings #667 back fails here loudly rather than
+// quietly shortening every three-member C enum in the index.
+func TestC_ThreeEnumeratorsParseWithoutRecoveryNodes(t *testing.T) {
+	lang := grammars.CLanguage()
+	for _, src := range []string{
+		"enum E { A, B, C };\n",
+		"enum Colour { RED, GREEN, BLUE };\n",
+		"typedef enum { RED, GREEN, BLUE } Colour;\n",
+	} {
+		parser := tsg.NewParser(lang)
+		tree, err := parser.Parse([]byte(src))
+		if err != nil || tree == nil {
+			t.Fatalf("Parse(%q): %v", src, err)
 		}
-	}
-	if constants != 3 {
-		t.Fatalf("got %d enumerators, want 3", constants)
-	}
-	if !cThreeEnumParseIsDefective() {
-		t.Error("gotreesitter now parses a three-enumerator enum cleanly — " +
-			"DELETE c_enum_recovery.go, this test, " +
-			"TestC_EnumRecovery_ThreeMembersSurviveUpstreamDefect, " +
-			"TestC_EnumRecovery_NeverFabricatesASymbol and " +
-			"TestC_EnumRecovery_LineRangeIsTheEnumeratorsOwn")
+		root := tree.RootNode()
+		if hasMissingOrError(root) {
+			t.Errorf("Parse(%q) carries an ERROR or MISSING node — upstream #667 has regressed; "+
+				"the third enumerator is no longer a direct child of enumerator_list and will be dropped", src)
+		}
+		// The walk reads DIRECT enumerator children, so pin that shape too: a
+		// clean tree that nests the third enumerator elsewhere would still lose
+		// it, and hasMissingOrError alone would not notice.
+		if got := cDirectEnumerators(root, lang, []byte(src)); got != 3 {
+			t.Errorf("Parse(%q) has %d direct enumerator children of enumerator_list, want 3", src, got)
+		}
+		tree.Release()
 	}
 }
 
-// cThreeEnumParseIsDefective reports whether the raw grammar still mis-parses
-// the three-enumerator form.
-func cThreeEnumParseIsDefective() bool {
-	lang := grammars.CLanguage()
-	parser := tsg.NewParser(lang)
-	tree, err := parser.Parse([]byte("enum E { A, B, C };\n"))
-	if err != nil || tree == nil {
-		return false
+// cDirectEnumerators counts the enumerator nodes that are DIRECT children of the
+// first enumerator_list in the tree — the same nodes cWalk.addEnumerators reads.
+func cDirectEnumerators(n *tsg.Node, lang *tsg.Language, src []byte) int {
+	if n.Type(lang) == "enumerator_list" {
+		count := 0
+		for _, e := range n.Children() {
+			if e.Type(lang) == "enumerator" {
+				count++
+			}
+		}
+		return count
 	}
-	defer tree.Release()
-	return hasMissingOrError(tree.RootNode())
+	for _, c := range n.Children() {
+		if got := cDirectEnumerators(c, lang, src); got > 0 {
+			return got
+		}
+	}
+	return 0
 }

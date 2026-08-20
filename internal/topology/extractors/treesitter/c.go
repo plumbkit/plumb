@@ -293,7 +293,6 @@ func (w *cWalk) addEnumerators(spec *tsg.Node, parent int64) {
 	if list == nil {
 		return
 	}
-	seen := map[string]bool{}
 	for _, e := range list.Children() {
 		if e.Type(w.lang) != "enumerator" {
 			continue
@@ -303,7 +302,6 @@ func (w *cWalk) addEnumerators(spec *tsg.Node, parent int64) {
 			continue
 		}
 		name := id.Text(w.src)
-		seen[name] = true
 		idx := int64(len(w.nodes))
 		node := topology.Node{
 			Kind:      topology.KindConstant,
@@ -317,9 +315,6 @@ func (w *cWalk) addEnumerators(spec *tsg.Node, parent int64) {
 		setSpan(&node, e)
 		w.nodes = append(w.nodes, node)
 		w.link(parent, idx)
-	}
-	if hasMissingOrError(list) {
-		w.recoverEnumerators(list, parent, seen)
 	}
 }
 

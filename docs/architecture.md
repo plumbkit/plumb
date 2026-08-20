@@ -87,7 +87,7 @@ production for a language is a deliberate per-language choice
 | Extractor | Status |
 |---|---|
 | `golang` | Go, via `go/parser`+`go/ast` (no CGo) |
-| `treesitter` | gotreesitter (pure Go), pinned v0.48.0, embeds the `grammars` package (~+26 MB). Python, Ruby, C, C#, Elixir, Scala, PHP, JSON, CSS, SCSS, XML, Lua, C++, Objective-C, Dart, JavaScript, Rust, Zig, Kotlin, Swift, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML. JavaScript (`.js`/`.mjs`/`.cjs`) and TypeScript/TSX/JSX (`.ts`/`.tsx`/`.jsx`) are primary here since the v0.48.0 per-language flip — 435/435 corpus extraction parity |
+| `treesitter` | gotreesitter (pure Go), pinned v0.51.0, embeds the `grammars` package (~+26 MB). Python, Ruby, C, C#, Elixir, Scala, PHP, JSON, CSS, SCSS, XML, Lua, C++, Objective-C, Dart, JavaScript, Rust, Zig, Kotlin, Swift, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML. JavaScript (`.js`/`.mjs`/`.cjs`) and TypeScript/TSX/JSX (`.ts`/`.tsx`/`.jsx`) are primary here since the v0.48.0 per-language flip — 435/435 corpus extraction parity |
 | `wasmts` | Grammar-generic WASM extractor driven by wazero (pure Go). Production for **Swift only**: the canonical alex-pinkus `tree-sitter-swift` grammar plus its C external scanner (`swift.wasm`, ~3.5 MB, `make swift-wasm`), held until gotreesitter clears six residual Swift parse shapes. Its TypeScript + TSX bundle (`ts.wasm`, ~2.9 MB, `make ts-wasm`) is no longer wired into production and is kept as the parity-sweep reference. Each bundle has its own builder; both need Zig only to regenerate |
 
 Config/IaC/markup grammars extract named declarations; TOML/YAML/Markdown/HTML
