@@ -251,7 +251,12 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          # Node is here only to `npm install -g pyright`. Kept in step with the
+          # other jobs in this file: Node 20 went end-of-life on 2026-04-30, so
+          # it stops receiving upstream security patches with no change on our
+          # side. Dependabot cannot catch this — it tracks the action version,
+          # not this input.
+          node-version: "22"
 
       - name: Put GOPATH/bin on PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
