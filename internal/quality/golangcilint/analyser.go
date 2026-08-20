@@ -46,7 +46,8 @@ func (*Analyser) Supports(path string) bool {
 // `run.relative-path-mode` selects between the working directory, the go.mod
 // directory, the git root, and the config file's directory, and the DEFAULT is
 // itself conditional — `cfg` when a config file is discovered, `wd` when none
-// is. Measured with v2.12.2, same module, file at <root>/sub/deep/bad.go:
+// is. Measured with v2.12.2 and re-confirmed at v2.13.0, same module, file at
+// <root>/sub/deep/bad.go:
 //
 //	no config, cwd=<root>/sub/deep         -> "bad.go"
 //	config at <root>, cwd=<root>/sub/deep  -> "sub/deep/bad.go"
