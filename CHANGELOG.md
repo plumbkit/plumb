@@ -122,6 +122,21 @@
 
 ### Fixed
 
+- **`plumb stats --failures` no longer tells you to raise `--limit` when that
+  provably cannot help, and no longer lets a blank-kind row carry a stray
+  retryable claim.** Two deferred nits from the #242 round-3 review. The
+  truncation footer used to say "raise `--limit`" regardless of which side of
+  the classified/unclassified split was cut — `--limit` only governs the
+  classified side, so on the common shape of an upgraded install (few
+  classified buckets, many unclassified ones capped at their own fixed 10) the
+  advice was wrong at every `--limit` value. `FailureReport` now tracks
+  `ClassifiedBuckets` separately and `ClassifiedTruncated()` says which side
+  was actually cut. Separately, `normaliseCall` guarded only an *invalid*
+  error kind, not a *blank* one — the normal shape for a successful call — so a
+  kindless row could still carry a `remediation_class` and `retryable=true`,
+  which the CLI (renders `—`) and the TUI (sums the stored flag) disagreed
+  about. It now clears both fields silently on a blank kind.
+
 - **The saved `[ui]` theme now applies to the whole CLI, not just the
   dashboard.** Only the bare `plumb` TUI launch read `[ui]` theme before
   styling; every other command — skills, doctor, trust, the logo banner, the

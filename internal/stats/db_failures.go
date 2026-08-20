@@ -80,8 +80,15 @@ func (f FailureCount) Label() string {
 type FailureReport struct {
 	Buckets []FailureCount
 
-	// TotalBuckets is how many buckets match the filter, before the limit.
+	// TotalBuckets is how many buckets match the filter, before the limit —
+	// both classified and unclassified.
 	TotalBuckets int64
+	// ClassifiedBuckets is how many of TotalBuckets are classified — the side
+	// --limit actually governs. Kept separate from TotalBuckets so a caller can
+	// tell WHICH side of the split a truncated view was cut on: the classified
+	// side responds to --limit, the unclassified side is capped independently
+	// (unclassifiedBucketCap) and --limit cannot widen it.
+	ClassifiedBuckets int64
 	// TotalCalls is how many failed calls match the filter, in all buckets.
 	TotalCalls int64
 	// UnclassifiedCalls is how many of TotalCalls carry no classification —
@@ -98,6 +105,20 @@ type FailureReport struct {
 // primitives rule reserves truncate-prefixed names for internal/textfmt's string
 // helpers, and this is a count comparison, not one of those.
 func (r FailureReport) Incomplete() bool { return int64(len(r.Buckets)) < r.TotalBuckets }
+
+// ClassifiedTruncated reports whether the LIMIT-governed classified side of the
+// split is what got cut, as opposed to the unclassified side, which is capped
+// independently (unclassifiedBucketCap) and unaffected by --limit. A footer
+// that recommends raising --limit is only correct when this is true.
+func (r FailureReport) ClassifiedTruncated() bool {
+	var shown int64
+	for _, f := range r.Buckets {
+		if f.Kind != "" {
+			shown++
+		}
+	}
+	return shown < r.ClassifiedBuckets
+}
 
 // ShownCalls sums the calls covered by Buckets, for a footer that can state what
 // fraction of the failures the view actually accounts for.
@@ -166,13 +187,14 @@ func (d *DB) FailureSummary(n int, filter Filter) (FailureReport, error) {
 // synthetic one.
 func (d *DB) failureTotals(where string, args []any) (FailureReport, error) {
 	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
-	q := `SELECT COUNT(*), COALESCE(SUM(calls), 0), COALESCE(SUM(unclassified), 0) FROM (
-	          SELECT COUNT(*) AS calls,
+	q := `SELECT COUNT(*), COALESCE(SUM(calls), 0), COALESCE(SUM(unclassified), 0),
+	             COALESCE(SUM(CASE WHEN kind <> '' THEN 1 ELSE 0 END), 0) FROM (
+	          SELECT error_kind AS kind, COUNT(*) AS calls,
 	                 SUM(CASE WHEN error_kind = '' THEN 1 ELSE 0 END) AS unclassified
 	          FROM tool_calls` + where + `
 	          GROUP BY error_kind, tool, client_name, client_version)`
 	var r FailureReport
-	if err := d.db.QueryRow(q, args...).Scan(&r.TotalBuckets, &r.TotalCalls, &r.UnclassifiedCalls); err != nil {
+	if err := d.db.QueryRow(q, args...).Scan(&r.TotalBuckets, &r.TotalCalls, &r.UnclassifiedCalls, &r.ClassifiedBuckets); err != nil {
 		return FailureReport{}, fmt.Errorf("stats: failure totals: %w", err)
 	}
 	return r, nil

@@ -409,6 +409,13 @@ func validateCall(c Call) error {
 // constant — so it is a guard against a future typo, not a live path. That is
 // exactly why it must not be silent: its callers log what it reports.
 func normaliseCall(c Call) (Call, string) {
+	// A blank kind is the normal shape for a successful call, not a fault — so
+	// this clears silently, before the badKind/badClass diagnostic below, and
+	// never adds to the "dropped" report the way an undeclared value does.
+	if c.ErrorKind == "" {
+		c.RemediationClass = ""
+		c.ErrorRetryable = false
+	}
 	badKind := c.ErrorKind != "" && !c.ErrorKind.Valid()
 	badClass := c.RemediationClass != "" && !c.RemediationClass.Valid()
 	if !badKind && !badClass {

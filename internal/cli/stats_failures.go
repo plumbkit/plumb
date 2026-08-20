@@ -130,11 +130,20 @@ func unclassifiedNote(r stats.FailureReport) string {
 // truncationNote says that a bounded view is bounded. Without it a reader takes
 // the rows on screen for the whole picture — three buckets of five hundred and
 // five calls looks exactly like three buckets of three.
+//
+// The remedy differs by which side of the split was cut: --limit governs only
+// the classified side, so recommending it when the unclassified side's own
+// fixed cap (unclassifiedBucketCap) is what shrank the view is advice that
+// provably cannot help.
 func truncationNote(r stats.FailureReport) string {
 	if !r.Incomplete() {
 		return ""
 	}
-	return fmt.Sprintf("↳ showing %d of %d %s (%d of %d failed calls); raise --limit, or narrow with --since.",
+	remedy := "the unclassified side is capped independently of --limit; narrow with --since to see more"
+	if r.ClassifiedTruncated() {
+		remedy = "raise --limit, or narrow with --since"
+	}
+	return fmt.Sprintf("↳ showing %d of %d %s (%d of %d failed calls); %s.",
 		len(r.Buckets), r.TotalBuckets, textfmt.Plural(r.TotalBuckets, "bucket", "buckets"),
-		r.ShownCalls(), r.TotalCalls)
+		r.ShownCalls(), r.TotalCalls, remedy)
 }
