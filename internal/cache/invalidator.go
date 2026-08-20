@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -180,6 +181,12 @@ func (inv *Invalidator) WaitForAnyDiagnostics(ctx context.Context) error {
 // On context cancellation or timeout the most-recent diagnostics for uri are
 // returned alongside ctx.Err().
 func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	if uri == AnyURI {
+		// Guard the sentinel: an empty URI would otherwise subscribe under the
+		// wildcard key and be woken by an unrelated file's publish. No caller does
+		// this today, but the collision would be silent if one ever did.
+		return nil, errors.New("WaitNextDiagnostics: uri must not be empty")
+	}
 	ch := make(chan struct{}, 1)
 
 	inv.diagsMu.Lock()

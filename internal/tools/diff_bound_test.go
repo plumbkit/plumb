@@ -11,30 +11,46 @@ import (
 // which must still be a VALID script: the renderers and the summary take it
 // without a special case.
 func TestComputeEditScript_BoundedFallsBackToWholeFile(t *testing.T) {
+	// The inputs share a COMMON line at each end. That is what makes this test
+	// able to tell the fallback apart from an exact run: exact Myers would emit
+	// those as ' ' context lines, whereas wholeFileEditScript emits none. Without
+	// a shared line, an all-different input produces the same delete-then-add
+	// shape either way, and the test passes with the bound short-circuited —
+	// which an independent review caught it doing.
 	n := maxMyersDistance + 200
-	before := make([]string, n)
-	after := make([]string, n)
-	for i := range before {
-		before[i] = "old line"
-		after[i] = "new line"
+	before := make([]string, 0, n+2)
+	after := make([]string, 0, n+2)
+	before = append(before, "shared header")
+	after = append(after, "shared header")
+	for range n {
+		before = append(before, "old line")
+		after = append(after, "new line")
 	}
+	before = append(before, "shared footer")
+	after = append(after, "shared footer")
 
 	script := computeEditScript(before, after)
 	if len(script) == 0 {
 		t.Fatal("a bounded computation must still return a usable script, not nil")
 	}
 
-	var dels, adds int
+	var dels, adds, common int
 	for _, l := range script {
 		switch l.kind {
 		case '-':
 			dels++
 		case '+':
 			adds++
+		case ' ':
+			common++
 		}
 	}
-	if dels != n || adds != n {
-		t.Errorf("whole-file fallback should remove %d and add %d lines, got -%d +%d", n, n, dels, adds)
+	// THE discriminator: an exact run would keep the two shared lines as context.
+	if common != 0 {
+		t.Errorf("expected the whole-file fallback (no common lines), got %d common lines — the bound did not fire", common)
+	}
+	if dels != len(before) || adds != len(after) {
+		t.Errorf("whole-file fallback should remove %d and add %d lines, got -%d +%d", len(before), len(after), dels, adds)
 	}
 
 	// The summary must still render something meaningful, not panic or blank.
