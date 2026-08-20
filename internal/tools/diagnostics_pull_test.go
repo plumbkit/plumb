@@ -59,8 +59,10 @@ func (m *modeOpener) DidOpen(_ context.Context, params protocol.DidOpenTextDocum
 	}
 	return nil
 }
+
 func (m *modeOpener) DidClose(context.Context, protocol.DidCloseTextDocumentParams) error { return nil }
-func (m *modeOpener) SupportsPullDiagnostics() bool                                       { return true }
+
+func (m *modeOpener) SupportsPullDiagnostics() bool { return true }
 
 func (m *modeOpener) DiagnosticsMode(uri string) string {
 	m.mu.Lock()
