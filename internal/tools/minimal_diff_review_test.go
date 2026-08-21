@@ -380,3 +380,100 @@ func TestMinimalDiffReview_UntrackedEmptyFile_NoCrashGoChangeStillReviewed(t *te
 		t.Errorf("the Go change should still be reviewed alongside an empty untracked file, got:\n%s", out)
 	}
 }
+
+// TestMinimalDiffReview_GeneratedBundleDoesNotHideLaterFiles is the regression
+// test for a silent, positionally biased truncation.
+//
+// The budget used to be spent as a byte PREFIX of the whole diff. git emits a
+// diff in path order, so a generated bundle sorting early (dist/ before
+// existing.go) consumed all of it and every later file was cut — the report
+// said only that a byte count had been exceeded, never which files it had
+// therefore not looked at. A review that skipped the source reads exactly like
+// a review that found nothing wrong with it.
+//
+// Both halves are asserted on purpose: that the later file WAS reviewed, and
+// that the bundle is NAMED. Either alone would pass a fix that traded one
+// silence for another.
+func TestMinimalDiffReview_GeneratedBundleDoesNotHideLaterFiles(t *testing.T) {
+	dir, run := setupReviewRepo(t)
+
+	// A generated bundle, larger than the whole review budget on its own, at a
+	// path that sorts BEFORE the source file below.
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var bundle strings.Builder
+	for i := range 40000 {
+		fmt.Fprintf(&bundle, "var _chunk%d = function(a){return a+%d};\n", i, i)
+	}
+	if bundle.Len() <= maxReviewDiffBytes {
+		t.Fatalf("fixture too small to exercise the cap: %d bytes", bundle.Len())
+	}
+	writeFileT(t, dir, "dist/bundle.js", bundle.String())
+	run("add", "dist/bundle.js")
+
+	// A real source change, after the bundle in path order, that has a finding.
+	writeFileT(t, dir, "existing.go", "package pkg\n\nfunc Existing() {\n\tif cond() {\n\t\tact()\n\t}\n}\n")
+
+	out, err := callReview(t, newReviewTool(dir), nil)
+	if err != nil {
+		t.Fatalf("review error: %v", err)
+	}
+	if !strings.Contains(out, "verification-gap") {
+		t.Errorf("the source file after the bundle was not reviewed — the bundle ate the budget:\n%s", out)
+	}
+	if !strings.Contains(out, "dist/bundle.js") {
+		t.Errorf("the skipped bundle must be named, not silently dropped:\n%s", out)
+	}
+}
+
+// TestCapPerFile_DropsWholeFilesOnly pins the property that makes the cap safe
+// to analyse: what survives is always a COMPLETE file diff. A byte cut could
+// land mid-hunk, leaving the parser a fragment of the last file and the report
+// no way to say so.
+func TestCapPerFile_DropsWholeFilesOnly(t *testing.T) {
+	big := strings.Repeat("+padding line to exceed the per-file budget\n", 5000)
+	raw := "diff --git a/big.js b/big.js\n--- a/big.js\n+++ b/big.js\n@@ -0,0 +1 @@\n" + big +
+		"diff --git a/small.go b/small.go\n--- a/small.go\n+++ b/small.go\n@@ -0,0 +1 @@\n+package p\n"
+
+	kept, capped := capPerFile(raw, 1024, maxReviewDiffBytes)
+
+	if len(capped) != 1 || capped[0].Path != "big.js" {
+		t.Fatalf("want big.js reported as capped, got %+v", capped)
+	}
+	if strings.Contains(kept, "padding line") {
+		t.Error("an over-budget file must be dropped whole, not truncated")
+	}
+	if !strings.Contains(kept, "+package p") {
+		t.Errorf("the small file must survive, got:\n%s", kept)
+	}
+	if !strings.HasPrefix(kept, "diff --git a/small.go") {
+		t.Errorf("kept text must start at a file header, got:\n%s", kept)
+	}
+}
+
+// TestCapPerFile_GlobalBudgetAlsoSpentInWholeFiles guards the backstop: when
+// many individually-small files exceed the total, the overflow is still dropped
+// file by file and reported, never sliced mid-hunk.
+func TestCapPerFile_GlobalBudgetAlsoSpentInWholeFiles(t *testing.T) {
+	var raw strings.Builder
+	for i := range 10 {
+		fmt.Fprintf(&raw, "diff --git a/f%d.go b/f%d.go\n@@ -0,0 +1 @@\n%s", i, i, strings.Repeat("+x\n", 50))
+	}
+	kept, capped := capPerFile(raw.String(), 1<<20, 600)
+
+	if len(capped) == 0 {
+		t.Fatal("want some files reported as dropped by the total budget")
+	}
+	for _, c := range capped {
+		if c.Path == "" {
+			t.Errorf("a dropped file must be named, got %+v", capped)
+		}
+	}
+	if n := strings.Count(kept, "diff --git "); n*100 > 600+100 {
+		t.Errorf("kept %d files, over the total budget", n)
+	}
+	if kept != "" && !strings.HasPrefix(kept, "diff --git ") {
+		t.Error("kept text must start at a file header")
+	}
+}

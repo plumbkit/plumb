@@ -699,6 +699,24 @@
   users' clients for exactly this workflow, so the instruction channel was
   actively steering agents away from the handoff the tool had been fixed to
   support. It now shows the two composing directly.
+- **`minimal_diff_review` no longer lets one generated file decide which files
+  get reviewed.** The 1 MiB budget was spent as a byte *prefix* of the whole
+  diff. git emits a diff in path order, so a bundle sorting early (`dist/` before
+  `src/`) consumed all of it: every later file was cut, the cut could land
+  mid-hunk, and the report said only that a byte count had been exceeded — never
+  which files it had therefore not looked at. On a pnpm project with a committed
+  bundle the tool would report `1 file(s) reviewed` and `findings: none` for a
+  change it had never seen, which reads exactly like a clean bill of health.
+
+  The budget is now spent **per file** (128 KiB, the cap the untracked path
+  already used "so one large generated file cannot dominate the review budget"),
+  an over-budget file is dropped **whole** rather than sliced mid-hunk, and the
+  files left out are **named with their sizes**. The 1 MiB total remains as a
+  backstop and is likewise spent in whole files. No path is guessed to be
+  "generated" — the bias is removed without the tool having to decide what a
+  project considers generated.
+
+### Fixed
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
