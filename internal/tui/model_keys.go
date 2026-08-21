@@ -26,10 +26,13 @@ func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "down", "j":
 		m = m.popupKeyDown()
 	case "c":
-		if len(m.popupCalls) > 0 {
-			inputJSON, outputText := m.currentDetail()
-			return m, copyToClipboard(inputJSON, outputText)
-		}
+		// Unconditional, matching the log detail: currentDetail already returns
+		// empty strings for an empty call list, and copyTextToClipboard turns
+		// that into "Nothing to copy". Guarding here instead left `c` silent on
+		// an empty list while the log detail answered — the same asymmetry that
+		// let an empty copy through in the first place.
+		inputJSON, outputText := m.currentDetail()
+		return m, copyToClipboard(inputJSON, outputText)
 	case "[":
 		m.popupLeftWidth -= 2
 		if m.popupLeftWidth < minPopupLeftWidth {

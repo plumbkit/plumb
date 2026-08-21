@@ -225,6 +225,16 @@ func runClipboardExecWithTimeout(m clipboardMethod, txt string, timeout time.Dur
 
 	cmd := exec.CommandContext(ctx, m.path, m.args...) //nolint:gosec // G204: the path comes from exec.LookPath over a closed set of literal helper names, never from user input
 	cmd.Stdin = strings.NewReader(txt)
+	// WaitDelay bounds Wait's wait on the stdin-copy goroutine, which the
+	// context alone does not: the context kills the process, but the stdin
+	// pipe's read end is inherited by the resident child described below, so a
+	// helper that forked without draining stdin would keep Wait blocked after
+	// its parent was killed. Not reachable with wl-copy/xclip/xsel — all three
+	// fail at display-open before touching stdin — but this is what Go's own
+	// docs prescribe for a subprocess that may orphan a pipe holder, and the
+	// cost of being wrong here is a hung goroutine and a status that never
+	// appears.
+	cmd.WaitDelay = time.Second
 	// Stdout and Stderr are left nil on purpose. wl-copy, xclip and xsel all
 	// fork and leave a child resident to serve the selection; assigning a
 	// non-*os.File writer makes os/exec create a pipe and wait for every writer

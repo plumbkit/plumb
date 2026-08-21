@@ -66,6 +66,15 @@
 
 ### Changed
 
+- **HTML promoted to Validated (#9).** `vscode-html-language-server` 4.10.0
+  passes both integration tests against the real binary on Linux, and CI now
+  installs it, so the tier definition — "integration tests spawn the real binary
+  and pass" — is met. Its capability caveat is unchanged and is not a tier
+  matter: the server has no filesystem access, so it answers only from documents
+  the client has opened. That distinction is now written into the tier table,
+  which previously used HTML as its example of "has not run green against a real
+  binary".
+
 - **`plumb config show --adapters` no longer under-reports TypeScript and Zig
   (#9).** Both were promoted to *Validated* in `docs/adding-an-lsp.md`,
   `README.md`, `docs/roadmap.md` and their `doc.go` files, but stayed
@@ -87,13 +96,29 @@
   rewrite, which ships no `tsserver`, so the language server fails to initialize
   and its test skips rather than failing.
 
-- **Linux real-binary validation is documented (#9).** Seven of the nine
-  adapters (Go, Python, Rust, Swift, TypeScript/JS, Zig, HTML) now pass their
-  integration tests against real server binaries on Linux — CachyOS/Arch, kernel
-  7.1.8, Go 1.26.5, 2026-08-21. Java and Kotlin remain macOS-validated only.
-  `README.md` and `docs/adding-an-lsp.md` no longer say validation is macOS-only,
-  and the latter records two toolchain traps that present as adapter bugs (the
-  TypeScript 7 `tsserver` gap, and the rustup `rust-analyzer` shim).
+- **Linux real-binary validation is documented (#9).** Eight of the nine
+  adapters (Go, Python, Java, Rust, Swift, TypeScript/JS, Zig, HTML) now pass
+  their integration tests against real server binaries on Linux — CachyOS/Arch,
+  kernel 7.1.8, Go 1.26.5, 2026-08-21. Only Kotlin remains macOS-validated, since
+  JetBrains ship `kotlin-lsp` as a download rather than through a package
+  manager. `README.md` and `docs/adding-an-lsp.md` no longer say validation is
+  macOS-only, and the latter records three toolchain traps that present as
+  adapter bugs (the TypeScript 7 `tsserver` gap, the rustup `rust-analyzer` shim,
+  and the Kotlin fixture's JVM target).
+
+- **The Kotlin integration fixture could not build on any JDK newer than 23.**
+  Its generated Gradle project pinned `kotlin("jvm") 2.1.0` with no toolchain, so
+  on JDK 26 it failed with *"Inconsistent JVM-target compatibility"* —
+  `compileJava` inherits the host JDK while the Kotlin plugin caps `jvmTarget` at
+  23 — and the test skipped with a generic "gradle build did not succeed".
+  Adding a toolchain alone then hit *"Internal compiler error"*, because 2.1.0
+  cannot run on 26; the fixture now pins 2.2.20 **and** `jvmToolchain(21)`, both
+  of which are needed. The superseded comment claimed a toolchain "fails unless
+  that exact JDK is installed" — modern Gradle auto-provisions it.
+
+- **The Kotlin integration test ran an 80-second Gradle build before checking
+  whether `kotlin-lsp` existed**, so a machine without the server paid the full
+  build to reach a skip. The cheap check now comes first: 86s → 0.01s.
 
 ### Added
 

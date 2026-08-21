@@ -212,9 +212,9 @@ func TestPopupFooterShowsCopyStatus(t *testing.T) {
 // currentDetail returning empty strings — no sessions, no stats DB, no stored
 // detail for the row, or a row written before input_json/output_text existed.
 func TestCopyTextToClipboard_EmptyPayloadRunsNoHelper(t *testing.T) {
-	// A PATH with nothing on it: if the empty payload ever reaches the exec
-	// leg, selection would fall through to OSC 52 rather than a helper, so the
-	// assertion below on the exact status is what does the work.
+	// This runs on whatever the host has installed, so the assertion is on the
+	// status rather than on which leg was taken: no reachable leg may report a
+	// verified copy for an empty payload.
 	cmd := copyTextToClipboard("")
 	if cmd == nil {
 		t.Fatal("an empty copy must still report something, not vanish")

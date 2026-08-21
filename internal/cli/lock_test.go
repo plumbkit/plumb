@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,11 +207,27 @@ func TestSocketPathLengthHint(t *testing.T) {
 	if got == "" {
 		t.Fatal("an over-long path must be explained")
 	}
-	if !strings.Contains(got, "sun_path") || !strings.Contains(got, "XDG_CACHE_HOME") {
+	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
 		t.Errorf("the hint must name the cause and the lever, got %q", got)
 	}
 	if !strings.Contains(got, strconv.Itoa(len(long))) {
 		t.Errorf("the hint must state the actual length, got %q", got)
+	}
+}
+
+// The lever is not XDG_CACHE_HOME everywhere. os.UserCacheDir reads that
+// variable only in its Unix branch; on darwin it returns $HOME/Library/Caches
+// unconditionally, so telling a macOS user to set XDG_CACHE_HOME is advice
+// that cannot move the socket. That is the case this hint fires on soonest,
+// since maxUnixSocketPath is the macOS ceiling.
+func TestSocketPathShortenLever_IsThePlatformsRealLever(t *testing.T) {
+	if got := socketPathShortenLever("darwin"); got != "$HOME" {
+		t.Errorf("darwin lever = %q, want $HOME — XDG_CACHE_HOME does nothing there", got)
+	}
+	for _, goos := range []string{"linux", "freebsd", "openbsd"} {
+		if got := socketPathShortenLever(goos); got != "XDG_CACHE_HOME" {
+			t.Errorf("%s lever = %q, want XDG_CACHE_HOME", goos, got)
+		}
 	}
 }
 
@@ -230,7 +247,7 @@ func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
 		if !strings.Contains(got, action) {
 			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
 		}
-		if !strings.Contains(got, "sun_path") || !strings.Contains(got, "XDG_CACHE_HOME") {
+		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
 			t.Errorf("%q: the timeout must carry the length hint, got %q", action, got)
 		}
 	}

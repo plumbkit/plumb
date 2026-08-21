@@ -59,7 +59,7 @@ var adapterCatalogue = []struct {
 	{"typescript", adapterMeta{"TS/JS", tierValidated}},
 	{"zig", adapterMeta{"Zig", tierValidated}},
 	{"kotlin", adapterMeta{"Kotlin", tierValidated}},
-	{"html", adapterMeta{"HTML", tierExperimental}},
+	{"html", adapterMeta{"HTML", tierValidated}},
 }
 
 // adapterAliasFlags are the alternative spellings of the --adapters flag,

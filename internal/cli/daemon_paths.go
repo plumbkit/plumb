@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -53,13 +54,32 @@ func plumbRuntimeDir() string {
 // platforms plumb supports. sun_path holds 104 bytes on the BSDs and macOS and
 // 108 on Linux, and the NUL terminator has to fit too — Go's
 // syscall.SockaddrUnix rejects a non-abstract name at n >= len(raw.Path) — so
-// the portable ceiling is 103 usable bytes, not 104. The conservative bound is
-// deliberate: a path that fits on Linux but not macOS is still worth naming,
-// because the fix is the same either way.
+// the portable ceiling is 103 usable bytes, not 104. The bound is the
+// conservative one on purpose: a path that fits on Linux but not macOS is
+// still worth naming. The REMEDY differs per platform, though, which is what
+// socketPathShortenLever exists to get right.
 const maxUnixSocketPath = 103
 
+// socketPathShortenLever names the environment variable that actually moves
+// the runtime directory on this platform.
+//
+// It is not XDG_CACHE_HOME everywhere. The socket lives under
+// os.UserCacheDir(), and Go reads XDG_CACHE_HOME only in that function's Unix
+// branch — the darwin branch returns $HOME/Library/Caches unconditionally. So
+// on macOS the only lever is $HOME, and telling a macOS user to set
+// XDG_CACHE_HOME is advice that provably does nothing. That matters precisely
+// here, because the 103-byte bound above is the macOS ceiling: the overflow
+// this hint fires on soonest is the one whose fix it would have got wrong.
+func socketPathShortenLever(goos string) string {
+	if goos == "darwin" {
+		return "$HOME"
+	}
+	return "XDG_CACHE_HOME"
+}
+
 // socketPathLengthHint explains an over-long socket path, or returns "" when
-// the path is not the problem. It is appended to the daemon's listen error.
+// the path is not the problem. It rides every error the user can actually see
+// when the daemon fails to come up.
 //
 // A Unix socket path lives in sun_path, a fixed-size array, so bind() answers
 // an over-long path with EINVAL — "invalid argument", which says nothing about
@@ -73,8 +93,8 @@ func socketPathLengthHint(path string) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — set XDG_CACHE_HOME to a shorter directory)",
-		len(path), maxUnixSocketPath)
+		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — point %s at a shorter directory)",
+		len(path), maxUnixSocketPath, socketPathShortenLever(runtime.GOOS))
 }
 
 // daemonStartTimeoutError is what the caller sees when the socket never

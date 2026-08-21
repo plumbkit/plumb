@@ -27,8 +27,8 @@ func TestAdapterMetaFor(t *testing.T) {
 	if m := adapterMetaFor("go"); m.display != "Go" || m.tier != tierFirstClass {
 		t.Errorf("go meta = %+v, want Go/first-class", m)
 	}
-	if m := adapterMetaFor("html"); m.display != "HTML" || m.tier != tierExperimental {
-		t.Errorf("html meta = %+v, want HTML/experimental", m)
+	if m := adapterMetaFor("html"); m.display != "HTML" || m.tier != tierValidated {
+		t.Errorf("html meta = %+v, want HTML/validated", m)
 	}
 	// Unknown key falls back to a title-cased name at the experimental tier.
 	if m := adapterMetaFor("nim"); m.display != "Nim" || m.tier != tierExperimental {
@@ -53,7 +53,7 @@ func TestAdapterCatalogueTiersMatchTheDocumentedStatus(t *testing.T) {
 		"typescript": tierValidated,
 		"zig":        tierValidated,
 		"kotlin":     tierValidated,
-		"html":       tierExperimental,
+		"html":       tierValidated,
 	}
 	if len(adapterCatalogue) != len(want) {
 		t.Fatalf("catalogue has %d entries, want %d — add the new adapter to this table too", len(adapterCatalogue), len(want))

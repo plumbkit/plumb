@@ -273,8 +273,11 @@ jobs:
       # integration tests, and those tests skipped on every run because the
       # binaries were absent — so "integration green" only ever meant Go and
       # Python. Installing them is the whole change: the tests un-skip on their
-      # own. (zls and jdtls are not npm-published and still skip; see
-      # docs/adding-an-lsp.md for the per-adapter status.)
+      # own. Four adapters still skip here: zls, jdtls and kotlin-lsp are not
+      # npm-published, and rust-analyzer skips because the runner image ships a
+      # rustup SHIM of that name which is on PATH without the component being
+      # installed — the rust test probes --version to catch exactly that. See
+      # docs/adding-an-lsp.md for the per-adapter status.
       #
       # typescript@5 is pinned deliberately: plain `typescript` now resolves to
       # TypeScript 7, the Go-native rewrite, which ships no `tsserver`. The

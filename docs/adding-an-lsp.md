@@ -115,7 +115,13 @@ ensure-open set — including your own adapter's.
 | Level | What it means | Example |
 |---|---|---|
 | **Validated** | Integration tests spawn the real binary and pass. | `internal/lsp/adapters/gopls`, `.../rust` |
-| **Experimental** | Real Go code, unit-tested with a mocked transport; the integration test exists but has not run green against a real binary. | `internal/lsp/adapters/html` |
+| **Experimental** | Real Go code, unit-tested with a mocked transport; the integration test exists but has not run green against a real binary. | none currently shipped — the tier is where a new adapter starts |
+
+The tiers describe **evidence**, not reach. An adapter is Validated when its
+round-trip has been proven against a real binary; what that server can and
+cannot answer is a separate matter, recorded per adapter in the table below and
+in its `doc.go`. HTML is the case that forces the distinction: its round-trip
+passes, and it still has no filesystem access of its own.
 
 **The promotion rule.** An adapter stays *experimental* until the diagnostics
 round-trip runs green against a real server binary **by whichever model that
@@ -130,16 +136,17 @@ capability advertised, while a pull answered in 0.8 s), so the push wording woul
 have left a demonstrably working server permanently unpromotable. What the rule
 is for is evidence from a real binary, not a particular notification.
 
-Real-binary validation was exercised on macOS only until 2026-08-21, when seven
+Real-binary validation was exercised on macOS only until 2026-08-21, when eight
 of the nine adapters were run against real binaries on Linux (CachyOS/Arch,
 kernel 7.1.8, x86_64, Go 1.26.5) as part of the #9 hardening pass: `gopls`,
 `pyright` 1.1.413, `rust-analyzer` 1.97.0, `sourcekit-lsp` (Swift 6.3.3),
-`typescript-language-server` 6.0.0 with TypeScript 5.9.3, `zls` 0.16.0 and
-`vscode-html-language-server` 4.10.0 all pass their integration tests there.
-`jdtls` and `kotlin-lsp` were not exercised on Linux (no jdtls install; the
-Kotlin fixture needs Gradle). Windows is not yet supported.
+`typescript-language-server` 6.0.0 with TypeScript 5.9.3, `zls` 0.16.0,
+`vscode-html-language-server` 4.10.0 and `jdtls` (on a Temurin 26 runtime) all
+pass their integration tests there. Only `kotlin-lsp` is unexercised on Linux —
+JetBrains ship it as a download rather than through a package manager, and it
+was not installed on the validation box. Windows is not yet supported.
 
-Two toolchain traps that pass-count as adapter failures on Linux, both worth
+Three toolchain traps that pass-count as adapter failures on Linux, all worth
 checking before filing a bug:
 
 - **`npm i -g typescript` now installs TypeScript 7**, the Go-native rewrite,
@@ -151,6 +158,14 @@ checking before filing a bug:
   the component is not installed and exits with "Unknown binary". Run
   `rustup component add rust-analyzer`. The integration test probes `--version`
   for exactly this reason rather than trusting `LookPath`.
+- **The Kotlin fixture needs a JVM target it can actually compile.** Its Gradle
+  project pins `kotlin("jvm") version "2.2.20"` and `jvmToolchain(21)`, and both
+  are load-bearing on a modern JDK. On JDK 26 the previous fixture (2.1.0, no
+  toolchain) failed with *"Inconsistent JVM-target compatibility"* — `compileJava`
+  inherits the host JDK while the Kotlin plugin caps `jvmTarget` at 23 — and
+  merely adding the toolchain then failed with *"Internal compiler error"*,
+  because 2.1.0 cannot run on 26. Gradle auto-provisions the pinned toolchain, so
+  it does not have to be installed.
 
 Current status of every shipped adapter (details in the *Adapter reference*
 below):
@@ -165,7 +180,7 @@ below):
 | `zls` | Zig | **Validated** — real-binary retest (2026-06-17, zls 0.16) passes both integration tests once the `publishDiagnostics` client capability is advertised. |
 | `typescript-language-server` | TypeScript / JavaScript | **Validated** — publishes nothing unless the client advertises `textDocument.publishDiagnostics` (now in `DefaultClientCapabilities`); does not implement pull diagnostics. |
 | `kotlin-lsp` | Kotlin | **Validated (pull)** — JetBrains' Kotlin/kotlin-lsp 262.9593.0, 2026-08-11, on a resolvable Gradle project. The only adapter whose server never pushes: diagnostics come from `textDocument/diagnostic`. No Kotlin Multiplatform. |
-| `vscode-html-language-server` | HTML | **Experimental** — no filesystem access; answers only from documents the client has opened. Both integration tests do pass against the real binary (4.10.0, Linux, 2026-08-21); the tier reflects that capability gap, not missing evidence. |
+| `vscode-html-language-server` | HTML | **Validated** — 4.10.0 (vscode-langservers-extracted), Linux, 2026-08-21; both integration tests pass and CI now installs the binary. Capability caveat, unrelated to the tier: no filesystem access — it answers only from documents the client has opened, so a query against an unopened file returns nothing rather than reading it from disk. |
 
 Promote from experimental to validated by getting the integration test (step 6)
 green against a real server binary, then updating **all** of: the adapter's
