@@ -9,6 +9,26 @@
 
 ### Added
 
+- **Registration-parity and wiring tests make the `read_multiple_files`
+  tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing
+  previously asserted, at registration time, that a read-shaped tool actually
+  carries the `ReadTracker`/`readsFor` wiring `[edits]` strict mode depends
+  on — a tool could ship registered with tracking silently absent, surfacing
+  only as strict mode rejecting every edit that followed a read via it. Three
+  tests close the gap. `read_file`, `read_symbol`, and `read_multiple_files`
+  now implement a `ReadDeps() (tracker, readsFor, writes, client bool)`
+  contract (`internal/tools/read_deps.go`, pinned by compile-time assertions).
+  `TestToolWiringParity` and `TestPinMembership` (`internal/cli`) probe the
+  REAL tool objects `registerAllTools` builds — via a new
+  `mcp.Server.Lookup` — rather than a hand-copied fixture list: the former
+  asserts every read-recording tool's dependencies are wired non-nil, the
+  latter asserts every `tools.IsPinned` name is both registered and visible
+  under the served profile. `TestStrictReadRoundTrip` (`cmd/smoke`,
+  integration) exercises the same contract end to end over the wire,
+  parameterized per read-recording tool: read, then edit under strict mode.
+  Reverting PLAN-357's registration wiring locally sends both
+  `TestToolWiringParity` and `TestStrictReadRoundTrip` red immediately.
+
 - **`read_multiple_files`' per-file header dedups its one true shared fact —
   the indent convention — without dropping anything a windowed read still
   needs (header dedup, PLAN-357).** Its per-file provenance line used to

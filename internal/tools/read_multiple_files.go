@@ -154,6 +154,11 @@ func (t *ReadMultipleFiles) WithOutlineHint(fn func(string) bool) *ReadMultipleF
 	return t
 }
 
+// ReadDeps implements readRecordingTool (see read_deps.go).
+func (t *ReadMultipleFiles) ReadDeps() (tracker, readsFor, writes, client bool) {
+	return t.tracker != nil, t.readsFor != nil, t.writes != nil, t.clientNameFn != nil
+}
+
 func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
