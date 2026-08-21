@@ -201,7 +201,7 @@ const readMultipleFilesEditHint = "# To edit any of these files: use edit_file (
 // shape), so read_multiple_files can pull the per-file facts back out of its
 // inner reader's already-rendered output and restate them compactly rather
 // than reimplementing read_file's own formatting.
-var rmfHeaderRe = regexp.MustCompile(`^# plumb-read mtime=(\S+)(?: sha256=(\S+))? indent=(\S+) lines=(\d+) chars=\d+ baseline=\d+\n`)
+var rmfHeaderRe = regexp.MustCompile(`^# plumb-read mtime=(\S+)(?: sha256=(\S+))? indent=(\S+) lines=(\d+) chars=(\d+) baseline=(\d+)\n`)
 
 // rmfParsed is one file's provenance header, pulled out of its inner reader's
 // rendered output, plus everything that followed the header line (any
@@ -210,9 +210,9 @@ var rmfHeaderRe = regexp.MustCompile(`^# plumb-read mtime=(\S+)(?: sha256=(\S+))
 // expected shape (should not happen in practice); rest then holds the
 // original content unmodified, so nothing is ever lost.
 type rmfParsed struct {
-	ok                        bool
-	mtime, sha, indent, lines string
-	rest                      string
+	ok                                         bool
+	mtime, sha, indent, lines, chars, baseline string
+	rest                                       string
 }
 
 // parseReadFileHeader splits content into its read_file provenance header
@@ -223,14 +223,23 @@ func parseReadFileHeader(content string) rmfParsed {
 		return rmfParsed{rest: content}
 	}
 	m := rmfHeaderRe.FindStringSubmatch(content)
-	return rmfParsed{ok: true, mtime: m[1], sha: m[2], indent: m[3], lines: m[4], rest: content[loc[1]:]}
+	return rmfParsed{
+		ok: true, mtime: m[1], sha: m[2], indent: m[3], lines: m[4], chars: m[5], baseline: m[6],
+		rest: content[loc[1]:],
+	}
 }
 
 // rmfCompactHeader renders the header dedup format (PLAN-357 commit 3): path
 // is already stated by the '### path' heading above it, so the per-file line
-// shrinks to just what read_file's own header states beyond the shared facts
-// hoisted into rmfPreamble — mtime, sha256, lines, and indent ONLY when it
-// diverges from the batch's consensus indent (showIndent).
+// drops the "plumb-read " prefix and states mtime, sha256, lines, chars, and
+// baseline exactly as read_file does — UNCONDITIONALLY, including chars and
+// baseline. A windowed batch read still returns lines=N for just the slice;
+// baseline is the only signal in the response that N is a slice of a much
+// bigger file rather than the whole thing (review fix: this used to be
+// dropped per file on the theory that it "describes the same whole-file read
+// three ways" as mtime/sha — true for an UNRANGED read, false for a ranged
+// one, where baseline and lines diverge on purpose). indent is the one field
+// that stays conditional: it moves to rmfPreamble when every file agrees.
 func rmfCompactHeader(p rmfParsed, showIndent bool) string {
 	var sb strings.Builder
 	sb.WriteString("# mtime=")
@@ -241,6 +250,10 @@ func rmfCompactHeader(p rmfParsed, showIndent bool) string {
 	}
 	sb.WriteString(" lines=")
 	sb.WriteString(p.lines)
+	sb.WriteString(" chars=")
+	sb.WriteString(p.chars)
+	sb.WriteString(" baseline=")
+	sb.WriteString(p.baseline)
 	if showIndent {
 		sb.WriteString(" indent=")
 		sb.WriteString(p.indent)
@@ -254,12 +267,14 @@ func rmfCompactHeader(p rmfParsed, showIndent bool) string {
 // agrees on one — ONCE at the top of the response instead of repeating it per
 // file. Returns "" when there is nothing to state (no readable files, or the
 // files disagree). The pinned workspace root was considered too (the card's
-// "shared facts (workspace, indent convention)") and measured out: on a
-// mixed-language batch it is both a certainty (every read_file dependency
-// already resolves paths against it) and, at typical absolute-path lengths,
-// bigger than what indent dedup saves — see the scenario 8 remeasurement in
-// docs/use-cases.md. Restating it would have made the batch response BIGGER,
-// so it stays out.
+// "shared facts (workspace, indent convention)") and measured out: no
+// per-file header has ever stated it, so hoisting it into a preamble line
+// removes nothing — it is pure ADDED content, full stop, independent of path
+// length or shape. (The scenario 8 sample paths are workspace-relative, which
+// only sharpens the point: there was no per-file redundancy to trade it
+// against.) See the scenario 8 remeasurement in docs/use-cases.md. Restating
+// the root would have made the batch response BIGGER for zero offsetting
+// saving, so it stays out.
 func rmfPreamble(consensusIndent string) string {
 	if consensusIndent == "" {
 		return ""
@@ -392,10 +407,20 @@ func rmfAssemble(paths []string, results []rmfResult, outsideFn func(string) str
 	return sb.String()
 }
 
+// rmfPreambleMinFiles is the fewest successfully-read, indent-agreeing files
+// worth a preamble line for. The line itself costs bytes ("# plumb-read-batch
+// indent=X\n\n" is ~28 B); the review round that added chars=/baseline= back
+// to every per-file header priced the payoff per file: dropping one file's
+// " indent=X" (~8-13 B) doesn't cover a 28 B line until at least three files
+// share it. Below that, showing indent on each file (the DivergentIndent
+// path) is smaller AND simpler — no preamble to explain.
+const rmfPreambleMinFiles = 3
+
 // rmfParseHeaders parses every successful result's provenance header (see
 // rmfParsed) and reports the batch's consensus indent — the single value
 // every successfully-read file agrees on, or "" when there is no reading, no
-// agreement, or fewer than one successfully-parsed header.
+// agreement, or fewer than rmfPreambleMinFiles files agreeing (the preamble
+// line doesn't pay for itself below that — see rmfPreambleMinFiles).
 func rmfParseHeaders(results []rmfResult) (parsed []rmfParsed, consensusIndent string) {
 	parsed = make([]rmfParsed, len(results))
 	indentCounts := make(map[string]int, 2)
@@ -410,8 +435,10 @@ func rmfParseHeaders(results []rmfResult) (parsed []rmfParsed, consensusIndent s
 		}
 	}
 	if len(indentCounts) == 1 {
-		for indent := range indentCounts {
-			consensusIndent = indent
+		for indent, n := range indentCounts {
+			if n >= rmfPreambleMinFiles {
+				consensusIndent = indent
+			}
 		}
 	}
 	return parsed, consensusIndent

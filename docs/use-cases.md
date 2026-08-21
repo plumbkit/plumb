@@ -17,9 +17,10 @@ Four honest results up front:
 - **Semantic navigation is a correctness win, not a size one** — asked "what actually uses this?"
   a text search returned **60% non-references**, and it is the *kind* of over-match that matters:
   prose, a doc comment, a string literal, and a different symbol that merely contains the name.
-- **Batching reads is a turns win, not a token one** — `read_multiple_files` now costs about the
-  same payload as reading the same files one at a time (**7 bytes** more, down from a **1.32×**
-  loss before PLAN-357). It buys one round trip instead of three and, as of that same fix,
+- **Batching reads is a turns win, not a token one** — `read_multiple_files` still costs more
+  bytes than reading the same files one at a time (**76 bytes** over, down from a **1.32×** loss
+  before PLAN-357), but the gap is now small and honest, not padded by a decorative separator or
+  a wrong byte count. It buys one round trip instead of three and, as of that same fix,
   edit-safety parity with `read_file` under strict mode — it no longer trades a batch read for a
   broken next edit.
 
@@ -287,11 +288,12 @@ landing at a wash, and the honest number matters more than a flattering one.
 | Three native reads, raw file bytes | 1,739 | 0.89× | 3 |
 | Three native reads, with line gutters | 1,949 | 1× | 3 |
 | Three Plumb `read_file` calls | 2,469 | 1.27× | 3 |
-| One Plumb `read_multiple_files` | 2,476 | 1.27× | 1 |
+| One Plumb `read_multiple_files` | 2,545 | 1.31× | 1 |
 
-**Takeaway — batching is now a wash, not a loss: 7 bytes more than three separate `read_file`
-calls, for one round trip instead of three.** That number moved twice while this page was being
-kept honest:
+**Takeaway — batching still costs more than reading the same files one at a time: 76 bytes over
+three separate `read_file` calls, for one round trip instead of three.** That number moved three
+times while this page was being kept honest — including once backwards, on a review round that
+caught a real correctness bug in the byte-saving itself:
 
 - **691 → 109 bytes** (PLAN-13-era fix). The batching-specific framing used to include three
   horizontal-rule separators — `strings.Repeat("─", 60)`, and U+2500 is *three* bytes in UTF-8, so
@@ -300,16 +302,22 @@ kept honest:
   reported the length of the *rendered* response, header and gutters included, not the file — a
   677-byte file was announced as "933 bytes" one line above its own header reading
   `chars=675 baseline=677`), took the batching overhead from 691 bytes to 109.
-- **109 → 7 bytes** (PLAN-357). `read_multiple_files` was a strict-mode trap until this fix — see
-  the correctness note below — and while wiring it up to parity with `read_file`, its per-file
-  header was rebuilt to state only what a batch response needs restated per file (`mtime`,
-  `sha256`, `lines`); the indent convention moved into a single preamble line when every
-  successfully-read file agrees on one (a mixed-language batch, the case measured here, usually
-  doesn't — Go, JS and Python disagree, so this batch's own response still states each file's
-  indent individually). A pinned-workspace-root preamble line was tried too and **measured
-  out**: on an absolute-path-length workspace it cost more than the indent dedup saved, which
-  would have made the batch response *bigger* — the kind of thing this page exists to catch
-  before it ships.
+- **109 → 7 bytes, then corrected to 76** (PLAN-357). While wiring `read_multiple_files` up to
+  parity with `read_file`, its per-file header was first rebuilt to drop `chars`/`baseline`
+  entirely, on the theory that they "describe the same whole-file read three ways" as `mtime`/
+  `sha256`. True for an *unranged* read — false for a ranged one, which is exactly the case the
+  same PR's slicing feature added: a windowed batch read still returns `lines=2`, and without
+  `baseline` there is no signal left in the response that those 2 lines are a slice of a
+  2,000-line file rather than the whole thing. Independent review caught it before merge; both
+  fields are back on every per-file header, unconditionally, matching `read_file`. What *did*
+  survive is the indent convention moving into a single preamble line, when at least 3
+  successfully-read files agree on one (below that the line costs more than the per-file
+  `indent=` it would remove) — a mixed-language batch, the case measured here, usually doesn't
+  agree at all, so this batch's own response states each file's indent individually. A
+  pinned-workspace-root preamble line was tried too and **measured out**: no per-file header has
+  ever stated the workspace root, so hoisting it into a preamble removes nothing — it is pure
+  added content regardless of path length, and would have made the batch response *bigger* for
+  zero offsetting saving.
 
 > **This scenario also found a correctness bug, not just a bytes one.** `read_multiple_files`
 > built its inner reader with no `ReadTracker` wired in, so a batch read was never recorded —
@@ -319,10 +327,11 @@ kept honest:
 > `Fixed` entry in `CHANGELOG.md`.
 
 There is still no BYTES argument *for* `read_multiple_files` — three individual `read_file` calls
-are not bigger — but there is no longer one against it either. What it buys is real and unmeasured
-in bytes: one agent turn instead of three (latency, fewer chances to be interrupted mid-sequence),
-inline per-file errors so one unreadable path doesn't abort the batch, and now edit-safety parity
-with `read_file` under strict mode. If your agent budget is turns rather than raw bytes, batch.
+are smaller, by 76 bytes on this sample — but the gap is no longer 1.32× and no longer padded by a
+decorative separator or a wrong byte count. What it buys is real and unmeasured in bytes: one agent
+turn instead of three (latency, fewer chances to be interrupted mid-sequence), inline per-file
+errors so one unreadable path doesn't abort the batch, and now edit-safety parity with `read_file`
+under strict mode. If your agent budget is turns rather than raw bytes, batch.
 
 ## Scenario 9 — Latency, not just bytes
 
@@ -384,7 +393,7 @@ depend on the symbol.
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
 | Pick tests to run | `topology_affected` | 5 packages instead of 55, in 3.9 KB — package-granular |
-| Read several files | `read_multiple_files` | ~parity on bytes (7 B over); buys turns, not tokens |
+| Read several files | `read_multiple_files` | 1.31× (76 B over 3× `read_file`); buys turns, not tokens |
 | Any warm call | — | p95 well under 1 ms — not the bottleneck |
 
 The token-efficiency win is concentrated in **targeted reads**, and it scales with how much of

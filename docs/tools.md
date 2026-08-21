@@ -531,8 +531,22 @@ file read). **Inputs:** `path` (required), `name` (required — plain or dotted
 carry the same display-only line-number gutter as `read_file`.
 
 ### `read_multiple_files`
-Read up to 20 files in parallel; per-file errors reported inline. **Inputs:**
-`paths` (array, 1–20, required).
+Read up to 20 files in parallel; per-file errors reported inline. Reads are
+recorded per file exactly like `read_file`, so a batch-read file is editable
+under `[edits] strict` mode with no re-read. **Inputs:** `paths` (array, 1–20,
+required), plus the same slicing/search parameters as `read_file` — applied
+**uniformly to every path** in the call, with no per-path override:
+`start_line`, `end_line` (1-based, inclusive; window every file the same way),
+`pattern` (search every file instead of windowing it — literal by default, a
+Go RE2 regex when `use_regex`), `use_regex`, `context_lines` (0–50, like
+`rg -C`), `max_matches` (1–2000, default 200). A windowed batch read still
+records each file's FULL mtime/sha in the read tracker (identical to
+`read_file`'s own ranged-read behaviour — strict mode is mtime-based, not
+range-based) and its per-file header still carries `baseline` (the whole-file
+byte size), so a `lines=2` slice is distinguishable from a 2,000-line file.
+The 20-path cap is unchanged by slicing. When every successfully-read file
+agrees on one indent convention (3 or more files), it is stated once in a
+`# plumb-read-batch indent=…` preamble instead of being repeated per file.
 
 ### `find_files`
 Glob/regex file or directory finder, and plumb's directory lister. **Inputs:**

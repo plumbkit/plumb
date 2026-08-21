@@ -211,8 +211,9 @@ func TestReadMultipleFiles_UniformSlicing_Pattern(t *testing.T) {
 
 // PLAN-357 commit 3: when every successfully-read file agrees on an indent
 // convention, it is stated ONCE in the batch preamble and dropped from each
-// per-file header — which also shrinks to mtime+sha256+lines (no chars/
-// baseline/indent repeated per file).
+// per-file header. chars/baseline stay on every per-file header regardless —
+// see rmfCompactHeader's doc comment for why they can't be deduped like
+// indent (a windowed read needs baseline to know it's a slice).
 func TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.txt")
@@ -240,13 +241,43 @@ func TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted(t *testing.T) {
 	if n := strings.Count(out, "indent="); n != 1 {
 		t.Fatalf("expected indent stated exactly once (in the preamble, not per file), got %d:\n%s", n, out)
 	}
-	if strings.Contains(out, "chars=") || strings.Contains(out, "baseline=") {
-		t.Fatalf("per-file header should no longer carry chars=/baseline=:\n%s", out)
-	}
 	for _, p := range []string{pathA, pathB, pathC} {
 		block := blockFor(t, out, p)
 		if !strings.Contains(block, "mtime=") || !strings.Contains(block, "sha256=") || !strings.Contains(block, "lines=2") {
 			t.Fatalf("expected a compact mtime/sha256/lines header for %s:\n%s", p, block)
+		}
+		if !strings.Contains(block, "chars=") || !strings.Contains(block, "baseline=") {
+			t.Fatalf("chars=/baseline= must stay on every per-file header (only indent dedups):\n%s", block)
+		}
+	}
+}
+
+// PLAN-357 review fix: the preamble line costs more than a single file's
+// deduped " indent=X" would save, so it only pays for itself at
+// rmfPreambleMinFiles (3) or more agreeing files. Below that, even if every
+// file agrees, each keeps its own indent and there is no preamble.
+func TestReadMultipleFiles_HeaderDedup_NoPreambleBelowMinFiles(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.txt")
+	pathB := filepath.Join(dir, "b.txt")
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte("\thello\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(),
+		mustJSON(map[string]any{"paths": []string{pathA, pathB}}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if strings.HasPrefix(out, "# plumb-read-batch") {
+		t.Fatalf("2 agreeing files is below rmfPreambleMinFiles (3) — no preamble should be emitted:\n%s", out)
+	}
+	for _, p := range []string{pathA, pathB} {
+		if !strings.Contains(blockFor(t, out, p), "indent=tabs") {
+			t.Fatalf("expected %s's own header to still state indent=tabs:\n%s", p, out)
 		}
 	}
 }
@@ -281,5 +312,41 @@ func TestReadMultipleFiles_HeaderDedup_DivergentIndentKeptPerFile(t *testing.T) 
 	}
 	if !strings.Contains(blockFor(t, out, pathSpaces), "indent=spaces") {
 		t.Fatalf("expected spaces.txt's own header to state indent=spaces:\n%s", out)
+	}
+}
+
+// PLAN-357 review fix: a WINDOWED batch read must still carry baseline= (the
+// whole-file byte size) in its per-file header. lines=2 alone doesn't say
+// whether that's the whole file or a 2-line slice of a 2,000-line one —
+// baseline is the only signal that distinguishes them, exactly as it is for a
+// single ranged read_file call.
+func TestReadMultipleFiles_RangedRead_HeaderCarriesBaseline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	var content strings.Builder
+	for i := 1; i <= 50; i++ {
+		fmt.Fprintf(&content, "line%d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(), mustJSON(map[string]any{
+		"paths":      []string{path},
+		"start_line": 2,
+		"end_line":   3,
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	block := blockFor(t, out, path)
+	wantBaseline := fmt.Sprintf("baseline=%d", content.Len())
+	if !strings.Contains(block, wantBaseline) {
+		t.Fatalf("windowed batch read must carry %s in its header (whole-file size, distinct from the "+
+			"returned lines=2 slice):\n%s", wantBaseline, block)
+	}
+	if !strings.Contains(block, "lines=2") {
+		t.Fatalf("expected the returned slice to report lines=2:\n%s", block)
 	}
 }
