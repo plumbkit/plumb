@@ -34,6 +34,7 @@ described where they were found, in Scenario 7 and Scenario 8.
 | | |
 |---|---|
 | Repository | this repo at commit `b46e233f`, plus this page and its script |
+| Re-measured | scenarios 4, 7 and 10 at `302e9768`, after `topology_affected` became language-aware and `file_outline`'s output grew |
 | Date | 2026-08-21 |
 | Plumb | 0.17.0 (go1.26.7) |
 | Client | a direct MCP session over stdio (`plumb serve`) |
@@ -235,15 +236,15 @@ Question: *I changed `internal/stats/savings.go`. What do I run?*
 
 | Approach | Scope | Response |
 |---|---|---|
-| `go test ./...` | 55 packages, 661 test files, 4,386 test functions | — |
-| Plumb `topology_affected` | **5 packages**, 2,621 tests | 4,142 B |
+| `go test ./...` | 55 packages, 662 test files, 4,390 test functions | — |
+| Plumb `topology_affected` | **5 packages**, 2,623 tests | 4,142 B |
 
 The answer is a list of targets you can run, not a list of test names:
 
 ```
 run these packages (5) — pass each target to run_task(slot:"test", target:…):
   ./internal/stats/...                          53 tests   changed package
-  ./internal/tools/...                        1337 tests   imports the changed package
+  ./internal/tools/...                        1339 tests   imports the changed package
   ./internal/cli/...                           990 tests   imports the changed package
   ./internal/tui/...                           217 tests   imports the changed package
   ./internal/web/...                            24 tests   imports the changed package
@@ -261,10 +262,14 @@ without editing. A workspace whose runner scopes by test name (`cargo test <filt
 project-specific flag gets its directories named and no command guessed.
 
 **The honest limit is granularity, not coverage.** Within a reached package, *every* test is
-counted — all 1,337 in `internal/tools`, not the handful that touch savings code. Nothing in the
+counted — all 1,339 in `internal/tools`, not the handful that touch savings code. Nothing in the
 index says which tests exercise which function, because a Go test never lives in the file it
-tests. So this narrows the run from 55 packages to 5; it does not narrow 4,386 tests to a
+tests. So this narrows the run from 55 packages to 5; it does not narrow 4,390 tests to a
 handful, and a tool claiming otherwise would be guessing.
+
+These counts move whenever anyone adds a test, so they are pinned to the re-measured commit above
+rather than to whatever `main` holds today; the *shape* of the answer — 5 packages out of 55 — is
+the part that does not drift.
 
 > **This page found a bug here.** Measuring this scenario is what surfaced it. The tool used to
 > seed its traversal from every node in the changed file — including one per `import`, named for
