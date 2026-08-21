@@ -109,30 +109,36 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	// a message still arrives on EVERY tool call rather than only the path-bearing
 	// ones the hints are restricted to.
 	text += s.pathHints(ctx, name, args)
-	if !mailboxSilentTools[name] && len(text) <= maxEnrichedResultBytes {
+	if !mailboxSilentTools[name] {
 		text += s.messageHint(ctx)
 	}
 	return text
 }
 
-// maxEnrichedResultBytes is the result size past which a message is NOT
-// delivered on this call.
+// Deliberately NOT gated on the size of the result, though it looks like it
+// should be. Delivery claims the row, so appending to a 200 KiB read does bet
+// the message on the agent reading that far — and a size guard skipping delivery
+// on oversized results was tried here and reverted. Three reasons, in order of
+// how badly the guard failed on them:
 //
-// Delivery claims the row: inbox.Claim marks it delivered for good, and
-// check_messages will not hand it over again. So appending a message to the end
-// of a very large result bets a peer's message on the agent reading to the
-// bottom of, say, a 200 KiB file read — and loses it outright if it does not.
-// Everything else plumb appends is advisory and repeatable; this one is neither.
+// 1. The correlation runs the WRONG WAY for the message that matters most. This
+//    append is the fast path for "stop what you are doing" — it reaches a peer on
+//    its next tool call, with no round trip and nothing for the peer to remember
+//    to do. But a large result means the agent is deep in heavy work, which is
+//    exactly when someone wants to interrupt it. A size guard therefore suppresses
+//    delivery precisely for the class of message that cannot wait.
 //
-// Skipping is safe in the direction that matters: not claiming leaves the row
-// pending, so the message arrives on the next call under the threshold, on
-// check_messages, or at session_start. Deferring delivery costs latency;
-// claiming into an unread payload costs the message.
+// 2. No client is REQUIRED to call check_messages, and nothing makes it do so on
+//    any schedule. Appending to whatever the agent was already doing is what makes
+//    the mailbox arrive at all; every deferral leans on a fallback that may never
+//    come.
 //
-// The threshold is generous because the ordinary tool result is nowhere near it
-// — this is aimed at whole-file reads and large search dumps, not at making
-// delivery rare.
-const maxEnrichedResultBytes = 16 * 1024
+// 3. It trades a mechanism with a good operational record against a burial risk
+//    nobody has observed.
+//
+// If burial is ever seen in practice, fix it where it happens — make the block
+// harder to skim past, or exclude the single pathological payload — never by
+// making delivery conditional.
 
 // pathHints returns the three path-derived advisory blocks, or "" when this tool
 // carries no usable path. Each is self-gated on its own config: the

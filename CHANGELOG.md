@@ -70,15 +70,6 @@
   `read_file`'s sits in the header block, where it also qualifies the `lines`/
   `chars` counts (which describe the returned slice, not the file).
 
-- **A peer message is no longer delivered into an oversized tool result.**
-  Delivery *claims* the row — `check_messages` will not hand it over again — so
-  appending a message to the end of a 200 KiB file read bet a peer's message on
-  the agent reading to the bottom, and lost it outright otherwise. Every other
-  block plumb appends is advisory and repeatable; this one is neither. Above 16
-  KiB of result the message is left pending instead, arriving on the next smaller
-  call, `check_messages`, or `session_start`. Deferring costs latency; claiming
-  into an unread payload costs the message.
-
 ### Fixed
 
 - **`run_command` refused everything out of the box, and a config plumb wrote
