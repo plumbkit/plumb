@@ -70,8 +70,11 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 			return "", false
 		}
 		// SAFETY INVARIANT: an explicit unverified note, never an empty
-		// (implicitly clean) suffix and never the ✓ line.
-		return fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err), true
+		// (implicitly clean) suffix and never the ✓ line. Its own fixed label
+		// — neither authoritative nor a pre-write snapshot: the pull failed
+		// outright, so there is no diagnostics data of any age to report.
+		return postWriteDiagLabel(postWriteDiagLabelUnverified) +
+			fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err), true
 	}
 
 	var pre []protocol.Diagnostic

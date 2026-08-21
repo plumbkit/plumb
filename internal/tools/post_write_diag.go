@@ -20,24 +20,32 @@ import (
 // is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
 const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
-// postWriteDiagLabelAuthoritative and postWriteDiagLabelSnapshot are the two
-// fixed, machine-parseable labels every non-empty post-write diagnostics block
-// carries. Before this, a stale snapshot (the language server had not
-// re-published since the write) could be printed with the same confidence as
-// a genuinely fresh result — "agents learned to ignore the block, which
-// defeats its purpose" (worth-it strategy §2 pillar 2, W2-8). Never print
-// diagnostic content without one of these two labels.
+// postWriteDiagLabelAuthoritative, postWriteDiagLabelSnapshot, and
+// postWriteDiagLabelUnverified are the three fixed, machine-parseable labels
+// every non-empty post-write diagnostics block carries. Before this, a stale
+// snapshot (the language server had not re-published since the write), or a
+// failed pull, could be printed with the same confidence as a genuinely fresh
+// result — "agents learned to ignore the block, which defeats its purpose"
+// (worth-it strategy §2 pillar 2, W2-8). Never print diagnostic content
+// without one of these three labels.
 const (
 	// postWriteDiagLabelAuthoritative marks a block whose diagnostics were
 	// confirmed to reflect this write: the language server re-published
 	// after the write, whether because the caller explicitly waited
 	// (await_diagnostics:true) or the default adaptive window happened to
-	// catch a fast publish.
+	// catch a fast publish — or, in pull/hybrid mode, any successful pull
+	// (always synchronous with the write).
 	postWriteDiagLabelAuthoritative = "authoritative post-write pass"
 	// postWriteDiagLabelSnapshot marks a block whose diagnostics were NOT
 	// confirmed to reflect this write: no publish arrived within the (fast,
 	// default) adaptive window, so the data may predate the edit.
 	postWriteDiagLabelSnapshot = "pre-write snapshot — not yet re-analysed"
+	// postWriteDiagLabelUnverified marks a block whose diagnostics could not
+	// be obtained at all: a pull/hybrid-mode post-write pull errored, so
+	// there is neither a confirmed-fresh nor a pre-write-snapshot answer —
+	// only an explicit failure. Never the authoritative label, and never
+	// silent.
+	postWriteDiagLabelUnverified = "unverified — post-write pull failed"
 )
 
 // postWriteDiagLabel renders the fixed-prefix label line prepended to every
