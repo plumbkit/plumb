@@ -98,8 +98,20 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 				"execute_shell_command: this project's .plumb/config.toml enables shell execution, but its current content is not trusted. "+
 					"review it, then run `plumb trust` in %s", ws)
 		}
-		return tools.ResolvedShell{}, errors.New("execute_shell_command is disabled. enable it with [commands] allow_shell = true in your global config, " +
-			"or in this project's .plumb/config.toml plus `plumb trust`")
+		// Lead with run_command, not allow_shell. The refusal used to name only the
+		// blanket switch, so the one visible way forward was the broadest one — and a
+		// caller that just wants `wc -l` on a file has no reason to enable an
+		// unrestricted shell that inherits the daemon environment. A [[command]] entry
+		// is a fixed argv with no free text, needs no trust when it lives in the global
+		// config, and is what most refusals here actually want.
+		return tools.ResolvedShell{}, errors.New("execute_shell_command is disabled. " +
+			"For a command you run repeatedly, prefer run_command: add a [[command]] entry " +
+			"(name + fixed exec argv) to your global config and call it by name — no shell, " +
+			"no free text on the command line, and no trust prompt. " +
+			"Only for genuinely ad-hoc commands, enable this tool with [commands] allow_shell = true " +
+			"in your global config, or in this project's .plumb/config.toml plus `plumb trust` — " +
+			"note its sandbox confines writes, not reads, so the command can read any file and " +
+			"secret you can")
 	}
 	return tools.ResolvedShell{
 		WorkingDir: ws,

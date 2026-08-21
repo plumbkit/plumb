@@ -52,7 +52,63 @@
   was rewritten to match: it previously promised dependency-edge traversal that,
   for Go, could never fire.
 
+### Changed
+
+- **A truncation notice now leads the payload it qualifies, instead of ending
+  it.** A cut list is not a list of "the results", it is a list of *some* results,
+  and a reader who does not know that draws a conclusion the data does not
+  support — so printing the notice only after the payload puts the correction
+  after the conclusion. `topology_affected` announced its cut on the last line of
+  a 119 KB response; the rows above read as complete, and the one test that
+  covered the change had been cut. The marker was correct the whole time and did
+  not help.
+
+  `read_file`, `search_in_files`, `find_files`, `topology_affected` and
+  `topology_explore` now open with a `⚠ TRUNCATED` line naming what was cut and
+  the parameter that returns the rest, and keep their trailing marker — the
+  leading copy changes the reading, the trailing one marks where the data stops.
+  `read_file`'s sits in the header block, where it also qualifies the `lines`/
+  `chars` counts (which describe the returned slice, not the file).
+
+- **A peer message is no longer delivered into an oversized tool result.**
+  Delivery *claims* the row — `check_messages` will not hand it over again — so
+  appending a message to the end of a 200 KiB file read bet a peer's message on
+  the agent reading to the bottom, and lost it outright otherwise. Every other
+  block plumb appends is advisory and repeatable; this one is neither. Above 16
+  KiB of result the message is left pending instead, arriving on the next smaller
+  call, `check_messages`, or `session_start`. Deferring costs latency; claiming
+  into an unread payload costs the message.
+
 ### Fixed
+
+- **`run_command` refused everything out of the box, and a config plumb wrote
+  itself made sure it kept doing so.** The two command tiers shipped with opposite
+  defaults: `[tasks]` ships working per-language commands, while the `[[command]]`
+  allow-list — fixed argv, no shell, no free text — shipped EMPTY. So the only
+  documented way to run anything was `[commands] allow_shell`, the broad
+  read-everything tier, for wanting to count the lines in a file; callers duly
+  reached past plumb to their own shell, which is the outcome the safe tier exists
+  to prevent.
+
+  Defaults now ship three read-only entries — `wc`, `file-type`, `disk-usage` —
+  each fixed-argv, network-denied, and sandboxed read-only. `stat` and a sha256
+  helper were considered and rejected: `read_file`'s header already carries mtime,
+  sha256 and the byte count, and their spellings differ across macOS and Linux.
+
+  Shipping them was not enough on its own. `agent_write` marshals the WHOLE config
+  back to disk, so an empty allow-list was written out as a literal
+  `command = []` — and an explicit empty array in a user's file out-ranks the
+  compiled-in default from then on. A real global config here carried that exact
+  line, written by plumb, typed by nobody, which is why `run_command` reported "no
+  commands are configured" while the binary shipped three. `command` is now
+  `omitempty`. The shape generalises past commands: a writer that materialises
+  every field freezes today's defaults into every user's config, so any default
+  added later is dead on arrival.
+
+  The refusal from `execute_shell_command` also led with `allow_shell`, the
+  broadest switch, and never mentioned `run_command`. It now offers the narrow
+  option first, and says plainly that the shell sandbox confines writes but not
+  reads.
 
 - **`plumb stop` and `plumb restart` were unusable without a terminal, and said
   so in a way nobody could act on.** Both ran the shared Yes/No selector

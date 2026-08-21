@@ -191,8 +191,9 @@ var defaults = Config{
 			Enabled:         true,
 		},
 	},
-	Tasks: defaultTasks(),
-	Tools: ToolsConfig{Profile: "auto"},
+	Tasks:    defaultTasks(),
+	Commands: defaultCommands(),
+	Tools:    ToolsConfig{Profile: "auto"},
 	// execute_shell_command runs with the user's credentials and the daemon env and
 	// the sandbox is integrity-only, so the shell tier denies the network by default
 	// (opt back in with [commands] deny_network = false). run_command entries set

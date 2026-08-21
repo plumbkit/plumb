@@ -566,7 +566,14 @@ type Config struct {
 	AgentConfigWrites bool `toml:"agent_config_writes"`
 	// Commands is the [[command]] allow-list of fixed-argv named commands the
 	// run_command tool may run. User-authored; a project entry needs `plumb trust`.
-	Commands []CommandConfig `toml:"command"`
+	//
+	// omitempty matters more than it looks. agent_write marshals the WHOLE config
+	// back out, so without it an empty allow-list is written as a literal
+	// `command = []` — and an explicit empty array in a user's config out-ranks the
+	// compiled-in default forever after. That is how a config plumb wrote itself
+	// silently pinned this list empty: every default shipped here afterwards was
+	// dead on arrival for anyone whose config had ever been saved.
+	Commands []CommandConfig `toml:"command,omitempty"`
 	// CommandPolicy is the [commands] table: the execute_shell_command gate
 	// (allow_shell) and the sandbox-enforcement knob (require_sandbox).
 	CommandPolicy CommandsConfig `toml:"commands"`

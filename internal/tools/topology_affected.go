@@ -520,5 +520,17 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string
 	if result.Truncated {
 		sb.WriteString("\n[truncated: max_results reached — raise max_results for the full package list]\n")
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	return withTruncationBanner(strings.TrimRight(sb.String(), "\n"), cutPackagesNotice(result, a))
+}
+
+// cutPackagesNotice describes the cut for the leading banner, or "" when the
+// answer is complete. Named for what it reports rather than for the word
+// "truncate": it shortens no string, and the arch guard that watches for
+// re-implemented string truncation is right to read that name as a claim.
+func cutPackagesNotice(result *affectedResult, a topologyAffectedArgs) string {
+	if !result.Truncated {
+		return ""
+	}
+	return fmt.Sprintf("packages were cut at max_results=%d. Some packages that should be "+
+		"tested are NOT listed below. Raise max_results for the full set.", a.MaxResults)
 }

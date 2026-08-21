@@ -99,7 +99,15 @@ func formatFindFilesOutput(hits []findFileHit, a findFilesArgs, root string, tru
 		}
 	}
 	writeFindFilesSummary(&sb, a, hits, truncated, walkErr)
-	return sb.String()
+	// A capped file listing reads as "these are the files", which is the one
+	// conclusion it does not support. Say so before the list, not after it.
+	banner := ""
+	if truncated {
+		banner = fmt.Sprintf("the walk stopped at max_results=%d. Files matching this "+
+			"pattern are NOT listed below — do not read this as the complete set. Use a more "+
+			"specific pattern, set max_depth, or raise max_results.", a.MaxResults)
+	}
+	return withTruncationBanner(sb.String(), banner)
 }
 
 func writeFindFilesDetailRows(sb *strings.Builder, hits []findFileHit, root string) {

@@ -143,7 +143,30 @@ func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]strin
 			also, searchMaxOutputBytes/1024, filesShown, len(results))
 	}
 	sb.WriteString(summary)
-	return sb.String()
+
+	// The summary stays at the bottom — it is a tally, and a tally belongs after
+	// what it counts. But a CUT is not a tally: it means hits exist that are not
+	// below, and a reader who concludes "only these N places match" from a
+	// truncated list is simply wrong. That has to be said before the list.
+	var banner string
+	switch {
+	case timedOut:
+		banner = fmt.Sprintf("the search timed out after %s and did NOT finish. Matches "+
+			"may exist that are not listed below. Narrow with path/glob before concluding "+
+			"anything from these results.", searchDefaultDeadline)
+	case truncated && budgetHit:
+		banner = fmt.Sprintf("cut twice — at max_results=%d AND at the %d KiB output budget "+
+			"(%d of %d files shown). Matches are missing below.",
+			a.MaxResults, searchMaxOutputBytes/1024, filesShown, len(results))
+	case truncated:
+		banner = fmt.Sprintf("showing the first %d hit(s) only — more matches exist. "+
+			"Pass max_results=N to raise the cap, or narrow with glob/path.", a.MaxResults)
+	case budgetHit:
+		banner = fmt.Sprintf("output hit the %d KiB budget after %d of %d file(s). The "+
+			"remaining files' matches are missing below.",
+			searchMaxOutputBytes/1024, filesShown, len(results))
+	}
+	return withTruncationBanner(sb.String(), banner)
 }
 
 // docSymbolsCached returns DocumentSymbols for uri, consulting t.symCache first.

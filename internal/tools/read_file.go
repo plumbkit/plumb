@@ -394,6 +394,16 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, baseline i
 	} else {
 		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s lines=%d chars=%d baseline=%d\n", mtimeStr, classifyIndent(content), lines, chars, baseline)
 	}
+	// Ahead of every other note: it qualifies the lines/chars just printed. Those
+	// describe what was RETURNED, while baseline is the real file size, and a
+	// reader who does not know the body was cut will read them as the file's.
+	// The trailing marker stays; this is the copy that gets seen.
+	if truncated {
+		fmt.Fprintf(&sb, "# plumb-note: %s — this is the first 200 KiB of the file, not all of it. "+
+			"lines/chars above count the returned slice; baseline=%d is the whole file. "+
+			"Use start_line/end_line for a specific section, or file_outline for the whole structure.\n",
+			truncationMarker, baseline)
+	}
 	if concurrentNote != "" {
 		sb.WriteString(concurrentNote)
 	}

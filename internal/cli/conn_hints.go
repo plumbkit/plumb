@@ -109,11 +109,30 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	// a message still arrives on EVERY tool call rather than only the path-bearing
 	// ones the hints are restricted to.
 	text += s.pathHints(ctx, name, args)
-	if !mailboxSilentTools[name] {
+	if !mailboxSilentTools[name] && len(text) <= maxEnrichedResultBytes {
 		text += s.messageHint(ctx)
 	}
 	return text
 }
+
+// maxEnrichedResultBytes is the result size past which a message is NOT
+// delivered on this call.
+//
+// Delivery claims the row: inbox.Claim marks it delivered for good, and
+// check_messages will not hand it over again. So appending a message to the end
+// of a very large result bets a peer's message on the agent reading to the
+// bottom of, say, a 200 KiB file read — and loses it outright if it does not.
+// Everything else plumb appends is advisory and repeatable; this one is neither.
+//
+// Skipping is safe in the direction that matters: not claiming leaves the row
+// pending, so the message arrives on the next call under the threshold, on
+// check_messages, or at session_start. Deferring delivery costs latency;
+// claiming into an unread payload costs the message.
+//
+// The threshold is generous because the ordinary tool result is nowhere near it
+// — this is aimed at whole-file reads and large search dumps, not at making
+// delivery rare.
+const maxEnrichedResultBytes = 16 * 1024
 
 // pathHints returns the three path-derived advisory blocks, or "" when this tool
 // carries no usable path. Each is self-gated on its own config: the

@@ -203,7 +203,13 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 	if nb.Truncated {
 		sb.WriteString("\n[truncated: max_nodes or max_bytes reached — reduce depth or increase limits]\n")
 	}
-	return strings.TrimRight(sb.String(), "\n") + topologyAmbiguityNote(a.Name, alts)
+	banner := ""
+	if nb.Truncated {
+		banner = "the neighbourhood was cut at max_nodes or max_bytes. Nodes and edges " +
+			"connected to this symbol are MISSING below — absence here is not evidence of " +
+			"absence. Reduce depth, or raise max_nodes/max_bytes."
+	}
+	return withTruncationBanner(strings.TrimRight(sb.String(), "\n")+topologyAmbiguityNote(a.Name, alts), banner)
 }
 
 // topologyAmbiguityNote returns a trailing note when a symbol name resolved to

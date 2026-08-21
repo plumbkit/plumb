@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestValidateCommands(t *testing.T) {
@@ -76,10 +79,72 @@ func TestCloneCommands_DeepCopy(t *testing.T) {
 	}
 }
 
-func TestDefaults_NoCommands(t *testing.T) {
+// TestEmptyCommandsAreNotSerialised guards the interaction that made shipped
+// defaults inert.
+//
+// agent_write marshals the WHOLE config back to disk. Without omitempty an empty
+// allow-list is written as a literal `command = []`, and an explicit empty array
+// in a user's file out-ranks the compiled-in default from then on. A real global
+// config here carried exactly that line — written by plumb itself, never typed by
+// anyone — so `run_command` answered "no commands are configured" while the
+// binary shipped three.
+//
+// The general shape is worth keeping in mind beyond commands: a config writer
+// that materialises every field freezes today's defaults into every user's file.
+func TestEmptyCommandsAreNotSerialised(t *testing.T) {
+	data, err := toml.Marshal(Config{})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), "command = []") {
+		t.Errorf("an empty allow-list must not be written; it would override the shipped "+
+			"defaults permanently. Got:\n%s", data)
+	}
+}
+
+// TestDefaults_CommandsAreReadOnlyAndBounded replaces an earlier assertion that
+// defaults shipped NO commands at all.
+//
+// That was not a coherent posture: [tasks] has always shipped `go test ./...`
+// enabled by default, which runs arbitrary code out of the repository, while the
+// [[command]] tier — fixed argv, no shell, no free text — shipped empty and
+// refused `wc -l`. The practical result was that the only documented way to run
+// anything was [commands] allow_shell, the broadest tier, so callers enabled that
+// or left plumb for their own shell.
+//
+// What matters is not that the list is empty but that everything in it is safe,
+// so this asserts the bar each shipped entry must clear. Adding an entry that
+// writes, reaches the network, or takes free-form arguments fails here.
+func TestDefaults_CommandsAreReadOnlyAndBounded(t *testing.T) {
 	d := Defaults()
-	if d.Commands != nil {
-		t.Fatalf("Defaults ship no allow-list commands; got %v", d.Commands)
+	if len(d.Commands) == 0 {
+		t.Fatal("Defaults should ship the read-only allow-list; got none")
+	}
+	for _, c := range d.Commands {
+		if c.Name == "" || len(c.Exec) == 0 {
+			t.Errorf("default command %+v must have a name and an exec argv", c)
+		}
+		if c.AllowWrites {
+			t.Errorf("default command %q sets allow_writes; shipped defaults must be read-only", c.Name)
+		}
+		if !c.DenyNetwork {
+			t.Errorf("default command %q permits the network; shipped defaults must deny it", c.Name)
+		}
+		// At most one placeholder, and only the bounded {target} forms — anything
+		// else would mean free text reaching an argv nobody validated.
+		placeholders := 0
+		for _, arg := range c.Exec {
+			if arg == TargetToken || strings.HasPrefix(arg, TargetTokenPrefix) {
+				placeholders++
+				continue
+			}
+			if strings.Contains(arg, "{") {
+				t.Errorf("default command %q has an unrecognised placeholder in %q", c.Name, arg)
+			}
+		}
+		if placeholders > 1 {
+			t.Errorf("default command %q uses %d placeholders; at most one is allowed", c.Name, placeholders)
+		}
 	}
 	if d.CommandPolicy.AllowShell {
 		t.Fatal("Defaults must have allow_shell = false")
