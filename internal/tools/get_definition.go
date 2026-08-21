@@ -114,6 +114,14 @@ type getDefinitionArgs struct {
 	SymbolName string  `json:"symbol_name"`
 }
 
+// Execute's shape is intentionally near-identical to ExplainSymbol.Execute /
+// CallHierarchy.Execute / TypeHierarchy.Execute — all four position-taking
+// query tools share the "symbol_name preferred, raw line/character fallback"
+// dispatch via executeLSPQuery (lsp_snap.go); the wrapper below is the
+// irreducible per-tool glue (parse this tool's args, name its two closures),
+// not accidental duplication.
+//
+//nolint:dupl // structurally identical by design across the four query tools, see comment above
 func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a getDefinitionArgs
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -122,19 +130,12 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("get_definition: uri must not be empty")
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
-
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
-	defer cancel()
-
-	if a.SymbolName != "" {
-		return t.executeByName(ctx, a.URI, a.SymbolName)
-	}
-
-	if a.Line == nil || a.Character == nil {
-		return "", errors.New("get_definition: either symbol_name or both line and character are required")
-	}
-	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, true, "")
+	return executeLSPQuery(ctx, "get_definition", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
+		func(ctx context.Context, uri string) (string, error) { return t.executeByName(ctx, uri, a.SymbolName) },
+		func(ctx context.Context, uri string, line, character uint32) (string, error) {
+			return t.executeByPosition(ctx, uri, line, character, true, "")
+		},
+	)
 }
 
 // executeByName resolves a definition through the language server, falling back
@@ -226,9 +227,11 @@ func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line,
 		}
 	}
 
-	locs, err := t.client.Definition(ctx, protocol.DefinitionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: line, Character: character},
+	locs, err := retryOnServerNotReady(ctx, func() ([]protocol.Location, error) {
+		return t.client.Definition(ctx, protocol.DefinitionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: line, Character: character},
+		})
 	})
 	if err != nil {
 		if allowSnap && isPositionMissErr(err) {

@@ -286,7 +286,9 @@ func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*p
 		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: no symbol named %q in %s", a.SymbolName, a.URI)}
 	}
 	if len(matches) > 1 {
-		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; use line/character to disambiguate", len(matches), a.SymbolName, a.URI)}
+		cands := disambiguatedNames(syms, matches)
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; disambiguate by retrying with symbol_name set to one of: %s",
+			len(matches), a.SymbolName, a.URI, strings.Join(cands, ", "))}
 	}
 	sym := matches[0]
 	return t.renameByPosition(ctx, a, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
@@ -314,10 +316,12 @@ func (e preLSPErr) Error() string { return e.err.Error() }
 func (e preLSPErr) Unwrap() error { return e.err }
 
 func (t *RenameSymbol) renameByPosition(ctx context.Context, a renameSymbolArgs, line, character uint32, allowSnap bool) (*protocol.WorkspaceEdit, string, error) {
-	we, err := t.client.Rename(ctx, protocol.RenameParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
-		Position:     protocol.Position{Line: line, Character: character},
-		NewName:      a.NewName,
+	we, err := retryOnServerNotReady(ctx, func() (*protocol.WorkspaceEdit, error) {
+		return t.client.Rename(ctx, protocol.RenameParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+			Position:     protocol.Position{Line: line, Character: character},
+			NewName:      a.NewName,
+		})
 	})
 	if err == nil {
 		return we, "", nil

@@ -42,6 +42,20 @@ func (m *snapMock) PrepareCallHierarchy(_ context.Context, p protocol.PrepareCal
 	return m.chItems, nil
 }
 
+func (m *snapMock) Hover(_ context.Context, p protocol.HoverParams) (*protocol.Hover, error) {
+	if p.Position != m.good {
+		return nil, errors.New("no identifier found")
+	}
+	return m.hover, nil
+}
+
+func (m *snapMock) PrepareTypeHierarchy(_ context.Context, p protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
+	if p.Position != m.good {
+		return nil, errors.New("no identifier found")
+	}
+	return m.thItems, nil
+}
+
 // enclosingSymbol models a function spanning lines 5–10 whose identifier
 // (SelectionRange) sits at (5,5): a query on any body line snaps here.
 func enclosingSymbol(name string) []protocol.DocumentSymbol {

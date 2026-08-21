@@ -129,24 +129,25 @@ func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 	return a, nil
 }
 
+// Execute's shape is intentionally near-identical to TypeHierarchy.Execute
+// (and, modulo the direction param, GetDefinition/ExplainSymbol.Execute) —
+// see the comment on GetDefinition.Execute in get_definition.go for why.
+//
+//nolint:dupl // structurally identical by design across the four query tools, see get_definition.go
 func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	a, err := parseCallHierarchyArgs(args)
 	if err != nil {
 		return "", err
 	}
-	uri := toFileURIAnchored(ctx, a.URI, t.ws)
-
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
-	defer cancel()
-
-	if a.SymbolName != "" {
-		return t.executeByName(ctx, uri, a.SymbolName, a.Direction)
-	}
-	if a.Line == nil || a.Character == nil {
-		return "", errors.New("call_hierarchy: either symbol_name or both line and character are required")
-	}
-	q := callHierarchyQuery{uri: uri, line: *a.Line, character: *a.Character, direction: a.Direction}
-	return t.executeByPosition(ctx, q, true)
+	return executeLSPQuery(ctx, "call_hierarchy", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
+		func(ctx context.Context, uri string) (string, error) {
+			return t.executeByName(ctx, uri, a.SymbolName, a.Direction)
+		},
+		func(ctx context.Context, uri string, line, character uint32) (string, error) {
+			q := callHierarchyQuery{uri: uri, line: line, character: character, direction: a.Direction}
+			return t.executeByPosition(ctx, q, true)
+		},
+	)
 }
 
 // executeByName resolves the symbol by name against the file's document symbols

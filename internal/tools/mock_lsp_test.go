@@ -26,6 +26,11 @@ type mockLSP struct {
 	chIncoming []protocol.CallHierarchyIncomingCall
 	chOutgoing []protocol.CallHierarchyOutgoingCall
 
+	// Type-hierarchy responses (nil by default → same as an empty server).
+	thItems  []protocol.TypeHierarchyItem
+	thSupers []protocol.TypeHierarchyItem
+	thSubs   []protocol.TypeHierarchyItem
+
 	// last*Pos records the Position of the most recent semantic query, so tests can
 	// assert the tool queried the identifier (DocumentSymbol SelectionRange) rather
 	// than the declaration start (the keyword).
@@ -124,15 +129,15 @@ func (m *mockLSP) OutgoingCalls(_ context.Context, _ protocol.CallHierarchyOutgo
 }
 
 func (m *mockLSP) PrepareTypeHierarchy(_ context.Context, _ protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thItems, m.err
 }
 
 func (m *mockLSP) Supertypes(_ context.Context, _ protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thSupers, m.err
 }
 
 func (m *mockLSP) Subtypes(_ context.Context, _ protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thSubs, m.err
 }
 func (m *mockLSP) Capabilities() *protocol.ServerCapabilities       { return m.caps }
 func (m *mockLSP) Subscribe(_ func(string, json.RawMessage)) func() { return func() {} }
