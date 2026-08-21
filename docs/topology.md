@@ -157,7 +157,7 @@ treat it as an optional, rebuildable index.
 | Understand a symbol's neighbourhood | `topology_explore` |
 | Assess the blast radius of a change | `topology_impact` |
 | Know which tests a change might affect | `topology_affected` |
-| List framework entry points (routes, commands) | `topology_routes` |
+| Find symbols shaped like entry points (handler/command name patterns) | `topology_routes` |
 | Jump to a definition with certainty | `get_definition` (LSP) |
 | Find every real call site | `find_references` (LSP) |
 | Rename safely across the workspace | `rename_symbol` (LSP) |

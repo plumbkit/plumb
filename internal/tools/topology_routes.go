@@ -18,7 +18,7 @@ var topologyRoutesSchema = json.RawMessage(`{
     },
     "path_prefix": {
       "type": "string",
-      "description": "Optional path prefix filter for route handlers (e.g. '/api/')."
+      "description": "Optional substring filter applied to the candidate symbol's name/signature (e.g. 'api') — NOT a URL path filter; it is not matched against any route path, since none is parsed."
     },
     "limit": {
       "type": "integer",
@@ -29,7 +29,7 @@ var topologyRoutesSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
-// TopologyRoutes scans topology nodes to identify HTTP/CLI entry points.
+// TopologyRoutes pattern-matches topology nodes whose name/signature look like HTTP/CLI entry points.
 //
 // Concurrency: Execute is safe for concurrent use.
 type TopologyRoutes struct {
