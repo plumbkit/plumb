@@ -125,8 +125,7 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "test_task": {
       "type": "string",
-      "enum": ["build", "lint", "test", "e2e", "verify"],
-      "description": "Which stored [tasks.<lang>] slot runs the tests. Default \"test\"."
+      "description": "Which stored [tasks.<lang>] slot runs the tests. Default \"test\". The built-ins are build, lint, test, e2e and verify; a project-defined slot works here too."
     },
     "test_target": {
       "type": "string",
@@ -134,8 +133,7 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "compile_task": {
       "type": "string",
-      "enum": ["build", "lint", "test", "e2e", "verify"],
-      "description": "Which stored slot proves the mutant COMPILES before its tests are trusted. Default \"build\". It always runs unscoped (no {target}) — a whole-module compile catches breakage a scoped test never reaches. Cannot be disabled: without it a non-compiling mutant looks exactly like a kill."
+      "description": "Which stored slot proves the mutant COMPILES before its tests are trusted. Default \"build\". It always runs unscoped (no {target}) — a whole-module compile catches breakage a scoped test never reaches. Cannot be disabled: without it a non-compiling mutant looks exactly like a kill. The built-ins are build, lint, test, e2e and verify; a project-defined slot works here too."
     },
     "timeout_seconds": {
       "type": "integer",
@@ -201,11 +199,11 @@ func (a mutationTestArgs) validate() error {
 	if len(a.Mutants) > maxMutants {
 		return fmt.Errorf("mutation_test: %d mutants exceeds the limit of %d — each costs a full compile+test cycle", len(a.Mutants), maxMutants)
 	}
-	if !taskSlots[a.TestTask] {
-		return fmt.Errorf("mutation_test: test_task must be one of build, lint, test, e2e, verify; got %q", a.TestTask)
+	if !taskSlotName.MatchString(a.TestTask) {
+		return fmt.Errorf("mutation_test: test_task %q is not a valid slot name; the built-ins are build, lint, test, e2e, verify", a.TestTask)
 	}
-	if !taskSlots[a.CompileTask] {
-		return fmt.Errorf("mutation_test: compile_task must be one of build, lint, test, e2e, verify; got %q", a.CompileTask)
+	if !taskSlotName.MatchString(a.CompileTask) {
+		return fmt.Errorf("mutation_test: compile_task %q is not a valid slot name; the built-ins are build, lint, test, e2e, verify", a.CompileTask)
 	}
 	if a.TestTarget != "" && !targetPattern.MatchString(a.TestTarget) {
 		return fmt.Errorf("mutation_test: test_target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.TestTarget)

@@ -10,7 +10,7 @@ import (
 )
 
 // tasks.go is the run_task MCP tool: it executes a STORED per-language command
-// (build/lint/test/e2e/verify) resolved by the daemon, never an agent-supplied
+// (build/lint/test/e2e/verify, or a project-defined slot) resolved by the daemon, never an agent-supplied
 // command line. The only agent input that reaches the argv is an optional
 // {target} token, shell-escaped by validation. Resolution + the per-workspace
 // trust gate live in the daemon (the resolver closure); this file is the MCP
@@ -18,8 +18,17 @@ import (
 //
 // Concurrency: Execute is safe for concurrent use (no shared mutable state).
 
-// taskSlots are the runnable slot names.
-var taskSlots = map[string]bool{"build": true, "lint": true, "test": true, "e2e": true, "verify": true}
+// taskSlotName bounds the slot argument to a plain lowercase identifier. It is
+// INPUT HYGIENE, not the vocabulary: which slots exist is the config layer's
+// answer, and this file deliberately does not import it (see the file comment)
+// — the resolver bridges it. Keeping a closed set here is what made the slot
+// vocabulary Go-shaped: a project whose toolchain calls its verb `check` could
+// not reach run_task at all, and fell back to raw shell, losing the no-shell
+// argv contract and the trust gate with it.
+//
+// TestTaskSlotNamePattern_MatchesConfig pins this against
+// config.ValidTaskSlotName so the two cannot drift.
+var taskSlotName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // targetPattern bounds the {target} token to a single shell-safe argument.
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
@@ -87,8 +96,7 @@ var runTaskSchema = json.RawMessage(`{
   "properties": {
     "slot": {
       "type": "string",
-      "enum": ["build", "lint", "test", "e2e", "verify"],
-      "description": "Which stored task command to run: build, lint, test, e2e (integration), or verify (build then test). The command is configured per language in [tasks.<lang>] and resolved for this workspace's language — you cannot pass an arbitrary command."
+      "description": "Which stored task command to run. The built-in slots are build, lint, test, e2e (integration) and verify (build then test); a project may also define slots of its own under [tasks.<lang>] (check, typecheck, audit, whatever its toolchain calls them), and those are run the same way. There is deliberately no fixed enum here — the vocabulary is the workspace's, not this tool's. session_start lists the slots configured for this workspace, and a slot with no command is refused with the list of those that have one. The command is resolved for this workspace's language — you cannot pass an arbitrary command."
     },
     "target": {
       "type": "string",
@@ -102,7 +110,7 @@ var runTaskSchema = json.RawMessage(`{
 func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
-	return "Run a stored per-language task command — build, lint, test, e2e, or verify (build then test) — configured in [tasks.<lang>]. " +
+	return "Run a stored per-language task command — the built-in build, lint, test, e2e or verify (build then test), or any extra slot the project defines — configured in [tasks.<lang>]. " +
 		"It executes only the command the user saved for this workspace's language (no shell, no agent-supplied command line); the optional target fills a {target} placeholder with one shell-safe argument, and the shipped test defaults carry one so scoping needs no config edit. " +
 		"Commands run from the workspace root, or from [tasks.<lang>] working_dir when the module lives in a subdirectory. " +
 		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
@@ -115,8 +123,10 @@ type runTaskArgs struct {
 }
 
 func (a runTaskArgs) validate() error {
-	if !taskSlots[a.Slot] {
-		return fmt.Errorf("run_task: slot must be one of build, lint, test, e2e, verify; got %q", a.Slot)
+	if !taskSlotName.MatchString(a.Slot) {
+		return fmt.Errorf("run_task: slot %q is not a valid slot name "+
+			"(lowercase letter first, then letters, digits, _ or -, max 32 characters); "+
+			"the built-ins are build, lint, test, e2e, verify", a.Slot)
 	}
 	if a.Target != "" && !targetPattern.MatchString(a.Target) {
 		return fmt.Errorf("run_task: target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.Target)

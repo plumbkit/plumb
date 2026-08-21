@@ -564,14 +564,6 @@ func TestMutationTest_ArgValidation(t *testing.T) {
 			},
 			"shell-safe",
 		},
-		{
-			"bad slot",
-			map[string]any{
-				"mutants":   []map[string]any{{"file_path": "f", "old_string": "a", "new_string": "b"}},
-				"test_task": "deploy",
-			},
-			"test_task must be one of",
-		},
 	}
 	tool := NewMutationTest(WriteDeps{}, nil)
 	for _, tc := range cases {
