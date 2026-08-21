@@ -92,14 +92,27 @@ var paramAliases = map[string][]aliasTarget{
 	// value is the pattern itself (the long-standing behaviour); a truthy bool
 	// is the intent-explicit "treat the pattern as a regex" flag, so only then
 	// does it rewrite to use_regex:true.
-	"regex":       {constant("use_regex"), plain("pattern")},
-	"query":       {plain("pattern"), plain("name")},
-	"pattern":     {plain("query")},
-	"name":        {plain("query"), plain("symbol_name")},
-	"newname":     {plain("name")},
-	"symbol":      {plain("name"), plain("symbol_name"), plain("query")},
+	"regex":   {constant("use_regex"), plain("pattern")},
+	"query":   {plain("pattern"), plain("name")},
+	"pattern": {plain("query")},
+	"name":    {plain("query"), plain("symbol_name")},
+	"newname": {plain("name")},
+	"symbol":  {plain("name"), plain("symbol_name"), plain("query")},
+	// read_symbol / read_memory call it `name`, while get_definition and
+	// find_references call the same thing `symbol_name` — so an agent moving
+	// between them sends the other tool's spelling. 40 read_symbol({symbol_name})
+	// rejections in the stats DB, the single largest unknown-parameter group.
+	"symbolname":  {plain("name"), plain("symbol_name")},
+	"namepath":    {plain("name")},
+	"memoryname":  {plain("name")},
 	"isregex":     {plain("use_regex")},
 	"filepattern": {plain("glob")},
+	// A file filter agents spell `include`, against tools that call it `glob`.
+	// It is NOT a semantic flip: the canonical it reaches is the INCLUDE filter.
+	// Left unmapped it was worse than a rejection — `exclude` is the nearest
+	// declared name by edit distance, so the "did you mean" hint pointed at the
+	// OPPOSITE filter (see antonymStems).
+	"include": {plain("glob")},
 	// Case sensitivity: grep-style value-inverting flags (-i normalises to "i").
 	"i":          {invert("case_sensitive")},
 	"ignorecase": {invert("case_sensitive")},
@@ -124,15 +137,27 @@ var paramAliases = map[string][]aliasTarget{
 	// recent_limit — first eligible wins); "limit" itself crosses only to tools
 	// WITHOUT a limit parameter (eligibility skips it where limit is declared),
 	// where the same cap goes by a different name.
-	"start":      {plain("start_line")},
-	"end":        {plain("end_line")},
-	"nlines":     {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
-	"numlines":   {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
-	"maxlines":   {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
-	"linecount":  {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
-	"limit":      {plain("max_results"), plain("max_matches"), plain("recent_limit")},
+	"start":     {plain("start_line")},
+	"end":       {plain("end_line")},
+	"linestart": {plain("start_line")},
+	"lineend":   {plain("end_line")},
+	"nlines":    {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"numlines":  {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"maxlines":  {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"linecount": {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"limit":     {plain("max_results"), plain("max_matches"), plain("recent_limit")},
+	// The reciprocal of "limit". workspace_search caps with `limit` while the
+	// search tools cap with `max_results`, so the crossing is needed both ways.
+	"maxresults": {plain("limit"), plain("max_matches"), plain("recent_limit")},
 	"maxmatches": {plain("max_matches"), plain("max_results")},
 	"maxcount":   {plain("max_matches"), plain("max_results")},
+	// NOT mapped: column/col → character. It is a real spelling agents send (3
+	// calls in the stats DB), but `character` is REQUIRED on explain_symbol and
+	// type_hierarchy, and publishSchema drops every alias target from the
+	// published `required` list so a pre-validating host cannot reject the alias
+	// before it reaches plumb. Three calls does not buy weakening the
+	// required-ness signal on two other tools. TestAliasTargetSet_ExactMembership
+	// is what forces this trade to be made deliberately.
 	// Traversal depth: find_files calls it max_depth, the topology tools call it
 	// depth — both directions.
 	"depth":    {plain("max_depth")},
@@ -151,10 +176,36 @@ var paramAliases = map[string][]aliasTarget{
 	"commitmessage": {plain("message")},
 	"repository":    {plain("repo")},
 	"subcmd":        {plain("subcommand")},
+	"op":            {plain("subcommand")},
 	"command":       {plain("subcommand")},
 	// Workspace pin.
 	"workspacepath": {plain("workspace")},
 }
+
+// Why an unknown parameter is REJECTED rather than warned-about and dropped.
+//
+// The question was reopened against data, not argument: 296 unknown-parameter
+// rejections in the stats DB. Most were spellings the curated table simply did
+// not carry, and those are now rows above — a rewrite keeps the caller's VALUE,
+// so it costs nothing.
+//
+// The remainder are the case for keeping the rejection, and they are not typos.
+// Agents send `edits[].new_string_2`, `new_string_unused`, `old_string_offset` —
+// invented parameters, reaching for a shape edit_file does not have. Dropping
+// `new_string_2` with a warning would apply the first replacement, silently skip
+// the second, and report success: a partial edit that looks like a whole one.
+// No warning string prevents that, because by the time it is read the write has
+// happened.
+//
+// The earlier statement of this rule was that dropping masks a mistyped SAFETY
+// flag. That much is true but it is the weaker half: a dropped `dirty_ok` or
+// `confirm` fails CLOSED — the operation is refused, which is safe if annoying.
+// The real cost is a dropped VALUE, where absence is not a safer default but a
+// different, silently smaller change.
+//
+// So the two paths stay as they are: rewrite when the value can be carried to a
+// canonical, reject when it cannot. What was actually missing was neither — it
+// was the quality of the rejection, and closest() had a hole (see antonymStems).
 
 // safetyCriticalParams names canonical parameters a fuzzy (edit-distance) match
 // must never auto-correct TO: a wrong guess here flips a side-effect or defeats a
@@ -283,13 +334,102 @@ func normaliseKey(s string) string {
 	return b.String()
 }
 
+// antonymStems are meaning-inverting word pairs. A suggestion that differs from
+// the typed key by one of these is not a typo correction — it is the OPPOSITE
+// parameter, and following it produces a silently wrong result rather than an
+// error.
+//
+// This is the "never a semantic flip (include≠exclude)" rule the alias table
+// states, applied where it was missing. The rule was enforced on the two paths
+// that REWRITE a call (the curated table is hand-audited; fuzzyCanonical is
+// gated by safetyCriticalParams), but not on the path that ADVISES one. Measured
+// on the stats DB: `search_in_files({include: "*.go"})` — 12 calls — was rejected
+// with `did you mean "exclude"?`, because `exclude` is the nearest declared name
+// by edit distance. An agent that took the advice would have searched with the
+// inverse filter and got a confidently wrong answer.
+var antonymStems = [][2]string{
+	{"include", "exclude"},
+	{"before", "after"},
+	{"start", "end"},
+	{"first", "last"},
+	{"min", "max"},
+	{"enable", "disable"},
+	{"enabled", "disabled"},
+	{"allow", "deny"},
+	{"old", "new"},
+	{"add", "remove"},
+	{"in", "out"},
+	{"asc", "desc"},
+}
+
+// nameTokens splits a parameter name into lowercase words, on separators and
+// camelCase boundaries: start_line → [start line], includeHidden → [include
+// hidden].
+//
+// Antonyms are compared as WHOLE TOKENS, never as substrings. Substring matching
+// reads "append" as containing "end", "threshold" as containing "old" and
+// "line" as containing "in", so it would suppress unrelated, useful suggestions
+// — and the short pairs (in/out, min/max) are the ones a parameter vocabulary
+// actually uses, so dropping them instead is not an option either.
+func nameTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			out[strings.ToLower(cur.String())] = true
+			cur.Reset()
+		}
+	}
+	var prev rune
+	for i, r := range s {
+		switch {
+		case r == '_' || r == '-' || r == ' ' || r == '.':
+			flush()
+		case i > 0 && r >= 'A' && r <= 'Z' && (prev < 'A' || prev > 'Z'):
+			flush()
+			cur.WriteRune(r)
+		default:
+			cur.WriteRune(r)
+		}
+		prev = r
+	}
+	flush()
+	return out
+}
+
+// invertsMeaning reports whether suggesting cand for key would swap a meaning
+// rather than fix a spelling: one name carries a stem as a whole token and the
+// other carries its opposite. A name carrying BOTH sides of a pair is not an
+// inversion of anything.
+func invertsMeaning(key, cand string) bool {
+	k, c := nameTokens(key), nameTokens(cand)
+	for _, pair := range antonymStems {
+		a, b := pair[0], pair[1]
+		if k[a] && k[b] || c[a] && c[b] {
+			continue
+		}
+		if (k[a] && c[b]) || (k[b] && c[a]) {
+			return true
+		}
+	}
+	return false
+}
+
 // closest returns the candidate most similar to key (case-insensitive
 // Levenshtein) when it is close enough to be a plausible typo — used only for
 // the "did you mean" hint on a rejected unknown parameter.
+//
+// A candidate whose meaning INVERTS the key's is skipped rather than offered,
+// even when it is the nearest by edit distance: a hint is advice an agent acts
+// on, and advice to use the opposite filter is worse than no advice at all. The
+// next-nearest non-inverting candidate is offered instead, or nothing.
 func closest(key string, candidates []string) string {
 	lowerKey := strings.ToLower(key)
 	best, bestDist := "", -1
 	for _, c := range candidates {
+		if invertsMeaning(key, c) {
+			continue
+		}
 		d := levenshtein(lowerKey, strings.ToLower(c))
 		if bestDist == -1 || d < bestDist {
 			best, bestDist = c, d
