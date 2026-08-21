@@ -269,13 +269,27 @@ jobs:
       - name: Install gopls
         run: go install golang.org/x/tools/gopls@latest
 
-      - name: Install pyright
-        run: npm install -g pyright
+      # typescript-language-server and vscode-html-language-server already have
+      # integration tests, and those tests skipped on every run because the
+      # binaries were absent — so "integration green" only ever meant Go and
+      # Python. Installing them is the whole change: the tests un-skip on their
+      # own. (zls and jdtls are not npm-published and still skip; see
+      # docs/adding-an-lsp.md for the per-adapter status.)
+      #
+      # typescript@5 is pinned deliberately: plain `typescript` now resolves to
+      # TypeScript 7, the Go-native rewrite, which ships no `tsserver`. The
+      # language server then fails to initialize with "Could not find a valid
+      # TypeScript installation" and its test SKIPS — coverage quietly drops
+      # instead of the run going red.
+      - name: Install npm-published language servers
+        run: npm install -g pyright typescript-language-server typescript@5 vscode-langservers-extracted
 
       - name: Verify language servers are on PATH
         run: |
           gopls version
           pyright --version
+          typescript-language-server --version
+          command -v vscode-html-language-server
 
       - name: make integration-test
         run: make integration-test

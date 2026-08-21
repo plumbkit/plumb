@@ -56,8 +56,8 @@ var adapterCatalogue = []struct {
 	{"java", adapterMeta{"Java", tierValidated}},
 	{"rust", adapterMeta{"Rust", tierValidated}},
 	{"swift", adapterMeta{"Swift", tierValidated}},
-	{"typescript", adapterMeta{"TS/JS", tierExperimental}},
-	{"zig", adapterMeta{"Zig", tierExperimental}},
+	{"typescript", adapterMeta{"TS/JS", tierValidated}},
+	{"zig", adapterMeta{"Zig", tierValidated}},
 	{"kotlin", adapterMeta{"Kotlin", tierValidated}},
 	{"html", adapterMeta{"HTML", tierExperimental}},
 }

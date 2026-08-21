@@ -56,6 +56,15 @@ to refresh; both are also listed in the right panel's footer and the in-app help
 overlay (`ctrl+h`). Press `q` or `ctrl+c` to quit. See the
 [TUI conventions in CONTRIBUTING.md](contributing.md#tui-conventions-bubble-tea-v2) for navigation details.
 
+**Copying (`c`).** In the log detail and the call-detail popup, `c` copies to
+the system clipboard by piping into a platform helper: `pbcopy` on macOS, and on
+Linux `wl-copy` under Wayland (`wl-clipboard`) or `xclip`/`xsel` under X11 —
+including XWayland, when `DISPLAY` is set but `wl-copy` is not installed. With
+no helper available, and on a bare SSH session or TTY, it falls back to an
+OSC 52 escape sequence, which needs no binary but depends on the terminal
+honouring it. The status line says which happened and never reports a copy it
+cannot verify. `plumb doctor` reports the resolved helper under **Dev Tools**.
+
 ---
 
 ## `plumb serve`

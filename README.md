@@ -122,7 +122,7 @@ Plumb negotiates LSP capabilities per language and also ships a built-in tree-si
 | **Experimental** | **HTML** | Navigation works against the real server; diagnostics validation is still in progress. Put the server on `$PATH` to activate (exclude any language with `[lsp.<lang>] enabled = false`) |
 | **Search & navigation** (tree-sitter, no LSP needed) | 31+ incl. JS/TS/TSX, Ruby, C, C#, Elixir, Scala, PHP, JSON, CSS, SCSS, XML, Lua, C++, Objective-C, Dart, Bash, SQL, HCL, Dockerfile, TOML, YAML, Markdown | Ranked symbol search, outlines, graph exploration via the Topology index |
 
-Real-binary validation has been exercised on **macOS**; Linux integration runs in CI and is being hardened pre-v1. Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues/8) — the daemon's Unix-socket architecture needs a port.
+Real-binary validation has been exercised on **macOS and Linux** — as of 2026-08-21, seven of the nine adapters (Go, Python, Rust, Swift, TypeScript/JS, Zig, HTML) pass their integration tests against real server binaries on Linux too; Java and Kotlin have been validated on macOS only so far. Details, including two toolchain traps that look like adapter bugs, are in [docs/adding-an-lsp.md](docs/adding-an-lsp.md#validation-levels). Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues/8) — the daemon's Unix-socket architecture needs a port.
 
 ---
 

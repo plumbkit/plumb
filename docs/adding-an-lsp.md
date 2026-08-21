@@ -130,9 +130,30 @@ capability advertised, while a pull answered in 0.8 s), so the push wording woul
 have left a demonstrably working server permanently unpromotable. What the rule
 is for is evidence from a real binary, not a particular notification.
 
-Real-binary validation has been exercised on macOS only; Linux integration runs
-in CI and is being hardened pre-v1; Windows is not yet supported. Current status
-of every shipped adapter (details in the *Adapter reference* below):
+Real-binary validation was exercised on macOS only until 2026-08-21, when seven
+of the nine adapters were run against real binaries on Linux (CachyOS/Arch,
+kernel 7.1.8, x86_64, Go 1.26.5) as part of the #9 hardening pass: `gopls`,
+`pyright` 1.1.413, `rust-analyzer` 1.97.0, `sourcekit-lsp` (Swift 6.3.3),
+`typescript-language-server` 6.0.0 with TypeScript 5.9.3, `zls` 0.16.0 and
+`vscode-html-language-server` 4.10.0 all pass their integration tests there.
+`jdtls` and `kotlin-lsp` were not exercised on Linux (no jdtls install; the
+Kotlin fixture needs Gradle). Windows is not yet supported.
+
+Two toolchain traps that pass-count as adapter failures on Linux, both worth
+checking before filing a bug:
+
+- **`npm i -g typescript` now installs TypeScript 7**, the Go-native rewrite,
+  which ships no `tsserver`. `typescript-language-server` then fails to
+  initialize with "Could not find a valid TypeScript installation", and its
+  integration test skips. Install `typescript@5` for the tsserver the language
+  server drives.
+- **`rust-analyzer` on PATH may be the rustup shim**, which is present even when
+  the component is not installed and exits with "Unknown binary". Run
+  `rustup component add rust-analyzer`. The integration test probes `--version`
+  for exactly this reason rather than trusting `LookPath`.
+
+Current status of every shipped adapter (details in the *Adapter reference*
+below):
 
 | Adapter | Language | Status |
 |---|---|---|
@@ -144,12 +165,17 @@ of every shipped adapter (details in the *Adapter reference* below):
 | `zls` | Zig | **Validated** — real-binary retest (2026-06-17, zls 0.16) passes both integration tests once the `publishDiagnostics` client capability is advertised. |
 | `typescript-language-server` | TypeScript / JavaScript | **Validated** — publishes nothing unless the client advertises `textDocument.publishDiagnostics` (now in `DefaultClientCapabilities`); does not implement pull diagnostics. |
 | `kotlin-lsp` | Kotlin | **Validated (pull)** — JetBrains' Kotlin/kotlin-lsp 262.9593.0, 2026-08-11, on a resolvable Gradle project. The only adapter whose server never pushes: diagnostics come from `textDocument/diagnostic`. No Kotlin Multiplatform. |
-| `vscode-html-language-server` | HTML | **Experimental** — no filesystem access; answers only from documents the client has opened. |
+| `vscode-html-language-server` | HTML | **Experimental** — no filesystem access; answers only from documents the client has opened. Both integration tests do pass against the real binary (4.10.0, Linux, 2026-08-21); the tier reflects that capability gap, not missing evidence. |
 
 Promote from experimental to validated by getting the integration test (step 6)
-green against a real server binary, then updating the adapter's `doc.go` status
-comment and the status table above. Record the binary version and the date
-tested: "validated" with no build behind it ages into a claim nobody can check.
+green against a real server binary, then updating **all** of: the adapter's
+`doc.go` status comment, the status table above, the tier table in `README.md`,
+and `adapterCatalogue` in `internal/cli/config_adapters.go` — that last one is
+what `plumb config show --adapters` renders, it is the easiest to miss, and
+typescript and zig sat there as *experimental* for months after being promoted
+everywhere else. `TestAdapterCatalogueTiersMatchTheDocumentedStatus` now pins
+it. Record the binary version and the date tested: "validated" with no build
+behind it ages into a claim nobody can check.
 
 ---
 
