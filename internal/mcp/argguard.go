@@ -495,9 +495,9 @@ func firstUnknown(sh *shape, obj map[string]any) string {
 }
 
 // unknownErr renders the rejection for an undeclared parameter. obj is the
-// object the key was found in, so the message can distinguish the two reasons a
-// key reaches here — a name the tool never had, and a name it DOES understand
-// but could not apply because the caller also supplied its canonical.
+// object the key was found in; unknownDetail (argplacement.go) supplies the
+// clause explaining WHY — an alias collision, a "did you mean" typo
+// suggestion, or (PLAN-358) a nested-placement hint — or "" when none apply.
 func unknownErr(sh *shape, obj map[string]any, key, toolName string, synth aliasSynth) error {
 	prefix := ""
 	if toolName != "" {
@@ -506,39 +506,13 @@ func unknownErr(sh *shape, obj map[string]any, key, toolName string, synth alias
 	if len(sh.order) == 0 {
 		return badArgument(fmt.Errorf("%sunknown parameter %q: this tool accepts no parameters", prefix, key))
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%sunknown parameter %q", prefix, key)
-	if collided := collidingCanonical(sh, obj, baseName(key)); collided != "" {
-		// The alias resolver refused this key on purpose: its canonical was
-		// already taken, and rewriting would have silently dropped one of two
-		// values the caller explicitly passed. Without saying so the message is
-		// actively misleading — it calls a name the tool understands "unknown",
-		// and the "did you mean" hint would point at the parameter already
-		// present, reading as nonsense.
-		//
-		// Which of two wordings is TRUE depends on how the canonical got there.
-		// The rewrite runs before validation, so an alias-vs-alias collision
-		// reaches this point with a canonical the caller never typed: for
-		// write_file({body, text}) obj holds "content" only because "body" was
-		// rewritten to it, and telling the caller they "supplied content" — let
-		// alone to keep it — names a key that is nowhere in their call.
-		parent := parentPath(key)
-		if via, synthesised := synth[joinPath(parent, collided)]; synthesised {
-			fmt.Fprintf(&b, ": you supplied both %q and %q, which both name %q here — remove one",
-				joinPath(parent, via), key, collided)
-		} else {
-			fmt.Fprintf(&b, ": you supplied both %q and %q, which name the same parameter here — "+
-				"remove %q and keep %q", key, collided, key, collided)
-		}
-	} else if suggestion := closest(baseName(key), sh.order); suggestion != "" {
-		fmt.Fprintf(&b, "; did you mean %q?", suggestion)
-	}
+	msg := fmt.Sprintf("%sunknown parameter %q%s", prefix, key, unknownDetail(sh, obj, key, synth))
 	// The separator is load-bearing: without it the sentence ran straight into
 	// its own parameter list ("unknown parameter \"foo\" valid parameters: …"),
 	// which reads as one clause and hides where the message ends. A "did you
 	// mean" clause already terminates itself, so it takes a space rather than a
 	// second stop.
-	msg, sep := b.String(), ". "
+	sep := ". "
 	if strings.HasSuffix(msg, "?") {
 		sep = " "
 	}

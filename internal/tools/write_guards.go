@@ -21,22 +21,33 @@ import (
 // edit-logic error, and appending a reconcile hint for an anchored batch), so the
 // two enforce identical semantics and wording.
 func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error {
+	if expectedMtime == "" && expectedSha == "" {
+		return nil
+	}
+
+	// Stat once up front: both branches below report the CURRENT mtime inline
+	// (not just whichever guard was actually supplied), so a one-call retry never
+	// needs a follow-up read_file just to learn the other value.
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s: stat %q: %w", tool, path, err)
+	}
+	currentMtime := info.ModTime()
+
 	if expectedMtime != "" {
 		want, err := time.Parse(time.RFC3339Nano, expectedMtime)
 		if err != nil {
 			return badArgument(fmt.Errorf("%s: expected_mtime is not RFC3339Nano: %w", tool, err))
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return fmt.Errorf("%s: stat %q: %w", tool, path, err)
-		}
-		if !info.ModTime().Equal(want) {
+		if !currentMtime.Equal(want) {
 			return staleRead(fmt.Errorf(
 				"%s: file %q was modified since you read it\n"+
 					"  expected_mtime: %s\n"+
 					"  current mtime:  %s\n"+
+					"%s"+
 					"  Re-read the file and try again",
-				tool, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano)))
+				tool, path, want.Format(time.RFC3339Nano), currentMtime.Format(time.RFC3339Nano),
+				currentShaLine(path)))
 		}
 	}
 	if expectedSha != "" {
@@ -49,11 +60,23 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 				"%s: file %q content has changed since you read it\n"+
 					"  expected sha256: %s\n"+
 					"  current  sha256: %s\n"+
+					"  current mtime:   %s\n"+
 					"  Re-read the file and try again",
-				tool, path, expectedSha, current))
+				tool, path, expectedSha, current, currentMtime.Format(time.RFC3339Nano)))
 		}
 	}
 	return nil
+}
+
+// currentShaLine returns a formatted "  current sha256: <hex>\n" line for path,
+// or "" when the hash cannot be computed. Informational only: a secondary read
+// error here must never mask the primary mtime-mismatch rejection it decorates.
+func currentShaLine(path string) string {
+	sha, err := fileSHA256(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("  current sha256: %s\n", sha)
 }
 
 // changedSinceSessionRead reports whether this session read path earlier (via
