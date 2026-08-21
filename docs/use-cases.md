@@ -235,29 +235,35 @@ Question: *I changed `internal/stats/savings.go`. What do I run?*
 
 | Approach | Scope | Response |
 |---|---|---|
-| `go test ./...` | 55 packages, 653 test files, 4,313 test functions | — |
-| Plumb `topology_affected` | **5 packages**, 2,553 tests | 3,906 B |
+| `go test ./...` | 55 packages, 659 test files, 4,363 test functions | — |
+| Plumb `topology_affected` | **5 packages**, 2,598 tests | 4,142 B |
 
-The answer is a list of runnable commands, not a list of test names:
+The answer is a list of targets you can run, not a list of test names:
 
 ```
-run these packages (5):
-  go test ./internal/stats/...      53 tests   changed package
-  go test ./internal/tools/...    1310 tests   imports the changed package
-  go test ./internal/cli/...       971 tests   imports the changed package
-  go test ./internal/tui/...       195 tests   imports the changed package
-  go test ./internal/web/...        24 tests   imports the changed package
+run these packages (5) — pass each target to run_task(slot:"test", target:…):
+  ./internal/stats/...                          53 tests   changed package
+  ./internal/tools/...                        1317 tests   imports the changed package
+  ./internal/cli/...                           987 tests   imports the changed package
+  ./internal/tui/...                           217 tests   imports the changed package
+  ./internal/web/...                            24 tests   imports the changed package
 ```
 
 **Takeaway — 5 packages out of 55, and it tells you why each one.** The actionable unit is the
-package, because that is what `go test` takes. `internal/stats` is where the edit landed; the
+package, because that is what a test runner takes. `internal/stats` is where the edit landed; the
 other four are the packages that import it, which is exactly the set you would have had to work
 out by hand.
 
+The target is shaped for *this* workspace, not assumed to be Go: it is emitted only where the
+primary language's runner takes a positional path, and it is expressed relative to
+`[tasks.<lang>].working_dir`, so it can be handed straight to `run_task` — or to `go test` —
+without editing. A workspace whose runner scopes by test name (`cargo test <filter>`) or by a
+project-specific flag gets its directories named and no command guessed.
+
 **The honest limit is granularity, not coverage.** Within a reached package, *every* test is
-counted — all 1,310 in `internal/tools`, not the handful that touch savings code. Nothing in the
+counted — all 1,317 in `internal/tools`, not the handful that touch savings code. Nothing in the
 index says which tests exercise which function, because a Go test never lives in the file it
-tests. So this narrows the run from 55 packages to 5; it does not narrow 4,313 tests to a
+tests. So this narrows the run from 55 packages to 5; it does not narrow 4,363 tests to a
 handful, and a tool claiming otherwise would be guessing.
 
 > **This page found a bug here.** Measuring this scenario is what surfaced it. The tool used to
@@ -392,7 +398,7 @@ depend on the symbol.
 | Find text | `search_in_files` | a wash vs `ripgrep`; 9.3× smaller than naive `grep` |
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
-| Pick tests to run | `topology_affected` | 5 packages instead of 55, in 3.9 KB — package-granular |
+| Pick tests to run | `topology_affected` | 5 packages instead of 55, in 4.1 KB — package-granular |
 | Read several files | `read_multiple_files` | 1.31× (76 B over 3× `read_file`); buys turns, not tokens |
 | Any warm call | — | p95 well under 1 ms — not the bottleneck |
 

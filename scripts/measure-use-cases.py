@@ -466,15 +466,28 @@ def scenario_affected(s: Serve) -> dict:
     # The recall question that matters: is the test for the changed function in
     # the list at all? If not, the tool has not answered "which tests to run".
     own_test = "savings_test.go" in text
-    # The tool now answers in packages, each as a runnable command with its test
-    # count. Parse that rather than counting per-test lines: importing packages
-    # are summarised, so per-test lines exist only for the changed package and
-    # counting them would report a fraction of the real total as if it were all
-    # of it.
-    pkg_rows = re.findall(r"go test \./(\S+?)/\.\.\.\s+(\d+) tests\s+(.+)", text)
-    selected_pkgs = [p for p, _, _ in pkg_rows]
+    # The tool answers in packages, one row each with its test count. Parse that
+    # rather than counting per-test lines: importing packages are summarised, so
+    # per-test lines exist only for the changed package and counting them would
+    # report a fraction of the real total as if it were all of it.
+    #
+    # The row LABEL is deliberately not pinned to a command shape. It used to be
+    # matched as `go test ./<pkg>/...`, which silently stopped matching anything
+    # the moment topology_affected became language-aware (PLAN-378) and dropped
+    # the hardcoded `go test ` prefix — this scenario then reported "0 tests in 0
+    # packages" with no error, which reads as a tool regression rather than a
+    # broken parser. Anchor on the stable part of the row (the count and reason)
+    # and treat the label as opaque.
+    pkg_rows = re.findall(r"^ {2}(\S+)\s+(\d+) tests\s{2,}(.+)$", text, re.M)
+    if not pkg_rows and "run these packages" in text:
+        raise RuntimeError(
+            "topology_affected returned packages but no row matched the parser — "
+            "its output format changed. Fix this regex rather than publishing a "
+            f"zero.\n{text[:1500]}"
+        )
+    selected_pkgs = [pkg_name(label) for label, _, _ in pkg_rows]
     selected_tests = sum(int(n) for _, n, _ in pkg_rows)
-    reasons = {p: r.strip() for p, _, r in pkg_rows}
+    reasons = {pkg_name(label): r.strip() for label, _, r in pkg_rows}
     return {
         "changed": REFERENCE_FILE,
         "total_packages": len(all_pkgs),
@@ -487,6 +500,16 @@ def scenario_affected(s: Serve) -> dict:
         "includes_own_test": own_test,
         "plumb": affected,
     }
+
+
+def pkg_name(label: str) -> str:
+    """Reduce a run-target label to the package path it names.
+
+    The label is whatever the workspace's test runner takes — `./internal/x/...`
+    for go, a bare path for python/pytest, or just the directory when no command
+    could be inferred. All of them reduce to the same package path for reporting.
+    """
+    return label.removeprefix("./").removesuffix("/...").removesuffix("/")
 
 
 def scenario_latency(s: Serve, runs: int) -> dict:
