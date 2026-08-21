@@ -13,7 +13,6 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
-	"github.com/plumbkit/plumb/internal/quality/golangcilint"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -402,42 +401,7 @@ func checkStatsDB(ws string) []checkResult {
 	}}
 }
 
-// checkDevTools reports the external developer tools plumb itself shells out
-// to. Only golangci-lint qualifies today: the post-write [quality] analyser
-// runs it on every Go write, and the repo's pre-commit hook depends on it.
-//
-// It exists because its absence used to be invisible. The analyser skips
-// silently when the binary cannot be resolved, so on a machine where
-// golangci-lint was installed in ~/go/bin but the daemon's PATH lacked that
-// directory, the quality findings simply never appeared and nothing — not
-// doctor, not the log — said why.
-func checkDevTools() []checkResult {
-	path, found := golangcilint.LookBinary()
-	return []checkResult{golangciLintResult(path, found)}
-}
-
-// golangciLintResult is the pure decision half of checkDevTools, so the shape
-// of the report is testable without depending on what the host has installed.
-//
-// A missing linter is a WARNING, never a failure: plumb works fine without it
-// (writes still succeed, findings are simply absent), and doctor's exit code is
-// reserved for things that are actually broken.
-func golangciLintResult(path string, found bool) checkResult {
-	if !found {
-		return checkResult{
-			name:   "golangci-lint",
-			ok:     true,
-			warn:   true,
-			detail: "not found on PATH or in the Go tool bin dir — post-write [quality] Go findings are disabled",
-			fix:    "install golangci-lint (golangci-lint.run), or put its directory on the PATH the daemon inherits",
-		}
-	}
-	return checkResult{
-		name:   "golangci-lint",
-		ok:     true,
-		detail: render.ContractPath(path),
-	}
-}
+// checkDevTools and its pure decision halves live in doctor_devtools.go.
 
 // checkRastro reports whether the Rastro integration is enabled and, if so,
 // whether its executable resolves on PATH. It resolves the effective config and

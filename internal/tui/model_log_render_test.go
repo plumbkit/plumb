@@ -276,7 +276,11 @@ func TestLogEnterOpensDetail(t *testing.T) {
 	}
 }
 
-func TestLogDetailCopyShortcutReturnsCommand(t *testing.T) {
+// TestLogDetailCopyDoesNotClaimSuccessBeforeResult pins the honesty rule: the
+// key press only dispatches the copy. This used to set the "Copied to the
+// clipboard" status inline, so on a Wayland desktop — where the old xclip/xsel
+// chain could not work at all — the TUI reported a success that never happened.
+func TestLogDetailCopyDoesNotClaimSuccessBeforeResult(t *testing.T) {
 	m := Model{
 		currentSection: 3,
 		width:          80,
@@ -289,13 +293,39 @@ func TestLogDetailCopyShortcutReturnsCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("c did not return a copy command")
 	}
-	if !m.logDetailCopied {
-		t.Fatal("c did not set copied status")
+	if m.copyStatus.text != "" {
+		t.Fatalf("c set a status before the copy reported its outcome: %q", m.copyStatus.text)
 	}
-	updated, _ = m.Update(logDetailCopyResetMsg{})
+}
+
+func TestClipboardResultSetsStatusAndSchedulesReset(t *testing.T) {
+	m := Model{}
+	updated, cmd := m.Update(clipboardResultMsg{status: clipboardStatus{text: clipboardCopiedMsg, verified: true}})
 	m = updated.(Model)
-	if m.logDetailCopied {
-		t.Fatal("copy reset did not restore status")
+	if m.copyStatus.text != clipboardCopiedMsg || !m.copyStatus.verified {
+		t.Fatalf("result did not land on the model: %+v", m.copyStatus)
+	}
+	if cmd == nil {
+		t.Fatal("result did not schedule the status reset")
+	}
+}
+
+// TestCopyStatusResetClearsOnlyMatchingID guards the case where a second copy
+// lands while the first one's 3s tick is still in flight: the stale tick must
+// not wipe the newer status.
+func TestCopyStatusResetClearsOnlyMatchingID(t *testing.T) {
+	m := Model{}
+	updated, _ := m.Update(clipboardResultMsg{status: clipboardStatus{text: "first", verified: true}})
+	updated, _ = updated.(Model).Update(clipboardResultMsg{status: clipboardStatus{text: "second", verified: true}})
+	m = updated.(Model)
+
+	updated, _ = m.Update(copyStatusResetMsg{id: m.copyStatusID - 1})
+	if got := updated.(Model).copyStatus.text; got != "second" {
+		t.Fatalf("a superseded tick cleared the current status: %q", got)
+	}
+	updated, _ = updated.(Model).Update(copyStatusResetMsg{id: m.copyStatusID})
+	if got := updated.(Model).copyStatus.text; got != "" {
+		t.Fatalf("the matching tick did not clear the status: %q", got)
 	}
 }
 
@@ -375,15 +405,47 @@ func TestLogDetailContentUsesTwoSpacePadding(t *testing.T) {
 	}
 }
 
+// TestLogDetailStatusShowsCopiedMessage covers rendering only — it supplies
+// both the state and the string it expects, so it cannot say anything about
+// whether a copy really happened. TestLogDetailCopyDoesNotClaimSuccessBeforeResult
+// is what guards that.
 func TestLogDetailStatusShowsCopiedMessage(t *testing.T) {
 	RebuildStyles()
-	m := Model{logDetailCopied: true}
+	m := Model{copyStatus: clipboardStatus{text: clipboardCopiedMsg, verified: true}}
 	got := ansiStripForTest(m.renderLogDetailStatusBar(50))
-	if !strings.Contains(got, "Copied to the clipboard") {
+	if !strings.Contains(got, clipboardCopiedMsg) {
 		t.Fatalf("copied status missing:\n%s", got)
 	}
 	if strings.Contains(got, "c copy") {
 		t.Fatalf("copied status should replace normal text:\n%s", got)
+	}
+}
+
+func TestLogDetailStatusShowsCopyFailure(t *testing.T) {
+	RebuildStyles()
+	m := Model{copyStatus: clipboardStatus{text: "Copy failed: wl-copy: exit status 1"}}
+	got := ansiStripForTest(m.renderLogDetailStatusBar(60))
+	if !strings.Contains(got, "Copy failed: wl-copy") {
+		t.Fatalf("failure status missing:\n%s", got)
+	}
+	if strings.Contains(got, "c copy") {
+		t.Fatalf("failure status should replace the key hint:\n%s", got)
+	}
+}
+
+// TestLogDetailStatusBarTruncatesLongCopyStatus guards the render.PadRight
+// hazard: it pads but never trims, so a long failure message would push the
+// overlay's right border off a narrow frame.
+func TestLogDetailStatusBarTruncatesLongCopyStatus(t *testing.T) {
+	RebuildStyles()
+	long := "Copy failed: wl-copy: exit status 1 — " + strings.Repeat("very long detail ", 8)
+	plain := Model{}
+	want := lipgloss.Width(ansiStripForTest(plain.renderLogDetailStatusBar(40)))
+
+	m := Model{copyStatus: clipboardStatus{text: long}}
+	got := lipgloss.Width(ansiStripForTest(m.renderLogDetailStatusBar(40)))
+	if got != want {
+		t.Fatalf("status bar width %d with a long copy status, want %d", got, want)
 	}
 }
 

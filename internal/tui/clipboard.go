@@ -1,0 +1,200 @@
+package tui
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// clipboardCopiedMsg is the status shown after a copy we can prove landed.
+// Declared once so the renderer and its tests agree on the exact string.
+const clipboardCopiedMsg = "Copied to the clipboard"
+
+// clipboardKind distinguishes the two ways the TUI can put text on the
+// clipboard: shelling out to a platform helper, or writing an OSC 52 escape
+// sequence and hoping the terminal honours it.
+type clipboardKind int
+
+const (
+	clipExec clipboardKind = iota
+	clipOSC52
+)
+
+// clipboardMethod is how a copy will be attempted on this host. name/path/args
+// are set only for clipExec; installHint names the package that would give us a
+// real helper, and is empty when installing something would not help.
+type clipboardMethod struct {
+	kind        clipboardKind
+	name        string
+	path        string
+	args        []string
+	installHint string
+}
+
+// clipboardStatus is the transient line shown after a copy attempt. verified
+// means we have positive evidence the text landed — a helper that exited 0. An
+// OSC 52 write can never set it: the escape sequence is write-only, and a
+// terminal that silently discards it is indistinguishable from one that
+// honoured it. The TUI used to report success unconditionally, which on a
+// Wayland desktop meant "Copied to the clipboard" over a clipboard that was
+// never touched.
+type clipboardStatus struct {
+	text     string
+	verified bool
+}
+
+type clipboardResultMsg struct{ status clipboardStatus }
+
+type copyStatusResetMsg struct{ id int }
+
+// selectClipboardMethod picks the copy helper for this host. goos, getenv and
+// look are injected so the whole table is testable without a display server.
+//
+// Wayland is detected by WAYLAND_DISPLAY rather than XDG_SESSION_TYPE. The
+// session type is set by the login manager, so it reads "tty" or is absent
+// whenever the compositor is started from a getty, and it is a label rather
+// than an address: wl-copy needs the socket that WAYLAND_DISPLAY names.
+// DISPLAY is used the same way for X11.
+//
+// Every exec arm is look-guarded. The previous implementation fell back to
+// xsel unconditionally, so on a box with neither helper it ran a command that
+// does not exist and discarded the error.
+func selectClipboardMethod(goos string, getenv func(string) string, look func(string) (string, error)) clipboardMethod {
+	lookup := func(name string, args ...string) (clipboardMethod, bool) {
+		path, err := look(name)
+		if err != nil {
+			return clipboardMethod{}, false
+		}
+		return clipboardMethod{kind: clipExec, name: name, path: path, args: args}, true
+	}
+
+	switch goos {
+	case "darwin":
+		if m, ok := lookup("pbcopy"); ok {
+			return m
+		}
+		return clipboardMethod{kind: clipOSC52, installHint: "pbcopy is missing from PATH"}
+	case "windows":
+		// clip.exe writes through the console codepage and mangles anything
+		// outside it. Windows Terminal supports OSC 52, so the escape sequence
+		// is both simpler and more correct until someone can test the native
+		// path on real hardware.
+		return clipboardMethod{kind: clipOSC52}
+	}
+
+	wayland := getenv("WAYLAND_DISPLAY") != ""
+	x11 := getenv("DISPLAY") != ""
+
+	if wayland {
+		if m, ok := lookup("wl-copy"); ok {
+			return m
+		}
+	}
+	// Falling through to the X11 helpers under Wayland is deliberate: XWayland
+	// bridges the X11 CLIPBOARD selection into the compositor's clipboard, so a
+	// paste into a native Wayland window still works. It is gated on DISPLAY
+	// because a compositor started without XWayland leaves it unset, and xclip
+	// there dies with "Can't open display" — the blind failure this replaces.
+	if x11 {
+		if m, ok := lookup("xclip", "-selection", "clipboard"); ok {
+			return m
+		}
+		if m, ok := lookup("xsel", "--clipboard", "--input"); ok {
+			return m
+		}
+	}
+
+	switch {
+	case wayland:
+		// Name the native package even when DISPLAY is set: a Wayland user
+		// should not be talked into the compatibility path.
+		return clipboardMethod{kind: clipOSC52, installHint: "install wl-clipboard"}
+	case x11:
+		return clipboardMethod{kind: clipOSC52, installHint: "install xclip"}
+	default:
+		// No display server at all — an SSH session or a bare TTY. OSC 52 is
+		// the right answer here rather than a shortfall, so there is no hint:
+		// installing xclip on a headless box would change nothing.
+		return clipboardMethod{kind: clipOSC52}
+	}
+}
+
+// ClipboardTool reports the copy helper the TUI would actually shell out to on
+// this host, so `plumb doctor` and the TUI can never disagree about it. name
+// and path are empty when the copy falls back to OSC 52; hint names what to
+// install when installing something would help.
+func ClipboardTool() (name, path, hint string) {
+	m := selectClipboardMethod(runtime.GOOS, os.Getenv, exec.LookPath)
+	return m.name, m.path, m.installHint
+}
+
+func copyToClipboard(ij, ot string) tea.Cmd {
+	return copyTextToClipboard(formatCallDetailForClipboard(ij, ot))
+}
+
+func formatCallDetailForClipboard(ij, ot string) string {
+	var buf strings.Builder
+	if ij != "" {
+		buf.WriteString("=== Args ===\n")
+		var pb bytes.Buffer
+		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
+			buf.WriteString(pb.String())
+		} else {
+			buf.WriteString(ij)
+		}
+		buf.WriteString("\n")
+	}
+	if ot != "" {
+		buf.WriteString("=== Output ===\n")
+		buf.WriteString(ot)
+		buf.WriteString("\n")
+	}
+	return buf.String()
+}
+
+// copyTextToClipboard attempts the copy and always reports what happened as a
+// clipboardResultMsg, so the status line describes the outcome instead of the
+// key press.
+func copyTextToClipboard(txt string) tea.Cmd {
+	// Selection runs here rather than inside the returned closure because the
+	// OSC 52 leg has to hand bubbletea its own command; it costs two getenvs
+	// and at most three PATH stats.
+	method := selectClipboardMethod(runtime.GOOS, os.Getenv, exec.LookPath)
+	if method.kind == clipOSC52 {
+		status := clipboardStatus{text: "Sent via OSC 52 — the terminal may ignore it"}
+		if method.installHint != "" {
+			status.text = "Sent via OSC 52 (unverified) — " + method.installHint
+		}
+		// Batched rather than chained: tea.SetClipboard's command yields
+		// bubbletea's own internal message, which the runtime consumes, so the
+		// status has to travel as a message of its own.
+		return tea.Batch(tea.SetClipboard(txt), func() tea.Msg {
+			return clipboardResultMsg{status: status}
+		})
+	}
+	return func() tea.Msg {
+		return clipboardResultMsg{status: runClipboardExec(method, txt)}
+	}
+}
+
+// runClipboardExec pipes txt into the helper and reports whether it exited
+// cleanly.
+func runClipboardExec(m clipboardMethod, txt string) clipboardStatus {
+	cmd := exec.Command(m.path, m.args...) //nolint:gosec // G204: the path comes from exec.LookPath over a closed set of literal helper names, never from user input
+	cmd.Stdin = strings.NewReader(txt)
+	// Stdout and Stderr are left nil on purpose. wl-copy, xclip and xsel all
+	// fork and leave a child resident to serve the selection; assigning a
+	// non-*os.File writer makes os/exec create a pipe and wait for every writer
+	// to close it — including that resident child — so Run would block for as
+	// long as the clipboard offer stands. The exit status and the helper's name
+	// are enough to say something actionable.
+	if err := cmd.Run(); err != nil {
+		return clipboardStatus{text: "Copy failed: " + m.name + ": " + err.Error()}
+	}
+	return clipboardStatus{text: clipboardCopiedMsg, verified: true}
+}

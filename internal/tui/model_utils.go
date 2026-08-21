@@ -1,15 +1,10 @@
 package tui
 
 import (
-	"bytes"
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -247,51 +242,6 @@ func daemonRunning() bool {
 	}
 	_, err = os.Stat(filepath.Join(base, "plumb", "plumb.sock"))
 	return err == nil
-}
-
-func copyToClipboard(ij, ot string) tea.Cmd {
-	return copyTextToClipboard(formatCallDetailForClipboard(ij, ot))
-}
-
-func formatCallDetailForClipboard(ij, ot string) string {
-	var buf strings.Builder
-	if ij != "" {
-		buf.WriteString("=== Args ===\n")
-		var pb bytes.Buffer
-		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
-			buf.WriteString(pb.String())
-		} else {
-			buf.WriteString(ij)
-		}
-		buf.WriteString("\n")
-	}
-	if ot != "" {
-		buf.WriteString("=== Output ===\n")
-		buf.WriteString(ot)
-		buf.WriteString("\n")
-	}
-	return buf.String()
-}
-
-func copyTextToClipboard(txt string) tea.Cmd {
-	return func() tea.Msg {
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.Command("pbcopy")
-		case "linux":
-			if _, err := exec.LookPath("xclip"); err == nil {
-				cmd = exec.Command("xclip", "-selection", "clipboard")
-			} else {
-				cmd = exec.Command("xsel", "--clipboard", "--input")
-			}
-		}
-		if cmd != nil {
-			cmd.Stdin = strings.NewReader(txt)
-			_ = cmd.Run()
-		}
-		return nil
-	}
 }
 
 func spliceOverlay(bg, overlay string, w, h int) string {

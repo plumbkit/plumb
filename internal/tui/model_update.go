@@ -30,8 +30,14 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handlePollMsg()
 	case clearQuitMessageMsg:
 		return m.handleClearQuitMsg(msg), nil
-	case logDetailCopyResetMsg:
-		m.logDetailCopied = false
+	case clipboardResultMsg:
+		return m.handleClipboardResult(msg)
+	case copyStatusResetMsg:
+		// A later copy supersedes an earlier one's tick, so only the tick
+		// belonging to the status now on screen may clear it.
+		if m.copyStatusID == msg.id {
+			m.copyStatus = clipboardStatus{}
+		}
 		return m, nil
 	case settingsStatusMsg:
 		m.settingsStatus = msg.text
@@ -118,6 +124,16 @@ func (m Model) handlePollMsg() (Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
+}
+
+// handleClipboardResult shows what the copy actually did and starts the clock
+// on clearing it. The timer runs from the result rather than the key press:
+// starting it earlier would shorten the window by however long the helper took.
+func (m Model) handleClipboardResult(msg clipboardResultMsg) (Model, tea.Cmd) {
+	m.copyStatus = msg.status
+	m.copyStatusID++
+	id := m.copyStatusID
+	return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return copyStatusResetMsg{id: id} })
 }
 
 func (m Model) handleClearQuitMsg(msg clearQuitMessageMsg) Model {

@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -57,11 +55,10 @@ func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.logDetailScroll = 0
 	case "c":
 		if text := m.currentLogDetailText(); text != "" {
-			m.logDetailCopied = true
-			return m, tea.Batch(
-				copyTextToClipboard(text),
-				tea.Tick(3*time.Second, func(time.Time) tea.Msg { return logDetailCopyResetMsg{} }),
-			)
+			// No status is set here: the copy reports its own outcome as a
+			// clipboardResultMsg. This used to claim success before the helper
+			// had even run.
+			return m, copyTextToClipboard(text)
 		}
 	case "up", "k":
 		if m.logDetailScroll > 0 {
