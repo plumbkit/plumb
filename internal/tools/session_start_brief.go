@@ -62,17 +62,41 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // the closing pointer to the full packet. Everything else in the full packet
 // (context.md, commits, working-tree diffstat, tool stats, the tokens
 // banner, the full client guidance block, submodules, tasks, the episodic
-// summary, messages, collab policy) is full-only — per the card's Do NOT,
-// brief never grows a second "sections" knob to pick among them.
-func (t *SessionStart) executeBrief(ws, lang string) string {
+// summary, collab policy) is full-only — per the card's Do NOT, brief never
+// grows a second "sections" knob to pick among them.
+//
+// Three signals are NOT optional, even though the rest of the identity block
+// (writeSessionIdentity) is full-only: inheritedName and repinnedFrom, plus
+// the wired lspSkipNoteFn, are exactly the loud, one-shot announcements full
+// always carries — the PR #181 re-pin guarantee, the #316 why-no-server note,
+// and the resumed session's own peer-addressable name (how a woken agent
+// learns what to call itself for plumb mail). Dropping them silently on the
+// brief path would defeat each of those guarantees specifically for the
+// resumed-session case the auto-brief default targets. Message delivery
+// (writeSessionMessages) rides along for the same reason: an auto-briefed
+// woken session must still see its pending mail, or the wake flow loses its
+// point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
+// so it costs nothing when there is nothing to deliver.
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
+	if repinnedFrom != "" {
+		fmt.Fprintf(&sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
+	}
 	if lang != "" {
 		fmt.Fprintf(&sb, "Language: %s\n", lang)
+	}
+	if t.lspSkipNoteFn != nil {
+		if note := t.lspSkipNoteFn(); note != "" {
+			fmt.Fprintf(&sb, "%s\n", note)
+		}
 	}
 	branch := gitBranch(ws)
 	if branch != "" {
 		fmt.Fprintf(&sb, "Branch:   %s\n", branch)
+	}
+	if inheritedName != "" {
+		fmt.Fprintf(&sb, "Session:  %s (resumed)\n", inheritedName)
 	}
 	if t.gitPolicyFn != nil && branch != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
@@ -85,6 +109,7 @@ func (t *SessionStart) executeBrief(ws, lang string) string {
 	if clientHasNativeEditConflict(t.clientNameFn) {
 		sb.WriteString("\n" + strings.TrimRight(nativeEditLaneWarning, "\n") + "\n")
 	}
+	t.writeSessionMessages(&sb, ws)
 	sb.WriteString("\n" + briefOrientationFooter)
 	return sb.String()
 }
