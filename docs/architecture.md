@@ -342,14 +342,24 @@ would move depending on how the client started plumb. (`os.TempDir()` is the
 last resort behind that, reached only when `os.UserCacheDir()` itself fails —
 which means `$HOME` is unset.)
 
-Because the resolution depends on the environment, and `$XDG_RUNTIME_DIR` is
-absent under cron, systemd system units, `docker exec` and ssh without
-`pam_systemd`, `plumb serve` and `plumb doctor` **dial both** the current and
-the cache-dir socket before concluding no daemon is running. Otherwise a plumb
-launched from one of those contexts would miss the daemon a desktop session
-started and spawn a second one — two daemons, two sets of language servers,
-both writing the same `stats.db`, each holding a different `plumb.daemon.lock`
-so the flock singleton never notices.
+The runtime directory determines the socket, the control socket, the pid and
+the version file **as a set**: every command resolves all of them from the one
+directory it computed. That is a deliberate constraint. Connecting to one
+directory's socket while reading another's files was tried and reverted — it
+left `plumb web` and `plumb log-level` dialling a control socket that was not
+there, doctor calling a version file missing when it existed one directory
+over, and `plumb restart` spawning a duplicate.
+
+The consequence is that the runtime directory identifies the daemon instance,
+and `$XDG_RUNTIME_DIR` is absent under cron, systemd system units,
+`docker exec` and ssh without `pam_systemd`. A plumb launched from one of those
+contexts therefore uses the cache dir and will start its own daemon rather than
+reusing a desktop session's. `plumb serve` warns before doing so and
+`plumb doctor` names the other directory rather than only reporting "cannot
+dial"; `plumb stop` consolidates, since it finds daemons by process name
+regardless of which socket they opened. This is the same property the flock
+singleton has always had — `plumb.daemon.lock` lives *in* the runtime dir, so it
+has only ever guaranteed one daemon per directory.
 
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
 respected when set.

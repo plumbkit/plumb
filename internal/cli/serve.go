@@ -192,9 +192,8 @@ func proxyHeartbeatInterval() time.Duration {
 // of them ever calls startDaemonProcess. Without that lock, two serves racing
 // from a cold start each observe "no daemon" and each spawn one.
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
-	if conn, path := dialAnyDaemon(); conn != nil {
-		slog.Info("serve: connected to existing daemon", "socket", path)
-		noteLegacyRuntimeDir(path)
+	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
+		slog.Info("serve: connected to existing daemon")
 		warnIfDaemonStale()
 		return conn, nil
 	}
@@ -207,12 +206,13 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 
 	// Re-check now that we hold the lock — another serve may have spawned
 	// the daemon while we were waiting.
-	if conn, path := dialAnyDaemon(); conn != nil {
-		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock", "socket", path)
-		noteLegacyRuntimeDir(path)
+	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
+		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock")
 		warnIfDaemonStale()
 		return conn, nil
 	}
+
+	warnIfDaemonAtLegacyPath()
 
 	slog.Info("serve: daemon not running — starting", "socket", socketPath)
 	if err := startDaemonProcess(); err != nil {
@@ -252,36 +252,41 @@ func warnIfDaemonStale() {
 		running, Version)
 }
 
-// dialAnyDaemon connects to whichever candidate socket answers, returning the
-// connection and the path it came from. Both nil/"" when none does.
-func dialAnyDaemon() (net.Conn, string) {
-	for _, sock := range daemonSocketCandidates() {
-		if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
-			return conn, sock
-		}
-	}
-	return nil, ""
-}
-
-// noteLegacyRuntimeDir tells the user when the daemon we just attached to is at
-// the cache-dir runtime location rather than $XDG_RUNTIME_DIR, so the migration
-// is visible rather than silent and permanent.
+// warnIfDaemonAtLegacyPath reports a daemon listening at the cache-dir runtime
+// location when this process resolves $XDG_RUNTIME_DIR, right before we start a
+// second one beside it.
 //
-// Attaching to it is the point: the alternative is spawning a second daemon
-// beside a live one, with a second set of language servers, both writing the
-// same stats.db. It is also deliberately NOT called a stale or old-version
-// daemon — a current build lands there whenever $XDG_RUNTIME_DIR is absent from
-// the launching environment (cron, a systemd system unit, docker exec, ssh
-// without pam_systemd), and calling that "old" would be wrong. Version skew is
-// warnIfDaemonStale's job and it reads the version file to decide.
-func noteLegacyRuntimeDir(connected string) {
+// It states the fact and stops there. An earlier version called it "a daemon
+// from an older version", which it cannot know — it never reads the version
+// file, and a CURRENT build lands at the cache path whenever $XDG_RUNTIME_DIR
+// is absent from the launching environment (cron, a systemd system unit,
+// docker exec, ssh without pam_systemd). Version skew is warnIfDaemonStale's
+// job, which reads the version file to decide.
+//
+// The warning is the whole remedy on purpose. Attaching to that daemon instead
+// was tried and reverted: the runtime directory determines the socket, the
+// control socket, the pid and the version file together, so a process that
+// connected to one directory's socket while resolving every other path in the
+// other got a half-migrated state — `plumb web` and `plumb log-level` dialling
+// a control socket that was not there, doctor reporting a version file as
+// missing when it existed one directory over, and `plumb restart` spawning the
+// duplicate this was supposed to prevent. One directory per process, and a
+// warning when the user has two.
+func warnIfDaemonAtLegacyPath() {
 	legacy := legacyDaemonSocketPath()
-	if legacy == "" || connected != legacy {
+	if legacy == "" {
+		return // the runtime dir does not move on this platform
+	}
+	conn, err := net.DialTimeout("unix", legacy, time.Second)
+	if err != nil {
 		return
 	}
+	_ = conn.Close()
 	fmt.Fprintf(os.Stderr,
-		"plumb: note: attached to the daemon at %s; this plumb would put it in %s.\n"+
-			"plumb: `plumb stop` once, and the next start moves it there.\n",
+		"plumb: warning: a daemon is already running at %s, but this plumb uses %s.\n"+
+			"plumb: that happens after an upgrade, or when plumb is launched somewhere\n"+
+			"plumb: $XDG_RUNTIME_DIR is not set (cron, a systemd unit, docker exec, ssh).\n"+
+			"plumb: starting a second daemon; run `plumb stop` to consolidate on one.\n",
 		legacy, paths.RuntimeDir())
 }
 

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -17,29 +19,34 @@ import (
 
 // checkDaemon verifies the daemon is reachable and its version matches.
 func checkDaemon() []checkResult {
-	// Every candidate, not just the primary: the same reason `plumb serve`
-	// dials both. A daemon started where $XDG_RUNTIME_DIR was absent sits at
-	// the legacy path, and doctor reporting "cannot dial" for a daemon that is
-	// demonstrably serving the user's session would be worse than no check.
-	conn, socketPath := dialAnyDaemon()
-	if conn == nil {
-		return []checkResult{{
+	socketPath := daemonSocketPath()
+	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		result := checkResult{
 			name:   "socket",
 			ok:     false,
-			detail: "cannot dial " + render.ContractPath(daemonSocketPath()),
+			detail: "cannot dial " + render.ContractPath(socketPath),
 			fix:    "run `plumb serve` or let an MCP client start it automatically",
-		}}
+		}
+		// Naming the other directory is the difference between "plumb is
+		// broken" and "plumb is looking somewhere else": after an upgrade, or
+		// under cron/docker/ssh where $XDG_RUNTIME_DIR is unset, the daemon
+		// serving the user is alive one directory over. Every other path this
+		// command reads — version file, control socket, pid — comes from the
+		// same directory as the socket, so doctor deliberately does NOT dial
+		// the other one and report a mix of the two.
+		if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) {
+			result.detail += " — but a daemon is running at " + render.ContractPath(legacy)
+			result.fix = "run `plumb stop`, then reconnect; the daemon restarts under " + render.ContractPath(paths.RuntimeDir())
+		}
+		return []checkResult{result}
 	}
 	conn.Close()
 
-	detail := render.ContractPath(socketPath)
-	if socketPath == legacyDaemonSocketPath() {
-		detail += "  (legacy runtime dir — `plumb stop` moves it to " + render.ContractPath(paths.RuntimeDir()) + ")"
-	}
 	results := []checkResult{{
 		name:   "socket",
 		ok:     true,
-		detail: detail,
+		detail: render.ContractPath(socketPath),
 	}}
 
 	data, err := os.ReadFile(daemonVersionPath())

@@ -122,17 +122,29 @@
   caller — and falls back to the cache dir if any fails, because a
   world-readable runtime dir would expose the daemon socket.
 
-  **Migration:** a daemon started by an older build keeps running at the old
-  path. `plumb serve` now detects that and prints exactly what to do; one
-  `plumb stop` retires it. Nothing is killed automatically, since that daemon
-  may still be serving other live sessions.
+  **Migration:** a daemon started before the move keeps running at the old
+  path, and `$XDG_RUNTIME_DIR` is also absent under cron, systemd system units,
+  `docker exec` and ssh without `pam_systemd` — so a plumb launched there still
+  uses the cache dir. In either case `plumb serve` says so before starting a
+  second daemon, and `plumb doctor` names the other directory instead of just
+  reporting "cannot dial". One `plumb stop` consolidates. Nothing is killed
+  automatically, since that daemon may still be serving other live sessions.
 
-  This also collapses **four independent copies** of the runtime-path rule — in
-  the CLI, the TUI's daemon-liveness check, and the macOS and Linux command
-  sandboxes — into one `paths.RuntimeDir()`. That was a latent bug of its own:
-  the sandboxes deny writes to the daemon's runtime directory, and a copy that
-  drifted would have gone on protecting an empty directory while the real socket
-  sat somewhere else.
+  The runtime directory determines the socket, the control socket, the pid and
+  the version file **as a set**, and every command resolves all of them from the
+  one directory. Connecting to one directory's socket while reading another's
+  files was tried and reverted — it left `plumb web` and `plumb log-level`
+  dialling a control socket that was not there, doctor calling a version file
+  missing when it existed one directory over, and `plumb restart` spawning the
+  duplicate the change was meant to prevent.
+
+  This also collapses **five independent copies** of the runtime-path rule — in
+  the CLI, `plumb config show`, the TUI's daemon-liveness check, and the macOS
+  and Linux command sandboxes — into one `paths.RuntimeDir()`. That was a latent
+  bug of its own: the sandboxes deny writes to the daemon's runtime directory,
+  and a copy that drifted would have gone on protecting an empty directory while
+  the real socket sat somewhere else. `plumb config show` had in fact already
+  drifted, reporting the cache dir as the runtime dir.
 
 ### Fixed
 

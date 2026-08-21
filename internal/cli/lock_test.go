@@ -257,7 +257,10 @@ func TestSocketPathShortenLever_TracksWhereTheSocketActuallyIs(t *testing.T) {
 	}
 }
 
-func TestDaemonSocketCandidates_IncludeTheLegacyPath(t *testing.T) {
+// legacyDaemonSocketPath is for DIAGNOSIS only — naming the other directory
+// when a daemon is running there. It must be empty when there is no other
+// directory, or the warning fires against the socket we are already using.
+func TestLegacyDaemonSocketPath(t *testing.T) {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		t.Skip("the runtime dir does not move on this platform")
 	}
@@ -265,19 +268,11 @@ func TestDaemonSocketCandidates_IncludeTheLegacyPath(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
 
-	// No runtime dir: one candidate, and nothing is "legacy".
 	t.Setenv("XDG_RUNTIME_DIR", "")
-	if got := daemonSocketCandidates(); len(got) != 1 {
-		t.Fatalf("want a single candidate when the dir has not moved, got %v", got)
-	}
 	if got := legacyDaemonSocketPath(); got != "" {
 		t.Errorf("legacyDaemonSocketPath = %q, want empty when it IS the current dir", got)
 	}
 
-	// With one: the current socket first, the cache-dir socket as a fallback,
-	// so a plumb launched without XDG_RUNTIME_DIR (cron, docker exec, ssh)
-	// still finds a daemon a desktop session started, instead of spawning a
-	// second one.
 	run := filepath.Join(t.TempDir(), "run")
 	if err := os.Mkdir(run, 0o700); err != nil {
 		t.Fatal(err)
@@ -287,16 +282,48 @@ func TestDaemonSocketCandidates_IncludeTheLegacyPath(t *testing.T) {
 	}
 	t.Setenv("XDG_RUNTIME_DIR", run)
 
-	got := daemonSocketCandidates()
-	if len(got) != 2 {
-		t.Fatalf("want 2 candidates, got %v", got)
-	}
-	if got[0] != filepath.Join(run, "plumb", "plumb.sock") {
-		t.Errorf("first candidate = %q, want the runtime-dir socket", got[0])
-	}
 	cache, _ := os.UserCacheDir()
-	if want := filepath.Join(cache, "plumb", "plumb.sock"); got[1] != want {
-		t.Errorf("second candidate = %q, want %q", got[1], want)
+	if got, want := legacyDaemonSocketPath(), filepath.Join(cache, "plumb", "plumb.sock"); got != want {
+		t.Errorf("legacyDaemonSocketPath = %q, want %q", got, want)
+	}
+	// And the socket actually in use stays the runtime-dir one — the legacy
+	// path is never something we connect to.
+	if got, want := daemonSocketPath(), filepath.Join(run, "plumb", "plumb.sock"); got != want {
+		t.Errorf("daemonSocketPath = %q, want %q", got, want)
+	}
+}
+
+// Every daemon-facing path must come from ONE directory. A process that dialled
+// one directory's socket while reading another's version file or control socket
+// was the half-migrated state this pins against.
+func TestDaemonPaths_AllShareOneRuntimeDir(t *testing.T) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("the runtime dir does not move on this platform")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+
+	want := filepath.Join(run, "plumb")
+	for name, got := range map[string]string{
+		"socket":      daemonSocketPath(),
+		"ctrl socket": daemonCtrlSocketPath(),
+		"pid":         daemonPIDPath(),
+		"version":     daemonVersionPath(),
+		"spawn lock":  spawnLockPath(),
+		"daemon lock": daemonLockPath(),
+	} {
+		if filepath.Dir(got) != want {
+			t.Errorf("%s is in %q, want %q — all daemon paths must share one runtime dir", name, filepath.Dir(got), want)
+		}
 	}
 }
 

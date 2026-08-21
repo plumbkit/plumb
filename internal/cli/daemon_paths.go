@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -64,34 +66,33 @@ const maxUnixSocketPath = 103
 // at a setting that cannot move the socket.
 func socketPathShortenLever() string { return paths.RuntimeDirLever() }
 
-// daemonSocketCandidates lists every socket a running daemon might be on, most
-// current first.
+// legacyDaemonSocketPath is the socket under the cache-dir runtime location,
+// or "" when that is the same directory in use now.
 //
-// There is more than one because RuntimeDir is environment-dependent, and the
-// environment is not consistent across the ways plumb gets launched:
-// $XDG_RUNTIME_DIR is set in a desktop session but absent under cron, a systemd
-// system unit, `docker exec`, or ssh without pam_systemd. Resolving only the
-// primary path would mean a plumb launched from one of those contexts fails to
-// find the daemon a desktop session already started, and spawns a second one —
-// two daemons, two sets of language servers, both writing the same stats.db,
-// each holding a DIFFERENT plumb.daemon.lock so the flock singleton never
-// notices. Dialling both is what keeps them converged on one process.
-func daemonSocketCandidates() []string {
-	sockets := []string{daemonSocketPath()}
-	if legacy := legacyDaemonSocketPath(); legacy != "" {
-		sockets = append(sockets, legacy)
-	}
-	return sockets
-}
-
-// legacyDaemonSocketPath is the socket under the pre-$XDG_RUNTIME_DIR runtime
-// dir, or "" when that is the same directory in use now.
+// It exists for DIAGNOSIS only — telling the user a daemon is running in the
+// other directory — and never for connecting. RuntimeDir determines the
+// socket, the control socket, the pid and the version file as a set, so a
+// process that connected to one directory's socket while resolving the rest in
+// the other would be half-migrated: `plumb web` and `plumb log-level` dial a
+// control socket that is not there, doctor reads a version file one directory
+// over and calls it missing, and `plumb restart` spawns a duplicate. One
+// directory per process.
 func legacyDaemonSocketPath() string {
 	dir := paths.LegacyRuntimeDir()
 	if dir == "" {
 		return ""
 	}
 	return filepath.Join(dir, "plumb.sock")
+}
+
+// socketAlive reports whether something is listening on a unix socket path.
+func socketAlive(path string) bool {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // socketPathLengthHint explains an over-long socket path, or returns "" when

@@ -223,7 +223,14 @@ func RuntimeDirLever() string {
 	if _, ok := xdgRuntimeDir(); ok {
 		return "XDG_RUNTIME_DIR"
 	}
+	// $HOME covers two cases: macOS, where os.UserCacheDir ignores
+	// XDG_CACHE_HOME outright, and the degenerate branch where UserCacheDir
+	// failed and runtimeBase fell through to os.TempDir — which only happens
+	// when $HOME is unset, making $HOME the thing to fix either way.
 	if runtime.GOOS == "darwin" {
+		return "$HOME"
+	}
+	if _, err := os.UserCacheDir(); err != nil {
 		return "$HOME"
 	}
 	return "XDG_CACHE_HOME"

@@ -187,7 +187,7 @@ func formatIdleField(s string) string {
 func dialDaemonCtrlFull(command string) (string, error) {
 	conn, err := net.Dial("unix", daemonCtrlSocketPath())
 	if err != nil {
-		return "", fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve\n  (%w)", err)
+		return "", ctrlSocketUnavailable(err)
 	}
 	defer conn.Close()
 	if _, err := fmt.Fprintf(conn, "%s\n", command); err != nil {
