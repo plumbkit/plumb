@@ -724,6 +724,34 @@
   users' clients for exactly this workflow, so the instruction channel was
   actively steering agents away from the handoff the tool had been fixed to
   support. It now shows the two composing directly.
+- **A rejected parameter no longer gets suggested its own opposite.**
+  `search_in_files` declares both `glob` (the include filter) and `exclude`, and
+  `include` is nearer to `exclude` by edit distance than to anything else — so
+  `search_in_files({include: "*.go"})` was rejected with `did you mean
+  "exclude"?`. An agent taking that advice searches with the inverse filter and
+  gets a confidently wrong answer instead of an error. 12 such calls in the stats
+  DB. The alias table's stated rule — never a semantic flip, `include` ≠
+  `exclude` — was enforced on the two paths that *rewrite* a call and missing on
+  the path that *advises* one. `closest` now skips a candidate whose meaning
+  inverts the key's and offers the next-nearest instead, matching antonyms as
+  whole tokens so `append` is not read as containing `end`.
+
+- **Seven parameter spellings agents actually send now resolve instead of being
+  rejected**, mined from 296 unknown-parameter rejections in the stats DB:
+  `symbol_name` and `name_path` → `name` (`read_symbol`; 43 calls, the largest
+  single group — `get_definition` and `find_references` call the same thing
+  `symbol_name`, so an agent moving between them sends the other tool's
+  spelling), `memory_name` → `name`, `include` → `glob`, `max_results` → `limit`
+  (the reciprocal of an existing row), `line_end`/`line_start` → `end_line`/
+  `start_line`, and `op` → `subcommand`. Each carries the caller's value to the
+  canonical, so none of them drops anything.
+
+  Deliberately **not** added: `column` → `character`. It is a real spelling (3
+  calls) but `character` is *required* on `explain_symbol` and `type_hierarchy`,
+  and every alias target is dropped from the published `required` list so a
+  pre-validating host cannot reject the alias before it reaches plumb. Three
+  calls does not buy weakening that signal on two other tools.
+
 - **`minimal_diff_review` no longer lets one generated file decide which files
   get reviewed.** The 1 MiB budget was spent as a byte *prefix* of the whole
   diff. git emits a diff in path order, so a bundle sorting early (`dist/` before
