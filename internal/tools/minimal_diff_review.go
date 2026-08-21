@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/minchange"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tokenise"
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -129,12 +130,12 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	if gitErr != nil {
 		return notAGitRepoMessage(), nil
 	}
-	diffText, err := t.gitDiff(ctx, repoRoot, ws, a, resolvedFiles)
+	diffText, capped, err := t.gitDiff(ctx, repoRoot, ws, a, resolvedFiles)
 	if err != nil {
 		return "", err
 	}
-	report := t.review(ctx, diffText, a)
-	return formatReview(report, a, len(diffText) >= maxReviewDiffBytes), nil
+	report := t.review(ctx, diffText, a, len(capped) > 0)
+	return formatReview(report, a, capped), nil
 }
 
 // notAGitRepoMessage renders the degrade-cleanly response for a workspace that
@@ -183,10 +184,11 @@ func (a *minimalDiffReviewArgs) validate() error {
 }
 
 // gitDiff runs the git diff for the requested scope and returns its text,
-// bounded to maxReviewDiffBytes. Pathspecs are limited to the requested files,
+// bounded per file and in total (capPerFile), along with the files that bound
+// left out. Pathspecs are limited to the requested files,
 // or to the workspace root when none are given, so the review never reaches
 // changes outside the pinned workspace even when the repo root is an ancestor.
-func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a minimalDiffReviewArgs, resolvedFiles []string) (string, error) {
+func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a minimalDiffReviewArgs, resolvedFiles []string) (string, []cappedFile, error) {
 	argv := []string{"--no-pager", "diff", "--no-color", "-U3"}
 	if a.Mode == "staged" {
 		argv = append(argv, "--cached")
@@ -210,9 +212,9 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 			if msg == "" {
 				msg = err.Error()
 			}
-			return "", fmt.Errorf("minimal_diff_review: git diff: %s", msg)
+			return "", nil, fmt.Errorf("minimal_diff_review: git diff: %s", msg)
 		}
-		return "", fmt.Errorf("minimal_diff_review: running git diff: %w", err)
+		return "", nil, fmt.Errorf("minimal_diff_review: running git diff: %w", err)
 	}
 	text := string(out)
 	// `git diff` omits untracked files, but a brand-new uncommitted file is
@@ -222,10 +224,54 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	if a.Mode == "changed" && len(text) < maxReviewDiffBytes {
 		text += t.untrackedDiffs(ctx, repoRoot, ws, resolvedFiles, maxReviewDiffBytes-len(text))
 	}
-	if len(text) > maxReviewDiffBytes {
-		text = text[:maxReviewDiffBytes]
+	text, capped := capPerFile(text, maxReviewFileBytes, maxReviewDiffBytes)
+	return text, capped, nil
+}
+
+// cappedFile names a file whose diff was left out of the analysis, and how big
+// it was. It is reported rather than dropped silently: a review that quietly
+// skipped half the change reads exactly like a review that found nothing wrong
+// with it.
+type cappedFile struct {
+	Path  string
+	Bytes int
+}
+
+// capPerFile bounds a diff FILE BY FILE, returning the kept text and the files
+// left out.
+//
+// The global maxReviewDiffBytes cap used to be applied as a byte prefix
+// (text[:maxReviewDiffBytes]). git emits a diff in path order, so that did not
+// merely bound the work — it let one generated file DECIDE which files were
+// reviewed: a `dist/` bundle sorting ahead of the source consumed the whole
+// budget, everything after it was cut, and the report said only that a byte
+// count had been exceeded. The truncation was silent, positionally biased, and
+// could land mid-hunk, so the last file analysed was a fragment.
+//
+// Capping per file removes the bias without guessing which paths are
+// "generated" — this tool refuses to guess that, the same way it refuses to
+// guess a project's layout elsewhere. A file over the per-file budget is
+// dropped WHOLE, never mid-hunk, so what is analysed is always a complete file
+// diff. The global budget stays as a backstop and is likewise spent in whole
+// files.
+func capPerFile(text string, perFile, total int) (string, []cappedFile) {
+	chunks := minchange.SplitByFile(text)
+	if len(chunks) == 0 {
+		return text, nil
 	}
-	return text, nil
+	var kept strings.Builder
+	var capped []cappedFile
+	for _, c := range chunks {
+		switch {
+		case len(c.Text) > perFile:
+			capped = append(capped, cappedFile{Path: c.Path, Bytes: len(c.Text)})
+		case kept.Len()+len(c.Text) > total:
+			capped = append(capped, cappedFile{Path: c.Path, Bytes: len(c.Text)})
+		default:
+			kept.WriteString(c.Text)
+		}
+	}
+	return kept.String(), capped
 }
 
 // untrackedDiffs synthesises a new-file unified diff for every untracked,
@@ -257,16 +303,17 @@ func (t *MinimalDiffReview) untrackedDiffs(ctx context.Context, repoRoot, ws str
 	return sb.String()
 }
 
-// maxUntrackedFileBytes caps a single synthesised untracked file so one large
-// generated file cannot dominate the review budget.
-const maxUntrackedFileBytes = 128 * 1024
+// maxReviewFileBytes caps ONE file's diff, so a single large generated file
+// cannot dominate the review budget. It applies to tracked and untracked files
+// alike — see capPerFile for why the tracked half needs it.
+const maxReviewFileBytes = 128 * 1024
 
 // synthesiseNewFileDiff builds the new-file unified diff ParseUnifiedDiff
 // expects for one untracked file, reading its current content. Returns "" for a
 // binary, oversized, or unreadable file.
 func synthesiseNewFileDiff(repoRoot, rel string) string {
 	content, err := os.ReadFile(filepath.Join(repoRoot, rel)) //nolint:gosec // G304: repoRoot is a resolved git root; rel comes from git ls-files, not agent input
-	if err != nil || len(content) > maxUntrackedFileBytes || isProbablyBinary(content) {
+	if err != nil || len(content) > maxReviewFileBytes || isProbablyBinary(content) {
 		return ""
 	}
 	var sb strings.Builder
@@ -307,7 +354,7 @@ func isProbablyBinary(content []byte) bool {
 
 // review parses the diff and runs the analyser with topology-backed deps wired
 // to this session's store.
-func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minimalDiffReviewArgs) minchange.Report {
+func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minimalDiffReviewArgs, capped bool) minchange.Report {
 	diff := minchange.ParseUnifiedDiff(diffText)
 	include := true
 	if a.IncludeSuggestions != nil {
@@ -322,7 +369,7 @@ func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minim
 		MaxFindings:        a.MaxFindings,
 		IncludeSuggestions: include,
 		ScopedToFiles:      len(a.Files) > 0,
-		DiffTruncated:      len(diffText) >= maxReviewDiffBytes,
+		DiffTruncated:      capped,
 	})
 }
 
@@ -408,15 +455,36 @@ func nodeToSymbolRef(n topology.Node) minchange.SymbolRef {
 	return minchange.SymbolRef{Name: n.Name, Path: n.Path, Line: n.StartLine, Kind: string(n.Kind)}
 }
 
+// writeCappedFiles names the files left out of the analysis and how big they
+// were. Naming them is the point: the caller can see that the review covered
+// their source and skipped a bundle, which the previous "the diff exceeded N
+// bytes" note could not tell them — under a byte-prefix cut, the files it
+// dropped were whichever ones sorted last.
+func writeCappedFiles(sb *strings.Builder, capped []cappedFile) {
+	if len(capped) == 0 {
+		return
+	}
+	fmt.Fprintf(sb, "note: %d %s over the %s per-file budget %s not analysed:\n",
+		len(capped), textfmt.Plural(len(capped), "file", "files"),
+		textfmt.HumanBytesCompact(maxReviewFileBytes),
+		textfmt.Plural(len(capped), "was", "were"))
+	for _, c := range capped {
+		path := c.Path
+		if path == "" {
+			path = "(unnamed file)"
+		}
+		fmt.Fprintf(sb, "        %s (%s)\n", path, textfmt.HumanBytesCompact(c.Bytes))
+	}
+	sb.WriteString("      every other file in scope was reviewed in full.\n")
+}
+
 // formatReview renders the report as a bounded, human-readable advisory block.
-func formatReview(r minchange.Report, a minimalDiffReviewArgs, diffCapped bool) string {
+func formatReview(r minchange.Report, a minimalDiffReviewArgs, capped []cappedFile) string {
 	var sb strings.Builder
 	sb.WriteString("minimal_diff_review — advisory (findings never block writes)\n")
 	fmt.Fprintf(&sb, "scope: mode=%s, base_ref=%s, %d file(s) reviewed\n", a.Mode, a.BaseRef, r.FilesReviewed)
 	sb.WriteString("source: git diff + topology index. Evidence is asymmetric — silence is not proof a change is minimal.\n")
-	if diffCapped {
-		fmt.Fprintf(&sb, "note: the diff exceeded %d bytes and was truncated before analysis.\n", maxReviewDiffBytes)
-	}
+	writeCappedFiles(&sb, capped)
 	sb.WriteString("\n")
 
 	if len(r.Findings) == 0 {
