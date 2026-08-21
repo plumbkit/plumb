@@ -29,13 +29,36 @@ var readMultipleFilesSchema = json.RawMessage(`{
 // reported inline rather than failing the whole call, so a single unreadable
 // file doesn't block the others.
 //
+// PLAN-357: every dependency read_file carries is threaded into the per-file
+// inner reader EXCEPT the client-name accessor (WithClient). Reads ARE
+// recorded per file exactly as read_file records them, so edit_file works
+// under [edits] strict mode without a re-read. The native-edit-lane hint that
+// WithClient would otherwise emit per file is suppressed on the inner reader
+// and replaced with at most ONE consolidated hint at the end of the response
+// — see readMultipleFilesEditHint. Peer-write warnings, outside-workspace
+// labels, and the large-file file_outline nudge are safety/orientation
+// signals, not per-call noise, so they still fire per affected file exactly
+// as read_file would emit them.
+//
 // Concurrency: Execute is safe for concurrent use.
 type ReadMultipleFiles struct {
-	guard BoundaryGuard
-	ws    WorkspaceFn // may be nil; anchors workspace-relative entries in paths
+	tracker      *ReadTracker                            // may be nil; strict-mode tracking disabled when nil
+	writes       *WriteTracker                           // may be nil; powers the concurrent-edit-on-read warning
+	readsFor     func(ctx context.Context) *ReadTracker  // PLAN-286: per-agent resolver; overrides tracker
+	writesFor    func(ctx context.Context) *WriteTracker // PLAN-286: per-agent resolver; overrides writes
+	guard        BoundaryGuard
+	clientNameFn func() string       // may be nil; gates the ONE consolidated edit-lane hint below
+	outsideFn    func(string) string // may be nil; returns a root label when a path is outside the workspace
+	outlineFn    func(string) bool   // may be nil; reports whether a path has a structural engine
+	ws           WorkspaceFn         // may be nil; anchors workspace-relative entries in paths
 }
 
-func NewReadMultipleFiles() *ReadMultipleFiles { return &ReadMultipleFiles{} }
+// NewReadMultipleFiles mirrors NewReadFile's constructor shape: tracker may be
+// nil (strict-mode tracking disabled), and WithReadsFor overrides it per call
+// on a shared connection.
+func NewReadMultipleFiles(tracker *ReadTracker) *ReadMultipleFiles {
+	return &ReadMultipleFiles{tracker: tracker}
+}
 
 func (t *ReadMultipleFiles) WithBoundary(guard BoundaryGuard) *ReadMultipleFiles {
 	t.guard = guard
@@ -49,13 +72,64 @@ func (t *ReadMultipleFiles) WithWorkspace(ws WorkspaceFn) *ReadMultipleFiles {
 	return t
 }
 
+// WithReadsFor wires a per-call ReadTracker resolver (PLAN-286): on a shared
+// connection each logical agent records its reads against its own tracker.
+// Takes precedence over the tracker passed to NewReadMultipleFiles.
+func (t *ReadMultipleFiles) WithReadsFor(fn func(ctx context.Context) *ReadTracker) *ReadMultipleFiles {
+	t.readsFor = fn
+	return t
+}
+
+// WithWrites wires the per-session WriteTracker so a batch read can warn, per
+// affected file, when it changed on disk since plumb last wrote it this
+// session (a concurrent peer/external edit). Nil-safe.
+func (t *ReadMultipleFiles) WithWrites(w *WriteTracker) *ReadMultipleFiles {
+	t.writes = w
+	return t
+}
+
+// WithWritesFor is the WriteTracker counterpart of WithReadsFor (PLAN-286).
+func (t *ReadMultipleFiles) WithWritesFor(fn func(ctx context.Context) *WriteTracker) *ReadMultipleFiles {
+	t.writesFor = fn
+	return t
+}
+
+// WithClient wires the MCP client-name accessor so the response can carry the
+// ONE consolidated edit-lane hint for clients whose native Edit tool
+// conflicts with plumb's read-state (see edit_lane.go). Nil-safe; without it
+// no hint is emitted. Deliberately NOT threaded into the per-file inner
+// reader — see the suppression note on the type doc above.
+func (t *ReadMultipleFiles) WithClient(fn func() string) *ReadMultipleFiles {
+	t.clientNameFn = fn
+	return t
+}
+
+// WithOutsideLabel wires an accessor that, given a resolved path, returns the
+// allowed-root label when the path lies outside the workspace (a read-only
+// dependency or configured read root), or "" when inside it. Threaded into
+// the per-file inner reader so each affected file is labelled, matching
+// read_file. Nil-safe.
+func (t *ReadMultipleFiles) WithOutsideLabel(fn func(string) string) *ReadMultipleFiles {
+	t.outsideFn = fn
+	return t
+}
+
+// WithOutlineHint wires an accessor reporting whether a path has a structural
+// engine, gating read_file's >32 KiB file_outline nudge (a single line per
+// affected file, no prose block). Nil-safe.
+func (t *ReadMultipleFiles) WithOutlineHint(fn func(string) bool) *ReadMultipleFiles {
+	t.outlineFn = fn
+	return t
+}
+
 func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
 	return "Read up to 20 files in a single call. Each file's content is returned " +
 		"under a '### <path>' heading, followed by that file's own read_file header " +
-		"(mtime, sha256, line and byte counts) so it can be edited without re-reading. " +
-		"Errors for individual " +
+		"(mtime, sha256, line and byte counts) so it can be edited without re-reading " +
+		"— reads ARE recorded per file, exactly like read_file, so edit_file works " +
+		"under [edits] strict mode with no re-read. Errors for individual " +
 		"files are reported inline — one unreadable file doesn't block the others. " +
 		"Accepts absolute paths, file:// URIs, or workspace-relative paths. Binary files are detected and skipped. " +
 		"Each file is subject to the same 200 KiB cap as read_file."
@@ -69,6 +143,15 @@ type readMultipleFilesArgs struct {
 // balance: enough to hide latency from cold-cache reads on rotational media,
 // low enough not to thrash an SSD's queue depth or exhaust open-fd limits.
 const readMultipleFilesParallelism = 8
+
+// readMultipleFilesEditHint is the ONE consolidated edit-lane hint appended at
+// the end of a batch read for clients whose native Edit tool conflicts with
+// plumb's read-state (see edit_lane.go). read_file emits an equivalent line
+// per call because each read is its own turn; a batch read emits it once,
+// pointing back at each file's own per-file header rather than naming a
+// single mtime, so the line stays correct no matter how many files were read.
+const readMultipleFilesEditHint = "# To edit any of these files: use edit_file (not the native Edit tool), " +
+	"passing expected_mtime from that file's own header above.\n"
 
 func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a readMultipleFilesArgs
@@ -87,7 +170,16 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		err     error
 	}
 	results := make([]result, len(a.Paths))
-	reader := (&ReadFile{}).WithBoundary(t.guard).WithWorkspace(t.ws)
+	// Every read_file dependency read_file itself carries is threaded through
+	// the inner reader EXCEPT WithClient — see the type doc and
+	// readMultipleFilesEditHint above for why.
+	reader := (&ReadFile{tracker: t.tracker, readsFor: t.readsFor}).
+		WithBoundary(t.guard).
+		WithWorkspace(t.ws).
+		WithWrites(t.writes).
+		WithWritesFor(t.writesFor).
+		WithOutsideLabel(t.outsideFn).
+		WithOutlineHint(t.outlineFn)
 
 	sem := make(chan struct{}, readMultipleFilesParallelism)
 	var wg sync.WaitGroup
@@ -97,7 +189,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			raw, _ := json.Marshal(map[string]string{"file_path": p})
+			raw, _ := json.Marshal(map[string]any{"file_path": p})
 			out, err := reader.Execute(ctx, raw)
 			results[i] = result{content: out, err: err}
 		}()
@@ -121,6 +213,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 	// chars=675 baseline=677. Three numbers, and the prominent one meant nothing.
 	// The provenance line carries the real figures.
 	var sb strings.Builder
+	editable := false
 	for i, p := range a.Paths {
 		if i > 0 {
 			sb.WriteString("\n")
@@ -133,6 +226,13 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		fmt.Fprintf(&sb, "### %s\n", p)
 		sb.WriteString(r.content)
 		sb.WriteString("\n")
+		if t.outsideFn == nil || t.outsideFn(p) == "" {
+			editable = true
+		}
+	}
+	// One hint, not N — see the type doc and readMultipleFilesEditHint above.
+	if editable && clientHasNativeEditConflict(t.clientNameFn) {
+		sb.WriteString("\n" + readMultipleFilesEditHint)
 	}
 	return sb.String(), nil
 }

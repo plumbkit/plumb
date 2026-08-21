@@ -31,6 +31,24 @@
 
 ### Fixed
 
+- **`read_multiple_files` no longer traps strict mode.** Its inner reader was a
+  bare `&ReadFile{}` with no `ReadTracker` wired in, so `ReadTracker.Record`
+  (nil-safe, silently a no-op) never ran — a batch read left every file
+  unrecorded, and under `[edits] strict` a subsequent `edit_file` always failed
+  with "has not been read in this daemon session", even immediately after
+  reading it in that same batch. `read_multiple_files` now threads every
+  `read_file` dependency into its per-file inner reader (tracker, write
+  tracker, outside-workspace label, large-file `file_outline` nudge), so reads
+  ARE recorded per file and a batch read is editable exactly like an
+  individual `read_file` call. The one deliberate exception is the native
+  Claude-Code edit-lane hint: repeating it once per file was noise, so it is
+  suppressed on the inner reader and replaced with at most ONE consolidated
+  hint at the end of the response. Peer-write warnings and outside-workspace
+  labels still fire per affected file — they are safety signals, not
+  orientation noise. Guarded by `TestReadMultipleFiles_StrictMode_BatchReadThenEditSucceeds`
+  and `TestReadMultipleFiles_EditLaneHint_ConsolidatedOnce`
+  (`internal/tools/read_multiple_files_test.go`).
+
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
   to `xsel` **without checking it was installed** — X11 only, no `wl-copy`, no

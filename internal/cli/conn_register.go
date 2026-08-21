@@ -143,7 +143,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(readBoundaryFor).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithReadsFor(s.readTrackerFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadMultipleFiles().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadMultipleFiles(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewFileStatus(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
