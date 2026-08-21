@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -95,9 +96,26 @@ func confirmDaemonActionWithActiveSessions(p daemonActionPrompt) (bool, bool, er
 }
 
 func runActionConfirmationSelector(sessionCount int, p daemonActionPrompt) (bool, error) {
-	return runYesNoSelector(func(cursor int) string {
+	ok, err := runYesNoSelector(func(cursor int) string {
 		return renderStopConfirmationPrompt(p.consequence, sessionCount, cursor)
 	})
+	if errors.Is(err, ErrNoTerminal) {
+		return false, nonInteractiveDaemonActionError(p, sessionCount)
+	}
+	return ok, err
+}
+
+// nonInteractiveDaemonActionError is the refusal when there is no terminal to
+// ask on. It names the command, the consequence, and the flag that proceeds —
+// the previous behaviour was a raw bubbletea TTY error that named none of them,
+// so a script or an agent could not tell what had failed or what to do about it.
+func nonInteractiveDaemonActionError(p daemonActionPrompt, sessionCount int) error {
+	sessions := ""
+	if sessionCount > 0 {
+		sessions = fmt.Sprintf(" %d active session(s) would be interrupted:", sessionCount)
+	}
+	return fmt.Errorf("refusing to %s the daemon without confirmation: stdin is not a terminal.%s %s "+
+		"Re-run with --force to %s without asking", p.verb, sessions, p.consequence, p.verb)
 }
 
 func renderStopConfirmationPrompt(consequence string, sessionCount, cursor int) string {

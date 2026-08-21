@@ -54,6 +54,37 @@
 
 ### Fixed
 
+- **`plumb stop` and `plumb restart` were unusable without a terminal, and said
+  so in a way nobody could act on.** Both ran the shared Yes/No selector
+  unconditionally, so headless they died inside bubbletea with `could not open
+  TTY: open /dev/tty: device not configured` — an error naming neither the command
+  that failed nor any way to proceed. `plumb trust`, the third caller of the *same
+  selector*, had always checked for a terminal first; `stop` and `restart` simply
+  never got the guard.
+
+  This is the failure mode an automated caller is most likely to hit and least
+  likely to notice. It is how an agent in this repo rebuilt the binary, ran `plumb
+  restart`, and then measured a **stale daemon for two hours** believing it had
+  restarted — the restart had failed, loudly enough to print, quietly enough to
+  scroll past.
+
+  The terminal check now lives in `runYesNoSelector` itself, so no future caller
+  can forget it, and it refuses rather than assuming Yes: these gates guard
+  stopping a daemon out from under live sessions and granting command-execution
+  trust, and a pipeline must not acquire either by side effect. The refusal names
+  the command, the consequence, the number of sessions that would be interrupted,
+  and `--force`:
+
+  ```
+  refusing to restart the daemon without confirmation: stdin is not a terminal.
+  3 active session(s) would be interrupted: Restarting the daemon briefly drops
+  active sessions; resilient clients reconnect automatically. Re-run with --force
+  to restart without asking
+  ```
+
+  `--force` already existed on both commands and now genuinely works headless;
+  `plumb restart --force` from a script exits 0 and replaces the daemon.
+
 - **`read_multiple_files` spent 17% of its response on a decorative line, and
   announced the wrong byte count.** Each file was preceded by
   `strings.Repeat("─", 60)`; U+2500 is 3 bytes in UTF-8, so every rule cost 180
