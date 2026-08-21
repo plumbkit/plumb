@@ -213,3 +213,40 @@ func TestSocketPathLengthHint(t *testing.T) {
 		t.Errorf("the hint must state the actual length, got %q", got)
 	}
 }
+
+// The hint has to ride the error the USER sees. The daemon's own listen error
+// goes to daemon.log and then the daemon exits, so for anyone running plumb
+// through an MCP client the start timeout is the only report there is — which
+// is why both callers go through daemonStartTimeoutError.
+func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
+	short := "/home/u/.cache/plumb/plumb.sock"
+	if got := daemonStartTimeoutError("start", short).Error(); strings.Contains(got, "sun_path") {
+		t.Errorf("a short path must not be blamed on length: %q", got)
+	}
+
+	long := "/" + strings.Repeat("a", maxUnixSocketPath) + "/plumb.sock"
+	for _, action := range []string{"start", "come back up"} {
+		got := daemonStartTimeoutError(action, long).Error()
+		if !strings.Contains(got, action) {
+			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
+		}
+		if !strings.Contains(got, "sun_path") || !strings.Contains(got, "XDG_CACHE_HOME") {
+			t.Errorf("%q: the timeout must carry the length hint, got %q", action, got)
+		}
+	}
+}
+
+// sun_path is 104 bytes on macOS/BSD *including* the NUL, so 104 usable bytes
+// already fails to bind and must still be explained.
+func TestSocketPathLengthHint_BoundaryIsPortable(t *testing.T) {
+	if maxUnixSocketPath != 103 {
+		t.Fatalf("maxUnixSocketPath = %d, want 103 (104-byte sun_path less the NUL)", maxUnixSocketPath)
+	}
+	atLimit := strings.Repeat("a", maxUnixSocketPath)
+	if got := socketPathLengthHint(atLimit); got != "" {
+		t.Errorf("a path exactly at the limit is fine, got %q", got)
+	}
+	if got := socketPathLengthHint(atLimit + "a"); got == "" {
+		t.Error("one byte over the limit must be explained")
+	}
+}

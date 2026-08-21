@@ -54,12 +54,13 @@ func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.logDetailOpen = false
 		m.logDetailScroll = 0
 	case "c":
-		if text := m.currentLogDetailText(); text != "" {
-			// No status is set here: the copy reports its own outcome as a
-			// clipboardResultMsg. This used to claim success before the helper
-			// had even run.
-			return m, copyTextToClipboard(text)
-		}
+		// No status is set here: the copy reports its own outcome as a
+		// clipboardResultMsg. This used to claim success before the helper had
+		// even run. The empty case is handled by copyTextToClipboard rather
+		// than guarded here, so this key behaves identically in the popup —
+		// the two sites guarding it differently is what let an empty copy
+		// through there.
+		return m, copyTextToClipboard(m.currentLogDetailText())
 	case "up", "k":
 		if m.logDetailScroll > 0 {
 			m.logDetailScroll--

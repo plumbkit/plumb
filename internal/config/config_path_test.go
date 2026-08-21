@@ -56,13 +56,17 @@ func TestConfigPath_RelativeXDGConfigHomeDoesNotDivertTheLoader(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "relative/config")
-	// Plant a config where the relative value would have pointed, relative to
-	// this test's working directory.
+	// Chdir into a scratch directory before planting anything: the relative
+	// value resolves against the process cwd, which is the package source
+	// directory by default, and a killed run would leave the planted tree in
+	// the repo. t.Chdir restores the old cwd on cleanup.
+	t.Chdir(t.TempDir())
+
+	// Plant a config exactly where the relative value would have pointed.
 	planted := filepath.Join("relative", "config", "plumb")
 	if err := os.MkdirAll(planted, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll("relative") })
 	if err := os.WriteFile(filepath.Join(planted, "config.toml"), []byte("[topology]\nenabled = false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -27,13 +27,22 @@
   helper and its exit status, or "sent via OSC 52 (unverified)" — in both the
   log detail and the popup. Wayland is detected by `WAYLAND_DISPLAY` rather than
   `XDG_SESSION_TYPE`, which reads `tty` or is absent whenever the compositor is
-  started from a getty.
+  started from a getty. An empty payload is refused at the choke point rather
+  than at the call sites: every helper accepts empty stdin and exits 0, so
+  copying nothing would replace the clipboard with nothing and then truthfully
+  report a verified copy. And the helper now runs under a 5s timeout — one that
+  cannot make progress (xclip against a wedged X server) used to hang the
+  goroutine forever, so no status ever appeared.
 
 - **`plumb setup opencode|crush|goose` ignored `XDG_CONFIG_HOME` (#9).** All
   three clients resolve their own config through XDG, but plumb hardcoded
   `~/.config`, so on any Linux box with the variable set it registered itself in
   a file the client never reads — and reported success. They now go through a
   new `xdgConfigPath` helper. Reproduced on a live binary before the fix.
+  **Migration:** if you ran one of those three with `XDG_CONFIG_HOME` set, the
+  old `~/.config/<client>/…` file is neither migrated nor removed by
+  `--uninstall` — delete it by hand. The client was never reading it, which is
+  the bug.
 
 - **A relative `XDG_CONFIG_HOME` diverted the config loader (#9).**
   `legacyConfigPath` read the variable raw, while `internal/paths` correctly
@@ -48,8 +57,12 @@
   `EINVAL` — "invalid argument", which says nothing about length. The daemon
   wrote that to `daemon.log` and exited, and `plumb serve` reported only "daemon
   did not start within 10 seconds". Hit for real on Linux with a long
-  `XDG_CACHE_HOME` (the runtime dir follows `os.UserCacheDir`). The listen error
-  now states the actual length, the limit, and the variable to shorten.
+  `XDG_CACHE_HOME` (the runtime dir follows `os.UserCacheDir`). The error now
+  states the actual length, the limit, and the variable to shorten — on the
+  timeout `plumb serve` and `plumb restart` return, not only on the daemon's own
+  listen error, since that one goes to `daemon.log` and then the daemon exits,
+  so through an MCP client it is never seen. The portable ceiling is 103 usable
+  bytes, not 104: `sun_path` is 104 bytes on macOS/BSD *including* the NUL.
 
 ### Changed
 

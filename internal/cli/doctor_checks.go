@@ -401,8 +401,6 @@ func checkStatsDB(ws string) []checkResult {
 	}}
 }
 
-// checkDevTools and its pure decision halves live in doctor_devtools.go.
-
 // checkRastro reports whether the Rastro integration is enabled and, if so,
 // whether its executable resolves on PATH. It resolves the effective config and
 // delegates the decision to rastroResults, which is pure and therefore testable

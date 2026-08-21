@@ -227,7 +227,7 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 			return conn, nil
 		}
 	}
-	return nil, fmt.Errorf("daemon did not start within 10 seconds (socket: %s)", socketPath)
+	return nil, daemonStartTimeoutError("start", socketPath)
 }
 
 // warnIfDaemonStale compares the running daemon's published version against

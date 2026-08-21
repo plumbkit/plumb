@@ -3,11 +3,13 @@ package tui
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeEnv and fakeLook stand in for the process environment and PATH, so the
@@ -203,6 +205,49 @@ func TestPopupFooterShowsCopyStatus(t *testing.T) {
 	}
 }
 
+// TestCopyTextToClipboard_EmptyPayloadRunsNoHelper is the regression for the
+// worst failure this file can produce: every helper accepts empty stdin and
+// exits 0, so copying "" would REPLACE the user's clipboard with nothing and
+// then truthfully report a verified copy. The popup reaches this with
+// currentDetail returning empty strings — no sessions, no stats DB, no stored
+// detail for the row, or a row written before input_json/output_text existed.
+func TestCopyTextToClipboard_EmptyPayloadRunsNoHelper(t *testing.T) {
+	// A PATH with nothing on it: if the empty payload ever reaches the exec
+	// leg, selection would fall through to OSC 52 rather than a helper, so the
+	// assertion below on the exact status is what does the work.
+	cmd := copyTextToClipboard("")
+	if cmd == nil {
+		t.Fatal("an empty copy must still report something, not vanish")
+	}
+	msg, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatalf("want a clipboardResultMsg, got %T", cmd())
+	}
+	if msg.status.verified {
+		t.Fatal("an empty copy must never report a verified success")
+	}
+	if msg.status.text != "Nothing to copy" {
+		t.Fatalf("status = %q, want %q", msg.status.text, "Nothing to copy")
+	}
+}
+
+// The popup's `c` key guarded only that the call list was non-empty, while the
+// log detail also checked its payload — that asymmetry is what let an empty
+// copy through. Both now route through copyTextToClipboard, so pin that an
+// empty call detail cannot claim success.
+func TestPopupCopyWithEmptyDetailDoesNotClaimSuccess(t *testing.T) {
+	if got := formatCallDetailForClipboard("", ""); got != "" {
+		t.Fatalf("an empty call detail should format to nothing, got %q", got)
+	}
+	msg, ok := copyToClipboard("", "")().(clipboardResultMsg)
+	if !ok {
+		t.Fatal("popup copy did not report a result")
+	}
+	if msg.status.verified {
+		t.Fatalf("popup copy of an empty detail claimed a verified copy: %q", msg.status.text)
+	}
+}
+
 func TestRunClipboardExec_ReportsFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("exec permissions behave differently on windows")
@@ -217,6 +262,33 @@ func TestRunClipboardExec_ReportsFailure(t *testing.T) {
 	}
 	if !strings.Contains(got.text, "wl-copy") {
 		t.Fatalf("failure text should name the helper: %q", got.text)
+	}
+}
+
+// A helper that cannot make progress — xclip blocking in XOpenDisplay against
+// a wedged X server is the real-world shape — used to hang the goroutine
+// forever, so no result message was ever sent and the status bar stayed blank:
+// silence, which is the failure mode this whole path exists to remove.
+func TestRunClipboardExec_WedgedHelperTimesOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no /bin/sh on windows")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available")
+	}
+	wedged := clipboardMethod{kind: clipExec, name: "xclip", path: sh, args: []string{"-c", "sleep 30"}}
+
+	start := time.Now()
+	got := runClipboardExecWithTimeout(wedged, "text", 150*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("the timeout did not fire: waited %s", elapsed)
+	}
+	if got.verified {
+		t.Fatal("a helper that never responded was reported as verified")
+	}
+	if !strings.Contains(got.text, "did not respond") || !strings.Contains(got.text, "xclip") {
+		t.Fatalf("the status should name the helper and the timeout, got %q", got.text)
 	}
 }
 

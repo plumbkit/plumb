@@ -49,11 +49,14 @@ func plumbRuntimeDir() string {
 	return dir
 }
 
-// maxUnixSocketPath is the smallest sun_path capacity across the platforms
-// plumb supports: 104 bytes on the BSDs and macOS, 108 on Linux. The check is
-// deliberately the conservative one — a path that fits on Linux but not macOS
-// is still worth naming, because the fix is the same either way.
-const maxUnixSocketPath = 104
+// maxUnixSocketPath is the longest socket path that is portable across the
+// platforms plumb supports. sun_path holds 104 bytes on the BSDs and macOS and
+// 108 on Linux, and the NUL terminator has to fit too — Go's
+// syscall.SockaddrUnix rejects a non-abstract name at n >= len(raw.Path) — so
+// the portable ceiling is 103 usable bytes, not 104. The conservative bound is
+// deliberate: a path that fits on Linux but not macOS is still worth naming,
+// because the fix is the same either way.
+const maxUnixSocketPath = 103
 
 // socketPathLengthHint explains an over-long socket path, or returns "" when
 // the path is not the problem. It is appended to the daemon's listen error.
@@ -72,6 +75,18 @@ func socketPathLengthHint(path string) string {
 	return fmt.Sprintf(
 		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — set XDG_CACHE_HOME to a shorter directory)",
 		len(path), maxUnixSocketPath)
+}
+
+// daemonStartTimeoutError is what the caller sees when the socket never
+// appears: `plumb serve` on a cold start, and `plumb restart` after a respawn.
+//
+// It is one function so the length hint cannot be attached to some of those
+// paths and not others. That is exactly what happened first time round — the
+// hint went on the daemon's own listen error, which goes to daemon.log before
+// the daemon exits, so the user, who runs `plumb serve` through an MCP client,
+// only ever saw the bare timeout.
+func daemonStartTimeoutError(action, socketPath string) error {
+	return fmt.Errorf("daemon did not %s within 10 seconds (socket: %s)%s", action, socketPath, socketPathLengthHint(socketPath))
 }
 
 // startDaemonProcess launches a detached plumb daemon subprocess.

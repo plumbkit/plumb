@@ -2,11 +2,14 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -78,7 +81,10 @@ func selectClipboardMethod(goos string, getenv func(string) string, look func(st
 		if m, ok := lookup("pbcopy"); ok {
 			return m
 		}
-		return clipboardMethod{kind: clipOSC52, installHint: "pbcopy is missing from PATH"}
+		// pbcopy ships with macOS, so there is nothing to install — but an
+		// absent one still means a broken PATH the user can repair, which is
+		// why this carries a hint at all.
+		return clipboardMethod{kind: clipOSC52, installHint: "put pbcopy back on PATH (it ships with macOS, at /usr/bin/pbcopy)"}
 	case "windows":
 		// clip.exe writes through the console codepage and mangles anything
 		// outside it. Windows Terminal supports OSC 52, so the escape sequence
@@ -160,7 +166,21 @@ func formatCallDetailForClipboard(ij, ot string) string {
 // copyTextToClipboard attempts the copy and always reports what happened as a
 // clipboardResultMsg, so the status line describes the outcome instead of the
 // key press.
+//
+// An empty payload is refused here rather than at the call sites. Every helper
+// accepts empty stdin and exits 0, so running one would REPLACE the user's
+// clipboard with nothing and then truthfully report a verified copy — the
+// worst of both. It is refused at this choke point because the two call sites
+// used to guard it differently: the log detail checked its text was non-empty
+// and the call-detail popup did not, and currentDetail has four exits that
+// return empty strings (no sessions, no stats DB, no stored detail for the
+// row, and rows written before input_json/output_text existed).
 func copyTextToClipboard(txt string) tea.Cmd {
+	if txt == "" {
+		return func() tea.Msg {
+			return clipboardResultMsg{status: clipboardStatus{text: "Nothing to copy"}}
+		}
+	}
 	// Selection runs here rather than inside the returned closure because the
 	// OSC 52 leg has to hand bubbletea its own command; it costs two getenvs
 	// and at most three PATH stats.
@@ -182,18 +202,40 @@ func copyTextToClipboard(txt string) tea.Cmd {
 	}
 }
 
+// clipboardExecTimeout bounds a wedged helper. The healthy case returns in
+// milliseconds — wl-copy, xclip and xsel all drain stdin and fork before the
+// parent exits — so this only fires when the helper cannot make progress at
+// all, e.g. xclip blocking in XOpenDisplay against an unresponsive X server.
+// Without it that goroutine never returns, no result message is ever sent, and
+// the status line stays blank forever: silence, which is the failure mode this
+// whole path exists to remove.
+const clipboardExecTimeout = 5 * time.Second
+
 // runClipboardExec pipes txt into the helper and reports whether it exited
 // cleanly.
 func runClipboardExec(m clipboardMethod, txt string) clipboardStatus {
-	cmd := exec.Command(m.path, m.args...) //nolint:gosec // G204: the path comes from exec.LookPath over a closed set of literal helper names, never from user input
+	return runClipboardExecWithTimeout(m, txt, clipboardExecTimeout)
+}
+
+// runClipboardExecWithTimeout is the timeout-injectable half, so the wedged
+// case is testable without a test that sits for the real budget.
+func runClipboardExecWithTimeout(m clipboardMethod, txt string, timeout time.Duration) clipboardStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, m.path, m.args...) //nolint:gosec // G204: the path comes from exec.LookPath over a closed set of literal helper names, never from user input
 	cmd.Stdin = strings.NewReader(txt)
 	// Stdout and Stderr are left nil on purpose. wl-copy, xclip and xsel all
 	// fork and leave a child resident to serve the selection; assigning a
 	// non-*os.File writer makes os/exec create a pipe and wait for every writer
 	// to close it — including that resident child — so Run would block for as
-	// long as the clipboard offer stands. The exit status and the helper's name
-	// are enough to say something actionable.
+	// long as the clipboard offer stands. A nil writer gets /dev/null and no
+	// pipe, so Wait returns as soon as the parent does. The exit status and the
+	// helper's name are enough to say something actionable.
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return clipboardStatus{text: fmt.Sprintf("Copy failed: %s did not respond within %s", m.name, timeout)}
+		}
 		return clipboardStatus{text: "Copy failed: " + m.name + ": " + err.Error()}
 	}
 	return clipboardStatus{text: clipboardCopiedMsg, verified: true}
