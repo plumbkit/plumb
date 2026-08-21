@@ -22,7 +22,13 @@ It is biased toward recall — a missed test is worse than an extra one — so e
     run_task(slot="test")      # the stored test command, whole
     run_task(slot="verify")    # build, then test
 
-`slot` is `build` / `lint` / `test` / `e2e` / `verify`. `target` fills a `{target}` placeholder with one shell-safe argument, but only when the stored command has that placeholder — none of the shipped defaults do (`go test ./...`, `pytest`, `cargo test`, `npm test`, `swift test`, `zig build test`), and a target passed to a command without it is refused. So narrowing the run to what `topology_affected` named needs either a project that put `{target}` in its own stored command, or the client's own runner. When the project configures no command for the slot, use the client's runner too — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
+`slot` is `build` / `lint` / `test` / `e2e` / `verify`. `target` fills a `{target}` placeholder with one shell-safe argument, and the shipped go, python and rust test defaults now carry a defaulted one (`go test {target:./...}`, `pytest {target:}`, `cargo test {target:}`), so scoping works on an unmodified install and a bare `run_task(slot="test")` still runs everything. `npm test`, `swift test` and `zig build test` have no placeholder, because those runners scope through flags whose spelling depends on the project — a target passed to a command without a placeholder is refused.
+
+When the command takes a positional path, `topology_affected` hands you the target already shaped for it, relative to `[tasks.<lang>].working_dir`, so the two compose directly:
+
+    run_task(slot="test", target="./internal/config/...")   # a row from topology_affected, verbatim
+
+Where no target can be spelled — a runner that scopes by test name, a project-specific flag, or a package outside the command's `working_dir` — `topology_affected` names the directory and guesses no command. Use your own runner there, but keep the scope it gave you. When the project configures no command for the slot, use the client's runner too — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
 
 ## 3. Confirm it still compiles
 

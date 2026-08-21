@@ -81,7 +81,7 @@ func TestTopologyAffected_FormatSurfacesPackagesAndRecall(t *testing.T) {
 			{Node: topology.Node{Name: "TestBar", Path: "internal/cli/bar_test.go", StartLine: 5}, Confidence: 0.5, Reason: reasonImporter},
 		},
 	}
-	out := formatAffectedResult(result, a, TestScope{Language: "go", ScopedTests: true})
+	out := formatAffectedResult(result, a, TestScope{Language: "go", Style: TargetGoPackage})
 	// The actionable unit is the package: a caller narrows the test run by path,
 	// not by test name, so the row leads with the target run_task takes.
 	for _, want := range []string{
@@ -121,7 +121,7 @@ func TestTopologyAffected_FormatAggregatesRatherThanEnumerates(t *testing.T) {
 			Reason:     reasonImporter,
 		})
 	}
-	out := formatAffectedResult(result, a, TestScope{Language: "go", ScopedTests: true})
+	out := formatAffectedResult(result, a, TestScope{Language: "go", Style: TargetGoPackage})
 	if strings.Contains(out, "TestNoise") {
 		t.Errorf("importing package's tests must be summarised, not enumerated:\n%s", out[:min(len(out), 600)])
 	}

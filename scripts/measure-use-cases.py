@@ -478,7 +478,12 @@ def scenario_affected(s: Serve) -> dict:
     # packages" with no error, which reads as a tool regression rather than a
     # broken parser. Anchor on the stable part of the row (the count and reason)
     # and treat the label as opaque.
-    pkg_rows = re.findall(r"^ {2}(\S+)\s+(\d+) tests\s{2,}(.+)$", text, re.M)
+    # The label may carry a trailing note (a package outside the test command's
+    # working_dir is rendered `scripts (outside plumb/)`), so it is matched
+    # non-greedily up to the run of spaces before the count rather than as a
+    # single token — `(\S+)` silently DROPPED those rows, which is a partial
+    # parse failure the all-or-nothing guard below cannot see.
+    pkg_rows = re.findall(r"^ {2}(.+?)\s{2,}(\d+) tests\s{2,}(.+)$", text, re.M)
     if not pkg_rows and "run these packages" in text:
         raise RuntimeError(
             "topology_affected returned packages but no row matched the parser — "
@@ -509,6 +514,10 @@ def pkg_name(label: str) -> str:
     for go, a bare path for python/pytest, or just the directory when no command
     could be inferred. All of them reduce to the same package path for reporting.
     """
+    label = label.split("  ")[0].strip()
+    for note in (" (outside",):
+        if note in label:
+            label = label.split(note)[0].strip()
     return label.removeprefix("./").removesuffix("/...").removesuffix("/")
 
 
