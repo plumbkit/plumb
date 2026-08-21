@@ -84,9 +84,9 @@ func TestSurchargeSumsOnlyVisibleTools(t *testing.T) {
 	if got.TotalBytes != 1370 {
 		t.Errorf("TotalBytes = %d, want 1370", got.TotalBytes)
 	}
-	// 1370 / 3.7 = 370.27... rounds to 370.
-	if got.Tokens != 370 {
-		t.Errorf("Tokens = %d, want 370", got.Tokens)
+	// 1370 / 4.57 = 299.78... rounds to 300.
+	if got.Tokens != 300 {
+		t.Errorf("Tokens = %d, want 300", got.Tokens)
 	}
 }
 
@@ -110,19 +110,22 @@ func TestSurchargeEmptyRegistryIsZero(t *testing.T) {
 	}
 }
 
-// TestSurchargePlausibleAgainstPLAN323 sanity-checks the conversion against
-// the PLAN-323 measurement this methodology reuses: 59 tools, 106,341 chars,
-// measured as ~28,700 tokens (notes-system-improvements-2026-08-15.md). The
-// tolerance is loose — this is a methodology cross-check, not a pin of the
-// live registry's exact current size, which drifts as tools are added.
-func TestSurchargePlausibleAgainstPLAN323(t *testing.T) {
-	got := ProfileSurcharge(map[string]int{"whole-surface": 106341}, nil)
-	const want = 28700
+// TestSurchargeMatchesMeasuredCl100kRatio sanity-checks the conversion
+// against a REAL tokenizer measurement, not PLAN-323's original 3.7-chars-
+// per-token assumption (which this test used to reproduce, and which
+// overstated the surcharge by ~24%). A PLAN-367 review round tokenised the
+// live 59-tool tools/list payload with cl100k and got 106,401 chars / 23,276
+// tokens. The tolerance is loose — this is a methodology cross-check against
+// that one measured payload, not a pin of the live registry's exact current
+// size, which drifts as tools are added.
+func TestSurchargeMatchesMeasuredCl100kRatio(t *testing.T) {
+	got := ProfileSurcharge(map[string]int{"whole-surface": 106401}, nil)
+	const want = 23276
 	diff := got.Tokens - want
 	if diff < 0 {
 		diff = -diff
 	}
 	if diff > 200 {
-		t.Errorf("Tokens = %d, want ~%d (±200) reproducing the PLAN-323 figure", got.Tokens, want)
+		t.Errorf("Tokens = %d, want ~%d (±200), the measured cl100k figure for this payload", got.Tokens, want)
 	}
 }

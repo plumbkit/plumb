@@ -93,7 +93,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 | `write_file` | Full new content | Use only for new files or whole-file replacements. |
 | `transaction_apply` | Sum of operation costs | Cheaper than N separate `edit_file` calls when the changes are related — one tool result, not N. |
 | `git diff` | Bounded; very efficient | The verification tool of choice for multi-file refactors. |
-| `session_start` | Full packet ~7.5 KB | Call once per session; `detail: "brief"` returns a ≤1.5 KB subset (workspace, language, branch, one-line git policy, diagnostics/peer counts, memory names only) for cheap re-orientation. Subsequent re-orientation should also reuse what's already in context. |
+| `session_start` | Full packet ~7.5 KB baseline, workspace-dependent (measured up to ~9.6 KB on a workspace with more commits/memories/diagnostics) | Call once per session; `detail: "brief"` returns a ≤1.5 KB subset (workspace, language, branch, one-line git policy, diagnostics/peer counts, memory names only) for cheap re-orientation. Subsequent re-orientation should also reuse what's already in context. |
 
 ## Prompt Caching Considerations
 

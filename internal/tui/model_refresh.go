@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -174,7 +175,9 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 		return
 	}
 	m.activity = activity
-	m.tokenSavings = db.SavingsAxes(stats.Filter{Since: start}).Total()
+	// PLAN-367 review round 1: netted to the current savings-model version
+	// only (see the matching comment in dashboard.go's refreshDashboard).
+	m.tokenSavings = db.SavingsAxes(stats.Filter{Since: start, SavingsModelVersion: clientcaps.ModelVersion}).Total()
 	m.lastActivityAt = now
 	m.activitySession = ""
 }

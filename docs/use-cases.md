@@ -10,8 +10,11 @@ returns exactly the right answer where a text tool over- or under-matches — Sc
 **coordination** (test selection that doesn't drop the one test covering your change, and writes
 that stay safe under concurrent or stale edits — Scenarios 4 and 10), and, running through both
 and worth measuring honestly on its own terms, **token economics** — which is real in places,
-neutral in others, and negative in at least one (Scenarios 6–9). The token story is not the whole
-case, and this page leads with the two pillars that are.
+neutral in others, and negative in at least one (Scenarios 6–9). Scenario 5 sits outside all three:
+it is a latency measurement, not a correctness, coordination, or token one — included because a
+tool's cost is not just what it returns but how long the agent waits for it, and the honest answer
+there is "not the bottleneck". The token story is not the whole case, and this page leads with the
+two pillars that are.
 
 Five honest results, correctness and coordination first:
 

@@ -110,7 +110,7 @@ type SessionStart struct {
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
 	tasksFn       func() TaskState                                                                  // may be nil; the resolved run_task/run_command state for this workspace
-	surchargeFn   func() (tokens int, toolCount int)                                                // may be nil; the estimated per-request tool-schema surcharge for the tools THIS connection actually advertises
+	surchargeFn   func() (bytes int, tokens int, toolCount int)                                     // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
 }
 
 // WithProjectPolicy wires the accessor for this session's capability-granting
@@ -192,8 +192,13 @@ func (t *SessionStart) resolvedToolProfile() (string, int, string) {
 // clientcaps.ProfileSurcharge / mcp.Server.ToolSchemaBytes) — a client-side
 // cost the daemon cannot observe directly, so it is computed fresh from the
 // live registry and the resolved profile rather than read back from stats.
-// Nil-safe: unwired ⇒ the surcharge line is omitted from the banner.
-func (t *SessionStart) WithSurcharge(fn func() (tokens int, toolCount int)) *SessionStart {
+// bytes is the exact, MEASURED wire byte total (the primary figure — PLAN-367
+// review round 1: a token count must never be shown without the measured
+// figure it was estimated from); tokens is the derived ESTIMATE
+// (clientcaps.surchargeCharsPerToken, a measured-but-still-approximate
+// chars/token ratio). Nil-safe: unwired ⇒ the surcharge line is omitted from
+// the banner.
+func (t *SessionStart) WithSurcharge(fn func() (bytes int, tokens int, toolCount int)) *SessionStart {
 	t.surchargeFn = fn
 	return t
 }

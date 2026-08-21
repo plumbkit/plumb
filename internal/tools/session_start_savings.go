@@ -40,9 +40,13 @@ func (t *SessionStart) writeSessionStats(sb *strings.Builder, ws string) {
 	sb.WriteString("\n")
 
 	if t.surchargeFn != nil {
-		if tokens, n := t.surchargeFn(); n > 0 {
-			fmt.Fprintf(sb, "profile surcharge: ~%s tokens of tool schemas served to this client per request (%d tools)\n",
-				stats.FormatSavings(tokens), n)
+		// bytes is the MEASURED primary figure; tokens is a labelled ESTIMATE
+		// derived from it (clientcaps.surchargeCharsPerToken) — never state the
+		// token count without naming it as an estimate over the measured bytes
+		// (PLAN-367 review round 1).
+		if bytes, tokens, n := t.surchargeFn(); n > 0 {
+			fmt.Fprintf(sb, "profile surcharge: %d bytes of tool schemas served to this client per request (%d tools) — ~%s tokens estimated\n",
+				bytes, n, stats.FormatSavings(tokens))
 		}
 	}
 
@@ -57,7 +61,7 @@ func (t *SessionStart) writeSessionStats(sb *strings.Builder, ws string) {
 	}
 
 	if n := db.PreventedIncidents(stats.Filter{Workspace: ws}); n > 0 {
-		fmt.Fprintf(sb, "prevented incidents: %d (stale/unread-write and dirty-file guards that refused a call this workspace)\n", n)
+		fmt.Fprintf(sb, "guard refusals: %d (stale/unread-write and dirty-file guards that refused a call this workspace; a retried call counts once per refusal)\n", n)
 	}
 	sb.WriteString("\n")
 }

@@ -259,20 +259,32 @@
   `catSemantic` tool (reconstruction-cost model, unaffected). Historical rows
   keep the version they were scored under; nothing is rescored.
   **(2) A real profile-surcharge estimate** (`clientcaps.ProfileSurcharge`,
-  `mcp.Server.ToolSchemaBytes`): the per-request token cost of the tool
-  schemas actually advertised to a client, computed from the live registry —
-  reported as a rate, never multiplied into a fake aggregate.
-  **(3) A real prevented-incidents count** (`stats.DB.PreventedIncidents`):
-  the count of write-guard refusals (`unread_or_stale`, `dirty_file`,
+  `mcp.Server.ToolSchemaBytes`): the per-request cost of the tool schemas
+  actually advertised to a client, computed from the live registry. `TotalBytes`
+  is the exact, measured wire figure — the primary number; `Tokens` is a
+  clearly-labelled ESTIMATE on top of it. The chars/token ratio is the
+  measured cl100k figure on a real 59-tool payload (106,401 chars / 23,276
+  tokens = 4.57), not PLAN-323's original 3.7 assumption, which overstated
+  the surcharge by ~24% (review round 1). Reported as a rate, never
+  multiplied into a fake aggregate.
+  **(3) A real guard-refusals count** (`stats.DB.PreventedIncidents`): the
+  count of write-guard refusals (`unread_or_stale`, `dirty_file`,
   `concurrent_ref_move`) — a direct count of refusals the daemon actually
-  issued, not an estimate.
-  **(4) The banner** (`session_start`, `plumb stats`) now shows three honest
-  lines — profile surcharge, netted read savings (current model version
-  only, labelled "since v4"), and prevented incidents — replacing the single
-  "tokens saved" headline. `stats.Filter.SavingsModelVersion` prevents
-  silently summing rows scored under different models. TUI and web dashboard
-  keep the pre-existing combined total for now (unchanged in this PR — do not
-  chase TUI coverage).
+  issued, not an estimate. Counts CALLS, not distinct incidents (a retried
+  call counts once per refusal) — the banner label says "guard refusals",
+  not "incidents", to match.
+  **(4) The banner** (`session_start`, `plumb stats`, TUI, web dashboard) now
+  shows netted, honest numbers throughout: `session_start`/`plumb stats` show
+  three lines — measured surcharge bytes + estimated tokens, netted read
+  savings (current model version only, labelled "since v4"), and guard
+  refusals; the CLI's per-tool table (`stats.DB.SummarySinceVersion`) nets
+  its Capability/Efficiency columns the same way its header does, so the two
+  can never contradict each other. TUI (lifetime/uptime/project axes and
+  top-tools tables) and the web dashboard's `/api/dashboard` savings
+  breakdown (now carrying an explicit `modelVersion` field) get the same
+  since-v4 netting (review round 1 — these were flagged as still showing the
+  un-netted cross-version number). `stats.Filter.SavingsModelVersion`
+  prevents silently summing rows scored under different models throughout.
   **(5) docs/use-cases.md** reordered: correctness/coordination scenarios
   (working-checkout scoping, semantic references, safe rename, test
   selection, latency) lead; the two real token wins (`read_symbol`,
@@ -280,13 +292,19 @@
   the `read_multiple_files` loss close it out. Scenario numbers renumbered to
   match physical order; every cross-reference updated. Framing paragraph
   rewritten to the three-pillar thesis (correctness, coordination, token
-  economics — in that order).
+  economics — in that order), with the latency scenario explicitly named as
+  sitting outside all three rather than silently unassigned (review round 1).
+  README's own lede was left untouched — it already led with reliability/
+  write-safety, coordination, and semantic intelligence ahead of a demoted
+  "context efficiency" pillar (a prior positioning pass), so PLAN-367 only
+  fixed its one stale `docs/use-cases.md` Scenario cross-reference.
   **(6) Corrections:** `docs/token-efficiency.md`'s `session_start` row
-  corrected from a stale "~1-2 KB" to the measured reality (full ~7.5 KB,
-  `detail: "brief"` ≤1.5 KB, per CHANGELOG's own brief-mode entry).
-  `docs/topology.md`'s `topology_affected` description was checked against
-  the current package-aggregated contract and found already accurate — no
-  drift remained to fix there.
+  corrected from a stale "~1-2 KB" to the measured reality (full ~7.5 KB
+  baseline, workspace-dependent — up to ~9.6 KB measured on a heavier
+  workspace; `detail: "brief"` ≤1.5 KB, per CHANGELOG's own brief-mode
+  entry). `docs/topology.md`'s `topology_affected` description was checked
+  against the current package-aggregated contract and found already
+  accurate — no drift remained to fix there.
   **(7) The public site** (`site/index.html`) no longer leads with "token
   efficiency": the nav label and the read-footprint section's kicker are
   reframed ("Measured" / "Read footprint · measured on plumb itself"), and

@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -80,12 +81,20 @@ func (m *Model) refreshDashboard() {
 	if lifetimeDue {
 		m.dashLifetimeCalls = m.globalDB.TotalCalls(globalFilter)
 		m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
-		m.dashLifetimeAxes = m.globalDB.SavingsAxes(globalFilter)
+		// PLAN-367 review round 1: the savings axes are netted to the CURRENT
+		// model version only (SummarySinceVersion/versioned SavingsAxes filter)
+		// — Calls/Sessions above stay unversioned real usage counts, but a
+		// blended v3+v4 axis total would silently contradict the per-tool table
+		// below it, which is exactly the bug this fixes. See internal/cli/stats.go
+		// for the same split on the `plumb stats` CLI.
+		versionedGlobalFilter := globalFilter
+		versionedGlobalFilter.SavingsModelVersion = clientcaps.ModelVersion
+		m.dashLifetimeAxes = m.globalDB.SavingsAxes(versionedGlobalFilter)
 		m.dashLifetimeTokens = m.dashLifetimeAxes.Total()
 		m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
-		m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
+		m.dashLifetimeTopTools, _ = m.globalDB.SummarySinceVersion(globalFilter, clientcaps.ModelVersion)
 		uptimeFilter := stats.Filter{Since: m.dashboardUptimeStart(now)}
-		m.dashUptimeTopTools, _ = m.globalDB.Summary(uptimeFilter)
+		m.dashUptimeTopTools, _ = m.globalDB.SummarySinceVersion(uptimeFilter, clientcaps.ModelVersion)
 		// The widget shows at most ten kinds after collapsing; asking for more
 		// buckets than that only pays for rows nothing renders.
 		failures, _ := m.globalDB.FailureSummary(dashFailureBucketLimit, uptimeFilter)
@@ -137,9 +146,12 @@ func (m *Model) refreshDashboardProject() {
 	pf := stats.Filter{Workspace: m.dashProjectFolder}
 	m.dashProjectCalls = m.globalDB.TotalCalls(pf)
 	m.dashProjectSessions = m.globalDB.TotalSessions(pf)
-	m.dashProjectAxes = m.globalDB.SavingsAxes(pf)
+	// See the versioned-filter comment in refreshDashboard above.
+	versionedPF := pf
+	versionedPF.SavingsModelVersion = clientcaps.ModelVersion
+	m.dashProjectAxes = m.globalDB.SavingsAxes(versionedPF)
 	m.dashProjectTokens = m.dashProjectAxes.Total()
-	m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
+	m.dashProjectTopTools, _ = m.globalDB.SummarySinceVersion(pf, clientcaps.ModelVersion)
 }
 
 // renderDashboard renders the full-width Dashboard section (section 0).

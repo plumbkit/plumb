@@ -241,9 +241,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessionID).
-		WithSurcharge(func() (int, int) {
+		WithSurcharge(func() (int, int, int) {
 			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
-			return r.Tokens, r.ToolCount
+			return r.TotalBytes, r.Tokens, r.ToolCount
 		}).
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
