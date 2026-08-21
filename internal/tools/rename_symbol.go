@@ -287,8 +287,8 @@ func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*p
 	}
 	if len(matches) > 1 {
 		cands := disambiguatedNames(syms, matches)
-		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; disambiguate by retrying with symbol_name set to one of: %s",
-			len(matches), a.SymbolName, a.URI, strings.Join(cands, ", "))}
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; disambiguate using one of: %s",
+			len(matches), a.SymbolName, a.URI, formatDisambiguation(cands))}
 	}
 	sym := matches[0]
 	return t.renameByPosition(ctx, a, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
