@@ -22,8 +22,9 @@
   REAL tool objects `registerAllTools` builds — via a new
   `mcp.Server.Lookup` — rather than a hand-copied fixture list: the former
   asserts every read-recording tool's dependencies are wired non-nil, the
-  latter asserts every `tools.IsPinned` name is both registered and visible
-  under the served profile. `TestStrictReadRoundTrip` (`cmd/smoke`,
+  latter asserts every `tools.IsPinned` name is registered, and, under the
+  lean profile, either visible or a named exception
+  (`pinnedHiddenUnderLean`). `TestStrictReadRoundTrip` (`cmd/smoke`,
   integration) exercises the same contract end to end over the wire,
   parameterized per read-recording tool: read, then edit under strict mode.
   Reverting PLAN-357's registration wiring locally sends both
