@@ -7,6 +7,28 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Added
+
+- **`session_start` gains a `detail: "brief"` mode — a ≤1.5 KB orientation
+  packet for a caller that just needs cheap re-orientation.** The full packet
+  runs ~7.5 KB; a subagent or a resumed conversation calling `session_start`
+  again does not need context.md inlined, commits, the working-tree diffstat,
+  tool stats, the tokens banner, or the full client guidance block a second
+  time. `detail: "brief"` returns only workspace path, language, branch, a
+  one-line git policy, diagnostics and active-peer COUNTS (never bodies),
+  memory NAMES only (no descriptions or sizes), the edit-lane rule for
+  clients that need it, and a closing pointer back to
+  `session_start({detail:"full"})`. The default stays `"full"` — including on
+  first contact, so bootstrap discoverability (#189) is untouched — except it
+  flips to `"brief"` automatically when the supplied `session_id` was already
+  seen by this daemon within the last 24h (the same `session.FindEnded` grace
+  window `WithExternalID` already uses to inherit a session's name): an
+  explicit `detail` argument always wins over that default. Guarded by
+  `TestSessionStartBrief_*` in `internal/tools/session_start_brief_test.go`
+  (byte budget under realistic load, full render unchanged, auto-brief on a
+  repeat `session_id`, first-contact stays full, explicit `detail` overrides
+  either default).
+
 ### Fixed
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
