@@ -134,11 +134,17 @@ func changedPackageTarget(t *testing.T, out string) string {
 // path-scoped default for a new language to config.defaultTasks would silently
 // fail to reach topology_affected, and nothing would say so.
 func TestTargetStyleMatchesShippedDefaults(t *testing.T) {
-	// The languages whose runner takes a positional PATH, per the rule stated in
-	// config_tasks.go's defaultTasks doc comment.
+	// Every shipped language whose test command takes a POSITIONAL target must
+	// appear here, including those deliberately given no target style. rust is
+	// the instructive one: `cargo test {target:}` is positional, but the operand
+	// is a test-NAME filter, so handing it a directory would silently select
+	// nothing. Listing it as TargetNone records that as a decision rather than an
+	// omission — the loop at the end of this test refuses to let a positional
+	// language be merely absent.
 	want := map[string]tools.TargetStyle{
 		"go":     tools.TargetGoPackage,
 		"python": tools.TargetPath,
+		"rust":   tools.TargetNone,
 	}
 	defaults := config.Defaults().Tasks
 	if len(defaults) == 0 {
@@ -157,8 +163,29 @@ func TestTargetStyleMatchesShippedDefaults(t *testing.T) {
 	}
 	for lang := range want {
 		if _, ok := defaults[lang]; !ok {
-			t.Errorf("language %q is expected to be path-scoped but ships no default "+
-				"task config at all", lang)
+			t.Errorf("language %q is classified here but ships no default task config "+
+				"at all", lang)
+		}
+	}
+
+	// The direction the comment above promises, which the table alone does NOT
+	// give: a language ABSENT from `want` reads back as TargetNone, so a new
+	// shipped default with a positional target would match silently and the
+	// feature would simply never fire for it. Force a human to classify it.
+	//
+	// Found by an adversarial review, which added `npm test {target:}` and a
+	// `ruby: rspec {target:}` default and watched this test stay green.
+	for lang, tc := range defaults {
+		if !testSlotTakesPositionalTarget(tc) {
+			continue
+		}
+		if _, classified := want[lang]; !classified {
+			t.Errorf("language %q ships a test command with a positional target (%q) but "+
+				"is not classified in this table, so testTargetStyle silently returns "+
+				"TargetNone and topology_affected emits no target for it. Decide whether "+
+				"its operand is a PATH (add it here and to testTargetStyle) or a NAME "+
+				"filter like cargo's (add it here as TargetNone, deliberately)",
+				lang, tc.Test)
 		}
 	}
 }
@@ -182,6 +209,17 @@ func TestTargetStyleRejectsNonPositionalPlaceholders(t *testing.T) {
 		{"shipped go default", "go", "go test {target:./...}", tools.TargetGoPackage},
 		{"shipped python default", "python", "pytest {target:}", tools.TargetPath},
 		{"go with extra flags before a trailing operand", "go", "go test -count=1 {target:./...}", tools.TargetGoPackage},
+
+		// Boolean flags do not consume the target. Reading them as if they did
+		// silently killed the feature for the most ordinary customisation there
+		// is — adding -race or -v to the shipped default.
+		{"go -race is boolean", "go", "go test -race {target:./...}", tools.TargetGoPackage},
+		{"go -v is boolean", "go", "go test -v {target:./...}", tools.TargetGoPackage},
+		{"pytest -q is boolean", "python", "pytest -q {target:}", tools.TargetPath},
+		{"double dash marks what follows as positional", "go", "gotestsum -- {target:./...}", tools.TargetGoPackage},
+		// An UNKNOWN flag still counts as consuming: withholding a target costs an
+		// edit, emitting a wrong one costs a green run that tested nothing.
+		{"unknown flag is assumed to take a value", "go", "go test -mystery {target:./...}", tools.TargetNone},
 
 		{"go -run takes a NAME regex", "go", "go test -run {target}", tools.TargetNone},
 		{"pytest -k takes a NAME expression", "python", "pytest -k {target}", tools.TargetNone},

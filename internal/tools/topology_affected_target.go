@@ -28,6 +28,21 @@ const (
 	TargetPath
 )
 
+// String names the style, so a test failure reads as a style rather than as an
+// integer.
+func (s TargetStyle) String() string {
+	switch s {
+	case TargetGoPackage:
+		return "TargetGoPackage"
+	case TargetPath:
+		return "TargetPath"
+	case TargetNone:
+		return "TargetNone"
+	default:
+		return fmt.Sprintf("TargetStyle(%d)", int(s))
+	}
+}
+
 // TestScope describes how this workspace runs a scoped test command.
 //
 // The zero value means "nothing is known": directories are named and no command
@@ -68,7 +83,16 @@ func testTarget(scope TestScope, dir string) (string, bool) {
 			target = "./" + rel + "/..."
 		}
 	case TargetPath:
-		target = rel
+		// "./"-prefixed, so a directory whose name begins with "-" cannot be read
+		// as a flag by the runner. targetPattern admits "-" anywhere, including
+		// first, so an indexed directory called "-x" would otherwise reach pytest
+		// as `pytest -x` — the whole suite in exit-first mode, silently, instead
+		// of the one package meant. "." stays bare rather than becoming "./.".
+		if rel == "." {
+			target = rel
+		} else {
+			target = "./" + rel
+		}
 	default:
 		return "", false
 	}

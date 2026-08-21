@@ -480,10 +480,14 @@ def scenario_affected(s: Serve) -> dict:
     # and treat the label as opaque.
     # The label may carry a trailing note (a package outside the test command's
     # working_dir is rendered `scripts (outside plumb/)`), so it is matched
-    # non-greedily up to the run of spaces before the count rather than as a
-    # single token — `(\S+)` silently DROPPED those rows, which is a partial
-    # parse failure the all-or-nothing guard below cannot see.
-    pkg_rows = re.findall(r"^ {2}(.+?)\s{2,}(\d+) tests\s{2,}(.+)$", text, re.M)
+    # non-greedily up to the whitespace before the count rather than as a single
+    # token — `(\S+)` silently DROPPED those rows, and the guard below is
+    # all-or-nothing so it cannot see a PARTIAL parse failure.
+    #
+    # `\s+` and not `\s{2,}` before the count: the row is padded to a fixed
+    # column width, so a label longer than the pad collapses the gap to a single
+    # space and a stricter pattern would drop exactly the longest package names.
+    pkg_rows = re.findall(r"^ {2}(.+?)\s+(\d+) tests\s{2,}(.+)$", text, re.M)
     if not pkg_rows and "run these packages" in text:
         raise RuntimeError(
             "topology_affected returned packages but no row matched the parser — "
@@ -514,11 +518,17 @@ def pkg_name(label: str) -> str:
     for go, a bare path for python/pytest, or just the directory when no command
     could be inferred. All of them reduce to the same package path for reporting.
     """
-    label = label.split("  ")[0].strip()
     for note in (" (outside",):
         if note in label:
-            label = label.split(note)[0].strip()
-    return label.removeprefix("./").removesuffix("/...").removesuffix("/")
+            label = label.split(note)[0]
+    label = label.strip()
+    # Order matters: strip the recursive suffix BEFORE the "./" prefix, or
+    # "./..." (the whole tree, emitted when the change is at working_dir root)
+    # reduces to "..." — a package name matching nothing in `go list ./...`.
+    label = label.removesuffix("/...")
+    if label in ("./...", "."):
+        return "."
+    return label.removeprefix("./").removesuffix("/")
 
 
 def scenario_latency(s: Serve, runs: int) -> dict:

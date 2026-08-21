@@ -173,7 +173,19 @@
   emitted string is also validated against `run_task`'s own one-shell-safe-
   argument rule, so a directory containing a space — ordinary in the Python and
   JavaScript trees this indexes — is named rather than offered as a target the
-  receiving tool would refuse.
+  receiving tool would refuse. Python targets carry a `./` prefix for the same
+  class of reason: `targetPattern` admits `-` in any position, so an indexed
+  directory called `-x` would otherwise reach pytest **as the flag** `-x` — the
+  whole suite in exit-first mode, silently, instead of the one package meant.
+
+  A flag preceding the placeholder is only assumed to consume it when it might:
+  `--` (the canonical "what follows is positional" marker) and known boolean
+  flags do not. Without that, the most ordinary customisation of a shipped
+  default — adding `-race` or `-v` — silently disabled the feature and told the
+  caller the command could not be narrowed to a directory, while `run_task`
+  would have built a perfectly correct scoped argv. An UNKNOWN flag still counts
+  as consuming: a withheld target costs one manual edit, a misplaced one costs a
+  green run that tested nothing.
 
   The second half was broken even for Go, in this very repository. The tool
   emitted workspace-relative paths (`./plumb/internal/config/...`) while
@@ -273,6 +285,16 @@
   false truncation banner. A fixture-size guard now fails loudly rather than
   silently stopping detecting the regression, which is how the previous two
   tests in this area went blind.
+
+  That guard sizes the fixture from `max_results`, and getting it to read the
+  RIGHT `max_results` took two attempts. A duplicated literal was replaced by a
+  read of the tool's InputSchema — but the cap that actually shapes the answer
+  is a separate literal in `parseTopologyAffectedArgs`, so raising that one
+  while leaving the schema's documentation alone left the fixture measuring
+  against a number no longer in force, passing vacuously over a deliberately
+  restored regression. The two are now one constant, pinned together by
+  `TestSchemaDefaultMatchesRuntimeDefault`, which also checks the default is
+  actually applied rather than merely advertised.
 
 ### Changed
 
