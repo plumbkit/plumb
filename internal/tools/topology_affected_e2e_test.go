@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -340,5 +341,97 @@ func TestSessionStart_EditLaneWarning_AbsentForDesktop(t *testing.T) {
 	}
 	if strings.Contains(out, "File has not been read yet") {
 		t.Errorf("Desktop guidance must NOT carry the native-Edit warning:\n%s", out)
+	}
+}
+
+// TestTopologyAffected_ImportNameCollisionDoesNotDragInUnrelatedPackage is the
+// regression for the recall bug found while measuring docs/use-cases.md.
+//
+// SymbolsInFile returns every node in a file, including one per `import` — named
+// for the imported package ("strings"), not for anything the edit touched. Those
+// were seeded as traversal roots, and fromGraph then passed root.Name to
+// store.Impact, which re-resolved the bare name against the whole index with no
+// tie-break. So "strings" landed on an arbitrary import node in an unrelated
+// package, whose directory was then seeded for co-location, dumping that
+// package's entire test suite into the answer.
+//
+// Two symptoms, both asserted here, because fixing only the first would leave
+// the damaging one in place:
+//
+//   - precision: the unrelated package's tests must not appear at all;
+//   - recall: the changed file's OWN test must appear at the DEFAULT max_results.
+//     In the real index the flood pushed it past the 50-result cut entirely, so an
+//     agent running the suggested tests would not have run the one test that
+//     covered the function it just edited.
+func TestTopologyAffected_ImportNameCollisionDoesNotDragInUnrelatedPackage(t *testing.T) {
+	ws := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Directory names matter. The index is walked in path order, so "aaa" is
+	// indexed before "zzz" and its `import "strings"` node gets the lower rowid —
+	// which is exactly the row an unordered `LIMIT 1` returns. Name the unrelated
+	// package second and the buggy lookup happens to pick the right file, and this
+	// test passes against the bug it exists to catch.
+	//
+	// An unrelated package that also imports "strings", carrying enough tests to
+	// swamp the default result window if it is wrongly implicated.
+	write("aaa/noise.go",
+		"package aaa\n\nimport \"strings\"\n\nfunc Noise(s string) string { return strings.ToUpper(s) }\n")
+	var noise strings.Builder
+	noise.WriteString("package aaa\n\nimport \"testing\"\n")
+	for i := range 60 {
+		fmt.Fprintf(&noise, "\nfunc TestNoise%02d(t *testing.T) {}\n", i)
+	}
+	write("aaa/noise_test.go", noise.String())
+
+	// The changed package. It imports "strings", which is the collision seed.
+	write("zzz/target.go",
+		"package zzz\n\nimport \"strings\"\n\nfunc Target(s string) string { return strings.TrimSpace(s) }\n")
+	write("zzz/target_test.go",
+		"package zzz\n\nimport \"testing\"\n\nfunc TestTarget(t *testing.T) { _ = Target(\" x \") }\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		a, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "zzz/target.go"))
+		b, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "zzz/target_test.go"))
+		c, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "aaa/noise_test.go"))
+		if len(a) > 0 && len(b) > 0 && len(c) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	// No max_results: the default (50) is the shipped behaviour under test.
+	args, _ := json.Marshal(map[string]any{
+		"files": []string{filepath.Join(ws, "zzz/target.go")},
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(out, "TestNoise") {
+		t.Errorf("unrelated package implicated via the shared import name \"strings\";"+
+			" its tests must not appear:\n%s", out)
+	}
+	if !strings.Contains(out, "TestTarget") {
+		t.Errorf("the changed file's own co-located test must appear at the DEFAULT"+
+			" max_results, not only when the caller raises it:\n%s", out)
 	}
 }

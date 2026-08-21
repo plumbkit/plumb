@@ -7,6 +7,36 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Fixed
+
+- **`topology_affected` implicated unrelated packages and dropped the one test that
+  covered the change.** Roots were seeded from every node in the changed file,
+  including one per `import` — and an import node is named for the package it pulls
+  in (`strings`, `strconv`), not for anything the edit touched. `fromGraph` then
+  passed that bare name to `store.Impact`, which re-resolved it against the whole
+  index with `LIMIT 1` and no ordering. This workspace holds **636 nodes named
+  `strings`** and 57 named `stats`, so a one-line change to
+  `internal/stats/savings.go` reported `cmd/clientsmoke` and `internal/cli` as
+  affected — `cmd/clientsmoke` does not import `internal/stats` at all — and
+  returned **1,037 tests, 984 of them false positives, in a 119 KB response**.
+
+  The precision loss was the visible half. The damaging half was recall: because
+  every co-located hit ties at confidence 0.5, the `max_results: 50` default cut in
+  path order, and at the shipped default the answer contained **zero**
+  `internal/stats` tests. `TestFormatSavings` — the only test exercising the changed
+  function — was absent, so an agent running the suggested tests would not have run
+  it. Same change now returns **53 tests in 1 package, 6.2 KB** (19× smaller), and
+  `TestFormatSavings` is present at the default.
+
+  `fromGraph` now calls `store.ImpactFrom` with the node it already resolved
+  instead of round-tripping through a name, and `import`/`package`/`file` nodes are
+  no longer seeded as roots. Separately, `resolveNode` gained a deterministic
+  `ORDER BY` (exact qualified match, then real declarations over imports, then id):
+  it does not fix the above on its own, but it stops every other by-name caller —
+  `topology_explore`, `topology_impact` — from silently answering about an
+  arbitrary file, and from answering differently on the next call against an
+  unchanged index.
+
 ### Added
 
 - **`scripts/measure-use-cases.py` regenerates every number in `docs/use-cases.md`.**

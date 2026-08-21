@@ -120,6 +120,19 @@ func ResolveNodes(ctx context.Context, db *sql.DB, name string, hint NodeHint) (
 	return all, nil
 }
 
+// resolveNode maps a bare name to a single indexed node.
+//
+// The ORDER BY is load-bearing, not cosmetic. Names collide heavily — every file
+// that imports "strings" contributes a node named "strings", so one workspace
+// here holds 636 of them — and without an ordering SQLite is free to return any
+// matching row, silently answering about a different file on a later call.
+// Prefer, in order: an exact qualified-name match (the caller gave a fully
+// qualified name and means that node), then a real declaration over an import or
+// package clause, then the lowest id so repeated calls agree.
+//
+// Callers that already hold a resolved node must use the *From variants
+// (ExploreFrom, ImpactFrom) rather than round-tripping through a name here —
+// re-resolving discards the identity they already had.
 func resolveNode(db *sql.DB, name string) (Node, error) {
 	var n Node
 	row := db.QueryRow(
@@ -128,7 +141,10 @@ func resolveNode(db *sql.DB, name string) (Node, error) {
          FROM topology_nodes n
          JOIN topology_files f ON f.id = n.file_id
          WHERE n.name = ? OR n.qualified = ?
-         LIMIT 1`, name, name)
+         ORDER BY (n.qualified = ?) DESC,
+                  (n.kind NOT IN ('import','package','file')) DESC,
+                  n.id
+         LIMIT 1`, name, name, name)
 	if err := row.Scan(&n.ID, &n.FileID, &n.Kind, &n.Name, &n.Qualified, &n.Signature,
 		&n.StartLine, &n.EndLine, &n.Docstring, &n.Language, &n.Path); err == sql.ErrNoRows {
 		return n, fmt.Errorf("topology: symbol %q not found in index", name)

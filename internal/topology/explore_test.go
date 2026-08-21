@@ -40,6 +40,55 @@ func insertTestEdge(t *testing.T, db *sql.DB, fromID, toID int64, kind string) {
 	}
 }
 
+// TestResolveNode_PrefersDeclarationOverImport pins the tie-break in
+// resolveNode. Name collisions are the norm, not the exception: every file that
+// imports "strings" contributes a node named "strings", so a real workspace here
+// holds hundreds. Without an ORDER BY, SQLite may return any matching row, so a
+// by-name lookup silently answers about a different file — and can answer
+// differently on the next call against an unchanged index.
+//
+// The import node is inserted FIRST so it holds the lower rowid: that is exactly
+// the row an unordered `LIMIT 1` returns, so this test fails if the ordering is
+// dropped.
+func TestResolveNode_PrefersDeclarationOverImport(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "resolve.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	importFile := insertTestFile(t, db, "importer.go")
+	insertTestNode(t, db, importFile, "importer.go",
+		Node{Kind: KindImport, Name: "strings", Language: "go"})
+	declFile := insertTestFile(t, db, "declarer.go")
+	insertTestNode(t, db, declFile, "declarer.go",
+		Node{Kind: KindFunction, Name: "strings", Language: "go"})
+
+	got, err := resolveNode(db, "strings")
+	if err != nil {
+		t.Fatalf("resolveNode: %v", err)
+	}
+	if got.Kind != KindFunction {
+		t.Errorf("resolved kind = %q, want %q — an import node won the tie, so a"+
+			" by-name lookup is answering about the wrong file", got.Kind, KindFunction)
+	}
+	if got.Path != "declarer.go" {
+		t.Errorf("resolved path = %q, want declarer.go", got.Path)
+	}
+
+	// Determinism: repeated lookups against an unchanged index must agree.
+	for i := range 5 {
+		again, err := resolveNode(db, "strings")
+		if err != nil {
+			t.Fatalf("resolveNode (repeat %d): %v", i, err)
+		}
+		if again.ID != got.ID {
+			t.Fatalf("resolveNode is not deterministic: got id %d then %d", got.ID, again.ID)
+		}
+	}
+}
+
 func TestExplore_BFS_Depth2(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "exp.db"))

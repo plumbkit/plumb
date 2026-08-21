@@ -202,8 +202,8 @@ func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topology
 		if ferr != nil {
 			return nil, nil, fmt.Errorf("topology_affected: symbols in %q: %w", f, ferr)
 		}
-		if len(nodes) > 0 {
-			roots = append(roots, nodes...)
+		if decls := declarationRoots(nodes); len(decls) > 0 {
+			roots = append(roots, decls...)
 			continue
 		}
 		// Fallback: not found by exact path; try an FTS5 search and suffix-match.
@@ -219,6 +219,25 @@ func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topology
 		}
 	}
 	return roots, seedDirs, nil
+}
+
+// declarationRoots keeps only the nodes in a file that can actually change in a
+// way another file depends on. SymbolsInFile returns every indexed node,
+// including the file's `package` clause and one node per `import` — and an
+// import node is named for the package it pulls in ("strings", "strconv"), which
+// is both the most collision-prone name in any index and not a thing the edit
+// changed. Seeding traversal from those is what made an unrelated package look
+// affected.
+func declarationRoots(nodes []topology.Node) []topology.Node {
+	out := make([]topology.Node, 0, len(nodes))
+	for _, n := range nodes {
+		switch n.Kind {
+		case topology.KindImport, topology.KindPackage, topology.KindFile:
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, seedDirs []string, maxResults int) (*affectedResult, error) {
@@ -256,7 +275,15 @@ func (g *affectedGather) total() int { return len(g.dependents) + len(g.tests) }
 // with their incident-edge confidence, other nodes become affected files and
 // seed more directories for the co-location pass.
 func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
-	nb, err := g.store.Impact(ctx, root.Name, topology.ImpactOpts{
+	// ImpactFrom, not Impact: root is ALREADY resolved, and Impact would throw it
+	// away and re-resolve the bare name against the whole index. That lookup has no
+	// tie-break, so a common name lands on an arbitrary row in an unrelated package
+	// and drags its entire test suite in. This is not hypothetical: the index here
+	// holds 636 nodes named "strings" and 57 named "stats", so a change to
+	// internal/stats/savings.go reported cmd/clientsmoke and internal/cli as
+	// affected — 984 false positives — while pushing the one test that covers the
+	// changed function out of the default result window entirely.
+	nb, err := g.store.ImpactFrom(ctx, root, topology.ImpactOpts{
 		Depth:     2,
 		MaxNodes:  g.maxResults,
 		MaxBytes:  100000,
