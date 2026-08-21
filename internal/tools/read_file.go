@@ -132,6 +132,11 @@ func (t *ReadFile) WithWritesFor(fn func(ctx context.Context) *WriteTracker) *Re
 	return t
 }
 
+// ReadDeps implements readRecordingTool (see read_deps.go).
+func (t *ReadFile) ReadDeps() (tracker, readsFor, writes, client bool) {
+	return t.tracker != nil, t.readsFor != nil, t.writes != nil, t.clientNameFn != nil
+}
+
 // readTracker resolves the ReadTracker for this call: the per-logical-agent
 // tracker (readsFor) on a shared connection, else the connection-level tracker.
 func (t *ReadFile) readTracker(ctx context.Context) *ReadTracker {

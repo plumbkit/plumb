@@ -77,6 +77,14 @@ func (t *ReadSymbol) readTracker(ctx context.Context) *ReadTracker {
 	return t.tracker
 }
 
+// ReadDeps implements readRecordingTool (see read_deps.go). read_symbol has
+// no WriteTracker dependency — it never renders a concurrent-edit-on-read
+// warning — so writes is not applicable here and reports true rather than a
+// false wiring gap.
+func (t *ReadSymbol) ReadDeps() (tracker, readsFor, writes, client bool) {
+	return t.tracker != nil, t.readsFor != nil, true, t.clientNameFn != nil
+}
+
 // WithTopologyFallback wires the topology index so read_symbol can locate the
 // symbol from a fresh tree-sitter parse when the language server is
 // unavailable. Nil-safe; returns the tool for chaining.

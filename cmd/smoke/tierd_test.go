@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -324,6 +325,107 @@ func TestSmoke_StrictModeRejectsUnreadEdit(t *testing.T) {
 		"expected_mtime": mtime,
 	}, toolTimeout)
 	assertContains(t, "edit after read", editOut, "applied 1 edit")
+}
+
+// anyMtimeRe pulls an mtime field out of ANY read-recording tool's output.
+// read_file/read_symbol emit "# plumb-read mtime=<value> ..."; read_multiple_files
+// emits a per-file compact "# mtime=<value> ..." (see rmfCompactHeader) — this
+// covers both, unlike extractMtime's fixed "# plumb-read" prefix.
+var anyMtimeRe = regexp.MustCompile(`mtime=(\S+)`)
+
+// extractAnyMtime pulls the first mtime= field out of a read-recording tool's
+// output, whichever header shape it uses.
+func extractAnyMtime(t *testing.T, readOut string) string {
+	t.Helper()
+	m := anyMtimeRe.FindStringSubmatch(readOut)
+	if m == nil {
+		t.Fatal("extractAnyMtime: no mtime= field found in output:\n" + readOut)
+	}
+	return m[1]
+}
+
+// TestStrictReadRoundTrip is the PLAN-361 wiring guard, parameterized over
+// EVERY read-recording tool (read_file, read_symbol, read_multiple_files):
+// under [edits] strict mode, an edit_file on a never-read path is rejected,
+// then reading the SAME path via the tool under test opens the strict-mode
+// gate and the follow-up edit_file succeeds. A future read-shaped tool added
+// to the registry without its ReadTracker/readsFor wiring threaded through
+// (the read_multiple_files defect, PLAN-357) goes red here immediately, not
+// just in the unit-level TestToolWiringParity (internal/cli) — this exercises
+// the full wire protocol end to end, over a live daemon.
+func TestStrictReadRoundTrip(t *testing.T) {
+	plumbBin := buildPlumb(t)
+
+	const sampleGo = "package sample\n\n// Greet returns a greeting.\nfunc Greet() string {\n\treturn \"hi\"\n}\n"
+
+	cases := []struct {
+		tool      string
+		file      string
+		readArgs  func(path string) map[string]any
+		oldString string
+		newString string
+	}{
+		{
+			tool:      "read_file",
+			file:      "note.txt",
+			readArgs:  func(path string) map[string]any { return map[string]any{"file_path": path} },
+			oldString: "alpha",
+			newString: "beta",
+		},
+		{
+			tool: "read_symbol",
+			file: "sample.go",
+			readArgs: func(path string) map[string]any {
+				return map[string]any{"path": path, "name": "Greet"}
+			},
+			oldString: "hi",
+			newString: "hello",
+		},
+		{
+			tool: "read_multiple_files",
+			file: "note.txt",
+			readArgs: func(path string) map[string]any {
+				return map[string]any{"paths": []string{path}}
+			},
+			oldString: "alpha",
+			newString: "beta",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			fixture := makeBareGitFixture(t, map[string]string{
+				"note.txt":  "alpha\n",
+				"sample.go": sampleGo,
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), tierDTimeout)
+			defer cancel()
+
+			c := newMCPClient(t, ctx, plumbBin, mkTmpHome(t), fixture, "PLUMB_STRICT_EDITS=true")
+			c.initialize(t, fixture)
+			c.call(t, "session_start", map[string]any{"workspace": fixture}, toolTimeout)
+
+			path := filepath.Join(fixture, tc.file)
+
+			_, isErr := callResult(t, c, "edit_file", map[string]any{
+				"file_path": path,
+				"edits":     []map[string]any{{"old_string": tc.oldString, "new_string": tc.newString}},
+			}, toolTimeout)
+			if !isErr {
+				t.Fatalf("%s: strict mode did not reject an unread edit on %s", tc.tool, path)
+			}
+
+			readOut := c.call(t, tc.tool, tc.readArgs(path), toolTimeout)
+			mtime := extractAnyMtime(t, readOut)
+
+			editOut := c.call(t, "edit_file", map[string]any{
+				"file_path":      path,
+				"edits":          []map[string]any{{"old_string": tc.oldString, "new_string": tc.newString}},
+				"expected_mtime": mtime,
+			}, toolTimeout)
+			assertContains(t, tc.tool+": edit after read via "+tc.tool, editOut, "applied 1 edit")
+		})
+	}
 }
 
 // ─── transaction rollback ────────────────────────────────────────────────────
