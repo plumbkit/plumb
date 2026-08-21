@@ -269,3 +269,186 @@ func TestManagedBlock_TemplateSizeGuard(t *testing.T) {
 		t.Errorf("DefaultTemplate is %d lines, want <= %d — trim it, don't raise the budget", n, setup.MaxTemplateLines)
 	}
 }
+
+// TestManagedBlock_MalformedOrphanStartRefusesRatherThanCorrupt is the
+// regression for the destructive sequence: a user deletes just the end
+// marker, leaving an orphan start. A permissive scanner treats that as
+// "no block" and APPENDS a fresh one; the next Apply then pairs the orphan
+// start with the new block's end marker and silently deletes everything
+// between — including user prose that was never inside any block. Apply must
+// refuse instead.
+func TestManagedBlock_MalformedOrphanStartRefusesRatherThanCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+
+	if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Delete the end marker, leaving an orphan start, then add prose that must
+	// never be lost.
+	corrupted := strings.Replace(string(data), setup.EndMarker, "", 1)
+	corrupted += "\nImportant user prose that must never be lost.\n"
+	if err := os.WriteFile(path, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := setup.Apply(path, testBody, "v1"); err == nil {
+		t.Fatal("Apply on a file with an orphan start marker must refuse (error), not write")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != corrupted {
+		t.Errorf("Apply must not touch the file when refusing;\nwant:\n%s\ngot:\n%s", corrupted, after)
+	}
+	if !strings.Contains(string(after), "Important user prose that must never be lost.") {
+		t.Fatal("user prose was lost")
+	}
+
+	status, err := setup.Check(path, testBody, "v1")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status != setup.StatusMalformed {
+		t.Errorf("status = %v, want %v", status, setup.StatusMalformed)
+	}
+}
+
+// TestManagedBlock_MalformedOrphanEndRefuses covers the other half: an end
+// marker with no preceding start (the user deleted the start marker instead).
+func TestManagedBlock_MalformedOrphanEndRefuses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	content := "some user prose\n" + setup.EndMarker + "\nmore prose\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := setup.Check(path, testBody, "v1")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status != setup.StatusMalformed {
+		t.Errorf("status = %v, want %v", status, setup.StatusMalformed)
+	}
+	if _, err := setup.Apply(path, testBody, "v1"); err == nil {
+		t.Fatal("Apply on a file with an orphan end marker must refuse")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != content {
+		t.Errorf("Apply must not touch the file when refusing")
+	}
+}
+
+// TestManagedBlock_MalformedEndBeforeStartRefuses covers an end marker that
+// textually precedes any start marker in the file.
+func TestManagedBlock_MalformedEndBeforeStartRefuses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	content := setup.EndMarker + "\n" + setup.RenderBlock(testBody, "v1") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := setup.Check(path, testBody, "v1")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status != setup.StatusMalformed {
+		t.Errorf("status = %v, want %v", status, setup.StatusMalformed)
+	}
+	if _, err := setup.Apply(path, testBody, "v1"); err == nil {
+		t.Fatal("Apply must refuse when an end marker precedes any start")
+	}
+}
+
+// TestManagedBlock_QuotedMarkerInProseDoesNotGrowOnRepeatedApply is the
+// regression for a permissive scanner that latches onto the FIRST textual
+// occurrence of the marker prefix: a file that merely quotes the marker text
+// inline (documenting the mechanism, say) grew a fresh block on every single
+// Apply (measured 1→2→3→4). Marker recognition must be line-anchored — a
+// candidate only counts if the WHOLE line is exactly the marker — so an
+// inline quote is never mistaken for a real one.
+func TestManagedBlock_QuotedMarkerInProseDoesNotGrowOnRepeatedApply(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	userDoc := "# Docs\n\nOur markers look like `<!-- plumb:managed:start v1 -->` and `<!-- plumb:managed:end -->` inline.\n"
+	if err := os.WriteFile(path, []byte(userDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 4 {
+		if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+			t.Fatalf("Apply #%d: %v", i+1, err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Count LINE-EXACT markers, not the raw substring: the quoted mention in
+	// userDoc contains the marker text too, so a substring count would always
+	// read 2 even when the scanner correctly ignored the quote.
+	if n := countMarkerLines(string(data)); n != 1 {
+		t.Errorf("expected exactly one real start marker after 4 Applies, found %d:\n%s", n, data)
+	}
+	if !strings.Contains(string(data), userDoc) {
+		t.Errorf("user doc lost; got:\n%s", data)
+	}
+}
+
+// countMarkerLines counts lines that are EXACTLY a start-marker line —
+// mirroring the line-anchored matching scanBlocks applies — so a marker
+// quoted mid-sentence elsewhere in the file is not counted as a real one.
+func countMarkerLines(content string) int {
+	n := 0
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "<!-- plumb:managed:start ") && strings.HasSuffix(line, " -->") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestManagedBlock_MultipleWellFormedBlocksAreMalformed is the regression for
+// silent data loss when two well-formed blocks coexist (e.g. after a bug, or
+// a hand-merge): Apply used to rewrite only the first, leaving a stale second
+// block that Check never saw — it reported Current. Two blocks, however each
+// is individually well-formed, must be flagged rather than silently resolved.
+func TestManagedBlock_MultipleWellFormedBlocksAreMalformed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	one := setup.RenderBlock("body one", "v1")
+	two := setup.RenderBlock("body two", "v1")
+	content := one + "\n\nsome prose\n\n" + two + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := setup.Check(path, testBody, "v1")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status != setup.StatusMalformed {
+		t.Errorf("status = %v, want %v (two blocks present)", status, setup.StatusMalformed)
+	}
+
+	if _, err := setup.Apply(path, testBody, "v1"); err == nil {
+		t.Fatal("Apply must refuse when more than one managed block is present")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != content {
+		t.Errorf("Apply must not touch the file when refusing")
+	}
+}

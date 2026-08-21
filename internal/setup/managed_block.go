@@ -44,36 +44,120 @@ func RenderBlock(body, version string) string {
 	return startMarker(version) + "\n" + strings.TrimRight(body, "\n") + "\n" + EndMarker
 }
 
-// findBlock locates the first managed block in content and reports its byte
-// span [start, end) — start marker line through end marker line inclusive —
-// and the version recorded on its start marker. ok is false when no
-// well-formed block is present (no start marker, no matching end marker, or
-// a start marker line that doesn't close with startMarkerSuffix on the same
-// line — a hand-mangled marker is safer treated as absent than guessed at).
-func findBlock(content string) (start, end int, version string, ok bool) {
-	startIdx := strings.Index(content, startMarkerPrefix)
-	if startIdx == -1 {
-		return 0, 0, "", false
-	}
-	rest := content[startIdx:]
-	lineEnd := strings.IndexByte(rest, '\n')
-	var markerLine string
-	if lineEnd == -1 {
-		markerLine = rest
-	} else {
-		markerLine = rest[:lineEnd]
-	}
-	if !strings.HasSuffix(markerLine, startMarkerSuffix) {
-		return 0, 0, "", false
-	}
-	version = strings.TrimSuffix(strings.TrimPrefix(markerLine, startMarkerPrefix), startMarkerSuffix)
+// blockSpan describes one well-formed managed block found by scanBlocks: byte
+// offsets [start, end) covering its start-marker line through its end-marker
+// line (both inclusive of their own text, exclusive of a following newline),
+// and the version recorded on its start marker.
+type blockSpan struct {
+	start, end int
+	version    string
+}
 
-	endIdx := strings.Index(rest, EndMarker)
-	if endIdx == -1 {
-		return 0, 0, "", false
+// scanBlocks walks content line by line and reports every well-formed managed
+// block, plus whether the markers in content are malformed in any way: an
+// orphan start (no matching end before EOF or before another start), an end
+// with no preceding start, or more than one well-formed block.
+//
+// Malformed content is reported rather than guessed at, on purpose. An
+// earlier version of this scanner located just the FIRST textual occurrence
+// of the start-marker prefix and searched forward for the next end marker,
+// which fails open in two dangerous ways: (1) if the user deletes just the
+// end marker, the orphan start survives and the NEXT Apply pairs it with a
+// different block's end marker, silently deleting every byte between —
+// including user prose that was never inside any block; (2) a file that
+// merely quotes the marker text inline (documenting the mechanism, say) grows
+// a fresh block on every Apply, since the malformed candidate is invisible to
+// the scanner and "no block found" means append. A malformed or duplicated
+// block must stop Apply from writing at all, not make its best guess.
+//
+// A line only counts as a marker if it is EXACTLY the marker text with
+// nothing else on the line — this is what keeps a marker quoted mid-sentence
+// (“ `<!-- plumb:managed:start v1 -->` “ in a doc, say) from being mistaken
+// for a real one: such a line never starts at column zero with the marker
+// prefix.
+func scanBlocks(content string) (blocks []blockSpan, malformed bool) {
+	pos := 0
+	pendingStart := -1
+	pendingVersion := ""
+	for pos <= len(content) {
+		lineEnd := strings.IndexByte(content[pos:], '\n')
+		var line string
+		var nextPos int
+		last := lineEnd == -1
+		if last {
+			line = content[pos:]
+		} else {
+			line = content[pos : pos+lineEnd]
+			nextPos = pos + lineEnd + 1
+		}
+		trimmed := strings.TrimSuffix(line, "\r") // tolerate CRLF without treating it as content
+
+		switch trimmed {
+		case EndMarker:
+			if pendingStart == -1 {
+				malformed = true // end marker with no matching start
+			} else {
+				blocks = append(blocks, blockSpan{start: pendingStart, end: pos + len(trimmed), version: pendingVersion})
+				pendingStart = -1
+				pendingVersion = ""
+			}
+		default:
+			if version, ok := parseStartMarkerLine(trimmed); ok {
+				if pendingStart != -1 {
+					malformed = true // a second start before the first was closed
+				}
+				pendingStart = pos
+				pendingVersion = version
+			}
+		}
+
+		if last {
+			break
+		}
+		pos = nextPos
 	}
-	endIdx += startIdx + len(EndMarker)
-	return startIdx, endIdx, version, true
+	if pendingStart != -1 {
+		malformed = true // unterminated start at EOF
+	}
+	if len(blocks) > 1 {
+		malformed = true // more than one managed block — flagged rather than guessed at
+	}
+	return blocks, malformed
+}
+
+// parseStartMarkerLine reports whether line is EXACTLY a start marker line
+// — startMarkerPrefix, a version token, then startMarkerSuffix, and nothing
+// else — and returns the version. A version containing anything other than
+// letters, digits, '.', '_', or '-' fails the parse rather than being
+// accepted: it is either not a marker at all, or a hand-mangled one, and
+// either way scanBlocks must not treat it as a well-formed boundary.
+func parseStartMarkerLine(line string) (version string, ok bool) {
+	if !strings.HasPrefix(line, startMarkerPrefix) || !strings.HasSuffix(line, startMarkerSuffix) {
+		return "", false
+	}
+	version = line[len(startMarkerPrefix) : len(line)-len(startMarkerSuffix)]
+	if !isVersionToken(version) {
+		return "", false
+	}
+	return version, true
+}
+
+// isVersionToken reports whether v is a plausible version string: non-empty,
+// and built only from letters, digits, '.', '_', and '-'. It exists so a
+// version field can never smuggle marker-like syntax (a stray "-->", a space,
+// a newline) into what scanBlocks treats as a clean line match.
+func isVersionToken(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // resolveTarget follows path if it is a symlink (or a chain of them) and
@@ -103,6 +187,11 @@ const (
 	StatusModified
 	// StatusCurrent means the block matches the current template exactly.
 	StatusCurrent
+	// StatusMalformed means the file's markers cannot be trusted — an orphan
+	// start or end marker, or more than one well-formed block. Check reports
+	// it rather than guessing at Missing/Stale/Modified; Apply refuses to
+	// write at all (see scanBlocks).
+	StatusMalformed
 )
 
 // String names the status for CLI/log output.
@@ -116,6 +205,8 @@ func (s Status) String() string {
 		return "modified"
 	case StatusCurrent:
 		return "current"
+	case StatusMalformed:
+		return "malformed"
 	default:
 		return "unknown"
 	}
@@ -134,14 +225,18 @@ func Check(path, body, version string) (Status, error) {
 		return StatusMissing, fmt.Errorf("reading %s: %w", target, err)
 	}
 	content := string(data)
-	start, end, gotVersion, ok := findBlock(content)
-	if !ok {
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return StatusMalformed, nil
+	}
+	if len(blocks) == 0 {
 		return StatusMissing, nil
 	}
-	if gotVersion != version {
+	b := blocks[0]
+	if b.version != version {
 		return StatusStale, nil
 	}
-	if content[start:end] != RenderBlock(body, version) {
+	if content[b.start:b.end] != RenderBlock(body, version) {
 		return StatusModified, nil
 	}
 	return StatusCurrent, nil
@@ -186,7 +281,12 @@ func Apply(path, body, version string) (changed bool, err error) {
 	}
 
 	content := string(data)
-	next := mergeBlock(content, block)
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return false, fmt.Errorf("%s: managed block markers are malformed or duplicated (an orphan start/end marker, or more than one block) — refusing to write; repair the file by hand and re-run", target)
+	}
+
+	next := mergeBlock(content, blocks, block)
 	if next == content {
 		return false, nil
 	}
@@ -196,12 +296,14 @@ func Apply(path, body, version string) (changed bool, err error) {
 	return true, nil
 }
 
-// mergeBlock returns content with its managed block (if any) replaced by
-// block, or block appended — separated from any existing content by one
-// blank line — when content has none.
-func mergeBlock(content, block string) string {
-	if start, end, _, ok := findBlock(content); ok {
-		return content[:start] + block + content[end:]
+// mergeBlock returns content with its single well-formed managed block (if
+// any — blocks has at most one entry whenever scanBlocks reports
+// malformed=false) replaced by block, or block appended — separated from any
+// existing content by one blank line — when content has none.
+func mergeBlock(content string, blocks []blockSpan, block string) string {
+	if len(blocks) == 1 {
+		b := blocks[0]
+		return content[:b.start] + block + content[b.end:]
 	}
 	trimmed := strings.TrimRight(content, "\n")
 	if trimmed == "" {
