@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/setup"
 	"github.com/plumbkit/plumb/internal/tui"
@@ -146,45 +148,89 @@ func instructionCapableClients() []setupTarget {
 	return clients
 }
 
+// instructionFileGroup is every client whose project-level instruction path
+// resolves — via paths.Canonical — to the SAME real file. On this repo's own
+// layout, for instance, CLAUDE.md and GEMINI.md both symlink to AGENTS.md, so
+// claude-code/codex/gemini all name one file. Grouping is what keeps
+// --check/--sync from Check-ing or Apply-ing that one file three times over
+// (previously: three rows for one file) — and, looking ahead to per-client
+// templates, from three clients fighting over which template last wrote it.
+type instructionFileGroup struct {
+	names   []string
+	project string
+}
+
+// groupInstructionFiles resolves every instruction-capable client's
+// project-level path and groups the ones that name the same real file,
+// preserving first-seen order.
+func groupInstructionFiles() ([]instructionFileGroup, error) {
+	index := map[string]int{} // canonical path -> position in groups
+	var groups []instructionFileGroup
+	for _, target := range instructionCapableClients() {
+		project, _, err := target.instructionsFn()
+		if err != nil {
+			return nil, fmt.Errorf("locating %s instructions file: %w", target.name, err)
+		}
+		key := paths.Canonical(project)
+		if i, ok := index[key]; ok {
+			groups[i].names = append(groups[i].names, target.name)
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, instructionFileGroup{names: []string{target.name}, project: project})
+	}
+	return groups, nil
+}
+
 // runSetupInstructionsCheckOrSync implements `plumb setup --check` and
 // `plumb setup --sync`. Both inspect the same set of project-level
-// instruction files; --sync additionally rewrites any that drifted. Global
-// files are out of scope here — --check/--sync tracks the project a user is
-// standing in, matching Check/Apply everywhere else in this file rather than
-// silently touching a shared global file the user never asked about here.
+// instruction files — deduplicated by real file, see groupInstructionFiles —
+// and --sync additionally rewrites any that drifted. Global files are out of
+// scope here — --check/--sync tracks the project a user is standing in,
+// matching Check/Apply everywhere else in this file rather than silently
+// touching a shared global file the user never asked about here.
+//
+// A malformed file (setup.StatusMalformed, or an Apply refusal during
+// --sync) is reported IN ITS ROW rather than aborting the whole run: the
+// point of listing every client's file in one pass is to see all of them,
+// and one file needing hand repair should not hide the status of the rest.
 func runSetupInstructionsCheckOrSync(sync bool) error {
 	PrintLogo()
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "File", "Status")
 
+	groups, err := groupInstructionFiles()
+	if err != nil {
+		return err
+	}
+
 	drift := false
-	for _, target := range instructionCapableClients() {
-		project, _, err := target.instructionsFn()
-		if err != nil {
-			return fmt.Errorf("locating %s instructions file: %w", target.name, err)
-		}
+	for _, g := range groups {
+		label := strings.Join(g.names, " / ")
 
 		if sync {
-			changed, err := setup.Apply(project, setup.DefaultTemplate, setup.DefaultVersion)
+			changed, err := setup.Apply(g.project, setup.DefaultTemplate, setup.DefaultVersion)
 			if err != nil {
-				return fmt.Errorf("syncing %s: %w", target.name, err)
+				drift = true
+				t.Row(label, render.ShortenPath(g.project, setupPathWidth), "error: "+err.Error())
+				continue
 			}
 			status := "current"
 			if changed {
 				status = "synced"
 				drift = true
 			}
-			t.Row(target.name, render.ShortenPath(project, setupPathWidth), status)
+			t.Row(label, render.ShortenPath(g.project, setupPathWidth), status)
 			continue
 		}
 
-		status, err := setup.Check(project, setup.DefaultTemplate, setup.DefaultVersion)
+		status, err := setup.Check(g.project, setup.DefaultTemplate, setup.DefaultVersion)
 		if err != nil {
-			return fmt.Errorf("checking %s: %w", target.name, err)
+			return fmt.Errorf("checking %s: %w", label, err)
 		}
 		if status != setup.StatusCurrent {
 			drift = true
 		}
-		t.Row(target.name, render.ShortenPath(project, setupPathWidth), status.String())
+		t.Row(label, render.ShortenPath(g.project, setupPathWidth), status.String())
 	}
 
 	fmt.Println(t.Render())

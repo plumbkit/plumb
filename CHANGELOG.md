@@ -24,7 +24,15 @@
   rewrites them to the current template version — the same operation a bare re-register
   performs. The template is a client-agnostic placeholder (`internal/setup.DefaultTemplate`),
   size-guarded at 25 lines by `TestManagedBlock_TemplateSizeGuard`; per-client templates
-  (including Codex's apply_patch countermand) are PR 2.
+  (including Codex's apply_patch countermand) are PR 2. Marker scanning is line-anchored and
+  refuses to write on anything it can't trust — an orphan start/end marker, or more than one
+  well-formed block — rather than guessing: an earlier version latched onto the first textual
+  occurrence of the marker text, which both let an orphan start marker pair with an unrelated
+  block's end marker on a later run (silently deleting everything between, including prose
+  never inside any block) and let a file that merely quoted the marker string grow a fresh
+  block on every run. `--check`/`--sync` also dedupe by real file (`paths.Canonical`) before
+  reporting, so a symlinked layout like this repo's own (`CLAUDE.md`/`GEMINI.md` -> `AGENTS.md`)
+  shows one row, not three.
 
 - **`fail_on_new_errors`: a plumb edit can now REFUSE to break the build — PR 2
   of 2 (PLAN-362).** `edit_file`, `write_file` and `transaction_apply` take
