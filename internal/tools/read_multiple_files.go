@@ -53,7 +53,9 @@ func (*ReadMultipleFiles) Name() string                 { return "read_multiple_
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
 	return "Read up to 20 files in a single call. Each file's content is returned " +
-		"with a clear header showing the path and byte count. Errors for individual " +
+		"under a '### <path>' heading, followed by that file's own read_file header " +
+		"(mtime, sha256, line and byte counts) so it can be edited without re-reading. " +
+		"Errors for individual " +
 		"files are reported inline — one unreadable file doesn't block the others. " +
 		"Accepts absolute paths, file:// URIs, or workspace-relative paths. Binary files are detected and skipped. " +
 		"Each file is subject to the same 200 KiB cap as read_file."
@@ -102,18 +104,33 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 	}
 	wg.Wait()
 
+	// No separator rule. It used to be strings.Repeat("─", 60) — and U+2500 is 3
+	// bytes in UTF-8, so each rule cost 180 bytes. On a three-file read that was
+	// 543 bytes, 17% of the entire response, spent on decoration.
+	//
+	// The "### " heading is the boundary marker, and it is sufficient precisely
+	// because of the line-number gutter below it: file CONTENT containing a
+	// markdown heading renders as "  1\t### Subsection", indented and numbered,
+	// while a real boundary starts at column 0. That is what the rule was
+	// disambiguating, and the gutter already does it for free.
+	//
+	// The byte count is gone too, and its removal is a correctness fix rather than
+	// a saving: it printed len(r.content), the length of read_file's RENDERED
+	// output — header and gutters included — not the size of the file. A 677-byte
+	// file was announced as "933 bytes", one line above its own header stating
+	// chars=675 baseline=677. Three numbers, and the prominent one meant nothing.
+	// The provenance line carries the real figures.
 	var sb strings.Builder
-	sep := strings.Repeat("─", 60)
 	for i, p := range a.Paths {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
 		r := results[i]
 		if r.err != nil {
-			fmt.Fprintf(&sb, "%s\n### %s\n### ERROR: %s\n", sep, p, r.err.Error())
+			fmt.Fprintf(&sb, "### %s\n### ERROR: %s\n", p, r.err.Error())
 			continue
 		}
-		fmt.Fprintf(&sb, "%s\n### %s (%d bytes)\n\n", sep, p, len(r.content))
+		fmt.Fprintf(&sb, "### %s\n", p)
 		sb.WriteString(r.content)
 		sb.WriteString("\n")
 	}

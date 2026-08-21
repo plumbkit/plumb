@@ -54,6 +54,25 @@
 
 ### Fixed
 
+- **`read_multiple_files` spent 17% of its response on a decorative line, and
+  announced the wrong byte count.** Each file was preceded by
+  `strings.Repeat("─", 60)`; U+2500 is 3 bytes in UTF-8, so every rule cost 180
+  bytes — 543 bytes on a three-file read, out of 3,160. The `### <path>` heading
+  already marks the boundary, and marks it unambiguously *because* of the
+  line-number gutter: a markdown heading inside file content renders as
+  `  1\t### Subsection`, indented and numbered, while a real boundary starts at
+  column 0.
+
+  The `(N bytes)` beside each path is also gone, which is a correctness fix rather
+  than a saving. It printed `len(r.content)` — the length of `read_file`'s
+  *rendered* output, header and gutters included — not the size of the file. A
+  677-byte file was announced as “933 bytes” directly above its own header reading
+  `chars=675 baseline=677`: three numbers, and the prominent one meant nothing.
+  `Description()` promised “a clear header showing the path and byte count” and now
+  describes what is actually emitted. The per-file provenance header is kept in
+  full — its `sha256` is what lets a batch-read file be edited without a second
+  round trip.
+
 - **`topology_affected` implicated unrelated packages and dropped the one test that
   covered the change.** Roots were seeded from every node in the changed file,
   including one per `import` — and an import node is named for the package it pulls
