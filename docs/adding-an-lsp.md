@@ -136,15 +136,14 @@ capability advertised, while a pull answered in 0.8 s), so the push wording woul
 have left a demonstrably working server permanently unpromotable. What the rule
 is for is evidence from a real binary, not a particular notification.
 
-Real-binary validation was exercised on macOS only until 2026-08-21, when eight
-of the nine adapters were run against real binaries on Linux (CachyOS/Arch,
-kernel 7.1.8, x86_64, Go 1.26.5) as part of the #9 hardening pass: `gopls`,
-`pyright` 1.1.413, `rust-analyzer` 1.97.0, `sourcekit-lsp` (Swift 6.3.3),
+Real-binary validation was exercised on macOS only until 2026-08-21, when **all
+nine adapters** were run against real binaries on Linux (CachyOS/Arch, kernel
+7.1.8, x86_64, Go 1.26.5) as part of the #9 hardening pass: `gopls`, `pyright`
+1.1.413, `rust-analyzer` 1.97.0, `sourcekit-lsp` (Swift 6.3.3),
 `typescript-language-server` 6.0.0 with TypeScript 5.9.3, `zls` 0.16.0,
-`vscode-html-language-server` 4.10.0 and `jdtls` (on a Temurin 26 runtime) all
-pass their integration tests there. Only `kotlin-lsp` is unexercised on Linux —
-JetBrains ship it as a download rather than through a package manager, and it
-was not installed on the validation box. Windows is not yet supported.
+`vscode-html-language-server` 4.10.0, `jdtls` (on a Temurin 26 runtime) and
+`kotlin-lsp` all pass their integration tests there. Windows is not yet
+supported.
 
 Three toolchain traps that pass-count as adapter failures on Linux, all worth
 checking before filing a bug:
