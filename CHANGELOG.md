@@ -9,6 +9,23 @@
 
 ### Added
 
+- **Managed instruction block — the mechanism, PR 1 of 2 (PLAN-364).** `plumb setup <client>`
+  (codex, gemini, claude-code) now writes a small, versioned, idempotent block into the
+  client's project-level instruction file (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, per client
+  convention), bounded by `<!-- plumb:managed:start vN -->` / `<!-- plumb:managed:end -->`
+  markers — everything outside the markers is the user's and is never touched. Idempotent
+  (running setup again is a byte-for-byte no-op once current) and symlink-aware: a
+  `CLAUDE.md` that symlinks to `AGENTS.md` (this repo's own layout) is followed to its real
+  target, which is rewritten in place — the symlink itself is never replaced with a plain
+  file. `--global` additionally writes the client's global instruction file
+  (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`); without it only the
+  project file is touched. `plumb setup --check` reports drift (missing / stale version /
+  hand-edited) across this project's instruction files without writing; `plumb setup --sync`
+  rewrites them to the current template version — the same operation a bare re-register
+  performs. The template is a client-agnostic placeholder (`internal/setup.DefaultTemplate`),
+  size-guarded at 25 lines by `TestManagedBlock_TemplateSizeGuard`; per-client templates
+  (including Codex's apply_patch countermand) are PR 2.
+
 - **`fail_on_new_errors`: a plumb edit can now REFUSE to break the build — PR 2
   of 2 (PLAN-362).** `edit_file`, `write_file` and `transaction_apply` take
   `fail_on_new_errors: true` (implies `await_diagnostics`). When the language

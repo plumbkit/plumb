@@ -108,6 +108,10 @@ func init() {
 		"Register plumb in every installed client, and repoint existing registrations at this binary")
 	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
 		"Also register plumb in installed clients that don't have it yet")
+	setupCmd.Flags().BoolVar(&setupCheckFlag, "check", false,
+		"Report managed-instruction-block drift for this project's client instruction files, without writing")
+	setupCmd.Flags().BoolVar(&setupSyncFlag, "sync", false,
+		"Rewrite this project's client instruction files to the current managed-block template version")
 	// One-release bridge: --repair used to be the repoint-only sweep and
 	// --install-missing the only way to register missing clients; --all now does
 	// both. The old flags still parse but warn and stay out of help.
@@ -119,12 +123,15 @@ func init() {
 	registerUninstallFlag(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	registerUninstallFlag(setupClaudeCodeCmd)
+	registerGlobalInstructionsFlag(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupClaudeCodeCmd)
 	registerTargetFlags(setupGeminiCmd, geminiTarget)
 	registerUninstallFlag(setupGeminiCmd)
+	registerGlobalInstructionsFlag(setupGeminiCmd)
 	setupCmd.AddCommand(setupGeminiCmd)
 	registerTargetFlags(setupCodexCmd, codexTarget)
 	registerUninstallFlag(setupCodexCmd)
+	registerGlobalInstructionsFlag(setupCodexCmd)
 	setupCmd.AddCommand(setupCodexCmd)
 }
 
@@ -228,6 +235,7 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 	}
 
 	printSkillsDriftHint(claudeCodeTarget)
+	printInstructionsResult(claudeCodeTarget)
 	return nil
 }
 

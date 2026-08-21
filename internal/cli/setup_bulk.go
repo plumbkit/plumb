@@ -28,6 +28,9 @@ import (
 // and bare `plumb setup` (no flags) opens the interactive picker on a
 // terminal (setup_interactive.go) or prints help without one.
 func runSetupAll(cmd *cobra.Command, _ []string) error {
+	if setupCheckFlag || setupSyncFlag {
+		return runSetupInstructionsCheckOrSync(setupSyncFlag)
+	}
 	if !setupRepairFlag && !setupAllFlag && !setupInstallMissingFlag {
 		if stdinIsTerminal() && stdoutIsTerminal() {
 			return runSetupPicker()

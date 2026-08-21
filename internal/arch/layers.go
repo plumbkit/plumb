@@ -131,6 +131,7 @@ var Layers = map[string]Layer{
 	"internal/semantics":    LayerDomain,
 	"internal/monitor":      LayerDomain,
 	"internal/xcodebsp":     LayerDomain,
+	"internal/setup":        LayerDomain, // managed instruction block mechanism (markers, idempotent write, drift check)
 
 	// ── Intelligence ──
 	"internal/topology":                       LayerIntelligence,
