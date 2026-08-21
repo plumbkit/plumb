@@ -30,7 +30,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 *   When investigating logs, use `grep` or `tail` equivalents. Do not read the entire log file into context.
 
 ### 5. Batch Reads Within a Turn
-*   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. One tool result is cheaper than four headers, and Anthropic's prompt cache hits the next turn either way.
+*   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. Be honest with yourself about *why*: it is not a token discount — a batch response costs about the same bytes as the same reads done one at a time (`docs/use-cases.md` Scenario 8 measures the gap at single-digit bytes) — the win is one round trip instead of four, and one unreadable path doesn't abort the other three. Every file you batch-read is recorded exactly like `read_file`, so it stays editable under `[edits] strict` mode with no re-read.
 *   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `workspace_symbols` four times.
 
 ### 6. Don't Read to Confirm What `git` or `diagnostics` Already Tells You
@@ -81,7 +81,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 | Tool | Default cost | Cheaper alternative |
 |---|---|---|
 | `read_file` | ~1 token per byte (text) | Always pass `start_line` / `end_line` once you know them. Stream in slices, not full files. |
-| `read_multiple_files` | Sum of per-file costs | Prefer over many sequential `read_file` calls when you know the set up front. |
+| `read_multiple_files` | ~sum of per-file costs (no token discount) | Use for the round-trip and inline-error win when you know the set up front, not to save bytes. Pass `start_line`/`end_line`/`pattern` to slice or search every path uniformly, same as `read_file`. |
 | `find_files` | Linear in file count | Pair with a tight `pattern` glob. `**/*.go` is cheaper than dumping the whole tree. Add `max_depth` to stay shallow, and leave `include_details` off unless you need sizes/mtimes. |
 | `search_in_files` | Hit count × ~200 bytes per hit | Use a quoted phrase or anchored regex. Use `find_references` for symbol-shaped queries. |
 | `find_replace` | Doubles in dry-run + commit cycle | Run dry-run *only when* you don't trust your pattern. For deterministic patterns, go straight to commit. |

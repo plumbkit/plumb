@@ -66,6 +66,16 @@
 
 ### Fixed
 
+- **`docs/token-efficiency.md` no longer recommends `read_multiple_files` as a
+  caveat-free token saving (PLAN-357).** It claimed "one tool result is
+  cheaper than four headers" and listed the tool's default cost as "sum of
+  per-file costs" with no further note — both read as an unqualified discount
+  that never existed (see `docs/use-cases.md` Scenario 8, published as a
+  1.32× loss before this PR). Replaced with the honest contract: batching is
+  a round-trip win, not a token one, and — as of the rest of this PR — every
+  batch-read file is now editable under `[edits] strict` mode with no
+  re-read, which the old text didn't mention either.
+
 - **`read_multiple_files` no longer traps strict mode.** Its inner reader was a
   bare `&ReadFile{}` with no `ReadTracker` wired in, so `ReadTracker.Record`
   (nil-safe, silently a no-op) never ran — a batch read left every file
