@@ -133,11 +133,10 @@ func installSkillsFor(t setupTarget, dryRun bool) (dir string, results []skillRe
 		return dir, []skillResult{{name: t.name, err: err}}, skillCleanupReport{}
 	}
 	before := cloneSkillManifest(manifest)
-	seedBootstrapHashes(dir, before)
 
 	for _, skill := range embeddedSkills() {
 		action, err := installSkill(dir, skill.Name, skill.Content, manifest, dryRun)
-		if err == nil && action != skillActionConflict {
+		if err == nil && !strings.HasPrefix(action, skillActionConflict) {
 			action, err = installSkillReferences(dir, skill, action, dryRun)
 		}
 		results = append(results, skillResult{name: skill.Name, action: action, err: err})
@@ -237,14 +236,23 @@ func strongerSkillAction(a, b string) string {
 	return a
 }
 
-// skillActionConflict marks a skill whose on-disk SKILL.md was modified by
-// the user: its content hashes to neither the hash the manifest (or a
-// pre-manifest provenance marker) says plumb shipped last time, nor the hash
-// of what plumb is shipping now. Their file is left completely untouched;
-// the proposed content is written instead to a "<name>.plumb-new" sibling
-// FILE (not a directory) so it can never be mistaken for another skill
-// bundle by a client that scans the skills directory for one.
-const skillActionConflict = "conflict"
+// skillActionConflict marks a skill whose on-disk SKILL.md cannot be proven
+// to be plumb's own: either the manifest has no entry for it and content
+// differs from what is being shipped now (a manifest-less directory can
+// never prove ownership — see lastShippedHash), or the manifest's recorded
+// hash does not match. Their file is left completely untouched; the
+// proposed content is written instead to a "<name>.plumb-new" sibling FILE
+// (not a directory, so it can never be mistaken for another skill bundle by
+// a client that scans the skills directory for one) — UNLESS that file
+// already holds this exact proposal, in which case nothing is rewritten, so
+// re-running sync never clobbers a user's in-progress merge inside it. The
+// action string carries which case applies: exactly skillActionConflict
+// when the proposal was written or changed this run, or
+// skillActionConflict+conflictUnchangedSuffix when it already matched.
+const (
+	skillActionConflict     = "conflict"
+	conflictUnchangedSuffix = " (proposal unchanged)"
+)
 
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating the
 // directory if needed. Returns "installed", "updated", "unchanged", or
@@ -292,22 +300,34 @@ func installSkill(skillsDir, name, content string, manifest *skillManifest, dryR
 		return write("unchanged")
 	case readErr == nil:
 		diskHash := hashSkillContent(stripSkillMarker(string(existing)))
-		if oldHash, known := lastShippedHash(manifest, name, string(existing)); known && diskHash == oldHash {
+		if oldHash, known := lastShippedHash(manifest, name); known && diskHash == oldHash {
 			return write("updated")
 		}
-		if dryRun {
-			return skillActionConflict, nil
-		}
-		newFile := filepath.Join(skillsDir, name+".plumb-new")
-		if err := fsync.AtomicWrite(newFile, []byte(stamped), setupWriteOptions(".plumb_skill_new_*.md")); err != nil {
-			return "", fmt.Errorf("writing %s: %w", newFile, err)
-		}
-		return skillActionConflict, nil
+		return writeConflictProposal(skillsDir, name, stamped, dryRun)
 	case os.IsNotExist(readErr):
 		return write("installed")
 	default:
 		return "", fmt.Errorf("reading %s: %w", dst, readErr)
 	}
+}
+
+// writeConflictProposal reports name as a conflict and, unless dryRun,
+// writes stamped to "<name>.plumb-new" — but only when that would actually
+// change the file's content, so a re-run never clobbers a user's
+// in-progress merge sitting inside it. See skillActionConflict for the two
+// action strings this can return.
+func writeConflictProposal(skillsDir, name, stamped string, dryRun bool) (string, error) {
+	newFile := filepath.Join(skillsDir, name+".plumb-new")
+	if existing, err := os.ReadFile(newFile); err == nil && string(existing) == stamped {
+		return skillActionConflict + conflictUnchangedSuffix, nil
+	}
+	if dryRun {
+		return skillActionConflict, nil
+	}
+	if err := fsync.AtomicWrite(newFile, []byte(stamped), setupWriteOptions(".plumb_skill_new_*.md")); err != nil {
+		return "", fmt.Errorf("writing %s: %w", newFile, err)
+	}
+	return skillActionConflict, nil
 }
 
 // skillMarkerPrefix opens plumb's provenance marker — one HTML comment line,

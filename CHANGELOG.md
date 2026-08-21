@@ -47,18 +47,23 @@
   skills directory now carries `.plumb/skills-manifest.json`, a hash+version
   ledger sync uses to tell "plumb's own content changed between versions"
   from "the user edited this file": a skill whose disk content still matches
-  what plumb last shipped is replaced in place with no backup at all; a
-  skill matching neither the last-shipped hash nor the newly-shipped one is
-  left completely untouched, with the proposed content written instead to a
-  `<name>.plumb-new` file (never a directory, so it can't be mistaken for
-  another skill bundle) for manual review. A client synced before this
-  manifest existed falls back to the file's own provenance marker as an
-  implicit prior hash, so turning this on never manufactures a false
-  "user modified this" conflict for an already-installed skill. Sync also
-  now cleans up the directory-level `<name>.<timestamp>.bak` backups a prior
-  overwrite-and-backup policy left beside the skill directories — deleting
-  only the ones whose content hashes to a shipped hash on record, and
-  listing any others for manual review rather than guessing. New
+  the hash the manifest recorded is replaced in place with no backup at all;
+  anything else is left completely untouched, with the proposed content
+  written instead to a `<name>.plumb-new` file (never a directory, so it
+  can't be mistaken for another skill bundle) for manual review — rewritten
+  only when the proposal itself changes, so a re-run never clobbers a user's
+  in-progress merge inside it. **A skills directory with no manifest entry
+  yet is always the untouched/review case, never a legitimate update:** it
+  cannot be proven to be plumb's own (there is no historical shipped content
+  to check a differing file against for any version but the one currently
+  running, and that version's content is, by definition, the "new" side of
+  the very comparison), so the manifest is the only source of truth sync
+  ever treats as authoritative for "what plumb shipped last time" — a
+  provenance marker alone is never enough. Sync also cleans up the
+  directory-level `<name>.<timestamp>.bak` backups a prior overwrite-and-
+  backup policy left beside the skill directories, deleting only the ones
+  whose content hashes to a shipped hash actually on record in the manifest
+  and listing any others for manual review rather than guessing. New
   `plumb skills sync --check` lists every action (including which backups
   would be cleaned up) without writing anything.
 

@@ -189,8 +189,13 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			tally.current++
 		case r.action == "installed":
 			tally.installed++
-		case r.action == skillActionConflict:
-			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (edited by user — review and merge)"
+		case strings.HasPrefix(r.action, skillActionConflict):
+			status = skillActionConflict
+			word := "proposal updated"
+			if strings.HasSuffix(r.action, conflictUnchangedSuffix) {
+				word = "proposal unchanged"
+			}
+			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (edited by user — " + word + ", review and merge)"
 			tally.conflict++
 		default:
 			tally.updated++
