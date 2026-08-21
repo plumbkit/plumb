@@ -1,10 +1,10 @@
 package tools
 
 // post_write_diag_label_test.go — PLAN-362 PR1: every non-empty post-write
-// diagnostics block carries one of two fixed, machine-parseable labels so an
+// diagnostics block carries one of three fixed, machine-parseable labels so an
 // agent (or a script) can tell a genuine post-write re-analysis from a
-// pre-write snapshot without parsing prose. Never print diagnostic content
-// unlabelled.
+// pre-write snapshot, or an outright failed pull, without parsing prose.
+// Never print diagnostic content unlabelled.
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 const (
 	snapshotLabelLine      = "\n[diagnostics: pre-write snapshot — not yet re-analysed]"
 	authoritativeLabelLine = "\n[diagnostics: authoritative post-write pass]"
+	unverifiedLabelLine    = "\n[diagnostics: unverified — post-write pull failed]"
 )
 
 // TestPostWriteDiagLabel_StalePathCarriesSnapshotLabel covers acceptance case
@@ -90,15 +91,33 @@ func TestPostWriteDiagLabel_FreshCleanPassCarriesAuthoritativeLabel(t *testing.T
 }
 
 // TestPostWriteDiagLabel_StaleEmptyNeverLabelled covers the case where the
-// wait times out AND there is nothing cached to (mis)report: no content, so
-// no label either — labels only ever accompany real diagnostic content.
+// wait times out AND there is nothing cached to (mis)report.
 func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
-	src := newStubDiag() // never set — nothing cached
-	d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
-	out := d.postWriteDiagnostics("file:///foo.go", "before", "after", false, nil)
-	if out != "" {
-		t.Fatalf("nothing to report must render nothing, got:\n%q", out)
-	}
+	t.Run("awaitFresh=false: nothing to report renders nothing", func(t *testing.T) {
+		src := newStubDiag() // never set — nothing cached
+		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", false, nil)
+		if out != "" {
+			t.Fatalf("nothing to report must render nothing, got:\n%q", out)
+		}
+	})
+
+	// An agent that explicitly asked "did my change compile?" via
+	// await_diagnostics:true must never get total silence just because
+	// nothing happened to be cached before the wait — that reads as "no
+	// answer" rather than "not confirmed". The wait timing out with an empty
+	// cache still gets the snapshot label plus an explicit not-confirmed line.
+	t.Run("awaitFresh=true: timeout still surfaces the labelled snapshot line", func(t *testing.T) {
+		src := newStubDiag() // never set — nothing cached
+		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", true, nil)
+		if !strings.HasPrefix(out, snapshotLabelLine) {
+			t.Fatalf("expected the block to start with the fixed snapshot label, got:\n%q", out)
+		}
+		if !strings.Contains(out, "not re-analysed within the wait") {
+			t.Fatalf("expected an explicit not-confirmed line, got:\n%q", out)
+		}
+	})
 }
 
 // TestPostWriteDiagLabel_PullModeAlwaysAuthoritative covers the pull/hybrid
@@ -129,9 +148,10 @@ func TestPostWriteDiagLabel_PullModeAlwaysAuthoritative(t *testing.T) {
 }
 
 // TestPostWriteDiagLabel_PullFailureNeverAuthoritative covers the pull
-// failure path: it is neither of the two labelled states (it is an explicit
-// "state unverified" failure, already unambiguous), so it must never be
-// dressed up as authoritative.
+// failure path: it is its own third labelled state — never dressed up as
+// authoritative, and never left unlabelled (a bare "state unverified" prose
+// line, with no fixed prefix, would be a third UNlabelled state and break the
+// "exactly N fixed labels" machine-parseable contract).
 func TestPostWriteDiagLabel_PullFailureNeverAuthoritative(t *testing.T) {
 	inv := newPullInv(t)
 	client := &pullModeLSP{mode: "pull"}
@@ -143,8 +163,14 @@ func TestPostWriteDiagLabel_PullFailureNeverAuthoritative(t *testing.T) {
 	baseline := d.capturePreWriteBaseline(pwURI)
 	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
 
+	if !strings.HasPrefix(out, unverifiedLabelLine) {
+		t.Fatalf("expected the block to start with the fixed unverified label, got:\n%q", out)
+	}
 	if strings.Contains(out, authoritativeLabelLine) {
 		t.Fatalf("a failed pull must never carry the authoritative label:\n%q", out)
+	}
+	if strings.Contains(out, snapshotLabelLine) {
+		t.Fatalf("a failed pull must never carry the snapshot label either — it is its own state:\n%q", out)
 	}
 	if !strings.Contains(out, "unverified") {
 		t.Fatalf("expected the explicit unverified note, got:\n%q", out)

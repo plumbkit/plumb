@@ -15,23 +15,33 @@
   write) used to print with the same confidence as a genuinely fresh result —
   the "#1 recurring complaint" in dogfooding, because "agents learned to
   ignore the block, which defeats its purpose." Every non-empty post-write
-  diagnostics block is now prefixed with one of exactly two fixed labels:
+  diagnostics block is now prefixed with one of exactly three fixed labels:
   `[diagnostics: authoritative post-write pass]` when the language server
   confirmed re-analysis after this write (an explicit `await_diagnostics:true`
   wait, an incidentally fast default-window publish, or — always — a
-  successful pull/hybrid-mode pull, which is synchronous with the write), or
+  successful pull/hybrid-mode pull, which is synchronous with the write);
   `[diagnostics: pre-write snapshot — not yet re-analysed]` when no publish
-  arrived within the fast adaptive window, so the data may predate the edit.
-  A block with nothing to report still renders nothing (no behaviour change
-  beyond labelling). The existing `INCOMPLETE` warm-up labelling on the
-  standalone `diagnostics()` tool is untouched — a separate concern.
-  `postWriteDiagLabel` (`internal/tools/post_write_diag.go`) is the one place
-  the two label strings are defined; `TestPostWriteDiagLabel_*`
-  (`internal/tools/post_write_diag_label_test.go`) pins both the push-mode
-  fresh/stale split and the pull-mode always-authoritative behaviour.
-  `transaction_apply` has no post-write diagnostics yet, so it is out of
-  scope here; PR 2 (rollback semantics, `fail_on_new_errors`) adds that
-  support and inherits the same labelling.
+  arrived within the fast adaptive window, so the data may predate the edit —
+  including the `await_diagnostics:true` timeout case where nothing was
+  cached either, which now says so explicitly instead of returning silence to
+  a caller who asked "did my change compile?"; or
+  `[diagnostics: unverified — post-write pull failed]` when a pull/hybrid-mode
+  post-write pull errors outright, so there is neither a fresh nor a
+  pre-write answer to give. A block with nothing to report at all still
+  renders nothing (no behaviour change beyond labelling). The existing
+  `INCOMPLETE` warm-up labelling on the standalone `diagnostics()` tool is
+  untouched — a separate concern. `postWriteDiagLabel` and the three label
+  constants (`internal/tools/post_write_diag.go`) are the one place the
+  vocabulary is defined; `TestPostWriteDiagLabel_*`
+  (`internal/tools/post_write_diag_label_test.go`) pins the push-mode
+  fresh/stale split (including the timeout-with-nothing-cached case), the
+  pull-mode always-authoritative behaviour, and the pull-failure label as its
+  own third state. The `await_diagnostics` parameter description on
+  `edit_file`/`write_file` now states the label contract instead of promising
+  an unconditional "authoritative post-write result". `transaction_apply` has
+  no post-write diagnostics yet, so it is out of scope here; PR 2 (rollback
+  semantics, `fail_on_new_errors`) adds that support and inherits the same
+  labelling.
 
 - **Registration-parity and wiring tests make the `read_multiple_files`
   tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing

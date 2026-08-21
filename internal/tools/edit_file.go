@@ -86,7 +86,7 @@ var editFileSchema = json.RawMessage(`{
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file and report an authoritative post-write result — a clean fresh pass is stated explicitly. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
+      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file. The result is always labelled — authoritative when re-analysis was confirmed (a clean pass is stated explicitly), a pre-write snapshot if the wait times out unconfirmed, or unverified if a pull-mode check itself failed — never presented with false confidence. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
     },
     "reconcile": {
       "type": "boolean",
