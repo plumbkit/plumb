@@ -38,6 +38,11 @@ var sessionStartSchema = json.RawMessage(`{
     "purpose": {
       "type": "string",
       "description": "Optional human-readable tag describing what this session is for (e.g. 'deploy-fix', 'feature-auth'). Surfaced in the TUI session list, daemon_info, and workspace_sessions so an operator can tell concurrent sessions apart. Allowed characters: letters, digits, and hyphens; max 32 characters. An invalid value is rejected with a clear error."
+    },
+    "detail": {
+      "type": "string",
+      "enum": ["brief", "full"],
+      "description": "Orientation packet size. 'brief' (≤1.5 KB) returns workspace path, language, branch, a one-line git policy, diagnostics and active-peer COUNTS, memory NAMES only (no descriptions/sizes), and the edit-lane rule where it applies — cheap re-orientation for a subagent that does not need the full packet. 'full' returns the complete packet documented above. Defaults to 'full', except this default flips to 'brief' automatically when the supplied session_id was already seen by this daemon within the last 24h (a resumed conversation); an explicit value always wins over the automatic default."
     }
   },
   "additionalProperties": false
@@ -307,7 +312,9 @@ func (*SessionStart) Description() string {
 		"the live git tool policy (whether commits/destructive/push are enabled), " +
 		"and any active LSP errors/warnings. If no workspace is resolved yet, pass an " +
 		"absolute `workspace` to pin it — clients like Claude Desktop do not report the " +
-		"folder automatically. Idempotent — safe to call multiple times."
+		"folder automatically. A subagent that just needs cheap re-orientation should pass " +
+		"`detail: \"brief\"` for a ≤1.5 KB summary instead of the full packet. " +
+		"Idempotent — safe to call multiple times."
 }
 
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
@@ -320,22 +327,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
-	// linked reports whether the caller passed a non-empty session_id, the
-	// external id that makes this session addressable by name from plumb mail
-	// and the peer wake hook. It is derived from the raw input regardless of
-	// whether an externalIDFn is wired; the accessor is consulted only when it
-	// is non-nil.
-	var inheritedName string
-	linked := false
-	var a struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(raw, &a); err == nil && a.SessionID != "" {
-		linked = true
-		if t.externalIDFn != nil {
-			inheritedName = t.externalIDFn(a.SessionID)
-		}
-	}
+	inheritedName, linked := t.resolveLinkage(raw)
 	lang, lspKey := detectLanguageInfo(ws)
 	// A forced/attached primary may have no root marker (e.g. swift pinned on an
 	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer
@@ -352,6 +344,19 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		if keys := t.lspLangsFn(); len(keys) > 1 {
 			lang = joinLanguageLabels(keys)
 		}
+	}
+	// autoBrief mirrors the exact signal WithExternalID already computes: a
+	// non-empty inheritedName means session.FindEnded matched this session_id
+	// against a session this daemon saw within the last 24h, and the rename
+	// succeeded — i.e. this call is (very likely) a resumed conversation
+	// re-orienting itself, not a first bootstrap. First contact (no session_id,
+	// or no match) always defaults to full.
+	detail, err := resolveDetail(raw, linked && inheritedName != "")
+	if err != nil {
+		return "", err
+	}
+	if detail == "brief" {
+		return t.executeBrief(ws, lang), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
@@ -402,6 +407,25 @@ func (t *SessionStart) applyPurpose(raw json.RawMessage) error {
 		t.purposeFn(purpose)
 	}
 	return nil
+}
+
+// resolveLinkage reports whether the caller passed a non-empty session_id
+// (linked) — the external id that makes this session addressable by name from
+// plumb mail and the peer wake hook — and, when so, the name inherited from a
+// previous session with the same external id (see WithExternalID). linked is
+// derived from the raw input regardless of whether an externalIDFn is wired;
+// the accessor is consulted only when it is non-nil.
+func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string, linked bool) {
+	var a struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil || a.SessionID == "" {
+		return "", false
+	}
+	if t.externalIDFn != nil {
+		inheritedName = t.externalIDFn(a.SessionID)
+	}
+	return inheritedName, true
 }
 
 // resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is

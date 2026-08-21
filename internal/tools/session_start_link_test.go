@@ -57,7 +57,11 @@ func TestSessionStart_UnlinkedNotice(t *testing.T) {
 	t.Run("session_id present, externalIDFn returns name", func(t *testing.T) {
 		tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil).
 			WithExternalID(func(string) string { return "alice" })
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"abc-123"}`))
+		// An inherited name is exactly the auto-brief signal (PLAN-356), so this
+		// scenario now defaults to the brief packet; ask for detail:"full"
+		// explicitly since the identity-block behaviour under test—does the
+		// resumed name render—is a full-packet concern.
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"abc-123","detail":"full"}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
