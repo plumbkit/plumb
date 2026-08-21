@@ -7,6 +7,51 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Added
+
+- **The topology index now has cross-file edges — it had none at all.** Extractors
+  run per file and emit edges as indices into that file's own node slice, so
+  nothing they produce can leave the file. Measured on this repo before the
+  change: 14,779 `contains` + 8,002 `calls` + 6,759 `imports` edges, and **zero**
+  crossing a file boundary; exactly **one** test node in 4,321 had an edge to a
+  non-test file. Since a Go test never lives in the file it exercises, the
+  "dependency edge" arm of `topology_affected` could not fire for test selection,
+  and the tool was in practice a same-directory test finder wearing a
+  dependency-graph description.
+
+  A post-index pass (`linkImports`) now resolves `import` nodes to the package
+  they name and links them, producing **51,335 cross-file edges** here. It runs
+  per queue drain rather than per file, because an import can only be resolved
+  once its target package is indexed, and it rebuilds its own edges wholesale so
+  re-indexing one file cannot leave a stale half-graph. Matching is by longest
+  path suffix rather than go.mod parsing, so it generalises past Go; a minimum of
+  two path segments keeps `import "strings"` from binding to a local `strings/`
+  directory, which would recreate the false-dependency bug as real edges.
+
+  Concretely: a change to `internal/stats/savings.go` now reaches `internal/tools`,
+  `internal/cli`, `internal/tui` and `internal/web` — the four packages that
+  actually import it, none of which the tool could previously find.
+
+### Changed
+
+- **`topology_affected` answers with packages to run, not a wall of test names.**
+  Cross-file edges made the honest answer much larger: the same one-line change
+  went to 2,546 tests across 5 packages, a **298 KB** response in which every row
+  carried one of two identical labels. The output is now aggregated per package —
+  a runnable `go test ./pkg/...` line, its test count, and why it is implicated
+  (`changed package` / `imports the changed package`) — with individual test names
+  kept only for the package the change landed in, where they are actionable.
+  **3.9 KB instead of 298 KB**, covering strictly more ground than the 119 KB the
+  tool returned before any of this work.
+
+  `max_results` now bounds **packages** rather than test rows, and the changed
+  package always sorts first, so a cap can no longer drop the very package the
+  edit landed in. Co-location also no longer returns early when the graph pass
+  filled the budget — that turned a size cap into a recall cliff, since
+  co-location is the only arm that can name a test at all. The tool description
+  was rewritten to match: it previously promised dependency-edge traversal that,
+  for Go, could never fire.
+
 ### Fixed
 
 - **`topology_affected` implicated unrelated packages and dropped the one test that

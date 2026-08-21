@@ -70,12 +70,15 @@ func (*TopologyAffected) Name() string                 { return "topology_affect
 func (*TopologyAffected) InputSchema() json.RawMessage { return topologyAffectedSchema }
 func (*TopologyAffected) Description() string {
 	return "After you change code, ask this which tests to run instead of running the whole " +
-		"suite. Given changed files or symbols, it returns the " +
-		"likely affected files and tests by traversing inward dependency edges AND by " +
-		"co-location (tests in the same directory as a changed/affected file — which catches " +
-		"sibling test files the call graph alone misses). " +
-		"Results are heuristic and biased toward recall (a missed test is worse than an extra); " +
-		"every test carries a confidence and the reason it was flagged. " +
+		"suite. Given changed files or symbols, it answers with PACKAGES to run — a ready " +
+		"`go test ./pkg/...` line each, with the test count and why the package is " +
+		"implicated — plus the individual test names in the package the change landed in. " +
+		"A package is reached either by containing the change, or by importing a package " +
+		"that does (cross-package import edges). Within a reached package every test is " +
+		"counted, because co-location cannot tell which of them exercise the change: that " +
+		"is the recall bias, and it is deliberate — a missed test is worse than an extra. " +
+		"Results are heuristic; verify before relying. max_results bounds the number of " +
+		"PACKAGES, and the changed package is always listed first so a cap cannot drop it. " +
 		"Returns a clear message when topology is disabled."
 }
 
@@ -90,7 +93,82 @@ type topologyAffectedArgs struct {
 type affectedTest struct {
 	Node       topology.Node
 	Confidence float64
-	Reason     string // "dependency edge" or "co-located"
+	Reason     string // "dependency edge", "changed package", "imports the changed package"
+}
+
+// Reasons a directory is worth scanning for tests. They are ordered by how
+// directly the change reaches them, which is also the order a caller should run
+// them in.
+const (
+	reasonChanged  = "changed package"
+	reasonImporter = "imports the changed package"
+	reasonGraph    = "dependency edge"
+)
+
+// maxNamedTests caps the individually-named tests in the changed package. Past
+// a few dozen the list stops informing a decision and starts costing context.
+const maxNamedTests = 40
+
+// affectedPackage is the unit a caller acts on: `go test` takes a package path,
+// not a test name.
+type affectedPackage struct {
+	Dir    string
+	Count  int
+	Reason string
+	Tests  []affectedTest
+}
+
+// aggregateTestsByPackage groups tests by directory, changed packages first,
+// then by descending test count so the biggest run is visible.
+func aggregateTestsByPackage(tests []affectedTest) []affectedPackage {
+	byDir := map[string]*affectedPackage{}
+	order := []string{}
+	for _, ts := range tests {
+		d := filepath.Dir(ts.Node.Path)
+		p, ok := byDir[d]
+		if !ok {
+			p = &affectedPackage{Dir: d, Reason: ts.Reason}
+			byDir[d] = p
+			order = append(order, d)
+		}
+		// A package that contains the change outranks one that merely imports it,
+		// whichever order the tests happened to arrive in.
+		if ts.Reason == reasonChanged {
+			p.Reason = reasonChanged
+		}
+		p.Count++
+		p.Tests = append(p.Tests, ts)
+	}
+	out := make([]affectedPackage, 0, len(order))
+	for _, d := range order {
+		out = append(out, *byDir[d])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].Reason == reasonChanged) != (out[j].Reason == reasonChanged) {
+			return out[i].Reason == reasonChanged
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+// goTestTarget renders a directory as a runnable package pattern. A test at the
+// workspace root has directory ".", which would otherwise print "./././...".
+func goTestTarget(dir string) string {
+	if dir == "." || dir == "" {
+		return "go test ./..."
+	}
+	return "go test ./" + dir + "/..."
+}
+
+// firstChangedPackage returns the package the edit actually landed in, if any.
+func firstChangedPackage(pkgs []affectedPackage) *affectedPackage {
+	for i := range pkgs {
+		if pkgs[i].Reason == reasonChanged {
+			return &pkgs[i]
+		}
+	}
+	return nil
 }
 
 // affectedResult collects dependents and likely-affected tests.
@@ -241,12 +319,12 @@ func declarationRoots(nodes []topology.Node) []topology.Node {
 }
 
 func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, seedDirs []string, maxResults int) (*affectedResult, error) {
-	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]bool{}}
+	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]string{}}
 	for _, d := range seedDirs {
-		g.dirs[d] = true
+		g.dirs[d] = reasonChanged
 	}
 	for _, root := range roots {
-		g.dirs[filepath.Dir(root.Path)] = true
+		g.dirs[filepath.Dir(root.Path)] = reasonChanged
 		g.fromGraph(ctx, root)
 		if g.truncated {
 			break
@@ -263,7 +341,7 @@ type affectedGather struct {
 	store      *topology.Store
 	maxResults int
 	seen       map[int64]bool
-	dirs       map[string]bool
+	dirs       map[string]string // directory -> why it is implicated
 	dependents []topology.Node
 	tests      []affectedTest
 	truncated  bool
@@ -303,10 +381,15 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 			if c == 0 {
 				c = graphEdgeBaseline
 			}
-			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: "dependency edge"})
+			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reasonGraph})
 		} else {
 			g.dependents = append(g.dependents, n)
-			g.dirs[filepath.Dir(n.Path)] = true
+			// Do not demote a directory that is already the changed one: a package
+			// that both contains the edit and is reached by an edge is still where
+			// the change actually happened.
+			if d := filepath.Dir(n.Path); g.dirs[d] == "" {
+				g.dirs[d] = reasonImporter
+			}
 		}
 		if g.total() >= g.maxResults {
 			g.truncated = true
@@ -318,12 +401,31 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 // fromColocation adds tests that sit in a changed/affected directory but were
 // not reached through the graph (the recall booster).
 func (g *affectedGather) fromColocation(ctx context.Context) {
-	if g.truncated {
-		return
-	}
+	// Deliberately NOT gated on g.truncated. It used to return early if the graph
+	// pass had filled the budget, which meant a change with many graph dependents
+	// produced zero co-located tests — and co-location is the only arm that can
+	// name a test at all, since a test never lives in the file it exercises. That
+	// turned a budget cap into a recall cliff.
+	//
+	// max_results now bounds PACKAGES, not test rows. Truncating a test list drops
+	// coverage silently; truncating a package list drops a whole `go test` target
+	// that the caller can see is missing.
 	dirs := make([]string, 0, len(g.dirs))
 	for d := range g.dirs {
 		dirs = append(dirs, d)
+	}
+	// Changed packages first, so a cap can never drop the package the edit landed
+	// in — the failure that made this bug harmful.
+	sort.SliceStable(dirs, func(i, j int) bool {
+		ci, cj := g.dirs[dirs[i]] == reasonChanged, g.dirs[dirs[j]] == reasonChanged
+		if ci != cj {
+			return ci
+		}
+		return dirs[i] < dirs[j]
+	})
+	if g.maxResults > 0 && len(dirs) > g.maxResults {
+		dirs = dirs[:g.maxResults]
+		g.truncated = true
 	}
 	tests, err := g.store.TestsInDirs(ctx, dirs)
 	if err != nil {
@@ -334,11 +436,11 @@ func (g *affectedGather) fromColocation(ctx context.Context) {
 			continue
 		}
 		g.seen[n.ID] = true
-		g.tests = append(g.tests, affectedTest{Node: n, Confidence: colocatedConfidence, Reason: "co-located"})
-		if g.total() >= g.maxResults {
-			g.truncated = true
-			return
+		reason := g.dirs[filepath.Dir(n.Path)]
+		if reason == "" {
+			reason = reasonImporter
 		}
+		g.tests = append(g.tests, affectedTest{Node: n, Confidence: colocatedConfidence, Reason: reason})
 	}
 }
 
@@ -374,35 +476,49 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string
 	fmt.Fprintf(&sb, "topology affected: %d files, %d symbols changed\n",
 		len(a.Files), len(a.Symbols))
 	sb.WriteString("source=topology — heuristic, biased toward recall: a missed test is worse " +
-		"than an extra, so co-located tests are included. Confidence: 1.0 certain (containment), " +
-		"0.8 dependency edge, 0.5 co-located (same directory, no edge). Verify before relying.\n\n")
+		"than an extra. A package is reached by containing the change, or by importing a " +
+		"package that does; within a reached package every test is listed, because " +
+		"co-location cannot say which ones exercise the change. Verify before relying.\n\n")
 
-	if len(result.Dependents) == 0 {
-		sb.WriteString("affected files: (none found)\n")
-	} else {
-		fmt.Fprintf(&sb, "affected files (%d):\n", len(result.Dependents))
-		for _, n := range result.Dependents {
-			fmt.Fprintf(&sb, "  %s %s — %s", string(n.Kind), n.Name, n.Path)
-			if n.StartLine > 0 {
-				fmt.Fprintf(&sb, " L%d", n.StartLine)
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	sb.WriteString("\n")
 	if len(result.Tests) == 0 {
 		sb.WriteString("likely affected tests: (none found)\n")
-	} else {
-		fmt.Fprintf(&sb, "likely affected tests (%d, highest confidence first):\n", len(result.Tests))
-		for _, ts := range result.Tests {
-			fmt.Fprintf(&sb, "  %s — %s L%d  [%s, confidence %.1f]\n",
-				ts.Node.Name, ts.Node.Path, ts.Node.StartLine, ts.Reason, ts.Confidence)
+		if len(result.Dependents) > 0 {
+			fmt.Fprintf(&sb, "\naffected files (%d):\n", len(result.Dependents))
+			for _, n := range result.Dependents {
+				fmt.Fprintf(&sb, "  %s %s — %s\n", string(n.Kind), n.Name, n.Path)
+			}
+		}
+		return strings.TrimRight(sb.String(), "\n")
+	}
+
+	// Aggregate by package. Enumerating every test is what made this response
+	// 298 KB for a one-line change: 2,546 lines carrying the same two labels. The
+	// unit a caller acts on is the package path, because that is what `go test`
+	// takes, so lead with a runnable command per package.
+	pkgs := aggregateTestsByPackage(result.Tests)
+	fmt.Fprintf(&sb, "run these packages (%d):\n", len(pkgs))
+	for _, p := range pkgs {
+		fmt.Fprintf(&sb, "  %-42s %5d tests   %s\n", goTestTarget(p.Dir), p.Count, p.Reason)
+	}
+
+	// Name individual tests only where naming them helps: the changed package.
+	// Elsewhere every test carries an identical label, so the list is noise.
+	if named := firstChangedPackage(pkgs); named != nil {
+		fmt.Fprintf(&sb, "\ntests in the changed package (%d):\n", named.Count)
+		shown := named.Tests
+		if len(shown) > maxNamedTests {
+			shown = shown[:maxNamedTests]
+		}
+		for _, ts := range shown {
+			fmt.Fprintf(&sb, "  %s — %s L%d\n", ts.Node.Name, ts.Node.Path, ts.Node.StartLine)
+		}
+		if rest := named.Count - len(shown); rest > 0 {
+			fmt.Fprintf(&sb, "  … (+%d more in this package)\n", rest)
 		}
 	}
 
 	if result.Truncated {
-		sb.WriteString("\n[truncated: max_results reached]\n")
+		sb.WriteString("\n[truncated: max_results reached — raise max_results for the full package list]\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

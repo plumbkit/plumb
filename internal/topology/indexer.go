@@ -255,6 +255,14 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 			reclaimed = true
 		}
 	}
+	// Cross-file import edges are resolved after the batch, not during it: an
+	// import can only be linked to a package once that package has been indexed,
+	// which is not knowable while walking a single file. Running it per drain
+	// rather than per file also collapses a checkout-sized burst into one pass.
+	if err := idx.linkImports(); err != nil {
+		slog.Warn("topology: import linking error", "err", err)
+		lastErr = err
+	}
 	if lastErr != nil {
 		idx.setState("error", lastErr.Error())
 	} else {

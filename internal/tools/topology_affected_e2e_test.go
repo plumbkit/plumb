@@ -16,6 +16,12 @@ import (
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
+// reasonChangedForTest mirrors the unexported tools.reasonChanged label. This
+// file is package tools_test, so it cannot reference the constant directly;
+// duplicating the string here is deliberate, and makes a change to the
+// user-visible wording show up as a test failure rather than passing silently.
+const reasonChangedForTest = "changed package"
+
 // TestTopologyAffected_ColocatedTests proves the recall booster: a sibling test
 // that does NOT call the changed symbol (so no dependency edge connects them) is
 // still flagged because it lives in the same directory.
@@ -57,8 +63,11 @@ func TestTopologyAffected_ColocatedTests(t *testing.T) {
 	if !strings.Contains(out, "TestUnrelated") {
 		t.Errorf("co-located test TestUnrelated should be flagged; got:\n%s", out)
 	}
-	if !strings.Contains(out, "co-located") {
-		t.Errorf("output should label the co-located reason; got:\n%s", out)
+	// The reason is now stated as the relationship ("changed package") rather than
+	// the mechanism ("co-located"), because that is what tells a caller whether to
+	// trust the hit.
+	if !strings.Contains(out, reasonChangedForTest) {
+		t.Errorf("output should say why the package is implicated; got:\n%s", out)
 	}
 }
 
@@ -152,8 +161,8 @@ func TestTopologyAffected_FileRootSeedsColocation(t *testing.T) {
 	if !strings.Contains(out, "TestUnrelated") {
 		t.Errorf("files input should surface co-located test TestUnrelated; got:\n%s", out)
 	}
-	if !strings.Contains(out, "co-located") {
-		t.Errorf("output should label the co-located reason; got:\n%s", out)
+	if !strings.Contains(out, reasonChangedForTest) {
+		t.Errorf("output should say why the package is implicated; got:\n%s", out)
 	}
 }
 
