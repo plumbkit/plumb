@@ -25,7 +25,7 @@ var hooksCmd = &cobra.Command{
 }
 
 var hooksInstallCmd = &cobra.Command{
-	Use:   "install codex",
+	Use:   "install <client>",
 	Short: "Install Plumb's opt-in Codex mailbox hooks",
 	Long: `Install two opt-in hooks in Codex's user hooks.json: SessionStart states the
 conversation ID needed by session_start, and Stop checks for unread Plumb mail.
@@ -37,8 +37,13 @@ daemon, or ambiguous session allows Codex to stop normally.
 
 Codex requires an interactive trust review for non-managed command hooks. After
 installation, use /hooks in Codex to inspect and trust the two Plumb entries.`,
-	Args: cobra.NoArgs,
-	RunE: runInstallCodexHooks,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if args[0] != "codex" {
+			return fmt.Errorf("unsupported hooks client %q (supported: codex)", args[0])
+		}
+		return runInstallCodexHooks(cmd, args)
+	},
 }
 
 var hooksRunCodexCmd = &cobra.Command{
