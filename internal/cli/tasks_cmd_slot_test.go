@@ -2,41 +2,11 @@ package cli
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/config"
 )
-
-func writeJSWorkspace(t *testing.T, extra string) string {
-	t.Helper()
-	ws := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{
-		"package.json":       `{"name":"demo"}`,
-		"pnpm-lock.yaml":     "",
-		".plumb/config.toml": extra,
-	} {
-		if err := os.WriteFile(filepath.Join(ws, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return ws
-}
-
-func runTaskCmd(t *testing.T, args ...string) (string, error) {
-	t.Helper()
-	cmd := taskSlotCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs(args)
-	cmd.SilenceUsage, cmd.SilenceErrors = true, true
-	err := cmd.Execute()
-	return out.String(), err
-}
 
 // The five fixed verbs are registered at package init from the built-in list, so
 // a project-defined slot can never have one. This is the verb that reaches it.
@@ -55,7 +25,13 @@ func TestTaskSlotCmd_IsRegisteredAlongsideTheBuiltinVerbs(t *testing.T) {
 
 func TestTaskSlotCmd_RejectsMalformedSlotName(t *testing.T) {
 	for _, bad := range []string{"Bad Name", "9build", "check!"} {
-		if _, err := runTaskCmd(t, bad); err == nil {
+		cmd := taskSlotCmd()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{bad})
+		cmd.SilenceUsage, cmd.SilenceErrors = true, true
+		err := cmd.Execute()
+		if err == nil {
 			t.Errorf("slot %q must be refused", bad)
 		} else if !strings.Contains(err.Error(), "not a valid slot name") {
 			t.Errorf("slot %q: unexpected error %v", bad, err)
@@ -63,41 +39,63 @@ func TestTaskSlotCmd_RejectsMalformedSlotName(t *testing.T) {
 	}
 }
 
-// A bare `plumb task` teaches the workspace's vocabulary — including the
-// project's own slots — rather than printing usage.
-func TestTaskSlotCmd_BareListsConfiguredSlotsIncludingExtras(t *testing.T) {
-	ws := writeJSWorkspace(t, "[tasks.typescript]\ncheck = \"echo checked\"\n")
-	t.Chdir(ws)
-
-	out, err := runTaskCmd(t)
-	if err != nil {
-		t.Fatalf("plumb task: %v (out=%s)", err, out)
+// A bare `plumb task` teaches the workspace's vocabulary — including slots the
+// project defined, which is the whole reason this verb exists.
+func TestWriteTaskSlotListing_IncludesProjectDefinedSlots(t *testing.T) {
+	tc := config.TasksConfig{
+		Build: "pnpm run build",
+		Test:  "pnpm run test",
+		Extra: map[string]string{"check": "pnpm run check", "audit": "pnpm audit --prod"},
 	}
-	for _, want := range []string{"check", "echo checked", "build", "test"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("listing should mention %q, got:\n%s", want, out)
+	var out bytes.Buffer
+	if err := writeTaskSlotListing(&out, "/ws", "typescript", tc); err != nil {
+		t.Fatalf("writeTaskSlotListing: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"typescript", "/ws",
+		"build", "pnpm run build",
+		"check", "pnpm run check",
+		"audit", "pnpm audit --prod",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("listing should mention %q, got:\n%s", want, got)
 		}
 	}
-	// verify is a composite; printing an empty command would read as unconfigured.
-	if strings.Contains(out, "verify      \n") {
-		t.Errorf("verify must not render as an empty command, got:\n%s", out)
+	// Built-ins first, then the project's own, sorted.
+	if i, j := strings.Index(got, "audit"), strings.Index(got, "check"); i > j {
+		t.Errorf("extras should be sorted (audit before check), got:\n%s", got)
+	}
+	if i, j := strings.Index(got, "build"), strings.Index(got, "audit"); i > j {
+		t.Errorf("built-ins should precede extras, got:\n%s", got)
 	}
 }
 
-// The typescript defaults must follow the lockfile through the CLI path too,
-// not just through the MCP resolver.
-func TestTaskSlotCmd_ListingShowsLockfileDerivedDefaults(t *testing.T) {
-	ws := writeJSWorkspace(t, "")
-	t.Chdir(ws)
+// verify is a composite the runner synthesises, so Get returns "" for it.
+// Printing that leaves a slot looking unconfigured in the listing that exists to
+// say it is runnable.
+func TestWriteTaskSlotListing_VerifyIsNotBlank(t *testing.T) {
+	var out bytes.Buffer
+	tc := config.TasksConfig{Build: "go build ./...", Test: "go test ./..."}
+	if err := writeTaskSlotListing(&out, "/ws", "go", tc); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "verify") && strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "verify")) == "" {
+			t.Errorf("verify rendered with no command, got line %q", line)
+		}
+	}
+	if !strings.Contains(out.String(), "composite") {
+		t.Errorf("verify should be labelled a composite, got:\n%s", out.String())
+	}
+}
 
-	out, err := runTaskCmd(t)
-	if err != nil {
-		t.Fatalf("plumb task: %v (out=%s)", err, out)
+func TestWriteTaskSlotListing_NoCommandsIsAnActionableError(t *testing.T) {
+	err := writeTaskSlotListing(&bytes.Buffer{}, "/ws", "zig", config.TasksConfig{})
+	if err == nil {
+		t.Fatal("a language with no commands should error")
 	}
-	if !strings.Contains(out, "pnpm run build") {
-		t.Errorf("a pnpm-lock.yaml workspace should show pnpm defaults, got:\n%s", out)
-	}
-	if strings.Contains(out, "npm run build") && !strings.Contains(out, "pnpm run build") {
-		t.Errorf("npm default leaked through on a pnpm workspace:\n%s", out)
+	if !strings.Contains(err.Error(), "[tasks.zig]") {
+		t.Errorf("the error should name the config key to set, got: %v", err)
 	}
 }

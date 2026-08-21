@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -77,7 +78,16 @@ func listTaskSlots(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	tc := projectCfg.Tasks[lang]
+	return writeTaskSlotListing(cmd.OutOrStdout(), root, lang, projectCfg.Tasks[lang])
+}
+
+// writeTaskSlotListing renders the runnable slots for one language. It is split
+// from listTaskSlots so the rendering can be tested without ambient workspace
+// detection: under `make`, GOTMPDIR sits INSIDE the checkout, so a t.TempDir()
+// fixture is nested in plumb's own Go repository — and package.json is a weak
+// root marker that correctly loses to the enclosing go.mod, so a fixture built
+// that way resolves as Go on CI and as TypeScript locally.
+func writeTaskSlotListing(w io.Writer, root, lang string, tc config.TasksConfig) error {
 	slots := config.ConfiguredSlotNames(tc)
 	have := make([]string, 0, len(slots))
 	for _, slot := range slots {
@@ -88,7 +98,7 @@ func listTaskSlots(cmd *cobra.Command) error {
 	if len(have) == 0 {
 		return fmt.Errorf("no task commands configured for %s in %s; set them under [tasks.%s]", lang, root, lang)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "task slots for %s in %s:\n", lang, root)
+	fmt.Fprintf(w, "task slots for %s in %s:\n", lang, root)
 	for _, slot := range have {
 		// verify is a composite the runner synthesises, so Get returns "" for it —
 		// printing that leaves a slot looking unconfigured in the very listing
@@ -97,7 +107,7 @@ func listTaskSlots(cmd *cobra.Command) error {
 		if slot == "verify" {
 			shown = "(composite: build, then test)"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  %-12s %s\n", slot, shown)
+		fmt.Fprintf(w, "  %-12s %s\n", slot, shown)
 	}
 	return nil
 }
