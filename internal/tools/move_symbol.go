@@ -92,17 +92,11 @@ func (t *MoveSymbol) WithWriteDeps(deps WriteDeps) *MoveSymbol {
 func (*MoveSymbol) Name() string { return "move_symbol" }
 
 func (*MoveSymbol) Description() string {
-	return `Move a top-level declaration (function, method, type, const, or var) from one file to another within the SAME directory/package, atomically.
+	return `Move a top-level declaration (function, method, type, const, or var) from one file to another within the SAME directory/package, atomically. The symbol's full source — declaration plus, by default, its leading doc comment (include_doc_comment) — moves from source_uri to destination_uri in one all-or-nothing operation: if the destination write fails the source is rolled back. Locates the symbol via the LSP document-symbol tree, falling back to tree-sitter when the language server is cold.
 
-The symbol's full source — its declaration and, by default, its contiguous leading doc comment (include_doc_comment) — is removed from source_uri and appended to destination_uri in one all-or-nothing operation: if the destination write fails the source is rolled back, so the declaration is never duplicated or lost. Locates the symbol via the LSP document-symbol tree, falling back to a fresh tree-sitter parse when the language server is cold.
+Scope (v1, conservative): source and destination must be in the SAME directory — plumb does not rewrite references or imports, so a move that would change a symbol's package or import path is REFUSED. destination_uri must already exist unless create_destination=true. Also refuses an ambiguous symbol (disambiguate with name_path), a path outside the workspace, or (Go) mismatched build constraints between source and destination.
 
-Scope (v1, conservative): source and destination must be in the SAME directory. plumb does NOT rewrite references or imports, so a move that would change a symbol's package or import path — a different directory, or (for Go) a different package clause — is REFUSED rather than applied half-correctly. Move within a package where references resolve unchanged; relocate across packages by hand.
-
-destination_uri must already exist unless create_destination=true (a newly created Go file is seeded with the source file's package clause). Refuses when the symbol is not found, the name is ambiguous (disambiguate with a slash-separated name_path), the destination is missing without create_destination, or either path is outside the workspace. For Go, also refuses when source and destination carry different build constraints — explicit (//go:build, legacy +build) or implicit (the _GOOS/_GOARCH and _test filename suffixes, e.g. handlers_linux.go) — since moving a declaration across them silently changes what compiles per platform, or drops it from the production build.
-
-Dry-run by default (dry_run=true): previews the unified diff of both files without writing. Set dry_run=false to apply.
-
-Undo is per-file: reverting a move takes two undo_edit calls, one per file, and the state between them is a transient duplicate of the moved declaration.`
+Dry-run by default (dry_run=true): previews the unified diff without writing; set dry_run=false to apply. Undo is per-file — reverting a move takes two undo_edit calls. Scope rationale: the plumb-refactor skill.`
 }
 
 var moveSymbolSchema = json.RawMessage(`{

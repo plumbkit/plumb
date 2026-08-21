@@ -121,6 +121,64 @@ var MailboxTools = map[string]bool{
 // IsMailbox reports whether name is one of the mailbox pair (see MailboxTools).
 func IsMailbox(name string) bool { return MailboxTools[name] }
 
+// PinnedTools is the explicit set of tools pinned into a Claude Code client's
+// context via mcp.Server.AlwaysLoad (conn_register.go) — the tools whose full
+// schema loads on every connection rather than being deferred behind an MCP
+// tool-search round-trip.
+//
+// This answers a DIFFERENT question than LeanTools, and used to be conflated
+// with it: AlwaysLoad was wired straight off IsLean(name) || IsBootstrap(name)
+// || IsMailbox(name), a set derived to control tools/list VISIBILITY for a
+// client with its own native tools, not schema-load order for a client whose
+// tools/list is full but whose tool search only loads some schemas up front.
+// The result was silent: workspace_search — the documented discovery entry
+// point (session_start_guidance.go) — was never in LeanTools, so it was
+// deferred on every full-profile Claude Code session and never discovered. A
+// deferred tool has no schema in context, so an agent cannot call it and does
+// not know it exists.
+//
+// The 20-tool set below is deliberately curated, not derived: session_start,
+// read_file, read_symbol, file_outline, edit_file, write_file, git,
+// diagnostics, workspace_search, search_in_files, get_definition,
+// find_references, workspace_symbols, topology_search, topology_affected,
+// transaction_apply, run_task, search_memories, leave_note, check_messages.
+// It happens to be a superset of BootstrapTools and MailboxTools (both are
+// pinned for their own stated reasons — see their doc comments), but is NOT
+// defined in terms of them: growing or shrinking either set no longer silently
+// changes what gets pinned.
+//
+// Evicted relative to the old LeanTools-derived pin: rename_file, delete_file,
+// and undo_edit (reachable once edit_file itself is pinned and steers to
+// them), topology_explore (reachable from topology_search output), and
+// rename_symbol (17.2% advertisement-gate error rate in practice — re-pin once
+// PLAN-363 improves that).
+var PinnedTools = map[string]bool{
+	"session_start":     true,
+	"read_file":         true,
+	"read_symbol":       true,
+	"file_outline":      true,
+	"edit_file":         true,
+	"write_file":        true,
+	"git":               true,
+	"diagnostics":       true,
+	"workspace_search":  true,
+	"search_in_files":   true,
+	"get_definition":    true,
+	"find_references":   true,
+	"workspace_symbols": true,
+	"topology_search":   true,
+	"topology_affected": true,
+	"transaction_apply": true,
+	"run_task":          true,
+	"search_memories":   true,
+	"leave_note":        true,
+	"check_messages":    true,
+}
+
+// IsPinned reports whether name's schema is pinned into a Claude Code client's
+// context on every connection (see PinnedTools).
+func IsPinned(name string) bool { return PinnedTools[name] }
+
 // LeanToolNames returns the sorted, deduplicated UNION of LeanTools and
 // BootstrapTools. It is the single source of truth for a CLIENT-SIDE tool
 // allowlist — the list `plumb setup <client> --lean` writes into the client's
@@ -158,13 +216,13 @@ func LeanToolNames() []string {
 
 // IsLean reports whether name is advertised under the lean profile.
 //
-// Double duty: this same set is also the backbone of the "always loaded" set
-// wired into mcp.Server.AlwaysLoad (see conn_register.go) — the tools plumb pins
-// into a Claude Code client's context so MCP tool search never defers them
-// behind a ToolSearch round-trip. Editing LeanTools moves BOTH behaviours; that
-// is intentional ("the tools that matter most" is one list, not two). The pin
-// set is that list plus BootstrapTools and MailboxTools, each of which states
-// its own reason for being pinned without being advertised-under-lean.
+// This set no longer does double duty: it used to also be the backbone of
+// mcp.Server.AlwaysLoad (Claude Code's pinned-schema set), which meant editing
+// LeanTools silently moved both tools/list visibility and schema-pin behaviour
+// together, and a tool answering "what does a lean client keep" is not
+// necessarily the same tool as "what must never be deferred behind a
+// ToolSearch round-trip" — see PinnedTools, which now answers that second
+// question on its own terms.
 func IsLean(name string) bool { return LeanTools[name] }
 
 // ProfileNote is the terse session_start/orientation line reporting the

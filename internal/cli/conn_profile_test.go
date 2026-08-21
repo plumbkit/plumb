@@ -300,27 +300,19 @@ func TestToolProfileClassification(t *testing.T) {
 
 // TestAlwaysLoad_PinsTheMailboxPair asserts the real registerHooks wiring, not a
 // restatement of it: the pin predicate the daemon installs must cover both
-// halves of the mailbox.
-//
-// The pair is not lean and not bootstrap, so before this wiring both were
-// deferred behind an MCP tool-search round-trip on a pinning client — and an
-// agent that had just been told by leave_note's own result to call
-// check_messages could not find it. The long tail must stay deferred, which is
-// what the negative case guards: this is a targeted pin, not an "always load
-// everything" escape hatch.
+// halves of the mailbox, plus workspace_search (the documented discovery entry
+// point that the old IsLean-derived wiring silently left deferred), while
+// leaving the long tail deferred.
 func TestAlwaysLoad_PinsTheMailboxPair(t *testing.T) {
 	srv := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
 	(&connSession{}).registerHooks(srv)
 	if srv.AlwaysLoad == nil {
 		t.Fatal("registerHooks left AlwaysLoad unset — nothing is pinned at all")
 	}
-	for _, name := range []string{"leave_note", "check_messages"} {
+	for _, name := range []string{"leave_note", "check_messages", "workspace_search", "session_start"} {
 		if !srv.AlwaysLoad(name) {
-			t.Errorf("%q is not pinned; the mailbox halves must stay together in the client's context", name)
+			t.Errorf("%q is not pinned; tools.PinnedTools must cover it", name)
 		}
-	}
-	if !srv.AlwaysLoad("session_start") {
-		t.Error("session_start (bootstrap) must stay pinned")
 	}
 	if srv.AlwaysLoad("topology_routes") {
 		t.Error("topology_routes is pinned — the long tail must stay deferred, or the pin saves nothing")
@@ -328,11 +320,9 @@ func TestAlwaysLoad_PinsTheMailboxPair(t *testing.T) {
 }
 
 // TestAlwaysLoadDocMatchesWiring guards docs/configuration.md's "always-loaded
-// (pinned) tools" paragraph against the drift that had already happened: it
-// claimed the pinned set was "exactly LeanTools", "wired to tools.IsLean". That
-// was accidentally true while the extra predicate was IsBootstrap (a subset of
-// lean); MailboxTools is disjoint, so the same sentence became false the moment
-// it was added — and nothing went red.
+// (pinned) tools" paragraph against drift: whatever tools.Is* predicate
+// srv.AlwaysLoad is wired to in conn_register.go, docs/configuration.md must
+// name it, and must not still name a predicate the wiring dropped.
 //
 // The predicate list is read from the wiring itself, so the doc and the code
 // must move together in BOTH directions: a predicate dropped from the code while
@@ -356,7 +346,7 @@ func TestAlwaysLoadDocMatchesWiring(t *testing.T) {
 		}
 	}
 	// The other direction: the doc must not advertise a predicate the code dropped.
-	for _, p := range []string{"IsLean", "IsBootstrap", "IsMailbox"} {
+	for _, p := range []string{"IsLean", "IsBootstrap", "IsMailbox", "IsPinned"} {
 		if strings.Contains(doc, "tools."+p) && !slices.Contains(wired, p) {
 			t.Errorf("docs/configuration.md names tools.%s but AlwaysLoad no longer uses it", p)
 		}
@@ -364,7 +354,9 @@ func TestAlwaysLoadDocMatchesWiring(t *testing.T) {
 }
 
 // alwaysLoadPredicates returns the tools.Is* predicate names appearing in the
-// srv.AlwaysLoad assignment in conn_register.go.
+// srv.AlwaysLoad assignment in conn_register.go. Matches both a direct
+// function-value assignment (srv.AlwaysLoad = tools.IsPinned) and a wrapping
+// closure that calls one or more tools.Is* predicates.
 func alwaysLoadPredicates(t *testing.T, root string) []string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(root, "internal/cli/conn_register.go"))
@@ -381,7 +373,7 @@ func alwaysLoadPredicates(t *testing.T, root string) []string {
 		body = body[:end]
 	}
 	var out []string
-	for _, m := range regexp.MustCompile(`tools\.(Is[A-Za-z]+)\(`).FindAllStringSubmatch(body, -1) {
+	for _, m := range regexp.MustCompile(`tools\.(Is[A-Za-z]+)\b`).FindAllStringSubmatch(body, -1) {
 		if !slices.Contains(out, m[1]) {
 			out = append(out, m[1])
 		}

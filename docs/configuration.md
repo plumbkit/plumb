@@ -742,19 +742,18 @@ reaches plumb). plumb exempts its highest-frequency tools from that deferral by
 advertising them with `_meta["anthropic/alwaysLoad"] = true` in `tools/list`
 (`MetaAlwaysLoadKey`, `internal/mcp/server.go`; emitted in `handleToolsList`
 when `Server.AlwaysLoad` accepts the name, wired in `conn_register.go` to
-`tools.IsLean || tools.IsBootstrap || tools.IsMailbox`). The pinned set is
-`LeanTools` plus two sets pinned for their own reasons:
-
-- **`BootstrapTools`** — so a future profile change can never un-pin
-  `session_start`/`git`/`read_file`/`edit_file`. It is a subset of `LeanTools`
-  today, so it adds nothing yet; it is named to keep that guarantee independent
-  of lean membership.
-- **`MailboxTools`** (`leave_note`, `check_messages`) — disjoint from
-  `LeanTools`, so this genuinely widens the pinned set by two. These are the
-  only tools whose own output tells the agent to call the other one, and
-  deferring one half of a half-finished exchange leaves the agent holding an
-  instruction it cannot follow. They are pinned as a **pair**; a one-sided edit
-  recreates the defect and fails `TestMailboxToolsArePairedAndNonLean`.
+`tools.IsPinned`). The pinned set is `tools.PinnedTools` — an explicit,
+curated 20-tool list (`internal/tools/profile.go`), independent of the
+`[tools]` profile's lean/bootstrap/mailbox sets. It answers a different
+question than those sets: not "what does a lean client keep advertised" but
+"what must never be deferred behind a `ToolSearch` round-trip", which is why
+it is no longer derived from `LeanTools || BootstrapTools || MailboxTools` —
+that derivation silently left `workspace_search`, the documented discovery
+entry point, deferred on every full-profile Claude Code session. `PinnedTools`
+happens to be a superset of `BootstrapTools` and `MailboxTools` (both listed
+explicitly, each still pinned for its own stated reason), so
+`session_start`/`git`/`read_file`/`edit_file` and the `leave_note`/
+`check_messages` pair stay pinned as before.
 
 Pinning is not visibility: it changes only whether a schema is deferred, so it
 is independent of both the `[tools]` profile and `[collab] mailbox`. Clients

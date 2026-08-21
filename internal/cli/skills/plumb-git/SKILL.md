@@ -66,6 +66,12 @@ Three jobs that reflexively reach for git have a safer plumb answer:
 - **`file_status`** answers "is this dirty, and who wrote it last?" without reading the file or running a diff.
 - **`minimal_diff_review`** reviews the working diff for signs of over-building before you commit it. Advisory only: it never blocks a write, and silence is not proof the change is minimal.
 
+## Cross-session guard and attribution
+
+Before a write/destructive/network op, if a **different** plumb session moved this repo's HEAD/branch since this session last observed it, the op is refused unless re-run with `confirm:true` — the response names the peer session and the old→new refs (movement by this session, an external tool, or an unknown mover adds no friction). `expected_head` pins the exact HEAD commit an op must be at, refusing outright on a mismatch.
+
+With `[git] commit_trailer = true` (default off) every plumb commit is stamped with a `Plumb-Session: <session-name>` trailer; either way, `workspace_sessions` lists recent commits per session (short SHA, subject, repository). With `[collab] intents = true`, a repo-state op (any destructive-tier op, plus `commit`/`switch`/`checkout`) also surfaces live peer `share_intent` claims covering this repository — advisory only, never blocks the op, never requires confirmation.
+
 ## Working in a nested repository
 
     git(subcommand="status", repo="/abs/path/to/submodule")

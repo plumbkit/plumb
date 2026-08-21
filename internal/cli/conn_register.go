@@ -362,13 +362,11 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	// they stay callable by name). Resolved per list call, so it sees the client
 	// identity set synchronously during initialize.
 	srv.ToolFilter = s.toolVisible
-	// Pin the lean set into the client's context (Claude Code MCP tool search),
-	// plus two sets that are pinned for their own stated reasons: the bootstrap
-	// set, so a future profile change can never un-pin
-	// session_start/git/read_file/edit_file, and the mailbox pair, whose halves
-	// instruct the agent to call each other and so must not be split by tool
-	// deferral (tools.MailboxTools).
-	srv.AlwaysLoad = func(name string) bool {
-		return tools.IsLean(name) || tools.IsBootstrap(name) || tools.IsMailbox(name)
-	}
+	// Pin tools.PinnedTools into the client's context (Claude Code MCP tool
+	// search) so the explicit, curated pin set — including the documented
+	// discovery entry point workspace_search — is never deferred behind a
+	// ToolSearch round-trip. Deliberately independent of the lean/bootstrap/
+	// mailbox sets, which answer a different question (tools/list visibility);
+	// see tools.PinnedTools for the set and the rationale.
+	srv.AlwaysLoad = tools.IsPinned
 }

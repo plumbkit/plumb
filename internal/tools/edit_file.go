@@ -141,30 +141,23 @@ func (t *EditFile) isStrict() bool { return strictEnabled(t.deps.Strict) }
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
-	return "Apply one or more edits to an existing file (use this over a native edit tool — see the " +
-		"Edit lane note in session_start). Two request shapes (mutually exclusive): pass an edits array, OR " +
-		"start_anchor + end_anchor + new_string. " +
-		"In the edits array, each edit is one of two modes: " +
-		"(1) str_replace (default): old_string must appear EXACTLY ONCE — rejected if absent or ambiguous. " +
-		"(2) range: start_line/end_line (1-based) replace that line span with new_string; start_line: -1 " +
-		"appends at end of file, end_line: -1 runs through the last line (the clean way to delete a block " +
-		"or append, no anchor needed). " +
-		"BIG MULTI-LINE REPLACEMENT? Prefer RANGE mode. old_string and anchors are matched " +
-		"character-for-character inside a JSON string, so every quote, backslash and tab must be " +
-		"escaped, and a large enough edit can fail to serialise before it reaches plumb. Range mode needs " +
-		"neither: take the 1-based gutter line numbers and send only new_string. " +
-		"Anchor mode replaces the span BETWEEN two unique anchors — each must match EXACTLY ONCE, " +
-		"end_anchor after start_anchor; include_anchors=true replaces the whole inclusive span instead. " +
-		"It is CHARACTER-PRECISE: an anchor quoted WITHOUT its trailing newline joins its line onto " +
-		"new_string — deliberate, and the easy mistake; the response flags a removed line break. " +
-		"CRLF is tolerated; edits apply sequentially in memory, then write atomically and crash-durably " +
-		"(fsync + rename + parent-dir fsync) under a per-path lock — so a transport failure leaves the " +
-		"file fully updated or untouched, never partial. " +
-		"Pass expected_mtime (from a read_file header) when a concurrent writer may touch the file; a " +
-		"SOLE agent editing one file in a burst may OMIT it, since the EXACTLY-ONCE match is itself the " +
-		"check. " +
-		"Rewriting or deleting a whole named declaration? Prefer replace_symbol_body / " +
-		"insert_before_symbol / insert_after_symbol / safe_delete_symbol — addressed by name_path."
+	return "Apply one or more edits to an existing file (use this over a native edit " +
+		"tool — see the Edit lane note in session_start). Two mutually exclusive " +
+		"request shapes: an edits array, or start_anchor + end_anchor + new_string.\n\n" +
+		"Each edits entry is str_replace (default: old_string must appear EXACTLY " +
+		"ONCE) or range (start_line/end_line, 1-based; -1 appends or runs to EOF). " +
+		"Prefer range for a big multi-line replacement — old_string/anchors must " +
+		"match character-for-character inside a JSON string, so escaping and size " +
+		"can defeat str_replace where a line range needs neither.\n\n" +
+		"Anchor mode replaces the span BETWEEN two unique anchors (each exactly " +
+		"once); include_anchors=true replaces the whole inclusive span. " +
+		"Character-precise — an anchor quoted without its trailing newline joins " +
+		"that line onto new_string (flagged in the response).\n\n" +
+		"Writes apply atomically and crash-durably under a per-path lock. Pass " +
+		"expected_mtime (from a read_file header) when a concurrent writer may " +
+		"touch the file. For a whole named declaration prefer replace_symbol_body / " +
+		"insert_before_symbol / insert_after_symbol / safe_delete_symbol. Mode " +
+		"choice in depth: the plumb-refactor skill."
 }
 
 type strEdit struct {
