@@ -138,6 +138,17 @@ const graphNodeBudget = 2000
 // a few dozen the list stops informing a decision and starts costing context.
 const maxNamedTests = 40
 
+// defaultMaxPackages is the max_results default applied when the caller names
+// none. It is the RUNTIME cap — the one that actually shapes the answer — and
+// the schema above advertises the same number.
+//
+// The two are pinned together by TestSchemaDefaultMatchesRuntimeDefault. That
+// guard is not decoration: the e2e fixture sizes itself from the schema, and
+// while this was a bare literal here, raising it without touching the schema
+// left that fixture measuring against a stale cap and passing vacuously over a
+// restored regression.
+const defaultMaxPackages = 50
+
 // affectedPackage is the unit a caller acts on: `go test` takes a package path,
 // not a test name.
 type affectedPackage struct {
@@ -241,7 +252,7 @@ func parseTopologyAffectedArgs(raw json.RawMessage) (topologyAffectedArgs, error
 		return a, fmt.Errorf("topology_affected: invalid arguments: %w", err)
 	}
 	if a.MaxResults <= 0 {
-		a.MaxResults = 50
+		a.MaxResults = defaultMaxPackages
 	}
 	return a, nil
 }

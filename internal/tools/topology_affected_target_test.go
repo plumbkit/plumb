@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -32,8 +33,15 @@ func TestTestTarget(t *testing.T) {
 		{"sibling sharing a name prefix", subdirGo, "plumbkit/internal/x", "", false},
 		{"outside the working_dir", subdirGo, "scripts", "", false},
 
-		{"python takes a plain path", TestScope{Language: "python", Style: TargetPath}, "src/api", "src/api", true},
-		{"python rebased", TestScope{Language: "python", WorkingDir: "svc", Style: TargetPath}, "svc/api", "api", true},
+		{"python takes a plain path", TestScope{Language: "python", Style: TargetPath}, "src/api", "./src/api", true},
+		{"python rebased", TestScope{Language: "python", WorkingDir: "svc", Style: TargetPath}, "svc/api", "./api", true},
+		{"python whole tree stays bare", TestScope{Language: "python", Style: TargetPath}, ".", ".", true},
+
+		// targetPattern admits "-" in any position, so a directory called "-x"
+		// would otherwise reach pytest AS THE FLAG -x: the whole suite in
+		// exit-first mode, silently, instead of the one package meant.
+		{"dash-leading dir cannot become a flag", TestScope{Language: "python", Style: TargetPath}, "-x", "./-x", true},
+		{"dash-leading dir, go", TestScope{Language: "go", Style: TargetGoPackage}, "-x", "./-x/...", true},
 
 		// run_task bounds a target to one shell-safe argument. A directory it
 		// would refuse must not be emitted as a target by the tool telling the
@@ -67,6 +75,7 @@ func TestTestTargetIsAlwaysRunTaskSafe(t *testing.T) {
 	dirs := []string{
 		"internal/config", ".", "plumb/internal/x", "a b/c", "x+y", "sr c/api (v2)",
 		"weird'quote", "tab\tsep", "emoji🙂/pkg", "trailing/", "../escape", "deep/a/b/c/d",
+		"-x", "--flag", "-", "..",
 	}
 	scopes := []TestScope{
 		{Language: "go", Style: TargetGoPackage},
@@ -162,5 +171,46 @@ func TestPackageRunLabel(t *testing.T) {
 	}
 	if got := packageRunLabel(TestScope{}, "internal/config"); got != "internal/config" {
 		t.Errorf("with nothing known, the row is the bare directory; got %q", got)
+	}
+}
+
+// TestSchemaDefaultMatchesRuntimeDefault pins the two places max_results'
+// default is written.
+//
+// This exists because of a defect an adversarial review found in the fix for a
+// PREVIOUS review round. The e2e fixture sizes itself by reading the default out
+// of the tool's InputSchema, which was meant to stop a future default bump
+// silently disarming it. But the cap that actually shapes the answer is the
+// literal in parseTopologyAffectedArgs, and nothing tied the two: raise the
+// runtime one, leave the schema's documentation alone, and the fixture measures
+// against a stale number while passing vacuously over a restored regression.
+// Proven at the time by doing exactly that — the test went green over the bug.
+//
+// Reading the schema is only legitimate while this passes.
+func TestSchemaDefaultMatchesRuntimeDefault(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			MaxResults struct {
+				Default int `json:"default"`
+			} `json:"max_results"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(topologyAffectedSchema, &schema); err != nil {
+		t.Fatalf("parsing topologyAffectedSchema: %v", err)
+	}
+	if got := schema.Properties.MaxResults.Default; got != defaultMaxPackages {
+		t.Errorf("schema advertises max_results default %d but the runtime applies %d. "+
+			"Change BOTH: the e2e fixture sizes itself from the schema, so a mismatch "+
+			"leaves it measuring against a cap that is not in force and passing over "+
+			"regressions it exists to catch", got, defaultMaxPackages)
+	}
+
+	// And the default must actually be applied, not merely documented.
+	a, err := parseTopologyAffectedArgs(json.RawMessage(`{"files":["x.go"]}`))
+	if err != nil {
+		t.Fatalf("parseTopologyAffectedArgs: %v", err)
+	}
+	if a.MaxResults != defaultMaxPackages {
+		t.Errorf("an unspecified max_results resolved to %d, want %d", a.MaxResults, defaultMaxPackages)
 	}
 }

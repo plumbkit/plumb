@@ -193,10 +193,45 @@ func placeholderIsPositionalOperand(argv []string) bool {
 	return false
 }
 
+// booleanTestFlags are flags of the go and python test runners that take NO
+// value, so a target following one is still a positional operand.
+//
+// Without this, the most ordinary customisation of a shipped default silently
+// killed the feature: `go test -race {target:./...}` and `pytest -q {target:.}`
+// were read as "the target is -race's value", so no target was emitted and the
+// caller was told the command could not be narrowed to a directory — while
+// run_task would in fact have built a perfectly correct scoped argv.
+//
+// An unknown flag still counts as consuming. That direction is deliberate: a
+// missing target costs the caller one manual edit, while a target handed to a
+// flag that wanted a value runs the wrong tests and reports success. Adding a
+// flag here is safe; guessing about one is not.
+var booleanTestFlags = map[string]bool{
+	// go test
+	"-v": true, "-race": true, "-short": true, "-cover": true, "-benchmem": true,
+	"-json": true, "-failfast": true, "-shuffle": false, "-count": false,
+	// pytest
+	"-q": true, "-x": true, "-s": true, "-l": true, "--verbose": true,
+	"--quiet": true, "--exitfirst": true, "--no-header": true, "--tb": false,
+}
+
 // consumesNextArg reports whether an argv element is a flag whose value is the
-// FOLLOWING element. A flag spelled with "=" carries its own value and does not.
+// FOLLOWING element.
+//
+// Three things do not consume: a flag spelled with "=" (it carries its own
+// value), "--" (the canonical marker that what follows is positional — reading
+// it as consuming was precisely backwards), and a known boolean flag.
 func consumesNextArg(arg string) bool {
-	return strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")
+	if !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	if arg == "--" || strings.Contains(arg, "=") {
+		return false
+	}
+	if takesNoValue, known := booleanTestFlags[arg]; known {
+		return !takesNoValue
+	}
+	return true
 }
 
 // configuredSlots lists the task slots that actually have a command, in a fixed
