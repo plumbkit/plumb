@@ -88,6 +88,41 @@
 
 ### Changed
 
+- **The set of tools pinned into Claude Code's context (`anthropic/alwaysLoad`)
+  is now an explicit list, decoupled from the lean tool profile.** `AlwaysLoad`
+  used to be wired to `tools.IsLean || tools.IsBootstrap || tools.IsMailbox` —
+  a set built to answer "what does a lean client keep advertised", not "what
+  must never be deferred behind an MCP `ToolSearch` round-trip". The result:
+  `workspace_search`, the documented discovery entry point, and `search_in_files`
+  were never in `LeanTools`, so they were silently deferred on every full-profile
+  Claude Code session and never discoverable — a deferred tool has no schema in
+  context. A new `tools.PinnedTools` (`internal/tools/profile.go`) is a curated
+  20-tool list — `session_start`, `read_file`, `read_symbol`, `file_outline`,
+  `edit_file`, `write_file`, `git`, `diagnostics`, `workspace_search`,
+  `search_in_files`, `get_definition`, `find_references`, `workspace_symbols`,
+  `topology_search`, `topology_affected`, `transaction_apply`, `run_task`,
+  `search_memories`, `leave_note`, `check_messages` — with its own `IsPinned`
+  accessor; `conn_register.go` now wires `AlwaysLoad` to it directly.
+  `session_start_guidance.go`'s Claude Code block now either names only a
+  pinned tool or says explicitly to load a named deferred one via `ToolSearch`
+  first (`rename_symbol` and the cold-LSP symbol-edit tools), guarded by a new
+  `TestGuidanceNamesPinnedToolsOnly`. A new `TestPinnedSetBudget` bounds the
+  pinned set's serialized `tools/list` payload (measured at ~42.7 KB for the
+  20 tools — dominated by schema JSON, not descriptions, so the card's
+  original 15 KB target was not reachable; the four `BootstrapTools` alone
+  already total 16.7 KB).
+
+- **Five tool descriptions that had drifted past the 2,000-rune client
+  truncation cap (#9) are now under a tighter 1,200-rune pinned-description
+  budget.** `edit_file`, `git`, `move_symbol`, `leave_note`, and
+  `check_messages` were previously arriving truncated in a live Claude Code
+  session (PLAN-323). The overflow — anchor-mode edge cases, the full git tier
+  table, `move_symbol`'s cross-package refusal rationale, mailbox etiquette —
+  moved into the `plumb-refactor`, `plumb-git`, and `plumb-chat` skills rather
+  than being deleted. `TestToolDescription_Budget` is renamed
+  `TestDescriptionRuneCeiling` and now also enforces the tighter cap for these
+  five via a new `maxPinnedDescriptionChars`/`tightenedDescriptionTools`.
+
 - **HTML promoted to Validated (#9).** `vscode-html-language-server` 4.10.0
   passes both integration tests against the real binary on Linux, and CI now
   installs it, so the tier definition — "integration tests spawn the real binary

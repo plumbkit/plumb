@@ -33,35 +33,24 @@ func (*CheckMessages) Name() string { return "check_messages" }
 
 func (*CheckMessages) Description() string {
 	return "Read messages other agents have sent you, optionally waiting for one to " +
-		"arrive. The receive half of plumb's mailbox; leave_note is the send half.\n\n" +
-		"Omit wait_seconds (or 0) to return immediately with whatever is waiting. A " +
-		"positive wait_seconds BLOCKS until a message arrives or the wait expires — " +
-		"this is how you hand your turn to a peer after asking something, instead of " +
-		"polling. It is capped by [collab] max_wait_seconds, kept below the client's " +
-		"own call timeout.\n\n" +
-		"Each message is delivered exactly ONCE, to whichever path sees it first — " +
-		"this tool, the block appended to any tool result, or session_start. " +
-		"Re-calling will not redeliver it, so act on a message when you read it.\n\n" +
-		"Every message carries a conversation_id; quote it in leave_note to reply in " +
-		"thread. A THREAD is capped at [collab] max_exchanges — it bounds one " +
-		"conversation, and a new one starts a fresh budget, so it is a speed bump, " +
-		"not an enforced limit on how long two agents may talk. When a thread is " +
-		"spent, surface it to your human rather than routing around the cap.\n\n" +
-		"Messages are addressed to a SESSION, not a name: one written while you were " +
-		"connected is readable only by this session, so a later session taking your " +
-		"name cannot read your mail (nor you your predecessor's).\n\n" +
-		"IT ALSO REPORTS YOUR OWN UNREAD MAIL. Any message you sent that nobody has " +
-		"read yet is listed back, with its age — the one thing you cannot otherwise " +
-		"observe: plumb does not push, so \"no reply\" means either the peer read it " +
-		"and has not answered or never read it, and only this tells them apart. " +
-		"Listing is a read; it never consumes the message on the recipient's " +
-		"behalf.\n\n" +
-		"Requires [collab] mailbox = true. Messages from a session in another " +
-		"workspace are shown only when this project sets [collab] cross_project = " +
-		"true, and are labelled with the sending project. Etiquette: the plumb-chat " +
-		"skill.\n\n" +
-		"Parameters:\n" +
-		"  wait_seconds — block up to this long for a message (default 0, no wait)."
+		"arrive. Receive half of plumb's mailbox; leave_note is the send half. " +
+		"Full etiquette — addressing, delivery, the exchange cap, cross-project " +
+		"rules: the plumb-chat skill.\n\n" +
+		"Omit wait_seconds (or 0) to return immediately with whatever is waiting. " +
+		"A positive wait_seconds BLOCKS until a message arrives or the wait " +
+		"expires — hand your turn to a peer instead of polling. Capped by " +
+		"[collab] max_wait_seconds, kept below the client's own call timeout.\n\n" +
+		"Each message is delivered exactly ONCE, to whichever path sees it first " +
+		"— this tool, the block appended to any tool result, or session_start. " +
+		"Re-calling will not redeliver it. Every message carries a " +
+		"conversation_id; quote it in leave_note to reply in thread.\n\n" +
+		"Also reports your OWN unread mail — any message you sent that nobody has " +
+		"read yet, with its age, since plumb does not push and cannot otherwise " +
+		"tell \"read, no answer yet\" from \"never read\". Listing is a read; it " +
+		"never consumes the message on the recipient's behalf.\n\n" +
+		"Requires [collab] mailbox = true.\n\n" +
+		"Parameters: wait_seconds — block up to this long for a message (default " +
+		"0, no wait)."
 }
 
 func (*CheckMessages) InputSchema() json.RawMessage {

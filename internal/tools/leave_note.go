@@ -29,34 +29,23 @@ func (*LeaveNote) Name() string { return "leave_note" }
 
 func (*LeaveNote) Description() string {
 	return "Send a message to another agent — a named peer session, or \"next\" " +
-		"(whoever attaches to this workspace next). This is the send half of plumb's " +
-		"mailbox; check_messages is the receive half. Etiquette: the plumb-chat " +
-		"skill.\n\n" +
-		"CONVERSATIONS. Every message belongs to a thread. Omit conversation_id to " +
-		"start one (the reply tells you its id); quote the id you were given to answer " +
-		"in that thread — then you may omit `to`, and the reply goes to the thread's " +
-		"other participant, or is refused if it has none or several. A thread is capped " +
-		"at [collab] max_exchanges messages; once spent, replies are refused — " +
-		"summarise for your human rather than opening a fresh thread to keep talking.\n\n" +
-		"DELIVERY is by polling only — plumb does not push. It reaches the peer on its " +
-		"next tool call (appended to the result), check_messages, or session_start — " +
-		"exactly once. A peer idle on its human makes no calls and will not see it " +
-		"until it acts, so do not read silence as refusal.\n\n" +
-		"ADDRESSED TO A SESSION, NOT TO A NAME. When the peer you name is connected " +
-		"the message is bound to that exact session and only it can read it — names " +
-		"are reusable, so without the binding a message its recipient never read " +
-		"would go to whoever next answers to the name. The trade: a bound message " +
-		"expires unread if its recipient never returns. A peer that is NOT CONNECTED " +
-		"stores no binding and is delivered by name, as is \"next\".\n\n" +
-		"CROSS-PROJECT sends are refused up front unless THAT project has already set " +
-		"[collab] cross_project = true — never silently accepted only to sit unclaimed.\n\n" +
-		"Messages expire after [collab] intent_ttl_minutes. Requires [collab] " +
-		"mailbox = true. The body is secret-scrubbed before storage.\n\n" +
-		"Parameters:\n" +
-		"  body            — the message (required, free text).\n" +
-		"  to              — a peer session name, or \"next\"; omitted, it means \"next\" " +
-		"on a new thread and \"the other participant\" on a reply.\n" +
-		"  conversation_id — reply into an existing thread; omit to start one."
+		"(whoever attaches to this workspace next). Send half of plumb's mailbox; " +
+		"check_messages is the receive half. Full etiquette — addressing, " +
+		"delivery, the exchange cap, cross-project rules: the plumb-chat skill.\n\n" +
+		"Every message belongs to a thread: omit conversation_id to start one (the " +
+		"reply carries its id), or quote an id you were given to reply into that " +
+		"thread (to may then be omitted). A thread is capped at [collab] " +
+		"max_exchanges messages; once spent, replies are refused.\n\n" +
+		"Delivery is by polling only, exactly once — via the next tool call, " +
+		"check_messages, or session_start. A peer idle on its human has not seen " +
+		"the message; silence is not refusal, so do not re-send.\n\n" +
+		"Messages are bound to the exact SESSION when it is connected; a " +
+		"disconnected peer, or \"next\", is delivered by name instead. " +
+		"Cross-project sends need the recipient project's opt-in. Requires " +
+		"[collab] mailbox = true; the body is secret-scrubbed.\n\n" +
+		"Parameters: body (required); to (peer session name or \"next\" — omitted " +
+		"means \"next\" on a new thread, the other participant on a reply); " +
+		"conversation_id (reply into an existing thread)."
 }
 
 func (*LeaveNote) InputSchema() json.RawMessage {

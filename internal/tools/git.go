@@ -110,29 +110,25 @@ func (t *Git) WithPeerIntents(on func() bool, store func() *collab.Store, hintBu
 func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
-	return "Run git through one tiered, policy-gated tool (no shell). Read subcommands (status, log, diff, " +
-		"show, blame, shortlog, branch/tag/stash listing) always run. " +
-		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) need [git] allow_writes (default on). " +
-		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, cherry-pick, branch/tag delete, " +
-		"stash drop) need allow_destructive AND confirm:true. " +
-		"Network subcommands (push, fetch, pull) need allow_push AND confirm:true; force-pushing a protected branch " +
-		"(via -f/--force or a +refspec) and using an ad-hoc URL/remote (incl. any <transport>:: helper) on any network " +
-		"subcommand are always refused — and a force push must name its destination branch, since a bare -f or +HEAD " +
-		"may target a protected one. " +
-		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
-		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
-		"worktree); every other subcommand uses args. " +
-		"Cross-session guard: before a write/destructive/network op, if a DIFFERENT plumb session moved this repo's " +
-		"HEAD/branch since this session last observed it, the op is refused unless re-run with confirm:true, and the " +
-		"response names the peer session and the old→new refs (movement by this session, an external tool, or an " +
-		"unknown mover adds no friction). " +
-		"expected_head pins the exact HEAD commit for write/destructive/network ops — a mismatch refuses the call outright. " +
-		"Attribution: with [git] commit_trailer = true (default off) every plumb commit is stamped with a " +
-		"Plumb-Session: <session-name> trailer; either way, workspace_sessions lists recent commits per " +
-		"session (short SHA, subject, repository). " +
-		"Peer intents: with [collab] intents = true, a repo-state op (any destructive-tier op, plus " +
-		"commit/switch/checkout) also surfaces live peer share_intent claims covering this repository — advisory " +
-		"only: never blocks the op, never requires confirm."
+	return "Run git through one tiered, policy-gated tool (no shell, no agent-supplied " +
+		"command line). Read subcommands (status, log, diff, show, blame, " +
+		"shortlog, branch/tag/stash listing) always run. Write (add, commit, " +
+		"switch, mv, branch/tag create, stash push/pop) needs [git] allow_writes " +
+		"(default on). Destructive (reset, clean, checkout, restore, rebase, " +
+		"revert, cherry-pick, branch/tag delete, stash drop) needs " +
+		"allow_destructive AND confirm:true. Network (push, fetch, pull) needs " +
+		"allow_push AND confirm:true; force-pushing a protected branch or using " +
+		"an ad-hoc URL/remote is always refused.\n\n" +
+		"add and commit are typed: add stages with -A semantics; commit takes " +
+		"message, plus an optional files list for a path-limited commit. Every " +
+		"other subcommand uses args.\n\n" +
+		"Cross-session guard refuses a write/destructive/network op if a " +
+		"DIFFERENT session moved this repo's HEAD/branch since observed (override " +
+		"with confirm:true). expected_head pins the exact HEAD commit those ops " +
+		"must be at.\n\n" +
+		"Full tier table, the cross-session guard, commit attribution, and the " +
+		"narrower plumb tool to prefer over a destructive git call: the plumb-git " +
+		"skill."
 }
 
 type gitToolArgs struct {

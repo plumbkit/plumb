@@ -38,6 +38,24 @@ Use **`rename_file`** for file moves — atomic, refuses to overwrite without `o
 
 **Do not switch to your client's own edit tool after a plumb `read_file`.** Plumb tracks read-state per session and a client with its own read-before-edit tracking keeps a separate record; a read taken in one lane does not satisfy the other, so the edit is refused as unread or stale even though you just read the file. Some clients say so with an error naming a file that "has not been read yet" or "has been modified since read"; others simply bypass plumb's per-path locks, the language-server notification, and `undo_edit`. Stay in one lane: `read_file` → `edit_file`.
 
+## Choosing an `edit_file` mode
+
+`edit_file` takes two mutually exclusive request shapes: an `edits` array, or `start_anchor` + `end_anchor` + `new_string`.
+
+Within `edits`, prefer **range mode** (`start_line`/`end_line`, 1-based) over `str_replace` for a big multi-line replacement: `old_string` and anchors are matched character-for-character inside a JSON string, so every quote, backslash, and tab must be escaped, and a large enough edit can fail to serialise before it even reaches plumb. Range mode needs none of that — take the 1-based gutter line numbers from `read_file`/`read_symbol` output and send only `new_string`. `start_line: -1` appends at end of file; `end_line: -1` runs through the last line — the clean way to delete a block or append, no anchor needed.
+
+**Anchor mode** replaces the span between two unique anchors (each must match exactly once, `end_anchor` after `start_anchor`); `include_anchors=true` replaces the whole inclusive span instead of just what's between them. It is character-precise: an anchor quoted *without* its trailing newline joins its line onto `new_string` — a common mistake, and the response flags a removed line break when it happens.
+
+`str_replace` mode is best for a small, unambiguous, single-occurrence change; pass `expected_mtime` whenever a concurrent writer might touch the file (a sole agent editing in a burst may omit it, since the exactly-once match is itself a check).
+
+## Moving a declaration between files (`move_symbol`)
+
+`move_symbol` relocates a whole top-level declaration (function, method, type, const, or var) — including its leading doc comment by default — from one file to another, atomically: if the destination write fails, the source is rolled back, so the declaration is never duplicated or lost.
+
+Scope is deliberately conservative (v1): source and destination must be in the **same directory/package**. plumb does not rewrite references or imports, so a move that would change the symbol's package or import path — a different directory, or (for Go) a different package clause — is **refused** rather than applied half-correctly; relocate across packages by hand. For Go, it also refuses when source and destination carry different build constraints (`//go:build`, legacy `+build`, or the implicit `_GOOS`/`_GOARCH`/`_test` filename suffixes), since moving a declaration across them would silently change what compiles per platform.
+
+`dry_run` defaults to **true** — check the unified diff before setting `dry_run=false`. Undo is per-file: reverting a move takes two `undo_edit` calls, one per file.
+
 ## Quick reference
 
 | Task | Tool |

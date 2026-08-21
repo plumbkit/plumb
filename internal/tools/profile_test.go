@@ -119,6 +119,78 @@ func payloadBytes(t *testing.T, set []describable) int {
 	return len(b)
 }
 
+// pinnedToolSet instantiates every tool in tools.PinnedTools with nil/zero
+// dependencies, mirroring leanToolSet/nonLeanToolSet — only the three pure
+// metadata methods are called, so the nil deps are never dereferenced.
+func pinnedToolSet() []describable {
+	return []describable{
+		NewSessionStart(nil, nil, nil, nil, nil, nil),
+		NewReadFile(nil),
+		NewReadSymbol(nil, nil, 0, 0, nil),
+		NewFileOutline(nil, nil, 0, 0),
+		NewEditFile(WriteDeps{}),
+		NewWriteFile(WriteDeps{}),
+		NewGit(WriteDeps{}, nil),
+		NewDiagnosticsWithOpener(nil, nil),
+		NewWorkspaceSearch(nil, nil),
+		NewSearchInFiles(nil, nil, nil, 0),
+		NewGetDefinition(nil, nil, 0, 0),
+		NewFindReferences(nil, nil, 0, 0),
+		NewWorkspaceSymbols(nil, nil, 0, 0, nil),
+		NewTopologySearch(nil),
+		NewTopologyAffected(nil),
+		NewTransactionApply(WriteDeps{}),
+		NewTasks(WriteDeps{}, nil),
+		NewSearchMemories(nil),
+		NewLeaveNote(CollabDeps{}),
+		NewCheckMessages(CollabDeps{}),
+	}
+}
+
+// TestPinnedSetMatchesPinnedTools mirrors TestLeanToolSet_MatchesLeanTools:
+// pinnedToolSet and tools.PinnedTools must stay in lockstep, or the budget
+// test below would be silently measuring the wrong set.
+func TestPinnedSetMatchesPinnedTools(t *testing.T) {
+	set := pinnedToolSet()
+	if len(set) != len(PinnedTools) {
+		t.Fatalf("pinnedToolSet has %d tools, PinnedTools has %d — keep them in lockstep", len(set), len(PinnedTools))
+	}
+	for _, tl := range set {
+		if !IsPinned(tl.Name()) {
+			t.Errorf("pinnedToolSet includes %q which is not in PinnedTools", tl.Name())
+		}
+	}
+}
+
+// maxPinnedBytes bounds the serialized payload of the tools Claude Code pins
+// into context on every connection (name + description + schema JSON, the same
+// shape handleToolsList emits).
+//
+// PLAN-355 originally proposed 15,000 — measurement shows that is not
+// reachable for this pin set without cutting into schema JSON (out of this
+// card's scope, which is descriptions only): the four BootstrapTools alone
+// (session_start, read_file, edit_file, git), which must stay pinned for their
+// own stated reasons regardless of PinnedTools' contents, already total 16,663
+// bytes — over 15,000 before a single other tool is added. Schema JSON, not
+// description text, dominates: edit_file's and git's schemas alone are 5,257
+// and 3,157 bytes respectively, driven by per-parameter documentation the
+// description-budget work in this card does not touch. Measured (not guessed,
+// same discipline as maxDescriptionChars above): the full 20-tool
+// PinnedTools payload is ~42,700 bytes today. The cap below is that
+// measurement plus modest headroom — a ratchet against payload growth, not an
+// aspirational target this card's description trims could ever reach alone.
+const maxPinnedBytes = 45000
+
+// TestPinnedSetBudget guards maxPinnedBytes.
+func TestPinnedSetBudget(t *testing.T) {
+	pinned := payloadBytes(t, pinnedToolSet())
+	t.Logf("pinned tools/list payload: %d bytes (%d tools)", pinned, len(pinnedToolSet()))
+	if pinned > maxPinnedBytes {
+		t.Errorf("pinned payload is %d bytes, over the %d-byte budget — trim a description or evict a tool from PinnedTools",
+			pinned, maxPinnedBytes)
+	}
+}
+
 func TestLeanToolSet_MatchesLeanTools(t *testing.T) {
 	set := leanToolSet()
 	if len(set) != len(LeanTools) {
@@ -220,19 +292,50 @@ func TestLeanProfileBudget(t *testing.T) {
 // doctrine belongs, and unlike a description they are not silently clipped.
 const maxDescriptionChars = 2000
 
-// TestToolDescription_Budget pins every advertised description under the client
-// truncation cap.
+// maxPinnedDescriptionChars is the tighter per-description budget for the
+// tools that previously drifted past maxDescriptionChars and got truncated in
+// a live Claude Code session: edit_file, git, move_symbol, leave_note, and
+// check_messages (PLAN-323/PLAN-355). All five are now candidates for
+// tools.PinnedTools — a pinned description is paid for on EVERY connection,
+// not just when a client's tool search happens to page it in, so it earns a
+// stricter ceiling than the general 2000-rune truncation cap: one behaviour
+// sentence plus one parameter-shape sentence, with everything else moved into
+// the tool's skill (internal/cli/skills/).
+const maxPinnedDescriptionChars = 1200
+
+// tightenedDescriptionTools names the five descriptions maxPinnedDescriptionChars
+// applies to (see its doc comment). Kept as an explicit list, not derived from
+// PinnedTools, because the tighter budget is a property of THESE descriptions'
+// history of drifting past the client truncation cap — not of pin membership in
+// general; a future PinnedTools addition does not automatically inherit it.
+var tightenedDescriptionTools = map[string]bool{
+	"edit_file":      true,
+	"git":            true,
+	"move_symbol":    true,
+	"leave_note":     true,
+	"check_messages": true,
+}
+
+// TestDescriptionRuneCeiling pins every advertised description under the
+// client truncation cap, and the five tools named in tightenedDescriptionTools
+// under the tighter pinned-description budget.
 //
-// Nothing asserted this before, which is exactly why it recurred silently: six
-// descriptions had drifted past the cap — including edit_file and git, both
-// BootstrapTools that every agent receives on every task — and the only symptom
-// was text quietly missing from the model's context. A build that never fails
-// cannot tell you the tool description you just wrote is not being read.
-func TestToolDescription_Budget(t *testing.T) {
+// Nothing asserted the general cap before PLAN-323, which is exactly why it
+// recurred silently: six descriptions had drifted past it — including
+// edit_file and git, both BootstrapTools that every agent receives on every
+// task — and the only symptom was text quietly missing from the model's
+// context. A build that never fails cannot tell you the tool description you
+// just wrote is not being read.
+func TestDescriptionRuneCeiling(t *testing.T) {
 	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
-		if n := len([]rune(tl.Description())); n > maxDescriptionChars {
+		n := len([]rune(tl.Description()))
+		if n > maxDescriptionChars {
 			t.Errorf("%s description is %d chars, over the %d-char client truncation cap by %d — a client will clip the tail before the model sees it; move the overflow into the tool's skill (internal/cli/skills/) or docs/tools.md rather than deleting it",
 				tl.Name(), n, maxDescriptionChars, n-maxDescriptionChars)
+		}
+		if tightenedDescriptionTools[tl.Name()] && n > maxPinnedDescriptionChars {
+			t.Errorf("%s description is %d chars, over the %d-char pinned-description budget by %d — move lore into the tool's skill rather than the description",
+				tl.Name(), n, maxPinnedDescriptionChars, n-maxPinnedDescriptionChars)
 		}
 	}
 }

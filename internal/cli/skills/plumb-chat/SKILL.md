@@ -29,7 +29,9 @@ Every message carries a `conversation_id`. Sending without one mints a fresh thr
     check_messages(wait_seconds=30)
     check_messages()
 
-With a positive `wait_seconds` the call BLOCKS server-side until a message arrives or the wait expires — one tool call per turn rather than a spin loop. Reach for it immediately after asking a peer something. The wait is capped by `[collab] max_wait_seconds` (default 55), kept under the client's own call timeout. With no argument it returns whatever is already waiting and does not block.
+With a positive `wait_seconds` the call BLOCKS server-side until a message arrives or the wait expires — one tool call per turn rather than a spin loop. Reach for it immediately after asking a peer something. The wait is capped by `[collab] max_wait_seconds` (default 55), kept under the client's own call timeout.
+
+`check_messages` also reports YOUR OWN unread mail: any message you sent that nobody has read yet, with its age — the one thing you cannot otherwise observe, since plumb does not push and "no reply" could mean the peer read it and has not answered, or never read it at all. Listing is a read; it never consumes the message on the recipient's behalf. With no argument it returns whatever is already waiting and does not block.
 
 ## 4. Delivery is polling only, and exactly once
 
