@@ -9,6 +9,19 @@
 
 ### Added
 
+- **`read_multiple_files` gains read_file's slicing/search parameters.**
+  Top-level `start_line`, `end_line`, `pattern`, `use_regex`, `context_lines`,
+  and `max_matches` apply uniformly to EVERY path in the call — same
+  semantics as `read_file`'s own parameters, no per-path override (that would
+  break the existing `file_paths`→`paths` alias/coercion machinery). "First 60
+  lines of each of 8 files" or "grep these files for X" is now one call
+  instead of N. A windowed batch read still records each file's FULL mtime/sha
+  in the read tracker, identical to `read_file`'s own ranged-read behaviour —
+  strict mode is mtime-based, not range-based, so a later edit anywhere in the
+  file is still covered. The 20-path cap is unchanged. Guarded by
+  `TestReadMultipleFiles_UniformSlicing_StartEndLine` and
+  `TestReadMultipleFiles_UniformSlicing_Pattern`.
+
 - **`session_start` gains a `detail: "brief"` mode — a ≤1.5 KB orientation
   packet for a caller that just needs cheap re-orientation.** The full packet
   runs ~7.5 KB; a subagent or a resumed conversation calling `session_start`

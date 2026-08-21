@@ -18,6 +18,37 @@ var readMultipleFilesSchema = json.RawMessage(`{
       "items": { "type": "string" },
       "minItems": 1,
       "maxItems": 20
+    },
+    "start_line": {
+      "type": "integer",
+      "description": "First line to return (1-based, inclusive) from EVERY path in this call — same semantics as read_file's start_line, applied uniformly. Omit to start from the beginning of each file.",
+      "minimum": 1
+    },
+    "end_line": {
+      "type": "integer",
+      "description": "Last line to return (1-based, inclusive) from EVERY path in this call. Omit to read to the end of each file.",
+      "minimum": 1
+    },
+    "pattern": {
+      "type": "string",
+      "description": "Search EVERY path in this call for this pattern instead of returning a window — same semantics as read_file's pattern (literal by default, smart-case, Go RE2 regex when use_regex). Combine with start_line/end_line to restrict the search to that line window in every file."
+    },
+    "use_regex": {
+      "type": "boolean",
+      "default": false,
+      "description": "Treat pattern as a Go RE2 regular expression. Only consulted when pattern is set."
+    },
+    "context_lines": {
+      "type": "integer",
+      "description": "Lines of context around each match (like rg -C), applied to every path. Default 0. Only consulted when pattern is set.",
+      "minimum": 0,
+      "maximum": 50
+    },
+    "max_matches": {
+      "type": "integer",
+      "description": "Maximum matching lines to return per file in search mode. Default 200. Only consulted when pattern is set.",
+      "minimum": 1,
+      "maximum": 2000
     }
   },
   "required": ["paths"],
@@ -132,11 +163,22 @@ func (*ReadMultipleFiles) Description() string {
 		"under [edits] strict mode with no re-read. Errors for individual " +
 		"files are reported inline — one unreadable file doesn't block the others. " +
 		"Accepts absolute paths, file:// URIs, or workspace-relative paths. Binary files are detected and skipped. " +
-		"Each file is subject to the same 200 KiB cap as read_file."
+		"Each file is subject to the same 200 KiB cap as read_file. " +
+		"Pass start_line/end_line or pattern (with use_regex/context_lines/max_matches) to slice or search EVERY " +
+		"path in the call uniformly — same semantics as read_file's own parameters, applied per file; there is no " +
+		"per-path override, so a windowed batch read still records EACH file's full mtime/sha in the read tracker " +
+		"(identical to read_file's own ranged-read behaviour — strict mode is mtime-based, not range-based, so a " +
+		"later edit anywhere in the file is still covered). The 20-path cap is unchanged by slicing."
 }
 
 type readMultipleFilesArgs struct {
-	Paths []string `json:"paths"`
+	Paths        []string `json:"paths"`
+	StartLine    *int     `json:"start_line"`
+	EndLine      *int     `json:"end_line"`
+	Pattern      string   `json:"pattern"`
+	UseRegex     bool     `json:"use_regex"`
+	ContextLines int      `json:"context_lines"`
+	MaxMatches   int      `json:"max_matches"`
 }
 
 // readMultipleFilesParallelism caps simultaneous file reads. 8 is a good
@@ -189,7 +231,22 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			raw, _ := json.Marshal(map[string]any{"file_path": p})
+			// Every one of these keys must be a canonical read_file schema
+			// property — see TestInProcessCompositionsUseCanonicalKeys
+			// (inprocess_call_guard_test.go), which checks this literal
+			// against read_file's own schema. StartLine/EndLine are *int:
+			// json.Marshal of a nil pointer inside an `any`-valued map emits
+			// null, and read_file's own *int fields unmarshal null as nil —
+			// "not specified", identical to omitting the key.
+			raw, _ := json.Marshal(map[string]any{
+				"file_path":     p,
+				"start_line":    a.StartLine,
+				"end_line":      a.EndLine,
+				"pattern":       a.Pattern,
+				"use_regex":     a.UseRegex,
+				"context_lines": a.ContextLines,
+				"max_matches":   a.MaxMatches,
+			})
 			out, err := reader.Execute(ctx, raw)
 			results[i] = result{content: out, err: err}
 		}()

@@ -129,3 +129,82 @@ func TestReadMultipleFiles_EditLaneHint_ConsolidatedOnce(t *testing.T) {
 		t.Fatalf("per-file native-edit hint leaked through — it must be suppressed on the inner reader:\n%s", out)
 	}
 }
+
+// blockFor extracts one path's '### path' ... section from a batch-read
+// response, up to (but not including) the next '### ' heading or EOF.
+func blockFor(t *testing.T, out, path string) string {
+	t.Helper()
+	idx := strings.Index(out, "### "+path)
+	if idx < 0 {
+		t.Fatalf("output has no block for %s:\n%s", path, out)
+	}
+	end := len(out)
+	if next := strings.Index(out[idx+len("### "+path):], "\n### "); next >= 0 {
+		end = idx + len("### "+path) + next
+	}
+	return out[idx:end]
+}
+
+// PLAN-357 commit 2: start_line/end_line apply uniformly to EVERY path in the
+// call — no per-path override.
+func TestReadMultipleFiles_UniformSlicing_StartEndLine(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.txt")
+	pathB := filepath.Join(dir, "b.txt")
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(), mustJSON(map[string]any{
+		"paths":      []string{pathA, pathB},
+		"start_line": 2,
+		"end_line":   3,
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	for _, p := range []string{pathA, pathB} {
+		block := blockFor(t, out, p)
+		if !strings.Contains(block, "line2") || !strings.Contains(block, "line3") {
+			t.Fatalf("expected line2/line3 in %s's slice:\n%s", p, block)
+		}
+		if strings.Contains(block, "line1") || strings.Contains(block, "line4") || strings.Contains(block, "line5") {
+			t.Fatalf("start_line/end_line should have restricted %s to lines 2-3 only:\n%s", p, block)
+		}
+	}
+}
+
+// PLAN-357 commit 2: pattern applies uniformly to EVERY path in the call.
+func TestReadMultipleFiles_UniformSlicing_Pattern(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.txt")
+	pathB := filepath.Join(dir, "b.txt")
+	content := "alpha\nneedle-here\nomega\n"
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(), mustJSON(map[string]any{
+		"paths":   []string{pathA, pathB},
+		"pattern": "needle",
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	for _, p := range []string{pathA, pathB} {
+		block := blockFor(t, out, p)
+		if !strings.Contains(block, "needle-here") {
+			t.Fatalf("expected a pattern match for %s:\n%s", p, block)
+		}
+		if strings.Contains(block, "alpha") || strings.Contains(block, "omega") {
+			t.Fatalf("search mode should return only matching lines for %s:\n%s", p, block)
+		}
+	}
+}
