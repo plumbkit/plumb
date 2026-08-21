@@ -5,6 +5,7 @@ package mcp
 // any registered tool, not just the advertised set. Lets a caller probe the
 // REAL object a registration path (e.g. registerAllTools) built and wired,
 // rather than reconstructing a parallel instance that could drift from it.
+// Introspection only; do not mutate the returned tool.
 func (s *Server) Lookup(name string) (Tool, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

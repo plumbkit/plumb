@@ -26,6 +26,15 @@ type readRecordingTool interface {
 	ReadDeps() (tracker, readsFor, writes, client bool)
 }
 
+// writesNotApplicable is the writes leg ReadDeps returns for a tool with no
+// WriteTracker dependency at all (e.g. read_symbol never renders a
+// concurrent-edit-on-read warning). true here means "not applicable", not a
+// claim that a WriteTracker is actually wired — a genuine two-state field
+// (wired vs not-applicable) isn't needed since neither TestToolWiringParity
+// nor any caller distinguishes them; naming the constant is enough to keep
+// the literal from reading as a claim about wiring.
+const writesNotApplicable = true
+
 // Compile-time membership: every read-recording tool must implement
 // readRecordingTool, so a future one added here without a ReadDeps method
 // fails the build rather than silently escaping TestToolWiringParity's
