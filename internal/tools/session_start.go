@@ -356,7 +356,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang), nil
+		return t.executeBrief(ws, lang, inheritedName, repinnedFrom), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder

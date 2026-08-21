@@ -168,6 +168,47 @@ func TestSessionStartBrief_AutoBriefOnRepeatSessionID(t *testing.T) {
 	})
 }
 
+// TestSessionStartBrief_CarriesIdentitySignals is a mutate-and-confirm-red
+// guard for a defect a review round caught: the brief early-return in Execute
+// happened before writeSessionIdentity, silently dropping three loud signals
+// full always carries — the PR #181 re-pin announcement, the #316
+// why-no-server note, and the resumed session's peer-addressable name. All
+// three must survive in brief too, on the very call that combines a re-pin
+// with an auto-brief-triggering session_id.
+func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
+	attached := briefGitInit(t)
+	target := briefGitInit(t)
+	const skipNote = "LSP skipped: the workspace root is the home directory"
+
+	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+		WithRepin(func(_ context.Context, ws, _ string, _ bool) (string, error) { return ws, nil }).
+		WithExternalID(func(string) string { return "resumed-session" }).
+		WithLSPSkipNote(func() string { return skipNote })
+
+	// workspace re-pins the connection; session_id resolves to a non-empty
+	// inherited name, which is exactly the auto-brief trigger — no explicit
+	// detail argument, so this must still default to brief.
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`","session_id":"cc-conv-1"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, briefOrientationFooter) {
+		t.Fatalf("expected this call to auto-brief, got:\n%s", out)
+	}
+	if want := "Re-pinned this connection: " + attached + " → " + target; !strings.Contains(out, want) {
+		t.Errorf("brief must carry the re-pin announcement %q, got:\n%s", want, out)
+	}
+	if !strings.Contains(out, "Session:  resumed-session (resumed)") {
+		t.Errorf("brief must carry the resumed session's peer-addressable name, got:\n%s", out)
+	}
+	if !strings.Contains(out, skipNote) {
+		t.Errorf("brief must carry the LSP skip note, got:\n%s", out)
+	}
+	if n := len(out); n > 1536 {
+		t.Errorf("brief render with identity signals = %d bytes, want <= 1536:\n%s", n, out)
+	}
+}
+
 // TestSessionStartBrief_ExplicitDetailWins proves an explicit `detail` always
 // overrides the auto-brief default in both directions.
 func TestSessionStartBrief_ExplicitDetailWins(t *testing.T) {
