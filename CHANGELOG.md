@@ -148,11 +148,32 @@
   Python user changing `src/api/handlers.py` was told to run
   `go test ./src/api/...`. The tool now derives the target from the workspace's
   primary language, and only where that language's runner takes a POSITIONAL
-  PATH — the same rule the shipped `[tasks.<lang>]` defaults already state, so
-  the two cannot drift: `go` and `python` scope by path; `cargo test <filter>`
-  matches test NAMES, and typescript/swift/zig scope through project-specific
-  flags, so those get their directories named and no command guessed. A wrong
-  command is worse than none.
+  PATH: `go` and `python` scope by path; `cargo test <filter>` matches test
+  NAMES, and typescript/swift/zig scope through project-specific flags, so those
+  get their directories named and no command guessed. A wrong command is worse
+  than none.
+
+  The decision is made at the cli seam and handed to the tool as a target STYLE,
+  because `internal/tools` (Application) cannot import `internal/config`
+  (Domain) and so cannot derive the rule for itself. An earlier revision kept a
+  `go`/`python` switch inside the tool and claimed it mirrored the shipped
+  `[tasks.<lang>]` defaults; nothing enforced that, and a reviewer was right to
+  call it a second literal free to drift. It is now a test
+  (`TestTargetStyleMatchesShippedDefaults`) that fails if a shipped default
+  gains or loses a positional path target without the emitter being updated.
+
+  Two conditions are required before a target is emitted, and checking only the
+  first is a trap worth naming: the probe that asks whether the command accepts
+  a `{target}` proves a slot EXISTS, never that it means a directory. With
+  `[tasks.go] test = "go test -run {target}"` the emitted package path lands in
+  a test-NAME regex, matches nothing, and exits 0 — a silent green over zero
+  tests, strictly worse than the hardcoded command this replaced. A placeholder
+  that is the value of a preceding flag is therefore not treated as positional,
+  while `-count=1`-style flags (which carry their own value) still are. The
+  emitted string is also validated against `run_task`'s own one-shell-safe-
+  argument rule, so a directory containing a space — ordinary in the Python and
+  JavaScript trees this indexes — is named rather than offered as a target the
+  receiving tool would refuse.
 
   The second half was broken even for Go, in this very repository. The tool
   emitted workspace-relative paths (`./plumb/internal/config/...`) while
@@ -165,6 +186,17 @@
   `run_task` uses, rather than by re-deriving the condition — the lesson
   `configuredSlots` already records. Covered end to end: the emitted string is
   fed back through `run_task`'s own argv builder.
+
+- **The `plumb-testing` skill told agents that scoping a test run was
+  impossible.** It listed the shipped test defaults as `go test ./...`,
+  `pytest`, `cargo test` and concluded "none of the shipped defaults" carry a
+  `{target}` placeholder, so "narrowing the run to what `topology_affected`
+  named needs either a project that put `{target}` in its own stored command, or
+  the client's own runner". Every command in that list gained a defaulted
+  placeholder in `11a651cc`. The skill is what `plumb skills sync` installs into
+  users' clients for exactly this workflow, so the instruction channel was
+  actively steering agents away from the handoff the tool had been fixed to
+  support. It now shows the two composing directly.
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back

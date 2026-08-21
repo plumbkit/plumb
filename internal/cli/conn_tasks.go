@@ -95,6 +95,9 @@ const targetAcceptanceProbe = "./..."
 // topology_affected can emit a target run_task will accept instead of assuming
 // `go test`. A session with no language attached yields the zero value, which
 // the tool renders as bare directories and no command.
+//
+// The language rule lives HERE, not in internal/tools, because this is the only
+// layer that can see both the language and the configured command.
 func (s *connSession) testScope() tools.TestScope {
 	v := s.view()
 	lang := v.acquiredLanguage
@@ -103,26 +106,97 @@ func (s *connSession) testScope() tools.TestScope {
 	}
 	tc := v.tasks[lang]
 	return tools.TestScope{
-		Language:    lang,
-		WorkingDir:  tc.WorkingDir,
-		ScopedTests: testSlotTakesTarget(tc),
+		Language:   lang,
+		WorkingDir: tc.WorkingDir,
+		Style:      testTargetStyle(lang, tc),
 	}
 }
 
-// testSlotTakesTarget reports whether the test command accepts a positional
-// target.
+// testTargetStyle decides how a package directory should be spelled for this
+// workspace's test command, or TargetNone when it cannot be spelled safely.
 //
-// It answers by asking buildTaskSteps — the same function run_task uses — with a
-// probe target, rather than re-deriving the condition by scanning argv for a
-// placeholder. configuredSlots below records what happens otherwise: two
-// hand-written predicates disagreed with buildTaskSteps in opposite directions.
-// The stakes are higher here, because what this gates is a string the caller
-// pastes straight into run_task — a false positive produces "a target was given
-// but the command has no {target} placeholder" from a tool that just told them
-// to pass it.
-func testSlotTakesTarget(tc config.TasksConfig) bool {
-	_, err := buildTaskSteps(tc, "test", targetAcceptanceProbe)
-	return err == nil
+// Two conditions, and BOTH are needed. The command must take a positional path
+// operand (testSlotTakesPositionalTarget), and the language's runner must treat
+// that operand as a PATH. Checking only the first is what let
+// `[tasks.go] test = "go test -run {target}"` through: the probe proves a
+// {target} slot exists, never that it means a directory, so the emitted package
+// path landed in a test-NAME regex, matched nothing, and exited 0 — a silent
+// green over zero tests, which is worse than the hardcoded `go test` this
+// replaced. Checking only the second mis-handles a project that rewired its own
+// command.
+//
+// rust is excluded even though `cargo test <filter>` is positional, because the
+// filter matches test NAMES. typescript, swift and zig ship no placeholder and
+// scope through project-specific flags.
+func testTargetStyle(lang string, tc config.TasksConfig) tools.TargetStyle {
+	if !testSlotTakesPositionalTarget(tc) {
+		return tools.TargetNone
+	}
+	switch lang {
+	case "go":
+		return tools.TargetGoPackage
+	case "python":
+		return tools.TargetPath
+	default:
+		return tools.TargetNone
+	}
+}
+
+// testSlotTakesPositionalTarget reports whether the test command has a {target}
+// placeholder that is a positional OPERAND rather than the value of a flag.
+//
+// Acceptance is asked of buildTaskSteps — the same function run_task uses —
+// rather than re-derived, because configuredSlots below records what happens
+// otherwise: two hand-written predicates disagreed with buildTaskSteps in
+// opposite directions. The len(steps) check matters for the same reason it does
+// there — an unset or whitespace-only command parses to a nil argv and returns
+// (nil, nil), so err == nil alone reports "takes a target" for a workspace that
+// has no test command at all.
+//
+// Position is then checked directly, since no existing function answers it.
+func testSlotTakesPositionalTarget(tc config.TasksConfig) bool {
+	steps, err := buildTaskSteps(tc, "test", targetAcceptanceProbe)
+	if err != nil || len(steps) == 0 {
+		return false
+	}
+	argv, err := config.ParseTaskCommand(tc.Get("test"))
+	if err != nil {
+		return false
+	}
+	return placeholderIsPositionalOperand(argv)
+}
+
+// placeholderIsPositionalOperand reports whether argv's {target} element is a
+// trailing positional operand.
+//
+// A placeholder preceded by a flag that takes a separate value (`-run {target}`,
+// `-k {target}`) is that flag's VALUE, and a directory handed to it selects
+// nothing while still exiting 0. A flag carrying its own value (`-count=1`) does
+// not consume what follows, so `go test -count=1 {target:./...}` is positional —
+// treating every leading dash as consuming would refuse a perfectly good
+// command.
+//
+// Deliberately conservative beyond that: a placeholder that is not last
+// (`go test {target} -v`) is treated as unknown rather than guessed at, because
+// naming the directory costs a caller one edit while a wrong target costs them a
+// green run that tested nothing.
+func placeholderIsPositionalOperand(argv []string) bool {
+	for i, a := range argv {
+		if _, ok := targetPlaceholder(a); !ok {
+			continue
+		}
+		if i == 0 || consumesNextArg(argv[i-1]) {
+			return false
+		}
+		return i == len(argv)-1
+	}
+	return false
+}
+
+// consumesNextArg reports whether an argv element is a flag whose value is the
+// FOLLOWING element. A flag spelled with "=" carries its own value and does not.
+func consumesNextArg(arg string) bool {
+	return strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")
 }
 
 // configuredSlots lists the task slots that actually have a command, in a fixed

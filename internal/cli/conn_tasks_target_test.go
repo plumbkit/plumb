@@ -49,12 +49,15 @@ func TestEmittedTestTargetIsAcceptedByRunTask(t *testing.T) {
 	tc := config.Defaults().Tasks["go"]
 	tc.WorkingDir = "plumb"
 
-	// The scope the cli seam would hand the tool for this workspace.
-	if !testSlotTakesTarget(tc) {
-		t.Fatalf("the shipped go test command %q must accept a target, "+
-			"or topology_affected cannot emit one", tc.Test)
+	// The scope the cli seam would hand the tool for this workspace — built by
+	// the real function, not hand-assembled, so the test exercises the decision
+	// and not a restatement of it.
+	style := testTargetStyle("go", tc)
+	if style != tools.TargetGoPackage {
+		t.Fatalf("the shipped go test command %q must resolve to a Go package "+
+			"target, got style %v", tc.Test, style)
 	}
-	scope := tools.TestScope{Language: "go", WorkingDir: tc.WorkingDir, ScopedTests: true}
+	scope := tools.TestScope{Language: "go", WorkingDir: tc.WorkingDir, Style: style}
 
 	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
 		[]topology.Extractor{goext.New()})
@@ -106,8 +109,11 @@ func TestEmittedTestTargetIsAcceptedByRunTask(t *testing.T) {
 // change landed in.
 func changedPackageTarget(t *testing.T, out string) string {
 	t.Helper()
+	// Anchored on the column separator, not a bare suffix: "changed package" is
+	// also a suffix of "imports the changed package", so HasSuffix alone picks up
+	// an importer row whenever one happens to sort first.
 	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "  ") || !strings.HasSuffix(line, "changed package") {
+		if !strings.HasPrefix(line, "  ") || !strings.HasSuffix(line, "   changed package") {
 			continue
 		}
 		if fields := strings.Fields(line); len(fields) > 0 {
@@ -116,4 +122,154 @@ func changedPackageTarget(t *testing.T, out string) string {
 	}
 	t.Fatalf("no changed-package row in topology_affected output:\n%s", out)
 	return ""
+}
+
+// TestTargetStyleMatchesShippedDefaults is the guard for a claim that was
+// otherwise unbacked: that the languages topology_affected emits a target for
+// are exactly the languages whose SHIPPED test command takes a positional path.
+//
+// internal/tools cannot import internal/config (Application may not reach down
+// past Domain in that direction), so it cannot derive the rule; this package can
+// see both and is where the two are tied together. Without this, adding a
+// path-scoped default for a new language to config.defaultTasks would silently
+// fail to reach topology_affected, and nothing would say so.
+func TestTargetStyleMatchesShippedDefaults(t *testing.T) {
+	// The languages whose runner takes a positional PATH, per the rule stated in
+	// config_tasks.go's defaultTasks doc comment.
+	want := map[string]tools.TargetStyle{
+		"go":     tools.TargetGoPackage,
+		"python": tools.TargetPath,
+	}
+	defaults := config.Defaults().Tasks
+	if len(defaults) == 0 {
+		t.Fatal("config.Defaults() shipped no task commands")
+	}
+	for lang, tc := range defaults {
+		got := testTargetStyle(lang, tc)
+		if got != want[lang] {
+			t.Errorf("language %q: shipped test command %q resolves to style %v, want %v. "+
+				"If a default changed, update BOTH this table and testTargetStyle — a "+
+				"language whose runner takes a positional path but which topology_affected "+
+				"declines to emit a target for is a silently missing feature, and the "+
+				"reverse emits a target that runs the wrong tests",
+				lang, tc.Test, got, want[lang])
+		}
+	}
+	for lang := range want {
+		if _, ok := defaults[lang]; !ok {
+			t.Errorf("language %q is expected to be path-scoped but ships no default "+
+				"task config at all", lang)
+		}
+	}
+}
+
+// TestTargetStyleRejectsNonPositionalPlaceholders is the regression for the
+// hole an adversarial review found: the acceptance probe proves only that a
+// {target} SLOT exists, never that the slot means a directory.
+//
+// `go test -run {target}` accepts a target and then treats it as a test-NAME
+// regex: the emitted package path matches nothing, no package operand is given
+// so only the current directory is considered, and the run exits 0. A silent
+// green over zero tests is worse than the hardcoded `go test ./x/...` this
+// feature replaced, because the old string was at least a correct command.
+func TestTargetStyleRejectsNonPositionalPlaceholders(t *testing.T) {
+	cases := []struct {
+		name string
+		lang string
+		cmd  string
+		want tools.TargetStyle
+	}{
+		{"shipped go default", "go", "go test {target:./...}", tools.TargetGoPackage},
+		{"shipped python default", "python", "pytest {target:}", tools.TargetPath},
+		{"go with extra flags before a trailing operand", "go", "go test -count=1 {target:./...}", tools.TargetGoPackage},
+
+		{"go -run takes a NAME regex", "go", "go test -run {target}", tools.TargetNone},
+		{"pytest -k takes a NAME expression", "python", "pytest -k {target}", tools.TargetNone},
+		{"placeholder is not the last operand", "go", "go test {target:./...} -v", tools.TargetNone},
+		{"no placeholder at all", "go", "go test ./...", tools.TargetNone},
+		{"unset test command", "go", "", tools.TargetNone},
+		{"whitespace-only test command", "go", "   ", tools.TargetNone},
+		{"rust is positional but scopes by NAME", "rust", "cargo test {target:}", tools.TargetNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := testTargetStyle(tc.lang, config.TasksConfig{Test: tc.cmd})
+			if got != tc.want {
+				t.Errorf("testTargetStyle(%q, %q) = %v, want %v", tc.lang, tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestConnSessionTestScope covers the production seam itself.
+//
+// An adversarial review found the feature could be deleted at the wiring layer
+// with the entire internal/cli suite still green: every other test in this file
+// hand-builds a tools.TestScope, so making (*connSession).testScope() return the
+// zero value — no target ever emitted, for any workspace — broke nothing. The
+// round trip has to start where production starts.
+func TestConnSessionTestScope(t *testing.T) {
+	goTasks := config.Defaults().Tasks["go"]
+	subdirGo := goTasks
+	subdirGo.WorkingDir = "plumb"
+
+	cases := []struct {
+		name  string
+		lang  string
+		tasks map[string]config.TasksConfig
+		want  tools.TestScope
+	}{
+		{
+			name:  "go with the shipped default",
+			lang:  "go",
+			tasks: map[string]config.TasksConfig{"go": goTasks},
+			want:  tools.TestScope{Language: "go", Style: tools.TargetGoPackage},
+		},
+		{
+			// The PLAN-378 rebasing bug, asserted at the seam: dropping WorkingDir
+			// here is what made the emitted target name a directory that does not
+			// exist from where run_task runs.
+			name:  "go with a working_dir must carry it through",
+			lang:  "go",
+			tasks: map[string]config.TasksConfig{"go": subdirGo},
+			want:  tools.TestScope{Language: "go", WorkingDir: "plumb", Style: tools.TargetGoPackage},
+		},
+		{
+			name:  "python resolves to a plain path",
+			lang:  "python",
+			tasks: map[string]config.TasksConfig{"python": config.Defaults().Tasks["python"]},
+			want:  tools.TestScope{Language: "python", Style: tools.TargetPath},
+		},
+		{
+			name:  "rust is positional but scopes by name",
+			lang:  "rust",
+			tasks: map[string]config.TasksConfig{"rust": config.Defaults().Tasks["rust"]},
+			want:  tools.TestScope{Language: "rust", Style: tools.TargetNone},
+		},
+		{
+			name:  "no language attached yields the zero value",
+			lang:  "",
+			tasks: map[string]config.TasksConfig{"go": goTasks},
+			want:  tools.TestScope{},
+		},
+		{
+			name:  "LanguageNone yields the zero value",
+			lang:  LanguageNone,
+			tasks: map[string]config.TasksConfig{"go": goTasks},
+			want:  tools.TestScope{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &connSession{}
+			s.mutate(func(v *sessionView) {
+				v.acquiredLanguage = tc.lang
+				v.tasks = tc.tasks
+			})
+			if got := s.testScope(); got != tc.want {
+				t.Errorf("testScope() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

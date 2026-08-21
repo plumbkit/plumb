@@ -506,8 +506,9 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs, scope 
 
 	// Aggregate by package. Enumerating every test is what made this response
 	// 298 KB for a one-line change: 2,546 lines carrying the same two labels. The
-	// unit a caller acts on is the package path, because that is what `go test`
-	// takes, so lead with a runnable command per package.
+	// unit a caller acts on is the package, because that is the granularity every
+	// test runner scopes at, so lead with one row per package — carrying the
+	// run_task target where one can be spelled for this workspace.
 	pkgs := aggregateTestsByPackage(result.Tests)
 	fmt.Fprintf(&sb, "run these packages (%d)%s\n", len(pkgs), runHeaderSuffix(scope))
 	for _, p := range pkgs {

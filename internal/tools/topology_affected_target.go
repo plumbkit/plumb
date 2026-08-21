@@ -7,52 +7,47 @@ import (
 	"strings"
 )
 
+// TargetStyle says how a package directory should be spelled as a target for
+// this workspace's test command.
+//
+// The decision is made at the cli seam, which can see both the language and the
+// user's configured command; this package only renders. That split is
+// deliberate: an earlier revision kept a `case "go", "python"` switch here and
+// claimed it mirrored the shipped [tasks.<lang>] defaults, but internal/tools
+// (Application) cannot import internal/config (Domain), so it could not
+// actually derive the rule and nothing stopped the two drifting apart.
+type TargetStyle int
+
+const (
+	// TargetNone means no target can be spelled correctly. The directory is
+	// named and no command is guessed.
+	TargetNone TargetStyle = iota
+	// TargetGoPackage is Go's recursive package pattern, ./<dir>/...
+	TargetGoPackage
+	// TargetPath is a plain directory path, as pytest takes.
+	TargetPath
+)
+
 // TestScope describes how this workspace runs a scoped test command.
 //
-// It is supplied by the cli seam, which owns config, so this package neither
-// re-derives the primary language nor re-parses [tasks.<lang>] — and, above all,
-// does not assume Go. topology_affected's answer is a set of directories, but
-// the caller's next move is run_task, and run_task takes a target relative to
-// [tasks.<lang>].working_dir, so the emitted string has to be built from both.
-//
 // The zero value means "nothing is known": directories are named and no command
-// is guessed. That is the correct answer for a workspace with no language
+// is guessed. That is the right answer for a workspace with no language
 // attached, and it is what a caller constructing the tool without WithTestScope
-// gets.
+// gets — never a Go assumption by default.
 type TestScope struct {
-	// Language is the workspace's primary language; "" when none is attached.
+	// Language is the workspace's primary language. It is used only to explain
+	// the answer in prose; the target shape comes from Style.
 	Language string
 	// WorkingDir is [tasks.<lang>].working_dir, relative to the workspace root.
 	// Empty means the workspace root.
 	WorkingDir string
-	// ScopedTests reports whether the resolved test command accepts a positional
-	// {target}. When false, run_task REFUSES a target outright ("a target was
-	// given but the command has no {target} placeholder"), so emitting one would
-	// hand the caller a string that cannot be run.
-	ScopedTests bool
+	// Style is how to spell a directory for the resolved test command, or
+	// TargetNone when it cannot be spelled.
+	Style TargetStyle
 }
 
-// pathScoped reports whether this workspace's test runner takes a positional
-// PATH target that this package knows how to spell.
-//
-// The language list mirrors the rule the shipped [tasks.<lang>] defaults already
-// state, rather than inventing a second one: go and python scope by path, so a
-// directory is a meaningful target. rust's `cargo test <filter>` takes a NAME
-// substring — handing it a directory silently runs nothing. typescript, swift
-// and zig scope through flags whose spelling depends on the project's runner.
-// For those, naming the directory and guessing no command is the honest answer;
-// a wrong command is worse than none.
-func (s TestScope) pathScoped() bool {
-	if !s.ScopedTests {
-		return false
-	}
-	switch s.Language {
-	case "go", "python":
-		return true
-	default:
-		return false
-	}
-}
+// pathScoped reports whether a target can be emitted at all.
+func (s TestScope) pathScoped() bool { return s.Style != TargetNone }
 
 // testTarget renders an indexed directory as a target this workspace's test
 // runner accepts, or ok=false when no correct target exists for it.
@@ -64,14 +59,28 @@ func testTarget(scope TestScope, dir string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if scope.Language == "go" {
+	var target string
+	switch scope.Style {
+	case TargetGoPackage:
 		if rel == "." {
-			return "./...", true
+			target = "./..."
+		} else {
+			target = "./" + rel + "/..."
 		}
-		return "./" + rel + "/...", true
+	case TargetPath:
+		target = rel
+	default:
+		return "", false
 	}
-	// python: pytest takes a plain path, and "." is a valid whole-tree scope.
-	return rel, true
+	// run_task bounds a target to one shell-safe argument, and that validator
+	// lives in this very package. A directory containing a space or a "+" —
+	// ordinary in the Python and JavaScript trees topology indexes — would
+	// otherwise produce a target refused by the tool this row just told the
+	// caller to pass it to. Name the directory instead.
+	if !targetPattern.MatchString(target) {
+		return "", false
+	}
+	return target, true
 }
 
 // rebaseToWorkingDir re-expresses a workspace-relative directory relative to the
@@ -100,9 +109,9 @@ func rebaseToWorkingDir(dir, workingDir string) (string, bool) {
 	return "", false
 }
 
-// runHeaderSuffix states, once, how to run the rows that follow. It is a
-// suffix on the "run these packages (N)" line so a complete answer stays one
-// line plus one row per package.
+// runHeaderSuffix states, once, how to run the rows that follow. It is a suffix
+// on the "run these packages (N)" line so a complete answer stays one line plus
+// one row per package.
 func runHeaderSuffix(scope TestScope) string {
 	switch {
 	case scope.pathScoped():
@@ -111,12 +120,14 @@ func runHeaderSuffix(scope TestScope) string {
 		return " — no language is attached, so no test command is inferred; " +
 			"run your own test runner in each directory:"
 	default:
-		// Deliberately "does not scope by directory" rather than "takes no
-		// target": `cargo test <filter>` does take a positional argument, it just
-		// matches test NAMES. Saying it accepts nothing would be its own false
-		// statement, in a tool being fixed for making one.
-		return fmt.Sprintf(" — this workspace's %s test command does not scope by "+
-			"directory, so run it as configured and use these packages to narrow by hand:",
+		// Deliberately "could not be narrowed to a directory" rather than "takes
+		// no target": `cargo test <filter>` does take a positional argument, it
+		// just matches test NAMES, and a project may well have configured a
+		// perfectly good directory-scoped runner this code declines to guess at.
+		// Claiming the command accepts nothing would be its own false statement,
+		// in a tool being fixed for making one.
+		return fmt.Sprintf(" — the %s test command could not be narrowed to a "+
+			"directory, so run it as configured and use these packages to scope by hand:",
 			scope.Language)
 	}
 }
@@ -129,7 +140,7 @@ func packageRunLabel(scope TestScope, dir string) string {
 	if target, ok := testTarget(scope, dir); ok {
 		return target
 	}
-	if scope.pathScoped() {
+	if scope.pathScoped() && scope.WorkingDir != "" {
 		return dir + " (outside " + scope.WorkingDir + "/)"
 	}
 	return dir
