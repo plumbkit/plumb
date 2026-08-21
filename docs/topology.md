@@ -189,9 +189,11 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   sibling test files the call graph alone misses). Recall-biased; each test
   carries a confidence (1.0 containment, 0.8 dependency edge, 0.5 co-located)
   and the reason it was flagged. Use after writing to decide what to run.
-- **`topology_routes`** — heuristic, framework-aware entry-point scan (Go HTTP
-  handlers, Cobra commands, Python `@app.route`). Results carry a confidence
-  annotation.
+- **`topology_routes`** — pattern-matches entry-point-shaped symbol names/signatures
+  (Go HTTP handlers, Cobra commands, Python `@app.route`). It does **not** parse route
+  registrations or call sites, so it cannot recover a path-to-handler binding (e.g.
+  `"/api/x" -> handlerFn`) — only symbol-name/signature candidates, each carrying a
+  confidence annotation.
 
 ## Configuration
 
@@ -219,7 +221,9 @@ never committed.
 
 - **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
   dispatch. Treat its graph as a strong hint, then confirm with LSP.
-- **`topology_routes` is heuristic.** It pattern-matches known frameworks; always
+- **`topology_routes` is heuristic and name/signature-only.** It pattern-matches
+  known entry-point idioms against symbol names and signatures; it does **not** parse
+  route registrations or call sites, so it cannot map a path to its handler. Always
   read the confidence annotation.
 - **Freshness is eventual.** Edits made through plumb re-index immediately;
   external changes are picked up by the periodic resync (or on the next attach).

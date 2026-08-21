@@ -778,10 +778,12 @@ Given changed files/symbols, return likely affected files and tests. **Inputs:**
 `files` (array), `symbols` (array), `max_results` (default 50).
 
 ### `topology_routes`
-Framework-aware entry-point scanner (Go HTTP handlers, Cobra commands, Python
-`@app.route`). Results annotated with confidence — heuristic. **Inputs:**
-`framework` (optional: `go` | `python` | `cobra`), `path_prefix` (optional),
-`limit` (default 20).
+Pattern-matches entry-point-shaped symbol names/signatures (Go HTTP handlers,
+Cobra commands, Python `@app.route`). Does **not** parse route registrations or
+call sites — it cannot recover a path-to-handler binding, only candidate
+functions whose name/signature look like a known entry-point idiom. Results
+annotated with confidence — heuristic. **Inputs:** `framework` (optional: `go`
+| `python` | `cobra`), `path_prefix` (optional), `limit` (default 20).
 
 ### `structural_query`
 Find symbols by **shape**, not name — a curated set of named structural checks

@@ -81,6 +81,18 @@
 
 ### Fixed
 
+- **`topology_routes` description and docs no longer oversell what it does
+  (worth-it W1-6).** The tool description said it "identifies HTTP handler and
+  CLI entry-point functions" and "matches" framework patterns — language that
+  reads as if it resolves real path-to-handler bindings. It does not: it
+  pattern-matches entry-point-*shaped* symbol names and signatures (functions
+  named `GET`/`Handle`/`RunE`, etc.) and has no call-site or route-registration
+  parsing, so it cannot recover a `"/api/x" -> handlerFn` binding (the gap
+  behind closed issue [#5](https://github.com/plumbkit/plumb/issues/5)). The
+  tool description, `docs/topology.md` (tool summary + trade-offs section), and
+  `docs/tools.md` now say so explicitly. No behaviour change — the real
+  route-registration-aware rewrite is tracked separately.
+
 - **`docs/token-efficiency.md` no longer recommends `read_multiple_files` as a
   caveat-free token saving (PLAN-357).** It claimed "one tool result is
   cheaper than four headers" and listed the tool's default cost as "sum of

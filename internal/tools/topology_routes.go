@@ -44,12 +44,16 @@ func NewTopologyRoutes(storeFn func() *topology.Store) *TopologyRoutes {
 func (*TopologyRoutes) Name() string                 { return "topology_routes" }
 func (*TopologyRoutes) InputSchema() json.RawMessage { return topologyRoutesSchema }
 func (*TopologyRoutes) Description() string {
-	return "Scans topology nodes to identify HTTP handler and CLI entry-point functions. " +
-		"Matches Go patterns (http.HandleFunc, r.GET/POST, mux.Handle, Cobra cmd.Run/RunE), " +
-		"Python patterns (@app.route, @router.get, FastAPI path decorators), and " +
-		"Swift/Vapor patterns (RouteCollection.boot, configure(_:Application), ParsableCommand.run). " +
-		"Results carry confidence annotations — these are pattern-matched, not type-resolved. " +
-		"Returns a clear message when no routes match or topology is disabled."
+	return "Pattern-matches entry-point-shaped symbol NAMES and signatures: Go handler funcs " +
+		"(http.HandleFunc, r.GET/POST, mux.Handle), Cobra cmd.Run/RunE, Python decorators " +
+		"(@app.route, @router.get, FastAPI path decorators), and Swift/Vapor idioms " +
+		"(RouteCollection.boot, configure(_:Application), ParsableCommand.run). " +
+		"It does NOT parse route registrations or call sites, so it cannot recover a " +
+		"path-to-handler binding (e.g. \"/api/x\" -> handlerFn) — it only finds functions whose " +
+		"name or signature looks like a known entry-point idiom. Results are candidates, not " +
+		"confirmed routes: each carries a confidence annotation reflecting the pattern's typical " +
+		"accuracy, not a resolved binding. Returns a clear message when no candidates match or " +
+		"topology is disabled."
 }
 
 // routeEntry is a matched route/entry-point candidate.
