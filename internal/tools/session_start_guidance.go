@@ -136,6 +136,9 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			sb.WriteString("- Discovery: start with **workspace_search**, then the Map and **get_definition** / " +
 				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")
 		}
+		sb.WriteString("- Narrow the Map before widening it: **topology_explore** with `include_source: \"none\"` " +
+			"and `depth: 1` answers \"what touches this?\" for a fraction of the default response; " +
+			"**topology_search** takes `kinds` and `limit`. The defaults are tuned for Go-sized files.\n")
 		sb.WriteString("- Refactors: **rename_symbol** (load via ToolSearch if not already in context) for " +
 			"identifiers, **transaction_apply** for one atomic multi-file change — the plumb-refactor skill " +
 			"has the rest.\n")

@@ -716,6 +716,14 @@
   "generated" — the bias is removed without the tool having to decide what a
   project considers generated.
 
+- **`topology_explore` and `topology_search` now lead with their own narrowing
+  knobs.** Both already accepted them (`include_source`, `depth`, `max_nodes`,
+  `max_bytes`; `kinds`, `limit`, `include_snippets`), but the descriptions
+  buried them under the per-parameter schema text, and the defaults are tuned for
+  Go-sized files — so on a large TypeScript file an agent got a large response
+  and no hint that a smaller one was one argument away. `session_start` guidance
+  says the same thing.
+
 ### Fixed
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
