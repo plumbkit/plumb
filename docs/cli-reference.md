@@ -26,6 +26,7 @@ language `none`.
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
 | [`plumb skills`](#plumb-skills) | Show or sync plumb's embedded skills per client |
+| [`plumb hooks`](#plumb-hooks) | Install opt-in lifecycle hooks for supported clients |
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
@@ -254,6 +255,27 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
 | `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. For a skill-capable client it also removes the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
+---
+
+## `plumb hooks`
+
+```
+plumb hooks install codex
+```
+
+Install Plumb's opt-in Codex mailbox hooks after `plumb setup codex`. The installer
+merges named `SessionStart` and `Stop` command hooks into `$CODEX_HOME/hooks.json`
+(or `~/.codex/hooks.json`), preserves other hook entries, refreshes its own binary
+path on re-run, and backs up an existing file before changing it. The `SessionStart`
+hook supplies Codex's conversation ID so the first `session_start` can pass it as
+`session_id`; the `Stop` hook performs one read-only `plumb mail` probe and keeps the
+turn going only when mail is pending.
+
+Use Codex's `/hooks` command to review and trust the installed commands. The hook is
+fail-open and does not expose message bodies. Codex cannot wake an already-idle
+session from a background hook, so this narrows the end-of-turn race rather than
+providing push delivery.
+
 ---
 
 ## `plumb skills`

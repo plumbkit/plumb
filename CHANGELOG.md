@@ -740,6 +740,11 @@
   build to reach a skip. The cheap check now comes first: 86s → 0.01s.
 
 ### Added
+- **Codex now has an opt-in Plumb mailbox hook pack.** `plumb hooks install codex`
+  merges a `SessionStart` session-link hook and a fail-open `Stop` mailbox probe into
+  Codex's user `hooks.json`, preserving existing handlers and requiring Codex's normal
+  `/hooks` trust review. It intentionally checks only as a turn ends: Codex cannot
+  wake an already-idle session from a background hook.
 
 - **The topology index now has cross-file edges — it had none at all.** Extractors
   run per file and emit edges as indices into that file's own node slice, so
