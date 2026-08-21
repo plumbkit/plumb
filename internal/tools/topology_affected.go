@@ -37,7 +37,7 @@ var topologyAffectedSchema = json.RawMessage(`{
     },
     "max_results": {
       "type": "integer",
-      "description": "Maximum affected nodes to return. Default 50.",
+      "description": "Maximum PACKAGES to return. Default 50, which is well above a normal answer — raise it only for a change that fans out very widely. Tests are counted per package rather than listed individually, so this no longer caps test rows; the changed package always sorts first, so a cap cannot drop the package the edit landed in.",
       "default": 50
     }
   },
