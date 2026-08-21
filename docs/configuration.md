@@ -1064,8 +1064,9 @@ results; the call/type hierarchies are URI-bearing and route per-file.
 
 ## `[tasks.<language>]` — per-language build/test commands
 
-Five optional command slots per language, keyed by the `[lsp.<lang>]` id, run by
-the `run_task` tool and the `plumb build|lint|test|e2e|verify` CLI.
+Five built-in command slots per language, keyed by the `[lsp.<lang>]` id, plus
+any slot the project names for itself — run by the `run_task` tool and the
+`plumb build|lint|test|e2e|verify` and `plumb task <slot>` CLI.
 
 ```toml
 [tasks.go]
@@ -1105,6 +1106,66 @@ is the *absence* of an argument (`cargo test`, `swift test`).
 `typescript`, `swift` and `zig` ship without a placeholder: they scope through
 runner-specific flags whose spelling depends on the project, and a wrong guess is
 worse than none. Add your own `{target}` to those slots.
+
+### Project-defined slots
+
+`build`, `lint`, `test`, `e2e` and `verify` are Go's verbs, and they are not
+every toolchain's. A slot named under `[tasks.<lang>]` that is not one of those
+is a **project-defined slot**, run exactly like a built-in:
+
+```toml
+[tasks.typescript]
+check = "pnpm run check"       # run_task {slot: "check"}  /  plumb task check
+audit = "pnpm audit --prod"
+```
+
+A slot name is a lowercase identifier (`^[a-z][a-z0-9_-]{0,31}$`); a malformed
+name, or one shadowing a built-in, is rejected at load rather than ignored, since
+an ignored slot is a command you wrote and believe is configured. Project-defined
+slots are trust-gated and validated identically to built-ins — the trust hash
+binds every `(language, slot, command)` triple regardless of slot name.
+
+They are deliberately **not agent-writable**: `agent_config op=set` works from a
+registry of known keys, and a project-defined slot has no registry entry, so the
+allowlist fails closed. Add one by editing `.plumb/config.toml` and running
+`plumb trust`.
+
+Because the vocabulary belongs to the workspace, `run_task`'s `slot` carries no
+JSON-schema `enum` — a client would enforce one on its side and close the
+vocabulary again. A slot with no command is refused with the list of slots that
+have one, and `plumb task` with no arguments prints the same list.
+
+The five built-in verbs are registered before any workspace is known, so a
+project-defined slot cannot have a verb of its own; `plumb task <slot>` is the
+CLI path to it, and works for the built-ins too.
+
+### JavaScript package manager detection
+
+The shipped `typescript` defaults name the package manager the workspace
+declares, rather than assuming npm:
+
+| the workspace has | build | test |
+|---|---|---|
+| `pnpm-lock.yaml` | `pnpm run build` | `pnpm run test` |
+| `yarn.lock` | `yarn run build` | `yarn run test` |
+| `bun.lockb` / `bun.lock` | `bun run build` | `bun run test` |
+| `package-lock.json`, or nothing | `npm run build` | `npm test` |
+
+A corepack `"packageManager"` field in `package.json` wins over a lockfile — it
+is an explicit statement, whereas a lockfile can be a leftover. For the same
+reason a non-npm lockfile wins over `package-lock.json` when both are present: an
+abandoned npm lockfile is the usual residue of a migration.
+
+This is not the "never guess an uninstalled tool" rule being relaxed — it is that
+rule being applied. `npm run build` was *already* a guess for every JS/TS
+workspace, and on a pnpm or yarn project it is frequently wrong rather than
+merely unhelpful. A lockfile is the project stating its runner; reading it is
+evidence. Note `bun run test`, not `bun test`: the latter invokes bun's own test
+runner instead of the project's `test` script.
+
+Only a slot still holding the shipped default is rewritten, compared byte for
+byte. Anything you, your global config or the project set is left exactly as
+written — including a command that names npm deliberately.
 
 ### `working_dir` — when the module is not at the root
 
