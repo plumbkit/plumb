@@ -42,6 +42,25 @@
   no post-write diagnostics yet, so it is out of scope here; PR 2 (rollback
   semantics, `fail_on_new_errors`) adds that support and inherits the same
   labelling.
+- **`plumb skills sync` is now versioned and self-cleaning, ending the
+  `.bak` litter a naive overwrite policy left behind (PLAN-365).** Each
+  skills directory now carries `.plumb/skills-manifest.json`, a hash+version
+  ledger sync uses to tell "plumb's own content changed between versions"
+  from "the user edited this file": a skill whose disk content still matches
+  what plumb last shipped is replaced in place with no backup at all; a
+  skill matching neither the last-shipped hash nor the newly-shipped one is
+  left completely untouched, with the proposed content written instead to a
+  `<name>.plumb-new` file (never a directory, so it can't be mistaken for
+  another skill bundle) for manual review. A client synced before this
+  manifest existed falls back to the file's own provenance marker as an
+  implicit prior hash, so turning this on never manufactures a false
+  "user modified this" conflict for an already-installed skill. Sync also
+  now cleans up the directory-level `<name>.<timestamp>.bak` backups a prior
+  overwrite-and-backup policy left beside the skill directories — deleting
+  only the ones whose content hashes to a shipped hash on record, and
+  listing any others for manual review rather than guessing. New
+  `plumb skills sync --check` lists every action (including which backups
+  would be cleaned up) without writing anything.
 
 - **Registration-parity and wiring tests make the `read_multiple_files`
   tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing

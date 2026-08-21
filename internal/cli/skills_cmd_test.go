@@ -143,7 +143,7 @@ func TestPlumbRegisteredIn(t *testing.T) {
 // validation: an unrecognised name fails and lists the valid ones, so a typo
 // cannot silently sync nothing.
 func TestRunSkillsSync_UnknownClientIsAUsageError(t *testing.T) {
-	err := runSkillsSync(nil, []string{"not-a-client"})
+	err := runSkillsSync(false, []string{"not-a-client"})
 	if err == nil {
 		t.Fatal("an unknown client name must be an error")
 	}
@@ -160,7 +160,7 @@ func TestRunSkillsSync_UnknownClientIsAUsageError(t *testing.T) {
 func TestRunSkillsSync_NamedUnregisteredClientErrors(t *testing.T) {
 	root := pointClientHomesAt(t)
 
-	err := runSkillsSync(nil, []string{"codex"})
+	err := runSkillsSync(false, []string{"codex"})
 	if err == nil {
 		t.Fatal("syncing an unregistered client by name must be an error")
 	}
@@ -184,7 +184,7 @@ func TestRunSkillsSync_SweepInstallsForRegisteredClientsOnly(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		if err := runSkillsSync(nil, nil); err != nil {
+		if err := runSkillsSync(false, nil); err != nil {
 			t.Errorf("sync sweep: %v", err)
 		}
 	})
@@ -211,23 +211,29 @@ func TestRunSkillsSync_SweepInstallsForRegisteredClientsOnly(t *testing.T) {
 
 // TestSkillSyncSummaryLine pins the per-client summary's shape: an
 // all-current client collapses to the short form, a mixed outcome lists every
-// non-zero bucket, and a failed install is never hidden.
+// non-zero bucket, a failed install is never hidden, a conflict is called out
+// as "needs review", and a backup-cleanup outcome appends as a trailing
+// clause rather than displacing the skill tally.
 func TestSkillSyncSummaryLine(t *testing.T) {
 	cases := []struct {
-		name  string
-		tally skillSyncTally
-		want  string
+		name    string
+		tally   skillSyncTally
+		cleanup skillCleanupReport
+		want    string
 	}{
-		{"all current", skillSyncTally{current: 7}, "Test: 7 skills current"},
-		{"singular", skillSyncTally{current: 1}, "Test: 1 skill current"},
-		{"fresh install", skillSyncTally{installed: 7}, "Test: 7 skills — 7 installed"},
-		{"mixed", skillSyncTally{installed: 1, updated: 2, current: 4}, "Test: 7 skills — 1 installed, 2 updated, 4 current"},
-		{"failure is visible", skillSyncTally{current: 6, failed: 1}, "Test: 7 skills — 6 current, 1 failed"},
-		{"empty", skillSyncTally{}, "Test: nothing to sync"},
+		{"all current", skillSyncTally{current: 7}, skillCleanupReport{}, "Test: 7 skills current"},
+		{"singular", skillSyncTally{current: 1}, skillCleanupReport{}, "Test: 1 skill current"},
+		{"fresh install", skillSyncTally{installed: 7}, skillCleanupReport{}, "Test: 7 skills — 7 installed"},
+		{"mixed", skillSyncTally{installed: 1, updated: 2, current: 4}, skillCleanupReport{}, "Test: 7 skills — 1 installed, 2 updated, 4 current"},
+		{"failure is visible", skillSyncTally{current: 6, failed: 1}, skillCleanupReport{}, "Test: 7 skills — 6 current, 1 failed"},
+		{"empty", skillSyncTally{}, skillCleanupReport{}, "Test: nothing to sync"},
+		{"conflict is visible", skillSyncTally{current: 6, conflict: 1}, skillCleanupReport{}, "Test: 7 skills — 6 current, 1 needs review"},
+		{"cleanup removed", skillSyncTally{current: 7}, skillCleanupReport{removed: []string{"a.bak", "b.bak"}}, "Test: 7 skills current; 2 shipped-hash backups removed"},
+		{"cleanup kept", skillSyncTally{current: 7}, skillCleanupReport{kept: []string{"c.bak"}}, "Test: 7 skills current; 1 backup left for review (c.bak)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := skillSyncSummaryLine("Test", tc.tally); got != tc.want {
+			if got := skillSyncSummaryLine("Test", tc.tally, tc.cleanup); got != tc.want {
 				t.Errorf("skillSyncSummaryLine = %q, want %q", got, tc.want)
 			}
 		})
@@ -246,7 +252,7 @@ func TestRunSkillsSync_NeverSilent(t *testing.T) {
 
 	n := strconv.Itoa(len(embeddedSkills()))
 	out := captureStdout(t, func() {
-		if err := runSkillsSync(nil, nil); err != nil {
+		if err := runSkillsSync(false, nil); err != nil {
 			t.Errorf("first sync: %v", err)
 		}
 	})
@@ -255,7 +261,7 @@ func TestRunSkillsSync_NeverSilent(t *testing.T) {
 	}
 
 	out = captureStdout(t, func() {
-		if err := runSkillsSync(nil, nil); err != nil {
+		if err := runSkillsSync(false, nil); err != nil {
 			t.Errorf("no-op re-sync: %v", err)
 		}
 	})
@@ -277,7 +283,7 @@ func TestRunSkillsSync_SummaryBlock(t *testing.T) {
 
 	n := strconv.Itoa(len(embeddedSkills()))
 	out := captureStdout(t, func() {
-		if err := runSkillsSync(nil, nil); err != nil {
+		if err := runSkillsSync(false, nil); err != nil {
 			t.Errorf("sync: %v", err)
 		}
 	})
@@ -342,7 +348,7 @@ func TestPrintSkillsDriftHint(t *testing.T) {
 		t.Errorf("missing skills must trigger the hint, got %q", out)
 	}
 
-	if _, results := installSkillsFor(target); len(results) == 0 {
+	if _, results, _ := installSkillsFor(target, false); len(results) == 0 {
 		t.Fatal("expected the skills to install for the test target")
 	}
 	out = captureStdout(t, func() { printSkillsDriftHint(target) })
@@ -454,7 +460,7 @@ func TestDoctorSeesSkillDrift(t *testing.T) {
 		t.Errorf("detail should count every embedded skill as missing: %q", res.detail)
 	}
 
-	if _, results := installSkillsFor(target); len(results) == 0 {
+	if _, results, _ := installSkillsFor(target, false); len(results) == 0 {
 		t.Fatal("expected the skills to install")
 	}
 	if _, ok := skillFreshnessResult(target); ok {
