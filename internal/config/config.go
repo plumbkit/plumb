@@ -567,12 +567,24 @@ type Config struct {
 	// Commands is the [[command]] allow-list of fixed-argv named commands the
 	// run_command tool may run. User-authored; a project entry needs `plumb trust`.
 	//
-	// omitempty matters more than it looks. agent_write marshals the WHOLE config
-	// back out, so without it an empty allow-list is written as a literal
-	// `command = []` — and an explicit empty array in a user's config out-ranks the
-	// compiled-in default forever after. That is how a config plumb wrote itself
-	// silently pinned this list empty: every default shipped here afterwards was
-	// dead on arrival for anyone whose config had ever been saved.
+	// omitempty keeps an empty allow-list out of a saved config. config_save.Save
+	// encodes the WHOLE struct — its production caller is the TUI Settings screen
+	// in Global scope — so without it an empty list is written as a literal
+	// `command = []`, and an explicit empty array in a user's file out-ranks a
+	// compiled-in default from then on.
+	//
+	// This is a mitigation, not the fix, and the difference matters. It only
+	// suppresses the EMPTY case: once a non-empty default ships, Save writes the
+	// entries out, and go-toml truncates the pre-populated slice on the first
+	// decoded [[command]] — so a LATER addition is still dead on arrival. The same
+	// freezing already applies to every other slice this encoder materialises
+	// (topology.exclude_patterns, lsp.*.args, lsp.*.root_markers,
+	// workspace.extra_roots) and, worse, to non-empty values it pins by VALUE
+	// (git.protected_branches, quality.analysers), which omitempty cannot reach.
+	//
+	// The real fix is in the writer: route the TUI's global save through the sparse
+	// config.SetGlobalValue, as SaveTheme already does, so only the edited key is
+	// touched. One caller, and all of the above stop freezing.
 	Commands []CommandConfig `toml:"command,omitempty"`
 	// CommandPolicy is the [commands] table: the execute_shell_command gate
 	// (allow_shell) and the sandbox-enforcement knob (require_sandbox).

@@ -72,34 +72,30 @@
 
 ### Fixed
 
-- **`run_command` refused everything out of the box, and a config plumb wrote
-  itself made sure it kept doing so.** The two command tiers shipped with opposite
-  defaults: `[tasks]` ships working per-language commands, while the `[[command]]`
-  allow-list — fixed argv, no shell, no free text — shipped EMPTY. So the only
-  documented way to run anything was `[commands] allow_shell`, the broad
-  read-everything tier, for wanting to count the lines in a file; callers duly
-  reached past plumb to their own shell, which is the outcome the safe tier exists
-  to prevent.
+- **`execute_shell_command`'s refusal now points at the narrower tool it should
+  have been pointing at all along.** It named only `[commands] allow_shell`, the
+  broad read-everything tier, so the one visible way forward from "I want to count
+  the lines in a file" was to enable an unrestricted shell that inherits the daemon
+  environment. It now leads with `run_command` and a `[[command]]` entry — fixed
+  argv, no shell, no free text, no trust prompt when it lives in the global config
+  — and states plainly that the shell sandbox confines writes but not reads.
 
-  Defaults now ship three read-only entries — `wc`, `file-type`, `disk-usage` —
-  each fixed-argv, network-denied, and sandboxed read-only. `stat` and a sha256
-  helper were considered and rejected: `read_file`'s header already carries mtime,
-  sha256 and the byte count, and their spellings differ across macOS and Linux.
+  A shipped read-only `[[command]]` allow-list (`wc`, `file-type`, `disk-usage`)
+  was written to go with this and **reverted before release**. `run_command` bounds
+  `{target}` to one *shell*-safe argument, which is not a *workspace*-safe one:
+  `^[A-Za-z0-9._/:@-]+$` admits `/`, `..`, `/etc/passwd` and `/dev/zero`, and
+  nothing downstream confines a target to the workspace. Shipping them would have
+  handed every connected agent a file-type-and-existence oracle for any path the
+  user can read, plus a ten-minute `du -sh /`, with no trust prompt and no action
+  by the user. `config_commands.go` records the three things that must land first.
 
-  Shipping them was not enough on its own. `agent_write` marshals the WHOLE config
-  back to disk, so an empty allow-list was written out as a literal
-  `command = []` — and an explicit empty array in a user's file out-ranks the
-  compiled-in default from then on. A real global config here carried that exact
-  line, written by plumb, typed by nobody, which is why `run_command` reported "no
-  commands are configured" while the binary shipped three. `command` is now
-  `omitempty`. The shape generalises past commands: a writer that materialises
-  every field freezes today's defaults into every user's config, so any default
-  added later is dead on arrival.
-
-  The refusal from `execute_shell_command` also led with `allow_shell`, the
-  broadest switch, and never mentioned `run_command`. It now offers the narrow
-  option first, and says plainly that the shell sandbox confines writes but not
-  reads.
+  Separately, `command` is now `omitempty` so an empty allow-list is not written
+  into a saved config as `command = []`, where an explicit empty array would
+  out-rank the compiled-in default from then on. That is a mitigation, not a fix:
+  the same freezing affects every slice `config_save.Save` materialises, and
+  values like `git.protected_branches` that `omitempty` cannot reach. The real fix
+  is routing the TUI's global save through the sparse `SetGlobalValue`, as
+  `SaveTheme` already does.
 
 - **`plumb stop` and `plumb restart` were unusable without a terminal, and said
   so in a way nobody could act on.** Both ran the shared Yes/No selector

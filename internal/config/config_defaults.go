@@ -191,9 +191,11 @@ var defaults = Config{
 			Enabled:         true,
 		},
 	},
-	Tasks:    defaultTasks(),
-	Commands: defaultCommands(),
-	Tools:    ToolsConfig{Profile: "auto"},
+	Tasks: defaultTasks(),
+	// No Commands. A shipped [[command]] allow-list was tried and reverted; the
+	// header comment above TargetToken in config_commands.go records why, and what
+	// confinement work has to land before defaults can ship.
+	Tools: ToolsConfig{Profile: "auto"},
 	// execute_shell_command runs with the user's credentials and the daemon env and
 	// the sandbox is integrity-only, so the shell tier denies the network by default
 	// (opt back in with [commands] deny_network = false). run_command entries set

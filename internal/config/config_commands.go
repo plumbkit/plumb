@@ -61,58 +61,37 @@ type CommandsConfig struct {
 	DenyNetwork bool `toml:"deny_network"`
 }
 
-// defaultCommands is the shipped [[command]] allow-list.
+// No [[command]] allow-list ships by default, and one nearly did.
 //
-// It exists because the two command tiers shipped with opposite defaults:
-// [tasks] ships working per-language commands, while the [[command]] allow-list
-// shipped EMPTY, so `run_command` refused everything out of the box. The only
-// documented way forward was then [commands] allow_shell — the broad, read-
-// everything tier — for wanting to count the lines in a file. Agents duly
-// reached past plumb to their own shell, which is the outcome the safe tier was
-// built to avoid.
+// The motivation was real: [tasks] ships working per-language commands —
+// including `go test ./...`, which runs arbitrary code out of the repository —
+// while the [[command]] tier, fixed argv with no shell and no free text, shipped
+// EMPTY and refused `wc -l`. The only documented way forward was then
+// [commands] allow_shell, the broad read-everything tier, so callers enabled
+// that or left plumb for their own shell — the outcome the safe tier exists to
+// prevent.
 //
-// The bar for an entry here is deliberately high, because these run with no
-// trust prompt:
+// Three read-only entries (wc, file-type, disk-usage) were shipped against that
+// reasoning and reverted, because run_command bounds {target} to one SHELL-safe
+// argument, which is not a WORKSPACE-safe one. `^[A-Za-z0-9._/:@-]+$` admits
+// `/`, `..`, `/etc/passwd` and `/dev/zero`, and nothing downstream confines a
+// target to the workspace. Shipping them therefore handed every connected agent
+// a file-type-and-existence oracle for any path the user can read, plus a
+// ten-minute `du -sh /`, with no trust prompt and no action by the user. A
+// user's own entry has always had that property — but that is their deliberate
+// choice about their own machine, and shipping it is a different act.
 //
-//   - It must be READ-ONLY. AllowWrites stays false, so the sandbox confines
-//     writes to $TMPDIR even if the binary tried.
-//   - Its argv must be fixed, with at most the single {target} token, which
-//     run_command bounds to one shell-safe argument — no free text reaches a
-//     command line.
-//   - DenyNetwork is true throughout. Nothing here has any business on the
-//     network, and the tier is meant to be boring.
-//   - It must be present on a stock macOS and Linux. A missing binary is a
-//     confusing runtime failure, so no rg, jq or gsed however useful.
+// Ship defaults only with all three of:
 //
-// Anything narrower than this list is a per-project [[command]] entry; anything
-// broader is genuinely ad-hoc and belongs to execute_shell_command.
-func defaultCommands() []CommandConfig {
-	ro := func(name string, argv ...string) CommandConfig {
-		return CommandConfig{Name: name, Exec: argv, DenyNetwork: true}
-	}
-	return []CommandConfig{
-		// Size and shape of a file without returning the file, which is the commonest
-		// reason to reach for a shell at all.
-		ro("wc", "wc", "-lc", TargetToken),
-		ro("file-type", "file", "-b", TargetToken),
-		// Disk usage answers "is this directory why the checkout is huge?", which no
-		// plumb tool reports. Defaulted, so a bare call means the workspace root.
-		ro("disk-usage", "du", "-sh", TargetTokenPrefix+".}"),
-	}
-}
-
-// Deliberately absent, and worth recording so they are not re-proposed:
+//   - a per-entry target KIND (e.g. Target: "path") so run_command can tell a
+//     path from an opaque argument;
+//   - workspace containment for a path target, resolve-then-check so a symlink
+//     cannot slip past a lexically-clean string (the #264 rule);
+//   - an explicit Timeout — entries inherit the 10-minute task default, an
+//     eternity for a metadata probe.
 //
-//   - stat, and any sha256 helper. read_file's header already carries mtime,
-//     sha256 and the whole-file byte count, so an entry would duplicate a number
-//     the agent was handed on the previous call.
-//   - Anything spelled differently across platforms. `stat -f` and `shasum`
-//     are macOS; Linux wants `stat -c` and `sha256sum`. One shipped argv cannot
-//     be both, and a default that works on the author's laptop and fails on CI
-//     is worse than no default.
-//   - grep/rg/find. run_command bounds {target} to one shell-safe argument, so a
-//     pattern loses its metacharacters; search_in_files and find_files answer
-//     these properly and are already scoped to the workspace.
+// And extend TestDefaults_CommandsAreReadOnlyAndBounded to cover the target's
+// VALUE, not just the placeholder count: that gap is what let this through.
 
 // TargetToken is the literal placeholder an exec argv may contain once; the
 // run_command tool substitutes it with a bounded target argument.

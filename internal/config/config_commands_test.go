@@ -102,24 +102,26 @@ func TestEmptyCommandsAreNotSerialised(t *testing.T) {
 	}
 }
 
-// TestDefaults_CommandsAreReadOnlyAndBounded replaces an earlier assertion that
-// defaults shipped NO commands at all.
+// TestDefaults_CommandsAreReadOnlyAndBounded asserts the bar any shipped
+// [[command]] entry must clear, rather than asserting there are none.
 //
-// That was not a coherent posture: [tasks] has always shipped `go test ./...`
-// enabled by default, which runs arbitrary code out of the repository, while the
-// [[command]] tier — fixed argv, no shell, no free text — shipped empty and
-// refused `wc -l`. The practical result was that the only documented way to run
-// anything was [commands] allow_shell, the broadest tier, so callers enabled that
-// or left plumb for their own shell.
+// The earlier test pinned "defaults ship no commands" with no recorded reason,
+// which is not a coherent posture on its own: [tasks] has always shipped
+// `go test ./...` enabled by default, and that runs arbitrary code out of the
+// repository. What matters is not that the list is empty but that anything in it
+// is safe.
 //
-// What matters is not that the list is empty but that everything in it is safe,
-// so this asserts the bar each shipped entry must clear. Adding an entry that
-// writes, reaches the network, or takes free-form arguments fails here.
+// Three entries were shipped against this bar and reverted, because the bar was
+// incomplete: it checks writes, network and placeholder COUNT, and says nothing
+// about the placeholder's VALUE — which is the property that mattered, since a
+// {target} is only shell-safe, not workspace-confined. Anyone shipping defaults
+// must extend this test to cover target confinement and an explicit timeout, not
+// just satisfy what is here.
 func TestDefaults_CommandsAreReadOnlyAndBounded(t *testing.T) {
 	d := Defaults()
-	if len(d.Commands) == 0 {
-		t.Fatal("Defaults should ship the read-only allow-list; got none")
-	}
+	// Currently none are shipped — config_commands.go records why they were
+	// reverted and what must land first.
+	// The loop stays so the bar is already enforced whenever entries return.
 	for _, c := range d.Commands {
 		if c.Name == "" || len(c.Exec) == 0 {
 			t.Errorf("default command %+v must have a name and an exec argv", c)
