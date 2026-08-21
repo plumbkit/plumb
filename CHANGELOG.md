@@ -7,7 +7,36 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Added
+
+- **`scripts/measure-use-cases.py` regenerates every number in `docs/use-cases.md`.**
+  The page published hand-measured tool comparisons that had quietly rotted: its
+  sample file had since been split (195 lines down to 28) and the function it
+  measured no longer existed, so the headline "~8×" was a figure nobody could
+  reproduce. The script re-derives the whole set in one run — native numbers from
+  real `rg`/`grep`/`wc` subprocesses, plumb numbers from a real MCP session that
+  speaks JSON-RPC to `plumb serve` and measures the exact response payload.
+  `--json` for machine-readable output, `--dump DIR` to write out every measured
+  payload so a surprising number can be checked against the response it came from.
+
 ### Changed
+
+- **`docs/use-cases.md` re-measured at `b46e233f`, and six scenarios added.** New:
+  the working checkout vs the repository (54.8× more bytes on disk than `git
+  ls-files` reports), `rename_symbol` vs naive find-replace (15 scoped edits vs 24
+  blind ones), `topology_affected` vs the whole suite (3 packages instead of 55),
+  `read_multiple_files` vs N native reads, warm-path latency (p95 under 1 ms), and
+  the same read measurements in Python and JavaScript. Two results are published
+  because they are *not* wins: `read_multiple_files` returns 1.82× **more** payload
+  than reading the files natively, and `read_symbol`'s ratio is shown as a
+  2.5×–29.6× spread rather than a single flattering multiple, because the ratio is
+  a property of the question, not the tool. Two measurement traps are documented
+  in the page: a `grep` shim on `PATH` that respects `.gitignore` (which silently
+  turns the grep-vs-ripgrep comparison into ripgrep-vs-ripgrep), and
+  `topology_affected`'s default `max_results: 50`, which truncates an answer of
+  1,037 — it does mark the cut on its last line, but the list above reads as
+  complete, and since every co-located hit shares confidence 0.5 the cut falls in
+  path order, dropping the one test that exercised the changed function.
 
 - **gotreesitter bumped v0.48.1 → v0.51.0, and the C enum recovery workaround is
   deleted — upstream fixed the defect plumb filed.** v0.48.1 arrived in a blanket
