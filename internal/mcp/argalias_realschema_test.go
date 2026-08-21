@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -396,5 +397,72 @@ func TestToolsCall_RealSchema_CoercionStillRejectsGarbage(t *testing.T) {
 	}
 	if !strings.Contains(text, "invalid arguments") {
 		t.Errorf("expected the tool's decode error for offset:\"abc\"; got: %s", text)
+	}
+}
+
+// exampleFieldRe extracts field names from a placement-hint's rendered example,
+// e.g. `Example: {"edits": [{"old_string": ..., "new_string": ..., "replace_all": ...}]}`
+// yields ["old_string", "new_string", "replace_all"] in order. Parsing the
+// hint's own text (rather than reimplementing its field selection) is the
+// point: this proves what the REJECTION actually told the caller round-trips,
+// not what the implementation intended to tell it.
+var exampleFieldRe = regexp.MustCompile(`"(\w+)":\s*\.\.\.`)
+
+// TestToolsCall_RealSchema_PlacementHintExampleRoundTrips is the PLAN-358
+// review fix: the placement hint's own "minimal example" must be a shape
+// edit_file's real, full dispatch path (schema guard + tool logic) actually
+// accepts — not just one the JSON Schema does not reject. A prior version
+// built the example from child.required alone, which for edit_file's edits[]
+// item is only ["new_string"] (old_string is schema-optional since range mode
+// omits it) — so the emitted example for a misplaced replace_all omitted
+// old_string entirely, a shape edit_file's own tool logic hard-rejects
+// ("old_string must not be empty") even though the schema guard alone would
+// have let it through.
+func TestToolsCall_RealSchema_PlacementHintExampleRoundTrips(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "a.txt")
+	if err := os.WriteFile(f, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := realToolServer()
+
+	// Trigger the placement hint: replace_all sent at the top level instead of
+	// inside each edits[] item.
+	rejected := callTool(t, s, "edit_file", fmt.Sprintf(
+		`{"file_path":%q,"edits":[{"old_string":"alpha","new_string":"beta"}],"replace_all":true}`, f))
+	if !strings.Contains(rejected, `"replace_all" belongs inside each edits[] item`) {
+		t.Fatalf("expected the placement hint, got: %s", rejected)
+	}
+
+	// Parse the field list straight out of the hint's own rendered example.
+	fields := exampleFieldRe.FindAllStringSubmatch(rejected, -1)
+	if len(fields) == 0 {
+		t.Fatalf("could not find any \"field\": ... entries in the example: %s", rejected)
+	}
+
+	// Concrete values for the fields the example is allowed to name. old_string
+	// must match the file's real content so a successful match — not just an
+	// accepted shape — is the pass criterion.
+	values := map[string]string{"old_string": `"alpha"`, "new_string": `"gamma"`, "replace_all": "true"}
+	parts := make([]string, 0, len(fields))
+	for _, m := range fields {
+		field := m[1]
+		v, ok := values[field]
+		if !ok {
+			t.Fatalf("example names field %q with no concrete value wired up in this test; example: %s", field, rejected)
+		}
+		parts = append(parts, fmt.Sprintf("%q: %s", field, v))
+	}
+	item := "{" + strings.Join(parts, ", ") + "}"
+	args := fmt.Sprintf(`{"file_path":%q,"edits":[%s]}`, f, item)
+
+	out := callTool(t, s, "edit_file", args)
+	if strings.Contains(out, "unknown parameter") {
+		t.Fatalf("the example's own shape failed the schema guard: %s\nargs: %s", out, args)
+	}
+	if strings.Contains(out, "must not be empty") || strings.Contains(out, "is required") {
+		t.Fatalf("the example's own shape was rejected by edit_file's tool logic — not a VALID example: %s\nargs: %s", out, args)
+	}
+	if !strings.Contains(out, "applied 1 edit") {
+		t.Fatalf("expected the round-tripped example to actually succeed, got: %s\nargs: %s", out, args)
 	}
 }
