@@ -192,8 +192,9 @@ func proxyHeartbeatInterval() time.Duration {
 // of them ever calls startDaemonProcess. Without that lock, two serves racing
 // from a cold start each observe "no daemon" and each spawn one.
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
-	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
-		slog.Info("serve: connected to existing daemon")
+	if conn, path := dialAnyDaemon(); conn != nil {
+		slog.Info("serve: connected to existing daemon", "socket", path)
+		noteLegacyRuntimeDir(path)
 		warnIfDaemonStale()
 		return conn, nil
 	}
@@ -206,13 +207,12 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 
 	// Re-check now that we hold the lock — another serve may have spawned
 	// the daemon while we were waiting.
-	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
-		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock")
+	if conn, path := dialAnyDaemon(); conn != nil {
+		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock", "socket", path)
+		noteLegacyRuntimeDir(path)
 		warnIfDaemonStale()
 		return conn, nil
 	}
-
-	warnIfLegacyDaemonRunning()
 
 	slog.Info("serve: daemon not running — starting", "socket", socketPath)
 	if err := startDaemonProcess(); err != nil {
@@ -252,31 +252,37 @@ func warnIfDaemonStale() {
 		running, Version)
 }
 
-// warnIfLegacyDaemonRunning reports a daemon still listening at the pre-0.17.2
-// runtime location, which on Linux is where every daemon lived before the move
-// to $XDG_RUNTIME_DIR.
-//
-// It runs on the spawn path only, which is exactly the moment it matters: we
-// are about to start a SECOND daemon while the first is alive and holding its
-// language servers. Nothing is stopped automatically — that daemon may be
-// serving other live sessions, and killing someone else's server mid-session to
-// tidy a path is a worse outcome than the warning. `plumb stop` retires it,
-// finding it by process name regardless of which socket it opened.
-func warnIfLegacyDaemonRunning() {
-	legacy := paths.LegacyRuntimeDir()
-	if legacy == "" {
-		return // the runtime dir did not move on this platform
+// dialAnyDaemon connects to whichever candidate socket answers, returning the
+// connection and the path it came from. Both nil/"" when none does.
+func dialAnyDaemon() (net.Conn, string) {
+	for _, sock := range daemonSocketCandidates() {
+		if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+			return conn, sock
+		}
 	}
-	sock := filepath.Join(legacy, "plumb.sock")
-	conn, err := net.DialTimeout("unix", sock, time.Second)
-	if err != nil {
+	return nil, ""
+}
+
+// noteLegacyRuntimeDir tells the user when the daemon we just attached to is at
+// the cache-dir runtime location rather than $XDG_RUNTIME_DIR, so the migration
+// is visible rather than silent and permanent.
+//
+// Attaching to it is the point: the alternative is spawning a second daemon
+// beside a live one, with a second set of language servers, both writing the
+// same stats.db. It is also deliberately NOT called a stale or old-version
+// daemon — a current build lands there whenever $XDG_RUNTIME_DIR is absent from
+// the launching environment (cron, a systemd system unit, docker exec, ssh
+// without pam_systemd), and calling that "old" would be wrong. Version skew is
+// warnIfDaemonStale's job and it reads the version file to decide.
+func noteLegacyRuntimeDir(connected string) {
+	legacy := legacyDaemonSocketPath()
+	if legacy == "" || connected != legacy {
 		return
 	}
-	_ = conn.Close()
 	fmt.Fprintf(os.Stderr,
-		"plumb: warning: a daemon from an older version is still running at %s.\n"+
-			"plumb: the runtime directory moved to %s; run `plumb stop` once to retire the old one.\n",
-		sock, paths.RuntimeDir())
+		"plumb: note: attached to the daemon at %s; this plumb would put it in %s.\n"+
+			"plumb: `plumb stop` once, and the next start moves it there.\n",
+		legacy, paths.RuntimeDir())
 }
 
 // proxyStdio copies stdin → conn and conn → stdout until ctx is cancelled or

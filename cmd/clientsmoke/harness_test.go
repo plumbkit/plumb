@@ -256,6 +256,7 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
+			strings.HasPrefix(e, "XDG_RUNTIME_DIR="),
 			strings.HasPrefix(e, "TSM_ORIG_XDG_"),
 			strings.HasPrefix(e, "CODEX_HOME="),
 			strings.HasPrefix(e, "PLUMB_STRICT_EDITS="),
@@ -271,6 +272,14 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 		"XDG_CACHE_HOME="+filepath.Join(tmpHome, ".cache"),
 		"XDG_DATA_HOME="+filepath.Join(tmpHome, ".local", "share"),
 		"XDG_STATE_HOME="+filepath.Join(tmpHome, ".local", "state"),
+		// Cleared, not redirected — the daemon's runtime dir prefers
+		// $XDG_RUNTIME_DIR over XDG_CACHE_HOME, so leaving the real one in place
+		// would put this "isolated" daemon on the machine's shared socket:
+		// stopDaemon would find no pid file under tmpHome and never stop it, and
+		// countToolCalls would read a stats.db that daemon never wrote. Empty
+		// fails the absolute-path check, so resolution falls back to
+		// XDG_CACHE_HOME above, which is where daemonPIDPaths looks.
+		"XDG_RUNTIME_DIR=",
 		"CODEX_HOME="+filepath.Join(tmpHome, ".codex"),
 	)
 	return append(out, extra...)

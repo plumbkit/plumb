@@ -338,7 +338,18 @@ directory, mode 0700, owned by the caller — and falls back rather than trustin
 the variable, since a world-readable runtime dir would expose the daemon socket.
 The fallback is the cache dir and deliberately **not** `os.TempDir()`: on macOS
 `$TMPDIR` differs between a GUI-app launch and a terminal launch, so the socket
-would move depending on how the client started plumb.
+would move depending on how the client started plumb. (`os.TempDir()` is the
+last resort behind that, reached only when `os.UserCacheDir()` itself fails —
+which means `$HOME` is unset.)
+
+Because the resolution depends on the environment, and `$XDG_RUNTIME_DIR` is
+absent under cron, systemd system units, `docker exec` and ssh without
+`pam_systemd`, `plumb serve` and `plumb doctor` **dial both** the current and
+the cache-dir socket before concluding no daemon is running. Otherwise a plumb
+launched from one of those contexts would miss the daemon a desktop session
+started and spawn a second one — two daemons, two sets of language servers,
+both writing the same `stats.db`, each holding a different `plumb.daemon.lock`
+so the flock singleton never notices.
 
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
 respected when set.

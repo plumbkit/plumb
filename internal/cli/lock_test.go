@@ -214,7 +214,7 @@ func TestSocketPathLengthHint(t *testing.T) {
 	if got == "" {
 		t.Fatal("an over-long path must be explained")
 	}
-	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever()) {
 		t.Errorf("the hint must name the cause and the lever, got %q", got)
 	}
 	if !strings.Contains(got, strconv.Itoa(len(long))) {
@@ -222,19 +222,81 @@ func TestSocketPathLengthHint(t *testing.T) {
 	}
 }
 
-// The lever is not XDG_CACHE_HOME everywhere. os.UserCacheDir reads that
-// variable only in its Unix branch; on darwin it returns $HOME/Library/Caches
-// unconditionally, so telling a macOS user to set XDG_CACHE_HOME is advice
-// that cannot move the socket. That is the case this hint fires on soonest,
-// since maxUnixSocketPath is the macOS ceiling.
-func TestSocketPathShortenLever_IsThePlatformsRealLever(t *testing.T) {
-	if got := socketPathShortenLever("darwin"); got != "$HOME" {
-		t.Errorf("darwin lever = %q, want $HOME — XDG_CACHE_HOME does nothing there", got)
+// The lever is whichever variable actually moves the socket on this host, and
+// that is not one answer: $XDG_RUNTIME_DIR when the runtime dir is in use,
+// $HOME on darwin (os.UserCacheDir ignores XDG_CACHE_HOME there), and
+// XDG_CACHE_HOME otherwise. Naming the wrong one sends the user to a setting
+// that cannot move the socket — which is the bug this replaced.
+func TestSocketPathShortenLever_TracksWhereTheSocketActuallyIs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	wantFallback := "XDG_CACHE_HOME"
+	if runtime.GOOS == "darwin" {
+		wantFallback = "$HOME"
 	}
-	for _, goos := range []string{"linux", "freebsd", "openbsd"} {
-		if got := socketPathShortenLever(goos); got != "XDG_CACHE_HOME" {
-			t.Errorf("%s lever = %q, want XDG_CACHE_HOME", goos, got)
-		}
+	if got := socketPathShortenLever(); got != wantFallback {
+		t.Errorf("with no runtime dir, lever = %q, want %q", got, wantFallback)
+	}
+
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return
+	}
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+	if got := socketPathShortenLever(); got != "XDG_RUNTIME_DIR" {
+		t.Errorf("with the socket under the runtime dir, lever = %q, want XDG_RUNTIME_DIR", got)
+	}
+}
+
+func TestDaemonSocketCandidates_IncludeTheLegacyPath(t *testing.T) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("the runtime dir does not move on this platform")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+
+	// No runtime dir: one candidate, and nothing is "legacy".
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if got := daemonSocketCandidates(); len(got) != 1 {
+		t.Fatalf("want a single candidate when the dir has not moved, got %v", got)
+	}
+	if got := legacyDaemonSocketPath(); got != "" {
+		t.Errorf("legacyDaemonSocketPath = %q, want empty when it IS the current dir", got)
+	}
+
+	// With one: the current socket first, the cache-dir socket as a fallback,
+	// so a plumb launched without XDG_RUNTIME_DIR (cron, docker exec, ssh)
+	// still finds a daemon a desktop session started, instead of spawning a
+	// second one.
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+
+	got := daemonSocketCandidates()
+	if len(got) != 2 {
+		t.Fatalf("want 2 candidates, got %v", got)
+	}
+	if got[0] != filepath.Join(run, "plumb", "plumb.sock") {
+		t.Errorf("first candidate = %q, want the runtime-dir socket", got[0])
+	}
+	cache, _ := os.UserCacheDir()
+	if want := filepath.Join(cache, "plumb", "plumb.sock"); got[1] != want {
+		t.Errorf("second candidate = %q, want %q", got[1], want)
 	}
 }
 
@@ -254,7 +316,7 @@ func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
 		if !strings.Contains(got, action) {
 			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
 		}
-		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever()) {
 			t.Errorf("%q: the timeout must carry the length hint, got %q", action, got)
 		}
 	}

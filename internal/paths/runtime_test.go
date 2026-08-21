@@ -62,6 +62,12 @@ func TestRuntimeDir_RejectsAnUnusableXDGRuntimeDir(t *testing.T) {
 	if err := os.Mkdir(loose, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Explicit chmod: os.Mkdir's mode is masked by the process umask, so under
+	// `umask 077` this directory would be created 0700 and correctly ACCEPTED,
+	// silently turning the world-readable case below into a no-op.
+	if err := os.Chmod(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	notADir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
 		t.Fatal(err)

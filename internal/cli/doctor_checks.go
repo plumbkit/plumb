@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -19,22 +17,29 @@ import (
 
 // checkDaemon verifies the daemon is reachable and its version matches.
 func checkDaemon() []checkResult {
-	socketPath := daemonSocketPath()
-	conn, err := net.DialTimeout("unix", socketPath, time.Second)
-	if err != nil {
+	// Every candidate, not just the primary: the same reason `plumb serve`
+	// dials both. A daemon started where $XDG_RUNTIME_DIR was absent sits at
+	// the legacy path, and doctor reporting "cannot dial" for a daemon that is
+	// demonstrably serving the user's session would be worse than no check.
+	conn, socketPath := dialAnyDaemon()
+	if conn == nil {
 		return []checkResult{{
 			name:   "socket",
 			ok:     false,
-			detail: "cannot dial " + render.ContractPath(socketPath),
+			detail: "cannot dial " + render.ContractPath(daemonSocketPath()),
 			fix:    "run `plumb serve` or let an MCP client start it automatically",
 		}}
 	}
 	conn.Close()
 
+	detail := render.ContractPath(socketPath)
+	if socketPath == legacyDaemonSocketPath() {
+		detail += "  (legacy runtime dir — `plumb stop` moves it to " + render.ContractPath(paths.RuntimeDir()) + ")"
+	}
 	results := []checkResult{{
 		name:   "socket",
 		ok:     true,
-		detail: render.ContractPath(socketPath),
+		detail: detail,
 	}}
 
 	data, err := os.ReadFile(daemonVersionPath())

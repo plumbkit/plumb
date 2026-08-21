@@ -210,6 +210,25 @@ func xdgRuntimeDir() (string, bool) {
 	return dir, true
 }
 
+// RuntimeDirLever names the environment variable that actually moves
+// RuntimeDir on this host, for error messages that tell the user what to
+// change.
+//
+// It is not one answer: the socket follows $XDG_RUNTIME_DIR when that is in
+// use, $HOME on macOS (os.UserCacheDir ignores XDG_CACHE_HOME there), and
+// XDG_CACHE_HOME on a Linux box without a runtime dir. Naming the wrong one
+// sends the user to a setting that cannot move the socket — the whole reason
+// this is computed rather than hardcoded.
+func RuntimeDirLever() string {
+	if _, ok := xdgRuntimeDir(); ok {
+		return "XDG_RUNTIME_DIR"
+	}
+	if runtime.GOOS == "darwin" {
+		return "$HOME"
+	}
+	return "XDG_CACHE_HOME"
+}
+
 // LegacyRuntimeDir returns the pre-XDG_RUNTIME_DIR location, so a caller can
 // notice a daemon left behind there by an older build. It returns "" when it is
 // the same directory RuntimeDir already resolves to — i.e. whenever there is

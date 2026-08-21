@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"syscall"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -58,21 +57,41 @@ func plumbRuntimeDir() string {
 // socketPathShortenLever exists to get right.
 const maxUnixSocketPath = 103
 
-// socketPathShortenLever names the environment variable that actually moves
-// the runtime directory on this platform.
+// socketPathShortenLever names the environment variable that actually moves the
+// runtime directory on this host. It delegates rather than deciding, because
+// the answer depends on which base RuntimeDir resolved — $XDG_RUNTIME_DIR,
+// $HOME on macOS, or XDG_CACHE_HOME — and naming the wrong one points the user
+// at a setting that cannot move the socket.
+func socketPathShortenLever() string { return paths.RuntimeDirLever() }
+
+// daemonSocketCandidates lists every socket a running daemon might be on, most
+// current first.
 //
-// It is not XDG_CACHE_HOME everywhere. The socket lives under
-// os.UserCacheDir(), and Go reads XDG_CACHE_HOME only in that function's Unix
-// branch — the darwin branch returns $HOME/Library/Caches unconditionally. So
-// on macOS the only lever is $HOME, and telling a macOS user to set
-// XDG_CACHE_HOME is advice that provably does nothing. That matters precisely
-// here, because the 103-byte bound above is the macOS ceiling: the overflow
-// this hint fires on soonest is the one whose fix it would have got wrong.
-func socketPathShortenLever(goos string) string {
-	if goos == "darwin" {
-		return "$HOME"
+// There is more than one because RuntimeDir is environment-dependent, and the
+// environment is not consistent across the ways plumb gets launched:
+// $XDG_RUNTIME_DIR is set in a desktop session but absent under cron, a systemd
+// system unit, `docker exec`, or ssh without pam_systemd. Resolving only the
+// primary path would mean a plumb launched from one of those contexts fails to
+// find the daemon a desktop session already started, and spawns a second one —
+// two daemons, two sets of language servers, both writing the same stats.db,
+// each holding a DIFFERENT plumb.daemon.lock so the flock singleton never
+// notices. Dialling both is what keeps them converged on one process.
+func daemonSocketCandidates() []string {
+	sockets := []string{daemonSocketPath()}
+	if legacy := legacyDaemonSocketPath(); legacy != "" {
+		sockets = append(sockets, legacy)
 	}
-	return "XDG_CACHE_HOME"
+	return sockets
+}
+
+// legacyDaemonSocketPath is the socket under the pre-$XDG_RUNTIME_DIR runtime
+// dir, or "" when that is the same directory in use now.
+func legacyDaemonSocketPath() string {
+	dir := paths.LegacyRuntimeDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "plumb.sock")
 }
 
 // socketPathLengthHint explains an over-long socket path, or returns "" when
@@ -92,7 +111,7 @@ func socketPathLengthHint(path string) string {
 	}
 	return fmt.Sprintf(
 		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — point %s at a shorter directory)",
-		len(path), maxUnixSocketPath, socketPathShortenLever(runtime.GOOS))
+		len(path), maxUnixSocketPath, socketPathShortenLever())
 }
 
 // daemonStartTimeoutError is what the caller sees when the socket never
