@@ -41,7 +41,7 @@ func TestTopologyAffected_Defaults(t *testing.T) {
 
 func TestTopologyAffected_FormatNilResult(t *testing.T) {
 	a := topologyAffectedArgs{Symbols: []string{"foo"}, MaxResults: 50}
-	out := formatAffectedResult(nil, a)
+	out := formatAffectedResult(nil, a, TestScope{})
 	if strings.Contains(out, "disabled") {
 		t.Errorf("nil result is a not-found case, not 'disabled'; got: %s", out)
 	}
@@ -53,7 +53,7 @@ func TestTopologyAffected_FormatNilResult(t *testing.T) {
 func TestTopologyAffected_FormatEmptyResult(t *testing.T) {
 	a := topologyAffectedArgs{Symbols: []string{"foo"}, MaxResults: 50}
 	result := &affectedResult{}
-	out := formatAffectedResult(result, a)
+	out := formatAffectedResult(result, a, TestScope{})
 	if !strings.Contains(out, "none") {
 		t.Errorf("empty result should say 'none', got: %s", out)
 	}
@@ -81,12 +81,13 @@ func TestTopologyAffected_FormatSurfacesPackagesAndRecall(t *testing.T) {
 			{Node: topology.Node{Name: "TestBar", Path: "internal/cli/bar_test.go", StartLine: 5}, Confidence: 0.5, Reason: reasonImporter},
 		},
 	}
-	out := formatAffectedResult(result, a)
-	// The actionable unit is the package: a caller narrows `go test` by path, not
-	// by test name, so the runnable command is what the output leads with.
+	out := formatAffectedResult(result, a, TestScope{Language: "go", Style: TargetGoPackage})
+	// The actionable unit is the package: a caller narrows the test run by path,
+	// not by test name, so the row leads with the target run_task takes.
 	for _, want := range []string{
-		"go test ./internal/stats/...",
-		"go test ./internal/cli/...",
+		"./internal/stats/...",
+		"./internal/cli/...",
+		`run_task(slot:"test"`,
 		reasonChanged,
 		reasonImporter,
 		"biased toward recall",
@@ -120,7 +121,7 @@ func TestTopologyAffected_FormatAggregatesRatherThanEnumerates(t *testing.T) {
 			Reason:     reasonImporter,
 		})
 	}
-	out := formatAffectedResult(result, a)
+	out := formatAffectedResult(result, a, TestScope{Language: "go", Style: TargetGoPackage})
 	if strings.Contains(out, "TestNoise") {
 		t.Errorf("importing package's tests must be summarised, not enumerated:\n%s", out[:min(len(out), 600)])
 	}

@@ -300,7 +300,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTopologySearch(topoFn).WithSemantics(s.semanticRerank))
 	srv.Register(tools.NewTopologyExplore(topoFn).WithMemories(s.workspaceFor))
 	srv.Register(tools.NewTopologyImpact(topoFn).WithCrossFileCallers(tools.NewLSPCrossFileCallers(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace)))
-	srv.Register(tools.NewTopologyAffected(topoFn).WithMemories(s.workspaceFor))
+	srv.Register(tools.NewTopologyAffected(topoFn).WithMemories(s.workspaceFor).WithTestScope(s.testScope))
 	srv.Register(tools.NewTopologyRoutes(topoFn))
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
 	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))

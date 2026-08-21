@@ -57,7 +57,11 @@ var skillContentCounts = map[string]skillCounts{
 	"plumb-memory":         {calls: 8, bullets: 0},
 	"plumb-minimal-change": {calls: 0, bullets: 0},
 	"plumb-refactor":       {calls: 5, bullets: 0},
-	"plumb-testing":        {calls: 4, bullets: 0},
+	// 6, not 4: the skill gained two worked examples when the shipped test
+	// defaults grew {target} placeholders and topology_affected started emitting
+	// a target run_task can take (PLAN-378) — the very composition this file's
+	// doc comment names as the defect class it exists to catch.
+	"plumb-testing": {calls: 6, bullets: 0},
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill

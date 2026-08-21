@@ -187,6 +187,74 @@
   orientation noise. Guarded by `TestReadMultipleFiles_StrictMode_BatchReadThenEditSucceeds`
   and `TestReadMultipleFiles_EditLaneHint_ConsolidatedOnce`
   (`internal/tools/read_multiple_files_test.go`).
+- **`topology_affected` emitted `go test` commands for every language, and
+  paths its own `run_task` could not use (PLAN-378).** `goTestTarget`
+  hardcoded `go test ./<dir>/...` with no language check anywhere in the file,
+  while the topology index covers Python, TypeScript, Rust, Java and Swift. A
+  Python user changing `src/api/handlers.py` was told to run
+  `go test ./src/api/...`. The tool now derives the target from the workspace's
+  primary language, and only where that language's runner takes a POSITIONAL
+  PATH: `go` and `python` scope by path; `cargo test <filter>` matches test
+  NAMES, and typescript/swift/zig scope through project-specific flags, so those
+  get their directories named and no command guessed. A wrong command is worse
+  than none.
+
+  The decision is made at the cli seam and handed to the tool as a target STYLE,
+  because `internal/tools` (Application) cannot import `internal/config`
+  (Domain) and so cannot derive the rule for itself. An earlier revision kept a
+  `go`/`python` switch inside the tool and claimed it mirrored the shipped
+  `[tasks.<lang>]` defaults; nothing enforced that, and a reviewer was right to
+  call it a second literal free to drift. It is now a test
+  (`TestTargetStyleMatchesShippedDefaults`) that fails if a shipped default
+  gains or loses a positional path target without the emitter being updated.
+
+  Two conditions are required before a target is emitted, and checking only the
+  first is a trap worth naming: the probe that asks whether the command accepts
+  a `{target}` proves a slot EXISTS, never that it means a directory. With
+  `[tasks.go] test = "go test -run {target}"` the emitted package path lands in
+  a test-NAME regex, matches nothing, and exits 0 — a silent green over zero
+  tests, strictly worse than the hardcoded command this replaced. A placeholder
+  that is the value of a preceding flag is therefore not treated as positional,
+  while `-count=1`-style flags (which carry their own value) still are. The
+  emitted string is also validated against `run_task`'s own one-shell-safe-
+  argument rule, so a directory containing a space — ordinary in the Python and
+  JavaScript trees this indexes — is named rather than offered as a target the
+  receiving tool would refuse. Python targets carry a `./` prefix for the same
+  class of reason: `targetPattern` admits `-` in any position, so an indexed
+  directory called `-x` would otherwise reach pytest **as the flag** `-x` — the
+  whole suite in exit-first mode, silently, instead of the one package meant.
+
+  A flag preceding the placeholder is only assumed to consume it when it might:
+  `--` (the canonical "what follows is positional" marker) and known boolean
+  flags do not. Without that, the most ordinary customisation of a shipped
+  default — adding `-race` or `-v` — silently disabled the feature and told the
+  caller the command could not be narrowed to a directory, while `run_task`
+  would have built a perfectly correct scoped argv. An UNKNOWN flag still counts
+  as consuming: a withheld target costs one manual edit, a misplaced one costs a
+  green run that tested nothing.
+
+  The second half was broken even for Go, in this very repository. The tool
+  emitted workspace-relative paths (`./plumb/internal/config/...`) while
+  `[tasks.go]` sets `working_dir = "plumb"`, so the `plumb-testing` skill's
+  prescribed handoff — feed the path to `run_task` — ran from `plumb/` against
+  a directory that does not exist there. Targets are now expressed relative to
+  `[tasks.<lang>].working_dir`, and a package outside it is named and marked
+  rather than rewritten into the wrong tree. Whether the command accepts a
+  target at all is answered by asking `buildTaskSteps`, the same function
+  `run_task` uses, rather than by re-deriving the condition — the lesson
+  `configuredSlots` already records. Covered end to end: the emitted string is
+  fed back through `run_task`'s own argv builder.
+
+- **The `plumb-testing` skill told agents that scoping a test run was
+  impossible.** It listed the shipped test defaults as `go test ./...`,
+  `pytest`, `cargo test` and concluded "none of the shipped defaults" carry a
+  `{target}` placeholder, so "narrowing the run to what `topology_affected`
+  named needs either a project that put `{target}` in its own stored command, or
+  the client's own runner". Every command in that list gained a defaulted
+  placeholder in `11a651cc`. The skill is what `plumb skills sync` installs into
+  users' clients for exactly this workflow, so the instruction channel was
+  actively steering agents away from the handoff the tool had been fixed to
+  support. It now shows the two composing directly.
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
@@ -242,6 +310,37 @@
   listen error, since that one goes to `daemon.log` and then the daemon exits,
   so through an MCP client it is never seen. The portable ceiling is 103 usable
   bytes, not 104: `sun_path` is 104 bytes on macOS/BSD *including* the NUL.
+
+### Testing
+
+- **The `max_results`-as-node-budget regression finally has a synthetic test
+  (PLAN-384).** `7568173c` fixed a real recall failure — a widely-imported
+  package reported FEWER dependents the wider its fan-out, measured at 2 of 9
+  packages for `internal/config/config.go` — but shipped verified only against
+  the live index, because cross-file import edges would not materialise in a
+  `t.TempDir()` fixture. Two causes, both now established and both encoded in
+  the fixture: `linkImports` runs at the END of an index pass, so polling for
+  node visibility is not a barrier for EDGES (the earlier attempt's mistake);
+  and `matchImportDir` refuses a suffix shorter than two segments, so a fixture
+  whose packages sit one directory deep gets no import edges at all and every
+  assertion passes vacuously. The test also keeps inward NODES above
+  `max_results` while holding PACKAGES below it, because `fromColocation`
+  legitimately caps packages at the same number — raising both together
+  truncates under the fix too, and so passes against the bug. Confirmed red
+  against the restored pre-fix behaviour: 7 of 20 importers dropped, plus a
+  false truncation banner. A fixture-size guard now fails loudly rather than
+  silently stopping detecting the regression, which is how the previous two
+  tests in this area went blind.
+
+  That guard sizes the fixture from `max_results`, and getting it to read the
+  RIGHT `max_results` took two attempts. A duplicated literal was replaced by a
+  read of the tool's InputSchema — but the cap that actually shapes the answer
+  is a separate literal in `parseTopologyAffectedArgs`, so raising that one
+  while leaving the schema's documentation alone left the fixture measuring
+  against a number no longer in force, passing vacuously over a deliberately
+  restored regression. The two are now one constant, pinned together by
+  `TestSchemaDefaultMatchesRuntimeDefault`, which also checks the default is
+  actually applied rather than merely advertised.
 
 ### Changed
 

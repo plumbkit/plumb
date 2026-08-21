@@ -50,7 +50,8 @@ var topologyAffectedSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologyAffected struct {
 	storeFn func() *topology.Store
-	ws      WorkspaceFn // optional; enables the known-context memories join
+	ws      WorkspaceFn      // optional; enables the known-context memories join
+	scopeFn func() TestScope // optional; without it no test command is inferred
 }
 
 // NewTopologyAffected returns a new TopologyAffected tool.
@@ -66,13 +67,34 @@ func (t *TopologyAffected) WithMemories(ws WorkspaceFn) *TopologyAffected {
 	return t
 }
 
+// WithTestScope wires the accessor for this workspace's test-command shape, so
+// the emitted target is one run_task will accept. Without it the tool names
+// directories and infers no command — never a Go one by default.
+func (t *TopologyAffected) WithTestScope(fn func() TestScope) *TopologyAffected {
+	t.scopeFn = fn
+	return t
+}
+
+// testScope reads the wired scope, or the zero value ("nothing is known").
+func (t *TopologyAffected) testScope() TestScope {
+	if t.scopeFn == nil {
+		return TestScope{}
+	}
+	return t.scopeFn()
+}
+
 func (*TopologyAffected) Name() string                 { return "topology_affected" }
 func (*TopologyAffected) InputSchema() json.RawMessage { return topologyAffectedSchema }
 func (*TopologyAffected) Description() string {
 	return "After you change code, ask this which tests to run instead of running the whole " +
-		"suite. Given changed files or symbols, it answers with PACKAGES to run — a ready " +
-		"`go test ./pkg/...` line each, with the test count and why the package is " +
-		"implicated — plus the individual test names in the package the change landed in. " +
+		"suite. Given changed files or symbols, it answers with PACKAGES to run — one row " +
+		"each with the test count and why the package is implicated, plus the individual " +
+		"test names in the package the change landed in. Where the workspace's test runner " +
+		"takes a positional path (go, python), each row leads with a ready target to hand " +
+		"straight to run_task(slot:\"test\"), expressed relative to " +
+		"[tasks.<lang>].working_dir so it works from the directory that command runs in. " +
+		"Where the runner scopes by name or by a project-specific flag (rust, typescript, " +
+		"swift, zig), the directory is named and no command is guessed. " +
 		"A package is reached either by containing the change, or by importing a package " +
 		"that does (cross-package import edges). Within a reached package every test is " +
 		"counted, because co-location cannot tell which of them exercise the change: that " +
@@ -115,6 +137,17 @@ const graphNodeBudget = 2000
 // maxNamedTests caps the individually-named tests in the changed package. Past
 // a few dozen the list stops informing a decision and starts costing context.
 const maxNamedTests = 40
+
+// defaultMaxPackages is the max_results default applied when the caller names
+// none. It is the RUNTIME cap — the one that actually shapes the answer — and
+// the schema above advertises the same number.
+//
+// The two are pinned together by TestSchemaDefaultMatchesRuntimeDefault. That
+// guard is not decoration: the e2e fixture sizes itself from the schema, and
+// while this was a bare literal here, raising it without touching the schema
+// left that fixture measuring against a stale cap and passing vacuously over a
+// restored regression.
+const defaultMaxPackages = 50
 
 // affectedPackage is the unit a caller acts on: `go test` takes a package path,
 // not a test name.
@@ -159,15 +192,6 @@ func aggregateTestsByPackage(tests []affectedTest) []affectedPackage {
 	return out
 }
 
-// goTestTarget renders a directory as a runnable package pattern. A test at the
-// workspace root has directory ".", which would otherwise print "./././...".
-func goTestTarget(dir string) string {
-	if dir == "." || dir == "" {
-		return "go test ./..."
-	}
-	return "go test ./" + dir + "/..."
-}
-
 // affectedResult collects dependents and likely-affected tests.
 type affectedResult struct {
 	Dependents []topology.Node
@@ -191,7 +215,7 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 	if runErr != nil {
 		return "", runErr
 	}
-	out := formatAffectedResult(result, a)
+	out := formatAffectedResult(result, a, t.testScope())
 	if t.ws != nil {
 		out += relatedMemoriesSection(t.ws(ctx), affectedRefs(a, result))
 	}
@@ -228,7 +252,7 @@ func parseTopologyAffectedArgs(raw json.RawMessage) (topologyAffectedArgs, error
 		return a, fmt.Errorf("topology_affected: invalid arguments: %w", err)
 	}
 	if a.MaxResults <= 0 {
-		a.MaxResults = 50
+		a.MaxResults = defaultMaxPackages
 	}
 	return a, nil
 }
@@ -468,7 +492,7 @@ func incidentConfidence(edges []topology.Edge) map[int64]float64 {
 	return m
 }
 
-func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string {
+func formatAffectedResult(result *affectedResult, a topologyAffectedArgs, scope TestScope) string {
 	if result == nil {
 		return "topology_affected: none of the given files or symbols are in the index"
 	}
@@ -493,12 +517,13 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string
 
 	// Aggregate by package. Enumerating every test is what made this response
 	// 298 KB for a one-line change: 2,546 lines carrying the same two labels. The
-	// unit a caller acts on is the package path, because that is what `go test`
-	// takes, so lead with a runnable command per package.
+	// unit a caller acts on is the package, because that is the granularity every
+	// test runner scopes at, so lead with one row per package — carrying the
+	// run_task target where one can be spelled for this workspace.
 	pkgs := aggregateTestsByPackage(result.Tests)
-	fmt.Fprintf(&sb, "run these packages (%d):\n", len(pkgs))
+	fmt.Fprintf(&sb, "run these packages (%d)%s\n", len(pkgs), runHeaderSuffix(scope))
 	for _, p := range pkgs {
-		fmt.Fprintf(&sb, "  %-42s %5d tests   %s\n", goTestTarget(p.Dir), p.Count, p.Reason)
+		fmt.Fprintf(&sb, "  %-42s %5d tests   %s\n", packageRunLabel(scope, p.Dir), p.Count, p.Reason)
 	}
 
 	// Name individual tests only where naming them helps: the packages the change

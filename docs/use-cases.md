@@ -34,6 +34,7 @@ described where they were found, in Scenario 7 and Scenario 8.
 | | |
 |---|---|
 | Repository | this repo at commit `b46e233f`, plus this page and its script |
+| Re-measured | scenarios 4, 7 and 10 at `302e9768`, after `topology_affected` became language-aware and `file_outline`'s output grew |
 | Date | 2026-08-21 |
 | Plumb | 0.17.0 (go1.26.7) |
 | Client | a direct MCP session over stdio (`plumb serve`) |
@@ -158,10 +159,10 @@ Question: *what's in `internal/cli/stats.go`?*
 |---|---|---|
 | Whole file, raw | 9,856 | ~2,464 |
 | Whole file, with a line gutter | 11,120 | ~2,780 |
-| Plumb `file_outline` | 1,558 | ~390 |
+| Plumb `file_outline` | 1,589 | ~397 |
 
-**Takeaway — 6.3× smaller than the raw file, 7.1× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
-ranges, bodies collapsed — for ~390 tokens instead of ~2,464. Enough to navigate the file and
+**Takeaway — 6.2× smaller than the raw file, 7.0× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
+ranges, bodies collapsed — for ~397 tokens instead of ~2,464. Enough to navigate the file and
 decide what to read in full, without reading it all. Unlike Scenario 3 this ratio is fairly
 stable, because it scales with the file's declaration density rather than with your question.
 
@@ -235,30 +236,40 @@ Question: *I changed `internal/stats/savings.go`. What do I run?*
 
 | Approach | Scope | Response |
 |---|---|---|
-| `go test ./...` | 55 packages, 653 test files, 4,313 test functions | — |
-| Plumb `topology_affected` | **5 packages**, 2,553 tests | 3,906 B |
+| `go test ./...` | 55 packages, 662 test files, 4,390 test functions | — |
+| Plumb `topology_affected` | **5 packages**, 2,623 tests | 4,142 B |
 
-The answer is a list of runnable commands, not a list of test names:
+The answer is a list of targets you can run, not a list of test names:
 
 ```
-run these packages (5):
-  go test ./internal/stats/...      53 tests   changed package
-  go test ./internal/tools/...    1310 tests   imports the changed package
-  go test ./internal/cli/...       971 tests   imports the changed package
-  go test ./internal/tui/...       195 tests   imports the changed package
-  go test ./internal/web/...        24 tests   imports the changed package
+run these packages (5) — pass each target to run_task(slot:"test", target:…):
+  ./internal/stats/...                          53 tests   changed package
+  ./internal/tools/...                        1339 tests   imports the changed package
+  ./internal/cli/...                           990 tests   imports the changed package
+  ./internal/tui/...                           217 tests   imports the changed package
+  ./internal/web/...                            24 tests   imports the changed package
 ```
 
 **Takeaway — 5 packages out of 55, and it tells you why each one.** The actionable unit is the
-package, because that is what `go test` takes. `internal/stats` is where the edit landed; the
+package, because that is what a test runner takes. `internal/stats` is where the edit landed; the
 other four are the packages that import it, which is exactly the set you would have had to work
 out by hand.
 
+The target is shaped for *this* workspace, not assumed to be Go: it is emitted only where the
+primary language's runner takes a positional path, and it is expressed relative to
+`[tasks.<lang>].working_dir`, so it can be handed straight to `run_task` — or to `go test` —
+without editing. A workspace whose runner scopes by test name (`cargo test <filter>`) or by a
+project-specific flag gets its directories named and no command guessed.
+
 **The honest limit is granularity, not coverage.** Within a reached package, *every* test is
-counted — all 1,310 in `internal/tools`, not the handful that touch savings code. Nothing in the
+counted — all 1,339 in `internal/tools`, not the handful that touch savings code. Nothing in the
 index says which tests exercise which function, because a Go test never lives in the file it
-tests. So this narrows the run from 55 packages to 5; it does not narrow 4,313 tests to a
+tests. So this narrows the run from 55 packages to 5; it does not narrow 4,390 tests to a
 handful, and a tool claiming otherwise would be guessing.
+
+These counts move whenever anyone adds a test, so they are pinned to the re-measured commit above
+rather than to whatever `main` holds today; the *shape* of the answer — 5 packages out of 55 — is
+the part that does not drift.
 
 > **This page found a bug here.** Measuring this scenario is what surfaced it. The tool used to
 > seed its traversal from every node in the changed file — including one per `import`, named for
@@ -368,9 +379,9 @@ parentheses — the same two baselines as Scenario 3.
 
 | Language | File (raw / gutter) | Symbol read | `file_outline` |
 |---|---|---|---|
-| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,558 B — **7.1×** (6.3×) |
-| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,255 B, **14.6×** (13.5×) | 2,426 B — **7.5×** (7.0×) |
-| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,721 B — **7.3×** (6.6×) |
+| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,589 B — **7.0×** (6.2×) |
+| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,253 B, **14.6×** (13.5×) | 2,457 B — **7.4×** (6.9×) |
+| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,752 B — **7.2×** (6.5×) |
 
 The three symbols are named, with their sizes, because Scenario 3 showed the ratio is a property
 of the symbol: a cross-language table pitting a 6-line helper against a 117-line function would
@@ -388,11 +399,11 @@ depend on the symbol.
 | Question | Plumb tool | Result |
 |---|---|---|
 | Read one function | `read_symbol` | 2.9×–33.4× fewer tokens, depending on the symbol |
-| Understand a file | `file_outline` | ~7.1× fewer tokens (7.5× Python, 7.3× JS) |
+| Understand a file | `file_outline` | ~7.0× fewer tokens (7.4× Python, 7.2× JS) |
 | Find text | `search_in_files` | a wash vs `ripgrep`; 9.3× smaller than naive `grep` |
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
-| Pick tests to run | `topology_affected` | 5 packages instead of 55, in 3.9 KB — package-granular |
+| Pick tests to run | `topology_affected` | 5 packages instead of 55, in 4.1 KB — package-granular |
 | Read several files | `read_multiple_files` | 1.31× (76 B over 3× `read_file`); buys turns, not tokens |
 | Any warm call | — | p95 well under 1 ms — not the bottleneck |
 
