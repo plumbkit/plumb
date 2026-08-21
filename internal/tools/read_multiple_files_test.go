@@ -208,3 +208,78 @@ func TestReadMultipleFiles_UniformSlicing_Pattern(t *testing.T) {
 		}
 	}
 }
+
+// PLAN-357 commit 3: when every successfully-read file agrees on an indent
+// convention, it is stated ONCE in the batch preamble and dropped from each
+// per-file header — which also shrinks to mtime+sha256+lines (no chars/
+// baseline/indent repeated per file).
+func TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.txt")
+	pathB := filepath.Join(dir, "b.txt")
+	pathC := filepath.Join(dir, "c.txt")
+	for _, p := range []string{pathA, pathB, pathC} {
+		if err := os.WriteFile(p, []byte("\thello\n\tworld\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(),
+		mustJSON(map[string]any{"paths": []string{pathA, pathB, pathC}}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if !strings.HasPrefix(out, "# plumb-read-batch ") {
+		t.Fatalf("expected a batch preamble at the top of the response:\n%s", out)
+	}
+	preamble := out[:strings.Index(out, "\n\n")]
+	if !strings.Contains(preamble, "indent=tabs") {
+		t.Fatalf("expected the consensus indent hoisted into the preamble:\n%s", preamble)
+	}
+	if n := strings.Count(out, "indent="); n != 1 {
+		t.Fatalf("expected indent stated exactly once (in the preamble, not per file), got %d:\n%s", n, out)
+	}
+	if strings.Contains(out, "chars=") || strings.Contains(out, "baseline=") {
+		t.Fatalf("per-file header should no longer carry chars=/baseline=:\n%s", out)
+	}
+	for _, p := range []string{pathA, pathB, pathC} {
+		block := blockFor(t, out, p)
+		if !strings.Contains(block, "mtime=") || !strings.Contains(block, "sha256=") || !strings.Contains(block, "lines=2") {
+			t.Fatalf("expected a compact mtime/sha256/lines header for %s:\n%s", p, block)
+		}
+	}
+}
+
+// PLAN-357 commit 3: when files DISAGREE on indent, the preamble makes no
+// claim about it (nothing false stated), and each file keeps its own indent
+// on its per-file header so the information isn't lost.
+func TestReadMultipleFiles_HeaderDedup_DivergentIndentKeptPerFile(t *testing.T) {
+	dir := t.TempDir()
+	pathTabs := filepath.Join(dir, "tabs.txt")
+	pathSpaces := filepath.Join(dir, "spaces.txt")
+	if err := os.WriteFile(pathTabs, []byte("\thello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathSpaces, []byte("  hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := (&ReadMultipleFiles{}).Execute(context.Background(),
+		mustJSON(map[string]any{"paths": []string{pathTabs, pathSpaces}}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// No workspace pinned ((&ReadMultipleFiles{}) has ws==nil) and the files
+	// disagree on indent, so there is nothing to hoist — no preamble at all.
+	if strings.HasPrefix(out, "# plumb-read-batch") {
+		t.Fatalf("no consensus indent exists, so no preamble should be emitted:\n%s", out)
+	}
+	if !strings.Contains(blockFor(t, out, pathTabs), "indent=tabs") {
+		t.Fatalf("expected tabs.txt's own header to state indent=tabs:\n%s", out)
+	}
+	if !strings.Contains(blockFor(t, out, pathSpaces), "indent=spaces") {
+		t.Fatalf("expected spaces.txt's own header to state indent=spaces:\n%s", out)
+	}
+}

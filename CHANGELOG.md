@@ -9,6 +9,28 @@
 
 ### Added
 
+- **`read_multiple_files`' per-file header shrinks (header dedup, PLAN-357).**
+  Its per-file provenance line used to restate everything `read_file` states —
+  `mtime`, `sha256`, `indent`, `lines`, `chars`, `baseline` — even though most
+  of that is either redundant in a batch (a `### path` heading already states
+  the path; `chars`/`baseline` describe the SAME whole-file read three ways)
+  or a fact every file in the batch usually shares (the indent convention). The
+  per-file header now states only `mtime` + `sha256` + `lines`; when every
+  successfully-read file agrees on one indent convention, it moves into a
+  single preamble line instead of repeating per file — and stays per-file,
+  honestly, when they disagree (a mixed-language batch usually does). A
+  workspace-root preamble line was tried too and measured OUT: at real
+  absolute-path lengths it cost more than the indent dedup saved, which would
+  have made the response bigger, not smaller. Re-measured with
+  `scripts/measure-use-cases.py` (scenario 8, same 3-file sample as
+  `docs/use-cases.md`): batching overhead fell from **109 bytes to 7 bytes**
+  — `read_multiple_files` now costs about the same payload as three separate
+  `read_file` calls (2,476 B vs 2,469 B, both ≈1.27× the native-with-gutters
+  baseline), down from 1.32× more. `docs/use-cases.md` Scenario 8 republished
+  with the new numbers. Guarded by
+  `TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted` and
+  `TestReadMultipleFiles_HeaderDedup_DivergentIndentKeptPerFile`.
+
 - **`read_multiple_files` gains read_file's slicing/search parameters.**
   Top-level `start_line`, `end_line`, `pattern`, `use_regex`, `context_lines`,
   and `max_matches` apply uniformly to EVERY path in the call — same

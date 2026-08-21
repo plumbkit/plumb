@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -195,6 +196,77 @@ const readMultipleFilesParallelism = 8
 const readMultipleFilesEditHint = "# To edit any of these files: use edit_file (not the native Edit tool), " +
 	"passing expected_mtime from that file's own header above.\n"
 
+// rmfHeaderRe matches read_file's own provenance header line (formatOutput /
+// formatSearchOutput in read_file.go and read_file_search.go share this exact
+// shape), so read_multiple_files can pull the per-file facts back out of its
+// inner reader's already-rendered output and restate them compactly rather
+// than reimplementing read_file's own formatting.
+var rmfHeaderRe = regexp.MustCompile(`^# plumb-read mtime=(\S+)(?: sha256=(\S+))? indent=(\S+) lines=(\d+) chars=\d+ baseline=\d+\n`)
+
+// rmfParsed is one file's provenance header, pulled out of its inner reader's
+// rendered output, plus everything that followed the header line (any
+// concurrent-edit/outside-workspace/large-file notes, the blank separator,
+// then the content) untouched. ok is false when the header didn't match the
+// expected shape (should not happen in practice); rest then holds the
+// original content unmodified, so nothing is ever lost.
+type rmfParsed struct {
+	ok                        bool
+	mtime, sha, indent, lines string
+	rest                      string
+}
+
+// parseReadFileHeader splits content into its read_file provenance header
+// fields and everything after the header line.
+func parseReadFileHeader(content string) rmfParsed {
+	loc := rmfHeaderRe.FindStringSubmatchIndex(content)
+	if loc == nil {
+		return rmfParsed{rest: content}
+	}
+	m := rmfHeaderRe.FindStringSubmatch(content)
+	return rmfParsed{ok: true, mtime: m[1], sha: m[2], indent: m[3], lines: m[4], rest: content[loc[1]:]}
+}
+
+// rmfCompactHeader renders the header dedup format (PLAN-357 commit 3): path
+// is already stated by the '### path' heading above it, so the per-file line
+// shrinks to just what read_file's own header states beyond the shared facts
+// hoisted into rmfPreamble — mtime, sha256, lines, and indent ONLY when it
+// diverges from the batch's consensus indent (showIndent).
+func rmfCompactHeader(p rmfParsed, showIndent bool) string {
+	var sb strings.Builder
+	sb.WriteString("# mtime=")
+	sb.WriteString(p.mtime)
+	if p.sha != "" {
+		sb.WriteString(" sha256=")
+		sb.WriteString(p.sha)
+	}
+	sb.WriteString(" lines=")
+	sb.WriteString(p.lines)
+	if showIndent {
+		sb.WriteString(" indent=")
+		sb.WriteString(p.indent)
+	}
+	sb.WriteByte('\n')
+	return sb.String()
+}
+
+// rmfPreamble states the one shared fact commit 3 hoists out of every
+// per-file header — the indent convention, when every successfully-read file
+// agrees on one — ONCE at the top of the response instead of repeating it per
+// file. Returns "" when there is nothing to state (no readable files, or the
+// files disagree). The pinned workspace root was considered too (the card's
+// "shared facts (workspace, indent convention)") and measured out: on a
+// mixed-language batch it is both a certainty (every read_file dependency
+// already resolves paths against it) and, at typical absolute-path lengths,
+// bigger than what indent dedup saves — see the scenario 8 remeasurement in
+// docs/use-cases.md. Restating it would have made the batch response BIGGER,
+// so it stays out.
+func rmfPreamble(consensusIndent string) string {
+	if consensusIndent == "" {
+		return ""
+	}
+	return "# plumb-read-batch indent=" + consensusIndent + "\n\n"
+}
+
 func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a readMultipleFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -207,11 +279,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		return "", fmt.Errorf("read_multiple_files: at most 20 paths per call, got %d", len(a.Paths))
 	}
 
-	type result struct {
-		content string
-		err     error
-	}
-	results := make([]result, len(a.Paths))
+	results := make([]rmfResult, len(a.Paths))
 	// Every read_file dependency read_file itself carries is threaded through
 	// the inner reader EXCEPT WithClient — see the type doc and
 	// readMultipleFilesEditHint above for why.
@@ -248,11 +316,25 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 				"max_matches":   a.MaxMatches,
 			})
 			out, err := reader.Execute(ctx, raw)
-			results[i] = result{content: out, err: err}
+			results[i] = rmfResult{content: out, err: err}
 		}()
 	}
 	wg.Wait()
 
+	return rmfAssemble(a.Paths, results, t.outsideFn, t.clientNameFn), nil
+}
+
+// rmfResult is one path's inner read_file call outcome.
+type rmfResult struct {
+	content string
+	err     error
+}
+
+// rmfAssemble builds the final response from each path's inner read_file
+// result: a header-dedup pass (commit 3), then the per-file '### path' blocks,
+// then at most one consolidated edit-lane hint. Split out of Execute to keep
+// it under the complexity budget — see the type doc for the design.
+func rmfAssemble(paths []string, results []rmfResult, outsideFn func(string) string, clientNameFn func() string) string {
 	// No separator rule. It used to be strings.Repeat("─", 60) — and U+2500 is 3
 	// bytes in UTF-8, so each rule cost 180 bytes. On a three-file read that was
 	// 543 bytes, 17% of the entire response, spent on decoration.
@@ -269,9 +351,21 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 	// file was announced as "933 bytes", one line above its own header stating
 	// chars=675 baseline=677. Three numbers, and the prominent one meant nothing.
 	// The provenance line carries the real figures.
+	//
+	// Commit 3 (header dedup): the per-file header from each inner read_file
+	// call still carries its own workspace-independent chars/baseline pair (a
+	// ranged read reflects the returned slice vs the whole file — that stays
+	// useful per file) but the indent CONVENTION, when every successfully-read
+	// file agrees on one, is a shared fact repeated N times for no reason. Pull
+	// it into ONE preamble line (see rmfPreamble for why workspace didn't make
+	// the cut), and shrink each per-file header to what's left: mtime +
+	// sha256 + lines, indent only when a file disagrees with the consensus.
+	parsed, consensusIndent := rmfParseHeaders(results)
+
 	var sb strings.Builder
+	sb.WriteString(rmfPreamble(consensusIndent))
 	editable := false
-	for i, p := range a.Paths {
+	for i, p := range paths {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
@@ -281,15 +375,44 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 			continue
 		}
 		fmt.Fprintf(&sb, "### %s\n", p)
-		sb.WriteString(r.content)
+		pf := parsed[i]
+		if pf.ok {
+			sb.WriteString(rmfCompactHeader(pf, consensusIndent == "" || pf.indent != consensusIndent))
+		}
+		sb.WriteString(pf.rest)
 		sb.WriteString("\n")
-		if t.outsideFn == nil || t.outsideFn(p) == "" {
+		if outsideFn == nil || outsideFn(p) == "" {
 			editable = true
 		}
 	}
 	// One hint, not N — see the type doc and readMultipleFilesEditHint above.
-	if editable && clientHasNativeEditConflict(t.clientNameFn) {
+	if editable && clientHasNativeEditConflict(clientNameFn) {
 		sb.WriteString("\n" + readMultipleFilesEditHint)
 	}
-	return sb.String(), nil
+	return sb.String()
+}
+
+// rmfParseHeaders parses every successful result's provenance header (see
+// rmfParsed) and reports the batch's consensus indent — the single value
+// every successfully-read file agrees on, or "" when there is no reading, no
+// agreement, or fewer than one successfully-parsed header.
+func rmfParseHeaders(results []rmfResult) (parsed []rmfParsed, consensusIndent string) {
+	parsed = make([]rmfParsed, len(results))
+	indentCounts := make(map[string]int, 2)
+	for i, r := range results {
+		if r.err != nil {
+			continue
+		}
+		p := parseReadFileHeader(r.content)
+		parsed[i] = p
+		if p.ok {
+			indentCounts[p.indent]++
+		}
+	}
+	if len(indentCounts) == 1 {
+		for indent := range indentCounts {
+			consensusIndent = indent
+		}
+	}
+	return parsed, consensusIndent
 }

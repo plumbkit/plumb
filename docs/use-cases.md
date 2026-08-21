@@ -17,9 +17,11 @@ Four honest results up front:
 - **Semantic navigation is a correctness win, not a size one** — asked "what actually uses this?"
   a text search returned **60% non-references**, and it is the *kind* of over-match that matters:
   prose, a doc comment, a string literal, and a different symbol that merely contains the name.
-- **Batching reads is not a token win at all** — `read_multiple_files` returns **1.32× more**
-  bytes than reading the same three files natively. It buys turns and atomicity, and it costs
-  you payload. That one is published because it is a loss.
+- **Batching reads is a turns win, not a token one** — `read_multiple_files` now costs about the
+  same payload as reading the same files one at a time (**7 bytes** more, down from a **1.32×**
+  loss before PLAN-357). It buys one round trip instead of three and, as of that same fix,
+  edit-safety parity with `read_file` under strict mode — it no longer trades a batch read for a
+  broken next edit.
 
 Writing this page changed the software it measures. Two scenarios turned up real defects — a
 test-selection bug that dropped the one test covering the change, and 17% of a response spent on
@@ -277,37 +279,50 @@ handful, and a tool claiming otherwise would be guessing.
 
 ## Scenario 8 — Reading several files at once
 
-Question: *I need these three files.* Published because it is a **loss**.
+Question: *I need these three files.* Published because it went through two real bugs before
+landing at a wash, and the honest number matters more than a flattering one.
 
 | Approach | Bytes | vs a real read tool | Turns |
 |---|---|---|---|
 | Three native reads, raw file bytes | 1,739 | 0.89× | 3 |
 | Three native reads, with line gutters | 1,949 | 1× | 3 |
 | Three Plumb `read_file` calls | 2,469 | 1.27× | 3 |
-| One Plumb `read_multiple_files` | 2,578 | 1.32× | 1 |
+| One Plumb `read_multiple_files` | 2,476 | 1.27× | 1 |
 
-**Takeaway — 1.32× *more* payload, for one round trip instead of three.** The two middle rows are
-the honest part, because almost none of the overhead is batching:
+**Takeaway — batching is now a wash, not a loss: 7 bytes more than three separate `read_file`
+calls, for one round trip instead of three.** That number moved twice while this page was being
+kept honest:
 
-- **520 bytes** — Plumb's per-read provenance header (`mtime`, `sha256`, line and byte counts),
-  charged whether you batch or not. That header is what `expected_mtime` / `expected_sha` are
-  built from, so it buys the guarantee that your edit will not silently clobber a concurrent
-  write. Load-bearing, not decoration.
-- **109 bytes** — the batching-specific framing on top: a `### path` heading per file.
+- **691 → 109 bytes** (PLAN-13-era fix). The batching-specific framing used to include three
+  horizontal-rule separators — `strings.Repeat("─", 60)`, and U+2500 is *three* bytes in UTF-8, so
+  each rule cost 180 — seventeen percent of the response spent on a decorative line the `###`
+  heading already made redundant. Removing it, and a byte count that was simply wrong (it
+  reported the length of the *rendered* response, header and gutters included, not the file — a
+  677-byte file was announced as "933 bytes" one line above its own header reading
+  `chars=675 baseline=677`), took the batching overhead from 691 bytes to 109.
+- **109 → 7 bytes** (PLAN-357). `read_multiple_files` was a strict-mode trap until this fix — see
+  the correctness note below — and while wiring it up to parity with `read_file`, its per-file
+  header was rebuilt to state only what a batch response needs restated per file (`mtime`,
+  `sha256`, `lines`); the indent convention moved into a single preamble line when every
+  successfully-read file agrees on one (a mixed-language batch, the case measured here, usually
+  doesn't — Go, JS and Python disagree, so this batch's own response still states each file's
+  indent individually). A pinned-workspace-root preamble line was tried too and **measured
+  out**: on an absolute-path-length workspace it cost more than the indent dedup saved, which
+  would have made the batch response *bigger* — the kind of thing this page exists to catch
+  before it ships.
 
-> **This scenario also found a bug.** That second number used to be **691 bytes**, of which 543
-> were three horizontal rules — `strings.Repeat("─", 60)`, and U+2500 is *three* bytes in UTF-8,
-> so each rule cost 180. Seventeen percent of the response was a decorative line that the `###`
-> heading already made redundant. Beside it, each file was labelled with a byte count that was
-> simply wrong: it reported the length of the *rendered* response rather than the file, so a
-> 677-byte file was announced as “933 bytes” one line above its own header reading
-> `chars=675 baseline=677`. Both are gone; the batching overhead fell from 691 bytes to 109.
+> **This scenario also found a correctness bug, not just a bytes one.** `read_multiple_files`
+> built its inner reader with no `ReadTracker` wired in, so a batch read was never recorded —
+> under `[edits] strict` mode, `edit_file` on a file you had just batch-read failed with "has not
+> been read in this daemon session". Batching was strictly worse than reading the same files one
+> at a time, on top of costing more bytes. Fixed alongside the bytes (PLAN-357); see the
+> `Fixed` entry in `CHANGELOG.md`.
 
-Even so, there is still no token argument for `read_multiple_files`. What it buys is one agent
-turn instead of three (latency, and fewer chances to be interrupted mid-sequence), and inline
-per-file errors, so one unreadable path doesn't abort the batch. Those are real, and they are not
-measured in bytes. If your agent budget is tokens rather than turns, read the files one at a
-time — and this is exactly why the tool is a candidate for hiding in a leaner tool profile.
+There is still no BYTES argument *for* `read_multiple_files` — three individual `read_file` calls
+are not bigger — but there is no longer one against it either. What it buys is real and unmeasured
+in bytes: one agent turn instead of three (latency, fewer chances to be interrupted mid-sequence),
+inline per-file errors so one unreadable path doesn't abort the batch, and now edit-safety parity
+with `read_file` under strict mode. If your agent budget is turns rather than raw bytes, batch.
 
 ## Scenario 9 — Latency, not just bytes
 
@@ -369,7 +384,7 @@ depend on the symbol.
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
 | Pick tests to run | `topology_affected` | 5 packages instead of 55, in 3.9 KB — package-granular |
-| Read several files | `read_multiple_files` | **1.32× more** tokens; buys turns and atomicity |
+| Read several files | `read_multiple_files` | ~parity on bytes (7 B over); buys turns, not tokens |
 | Any warm call | — | p95 well under 1 ms — not the bottleneck |
 
 The token-efficiency win is concentrated in **targeted reads**, and it scales with how much of
