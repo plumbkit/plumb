@@ -20,6 +20,33 @@ import (
 // is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
 const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
+// postWriteDiagLabelAuthoritative and postWriteDiagLabelSnapshot are the two
+// fixed, machine-parseable labels every non-empty post-write diagnostics block
+// carries. Before this, a stale snapshot (the language server had not
+// re-published since the write) could be printed with the same confidence as
+// a genuinely fresh result — "agents learned to ignore the block, which
+// defeats its purpose" (worth-it strategy §2 pillar 2, W2-8). Never print
+// diagnostic content without one of these two labels.
+const (
+	// postWriteDiagLabelAuthoritative marks a block whose diagnostics were
+	// confirmed to reflect this write: the language server re-published
+	// after the write, whether because the caller explicitly waited
+	// (await_diagnostics:true) or the default adaptive window happened to
+	// catch a fast publish.
+	postWriteDiagLabelAuthoritative = "authoritative post-write pass"
+	// postWriteDiagLabelSnapshot marks a block whose diagnostics were NOT
+	// confirmed to reflect this write: no publish arrived within the (fast,
+	// default) adaptive window, so the data may predate the edit.
+	postWriteDiagLabelSnapshot = "pre-write snapshot — not yet re-analysed"
+)
+
+// postWriteDiagLabel renders the fixed-prefix label line prepended to every
+// non-empty post-write diagnostics block. Callers (human or scripted) can
+// match on the literal "[diagnostics: " prefix without parsing prose.
+func postWriteDiagLabel(label string) string {
+	return "\n[diagnostics: " + label + "]"
+}
+
 // awaitDiagnosticsRefresh waits for the language server to re-publish
 // diagnostics for uri after a write, then returns the result. It subscribes to
 // the next publishDiagnostics notification and returns the instant the server

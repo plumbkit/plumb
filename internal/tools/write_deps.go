@@ -247,7 +247,8 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh 
 		if len(diags) == 0 {
 			return ""
 		}
-		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
+		return postWriteDiagLabel(postWriteDiagLabelSnapshot) +
+			"\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
 	}
 	var pre []protocol.Diagnostic
 	if baseline != nil {
@@ -265,7 +266,12 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh 
 	// commit over them. Append a count so the file's full state is not implied
 	// clean by silence.
 	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, diags, lo, hi, touched))
-	return out
+	if out == "" {
+		return out
+	}
+	// fresh is true on every path that reaches here, so the block reflects a
+	// genuine post-write re-analysis: label it authoritative.
+	return postWriteDiagLabel(postWriteDiagLabelAuthoritative) + out
 }
 
 func (d WriteDeps) crossFileEnabled() bool {
