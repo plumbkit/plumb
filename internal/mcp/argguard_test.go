@@ -49,6 +49,26 @@ const editsRejectSchema = `{
   "additionalProperties": false
 }`
 
+// editsWithReplaceAllSchema mirrors edit_file's real shape closely enough for
+// the placement-hint test below: replace_all is declared only inside each
+// edits[] item, never at the top level.
+const editsWithReplaceAllSchema = `{
+  "type": "object",
+  "properties": {
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}},
+        "required": ["old_string", "new_string"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["edits"],
+  "additionalProperties": false
+}`
+
 func mustShape(t *testing.T, schema string) *shape {
 	t.Helper()
 	sh, ok := parseShape(json.RawMessage(schema))
@@ -93,6 +113,19 @@ func TestResolveArgs(t *testing.T) {
 			schema:  editsRejectSchema,
 			args:    `{"edits":[{"old_string":"a","new_string":"b","foo":1}]}`,
 			wantErr: []string{`unknown parameter "edits[].foo"`, `Valid parameters: old_string, new_string`},
+		},
+		{
+			// PLAN-358: a schema-shape rejection for a parameter that IS declared,
+			// just nested wrong, names the correct placement with a minimal example
+			// instead of a bare "unknown parameter".
+			name:   "top-level key that belongs inside an array item gets a placement hint",
+			schema: editsWithReplaceAllSchema,
+			args:   `{"edits":[{"old_string":"a","new_string":"b"}],"replace_all":true}`,
+			wantErr: []string{
+				`unknown parameter "replace_all"`,
+				`belongs inside each edits[] item, not at the top level`,
+				`Example: {"edits": [{"old_string": ..., "new_string": ..., "replace_all": ...}]}`,
+			},
 		},
 		{
 			// file_path-canonical tool (read_file family): "path" is accepted.

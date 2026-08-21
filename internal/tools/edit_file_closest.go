@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -52,6 +53,56 @@ func closestMatchDiff(content, searched, path string) string {
 	b.WriteString(" (\"-\" = your old_string, \"+\" = current file content; suggestion only, not applied):\n")
 	b.WriteString(diff)
 	return b.String()
+}
+
+// multiLineHintMinLines is the old_string line count at which notFoundError
+// switches on the RANGE-mode suggestion (rangeModeHint). Below this a
+// str_replace anchor is usually cheap to fix by hand; at and above it, JSON-
+// escaping a multi-line old_string is the more likely failure mode, so the
+// rejection actively steers toward RANGE mode instead.
+const multiLineHintMinLines = 3
+
+// rangeModeHint returns a RANGE-mode suggestion for a multi-line (>=
+// multiLineHintMinLines lines) old_string that was not found, or "" when
+// old_string is too short for the hint to apply. Bounded and read-only: it
+// reuses the same capped fuzzy locate as closestMatchDiff (never O(n^2) over a
+// large file) and never applies anything — suggestion only.
+//
+// When a sufficiently similar region exists, the hint names the exact
+// computed line numbers and similarity so a retry can go straight to RANGE
+// mode in one call, with no old_string re-escaping needed. When no region is
+// similar enough, it falls back to a generic RANGE-mode pointer with no
+// computed numbers, so a multi-line miss always at least points at the
+// escaping-free alternative.
+func rangeModeHint(content, searched string) string {
+	oldLines := diffSplitLines(searched)
+	if len(oldLines) < multiLineHintMinLines {
+		return ""
+	}
+	contentLines := diffSplitLines(content)
+	if len(contentLines) == 0 {
+		return genericRangeModeHint()
+	}
+
+	bestStart, bestScore := bestClosestWindow(oldLines, contentLines)
+	if bestStart < 0 || bestScore < minClosestSimilarity {
+		return genericRangeModeHint()
+	}
+
+	startLine := bestStart + 1
+	endLine := min(bestStart+len(oldLines), len(contentLines))
+	return fmt.Sprintf(
+		"\n  Closest match: lines %d–%d (similarity ~%d%%). For multi-line replacements prefer RANGE mode: "+
+			`{"start_line": %d, "end_line": %d, "new_string": ...} — no JSON-escaping of the old text needed.`,
+		startLine, endLine, int(bestScore*100), startLine, endLine)
+}
+
+// genericRangeModeHint is the RANGE-mode pointer used when no near-match
+// region was found for a multi-line old_string, so no line numbers can be
+// computed.
+func genericRangeModeHint() string {
+	return "\n  For multi-line replacements, prefer RANGE mode: " +
+		`{"start_line": N, "end_line": M, "new_string": ...} — no JSON-escaping of the old text needed.`
 }
 
 // bestClosestWindow scores every candidate window proposed by

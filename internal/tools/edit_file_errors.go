@@ -67,6 +67,7 @@ func (t *EditFile) notFoundError(ctx context.Context, i int, path, sent, searche
 		b.WriteString("\n")
 		b.WriteString(diff)
 	}
+	b.WriteString(rangeModeHint(content, searched))
 	return errors.New(b.String())
 }
 
