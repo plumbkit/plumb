@@ -34,7 +34,7 @@ func TestPostWriteDiagLabel_StalePathCarriesSnapshotLabel(t *testing.T) {
 	src.set(errDiag("possibly stale error")) // present before the write; the stub never re-publishes
 
 	d := WriteDeps{Diag: src, PostWriteDiagWindow: 20 * time.Millisecond}
-	out := d.postWriteDiagnostics("file:///foo.go", "before", "after", false, nil)
+	out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
 
 	if !strings.HasPrefix(out, snapshotLabelLine) {
 		t.Fatalf("expected the block to start with the fixed snapshot label, got:\n%q", out)
@@ -58,7 +58,7 @@ func TestPostWriteDiagLabel_FreshPathCarriesAuthoritativeLabel(t *testing.T) {
 	// finding on the touched line (mirrors fakeCrossDiag's documented usage).
 	f.all[edited] = []protocol.Diagnostic{errAt("new break", 1)}
 
-	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", false, baseline)
+	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected the block to start with the fixed authoritative label, got:\n%q", out)
@@ -80,7 +80,7 @@ func TestPostWriteDiagLabel_FreshCleanPassCarriesAuthoritativeLabel(t *testing.T
 	d := WriteDeps{Diag: f}
 	baseline := d.capturePreWriteBaseline(edited)
 
-	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", true, baseline)
+	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", postWriteDiagOpts{awaitFresh: true}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected the clean-pass block to start with the fixed authoritative label, got:\n%q", out)
@@ -96,7 +96,7 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 	t.Run("awaitFresh=false: nothing to report renders nothing", func(t *testing.T) {
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", false, nil)
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
 		if out != "" {
 			t.Fatalf("nothing to report must render nothing, got:\n%q", out)
 		}
@@ -110,7 +110,7 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 	t.Run("awaitFresh=true: timeout still surfaces the labelled snapshot line", func(t *testing.T) {
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", true, nil)
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
 		if !strings.HasPrefix(out, snapshotLabelLine) {
 			t.Fatalf("expected the block to start with the fixed snapshot label, got:\n%q", out)
 		}
@@ -118,6 +118,63 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 			t.Fatalf("expected an explicit not-confirmed line, got:\n%q", out)
 		}
 	})
+}
+
+// TestPostWriteDiagLabel_DisabledWindowNeverBlamesAWait closes a PR1 review nit
+// (PLAN-362 PR2): when the post-write window is switched off there IS no wait,
+// so telling the caller their answer did not arrive "within the wait" names
+// something that never ran. The disabled case says so instead.
+func TestPostWriteDiagLabel_DisabledWindowNeverBlamesAWait(t *testing.T) {
+	t.Run("nothing cached", func(t *testing.T) {
+		src := newStubDiag()
+		d := WriteDeps{Diag: src, PostWriteDiagWindow: -1}
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
+		if !strings.HasPrefix(out, snapshotLabelLine) {
+			t.Fatalf("expected the snapshot label, got:\n%q", out)
+		}
+		if strings.Contains(out, "within the wait") {
+			t.Errorf("a disabled window must not report a wait that never ran:\n%q", out)
+		}
+		if !strings.Contains(out, "post_write_diagnostics_ms") {
+			t.Errorf("expected the disabled window named so the caller can fix it:\n%q", out)
+		}
+	})
+
+	t.Run("something cached", func(t *testing.T) {
+		src := newStubDiag()
+		src.set(errDiag("older error"))
+		d := WriteDeps{Diag: src, PostWriteDiagWindow: -1}
+		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
+		if !strings.HasPrefix(out, snapshotLabelLine) {
+			t.Fatalf("expected the snapshot label, got:\n%q", out)
+		}
+		if strings.Contains(out, "within the wait") || strings.Contains(out, "not yet re-analysed;") {
+			t.Errorf("a disabled window must not imply an analysis is pending:\n%q", out)
+		}
+	})
+}
+
+// TestPostWriteDiagLabel_NoDiagnosticsSourceIsSaidOutLoud qualifies the
+// "always labelled" claim (PR1 review, item 5): a file with NO diagnostics
+// source produces no block at all on the default path, and that silence means
+// "not analysed", not "clean". A caller who explicitly asks is told which.
+func TestPostWriteDiagLabel_NoDiagnosticsSourceIsSaidOutLoud(t *testing.T) {
+	d := WriteDeps{} // no Diag source wired at all
+
+	if out := d.postWriteDiagnostics("file:///foo.go", "a", "b", postWriteDiagOpts{}, nil).text; out != "" {
+		t.Fatalf("the default path must stay silent, got:\n%q", out)
+	}
+
+	r := d.postWriteDiagnostics("file:///foo.go", "a", "b", postWriteDiagOpts{awaitFresh: true, structured: true}, nil)
+	if !strings.HasPrefix(r.text, "\n[diagnostics: "+postWriteDiagLabelNotAnalysed+"]") {
+		t.Fatalf("expected the not-analysed label, got:\n%q", r.text)
+	}
+	if !strings.Contains(r.text, "not a clean bill of health") {
+		t.Errorf("the caller must be told silence is not a pass, got:\n%q", r.text)
+	}
+	if r.delta.Fresh || r.delta.Scopes.EditedFile != diagScopeNoSource {
+		t.Errorf("delta must report the no_source scope, got %+v", r.delta)
+	}
 }
 
 // TestPostWriteDiagLabel_PullModeAlwaysAuthoritative covers the pull/hybrid
@@ -137,7 +194,7 @@ func TestPostWriteDiagLabel_PullModeAlwaysAuthoritative(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected a successful pull to carry the fixed authoritative label, got:\n%q", out)
@@ -161,7 +218,7 @@ func TestPostWriteDiagLabel_PullFailureNeverAuthoritative(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 
 	if !strings.HasPrefix(out, unverifiedLabelLine) {
 		t.Fatalf("expected the block to start with the fixed unverified label, got:\n%q", out)

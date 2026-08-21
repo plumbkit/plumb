@@ -37,23 +37,42 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 			)
 			continue
 		}
+		// A failed notification is not just a warning for the diagnostics pass:
+		// the server does not know the file changed, so anything it publishes
+		// during the wait describes the PREVIOUS content. Thread it through, so
+		// freshness is derived from what actually happened rather than from the
+		// caller's request.
+		notifyFailed := false
 		if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
+			notifyFailed = true
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
 		if t.deps.PostWriteNotifyFn != nil {
 			if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+				notifyFailed = true
 				slog.Warn("edit_file: post-write adapter notification failed", "path", path, "err", err)
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
 		t.deps.recordWritten(ctx, path)
 		t.deps.recordUndo(ctx, path, before, content, true, "edit_file")
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics, notes, baseline), nil
+
+		// Still inside the per-path lock taken in Execute: the write, the
+		// analysis and the rollback decision are one critical section, so no
+		// other plumb writer can land between them.
+		diag := t.deps.postWriteDiagnostics(uri, before, content, a.diagOpts(notifyFailed), baseline)
+		if a.FailOnNewErrors && diag.delta.hasNewErrors() {
+			return "", t.deps.rollbackNewErrors(ctx, rollbackRequest{
+				tool: "edit_file", path: path, uri: uri,
+				before: before, existedBefore: true, wrote: content, diag: diag,
+			})
+		}
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, notes, diag), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
 
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, awaitFresh bool, notes []string, baseline *diagBaseline) string {
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content string, notes []string, diag postWriteDiagResult) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -83,7 +102,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, awaitFresh, baseline))
+	sb.WriteString(diag.text)
 	return sb.String()
 }
 

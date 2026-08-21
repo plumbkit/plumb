@@ -34,7 +34,7 @@ var editFileSchema = json.RawMessage(`{
     },
     "include_anchors": {
       "type": "boolean",
-      "description": "Anchor-bounded edit mode: when true the anchors themselves are part of the replaced span (the whole inclusive span becomes new_string); when false (default) only the text strictly between the anchors is replaced and the anchors are preserved as boundaries."
+      "description": "Anchor-bounded edit mode: when true the anchors are part of the replaced span; when false (default) only the text strictly between them is replaced and both are preserved."
     },
     "edits": {
       "type": "array",
@@ -86,11 +86,15 @@ var editFileSchema = json.RawMessage(`{
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file. The result is always labelled — authoritative when re-analysis was confirmed (a clean pass is stated explicitly), a pre-write snapshot if the wait times out unconfirmed, or unverified if a pull-mode check itself failed — never presented with false confidence. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
+      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file, and append a machine-readable 'diagnostics delta' line (fresh, new_errors, resolved, pre_existing). The block is always labelled — authoritative, pre-write snapshot, unverified, or not-analysed — so a stale result is never dressed as fresh. Default false (fast adaptive window; the result may predate the write)."
+    },
+    "fail_on_new_errors": {
+      "type": "boolean",
+      "description": "When true (implies await_diagnostics), roll this edit back if the language server CONFIRMS it introduced new errors here, leaving the file byte-for-byte unchanged and returning the delta as the error. An unconfirmed check never rolls back; nor do warnings, pre-existing errors, or breakage elsewhere. Not with apply_partial, or over 1 MiB. Default false."
     },
     "reconcile": {
       "type": "boolean",
-      "description": "When true, do NOT reject the edit if the file changed since your read (expected_mtime / expected_sha mismatch); apply against the current on-disk content instead, relying on the exact-once old_string match for safety. Use it for the edit→format(gofumpt/golangci-lint --fix)→edit loop, where a formatter bumped the mtime but your anchors still match. Default false (the mtime guard stays strict)."
+      "description": "When true, do NOT reject the edit if the file changed since your read (expected_mtime / expected_sha mismatch); apply against the current on-disk content instead, relying on the exact-once old_string match for safety. Use it for the edit→format→edit loop, where a formatter bumped the mtime but your anchors still match. Default false."
     }
   },
   "required": ["file_path"],
@@ -180,7 +184,20 @@ type editFileArgs struct {
 	DirtyOk          bool      `json:"dirty_ok"`
 	ApplyPartial     bool      `json:"apply_partial"`
 	AwaitDiagnostics bool      `json:"await_diagnostics"`
+	FailOnNewErrors  bool      `json:"fail_on_new_errors"`
 	Reconcile        bool      `json:"reconcile"`
+}
+
+// diagOpts derives the post-write diagnostics request from the call's flags.
+// fail_on_new_errors implies await_diagnostics: a rollback decision may only
+// ever rest on a confirmed pass, so it must pay for one.
+func (a editFileArgs) diagOpts(lspNotifyFailed bool) postWriteDiagOpts {
+	confirm := a.AwaitDiagnostics || a.FailOnNewErrors
+	return postWriteDiagOpts{
+		awaitFresh:      confirm,
+		structured:      confirm,
+		lspNotifyFailed: lspNotifyFailed,
+	}
 }
 
 // anchorMode reports whether this request uses the anchor-bounded edit shape
@@ -332,6 +349,17 @@ func recoverStringEncodedEdits(raw json.RawMessage) (editFileArgs, bool) {
 // editFilePreconditions runs the dirty-check, optimistic-concurrency, and
 // strict-mode gates before any read or write.
 func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a editFileArgs) error {
+	if a.FailOnNewErrors {
+		if a.ApplyPartial {
+			return badArgument(&editLogicErr{errors.New(
+				"edit_file: fail_on_new_errors cannot be combined with apply_partial — " +
+					"apply_partial deliberately lets some edits land while others fail, which is the opposite of the " +
+					"all-or-nothing guarantee fail_on_new_errors makes. Pick one")})
+		}
+		if err := failOnNewErrorsPrecheck("edit_file", path); err != nil {
+			return &editLogicErr{err}
+		}
+	}
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		return dirtyWrite(&editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)})

@@ -46,7 +46,11 @@ var writeFileSchema = json.RawMessage(`{
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file. The result is always labelled — authoritative when re-analysis was confirmed (a clean pass is stated explicitly), a pre-write snapshot if the wait times out unconfirmed, or unverified if a pull-mode check itself failed — never presented with false confidence. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
+      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file, and append a machine-readable 'diagnostics delta' line (fresh, new_errors, resolved, pre_existing). The block is always labelled — authoritative, pre-write snapshot, unverified, or not-analysed — so a stale result is never dressed as fresh. Default false (fast adaptive window; the result may predate the write)."
+    },
+    "fail_on_new_errors": {
+      "type": "boolean",
+      "description": "When true (implies await_diagnostics), roll this write back if the language server CONFIRMS it introduced new errors here, leaving the file byte-for-byte unchanged and returning the delta as the error. An unconfirmed check never rolls back; nor do warnings, pre-existing errors, or breakage elsewhere. Not over 1 MiB. Default false."
     }
   },
   "required": ["file_path", "content"],
@@ -92,9 +96,22 @@ type writeFileArgs struct {
 	CreateDirs       *bool  `json:"create_dirs"`
 	DirtyOk          bool   `json:"dirty_ok"`
 	AwaitDiagnostics bool   `json:"await_diagnostics"`
+	FailOnNewErrors  bool   `json:"fail_on_new_errors"`
 	ExpectedMtime    string `json:"expected_mtime"`
 	ExpectedSha      string `json:"expected_sha"`
 	OverwriteChanged bool   `json:"overwrite_changed"`
+}
+
+// diagOpts derives the post-write diagnostics request from the call's flags.
+// fail_on_new_errors implies await_diagnostics: a rollback decision may only
+// ever rest on a confirmed pass, so it must pay for one.
+func (a writeFileArgs) diagOpts(lspNotifyFailed bool) postWriteDiagOpts {
+	confirm := a.AwaitDiagnostics || a.FailOnNewErrors
+	return postWriteDiagOpts{
+		awaitFresh:      confirm,
+		structured:      confirm,
+		lspNotifyFailed: lspNotifyFailed,
+	}
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -122,7 +139,15 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	isNew := os.IsNotExist(statErr)
 	uri := "file://" + path
 
-	oldContent, undoBefore, undoOK := t.writeFileCapture(ctx, path, isNew)
+	oldContent, undoBefore, undoOK := t.writeFileCapture(ctx, path, isNew, a.FailOnNewErrors)
+	if a.FailOnNewErrors && !isNew && !undoOK {
+		// The pre-write bytes could not be captured (an unreadable file, or one
+		// that grew past the cap between the precheck and now). Refuse BEFORE
+		// writing: proceeding would arm a "rollback" that restores an empty file,
+		// which is worse than the breakage it is meant to prevent.
+		return "", badArgument(fmt.Errorf(
+			"write_file: fail_on_new_errors needs a readable snapshot of %q to restore, and it could not be captured — retry without the flag", path))
+	}
 	// Baseline must be captured before the bytes change so the cross-file sweep
 	// can tell errors this write introduced from ones already present.
 	baseline := t.deps.capturePreWriteBaseline(uri)
@@ -131,11 +156,28 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "", fmt.Errorf("write_file: %w", err)
 	}
 
-	t.writeFilePostWrite(ctx, path, uri, isNew)
+	notifyFailed := t.writeFilePostWrite(ctx, path, uri, isNew)
 	if undoOK {
 		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
-	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics, baseline)
+	// Prefer the untruncated pre-write content for the differential: oldContent
+	// is capped for diff rendering, and an unknown "before" costs the
+	// re-index-lag suppression that keeps phantom errors out of the delta — which
+	// under fail_on_new_errors would mean rolling a good write back.
+	diagBefore := oldContent
+	if undoOK {
+		diagBefore = undoBefore
+	}
+	// Still inside the per-path lock taken in Execute: write, analysis and
+	// rollback decision are one critical section.
+	diag := t.deps.postWriteDiagnostics(uri, diagBefore, a.Content, a.diagOpts(notifyFailed), baseline)
+	if a.FailOnNewErrors && diag.delta.hasNewErrors() {
+		return "", t.deps.rollbackNewErrors(ctx, rollbackRequest{
+			tool: "write_file", path: path, uri: uri,
+			before: undoBefore, existedBefore: !isNew, wrote: a.Content, diag: diag,
+		})
+	}
+	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, diag)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
@@ -156,6 +198,11 @@ func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {
 func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a writeFileArgs) error {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return fmt.Errorf("write_file: %q is a directory — pass a file path, not a directory", path)
+	}
+	if a.FailOnNewErrors {
+		if err := failOnNewErrorsPrecheck("write_file", path); err != nil {
+			return err
+		}
 	}
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		return dirtyWrite(fmt.Errorf("write_file: %q has uncommitted changes; "+
@@ -188,9 +235,13 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 // and the 1 MiB snapshot cap). A new file needs no read: oldContent is empty
 // and the write is undoable by deletion. A read failure or an over-cap file
 // disables undo for this write rather than erroring.
-func (t *WriteFile) writeFileCapture(ctx context.Context, path string, isNew bool) (oldContent, undoBefore string, undoOK bool) {
+func (t *WriteFile) writeFileCapture(ctx context.Context, path string, isNew, wantRollback bool) (oldContent, undoBefore string, undoOK bool) {
 	wantDiff := t.deps.showWriteDiff()
-	wantUndo := t.deps.undo(ctx) != nil
+	// wantRollback (fail_on_new_errors) needs the pre-write bytes regardless of
+	// whether an undo store is wired — they ARE the restore source. The 1 MiB cap
+	// below still applies, and the tool refuses fail_on_new_errors over it
+	// up-front, so this never silently returns a rollback with nothing to restore.
+	wantUndo := t.deps.undo(ctx) != nil || wantRollback
 	if isNew {
 		return "", "", wantUndo
 	}
@@ -211,24 +262,31 @@ func (t *WriteFile) writeFileCapture(ctx context.Context, path string, isNew boo
 	return oldContent, undoBefore, undoOK
 }
 
-func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool) {
+// writeFilePostWrite notifies the language server, cache and trackers. It
+// reports whether a notification FAILED: the diagnostics pass needs to know,
+// because a server that was never told the file changed cannot produce a result
+// that reflects this write.
+func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool) (notifyFailed bool) {
 	changeType := protocol.FileChanged
 	if isNew {
 		changeType = protocol.FileCreated
 	}
 	if err := notifyLSP(ctx, t.deps.Client, path, changeType); err != nil {
+		notifyFailed = true
 		slog.Warn("write_file: LSP notification failed", "path", path, "err", err)
 	}
 	if t.deps.PostWriteNotifyFn != nil {
 		if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+			notifyFailed = true
 			slog.Warn("write_file: post-write adapter notification failed", "path", path, "err", err)
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
 	t.deps.recordWritten(ctx, path)
+	return notifyFailed
 }
 
-func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool, baseline *diagBaseline) string {
+func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, diag postWriteDiagResult) string {
 	verb := "updated"
 	if isNew {
 		verb = "created"
@@ -243,6 +301,6 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, oldContent, newContent, awaitFresh, baseline))
+	sb.WriteString(diag.text)
 	return sb.String()
 }
