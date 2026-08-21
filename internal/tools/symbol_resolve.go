@@ -131,6 +131,49 @@ var symbolKindNames = map[protocol.SymbolKind]string{
 	protocol.SKTypeParameter: "TypeParameter",
 }
 
+// disambiguatedNames returns a copy-pasteable symbol_name value for each match
+// in an ambiguous name-resolution result, so a caller who hit "N symbols
+// named X" can retry with an exact value instead of guessing coordinates.
+// Preference order: the Go flat "(*Recv).Method"/"(Recv).Method" form gopls
+// already reports, normalised to "Recv.Method"; else the nearest enclosing
+// symbol's name joined as "Parent.Child" (Python/Java-style nesting); else a
+// line-qualified fallback for a top-level duplicate name resolveSymbolsByName
+// cannot otherwise disambiguate.
+func disambiguatedNames(syms []protocol.DocumentSymbol, matches []protocol.DocumentSymbol) []string {
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if recv, method, ok := goMethodReceiver(m.Name); ok {
+			out = append(out, recv+"."+method)
+			continue
+		}
+		if parent, ok := enclosingSymbolName(syms, m); ok {
+			out = append(out, parent+"."+m.Name)
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (line %d)", m.Name, m.SelectionRange.Start.Line+1))
+	}
+	return out
+}
+
+// enclosingSymbolName finds target's immediate parent in the tree, identified
+// by its SelectionRange.Start plus Name (unique per symbol in one
+// document-symbol response) so a caller can build a "Parent.Child"
+// disambiguated name for a nested match that resolveSymbolsByName itself does
+// not track parentage for.
+func enclosingSymbolName(syms []protocol.DocumentSymbol, target protocol.DocumentSymbol) (string, bool) {
+	for _, s := range syms {
+		for _, c := range s.Children {
+			if c.SelectionRange.Start == target.SelectionRange.Start && c.Name == target.Name {
+				return s.Name, true
+			}
+		}
+		if name, ok := enclosingSymbolName(s.Children, target); ok {
+			return name, ok
+		}
+	}
+	return "", false
+}
+
 func symbolKindName(k protocol.SymbolKind) string {
 	if name, ok := symbolKindNames[k]; ok {
 		return name

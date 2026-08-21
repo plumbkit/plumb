@@ -198,10 +198,12 @@ func (t *FindReferences) executeByPosition(ctx context.Context, uri string, line
 // only when plumb resolved that position from a symbol_name argument, which
 // selects the failure hint (see queryErr).
 func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, character uint32, includeDecl, allowSnap bool, symbolName string) (string, error) {
-	locs, err := t.client.References(ctx, protocol.ReferenceParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: line, Character: character},
-		Context:      protocol.ReferenceContext{IncludeDeclaration: includeDecl},
+	locs, err := retryOnServerNotReady(ctx, func() ([]protocol.Location, error) {
+		return t.client.References(ctx, protocol.ReferenceParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: line, Character: character},
+			Context:      protocol.ReferenceContext{IncludeDeclaration: includeDecl},
+		})
 	})
 	if err != nil {
 		// A still-warming server rewrites the failure into a retry advisory —
