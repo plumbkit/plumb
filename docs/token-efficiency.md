@@ -30,7 +30,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 *   When investigating logs, use `grep` or `tail` equivalents. Do not read the entire log file into context.
 
 ### 5. Batch Reads Within a Turn
-*   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. Be honest with yourself about *why*: it is not a token discount — a batch response costs about the same bytes as the same reads done one at a time (`docs/use-cases.md` Scenario 8 measures the gap at single-digit bytes) — the win is one round trip instead of four, and one unreadable path doesn't abort the other three. Every file you batch-read is recorded exactly like `read_file`, so it stays editable under `[edits] strict` mode with no re-read.
+*   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. Be honest with yourself about *why*: it costs slightly MORE bytes than the same reads done one at a time, not fewer (`docs/use-cases.md` Scenario 8 measures the gap at ~76 bytes on a 3-file sample) — the win is one round trip instead of four, and one unreadable path doesn't abort the other three. Every file you batch-read is recorded exactly like `read_file`, so it stays editable under `[edits] strict` mode with no re-read.
 *   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `workspace_symbols` four times.
 
 ### 6. Don't Read to Confirm What `git` or `diagnostics` Already Tells You

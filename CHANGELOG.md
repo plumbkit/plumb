@@ -9,27 +9,40 @@
 
 ### Added
 
-- **`read_multiple_files`' per-file header shrinks (header dedup, PLAN-357).**
-  Its per-file provenance line used to restate everything `read_file` states —
-  `mtime`, `sha256`, `indent`, `lines`, `chars`, `baseline` — even though most
-  of that is either redundant in a batch (a `### path` heading already states
-  the path; `chars`/`baseline` describe the SAME whole-file read three ways)
-  or a fact every file in the batch usually shares (the indent convention). The
-  per-file header now states only `mtime` + `sha256` + `lines`; when every
-  successfully-read file agrees on one indent convention, it moves into a
-  single preamble line instead of repeating per file — and stays per-file,
-  honestly, when they disagree (a mixed-language batch usually does). A
-  workspace-root preamble line was tried too and measured OUT: at real
-  absolute-path lengths it cost more than the indent dedup saved, which would
-  have made the response bigger, not smaller. Re-measured with
+- **`read_multiple_files`' per-file header dedups its one true shared fact —
+  the indent convention — without dropping anything a windowed read still
+  needs (header dedup, PLAN-357).** Its per-file provenance line used to
+  restate everything `read_file` states — `mtime`, `sha256`, `indent`,
+  `lines`, `chars`, `baseline`. The path is already stated by the `### path`
+  heading, so that part of the header shrinks safely. `indent`, when at least
+  3 successfully-read files agree on one, moves into a single preamble line
+  (`# plumb-read-batch indent=…`) instead of repeating per file — and stays
+  per-file, honestly, when files disagree or there are fewer than 3 (a
+  mixed-language batch usually disagrees outright). `chars` and `baseline`
+  stay on **every** per-file header, unconditionally, matching `read_file` —
+  an earlier version of this change dropped them on the theory that they
+  "describe the same whole-file read three ways" as `mtime`/`sha256`; true for
+  an *unranged* read, false for a *ranged* one (the very case this PR's
+  slicing feature adds), where `baseline` is the only signal in the response
+  that a returned `lines=2` is a slice of a much bigger file, not the whole
+  thing. Caught by independent review before merge — the review also priced
+  the preamble line itself: below 3 agreeing files it costs more than the
+  per-file `indent=` it would remove, hence the 3-file floor. A
+  workspace-root preamble line was tried too and measured OUT: no per-file
+  header has ever stated the workspace root, so hoisting it removes nothing —
+  it is pure added content regardless of path length, and would have made the
+  response bigger for zero offsetting saving. Re-measured with
   `scripts/measure-use-cases.py` (scenario 8, same 3-file sample as
-  `docs/use-cases.md`): batching overhead fell from **109 bytes to 7 bytes**
-  — `read_multiple_files` now costs about the same payload as three separate
-  `read_file` calls (2,476 B vs 2,469 B, both ≈1.27× the native-with-gutters
-  baseline), down from 1.32× more. `docs/use-cases.md` Scenario 8 republished
-  with the new numbers. Guarded by
-  `TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted` and
-  `TestReadMultipleFiles_HeaderDedup_DivergentIndentKeptPerFile`.
+  `docs/use-cases.md`): batching overhead is now **76 bytes** (down from 109
+  before this PR, 691 before PLAN-13's separator fix) —
+  `read_multiple_files` (2,545 B, 1.31×) vs three separate `read_file` calls
+  (2,469 B, 1.27×), both against the native-with-gutters baseline.
+  `docs/use-cases.md` Scenario 8 republished with the real numbers. Guarded by
+  `TestReadMultipleFiles_HeaderDedup_ConsensusIndentHoisted`,
+  `TestReadMultipleFiles_HeaderDedup_NoPreambleBelowMinFiles`,
+  `TestReadMultipleFiles_HeaderDedup_DivergentIndentKeptPerFile`, and
+  `TestReadMultipleFiles_RangedRead_HeaderCarriesBaseline` (the regression
+  test for the review-caught defect).
 
 - **`read_multiple_files` gains read_file's slicing/search parameters.**
   Top-level `start_line`, `end_line`, `pattern`, `use_regex`, `context_lines`,
