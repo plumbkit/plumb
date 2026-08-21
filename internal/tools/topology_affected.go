@@ -105,6 +105,13 @@ const (
 	reasonGraph    = "dependency edge"
 )
 
+// graphNodeBudget bounds the dependent-discovery traversal. It is deliberately
+// far above any real fan-out (the widest here is 152 importers): its job is to
+// stop a pathological graph, not to shape the answer. The answer is shaped by
+// max_results, which bounds PACKAGES — conflating the two is what made a change
+// to a widely-imported file report fewer of its dependents, not more.
+const graphNodeBudget = 2000
+
 // maxNamedTests caps the individually-named tests in the changed package. Past
 // a few dozen the list stops informing a decision and starts costing context.
 const maxNamedTests = 40
@@ -159,16 +166,6 @@ func goTestTarget(dir string) string {
 		return "go test ./..."
 	}
 	return "go test ./" + dir + "/..."
-}
-
-// firstChangedPackage returns the package the edit actually landed in, if any.
-func firstChangedPackage(pkgs []affectedPackage) *affectedPackage {
-	for i := range pkgs {
-		if pkgs[i].Reason == reasonChanged {
-			return &pkgs[i]
-		}
-	}
-	return nil
 }
 
 // affectedResult collects dependents and likely-affected tests.
@@ -323,12 +320,17 @@ func collectAffected(ctx context.Context, store *topology.Store, roots []topolog
 	for _, d := range seedDirs {
 		g.dirs[d] = reasonChanged
 	}
+	// Every root is walked. This loop used to break as soon as the node budget
+	// filled, which made the answer worse the more widely the changed package was
+	// imported: a file with 152 importers spent the whole budget inside the FIRST
+	// root's traversal, and every remaining importer directory went unseeded. On
+	// this repo a change to internal/config reported 2 of its 9 affected packages
+	// and silently dropped internal/tools, 1,312 tests. Discovering dependents is
+	// cheap — it is the co-location scan that has to be bounded, and that is now
+	// bounded on packages in fromColocation.
 	for _, root := range roots {
 		g.dirs[filepath.Dir(root.Path)] = reasonChanged
 		g.fromGraph(ctx, root)
-		if g.truncated {
-			break
-		}
 	}
 	g.fromColocation(ctx)
 	g.sortTests()
@@ -347,8 +349,6 @@ type affectedGather struct {
 	truncated  bool
 }
 
-func (g *affectedGather) total() int { return len(g.dependents) + len(g.tests) }
-
 // fromGraph adds inward (dependedOnBy) neighbours of root: tests are flagged
 // with their incident-edge confidence, other nodes become affected files and
 // seed more directories for the co-location pass.
@@ -362,8 +362,12 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 	// affected — 984 false positives — while pushing the one test that covers the
 	// changed function out of the default result window entirely.
 	nb, err := g.store.ImpactFrom(ctx, root, topology.ImpactOpts{
-		Depth:     2,
-		MaxNodes:  g.maxResults,
+		Depth: 2,
+		// NOT g.maxResults. That is the caller's cap on PACKAGES; spending it here
+		// as a node budget is what let one heavily-imported root exhaust the answer
+		// before the other roots were walked. This bound exists only to stop a
+		// pathological fan-out, and is far above any real one.
+		MaxNodes:  graphNodeBudget,
 		MaxBytes:  100000,
 		EdgeKinds: []string{"calls", "imports", "contains"},
 	})
@@ -390,10 +394,6 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 			if d := filepath.Dir(n.Path); g.dirs[d] == "" {
 				g.dirs[d] = reasonImporter
 			}
-		}
-		if g.total() >= g.maxResults {
-			g.truncated = true
-			return
 		}
 	}
 }
@@ -501,18 +501,25 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string
 		fmt.Fprintf(&sb, "  %-42s %5d tests   %s\n", goTestTarget(p.Dir), p.Count, p.Reason)
 	}
 
-	// Name individual tests only where naming them helps: the changed package.
-	// Elsewhere every test carries an identical label, so the list is noise.
-	if named := firstChangedPackage(pkgs); named != nil {
-		fmt.Fprintf(&sb, "\ntests in the changed package (%d):\n", named.Count)
-		shown := named.Tests
+	// Name individual tests only where naming them helps: the packages the change
+	// actually landed in. Elsewhere every test carries an identical label, so the
+	// list is noise. EVERY changed package is named, not just the first — a caller
+	// who changed three files in three packages has no reason to get test names for
+	// one of them and a bare count for the others.
+	for i := range pkgs {
+		p := &pkgs[i]
+		if p.Reason != reasonChanged {
+			continue
+		}
+		fmt.Fprintf(&sb, "\ntests in %s (%d):\n", p.Dir, p.Count)
+		shown := p.Tests
 		if len(shown) > maxNamedTests {
 			shown = shown[:maxNamedTests]
 		}
 		for _, ts := range shown {
 			fmt.Fprintf(&sb, "  %s — %s L%d\n", ts.Node.Name, ts.Node.Path, ts.Node.StartLine)
 		}
-		if rest := named.Count - len(shown); rest > 0 {
+		if rest := p.Count - len(shown); rest > 0 {
 			fmt.Fprintf(&sb, "  … (+%d more in this package)\n", rest)
 		}
 	}

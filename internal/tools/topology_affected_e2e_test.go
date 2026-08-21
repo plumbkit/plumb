@@ -353,6 +353,103 @@ func TestSessionStart_EditLaneWarning_AbsentForDesktop(t *testing.T) {
 	}
 }
 
+// TestTopologyAffected_EveryChangedPackageIsNamed covers two properties of the
+// multi-package answer, and deliberately does NOT claim to cover a third.
+//
+// Covered: when several files change across packages, every changed package is
+// listed as a package to run AND has its tests named — naming only the first was
+// arbitrary — and a complete answer carries no truncation banner, since a false
+// "cut at max_results=50" above a two-package list is a wrong statement in the
+// loudest position.
+//
+// NOT covered: the node-budget starvation this file was extended for. max_results
+// was also spent as a MaxNodes budget, so a root with a large traversal consumed
+// it and later roots' directories went unseeded — the wider the fan-out, the
+// fewer packages reported. Reproducing that needs one root whose inward traversal
+// exceeds max_results, which in Go means cross-file import edges, and those do not
+// materialise in a t.TempDir() fixture here even after waiting on the indexer.
+// The fix is verified against the real index instead: a change to
+// internal/config/config.go returned 2 of 9 affected packages before and all 9
+// after, with internal/tools (1,312 tests) among those restored.
+//
+// Left explicit rather than papered over: a synthetic fixture that cannot fill
+// the budget passes against the bug, which is exactly how the earlier collision
+// test missed it.
+func TestTopologyAffected_EveryChangedPackageIsNamed(t *testing.T) {
+	ws := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "aaa" sorts first, so it is the root walked first. 200 declarations put its
+	// traversal far past the default max_results of 50.
+	var big strings.Builder
+	big.WriteString("package aaa\n")
+	for i := range 200 {
+		fmt.Fprintf(&big, "\nfunc Big%03d() int { return %d }\n", i, i)
+	}
+	write("aaa/aaa.go", big.String())
+	write("aaa/aaa_test.go",
+		"package aaa\n\nimport \"testing\"\n\nfunc TestBig(t *testing.T) {}\n")
+
+	// The second changed file, in a different package, with the test that must
+	// survive the first root's traversal.
+	write("zzz/zzz.go", "package zzz\n\nfunc Small() int { return 1 }\n")
+	write("zzz/zzz_test.go",
+		"package zzz\n\nimport \"testing\"\n\nfunc TestSmallSurvives(t *testing.T) { _ = Small() }\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		a, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "aaa/aaa.go"))
+		z, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "zzz/zzz_test.go"))
+		if len(a) > 100 && len(z) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	// No max_results: the shipped default is the behaviour under test.
+	args, _ := json.Marshal(map[string]any{
+		"files": []string{
+			filepath.Join(ws, "aaa/aaa.go"),
+			filepath.Join(ws, "zzz/zzz.go"),
+		},
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "TestSmallSurvives") {
+		t.Errorf("every changed package must have its tests named, not just the first:\n%s", out)
+	}
+	if !strings.Contains(out, "TestBig") {
+		t.Errorf("the first changed package's tests must still be named:\n%s", out)
+	}
+	if !strings.Contains(out, "go test ./zzz/...") {
+		t.Errorf("package zzz must be listed as a package to run:\n%s", out)
+	}
+	// And the banner must not claim a cut that did not happen: two packages is
+	// nowhere near max_results, so announcing a truncation would be a false
+	// statement in the loudest position on the response.
+	if strings.Contains(out, "TRUNCATED") {
+		t.Errorf("a complete answer must not carry a truncation banner:\n%s", out)
+	}
+}
+
 // TestTopologyAffected_ImportNameCollisionDoesNotDragInUnrelatedPackage is the
 // regression for the recall bug found while measuring docs/use-cases.md.
 //

@@ -54,6 +54,25 @@
 
 ### Changed
 
+- **`topology_affected` no longer reports FEWER dependents the more widely a
+  package is imported.** `max_results` is documented as bounding packages, but it
+  was also spent as a node budget — passed to `ImpactFrom` as `MaxNodes`, with the
+  root loop breaking as soon as dependents+tests reached it. A heavily-imported
+  file therefore exhausted the budget inside the *first* root's traversal and every
+  remaining importer directory went unseeded. A change to `internal/config/config.go`
+  returned **2 of its 9 affected packages** at the shipped default, silently
+  dropping `internal/tools` and its 1,312 tests — the same failure class as the
+  recall bug fixed one commit earlier, in the commit that fixed it. Worse, the new
+  truncation banner then announced "cut at max_results=50" above a two-package
+  list: right that something was lost, wrong about what and why, and in the loudest
+  position on the response.
+
+  Dependent discovery now has its own generous bound (`graphNodeBudget`), the root
+  loop always completes, and `max_results` bounds packages only — which is what it
+  claims to do. Same change now returns all 9 packages with no banner. Every
+  changed package also gets its tests named, not just the first, which was
+  arbitrary when several packages changed.
+
 - **A truncation notice now leads the payload it qualifies, instead of ending
   it.** A cut list is not a list of "the results", it is a list of *some* results,
   and a reader who does not know that draws a conclusion the data does not
