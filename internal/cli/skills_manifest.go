@@ -101,54 +101,30 @@ func hashSkillContent(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// seedBootstrapHashes fills before with the same pre-manifest fallback
-// installSkill uses (lastShippedHash's marker-based branch) for every
-// embedded skill not already recorded — so the FIRST sync a directory ever
-// runs under this manifest still knows "what was on disk a moment ago" for
-// the cleanup pass below, rather than treating everything as unknown just
-// because the manifest file itself did not exist yet. Without this, a
-// skill whose content legitimately changed between plumb versions would
-// have its pre-sync backup correctly identified as a real update in
-// installSkill, but the SAME backup would be reported as "needs manual
-// review" by cleanupSkillBackups purely because it predates the manifest —
-// two functions disagreeing about the same fact from the same run.
-func seedBootstrapHashes(skillsDir string, before *skillManifest) {
-	for _, skill := range embeddedSkills() {
-		if _, ok := before.Skills[skill.Name]; ok {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(skillsDir, skill.Name, "SKILL.md"))
-		if err != nil {
-			continue
-		}
-		h, ok := lastShippedHash(before, skill.Name, string(data))
-		if !ok {
-			continue
-		}
-		version, _ := skillMarkerVersion(string(data))
-		if version == "" {
-			version = Version
-		}
-		before.Skills[skill.Name] = skillManifestEntry{Hash: h, Version: version}
-	}
-}
-
 // lastShippedHash returns the hash installSkill should treat as "what plumb
 // shipped last time" for name, and whether one is known at all. The manifest
-// is authoritative when it already has an entry. Absent that — a client
-// synced before this manifest existed, or a directory nothing has ever
-// written to under this mechanism — a file that already carries plumb's own
-// provenance marker is trusted as plumb's, using its stripped content as the
-// implicit prior hash. Without this fallback, turning the manifest on would
-// read every already-installed skill as "user modified" on its first sync.
-func lastShippedHash(m *skillManifest, name, existingRaw string) (hash string, known bool) {
-	if e, ok := m.Skills[name]; ok {
-		return e.Hash, true
-	}
-	if _, ok := skillMarkerVersion(existingRaw); ok {
-		return hashSkillContent(stripSkillMarker(existingRaw)), true
-	}
-	return "", false
+// is the ONLY source of truth: a manifest-less directory (a client synced
+// before this manifest existed, or one nothing has ever written to under
+// this mechanism) always reports unknown here, never a legitimate update.
+//
+// An earlier version of this function fell back to the file's own
+// provenance marker when the manifest had no entry, treating a
+// marker-stamped file as trustworthy on the strength of the marker alone.
+// That was unsound: the "prior hash" it computed came from the SAME on-disk
+// content installSkill was about to compare it against, so the comparison
+// was true by construction for any marker-stamped file — including one a
+// user had hand-edited while leaving the (invisible, HTML-comment) marker
+// line in place, which silently overwrote the edit (see PLAN-365 review
+// round 2; TestSkillsSync_MarkerRetainingUserEditInManifestlessDirIsNotOverwritten
+// pins the fix). A manifest-less directory genuinely cannot prove a
+// differing marker-stamped file is plumb's own: there is no historical
+// shipped content to check it against for any version but the one
+// currently embedded, and the currently-embedded content is, by
+// definition, the "new" side of the very comparison installSkill is making.
+// Uncertain must mean conflict, never overwrite.
+func lastShippedHash(m *skillManifest, name string) (hash string, known bool) {
+	e, ok := m.Skills[name]
+	return e.Hash, ok
 }
 
 // skillBackupDirPattern matches the directory-level backups backupSkillDir

@@ -3,8 +3,91 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestSkillsSync_MarkerRetainingUserEditInManifestlessDirIsNotOverwritten is
+// the regression for a real data-loss defect found in independent review of
+// PLAN-365's first version: lastShippedHash's pre-manifest fallback computed
+// its "known prior hash" from the CURRENT on-disk content itself, so
+// diskHash == oldHash was true BY CONSTRUCTION for any marker-stamped file —
+// including one the user had hand-edited while leaving the (invisible,
+// HTML-comment) marker line alone, which is the realistic case: nothing
+// prompts a user to strip a line their markdown viewer never renders. A
+// manifest-less directory can never prove a differing marker-stamped file is
+// plumb's own (there is no historical shipped content to compare against for
+// any version but the running one, and the running version's content is, by
+// definition, the "new" side of the comparison) — so it must always be
+// treated as a conflict: the file is left untouched, and any backup whose
+// content cannot be matched to an actual recorded shipped hash must survive
+// too.
+func TestSkillsSync_MarkerRetainingUserEditInManifestlessDirIsNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	skill := embeddedSkills()[0]
+	skillDir := filepath.Join(dir, skill.Name)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(skillDir, "SKILL.md")
+
+	// A user's hand edit that RETAINS the provenance marker — no manifest
+	// exists yet (this directory was never synced under this mechanism, or
+	// was installed by a pre-manifest plumb).
+	const userEdit = "<!-- plumb: 0.10.0 -->\nuser edited this body, kept the marker line\n"
+	if err := os.WriteFile(dst, []byte(userEdit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A backup sitting beside it holding the same edit — the user's only
+	// other copy. Deleting it on top of overwriting the live file would
+	// destroy the edit twice over in one run.
+	bakName := skill.Name + ".20260101-000000.bak"
+	bakDir := filepath.Join(dir, bakName)
+	if err := os.MkdirAll(bakDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bakDir, "SKILL.md"), []byte(userEdit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	target := skillsTestTarget("", dir)
+	_, results, cleanup := installSkillsFor(target, false)
+
+	var found bool
+	for _, r := range results {
+		if r.name != skill.Name {
+			continue
+		}
+		found = true
+		if r.err != nil {
+			t.Fatalf("unexpected error: %v", r.err)
+		}
+		if !strings.HasPrefix(r.action, skillActionConflict) {
+			t.Fatalf("action = %q, want a conflict — a marker-retaining edit with no manifest entry must never be classified as plumb's own", r.action)
+		}
+	}
+	if !found {
+		t.Fatalf("no result for %s", skill.Name)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != userEdit {
+		t.Fatalf("SKILL.md was overwritten: got %q, want the untouched user edit %q", got, userEdit)
+	}
+
+	if _, err := os.Stat(bakDir); err != nil {
+		t.Errorf(".bak with unverifiable content was deleted: %v", err)
+	}
+	for _, name := range cleanup.removed {
+		if name == bakName {
+			t.Errorf("cleanup removed an unverifiable backup: %s", name)
+		}
+	}
+}
 
 // TestSkillsSync_CleansShippedHashBackupsPreservesUserEditWritesPlumbNew is
 // PLAN-365's literal acceptance fixture: a skills directory carrying
@@ -153,8 +236,11 @@ func TestSkillsSync_CleansShippedHashBackupsPreservesUserEditWritesPlumbNew(t *t
 			t.Errorf("second sync: %s reported an error: %v", r.name, r.err)
 		}
 		if r.name == edited.Name {
-			if r.action != skillActionConflict {
-				t.Errorf("second sync edited action = %q, want %q", r.action, skillActionConflict)
+			// The proposal file already holds exactly this content from the
+			// first sync, so the second run must not rewrite it — that is
+			// what the "(proposal unchanged)" suffix asserts here.
+			if want := skillActionConflict + conflictUnchangedSuffix; r.action != want {
+				t.Errorf("second sync edited action = %q, want %q", r.action, want)
 			}
 			continue
 		}
