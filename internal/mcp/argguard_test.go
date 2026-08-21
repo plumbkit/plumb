@@ -69,6 +69,28 @@ const editsWithReplaceAllSchema = `{
   "additionalProperties": false
 }`
 
+// editsWithTopLevelNewStringSchema reproduces the exact review-flagged case:
+// edit_file's real schema has BOTH a top-level "new_string" (anchor mode) and
+// an "old_string" declared one level down (each edits[] item). "old_string" is
+// Levenshtein-close to the top-level "new_string", so the two signals disagree
+// and the ordering between them matters.
+const editsWithTopLevelNewStringSchema = `{
+  "type": "object",
+  "properties": {
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}},
+        "required": ["old_string", "new_string"],
+        "additionalProperties": false
+      }
+    },
+    "new_string": {"type": "string"}
+  },
+  "additionalProperties": false
+}`
+
 func mustShape(t *testing.T, schema string) *shape {
 	t.Helper()
 	sh, ok := parseShape(json.RawMessage(schema))
@@ -306,6 +328,43 @@ func TestResolveArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveArgs_PlacementHintOutranksFuzzySuggestion pins the PLAN-358
+// review fix: an EXACT nested-parameter match must outrank a Levenshtein-close
+// top-level "did you mean" guess, while a genuine typo with no nested match
+// must still fall back to the fuzzy suggestion (the pre-existing behaviour,
+// unaffected by the reordering).
+func TestResolveArgs_PlacementHintOutranksFuzzySuggestion(t *testing.T) {
+	sh := mustShape(t, editsWithTopLevelNewStringSchema)
+
+	t.Run("exact nested match wins over a fuzzy top-level suggestion", func(t *testing.T) {
+		_, _, err := resolveArgs(sh, json.RawMessage(`{"edits":[{"old_string":"a","new_string":"b"}],"old_string":"x"}`), "edit_file")
+		if err == nil {
+			t.Fatal("expected an unknown-parameter rejection")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, `belongs inside each edits[] item`) {
+			t.Errorf("expected the placement hint, got: %s", msg)
+		}
+		if strings.Contains(msg, "did you mean") {
+			t.Errorf("an exact nested match must outrank the fuzzy suggestion, got: %s", msg)
+		}
+	})
+
+	t.Run("genuine typo with no nested match still gets the fuzzy suggestion", func(t *testing.T) {
+		_, _, err := resolveArgs(sh, json.RawMessage(`{"edits":[{"old_string":"a","new_string":"b"}],"new_strnig":"x"}`), "edit_file")
+		if err == nil {
+			t.Fatal("expected an unknown-parameter rejection")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, `did you mean "new_string"`) {
+			t.Errorf("expected the fuzzy suggestion to survive for a genuine typo, got: %s", msg)
+		}
+		if strings.Contains(msg, "belongs inside") {
+			t.Errorf("no nested match exists for this typo — must not claim a placement hint, got: %s", msg)
+		}
+	})
 }
 
 // TestResolveArgs_ToolNamePrefix asserts the tool name is threaded into the
