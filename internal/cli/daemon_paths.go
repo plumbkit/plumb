@@ -49,6 +49,31 @@ func plumbRuntimeDir() string {
 	return dir
 }
 
+// maxUnixSocketPath is the smallest sun_path capacity across the platforms
+// plumb supports: 104 bytes on the BSDs and macOS, 108 on Linux. The check is
+// deliberately the conservative one — a path that fits on Linux but not macOS
+// is still worth naming, because the fix is the same either way.
+const maxUnixSocketPath = 104
+
+// socketPathLengthHint explains an over-long socket path, or returns "" when
+// the path is not the problem. It is appended to the daemon's listen error.
+//
+// A Unix socket path lives in sun_path, a fixed-size array, so bind() answers
+// an over-long path with EINVAL — "invalid argument", which says nothing about
+// length. Every layer above then hides it: the daemon writes that error to
+// daemon.log and exits, and `plumb serve` reports only "daemon did not start
+// within 10 seconds". Reproduced on Linux with a long XDG_CACHE_HOME (the
+// runtime dir follows os.UserCacheDir), where the daemon appeared to start and
+// silently never came up.
+func socketPathLengthHint(path string) string {
+	if len(path) <= maxUnixSocketPath {
+		return ""
+	}
+	return fmt.Sprintf(
+		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — set XDG_CACHE_HOME to a shorter directory)",
+		len(path), maxUnixSocketPath)
+}
+
 // startDaemonProcess launches a detached plumb daemon subprocess.
 // Logs are written to daemonLogPath(); the process is detached with Setsid so
 // it outlives the calling plumb serve process.

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,5 +189,27 @@ func TestLockPaths_RespectUserCacheDir(t *testing.T) {
 	}
 	if filepath.Dir(daemonLockPath()) != got {
 		t.Fatalf("daemonLockPath not under runtime dir: %s", daemonLockPath())
+	}
+}
+
+// An over-long socket path is rejected by bind() as EINVAL — "invalid
+// argument" — which says nothing about length, and the daemon's only report of
+// it goes to daemon.log while `plumb serve` shows a generic 10-second timeout.
+// Reproduced on Linux with a long XDG_CACHE_HOME.
+func TestSocketPathLengthHint(t *testing.T) {
+	if got := socketPathLengthHint("/home/u/.cache/plumb/plumb.sock"); got != "" {
+		t.Errorf("a short path needs no hint, got %q", got)
+	}
+
+	long := "/" + strings.Repeat("a", maxUnixSocketPath) + "/plumb.sock"
+	got := socketPathLengthHint(long)
+	if got == "" {
+		t.Fatal("an over-long path must be explained")
+	}
+	if !strings.Contains(got, "sun_path") || !strings.Contains(got, "XDG_CACHE_HOME") {
+		t.Errorf("the hint must name the cause and the lever, got %q", got)
+	}
+	if !strings.Contains(got, strconv.Itoa(len(long))) {
+		t.Errorf("the hint must state the actual length, got %q", got)
 	}
 }

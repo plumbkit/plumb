@@ -49,9 +49,18 @@ func configPath() string {
 
 // legacyConfigPath is the pre-0.9.8 config location (XDG_CONFIG_HOME or
 // ~/.config), retained only as a read fallback for existing installs.
+//
+// XDG_CONFIG_HOME is honoured only when it is ABSOLUTE, per the basedir spec
+// ("If an implementation encounters a relative path it must be considered
+// invalid"). It used to be read raw, which made this the one place in plumb
+// that disagreed with internal/paths: a relative value produced a
+// cwd-dependent legacy path, so `plumb config show` reported the config
+// directory as ~/.config/plumb while actually LOADING <cwd>/<rel>/plumb/config.toml
+// — and the daemon chdirs to / , so the same setting resolved differently for
+// the CLI and the daemon.
 func legacyConfigPath() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
+	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return ""
