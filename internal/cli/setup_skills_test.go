@@ -114,7 +114,7 @@ func TestInstallSkillsFor_EveryCapableClientGetsEverySkill(t *testing.T) {
 		t.Run(c.use, func(t *testing.T) {
 			root := pointClientHomesAt(t)
 
-			dir, results := installSkillsFor(c)
+			dir, results, _ := installSkillsFor(c, false)
 			if len(results) != len(embedded) {
 				t.Fatalf("got %d results, want one per embedded skill (%d)", len(results), len(embedded))
 			}
@@ -144,7 +144,7 @@ func TestInstallSkillsFor_EveryCapableClientGetsEverySkill(t *testing.T) {
 
 			// Idempotence: the same run again must report every skill unchanged,
 			// which is what makes `plumb skills sync` safe to run repeatedly.
-			_, second := installSkillsFor(c)
+			_, second, _ := installSkillsFor(c, false)
 			for _, r := range second {
 				if r.err != nil || r.action != "unchanged" {
 					t.Errorf("second run: %s reported (%q, %v), want (\"unchanged\", nil)", r.name, r.action, r.err)
@@ -166,7 +166,7 @@ func TestInstallSkillsFor_SkipsClientsWithNoSkillChannel(t *testing.T) {
 		if c.skillsDirFn != nil {
 			continue
 		}
-		dir, results := installSkillsFor(c)
+		dir, results, _ := installSkillsFor(c, false)
 		if dir != "" || results != nil {
 			t.Errorf("%s: got (%q, %d results), want no skill install for a client with no channel",
 				c.use, dir, len(results))
@@ -444,7 +444,7 @@ func TestInstallSkill_RestampsStaleMarkerInPlace(t *testing.T) {
 		dst := writeExisting(t, dir, stampSkillContent(skill.Content))
 
 		pinVersion(t, "9.9.9")
-		action, err := installSkill(dir, skill.Name, skill.Content)
+		action, err := installSkill(dir, skill.Name, skill.Content, &skillManifest{Skills: map[string]skillManifestEntry{}}, false)
 		if err != nil {
 			t.Fatalf("installSkill: %v", err)
 		}
@@ -459,7 +459,7 @@ func TestInstallSkill_RestampsStaleMarkerInPlace(t *testing.T) {
 		dst := writeExisting(t, dir, skill.Content)
 
 		pinVersion(t, "9.9.9")
-		action, err := installSkill(dir, skill.Name, skill.Content)
+		action, err := installSkill(dir, skill.Name, skill.Content, &skillManifest{Skills: map[string]skillManifestEntry{}}, false)
 		if err != nil {
 			t.Fatalf("installSkill: %v", err)
 		}
@@ -564,7 +564,7 @@ func TestInstallSkillsFor_WritesReferencesBesideSKILLmd(t *testing.T) {
 	pointClientHomesAt(t)
 	c := skillCapableClients()[0]
 
-	dir, results := installSkillsFor(c)
+	dir, results, _ := installSkillsFor(c, false)
 	for _, r := range results {
 		if r.err != nil {
 			t.Fatalf("installing %q: %v", r.name, r.err)
@@ -587,7 +587,7 @@ func TestInstallSkillsFor_WritesReferencesBesideSKILLmd(t *testing.T) {
 	}
 
 	// A second sync is a no-op.
-	if _, results = installSkillsFor(c); results[0].err != nil {
+	if _, results, _ = installSkillsFor(c, false); results[0].err != nil {
 		t.Fatalf("re-sync: %v", results[0].err)
 	}
 	for _, r := range results {
@@ -630,7 +630,7 @@ func TestInstallSkillsFor_RefreshesADriftedReference(t *testing.T) {
 	pointClientHomesAt(t)
 	c := skillCapableClients()[0]
 
-	dir, results := installSkillsFor(c)
+	dir, results, _ := installSkillsFor(c, false)
 	for _, r := range results {
 		if r.err != nil {
 			t.Fatalf("installing %q: %v", r.name, r.err)
@@ -650,7 +650,7 @@ func TestInstallSkillsFor_RefreshesADriftedReference(t *testing.T) {
 		t.Error("a skill whose reference note has drifted still reports installed")
 	}
 
-	_, results = installSkillsFor(c)
+	_, results, _ = installSkillsFor(c, false)
 	var action string
 	for _, r := range results {
 		if r.name != chat.Name {

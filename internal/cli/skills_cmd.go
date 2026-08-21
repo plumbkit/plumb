@@ -38,14 +38,27 @@ var skillsSyncCmd = &cobra.Command{
 	Use:   "sync [client]",
 	Short: "Install or refresh plumb's skills for registered clients",
 	Long: `Install or refresh plumb's embedded skills in every skill-capable client
-that registers plumb, or only in the named client. Changed skills are backed up
-before being overwritten; unchanged ones are left alone. Naming a client that
-does not register plumb is an error — run ` + "`plumb setup <client>`" + ` first.`,
+that registers plumb, or only in the named client. A skill plumb shipped
+before is replaced in place — no backup — because its content hash is on
+record (` + "`.plumb/skills-manifest.json`" + ` in the skills directory); a skill the
+user has edited is left untouched, with the proposed content written to a
+"<name>.plumb-new" file alongside it for review. Directory-level ".bak"
+backups from a prior run whose content is provably plumb's own (a recorded
+shipped hash) are cleaned up automatically; any others are left for manual
+review. Naming a client that does not register plumb is an error — run ` +
+		"`plumb setup <client>`" + ` first.
+
+` + "`--check`" + ` reports every action sync would take — including which
+backups would be cleaned up — without writing anything.`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runSkillsSync,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dryRun, _ := cmd.Flags().GetBool("check")
+		return runSkillsSync(dryRun, args)
+	},
 }
 
 func init() {
+	skillsSyncCmd.Flags().Bool("check", false, "List drift without writing")
 	skillsCmd.AddCommand(skillsSyncCmd)
 }
 
@@ -93,7 +106,7 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 // Per-skill errors are rows with an error status, not fatal (see
 // syncClientGroup) — a sync that partially failed still leaves every other
 // skill correct.
-func runSkillsSync(_ *cobra.Command, args []string) error {
+func runSkillsSync(dryRun bool, args []string) error {
 	tui.RebuildStyles()
 	capable := skillCapableClients()
 	var targets []setupTarget
@@ -118,10 +131,15 @@ func runSkillsSync(_ *cobra.Command, args []string) error {
 		}
 	}
 
+	if dryRun {
+		fmt.Println(tui.HintStyle.Render("● Check only — no changes will be written"))
+		fmt.Println()
+	}
+
 	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
 	var summaries []string
 	for _, target := range targets {
-		syncClientGroup(t, &summaries, target)
+		syncClientGroup(t, &summaries, target, dryRun)
 	}
 	fmt.Println(t.Render())
 	if len(summaries) > 0 {
@@ -145,9 +163,14 @@ func runSkillsSync(_ *cobra.Command, args []string) error {
 // rows plus the client's summary line. The status cell carries the action
 // taken — "current" for an unchanged skill, the summary line's vocabulary —
 // and a failed install shows "error" with the reason in place of the dir:
-// errors stay visible without failing the sync.
-func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget) {
-	dir, results := installSkillsFor(target)
+// errors stay visible without failing the sync. A conflict (skill the user
+// edited) shows the ".plumb-new" review file in place of the dir, so the
+// table itself says where to look — no separate report needed. Backup
+// cleanup is appended to the client's summary line rather than given its own
+// row: it is not a per-skill outcome, and a table row with no matching skill
+// name would look like a bug.
+func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget, dryRun bool) {
+	dir, results, cleanup := installSkillsFor(target, dryRun)
 	var tally skillSyncTally
 	t.NextGroup()
 	for i, r := range results {
@@ -166,12 +189,15 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			tally.current++
 		case r.action == "installed":
 			tally.installed++
+		case r.action == skillActionConflict:
+			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (edited by user — review and merge)"
+			tally.conflict++
 		default:
 			tally.updated++
 		}
 		t.Row(name, r.name, statusStyle(status).Render(status), shown)
 	}
-	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally))
+	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally, cleanup))
 }
 
 // findSkillCapable resolves a sync argument against the capable set by command
@@ -196,36 +222,61 @@ func skillCapableNames(capable []setupTarget) string {
 // skillSyncTally is one client's sync outcome, aggregated for the summary
 // line runSkillsSync prints per client.
 type skillSyncTally struct {
-	installed, updated, current, failed int
+	installed, updated, current, failed, conflict int
 }
 
-// skillSyncSummaryLine renders one client's sync outcome as a single line. It
-// is printed UNCONDITIONALLY: a writer command that succeeds silently is
+// skillSyncSummaryLine renders one client's sync outcome as a single line,
+// plus the cleanup pass's outcome when it did anything. It is printed
+// UNCONDITIONALLY: a writer command that succeeds silently is
 // indistinguishable from a broken one, so "no output" may only ever mean the
 // command did not run — never that it no-opped.
-func skillSyncSummaryLine(client string, t skillSyncTally) string {
-	total := t.installed + t.updated + t.current + t.failed
-	if total == 0 {
-		return client + ": nothing to sync"
-	}
-	if t.installed == 0 && t.updated == 0 && t.failed == 0 {
-		return fmt.Sprintf("%s: %d %s current", client, t.current, textfmt.Plural(t.current, "skill", "skills"))
-	}
-	parts := make([]string, 0, 4)
-	for _, p := range []struct {
-		n    int
-		word string
-	}{
-		{t.installed, "installed"},
-		{t.updated, "updated"},
-		{t.current, "current"},
-		{t.failed, "failed"},
-	} {
-		if p.n > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
+func skillSyncSummaryLine(client string, t skillSyncTally, cleanup skillCleanupReport) string {
+	total := t.installed + t.updated + t.current + t.failed + t.conflict
+	line := client + ": nothing to sync"
+	switch {
+	case total == 0:
+		// line already set.
+	case t.installed == 0 && t.updated == 0 && t.failed == 0 && t.conflict == 0:
+		line = fmt.Sprintf("%s: %d %s current", client, t.current, textfmt.Plural(t.current, "skill", "skills"))
+	default:
+		parts := make([]string, 0, 5)
+		for _, p := range []struct {
+			n    int
+			word string
+		}{
+			{t.installed, "installed"},
+			{t.updated, "updated"},
+			{t.current, "current"},
+			{t.conflict, "needs review"},
+			{t.failed, "failed"},
+		} {
+			if p.n > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
+			}
 		}
+		line = fmt.Sprintf("%s: %d %s — %s", client, total, textfmt.Plural(total, "skill", "skills"), strings.Join(parts, ", "))
 	}
-	return fmt.Sprintf("%s: %d %s — %s", client, total, textfmt.Plural(total, "skill", "skills"), strings.Join(parts, ", "))
+	return line + skillCleanupSuffix(cleanup)
+}
+
+// skillCleanupSuffix renders the backup-cleanup outcome as a trailing clause
+// on the summary line, empty when there was nothing to report — so a run
+// with no ".bak" litter reads exactly as it did before this pass existed.
+func skillCleanupSuffix(cleanup skillCleanupReport) string {
+	switch {
+	case cleanup.err != nil:
+		return fmt.Sprintf("; backup cleanup failed: %s", cleanup.err)
+	case len(cleanup.removed) == 0 && len(cleanup.kept) == 0:
+		return ""
+	}
+	var parts []string
+	if n := len(cleanup.removed); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d shipped-hash %s removed", n, textfmt.Plural(n, "backup", "backups")))
+	}
+	if n := len(cleanup.kept); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s left for review (%s)", n, textfmt.Plural(n, "backup", "backups"), strings.Join(cleanup.kept, ", ")))
+	}
+	return "; " + strings.Join(parts, ", ")
 }
 
 // The three states a skill file can be in relative to the embedded copy. The
