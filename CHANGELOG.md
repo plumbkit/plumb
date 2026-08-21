@@ -9,6 +9,68 @@
 
 ### Added
 
+- **`fail_on_new_errors`: a plumb edit can now REFUSE to break the build — PR 2
+  of 2 (PLAN-362).** `edit_file`, `write_file` and `transaction_apply` take
+  `fail_on_new_errors: true` (implies `await_diagnostics`). When the language
+  server CONFIRMS the write introduced new **errors** in the file it wrote, the
+  write is **rolled back** — the file ends the call byte-for-byte as it began —
+  and the call returns the structured delta as a refusal. `transaction_apply`
+  applies the gate to the whole batch: one file gaining a new error restores
+  every file in the transaction, matching its existing all-or-nothing contract.
+  The rollback goes through `safeWrite`, so the revert is as atomic and as
+  crash-durable as the write it undoes, and it runs inside the same per-path
+  locked region as the write and the analysis, so no other plumb writer can land
+  in between (`TestFailOnNewErrors_DecisionHappensUnderThePathLock` probes the
+  lock from inside the analysis callback rather than racing a sleep).
+  **Deliberately narrow, because a safety feature that reverts good work is
+  worse than none:** only a confirmed-fresh result can roll back, so a timed-out
+  wait, a disabled post-write window, a cold or absent language server, a failed
+  `didChangeWatchedFiles`, or a failed pull all let the write LAND with
+  `fresh:false`; warnings never block; errors that were already present never
+  block (the delta is against a pre-write baseline); the known re-index-lag
+  class (`undefined:` / `imported and not used` / `declared and not used` on a
+  touched line) never blocks; and new errors in OTHER files are reported but
+  never roll back, since that sweep is heuristic, off by default, and a
+  mid-refactor edit breaks dependents on purpose. A file whose on-disk content
+  no longer matches what plumb wrote — an external process landed during the
+  call — is **reported, not reverted**, so a rollback never discards a peer's
+  change (the rule `undo_edit` already follows). `edit_file`/`write_file` refuse
+  `fail_on_new_errors` **up-front** on a file over the 1 MiB snapshot cap, and
+  `edit_file` refuses it with `apply_partial`, whose per-edit semantics are the
+  opposite of all-or-nothing. A rolled-back write clears the undo snapshot it
+  armed, so `undo_edit` never points at content that is no longer on disk.
+  New `internal/tools/fail_on_new_errors.go` + `transaction_diag.go`; guarded by
+  `TestFailOnNewErrors_*` and `TestTransactionApplyAwait_*`, which assert the
+  BYTES on disk, not just the message.
+- **`await_diagnostics` now returns a STRUCTURED delta, not just prose
+  (PLAN-362 PR 2).** Every `await_diagnostics` (and therefore every
+  `fail_on_new_errors`) response appends one fixed-prefix line —
+  `diagnostics delta: {"fresh":…,"scopes":{…},"new_errors":[…],"resolved":[…],"pre_existing":N}`
+  — so an agent can branch on the answer without parsing English. It is computed
+  from the SAME classification the prose block renders (`splitDifferential`), so
+  the two can never disagree, and it carries the other half of the picture too:
+  what the edit RESOLVED. Freshness is reported **per scope**
+  (`scopes.edited_file`, `scopes.cross_file`), because the two are confirmed by
+  different mechanisms and routinely disagree — the edited file by a publish or
+  pull that followed this write, the cross-file sweep by a bounded settle grace
+  that is non-exhaustive in pull mode. The default write path (no
+  `await_diagnostics`) is byte-for-byte unchanged.
+- **Post-write freshness is now derived from what actually happened, not from
+  what was asked (PLAN-362 PR 2, PR 1 review follow-ups).** A failed
+  `didChangeWatchedFiles` means the server does not know the file changed, so
+  anything it publishes during the wait describes the PREVIOUS content: that
+  failure is now threaded into the freshness verdict instead of only being
+  logged, and the pass reports `not analysed` rather than waiting for a publish
+  that could only mislead. `postWriteDiagnostics` returns a `postWriteDiagResult`
+  (rendered text + delta) rather than a bare string, so the freshness bool
+  reaches its call sites. A fourth fixed label,
+  `[diagnostics: not analysed — no post-write check ran]`, covers the two cases
+  that previously printed nothing at all — no diagnostics source for the file,
+  and the failed-notification case — qualifying the "always labelled" claim:
+  the default path's silence is unchanged, but a caller who explicitly asks is
+  told that silence means "not analysed", not "clean". The timeout wording no
+  longer blames "the wait" when the post-write window is disabled
+  (`post_write_diagnostics_ms = 0`), where no wait ran at all.
 - **Post-write diagnostics on `edit_file`/`write_file` now carry a fixed,
   machine-parseable freshness label — trust fix, PR 1 of 2 (PLAN-362).** A
   stale diagnostics block (the language server had not re-published since the

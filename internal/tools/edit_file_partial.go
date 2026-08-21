@@ -109,17 +109,23 @@ func formatPartialEditsResults(results []partialEditResult) string {
 }
 
 func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, before, content string, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
+	notifyFailed := false
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
+		notifyFailed = true
 		slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 	}
 	if t.deps.PostWriteNotifyFn != nil {
 		if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+			notifyFailed = true
 			slog.Warn("edit_file: post-write adapter notification failed", "path", path, "err", err)
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
 	t.deps.recordWritten(ctx, path)
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, awaitFresh, baseline))
+	// apply_partial cannot request fail_on_new_errors (the preconditions refuse
+	// the combination), so this path only ever reports.
+	opt := postWriteDiagOpts{awaitFresh: awaitFresh, structured: awaitFresh, lspNotifyFailed: notifyFailed}
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, opt, baseline).text)
 }
 
 // applyPartialEdit applies a single edit to content and returns the (possibly

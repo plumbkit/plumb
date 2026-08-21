@@ -20,14 +20,19 @@ import (
 // is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
 const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
-// postWriteDiagLabelAuthoritative, postWriteDiagLabelSnapshot, and
-// postWriteDiagLabelUnverified are the three fixed, machine-parseable labels
-// every non-empty post-write diagnostics block carries. Before this, a stale
-// snapshot (the language server had not re-published since the write), or a
-// failed pull, could be printed with the same confidence as a genuinely fresh
-// result — "agents learned to ignore the block, which defeats its purpose"
-// (worth-it strategy §2 pillar 2, W2-8). Never print diagnostic content
-// without one of these three labels.
+// The four fixed, machine-parseable labels every non-empty post-write
+// diagnostics block carries. Before this, a stale snapshot (the language server
+// had not re-published since the write), or a failed pull, could be printed with
+// the same confidence as a genuinely fresh result — "agents learned to ignore
+// the block, which defeats its purpose" (worth-it strategy §2 pillar 2, W2-8).
+// Never print diagnostic content without one of these four labels.
+//
+// SCOPE OF THE CLAIM: the labels cover every block plumb PRINTS. A file with no
+// diagnostics source at all (no language server for its type, or none attached)
+// still prints nothing on the default path — there is no analysis to label. That
+// silence means "not analysed", not "clean", and a caller who asks for a
+// confirmed answer (await_diagnostics / fail_on_new_errors) is told so
+// explicitly under postWriteDiagLabelNotAnalysed rather than left to infer it.
 const (
 	// postWriteDiagLabelAuthoritative marks a block whose diagnostics were
 	// confirmed to reflect this write: the language server re-published
@@ -46,6 +51,14 @@ const (
 	// only an explicit failure. Never the authoritative label, and never
 	// silent.
 	postWriteDiagLabelUnverified = "unverified — post-write pull failed"
+	// postWriteDiagLabelNotAnalysed marks a block for a write where no analysis
+	// was attempted at all: no diagnostics source is wired for the file, or the
+	// language server could not be told the file changed, so nothing it might
+	// publish would be about this write. Distinct from the snapshot label, which
+	// reports data of the wrong AGE; here there is no data and no request for
+	// any. Printed only when the caller explicitly asked for a confirmed answer
+	// — the default path's silence is unchanged.
+	postWriteDiagLabelNotAnalysed = "not analysed — no post-write check ran"
 )
 
 // postWriteDiagLabel renders the fixed-prefix label line prepended to every
@@ -348,13 +361,18 @@ func formatStandingPreExistingNote(n int) string {
 	return fmt.Sprintf("\n(%d pre-existing %s in this file not shown — call diagnostics() for full state)", n, textfmt.Plural(n, "issue", "issues"))
 }
 
-// formatDifferentialDiagnostics renders the differential result as a compact
-// suffix appended to a write/edit response. Returns "" when nothing new. fresh
-// diagnostics past the file's current end (newLineCount) are folded into the
-// likely-stale group — a diagnostic pointing past EOF is provably re-index lag
-// after a structural edit that shrank the file.
-func formatDifferentialDiagnostics(fresh, likelyStale []protocol.Diagnostic, newLineCount int) string {
-	var errs, warns, stale []protocol.Diagnostic
+// splitDifferential sorts the differential result into the three groups the
+// response renders — hard errors, warnings, and probably-stale findings. A fresh
+// diagnostic past the file's current end (newLineCount) is folded into the stale
+// group: a diagnostic pointing past EOF is provably re-index lag after a
+// structural edit that shrank the file.
+//
+// It is the single classification behind BOTH renderings — the prose block and
+// the structured delta — so the two can never report different sets. In
+// particular the errs group, and only it, is what fail_on_new_errors rolls a
+// write back for: the stale group is the known re-index-lag class, which is
+// exactly what must never trigger a rollback.
+func splitDifferential(fresh, likelyStale []protocol.Diagnostic, newLineCount int) (errs, warns, stale []protocol.Diagnostic) {
 	for _, x := range fresh {
 		if newLineCount > 0 && int(x.Range.Start.Line) >= newLineCount {
 			stale = append(stale, x)
@@ -367,6 +385,19 @@ func formatDifferentialDiagnostics(fresh, likelyStale []protocol.Diagnostic, new
 		}
 	}
 	stale = append(stale, likelyStale...)
+	return errs, warns, stale
+}
+
+// formatDifferentialDiagnostics renders the differential result as a compact
+// suffix appended to a write/edit response. Returns "" when nothing new.
+func formatDifferentialDiagnostics(fresh, likelyStale []protocol.Diagnostic, newLineCount int) string {
+	errs, warns, stale := splitDifferential(fresh, likelyStale, newLineCount)
+	return renderDifferential(errs, warns, stale)
+}
+
+// renderDifferential renders pre-classified groups. Returns "" when all three
+// are empty.
+func renderDifferential(errs, warns, stale []protocol.Diagnostic) string {
 	if len(errs) == 0 && len(warns) == 0 && len(stale) == 0 {
 		return ""
 	}

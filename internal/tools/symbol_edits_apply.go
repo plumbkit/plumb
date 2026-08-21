@@ -247,7 +247,7 @@ func semanticNotifyWritten(ctx context.Context, deps *WriteDeps, client lsp.Clie
 // modified files must bound how many times it calls this (see
 // maxRenameReportFiles).
 func semanticPostWriteReport(ctx context.Context, deps *WriteDeps, path, uri, before, after string, baseline *diagBaseline) string {
-	return deps.postWriteDiagnostics(uri, before, after, false, baseline) + deps.reportQuality(ctx, path)
+	return deps.postWriteDiagnostics(uri, before, after, postWriteDiagOpts{}, baseline).text + deps.reportQuality(ctx, path)
 }
 
 // notifySymbolEditWritten performs the post-write housekeeping shared by the

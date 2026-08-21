@@ -76,7 +76,7 @@ func TestPullPostWrite_PullReplacesWait(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 	if len(client.calls) != 1 {
 		t.Fatalf("expected exactly one pull, got %d", len(client.calls))
 	}
@@ -104,7 +104,7 @@ func TestPullPostWrite_CarriedOverDroppedAndStandingNote(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if !strings.Contains(out, "✓ fresh diagnostics pass") {
 		t.Errorf("a carried-over-only result is a clean pass for this edit:\n%s", out)
 	}
@@ -129,7 +129,7 @@ func TestPullPostWrite_UnchangedValidatedServesCache(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if !strings.Contains(out, "✓ fresh diagnostics pass") {
 		t.Errorf("a validated unchanged over a clean snapshot is a genuine clean pass:\n%s", out)
 	}
@@ -149,7 +149,7 @@ func TestPullPostWrite_Safety_ErrorNeverReadsClean(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if strings.Contains(out, "✓") {
 		t.Errorf("SAFETY: a failed pull must never render the clean tick:\n%s", out)
 	}
@@ -168,7 +168,7 @@ func TestPullPostWrite_Safety_UnvalidatableUnchanged(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if len(client.calls) != 2 {
 		t.Fatalf("expected exactly one retry, got %d calls", len(client.calls))
 	}
@@ -186,7 +186,7 @@ func TestPullPostWrite_PushModeNeverPulls(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 5 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if len(client.calls) != 0 {
 		t.Errorf("push mode must never pull, got %d calls", len(client.calls))
 	}
@@ -202,7 +202,7 @@ func TestPullPostWrite_DisabledWindowSkipsPull(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: -1}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	_ = d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	_ = d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if len(client.calls) != 0 {
 		t.Errorf("a disabled post-write window must not pull, got %d calls", len(client.calls))
 	}
@@ -218,7 +218,7 @@ func TestPullPostWrite_DowngradeFallsBackToPushMachinery(t *testing.T) {
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 5 * time.Millisecond}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if strings.Contains(out, "unverified") || strings.Contains(out, "failed") {
 		t.Errorf("a downgrade must fall back to the push machinery, not degrade:\n%s", out)
 	}
@@ -243,7 +243,7 @@ func TestPullPostWrite_CrossFile_WorkspacePullWhenAdvertised(t *testing.T) {
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if client.wsCalls != 1 {
 		t.Fatalf("expected one workspace pull, got %d", client.wsCalls)
 	}
@@ -276,7 +276,7 @@ func TestPullPostWrite_CrossFile_RelatedDocsWithHonestNote(t *testing.T) {
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if client.wsCalls != 0 {
 		t.Errorf("workspace pull must not be issued without the capability")
 	}
@@ -300,7 +300,7 @@ func TestPullPostWrite_CrossFile_WorkspacePullFailureIsExplicit(t *testing.T) {
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", false, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{}, baseline).text
 	if !strings.Contains(out, "workspace pull failed") || !strings.Contains(out, "NOT re-checked") {
 		t.Errorf("SAFETY: a failed sweep must say other files were not checked:\n%s", out)
 	}
@@ -324,7 +324,7 @@ func TestPullPostWrite_CrossFile_CleanPullEmitsCleanPassNoHedge(t *testing.T) {
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if !strings.Contains(out, "✓ fresh diagnostics pass") {
 		t.Errorf("an empty cross-file delta has nothing to hedge — the documented clean-pass line must still appear:\n%q", out)
 	}
@@ -358,7 +358,7 @@ func TestPullPostWrite_CrossFile_NonEmptyDeltaKeepsHedgeNote(t *testing.T) {
 	}
 
 	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if !strings.Contains(out, "not exhaustive") {
 		t.Errorf("a non-empty cross-file delta must still carry the honest non-exhaustive note:\n%q", out)
 	}
