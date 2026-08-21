@@ -31,6 +31,7 @@ func statusStyle(status string) lipgloss.Style {
 		strings.HasPrefix(status, "stale"),
 		strings.HasPrefix(status, "error"),
 		strings.HasPrefix(status, "uninstall"),
+		strings.HasPrefix(status, "conflict"),
 		strings.HasPrefix(status, "unregistered"):
 		return tui.WarnStyle
 	default:

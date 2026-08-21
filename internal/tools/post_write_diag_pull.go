@@ -70,8 +70,11 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 			return "", false
 		}
 		// SAFETY INVARIANT: an explicit unverified note, never an empty
-		// (implicitly clean) suffix and never the ✓ line.
-		return fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err), true
+		// (implicitly clean) suffix and never the ✓ line. Its own fixed label
+		// — neither authoritative nor a pre-write snapshot: the pull failed
+		// outright, so there is no diagnostics data of any age to report.
+		return postWriteDiagLabel(postWriteDiagLabelUnverified) +
+			fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err), true
 	}
 
 	var pre []protocol.Diagnostic
@@ -89,7 +92,13 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
 	}
 	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, pulled, lo, hi, touched))
-	return out, true
+	if out == "" {
+		return out, true
+	}
+	// A successful pull is synchronous with this write (the change
+	// notification is processed before the pull on the same connection), so
+	// the result is always authoritative — never a stale snapshot.
+	return postWriteDiagLabel(postWriteDiagLabelAuthoritative) + out, true
 }
 
 // pullEdited pulls the edited URI (previousResultId from the cache, unknown-ID

@@ -423,8 +423,9 @@ func TestClaudeSkillsDir_NoError(t *testing.T) {
 func TestInstallSkill_Fresh(t *testing.T) {
 	dir := t.TempDir()
 	content := "---\nname: test-skill\ndescription: A test skill\n---\nbody\n"
+	manifest := &skillManifest{Skills: map[string]skillManifestEntry{}}
 
-	action, err := installSkill(dir, "test-skill", content)
+	action, err := installSkill(dir, "test-skill", content, manifest, false)
 	if err != nil {
 		t.Fatalf("installSkill: %v", err)
 	}
@@ -439,17 +440,21 @@ func TestInstallSkill_Fresh(t *testing.T) {
 	if want := stampSkillContent(content); string(got) != want {
 		t.Errorf("content mismatch: got %q, want %q", string(got), want)
 	}
+	if manifest.Skills["test-skill"].Hash != hashSkillContent(content) {
+		t.Errorf("manifest hash not recorded for a fresh install")
+	}
 }
 
 func TestInstallSkill_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	content := "---\nname: test-skill\ndescription: test\n---\n"
+	manifest := &skillManifest{Skills: map[string]skillManifestEntry{}}
 
-	if _, err := installSkill(dir, "test-skill", content); err != nil {
+	if _, err := installSkill(dir, "test-skill", content, manifest, false); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
-	action, err := installSkill(dir, "test-skill", content)
+	action, err := installSkill(dir, "test-skill", content, manifest, false)
 	if err != nil {
 		t.Fatalf("second install: %v", err)
 	}
@@ -458,16 +463,24 @@ func TestInstallSkill_Idempotent(t *testing.T) {
 	}
 }
 
+// TestInstallSkill_Updated pins the manifest-tracked in-place update: a
+// second call with different content, following a first call that installed
+// the "old" content, is a legitimate plumb-shipped change (the manifest
+// proves the disk copy is still exactly what plumb wrote last time) — so it
+// is replaced in place with NO backup. This is the literal fix for PLAN-365's
+// ".bak" litter: the old behaviour (unconditional backup-on-diff) is what
+// produced it.
 func TestInstallSkill_Updated(t *testing.T) {
 	dir := t.TempDir()
 	old := "---\nname: test-skill\ndescription: test\n---\nold content\n"
 	updated := "---\nname: test-skill\ndescription: test\n---\nnew content\n"
+	manifest := &skillManifest{Skills: map[string]skillManifestEntry{}}
 
-	if _, err := installSkill(dir, "test-skill", old); err != nil {
+	if _, err := installSkill(dir, "test-skill", old, manifest, false); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
-	action, err := installSkill(dir, "test-skill", updated)
+	action, err := installSkill(dir, "test-skill", updated, manifest, false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -475,16 +488,12 @@ func TestInstallSkill_Updated(t *testing.T) {
 		t.Errorf("action: got %q, want %q", action, "updated")
 	}
 
-	// Backup must have been created.
+	// No backup: the manifest already proved this was plumb's own content.
 	entries, _ := os.ReadDir(filepath.Join(dir, "test-skill"))
-	var backups []string
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) == ".bak" {
-			backups = append(backups, e.Name())
+			t.Errorf("unexpected backup file %s — a manifest-verified update must replace in place", e.Name())
 		}
-	}
-	if len(backups) == 0 {
-		t.Error("expected a .bak backup file to be created before update")
 	}
 
 	// New content must be installed.
@@ -494,6 +503,9 @@ func TestInstallSkill_Updated(t *testing.T) {
 	}
 	if want := stampSkillContent(updated); string(got) != want {
 		t.Errorf("content after update: got %q, want %q", string(got), want)
+	}
+	if manifest.Skills["test-skill"].Hash != hashSkillContent(updated) {
+		t.Errorf("manifest hash not updated after a legitimate change")
 	}
 }
 

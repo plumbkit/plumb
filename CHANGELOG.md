@@ -9,6 +9,64 @@
 
 ### Added
 
+- **Post-write diagnostics on `edit_file`/`write_file` now carry a fixed,
+  machine-parseable freshness label — trust fix, PR 1 of 2 (PLAN-362).** A
+  stale diagnostics block (the language server had not re-published since the
+  write) used to print with the same confidence as a genuinely fresh result —
+  the "#1 recurring complaint" in dogfooding, because "agents learned to
+  ignore the block, which defeats its purpose." Every non-empty post-write
+  diagnostics block is now prefixed with one of exactly three fixed labels:
+  `[diagnostics: authoritative post-write pass]` when the language server
+  confirmed re-analysis after this write (an explicit `await_diagnostics:true`
+  wait, an incidentally fast default-window publish, or — always — a
+  successful pull/hybrid-mode pull, which is synchronous with the write);
+  `[diagnostics: pre-write snapshot — not yet re-analysed]` when no publish
+  arrived within the fast adaptive window, so the data may predate the edit —
+  including the `await_diagnostics:true` timeout case where nothing was
+  cached either, which now says so explicitly instead of returning silence to
+  a caller who asked "did my change compile?"; or
+  `[diagnostics: unverified — post-write pull failed]` when a pull/hybrid-mode
+  post-write pull errors outright, so there is neither a fresh nor a
+  pre-write answer to give. A block with nothing to report at all still
+  renders nothing (no behaviour change beyond labelling). The existing
+  `INCOMPLETE` warm-up labelling on the standalone `diagnostics()` tool is
+  untouched — a separate concern. `postWriteDiagLabel` and the three label
+  constants (`internal/tools/post_write_diag.go`) are the one place the
+  vocabulary is defined; `TestPostWriteDiagLabel_*`
+  (`internal/tools/post_write_diag_label_test.go`) pins the push-mode
+  fresh/stale split (including the timeout-with-nothing-cached case), the
+  pull-mode always-authoritative behaviour, and the pull-failure label as its
+  own third state. The `await_diagnostics` parameter description on
+  `edit_file`/`write_file` now states the label contract instead of promising
+  an unconditional "authoritative post-write result". `transaction_apply` has
+  no post-write diagnostics yet, so it is out of scope here; PR 2 (rollback
+  semantics, `fail_on_new_errors`) adds that support and inherits the same
+  labelling.
+- **`plumb skills sync` is now versioned and self-cleaning, ending the
+  `.bak` litter a naive overwrite policy left behind (PLAN-365).** Each
+  skills directory now carries `.plumb/skills-manifest.json`, a hash+version
+  ledger sync uses to tell "plumb's own content changed between versions"
+  from "the user edited this file": a skill whose disk content still matches
+  the hash the manifest recorded is replaced in place with no backup at all;
+  anything else is left completely untouched, with the proposed content
+  written instead to a `<name>.plumb-new` file (never a directory, so it
+  can't be mistaken for another skill bundle) for manual review — rewritten
+  only when the proposal itself changes, so a re-run never clobbers a user's
+  in-progress merge inside it. **A skills directory with no manifest entry
+  yet is always the untouched/review case, never a legitimate update:** it
+  cannot be proven to be plumb's own (there is no historical shipped content
+  to check a differing file against for any version but the one currently
+  running, and that version's content is, by definition, the "new" side of
+  the very comparison), so the manifest is the only source of truth sync
+  ever treats as authoritative for "what plumb shipped last time" — a
+  provenance marker alone is never enough. Sync also cleans up the
+  directory-level `<name>.<timestamp>.bak` backups a prior overwrite-and-
+  backup policy left beside the skill directories, deleting only the ones
+  whose content hashes to a shipped hash actually on record in the manifest
+  and listing any others for manual review rather than guessing. New
+  `plumb skills sync --check` lists every action (including which backups
+  would be cleaned up) without writing anything.
+
 - **Registration-parity and wiring tests make the `read_multiple_files`
   tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing
   previously asserted, at registration time, that a read-shaped tool actually

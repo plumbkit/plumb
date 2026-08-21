@@ -245,9 +245,20 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh 
 		// single honest pending line rather than the pre-edit findings, which read
 		// as fresh breakage (the recurring dogfooding friction).
 		if len(diags) == 0 {
-			return ""
+			if !awaitFresh {
+				// No explicit ask for confirmation and nothing cached: silence
+				// is the existing, unchanged default-path behaviour.
+				return ""
+			}
+			// The caller explicitly asked "did my change compile?"
+			// (await_diagnostics:true) and the wait timed out with nothing
+			// cached at all — total silence here would read as "no answer"
+			// rather than "not confirmed". Say so explicitly, still labelled.
+			return postWriteDiagLabel(postWriteDiagLabelSnapshot) +
+				"\ndiagnostics: not re-analysed within the wait — nothing cached either; call diagnostics() to confirm"
 		}
-		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
+		return postWriteDiagLabel(postWriteDiagLabelSnapshot) +
+			"\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
 	}
 	var pre []protocol.Diagnostic
 	if baseline != nil {
@@ -265,7 +276,12 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh 
 	// commit over them. Append a count so the file's full state is not implied
 	// clean by silence.
 	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, diags, lo, hi, touched))
-	return out
+	if out == "" {
+		return out
+	}
+	// fresh is true on every path that reaches here, so the block reflects a
+	// genuine post-write re-analysis: label it authoritative.
+	return postWriteDiagLabel(postWriteDiagLabelAuthoritative) + out
 }
 
 func (d WriteDeps) crossFileEnabled() bool {

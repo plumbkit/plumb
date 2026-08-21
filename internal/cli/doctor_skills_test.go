@@ -61,7 +61,7 @@ func TestSkillFreshnessResult(t *testing.T) {
 
 	t.Run("current skills produce no line", func(t *testing.T) {
 		target, _ := register(t, t.TempDir())
-		if _, results := installSkillsFor(target); len(results) == 0 {
+		if _, results, _ := installSkillsFor(target, false); len(results) == 0 {
 			t.Fatal("expected the skills to install")
 		}
 		if _, ok := skillFreshnessResult(target); ok {
@@ -71,7 +71,7 @@ func TestSkillFreshnessResult(t *testing.T) {
 
 	t.Run("one stale skill is reported", func(t *testing.T) {
 		target, skillsDir := register(t, t.TempDir())
-		if _, results := installSkillsFor(target); len(results) == 0 {
+		if _, results, _ := installSkillsFor(target, false); len(results) == 0 {
 			t.Fatal("expected the skills to install")
 		}
 		stale := filepath.Join(skillsDir, embeddedSkills()[0].Name, "SKILL.md")
@@ -93,7 +93,7 @@ func TestSkillFreshnessResult(t *testing.T) {
 	t.Run("stale skill reports its installing version", func(t *testing.T) {
 		pinVersion(t, "0.16.3")
 		target, skillsDir := register(t, t.TempDir())
-		if _, results := installSkillsFor(target); len(results) == 0 {
+		if _, results, _ := installSkillsFor(target, false); len(results) == 0 {
 			t.Fatal("expected the skills to install")
 		}
 		stale := filepath.Join(skillsDir, embeddedSkills()[0].Name, "SKILL.md")
