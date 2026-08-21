@@ -89,7 +89,13 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
 	}
 	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, pulled, lo, hi, touched))
-	return out, true
+	if out == "" {
+		return out, true
+	}
+	// A successful pull is synchronous with this write (the change
+	// notification is processed before the pull on the same connection), so
+	// the result is always authoritative — never a stale snapshot.
+	return postWriteDiagLabel(postWriteDiagLabelAuthoritative) + out, true
 }
 
 // pullEdited pulls the edited URI (previousResultId from the cache, unknown-ID

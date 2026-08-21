@@ -9,6 +9,30 @@
 
 ### Added
 
+- **Post-write diagnostics on `edit_file`/`write_file` now carry a fixed,
+  machine-parseable freshness label — trust fix, PR 1 of 2 (PLAN-362).** A
+  stale diagnostics block (the language server had not re-published since the
+  write) used to print with the same confidence as a genuinely fresh result —
+  the "#1 recurring complaint" in dogfooding, because "agents learned to
+  ignore the block, which defeats its purpose." Every non-empty post-write
+  diagnostics block is now prefixed with one of exactly two fixed labels:
+  `[diagnostics: authoritative post-write pass]` when the language server
+  confirmed re-analysis after this write (an explicit `await_diagnostics:true`
+  wait, an incidentally fast default-window publish, or — always — a
+  successful pull/hybrid-mode pull, which is synchronous with the write), or
+  `[diagnostics: pre-write snapshot — not yet re-analysed]` when no publish
+  arrived within the fast adaptive window, so the data may predate the edit.
+  A block with nothing to report still renders nothing (no behaviour change
+  beyond labelling). The existing `INCOMPLETE` warm-up labelling on the
+  standalone `diagnostics()` tool is untouched — a separate concern.
+  `postWriteDiagLabel` (`internal/tools/post_write_diag.go`) is the one place
+  the two label strings are defined; `TestPostWriteDiagLabel_*`
+  (`internal/tools/post_write_diag_label_test.go`) pins both the push-mode
+  fresh/stale split and the pull-mode always-authoritative behaviour.
+  `transaction_apply` has no post-write diagnostics yet, so it is out of
+  scope here; PR 2 (rollback semantics, `fail_on_new_errors`) adds that
+  support and inherits the same labelling.
+
 - **Registration-parity and wiring tests make the `read_multiple_files`
   tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing
   previously asserted, at registration time, that a read-shaped tool actually
