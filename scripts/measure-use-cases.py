@@ -240,6 +240,26 @@ def file_bytes(rel: str) -> int:
     return (ROOT / rel).stat().st_size
 
 
+def gutter_bytes(rel: str) -> int:
+    """Bytes of a file as a real agent read tool would hand it over.
+
+    "Native read" measured with `wc -c` is a baseline no agent actually gets.
+    Claude Code's own Read prefixes every line with a line number, exactly as
+    plumb's read_file does. Charging plumb for that framing while giving the
+    native side raw bytes understates plumb in every read scenario at once, so
+    both baselines are measured and both are published.
+
+    The gutter modelled here is the cheapest honest one: the line number right
+    aligned to the width of the largest, then a tab — which is what plumb emits.
+    Padding to a fixed six columns (`cat -n`) would overcharge the native side
+    and flatter plumb instead, which is the same error in the other direction.
+    """
+    data = (ROOT / rel).read_bytes()
+    lines = len(data.splitlines()) or 1
+    width = len(str(lines))
+    return len(data) + lines * (width + 1)
+
+
 def provenance() -> dict:
     commit, _ = run(["git", "rev-parse", "--short=8", "HEAD"])
     dirty, _ = run(["git", "status", "--porcelain"])
@@ -314,6 +334,7 @@ def scenario_checkout_noise() -> dict:
 
 def scenario_read_symbol(s: Serve) -> dict:
     whole = file_bytes(SAMPLE_FILE)
+    whole_real = gutter_bytes(SAMPLE_FILE)
     samples = []
     for name in SAMPLE_SYMBOLS:
         sym = s.measure("read_symbol", {"path": SAMPLE_FILE, "name": name})
@@ -325,25 +346,33 @@ def scenario_read_symbol(s: Serve) -> dict:
                 "tokens": sym["tokens"],
                 "ms": sym["ms"],
                 "ratio": round(whole / sym["bytes"], 1) if sym["bytes"] else 0,
+                "ratio_real": (
+                    round(whole_real / sym["bytes"], 1) if sym["bytes"] else 0
+                ),
             }
         )
     return {
         "file": SAMPLE_FILE,
         "whole_file_bytes": whole,
         "whole_file_tokens": tokens(whole),
+        "whole_file_gutter_bytes": whole_real,
+        "whole_file_gutter_tokens": tokens(whole_real),
         "samples": samples,
     }
 
 
 def scenario_outline(s: Serve) -> dict:
     whole = file_bytes(SAMPLE_FILE)
+    whole_real = gutter_bytes(SAMPLE_FILE)
     out = s.measure("file_outline", {"uri": SAMPLE_FILE})
     return {
         "file": SAMPLE_FILE,
         "whole_file_bytes": whole,
         "whole_file_tokens": tokens(whole),
+        "whole_file_gutter_bytes": whole_real,
         "plumb": out,
         "ratio": round(whole / out["bytes"], 1) if out["bytes"] else 0,
+        "ratio_real": round(whole_real / out["bytes"], 1) if out["bytes"] else 0,
     }
 
 
@@ -372,11 +401,13 @@ def scenario_references(s: Serve) -> dict:
 
 def scenario_multi_read(s: Serve) -> dict:
     native_bytes = sum(file_bytes(f) for f in MULTI_READ_FILES)
+    native_gutter_bytes = sum(gutter_bytes(f) for f in MULTI_READ_FILES)
     multi = s.measure("read_multiple_files", {"paths": MULTI_READ_FILES})
     singles = [s.measure("read_file", {"file_path": f}) for f in MULTI_READ_FILES]
     return {
         "files": MULTI_READ_FILES,
         "native_bytes": native_bytes,
+        "native_gutter_bytes": native_gutter_bytes,
         "native_turns": len(MULTI_READ_FILES),
         "plumb": multi,
         "plumb_turns": 1,
@@ -435,22 +466,23 @@ def scenario_affected(s: Serve) -> dict:
     # The recall question that matters: is the test for the changed function in
     # the list at all? If not, the tool has not answered "which tests to run".
     own_test = "savings_test.go" in text
-    # The actionable unit is the package, not the test function: you narrow a
-    # `go test ./...` by passing package paths.
-    selected_pkgs = {
-        str(Path(m).parent)
-        for m in re.findall(r"— (\S+_test\.go) L\d+", text)
-    }
+    # The tool now answers in packages, each as a runnable command with its test
+    # count. Parse that rather than counting per-test lines: importing packages
+    # are summarised, so per-test lines exist only for the changed package and
+    # counting them would report a fraction of the real total as if it were all
+    # of it.
+    pkg_rows = re.findall(r"go test \./(\S+?)/\.\.\.\s+(\d+) tests\s+(.+)", text)
+    selected_pkgs = [p for p, _, _ in pkg_rows]
+    selected_tests = sum(int(n) for _, n, _ in pkg_rows)
+    reasons = {p: r.strip() for p, _, r in pkg_rows}
     return {
         "changed": REFERENCE_FILE,
         "total_packages": len(all_pkgs),
         "total_test_files": len([f for f in test_files.splitlines() if f]),
         "total_test_funcs": sum(int(n) for n in total_tests.split() if n.isdigit()),
-        # Count the labelled entries, not every occurrence of "confidence" —
-        # the section header reads "(N, highest confidence first)" and would
-        # add one to every total.
-        "selected_tests": len(re.findall(r"\[[^\]]*confidence \d", text)),
-        "selected_packages": sorted(selected_pkgs),
+        "selected_tests": selected_tests,
+        "selected_packages": selected_pkgs,
+        "package_reasons": reasons,
         "truncated": "max_results reached" in text,
         "includes_own_test": own_test,
         "plumb": affected,
@@ -481,6 +513,7 @@ def scenario_cross_language(s: Serve) -> list[dict]:
     out = []
     for lang, rel, symbol in CROSS_LANGUAGE:
         whole = file_bytes(rel)
+        whole_real = gutter_bytes(rel)
         sym = s.measure("read_symbol", {"path": rel, "name": symbol})
         outline = s.measure("file_outline", {"uri": rel})
         out.append(
@@ -491,11 +524,18 @@ def scenario_cross_language(s: Serve) -> list[dict]:
                 "symbol_lines": symbol_line_span(sym["text"]),
                 "whole_file_bytes": whole,
                 "whole_file_tokens": tokens(whole),
+                "whole_file_gutter_bytes": whole_real,
                 "read_symbol": sym,
                 "file_outline": outline,
                 "symbol_ratio": round(whole / sym["bytes"], 1) if sym["bytes"] else 0,
+                "symbol_ratio_real": (
+                    round(whole_real / sym["bytes"], 1) if sym["bytes"] else 0
+                ),
                 "outline_ratio": (
                     round(whole / outline["bytes"], 1) if outline["bytes"] else 0
+                ),
+                "outline_ratio_real": (
+                    round(whole_real / outline["bytes"], 1) if outline["bytes"] else 0
                 ),
             }
         )
@@ -532,15 +572,17 @@ def report(data: dict) -> None:
 
     r = data["read_symbol"]
     print(f"## Read one function ({r['file']})")
-    print(f"  whole file            {r['whole_file_bytes']:>8,} B  ~{r['whole_file_tokens']:,} tok")
+    print(f"  whole file, raw       {r['whole_file_bytes']:>8,} B  ~{r['whole_file_tokens']:,} tok")
+    print(f"  whole file, w/ gutter {r['whole_file_gutter_bytes']:>8,} B  ~{r['whole_file_gutter_tokens']:,} tok   <- what a real read tool returns")
     for smp in r["samples"]:
-        print(f"  read_symbol {smp['symbol']:<10}{smp['bytes']:>8,} B  ~{smp['tokens']:,} tok  ({smp['lines']:>3} lines)  -> {smp['ratio']}x smaller")
+        print(f"  read_symbol {smp['symbol']:<10}{smp['bytes']:>8,} B  ({smp['lines']:>3} lines)  -> {smp['ratio']}x vs raw, {smp['ratio_real']}x vs real")
     print()
 
     o = data["outline"]
     print("## File shape")
-    print(f"  whole file    {o['whole_file_bytes']:>8,} B  ~{o['whole_file_tokens']:,} tok")
-    print(f"  file_outline  {o['plumb']['bytes']:>8,} B  ~{o['plumb']['tokens']:,} tok  -> {o['ratio']}x smaller\n")
+    print(f"  whole file, raw       {o['whole_file_bytes']:>8,} B  ~{o['whole_file_tokens']:,} tok")
+    print(f"  whole file, w/ gutter {o['whole_file_gutter_bytes']:>8,} B")
+    print(f"  file_outline          {o['plumb']['bytes']:>8,} B  ~{o['plumb']['tokens']:,} tok  -> {o['ratio']}x vs raw, {o['ratio_real']}x vs real\n")
 
     f = data["references"]
     print("## References")
@@ -548,12 +590,14 @@ def report(data: dict) -> None:
     print(f"  find_references  {f['reference_positions']} positions on {f['reference_lines']} lines across {f['reference_files']} files ({f['plumb']['ms']} ms)\n")
 
     m = data["multi_read"]
-    n, singles, multi = m["native_bytes"], m["sum_of_singles_bytes"], m["plumb"]["bytes"]
+    n, g = m["native_bytes"], m["native_gutter_bytes"]
+    singles, multi = m["sum_of_singles_bytes"], m["plumb"]["bytes"]
     print("## Batched reads")
-    print(f"  {m['native_turns']} native reads (raw)  {n:>8,} B   1.00x  in {m['native_turns']} turns")
-    print(f"  {m['native_turns']}x read_file          {singles:>8,} B  {singles / n:>5.2f}x  in {m['native_turns']} turns")
-    print(f"  1x read_multiple_files{multi:>8,} B  {multi / n:>5.2f}x  in 1 turn ({m['plumb']['ms']} ms)")
-    print(f"  framing (gutter+header) {singles - n:,} B; batching adds {multi - singles:,} B more\n")
+    print(f"  {m['native_turns']} native reads, raw     {n:>8,} B  {n / g:>5.2f}x  in {m['native_turns']} turns")
+    print(f"  {m['native_turns']} native reads, gutter  {g:>8,} B   1.00x  in {m['native_turns']} turns  <- the real baseline")
+    print(f"  {m['native_turns']}x read_file            {singles:>8,} B  {singles / g:>5.2f}x  in {m['native_turns']} turns")
+    print(f"  1x read_multiple_files  {multi:>8,} B  {multi / g:>5.2f}x  in 1 turn ({m['plumb']['ms']} ms)")
+    print(f"  plumb's per-read provenance header costs {singles - g:,} B; batching adds {multi - singles:,} B more\n")
 
     rn = data["rename"]
     print("## Rename")
@@ -564,7 +608,8 @@ def report(data: dict) -> None:
     print("## Which tests to run")
     print(f"  whole suite       {a['total_packages']} packages / {a['total_test_files']} test files / {a['total_test_funcs']} test funcs")
     print(f"  topology_affected {a['selected_tests']} tests in {len(a['selected_packages'])} packages, {a['plumb']['bytes']:,} B ({a['plumb']['ms']} ms)")
-    print(f"                    {', '.join(a['selected_packages'])}")
+    for pkg in a["selected_packages"]:
+        print(f"                    {pkg:<24} {a['package_reasons'][pkg]}")
     print(f"  truncated={a['truncated']}  includes the changed file's own test={a['includes_own_test']}\n")
 
     lat = data["latency"]
@@ -574,7 +619,9 @@ def report(data: dict) -> None:
     print("## Cross-language")
     for c in data["cross_language"]:
         print(f"  {c['language']:<11} {c['file']}")
-        print(f"    whole file {c['whole_file_bytes']:>7,} B | read_symbol {c['symbol']} ({c['symbol_lines']} lines) {c['read_symbol']['bytes']:>6,} B ({c['symbol_ratio']}x) | file_outline {c['file_outline']['bytes']:>6,} B ({c['outline_ratio']}x)")
+        print(f"    whole file raw {c['whole_file_bytes']:>7,} B / gutter {c['whole_file_gutter_bytes']:>7,} B")
+        print(f"    read_symbol {c['symbol']} ({c['symbol_lines']} lines) {c['read_symbol']['bytes']:>6,} B -> {c['symbol_ratio']}x raw, {c['symbol_ratio_real']}x real")
+        print(f"    file_outline {c['file_outline']['bytes']:>6,} B -> {c['outline_ratio']}x raw, {c['outline_ratio_real']}x real")
 
 
 def main() -> None:

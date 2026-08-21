@@ -118,13 +118,17 @@
 - **`docs/use-cases.md` re-measured at `b46e233f`, and six scenarios added.** New:
   the working checkout vs the repository (54.8× more bytes on disk than `git
   ls-files` reports), `rename_symbol` vs naive find-replace (15 scoped edits vs 24
-  blind ones), `topology_affected` vs the whole suite (3 packages instead of 55),
+  blind ones), `topology_affected` vs the whole suite (5 packages instead of 55),
   `read_multiple_files` vs N native reads, warm-path latency (p95 under 1 ms), and
   the same read measurements in Python and JavaScript. Two results are published
-  because they are *not* wins: `read_multiple_files` returns 1.82× **more** payload
+  because they are *not* wins: `read_multiple_files` returns 1.32× **more** payload
   than reading the files natively, and `read_symbol`'s ratio is shown as a
-  2.5×–29.6× spread rather than a single flattering multiple, because the ratio is
-  a property of the question, not the tool. Two measurement traps are documented
+  2.9×–33.4× spread rather than a single flattering multiple, because the ratio is
+  a property of the question, not the tool. Read scenarios carry **two baselines**:
+  raw `wc -c` bytes, and the file with a line-number gutter — because no agent read
+  tool returns a bare file (Claude Code's own `Read` adds line numbers, as plumb
+  does), so charging plumb for that framing while giving the native side raw bytes
+  understated plumb in every read scenario at once. Two measurement traps are documented
   in the page: a `grep` shim on `PATH` that respects `.gitignore` (which silently
   turns the grep-vs-ripgrep comparison into ripgrep-vs-ripgrep), and
   `topology_affected`'s default `max_results: 50`, which truncates an answer of
