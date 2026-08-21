@@ -170,7 +170,7 @@ func TestPinnedSetMatchesPinnedTools(t *testing.T) {
 // reachable for this pin set without cutting into schema JSON (out of this
 // card's scope, which is descriptions only): the four BootstrapTools alone
 // (session_start, read_file, edit_file, git), which must stay pinned for their
-// own stated reasons regardless of PinnedTools' contents, already total 16,663
+// own stated reasons regardless of PinnedTools' contents, already total 16,678
 // bytes — over 15,000 before a single other tool is added. Schema JSON, not
 // description text, dominates: edit_file's and git's schemas alone are 5,257
 // and 3,157 bytes respectively, driven by per-parameter documentation the
@@ -180,6 +180,29 @@ func TestPinnedSetMatchesPinnedTools(t *testing.T) {
 // measurement plus modest headroom — a ratchet against payload growth, not an
 // aspirational target this card's description trims could ever reach alone.
 const maxPinnedBytes = 45000
+
+// TestPinnedToolsSupersetsBootstrapAndMailbox is the structural guard for the
+// invariant PinnedTools' doc comment promises (and docs/configuration.md
+// repeats): PinnedTools stays a superset of BootstrapTools and MailboxTools,
+// so session_start/git/read_file/edit_file and the leave_note/check_messages
+// pair never lose their pin. Before this test, only
+// TestAlwaysLoad_PinsTheMailboxPair (internal/cli/conn_profile_test.go)
+// spot-checked four hardcoded names — a future PinnedTools edit dropping a
+// fifth BootstrapTools/MailboxTools member (there are none today, but the
+// sets are free to grow) could silently un-pin it and stay green. This loops
+// over both source sets instead of naming members by hand.
+func TestPinnedToolsSupersetsBootstrapAndMailbox(t *testing.T) {
+	for name := range BootstrapTools {
+		if !IsPinned(name) {
+			t.Errorf("BootstrapTools member %q is not in PinnedTools — PinnedTools must stay a superset of BootstrapTools", name)
+		}
+	}
+	for name := range MailboxTools {
+		if !IsPinned(name) {
+			t.Errorf("MailboxTools member %q is not in PinnedTools — PinnedTools must stay a superset of MailboxTools", name)
+		}
+	}
+}
 
 // TestPinnedSetBudget guards maxPinnedBytes.
 func TestPinnedSetBudget(t *testing.T) {
