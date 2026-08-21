@@ -195,7 +195,7 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			if strings.HasSuffix(r.action, conflictUnchangedSuffix) {
 				word = "proposal unchanged"
 			}
-			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (edited by user — " + word + ", review and merge)"
+			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)"
 			tally.conflict++
 		default:
 			tally.updated++
