@@ -421,7 +421,10 @@ func TestTopologyAffected_EveryChangedPackageIsNamed(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s }).
+		WithTestScope(func() tools.TestScope {
+			return tools.TestScope{Language: "go", ScopedTests: true}
+		})
 	// No max_results: the shipped default is the behaviour under test.
 	args, _ := json.Marshal(map[string]any{
 		"files": []string{
@@ -439,7 +442,7 @@ func TestTopologyAffected_EveryChangedPackageIsNamed(t *testing.T) {
 	if !strings.Contains(out, "TestBig") {
 		t.Errorf("the first changed package's tests must still be named:\n%s", out)
 	}
-	if !strings.Contains(out, "go test ./zzz/...") {
+	if !strings.Contains(out, "./zzz/...") {
 		t.Errorf("package zzz must be listed as a package to run:\n%s", out)
 	}
 	// And the banner must not claim a cut that did not happen: two packages is
@@ -539,5 +542,144 @@ func TestTopologyAffected_ImportNameCollisionDoesNotDragInUnrelatedPackage(t *te
 	if !strings.Contains(out, "TestTarget") {
 		t.Errorf("the changed file's own co-located test must appear at the DEFAULT"+
 			" max_results, not only when the caller raises it:\n%s", out)
+	}
+}
+
+// defaultMaxResultsForTest mirrors the shipped max_results default. This file
+// is package tools_test, so the constant is duplicated deliberately: a change to
+// the default that invalidates this fixture should surface as a failure here.
+const defaultMaxResultsForTest = 50
+
+// TestTopologyAffected_WideFanOutReportsEveryImporter is the synthetic
+// regression that 7568173c shipped without, and the reason PLAN-384 existed.
+//
+// The bug: max_results is documented as bounding PACKAGES, but it was also spent
+// as a node budget — passed to ImpactFrom as MaxNodes, with the root loop
+// breaking once dependents+tests reached it. A widely-imported package therefore
+// exhausted the budget inside its first root's traversal and later importer
+// directories went unseeded, so the WIDER the fan-out, the FEWER dependents were
+// reported. Measured in production: internal/config/config.go returned 2 of its
+// 9 packages, silently dropping internal/tools and its 1,312 tests.
+//
+// Two fixture properties are load-bearing, and both were missing from the
+// earlier attempts that left this untested. Do not shrink either one:
+//
+//   - Importer directories are TWO segments deep. matchImportDir refuses a
+//     suffix shorter than minImportSegments (2) so that `import "strings"` cannot
+//     bind to a local strings/ directory. A fixture whose packages sit one level
+//     deep gets no import edges at all, and every assertion here passes vacuously.
+//   - Inward NODES must exceed max_results while PACKAGES stay under it. That is
+//     what separates the two cuts: fromColocation legitimately caps packages at
+//     the same number, so a fixture that raises both together truncates under the
+//     fix as well and passes against the bug. Hence 20 packages of 4 files each:
+//     ~81 inward nodes, 21 packages.
+//
+// Confirmed red against the restored pre-fix behaviour (MaxNodes: g.maxResults,
+// the g.total() >= g.maxResults early return, and the root-loop break): 14
+// packages reported, 7 of 20 importers missing, plus a false truncation banner.
+func TestTopologyAffected_WideFanOutReportsEveryImporter(t *testing.T) {
+	const (
+		importerPkgs = 20
+		filesPerPkg  = 4
+	)
+
+	ws := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// go.mod gives the imports a module prefix to strip, exercising the same
+	// suffix match production uses.
+	write("go.mod", "module example.com/m\n\ngo 1.22\n")
+	write("internal/target/target.go", "package target\n\nfunc Target() int { return 1 }\n")
+	write("internal/target/target_test.go",
+		"package target\n\nimport \"testing\"\n\nfunc TestTarget(t *testing.T) {}\n")
+
+	for i := range importerPkgs {
+		dir := fmt.Sprintf("internal/imp%02d", i)
+		for f := range filesPerPkg {
+			write(fmt.Sprintf("%s/use%d.go", dir, f), fmt.Sprintf(
+				"package imp%02d\n\nimport \"example.com/m/internal/target\"\n\n"+
+					"func Use%02d_%d() int { return target.Target() }\n", i, i, f))
+		}
+		write(dir+"/use_test.go", fmt.Sprintf(
+			"package imp%02d\n\nimport \"testing\"\n\nfunc TestUse%02d(t *testing.T) {}\n", i, i))
+	}
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Wait on the EDGES, not the nodes. linkImports runs at the END of an index
+	// pass, so a file's symbols become queryable before its import edges exist —
+	// polling for nodes is what made an earlier attempt conclude, wrongly, that
+	// fixtures cannot produce cross-file edges at all.
+	var inward int
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		nodes, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "internal/target/target.go"))
+		for _, n := range nodes {
+			if n.Kind != topology.KindFunction {
+				continue
+			}
+			nb, nerr := s.ImpactFrom(context.Background(), n, topology.ImpactOpts{
+				Depth: 2, MaxNodes: 2000, MaxBytes: 100000,
+				EdgeKinds: []string{"calls", "imports", "contains"},
+			})
+			if nerr == nil && len(nb.DependedOnBy.Nodes) > inward {
+				inward = len(nb.DependedOnBy.Nodes)
+			}
+		}
+		if inward > defaultMaxResultsForTest {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The fixture-size guard. A fixture too small to fill the budget passes
+	// against the bug it was written for — that has now happened twice in this
+	// area, so it fails loudly here instead.
+	if inward <= defaultMaxResultsForTest {
+		t.Fatalf("fixture too small to exercise the cap: %d inward nodes, need > %d. "+
+			"This test cannot detect the regression it exists for; grow the fixture "+
+			"rather than relaxing this check", inward, defaultMaxResultsForTest)
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	// No max_results: the shipped default is the behaviour under test.
+	args, _ := json.Marshal(map[string]any{
+		"files": []string{filepath.Join(ws, "internal/target/target.go")},
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var missing []string
+	for i := range importerPkgs {
+		if dir := fmt.Sprintf("internal/imp%02d", i); !strings.Contains(out, dir) {
+			missing = append(missing, dir)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("%d of %d importer packages went unreported (%s); a wide fan-out must "+
+			"not starve later importers of the traversal budget:\n%s",
+			len(missing), importerPkgs, strings.Join(missing, ", "), out)
+	}
+
+	// A complete answer must not claim a cut. The banner is the loudest line on
+	// the response, and pointing a reader at max_results when nothing was cut is
+	// its own defect.
+	if strings.Contains(out, "TRUNCATED") || strings.Contains(out, "[truncated:") {
+		t.Errorf("a complete answer must not carry a truncation banner:\n%s", out)
 	}
 }

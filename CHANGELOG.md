@@ -141,6 +141,30 @@
   orientation noise. Guarded by `TestReadMultipleFiles_StrictMode_BatchReadThenEditSucceeds`
   and `TestReadMultipleFiles_EditLaneHint_ConsolidatedOnce`
   (`internal/tools/read_multiple_files_test.go`).
+- **`topology_affected` emitted `go test` commands for every language, and
+  paths its own `run_task` could not use (PLAN-378).** `goTestTarget`
+  hardcoded `go test ./<dir>/...` with no language check anywhere in the file,
+  while the topology index covers Python, TypeScript, Rust, Java and Swift. A
+  Python user changing `src/api/handlers.py` was told to run
+  `go test ./src/api/...`. The tool now derives the target from the workspace's
+  primary language, and only where that language's runner takes a POSITIONAL
+  PATH — the same rule the shipped `[tasks.<lang>]` defaults already state, so
+  the two cannot drift: `go` and `python` scope by path; `cargo test <filter>`
+  matches test NAMES, and typescript/swift/zig scope through project-specific
+  flags, so those get their directories named and no command guessed. A wrong
+  command is worse than none.
+
+  The second half was broken even for Go, in this very repository. The tool
+  emitted workspace-relative paths (`./plumb/internal/config/...`) while
+  `[tasks.go]` sets `working_dir = "plumb"`, so the `plumb-testing` skill's
+  prescribed handoff — feed the path to `run_task` — ran from `plumb/` against
+  a directory that does not exist there. Targets are now expressed relative to
+  `[tasks.<lang>].working_dir`, and a package outside it is named and marked
+  rather than rewritten into the wrong tree. Whether the command accepts a
+  target at all is answered by asking `buildTaskSteps`, the same function
+  `run_task` uses, rather than by re-deriving the condition — the lesson
+  `configuredSlots` already records. Covered end to end: the emitted string is
+  fed back through `run_task`'s own argv builder.
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
@@ -196,6 +220,27 @@
   listen error, since that one goes to `daemon.log` and then the daemon exits,
   so through an MCP client it is never seen. The portable ceiling is 103 usable
   bytes, not 104: `sun_path` is 104 bytes on macOS/BSD *including* the NUL.
+
+### Testing
+
+- **The `max_results`-as-node-budget regression finally has a synthetic test
+  (PLAN-384).** `7568173c` fixed a real recall failure — a widely-imported
+  package reported FEWER dependents the wider its fan-out, measured at 2 of 9
+  packages for `internal/config/config.go` — but shipped verified only against
+  the live index, because cross-file import edges would not materialise in a
+  `t.TempDir()` fixture. Two causes, both now established and both encoded in
+  the fixture: `linkImports` runs at the END of an index pass, so polling for
+  node visibility is not a barrier for EDGES (the earlier attempt's mistake);
+  and `matchImportDir` refuses a suffix shorter than two segments, so a fixture
+  whose packages sit one directory deep gets no import edges at all and every
+  assertion passes vacuously. The test also keeps inward NODES above
+  `max_results` while holding PACKAGES below it, because `fromColocation`
+  legitimately caps packages at the same number — raising both together
+  truncates under the fix too, and so passes against the bug. Confirmed red
+  against the restored pre-fix behaviour: 7 of 20 importers dropped, plus a
+  false truncation banner. A fixture-size guard now fails loudly rather than
+  silently stopping detecting the regression, which is how the previous two
+  tests in this area went blind.
 
 ### Changed
 

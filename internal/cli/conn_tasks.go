@@ -87,6 +87,44 @@ func (s *connSession) taskState() tools.TaskState {
 	return st
 }
 
+// targetAcceptanceProbe is a syntactically valid target used only to ask whether
+// the test command has a slot for one. It is never run.
+const targetAcceptanceProbe = "./..."
+
+// testScope reports how this session's workspace runs a SCOPED test command, so
+// topology_affected can emit a target run_task will accept instead of assuming
+// `go test`. A session with no language attached yields the zero value, which
+// the tool renders as bare directories and no command.
+func (s *connSession) testScope() tools.TestScope {
+	v := s.view()
+	lang := v.acquiredLanguage
+	if lang == "" || lang == LanguageNone {
+		return tools.TestScope{}
+	}
+	tc := v.tasks[lang]
+	return tools.TestScope{
+		Language:    lang,
+		WorkingDir:  tc.WorkingDir,
+		ScopedTests: testSlotTakesTarget(tc),
+	}
+}
+
+// testSlotTakesTarget reports whether the test command accepts a positional
+// target.
+//
+// It answers by asking buildTaskSteps — the same function run_task uses — with a
+// probe target, rather than re-deriving the condition by scanning argv for a
+// placeholder. configuredSlots below records what happens otherwise: two
+// hand-written predicates disagreed with buildTaskSteps in opposite directions.
+// The stakes are higher here, because what this gates is a string the caller
+// pastes straight into run_task — a false positive produces "a target was given
+// but the command has no {target} placeholder" from a tool that just told them
+// to pass it.
+func testSlotTakesTarget(tc config.TasksConfig) bool {
+	_, err := buildTaskSteps(tc, "test", targetAcceptanceProbe)
+	return err == nil
+}
+
 // configuredSlots lists the task slots that actually have a command, in a fixed
 // order.
 //
