@@ -586,7 +586,8 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 			path := filepath.Join(t.TempDir(), filepath.Base(mustPath(t, tc.client.pathFn)))
 			target := shippedTarget(t, tc.use)
 			target.pathFn = func() (string, error) { return path, nil }
-			target.skillsDirFn = nil // the skills hint is a separate concern
+			target.skillsDirFn = nil    // the skills hint is a separate concern
+			target.instructionsFn = nil // the instructions block is a separate concern; it defaults to os.Getwd()/os.UserHomeDir(), which under `go test` resolve inside the checkout
 
 			*tc.flag = true
 			if out := captureStdout(t, func() {
@@ -623,6 +624,7 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 		target := shippedTarget(t, "codex")
 		target.pathFn = func() (string, error) { return path, nil }
 		target.skillsDirFn = nil
+		target.instructionsFn = nil // same reason as above: it must not write into the checkout
 		setupCodexLeanFlag = false
 
 		first := captureStdout(t, func() {
