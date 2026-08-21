@@ -73,10 +73,21 @@ func TestToolWiringParity(t *testing.T) {
 		}
 		found[name] = true
 		tracker, readsFor, writes, client := rt.ReadDeps()
-		if !tracker && !readsFor {
-			t.Errorf("tool %q: neither tracker nor readsFor is wired at registration — "+
-				"ReadTracker.Record never runs for a read via this tool, so [edits] strict "+
-				"mode's edit_file gate rejects every edit that follows (the PLAN-357 defect)", name)
+		// Both legs are required, not either/or: tracker alone still records
+		// reads at the session level, so dropping readsFor and leaving tracker
+		// wired does NOT break strict mode — it silently reverts PLAN-286
+		// per-agent read tracking to session-wide tracking instead, which is
+		// its own regression and must fail here on its own axis.
+		if !tracker {
+			t.Errorf("tool %q: tracker (constructor-supplied ReadTracker) not wired at "+
+				"registration — ReadTracker.Record never runs for a read via this tool, so "+
+				"[edits] strict mode's edit_file gate rejects every edit that follows "+
+				"(the PLAN-357 defect)", name)
+		}
+		if !readsFor {
+			t.Errorf("tool %q: readsFor (PLAN-286 per-agent resolver) not wired at "+
+				"registration — reads silently fall back to session-wide tracking instead of "+
+				"per-agent tracking on a shared connection", name)
 		}
 		if !writes {
 			t.Errorf("tool %q: WriteTracker (writes) not wired at registration — the "+
@@ -102,15 +113,41 @@ func TestToolWiringParity(t *testing.T) {
 	}
 }
 
+// pinnedHiddenUnderLean is the deliberate PLAN-355 divergence: these pinned
+// tools are NOT members of tools.LeanTools ∨ tools.BootstrapTools, so under
+// the lean profile toolVisible legitimately hides them from tools/list (they
+// stay callable by name — hidden ≠ unregistered). tools.PinnedTools is
+// deliberately defined independently of LeanTools (see its doc comment), so
+// this is not drift to fix, it is the known, accepted shape of that
+// divergence today. A NEW pinned tool that is lean-hidden and NOT named here
+// is the bug TestPinMembership's second leg exists to catch — either add it
+// to LeanTools/BootstrapTools, or extend this list as a deliberate,
+// reviewed exception.
+var pinnedHiddenUnderLean = map[string]bool{
+	"search_in_files":  true,
+	"workspace_search": true,
+	"leave_note":       true,
+	"check_messages":   true,
+}
+
 // TestPinMembership guards pin/profile drift (PLAN-361, after PLAN-355): every
 // tool name tools.IsPinned reports true for must (1) actually exist in the
 // REAL registered tool set (registerAllTools) — catching a rename/typo that
-// silently orphans a pin entry in tools.PinnedTools — and (2) be visible
-// under the profile actually served to an ordinary connection (toolVisible).
-// The second leg matters because handleToolsList filters a tool out BEFORE
-// consulting mcp.Server.AlwaysLoad (internal/mcp/server_handlers.go): a
-// pinned tool hidden by the served profile never gets its
-// _meta[AlwaysLoad]=true annotation at all, silently making the pin a no-op.
+// silently orphans a pin entry in tools.PinnedTools — and (2) have a KNOWN
+// lean-profile visibility outcome: either lean-visible, or named in the
+// deliberate pinnedHiddenUnderLean exception list.
+//
+// Leg 2 is asserted under the LEAN profile, not the default one a bare
+// connSession resolves to. Under "full" toolVisible is unconditionally true
+// for every registered name, so checking it there is unfalsifiable — it can
+// never fail no matter how badly a pin/visibility wiring regresses. Lean is
+// the one profile where hiding is actually possible, which is exactly the
+// scenario this test exists to guard: handleToolsList filters a tool out
+// BEFORE consulting mcp.Server.AlwaysLoad (internal/mcp/server_handlers.go),
+// so a pinned tool hidden under lean never gets its _meta[AlwaysLoad]=true
+// annotation at all, silently making the pin a no-op for any client resolved
+// to lean (a per-client [tools.client_profiles] override, not merely the
+// auto-mode default).
 func TestPinMembership(t *testing.T) {
 	s, srv := buildTestConnSession(t)
 
@@ -127,12 +164,26 @@ func TestPinMembership(t *testing.T) {
 		if !registered[name] {
 			t.Errorf("pinned tool %q is not in the registered tool set (registerAllTools) — "+
 				"a rename or typo silently orphaned this pin entry", name)
-			continue
 		}
-		if !s.toolVisible(name) {
-			t.Errorf("pinned tool %q is hidden by the served profile (toolVisible) — "+
-				"handleToolsList filters before consulting AlwaysLoad, so a hidden pinned tool "+
-				"never gets its pin annotation and the pin is a silent no-op", name)
+	}
+
+	// Force the profile a bare connSession would never otherwise resolve to
+	// (autoProfile("") is "full", unknown-deferred-discovery) — toolVisible
+	// reads it live off the session view, so no re-registration is needed.
+	s.mutate(func(v *sessionView) { v.tools.Profile = "lean" })
+
+	for name := range tools.PinnedTools {
+		visible := s.toolVisible(name)
+		accepted := pinnedHiddenUnderLean[name]
+		switch {
+		case !visible && !accepted:
+			t.Errorf("pinned tool %q is hidden under the lean profile and not in "+
+				"pinnedHiddenUnderLean — a new pinned tool must either be added to "+
+				"tools.LeanTools/tools.BootstrapTools, or acknowledged here as a deliberate "+
+				"PLAN-355 exception; as-is its pin silently no-ops for any lean-resolved client", name)
+		case visible && accepted:
+			t.Errorf("pinned tool %q is listed in pinnedHiddenUnderLean but is actually "+
+				"visible under the lean profile — the exception list is stale; remove it", name)
 		}
 	}
 }
