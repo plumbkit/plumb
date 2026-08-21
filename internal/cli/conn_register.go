@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -240,6 +241,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessionID).
+		WithSurcharge(func() (int, int) {
+			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
+			return r.Tokens, r.ToolCount
+		}).
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes

@@ -8,12 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/fsguard"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/memory"
-	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool) {
@@ -474,31 +472,6 @@ func recentFirstMemories(mems []memory.Memory, recent []string) []memory.Memory 
 		}
 	}
 	return append(hot, rest...)
-}
-
-func writeSessionStats(sb *strings.Builder, ws string) {
-	db, err := stats.SharedReadOnly()
-	if err != nil || db == nil {
-		return
-	}
-	toolStats, err := db.Summary(stats.Filter{Workspace: ws})
-	if err != nil || len(toolStats) == 0 {
-		return
-	}
-	sb.WriteString("## Most-used tools (this workspace)\n\n")
-	limit := min(len(toolStats), 5)
-	for _, s := range toolStats[:limit] {
-		fmt.Fprintf(sb, "- %s: %d calls, avg %dms, p95 %dms\n", s.Tool, s.Calls, int64(s.AvgMs), s.P95Ms)
-	}
-	// Two honest axes instead of one "tokens saved" label: capability (work the
-	// client could not do natively) and efficiency (fewer tokens for the same
-	// result). Legacy rows carry neither and are simply absent here.
-	axes := db.SavingsAxes(stats.Filter{Workspace: ws})
-	if axes.Total() > 0 {
-		fmt.Fprintf(sb, "\n~%s capability + ~%s efficiency tokens (estimated, model v%d)\n",
-			stats.FormatSavings(int(axes.Capability)), stats.FormatSavings(int(axes.Efficiency)), clientcaps.ModelVersion)
-	}
-	sb.WriteString("\n")
 }
 
 func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {

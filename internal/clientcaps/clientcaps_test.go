@@ -114,13 +114,16 @@ func TestScoreCapabilityGatedRead(t *testing.T) {
 }
 
 func TestScoreRangedReadEfficiencyForCapableClient(t *testing.T) {
-	// Capable client, ranged read of a 3500-byte file returning 350 bytes of code
-	// (claude ratio 3.5): baseline 1000 tokens − returned 100 = 900 efficiency.
+	// v4: a capable client's PLAIN ranged read of read_file scores zero — its
+	// own native ranged Read reproduces the same byte-range saving, so crediting
+	// the delta would be scoring the agent's restraint, not plumb's
+	// contribution. See TestScoreModelV4NamedReadKeepsCreditForCapableClient for
+	// the name-addressed counterpart (read_symbol), which still earns it.
 	got := Score("read_file", "claude-code", 350, 3500, 0, true)
-	if got.Efficiency != 900 || got.Capability != 0 {
-		t.Errorf("ranged read = %+v, want efficiency=900", got)
+	if got.Total() != 0 {
+		t.Errorf("capable client ranged read_file = %+v, want zero (v4: native-reproducible)", got)
 	}
-	// A thin client is credited the delivered context regardless of baseline.
+	// A thin client is still credited the delivered context regardless of baseline.
 	thin := Score("read_file", "claude-desktop", 350, 3500, 0, true)
 	if thin.Capability != 100 || thin.Efficiency != 0 {
 		t.Errorf("thin ranged read = %+v, want capability=100", thin)

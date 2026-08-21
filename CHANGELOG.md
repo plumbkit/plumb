@@ -246,6 +246,62 @@
 - **`edit_file` rejections now carry enough information for a one-call retry (worth-it W1-4).** Three targeted improvements, all suggestion-only — nothing is ever auto-applied, and the exactly-once `old_string` contract is unchanged. **(1) Multi-line `old_string` not found:** when `old_string` is 3+ lines, the rejection now runs a bounded fuzzy locate (whitespace-normalised line-window scoring, capped candidate scan — never O(n²) over a large file) and, when a sufficiently similar region exists, names the exact `lines N–M` and similarity plus a ready-to-use RANGE-mode suggestion: `{"start_line": N, "end_line": M, "new_string": ...}` — no old_string re-escaping needed. When nothing is similar enough it falls back to a generic RANGE-mode pointer instead of computed numbers. **(2) `expected_mtime`/`expected_sha` mismatch ("modified since you read it"):** the rejection now always inlines the CURRENT mtime **and** sha256, regardless of which guard was supplied, so a caller that only sent `expected_mtime` no longer needs a follow-up `read_file` just to learn the current hash; the existing `reconcile: true` escape hatch for an all-anchor-based batch is unchanged. **(3) Schema-shape rejections:** an unknown parameter that IS declared, just nested at the wrong level (e.g. `replace_all` sent at the top level instead of inside each `edits[]` item), now names the correct placement with a minimal valid JSON example instead of a bare "unknown parameter". An exact nested-name match outranks a fuzzy top-level "did you mean" suggestion, and the generated example pairs `old_string`+`new_string` whenever the child schema declares both, not just its `required` fields — otherwise the example for `replace_all` would itself be a shape `edit_file` rejects. New: `unknownDetail`/`placementHint`/`minimalNestedExample`/`nestedExampleFields` (`internal/mcp/argplacement.go`), `currentShaLine` (`internal/tools/write_guards.go`), `rangeModeHint`/`genericRangeModeHint` (`internal/tools/edit_file_closest.go`). Guarded by `TestEditFileRejection` (`internal/tools/edit_file_rejection_test.go`), new `TestResolveArgs` cases (ordering + valid-example round-trip), and `TestToolsCall_RealSchema_PlacementHintExampleRoundTrips` (`internal/mcp/argalias_realschema_test.go`), which replays the emitted example's own field list back through the real `edit_file` tool.
 ### Changed
 
+- **Honest math + docs repositioning — correctness-first, net-of-surcharge (PLAN-367, worth-it W2-13).**
+  Today's savings model measured mostly the agent's own restraint: `read_file`'s
+  ranged-read arithmetic credited a capable client (native `Read`) for a saving
+  its own tool could reproduce unassisted, and the per-request tool-schema
+  surcharge was never netted against it. Fixed on both sides.
+  **(1) Savings model v3 → v4** (`internal/clientcaps/score.go`): a plain
+  ranged read (`read_file`, `find_files`) now scores ZERO efficiency for a
+  client with native file read — that saving is reproducible with the
+  client's own tools. Credit stays where the mechanism is plumb-only:
+  `read_symbol`'s name-addressed access (new `catReadNamed`) and every
+  `catSemantic` tool (reconstruction-cost model, unaffected). Historical rows
+  keep the version they were scored under; nothing is rescored.
+  **(2) A real profile-surcharge estimate** (`clientcaps.ProfileSurcharge`,
+  `mcp.Server.ToolSchemaBytes`): the per-request token cost of the tool
+  schemas actually advertised to a client, computed from the live registry —
+  reported as a rate, never multiplied into a fake aggregate.
+  **(3) A real prevented-incidents count** (`stats.DB.PreventedIncidents`):
+  the count of write-guard refusals (`unread_or_stale`, `dirty_file`,
+  `concurrent_ref_move`) — a direct count of refusals the daemon actually
+  issued, not an estimate.
+  **(4) The banner** (`session_start`, `plumb stats`) now shows three honest
+  lines — profile surcharge, netted read savings (current model version
+  only, labelled "since v4"), and prevented incidents — replacing the single
+  "tokens saved" headline. `stats.Filter.SavingsModelVersion` prevents
+  silently summing rows scored under different models. TUI and web dashboard
+  keep the pre-existing combined total for now (unchanged in this PR — do not
+  chase TUI coverage).
+  **(5) docs/use-cases.md** reordered: correctness/coordination scenarios
+  (working-checkout scoping, semantic references, safe rename, test
+  selection, latency) lead; the two real token wins (`read_symbol`,
+  `file_outline`) and their cross-language repeat follow; the search wash and
+  the `read_multiple_files` loss close it out. Scenario numbers renumbered to
+  match physical order; every cross-reference updated. Framing paragraph
+  rewritten to the three-pillar thesis (correctness, coordination, token
+  economics — in that order).
+  **(6) Corrections:** `docs/token-efficiency.md`'s `session_start` row
+  corrected from a stale "~1-2 KB" to the measured reality (full ~7.5 KB,
+  `detail: "brief"` ≤1.5 KB, per CHANGELOG's own brief-mode entry).
+  `docs/topology.md`'s `topology_affected` description was checked against
+  the current package-aggregated contract and found already accurate — no
+  drift remained to fix there.
+  **(7) The public site** (`site/index.html`) no longer leads with "token
+  efficiency": the nav label and the read-footprint section's kicker are
+  reframed ("Measured" / "Read footprint · measured on plumb itself"), and
+  the TUI blurb + feature chips move the token-savings mention out of the
+  headline position. The correctness/coordination sections (`#collision`,
+  `#coordination`, `#guardrails`) already led the page physically; unchanged.
+  **(8) `read_multiple_files` exposure decision, recorded** (`internal/tools/profile.go`
+  `PinnedTools` doc comment): it stays out of both `LeanTools` and
+  `PinnedTools`. It is a real turns win but a measured byte loss (76 B over
+  three individual `read_file` calls — `docs/use-cases.md` Scenario 10, after
+  PLAN-357's re-measurement); the standing rule is not to pin a tool while its
+  published number is a loss.
+  **Wording sign-off pending** on the public-facing docs and site copy — see
+  the PR description.
+
 - **All nine LSP adapters are now validated on Linux as well as macOS (#9).**
   `kotlin-lsp` was the last one outstanding; it passes all three of its
   integration tests on Linux/x86_64 against a resolvable Gradle project
