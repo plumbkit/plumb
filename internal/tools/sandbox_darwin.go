@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // sandbox_darwin.go confines a command with macOS Seatbelt via sandbox-exec.
@@ -88,18 +90,15 @@ func seatbeltParam(p string) string {
 
 func tempDir() string { return os.TempDir() }
 
-// plumbRuntimeDir is <UserCacheDir>/plumb, where the daemon keeps plumb.sock,
-// plumb.pid, and its locks. It is denied writes even though it sits inside the
-// (writable) cache dir.
-func plumbRuntimeDir() string {
-	if d, err := os.UserCacheDir(); err == nil && d != "" {
-		return filepath.Join(d, "plumb")
-	}
-	// A non-matching sentinel (nothing lives under a device file), so the deny is
-	// a no-op rather than accidentally denying /dev/null. Only hit if UserCacheDir
-	// fails, which is very rare.
-	return "/dev/null/plumb"
-}
+// plumbRuntimeDir is where the daemon keeps plumb.sock, plumb.pid, and its
+// locks. It is denied writes even though it sits inside the (writable) cache
+// dir.
+//
+// It resolves through internal/paths rather than rebuilding the rule, so the
+// deny always names the directory the daemon actually uses. On macOS that is
+// still <UserCacheDir>/plumb — paths.RuntimeDir only prefers $XDG_RUNTIME_DIR
+// on Linux/BSD — so this is a refactor here, not a behaviour change.
+func plumbRuntimeDir() string { return paths.RuntimeDir() }
 
 func cachesDir() string {
 	if d, err := os.UserCacheDir(); err == nil && d != "" {

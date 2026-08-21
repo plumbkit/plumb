@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var (
@@ -210,6 +212,8 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 		return conn, nil
 	}
 
+	warnIfLegacyDaemonRunning()
+
 	slog.Info("serve: daemon not running — starting", "socket", socketPath)
 	if err := startDaemonProcess(); err != nil {
 		return nil, fmt.Errorf("starting daemon: %w", err)
@@ -246,6 +250,33 @@ func warnIfDaemonStale() {
 	fmt.Fprintf(os.Stderr,
 		"plumb: warning: connected daemon is %s but this binary is %s — run `plumb stop` to refresh.\n",
 		running, Version)
+}
+
+// warnIfLegacyDaemonRunning reports a daemon still listening at the pre-0.17.2
+// runtime location, which on Linux is where every daemon lived before the move
+// to $XDG_RUNTIME_DIR.
+//
+// It runs on the spawn path only, which is exactly the moment it matters: we
+// are about to start a SECOND daemon while the first is alive and holding its
+// language servers. Nothing is stopped automatically — that daemon may be
+// serving other live sessions, and killing someone else's server mid-session to
+// tidy a path is a worse outcome than the warning. `plumb stop` retires it,
+// finding it by process name regardless of which socket it opened.
+func warnIfLegacyDaemonRunning() {
+	legacy := paths.LegacyRuntimeDir()
+	if legacy == "" {
+		return // the runtime dir did not move on this platform
+	}
+	sock := filepath.Join(legacy, "plumb.sock")
+	conn, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		return
+	}
+	_ = conn.Close()
+	fmt.Fprintf(os.Stderr,
+		"plumb: warning: a daemon from an older version is still running at %s.\n"+
+			"plumb: the runtime directory moved to %s; run `plumb stop` once to retire the old one.\n",
+		sock, paths.RuntimeDir())
 }
 
 // proxyStdio copies stdin → conn and conn → stdout until ctx is cancelled or

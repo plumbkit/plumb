@@ -34,18 +34,16 @@ func daemonVersionPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.version")
 }
 
-// plumbRuntimeDir returns the directory used for daemon runtime files
-// (socket, PID). It uses os.UserCacheDir so the path is stable and consistent
-// regardless of how the process was launched — critical on macOS where
-// os.TempDir() follows $TMPDIR, which differs between GUI apps and terminals.
+// plumbRuntimeDir returns the directory used for daemon runtime files (sockets,
+// pid, version, locks). The resolution itself lives in internal/paths, which is
+// also what the TUI and the two command sandboxes consult — four copies of this
+// rule used to exist, and a sandbox whose copy disagreed would stop protecting
+// the socket it was written to protect.
+// It creates the directory as a side effect, which paths.RuntimeDir
+// deliberately does not: the socket bind and the flocks both need it present,
+// and every caller here is on that path.
 func plumbRuntimeDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		// os.UserCacheDir only fails if $HOME is unset; fall back to os.TempDir
-		// which is the best we can do in that degenerate case.
-		base = os.TempDir()
-	}
-	dir := filepath.Join(base, "plumb")
+	dir := paths.RuntimeDir()
 	_ = os.MkdirAll(dir, 0o700)
 	return dir
 }

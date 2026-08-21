@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -236,11 +237,10 @@ func contractPathCompact(p string, maxW int) string {
 }
 
 func daemonRunning() bool {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	_, err = os.Stat(filepath.Join(base, "plumb", "plumb.sock"))
+	// paths.RuntimeDir, not a local copy of the rule: this used to rebuild
+	// os.UserCacheDir()/plumb itself, so once the daemon moved to
+	// $XDG_RUNTIME_DIR the TUI would have reported a live daemon as down.
+	_, err := os.Stat(filepath.Join(paths.RuntimeDir(), "plumb.sock"))
 	return err == nil
 }
 

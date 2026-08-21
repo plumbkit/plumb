@@ -13,14 +13,18 @@ import (
 	"time"
 )
 
-// withTempRuntime redirects plumbRuntimeDir() at the os.UserCacheDir level so
-// the lock files land in a t.TempDir() and don't collide with the user's real
-// runtime dir or with other tests running in parallel.
+// withTempRuntime redirects plumbRuntimeDir() so the lock files land in a
+// t.TempDir() and don't collide with the user's real runtime dir or with other
+// tests running in parallel.
 func withTempRuntime(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	// plumbRuntimeDir uses os.UserCacheDir which honours XDG_CACHE_HOME on Linux
-	// and HOME on macOS. Setting HOME is the portable way to redirect it.
+	// XDG_RUNTIME_DIR is cleared first and deliberately: it now takes priority
+	// over the cache dir, so on a real Linux desktop the developer's own
+	// /run/user/$UID would win and these tests would write their locks into it.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	// The fallback is os.UserCacheDir, which honours XDG_CACHE_HOME on Linux and
+	// HOME on macOS. Setting both is the portable way to redirect it.
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 }
@@ -184,6 +188,9 @@ func TestLockPaths_RespectUserCacheDir(t *testing.T) {
 	want := filepath.Join(cache, "plumb")
 	if got != want {
 		t.Fatalf("plumbRuntimeDir = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("plumbRuntimeDir must create the directory the locks live in: %v", err)
 	}
 	if filepath.Dir(spawnLockPath()) != got {
 		t.Fatalf("spawnLockPath not under runtime dir: %s", spawnLockPath())
