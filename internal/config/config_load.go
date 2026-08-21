@@ -356,6 +356,9 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 	if !st.InEffect() {
 		forceCapabilityFieldsToBase(base, &merged)
 	}
+	// After the project layer has had its say, so a command the project set is
+	// never rewritten — only a slot still holding the shipped npm default is.
+	merged.Tasks = applyJSPackageManagerDefaults(cloneTasks(merged.Tasks), workspace)
 	merged.LSP = dropUnknownLSPLanguages(base.LSP, merged.LSP)
 	forceGlobalOnlyToBase(base, &merged)
 	applyOneWayBools(base, &merged)

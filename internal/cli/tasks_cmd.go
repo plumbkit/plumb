@@ -20,7 +20,7 @@ import (
 )
 
 var taskCmds = func() []*cobra.Command {
-	out := make([]*cobra.Command, 0, len(config.TaskSlots))
+	out := make([]*cobra.Command, 0, len(config.TaskSlots)+1)
 	for _, slot := range config.TaskSlots {
 		out = append(out, &cobra.Command{
 			Use:   slot + " [target]",
@@ -29,8 +29,78 @@ var taskCmds = func() []*cobra.Command {
 			RunE:  func(_ *cobra.Command, args []string) error { return runTaskCLI(slot, args) },
 		})
 	}
-	return out
+	return append(out, taskSlotCmd())
 }()
+
+// taskSlotCmd is the CLI path to a slot the PROJECT named, which the five fixed
+// verbs above cannot reach.
+//
+// Those are registered at package init, from the built-in list, long before any
+// workspace is resolved — so a project-defined slot cannot get a verb of its own
+// without resolving the workspace during command registration. One generic verb
+// avoids that entirely: `plumb task check` runs what `run_task {slot: "check"}`
+// runs, through the same resolver and the same trust gate. It also works for the
+// built-ins, so there is one spelling that always works.
+func taskSlotCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "task [slot] [target]",
+		Short: "Run a task slot by name, including a slot this project defined",
+		Long: "Run a stored [tasks.<lang>] command by slot name.\n\n" +
+			"The five built-in slots have verbs of their own (plumb build, plumb test, …); this is how a\n" +
+			"slot the project defined is run, since those verbs are fixed at build time. Run it with no\n" +
+			"arguments to list the slots configured for this workspace.",
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return listTaskSlots(cmd)
+			}
+			if !config.ValidTaskSlotName(args[0]) {
+				return fmt.Errorf("%q is not a valid slot name "+
+					"(lowercase letter first, then letters, digits, _ or -, max 32 characters)", args[0])
+			}
+			return runTaskCLI(args[0], args[1:])
+		},
+	}
+}
+
+// listTaskSlots reports the slots that actually have a command here, so a bare
+// `plumb task` teaches the workspace's vocabulary rather than printing usage.
+func listTaskSlots(cmd *cobra.Command) error {
+	root, lang, cfg, err := resolveTaskWorkspace("")
+	if err != nil {
+		return err
+	}
+	if lang == "" || lang == "none" {
+		return fmt.Errorf("no language detected for %s; configure [tasks.<lang>] in your config", root)
+	}
+	projectCfg, err := config.LoadProject(cfg, root)
+	if err != nil {
+		return err
+	}
+	tc := projectCfg.Tasks[lang]
+	slots := config.ConfiguredSlotNames(tc)
+	have := make([]string, 0, len(slots))
+	for _, slot := range slots {
+		if steps, err := buildTaskSteps(tc, slot, ""); err == nil && len(steps) > 0 {
+			have = append(have, slot)
+		}
+	}
+	if len(have) == 0 {
+		return fmt.Errorf("no task commands configured for %s in %s; set them under [tasks.%s]", lang, root, lang)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "task slots for %s in %s:\n", lang, root)
+	for _, slot := range have {
+		// verify is a composite the runner synthesises, so Get returns "" for it —
+		// printing that leaves a slot looking unconfigured in the very listing
+		// that exists to say it is runnable.
+		shown := tc.Get(slot)
+		if slot == "verify" {
+			shown = "(composite: build, then test)"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "  %-12s %s\n", slot, shown)
+	}
+	return nil
+}
 
 // resolveTaskWorkspace resolves the workspace root and its primary language for
 // a CLI task command.
@@ -68,7 +138,9 @@ func runTaskCLI(slot string, args []string) error {
 		return err
 	}
 	if len(steps) == 0 {
-		return fmt.Errorf("no %s command configured for %s", slot, lang)
+		return fmt.Errorf("no %s command configured for %s (configured slots: %s); "+
+			"set one under [tasks.%s] in .plumb/config.toml",
+			slot, lang, strings.Join(configuredSlots(projectCfg.Tasks[lang]), ", "), lang)
 	}
 	if _, fromProject := taskProvenance(root, lang, slot); fromProject {
 		cmds, cerr := config.ProjectTaskCommands(root)
