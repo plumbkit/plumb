@@ -22,12 +22,24 @@ func checkDaemon() []checkResult {
 	socketPath := daemonSocketPath()
 	conn, err := net.DialTimeout("unix", socketPath, time.Second)
 	if err != nil {
-		return []checkResult{{
+		result := checkResult{
 			name:   "socket",
 			ok:     false,
 			detail: "cannot dial " + render.ContractPath(socketPath),
 			fix:    "run `plumb serve` or let an MCP client start it automatically",
-		}}
+		}
+		// Naming the other directory is the difference between "plumb is
+		// broken" and "plumb is looking somewhere else": after an upgrade, or
+		// under cron/docker/ssh where $XDG_RUNTIME_DIR is unset, the daemon
+		// serving the user is alive one directory over. Every other path this
+		// command reads — version file, control socket, pid — comes from the
+		// same directory as the socket, so doctor deliberately does NOT dial
+		// the other one and report a mix of the two.
+		if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) {
+			result.detail += " — but a daemon is running at " + render.ContractPath(legacy)
+			result.fix = "run `plumb stop`, then reconnect; the daemon restarts under " + render.ContractPath(paths.RuntimeDir())
+		}
+		return []checkResult{result}
 	}
 	conn.Close()
 

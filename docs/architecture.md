@@ -201,11 +201,14 @@ flowchart TD
 
 Key design properties:
 
-- **Single source of truth for runtime files** — socket and PID file live under
-  `os.UserCacheDir()/plumb/` so paths stay stable across GUI-app and terminal
-  launches (macOS `$TMPDIR` is unreliable across these). The daemon log is the
-  one exception: it lives in the OS log dir (`~/Library/Logs/plumb/` on macOS),
-  not the cache dir.
+- **Single source of truth for runtime files** — socket, PID and locks live
+  under `paths.RuntimeDir()`: `$XDG_RUNTIME_DIR/plumb` on Linux/BSD when that is
+  usable, else `os.UserCacheDir()/plumb`, which keeps paths stable across
+  GUI-app and terminal launches (macOS `$TMPDIR` is unreliable across these).
+  "Single source" is literal — one function, consulted by the CLI, the TUI and
+  both command sandboxes. The daemon log is the one exception: it lives in the
+  OS log dir (`~/Library/Logs/plumb/` on macOS), not the runtime dir. See
+  *Persistence layout* for the `$XDG_RUNTIME_DIR` validity checks.
 - **Singleton enforced by `flock(2)`** — two advisory locks (`plumb.spawn.lock`
   held briefly by `plumb serve` around its dial-or-spawn block, and
   `plumb.daemon.lock` held by `plumb daemon` for its lifetime) guarantee at
@@ -309,21 +312,57 @@ Rung 1 outranks client roots because it is the workspace the caller chose, not w
 | `~/.config/plumb/config.toml` | user | LSP commands, cache TTL, log level |
 | `~/.local/share/plumb/sessions/<id>.json` | daemon | Active session metadata (one file per MCP connection) |
 | `~/.local/share/plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Global tool call statistics, SQLite WAL, row-scoped by workspace and session |
-| `~/Library/Caches/plumb/plumb.sock` | daemon | Unix socket for MCP proxy connections |
-| `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
-| `~/Library/Caches/plumb/plumb.version` | daemon | Build version; `plumb serve` warns on mismatch |
-| `~/Library/Caches/plumb/plumb.ctrl.sock` | daemon | Admin socket; line-based commands such as `set-level <level>` from `plumb log-level` and `web-start` from `plumb web` |
-| `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
-| `~/Library/Caches/plumb/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
+| `<runtime>/plumb.sock` | daemon | Unix socket for MCP proxy connections |
+| `<runtime>/plumb.pid` | daemon | PID for `plumb stop` lookup |
+| `<runtime>/plumb.version` | daemon | Build version; `plumb serve` warns on mismatch |
+| `<runtime>/plumb.ctrl.sock` | daemon | Admin socket; line-based commands such as `set-level <level>` from `plumb log-level` and `web-start` from `plumb web` |
+| `<runtime>/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
+| `<runtime>/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
 | `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
 | `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic code index (rebuildable) |
 | `<workspace>/.plumb/memory.db` | daemon (when `[memory] enabled`) | Per-workspace SQLite/FTS5 index over `.plumb/memories/*.md` (rebuildable) |
 
+`<runtime>` is `paths.RuntimeDir()`: `$XDG_RUNTIME_DIR/plumb` on Linux/BSD when
+that variable is usable, otherwise `os.UserCacheDir()/plumb`
+(`~/Library/Caches/plumb` on macOS, `~/.cache/plumb` on Linux). It is one
+function, and the CLI, the TUI's daemon-liveness check and both command
+sandboxes all resolve through it — a sandbox that disagreed would go on
+protecting an empty directory.
+
+`$XDG_RUNTIME_DIR` is preferred because that is what the spec designates for
+sockets: a per-user tmpfs, mode 0700, owned and cleaned up by the login session.
+plumb applies the checks the spec puts on the consumer — absolute, exists, is a
+directory, mode 0700, owned by the caller — and falls back rather than trusting
+the variable, since a world-readable runtime dir would expose the daemon socket.
+The fallback is the cache dir and deliberately **not** `os.TempDir()`: on macOS
+`$TMPDIR` differs between a GUI-app launch and a terminal launch, so the socket
+would move depending on how the client started plumb. (`os.TempDir()` is the
+last resort behind that, reached only when `os.UserCacheDir()` itself fails —
+which means `$HOME` is unset.)
+
+The runtime directory determines the socket, the control socket, the pid and
+the version file **as a set**: every command resolves all of them from the one
+directory it computed. That is a deliberate constraint. Connecting to one
+directory's socket while reading another's files was tried and reverted — it
+left `plumb web` and `plumb log-level` dialling a control socket that was not
+there, doctor calling a version file missing when it existed one directory
+over, and `plumb restart` spawning a duplicate.
+
+The consequence is that the runtime directory identifies the daemon instance,
+and `$XDG_RUNTIME_DIR` is absent under cron, systemd system units,
+`docker exec` and ssh without `pam_systemd`. A plumb launched from one of those
+contexts therefore uses the cache dir and will start its own daemon rather than
+reusing a desktop session's. `plumb serve` warns before doing so and
+`plumb doctor` names the other directory rather than only reporting "cannot
+dial"; `plumb stop` consolidates, since it finds daemons by process name
+regardless of which socket they opened. This is the same property the flock
+singleton has always had — `plumb.daemon.lock` lives *in* the runtime dir, so it
+has only ever guaranteed one daemon per directory.
+
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
-respected when set. Cache paths use `os.UserCacheDir()` directly because they
-are runtime, not data — see Daemon architecture above for why.
+respected when set.
 
 plumb resolves these locations through `internal/paths`, which delegates to
 `github.com/adrg/xdg` for config/data/state/cache. The daemon log is the sole

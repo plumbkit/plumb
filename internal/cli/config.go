@@ -386,7 +386,10 @@ func printDirectoriesSection() {
 		{"data", paths.DataDir(), "sessions, stats.db"},
 		{"state", paths.StateDir(), "regenerable state"},
 		{"logs", paths.LogDir(), "daemon.log"},
-		{"runtime", paths.CacheDir(), "socket, pid, locks, version"},
+		// RuntimeDir, not CacheDir: those diverge on Linux now that the socket
+		// lives under $XDG_RUNTIME_DIR, and this row names where the socket
+		// actually is.
+		{"runtime", paths.RuntimeDir(), "socket, pid, locks, version"},
 	}
 	for _, r := range rows {
 		dirTable.Row(r.name, existsIcon(r.path), contractConfigPath(r.path), configShowMutedStyle().Render(r.holds))

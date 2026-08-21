@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // sandbox_linux.go confines a command with bubblewrap (bwrap): the whole
@@ -74,14 +76,17 @@ func writableLinuxDirs() []string {
 	return dirs
 }
 
-// linuxPlumbRuntimeDir is <UserCacheDir>/plumb, where the daemon keeps
-// plumb.sock, plumb.pid, and its locks. Re-bound read-only even though it sits
-// inside the (writable) cache dir.
+// linuxPlumbRuntimeDir is where the daemon keeps plumb.sock, plumb.pid, and its
+// locks — $XDG_RUNTIME_DIR/plumb where that is usable, else <UserCacheDir>/plumb.
+// Re-bound read-only in the cache-dir case because it sits inside the (writable)
+// cache bind; in the XDG_RUNTIME_DIR case it is outside every writable bind
+// already, and the read-only bind is then belt and braces.
+//
+// It resolves through internal/paths rather than rebuilding the rule. A sandbox
+// that disagreed with the daemon about this path would go on protecting an
+// empty directory while leaving the real socket wherever it actually lives.
 func linuxPlumbRuntimeDir() string {
-	if d, err := os.UserCacheDir(); err == nil && d != "" {
-		return filepath.Join(d, "plumb")
-	}
-	return ""
+	return paths.RuntimeDir()
 }
 
 func linuxGoModCache() string {

@@ -41,6 +41,7 @@ demo_env() {
     XDG_DATA_HOME="$DEMO_HOME/.local/share" \
     XDG_STATE_HOME="$DEMO_HOME/.local/state" \
     XDG_CACHE_HOME="$DEMO_HOME/.cache" \
+    XDG_RUNTIME_DIR= \
     PLUMB_BIN="$PLUMB" DEMO_WS="$DEMO_WS" "$@"
 }
 

@@ -13,14 +13,18 @@ import (
 	"time"
 )
 
-// withTempRuntime redirects plumbRuntimeDir() at the os.UserCacheDir level so
-// the lock files land in a t.TempDir() and don't collide with the user's real
-// runtime dir or with other tests running in parallel.
+// withTempRuntime redirects plumbRuntimeDir() so the lock files land in a
+// t.TempDir() and don't collide with the user's real runtime dir or with other
+// tests running in parallel.
 func withTempRuntime(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	// plumbRuntimeDir uses os.UserCacheDir which honours XDG_CACHE_HOME on Linux
-	// and HOME on macOS. Setting HOME is the portable way to redirect it.
+	// XDG_RUNTIME_DIR is cleared first and deliberately: it now takes priority
+	// over the cache dir, so on a real Linux desktop the developer's own
+	// /run/user/$UID would win and these tests would write their locks into it.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	// The fallback is os.UserCacheDir, which honours XDG_CACHE_HOME on Linux and
+	// HOME on macOS. Setting both is the portable way to redirect it.
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 }
@@ -185,6 +189,9 @@ func TestLockPaths_RespectUserCacheDir(t *testing.T) {
 	if got != want {
 		t.Fatalf("plumbRuntimeDir = %q, want %q", got, want)
 	}
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("plumbRuntimeDir must create the directory the locks live in: %v", err)
+	}
 	if filepath.Dir(spawnLockPath()) != got {
 		t.Fatalf("spawnLockPath not under runtime dir: %s", spawnLockPath())
 	}
@@ -207,7 +214,7 @@ func TestSocketPathLengthHint(t *testing.T) {
 	if got == "" {
 		t.Fatal("an over-long path must be explained")
 	}
-	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever()) {
 		t.Errorf("the hint must name the cause and the lever, got %q", got)
 	}
 	if !strings.Contains(got, strconv.Itoa(len(long))) {
@@ -215,18 +222,107 @@ func TestSocketPathLengthHint(t *testing.T) {
 	}
 }
 
-// The lever is not XDG_CACHE_HOME everywhere. os.UserCacheDir reads that
-// variable only in its Unix branch; on darwin it returns $HOME/Library/Caches
-// unconditionally, so telling a macOS user to set XDG_CACHE_HOME is advice
-// that cannot move the socket. That is the case this hint fires on soonest,
-// since maxUnixSocketPath is the macOS ceiling.
-func TestSocketPathShortenLever_IsThePlatformsRealLever(t *testing.T) {
-	if got := socketPathShortenLever("darwin"); got != "$HOME" {
-		t.Errorf("darwin lever = %q, want $HOME — XDG_CACHE_HOME does nothing there", got)
+// The lever is whichever variable actually moves the socket on this host, and
+// that is not one answer: $XDG_RUNTIME_DIR when the runtime dir is in use,
+// $HOME on darwin (os.UserCacheDir ignores XDG_CACHE_HOME there), and
+// XDG_CACHE_HOME otherwise. Naming the wrong one sends the user to a setting
+// that cannot move the socket — which is the bug this replaced.
+func TestSocketPathShortenLever_TracksWhereTheSocketActuallyIs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	wantFallback := "XDG_CACHE_HOME"
+	if runtime.GOOS == "darwin" {
+		wantFallback = "$HOME"
 	}
-	for _, goos := range []string{"linux", "freebsd", "openbsd"} {
-		if got := socketPathShortenLever(goos); got != "XDG_CACHE_HOME" {
-			t.Errorf("%s lever = %q, want XDG_CACHE_HOME", goos, got)
+	if got := socketPathShortenLever(); got != wantFallback {
+		t.Errorf("with no runtime dir, lever = %q, want %q", got, wantFallback)
+	}
+
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return
+	}
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+	if got := socketPathShortenLever(); got != "XDG_RUNTIME_DIR" {
+		t.Errorf("with the socket under the runtime dir, lever = %q, want XDG_RUNTIME_DIR", got)
+	}
+}
+
+// legacyDaemonSocketPath is for DIAGNOSIS only — naming the other directory
+// when a daemon is running there. It must be empty when there is no other
+// directory, or the warning fires against the socket we are already using.
+func TestLegacyDaemonSocketPath(t *testing.T) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("the runtime dir does not move on this platform")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if got := legacyDaemonSocketPath(); got != "" {
+		t.Errorf("legacyDaemonSocketPath = %q, want empty when it IS the current dir", got)
+	}
+
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+
+	cache, _ := os.UserCacheDir()
+	if got, want := legacyDaemonSocketPath(), filepath.Join(cache, "plumb", "plumb.sock"); got != want {
+		t.Errorf("legacyDaemonSocketPath = %q, want %q", got, want)
+	}
+	// And the socket actually in use stays the runtime-dir one — the legacy
+	// path is never something we connect to.
+	if got, want := daemonSocketPath(), filepath.Join(run, "plumb", "plumb.sock"); got != want {
+		t.Errorf("daemonSocketPath = %q, want %q", got, want)
+	}
+}
+
+// Every daemon-facing path must come from ONE directory. A process that dialled
+// one directory's socket while reading another's version file or control socket
+// was the half-migrated state this pins against.
+func TestDaemonPaths_AllShareOneRuntimeDir(t *testing.T) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("the runtime dir does not move on this platform")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	run := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", run)
+
+	want := filepath.Join(run, "plumb")
+	for name, got := range map[string]string{
+		"socket":      daemonSocketPath(),
+		"ctrl socket": daemonCtrlSocketPath(),
+		"pid":         daemonPIDPath(),
+		"version":     daemonVersionPath(),
+		"spawn lock":  spawnLockPath(),
+		"daemon lock": daemonLockPath(),
+	} {
+		if filepath.Dir(got) != want {
+			t.Errorf("%s is in %q, want %q — all daemon paths must share one runtime dir", name, filepath.Dir(got), want)
 		}
 	}
 }
@@ -247,7 +343,7 @@ func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
 		if !strings.Contains(got, action) {
 			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
 		}
-		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever()) {
 			t.Errorf("%q: the timeout must carry the length hint, got %q", action, got)
 		}
 	}

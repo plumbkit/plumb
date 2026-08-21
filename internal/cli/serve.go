@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var (
@@ -210,6 +212,8 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 		return conn, nil
 	}
 
+	warnIfDaemonAtLegacyPath()
+
 	slog.Info("serve: daemon not running — starting", "socket", socketPath)
 	if err := startDaemonProcess(); err != nil {
 		return nil, fmt.Errorf("starting daemon: %w", err)
@@ -246,6 +250,44 @@ func warnIfDaemonStale() {
 	fmt.Fprintf(os.Stderr,
 		"plumb: warning: connected daemon is %s but this binary is %s — run `plumb stop` to refresh.\n",
 		running, Version)
+}
+
+// warnIfDaemonAtLegacyPath reports a daemon listening at the cache-dir runtime
+// location when this process resolves $XDG_RUNTIME_DIR, right before we start a
+// second one beside it.
+//
+// It states the fact and stops there. An earlier version called it "a daemon
+// from an older version", which it cannot know — it never reads the version
+// file, and a CURRENT build lands at the cache path whenever $XDG_RUNTIME_DIR
+// is absent from the launching environment (cron, a systemd system unit,
+// docker exec, ssh without pam_systemd). Version skew is warnIfDaemonStale's
+// job, which reads the version file to decide.
+//
+// The warning is the whole remedy on purpose. Attaching to that daemon instead
+// was tried and reverted: the runtime directory determines the socket, the
+// control socket, the pid and the version file together, so a process that
+// connected to one directory's socket while resolving every other path in the
+// other got a half-migrated state — `plumb web` and `plumb log-level` dialling
+// a control socket that was not there, doctor reporting a version file as
+// missing when it existed one directory over, and `plumb restart` spawning the
+// duplicate this was supposed to prevent. One directory per process, and a
+// warning when the user has two.
+func warnIfDaemonAtLegacyPath() {
+	legacy := legacyDaemonSocketPath()
+	if legacy == "" {
+		return // the runtime dir does not move on this platform
+	}
+	conn, err := net.DialTimeout("unix", legacy, time.Second)
+	if err != nil {
+		return
+	}
+	_ = conn.Close()
+	fmt.Fprintf(os.Stderr,
+		"plumb: warning: a daemon is already running at %s, but this plumb uses %s.\n"+
+			"plumb: that happens after an upgrade, or when plumb is launched somewhere\n"+
+			"plumb: $XDG_RUNTIME_DIR is not set (cron, a systemd unit, docker exec, ssh).\n"+
+			"plumb: starting a second daemon; run `plumb stop` to consolidate on one.\n",
+		legacy, paths.RuntimeDir())
 }
 
 // proxyStdio copies stdin → conn and conn → stdout until ctx is cancelled or
