@@ -312,10 +312,13 @@ func installSkill(skillsDir, name, content string, manifest *skillManifest, dryR
 }
 
 // writeConflictProposal reports name as a conflict and, unless dryRun,
-// writes stamped to "<name>.plumb-new" — but only when that would actually
-// change the file's content, so a re-run never clobbers a user's
-// in-progress merge sitting inside it. See skillActionConflict for the two
-// action strings this can return.
+// writes stamped to "<name>.plumb-new" — but only when that differs from
+// what is already there, so a re-run leaves the file alone when the
+// proposal itself has not changed. This does NOT protect against a
+// modified ".plumb-new": if the user has edited that file themselves (or
+// left notes inside it), a differing proposal still replaces it outright —
+// the guard only skips the write when content is already identical. See
+// skillActionConflict for the two action strings this can return.
 func writeConflictProposal(skillsDir, name, stamped string, dryRun bool) (string, error) {
 	newFile := filepath.Join(skillsDir, name+".plumb-new")
 	if existing, err := os.ReadFile(newFile); err == nil && string(existing) == stamped {
