@@ -333,7 +333,7 @@ either `line` + `character` or `symbol_name`.
 
 ### `explain_symbol`
 Hover documentation and type information for a symbol. **Inputs:** `uri`
-(required) plus a position (`line` + `character`).
+(required), and either `line` + `character` or `symbol_name`.
 
 ### `file_outline`
 A token-cheap skeleton of a file: every function, type, method, class, and
@@ -363,8 +363,8 @@ Incoming and outgoing calls for a function. **Inputs:** `uri` (required), and
 either `line` + `character` or `symbol_name`.
 
 ### `type_hierarchy`
-Supertypes and subtypes of a class or interface. **Inputs:** `uri` (required)
-plus a position (`line` + `character`).
+Supertypes and subtypes of a class or interface. **Inputs:** `uri` (required),
+and either `line` + `character` or `symbol_name`.
 
 ### `diagnostics`
 LSP errors, warnings, and hints. **Inputs:** `uris` (array of `file://` URIs —
