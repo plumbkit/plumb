@@ -37,6 +37,14 @@ type Filter struct {
 	Workspace   string    // absolute path; when set, restricts to calls for this workspace
 	Tool        string    // when set, restricts to calls for this exact tool name
 	Since       time.Time // when set, restricts to calls at or after this time
+	// SavingsModelVersion, when > 0, restricts to rows scored under exactly
+	// this savings-model version (clientcaps.ModelVersion). A savings-axis
+	// query MUST set this to the current version rather than summing across
+	// versions: rows from an earlier model measured a different — and, for a
+	// version bump like v3→v4, sometimes materially different — counterfactual,
+	// so combining them silently blends two different claims into one number.
+	// See internal/clientcaps.ModelVersion's doc comment.
+	SavingsModelVersion int
 }
 
 func (f Filter) where() (string, []any) {
@@ -61,6 +69,10 @@ func (f Filter) where() (string, []any) {
 	if !f.Since.IsZero() {
 		conds = append(conds, "called_at >= ?")
 		args = append(args, f.Since.UnixMilli())
+	}
+	if f.SavingsModelVersion > 0 {
+		conds = append(conds, "savings_model_version = ?")
+		args = append(args, f.SavingsModelVersion)
 	}
 	if len(conds) == 0 {
 		return "", nil

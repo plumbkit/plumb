@@ -105,14 +105,26 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	tui.RebuildStyles()
 
-	axes := db.SavingsAxes(filter)
+	// PLAN-367: scoped to the CURRENT savings-model version only. Rows scored
+	// under an earlier version measured a different counterfactual (v4 stopped
+	// crediting a capable client's plain ranged read — see
+	// clientcaps.ModelVersion) and must never be summed alongside it as one
+	// figure. The tool-schema surcharge line session_start shows is deliberately
+	// absent here: it is computed from a LIVE MCP connection's advertised tool
+	// set, which this offline stats reader has no access to.
+	versionedFilter := filter
+	versionedFilter.SavingsModelVersion = clientcaps.ModelVersion
+	axes := db.SavingsAxes(versionedFilter)
+	prevented := db.PreventedIncidents(filter)
+
+	summaryLine := fmt.Sprintf("↳ %d total calls · ~%s tokens estimated read savings (model v%d, since this version only) · %d prevented incidents",
+		total, stats.FormatSavings(int(axes.Total())), clientcaps.ModelVersion, prevented)
 
 	// Structured Context Block
 	fmt.Println(render.ContextBox(
 		fmt.Sprintf("%s\n%s",
 			render.ContractPath(ws),
-			tui.MutedStyle.Render(fmt.Sprintf("↳ %d total calls · ~%s capability + ~%s efficiency tokens (estimated, model v%d)",
-				total, stats.FormatSavings(int(axes.Capability)), stats.FormatSavings(int(axes.Efficiency)), clientcaps.ModelVersion)),
+			tui.MutedStyle.Render(summaryLine),
 		),
 		tui.SepStyle,
 	))

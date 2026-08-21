@@ -6,6 +6,7 @@ package stats
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
@@ -198,6 +199,62 @@ func (d *DB) failureTotals(where string, args []any) (FailureReport, error) {
 		return FailureReport{}, fmt.Errorf("stats: failure totals: %w", err)
 	}
 	return r, nil
+}
+
+// preventedIncidentKinds are the failure classifications that represent
+// plumb catching something that would otherwise have silently gone wrong: a
+// caller writing over a version it never read or that changed since
+// (KindUnreadOrStale — covers both the read-before-write "strict mode" save
+// and the optimistic-concurrency "modified since read" rejection, which share
+// one guard), a write refused over pre-existing uncommitted changes
+// (KindDirtyFile — the closest existing signal to "someone else's work is
+// here"), and the cross-session ref-movement guard (KindConcurrentRefMove —
+// a peer moved HEAD/branch since this session last observed it). This is a
+// deliberately conservative list: PLAN-367 also names "exactly-once ambiguity
+// rejections" (edit_file's old_string-must-be-unique refusal) as a prevented
+// incident, but that refusal is not yet classified under its own Kind — it
+// currently falls into the broad, unrelated-things-included KindInternal
+// bucket via editLogicErr, and counting that bucket here would inflate N with
+// ordinary internal faults it was never meant to include. Left as a follow-up
+// (recorded in the PLAN-367 card Log) rather than added by widening a bucket
+// past what it can support.
+var preventedIncidentKinds = []toolerror.Kind{
+	toolerror.KindUnreadOrStale,
+	toolerror.KindDirtyFile,
+	toolerror.KindConcurrentRefMove,
+}
+
+// PreventedIncidents counts failed calls matching filter whose error_kind is
+// one plumb's write guards use to stop a caller from silently clobbering
+// something — see preventedIncidentKinds. This is the number the PLAN-367
+// banner reports as "prevented incidents": unlike the savings axes, it is not
+// an estimate reconstructed from a counterfactual model — it is a direct
+// count of refusals the daemon actually issued, so it carries no model
+// version and needs no version filter.
+func (d *DB) PreventedIncidents(filter Filter) int64 {
+	if d == nil {
+		return 0
+	}
+	where, args := filter.where()
+	placeholders := make([]string, len(preventedIncidentKinds))
+	for i, k := range preventedIncidentKinds {
+		placeholders[i] = "?"
+		args = append(args, string(k))
+	}
+	clause := "success = 0 AND error_kind IN (" + strings.Join(placeholders, ",") + ")"
+	if where == "" {
+		where = " WHERE " + clause
+	} else {
+		where += " AND " + clause
+	}
+	//nolint:gosec // G202: where is built from filter.where() plus a fixed IN(...) of ? placeholders only
+	q := `SELECT COUNT(*) FROM tool_calls` + where
+	var n int64
+	if err := d.db.QueryRow(q, args...).Scan(&n); err != nil {
+		slog.Warn("stats: prevented incidents count failed", "err", err)
+		return 0
+	}
+	return n
 }
 
 // failureBuckets runs the grouped query for one side of the classified split.

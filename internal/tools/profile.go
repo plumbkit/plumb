@@ -152,6 +152,17 @@ func IsMailbox(name string) bool { return MailboxTools[name] }
 // them), topology_explore (reachable from topology_search output), and
 // rename_symbol (17.2% advertisement-gate error rate in practice — re-pin once
 // PLAN-363 improves that).
+//
+// NEVER PINNED (PLAN-367): read_multiple_files. It is a real turns win (one
+// round trip instead of N, inline per-file errors), but a measured BYTE loss
+// vs the same reads done individually — 76 bytes over three read_file calls
+// on the docs/use-cases.md Scenario 10 sample, after two rounds of fixing a
+// padded separator and a wrong byte count (PLAN-13, PLAN-357). Pinning it
+// would put a tool that costs more tokens than the alternative into every
+// Claude Code session's up-front context for free, which is the opposite of
+// what pinning is for. Standing rule: don't pin a tool while its published
+// number is a loss. Re-litigate only if a future measurement moves it to
+// parity or a win — see docs/use-cases.md Scenario 10.
 var PinnedTools = map[string]bool{
 	"session_start":     true,
 	"read_file":         true,
