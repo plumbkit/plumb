@@ -158,10 +158,10 @@ Question: *what's in `internal/cli/stats.go`?*
 |---|---|---|
 | Whole file, raw | 9,856 | ~2,464 |
 | Whole file, with a line gutter | 11,120 | ~2,780 |
-| Plumb `file_outline` | 1,558 | ~390 |
+| Plumb `file_outline` | 1,589 | ~397 |
 
-**Takeaway — 6.3× smaller than the raw file, 7.1× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
-ranges, bodies collapsed — for ~390 tokens instead of ~2,464. Enough to navigate the file and
+**Takeaway — 6.2× smaller than the raw file, 7.0× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
+ranges, bodies collapsed — for ~397 tokens instead of ~2,464. Enough to navigate the file and
 decide what to read in full, without reading it all. Unlike Scenario 3 this ratio is fairly
 stable, because it scales with the file's declaration density rather than with your question.
 
@@ -374,9 +374,9 @@ parentheses — the same two baselines as Scenario 3.
 
 | Language | File (raw / gutter) | Symbol read | `file_outline` |
 |---|---|---|---|
-| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,558 B — **7.1×** (6.3×) |
-| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,255 B, **14.6×** (13.5×) | 2,426 B — **7.5×** (7.0×) |
-| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,721 B — **7.3×** (6.6×) |
+| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,589 B — **7.0×** (6.2×) |
+| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,253 B, **14.6×** (13.5×) | 2,457 B — **7.4×** (6.9×) |
+| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,752 B — **7.2×** (6.5×) |
 
 The three symbols are named, with their sizes, because Scenario 3 showed the ratio is a property
 of the symbol: a cross-language table pitting a 6-line helper against a 117-line function would
@@ -394,7 +394,7 @@ depend on the symbol.
 | Question | Plumb tool | Result |
 |---|---|---|
 | Read one function | `read_symbol` | 2.9×–33.4× fewer tokens, depending on the symbol |
-| Understand a file | `file_outline` | ~7.1× fewer tokens (7.5× Python, 7.3× JS) |
+| Understand a file | `file_outline` | ~7.0× fewer tokens (7.4× Python, 7.2× JS) |
 | Find text | `search_in_files` | a wash vs `ripgrep`; 9.3× smaller than naive `grep` |
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
