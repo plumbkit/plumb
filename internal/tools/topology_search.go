@@ -77,7 +77,11 @@ func (t *TopologySearch) semanticConfig() SemanticRerankConfig {
 func (*TopologySearch) Name() string                 { return "topology_search" }
 func (*TopologySearch) InputSchema() json.RawMessage { return topologySearchSchema }
 func (*TopologySearch) Description() string {
-	return "Ranked FTS5 search over the topology index. Finds symbols, functions, types, " +
+	return "Ranked FTS5 search over the topology index. " +
+		"NARROW IT FIRST when a query is broad: kinds=[\"function\"] (or type/method/class) filters by symbol kind, " +
+		"language=\"go\" filters by language, limit caps the result count (default 20), and " +
+		"include_snippets=false drops the matching-text excerpt that dominates the response size. " +
+		"Finds symbols, functions, types, " +
 		"classes, and other named entities by name, tokenised identifier (camelCase/snake_case), " +
 		"qualified name, signature, or docstring. Results include kind, file path, line range, " +
 		"match field, score, and optional snippet. Source is 'topology' (approximate; use " +
