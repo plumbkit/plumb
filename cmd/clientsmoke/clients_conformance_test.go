@@ -33,19 +33,30 @@ type toolRef struct {
 	namespace string
 }
 
-type scriptedProvider struct {
-	mu              sync.Mutex
-	step            int
-	scenario        *conformanceScenario
-	toolNames       map[string]toolRef
-	advertisedTools int
-	err             error
+type codexConformanceConfig struct {
+	profile       string
+	profileReason string
+	hiddenTool    string
 }
 
-func newScriptedProvider(tmpHome, fixture string) *scriptedProvider {
+type scriptedProvider struct {
+	mu                sync.Mutex
+	step              int
+	scenario          *conformanceScenario
+	config            codexConformanceConfig
+	requiredTools     []string
+	toolNames         map[string]toolRef
+	advertisedTools   int
+	err               error
+}
+
+func newScriptedProvider(tmpHome, fixture string, config codexConformanceConfig) *scriptedProvider {
+	requiredTools := append([]string(nil), conformanceRequiredTools()...)
 	return &scriptedProvider{
-		scenario:  newConformanceScenario(tmpHome, fixture),
-		toolNames: make(map[string]toolRef),
+		scenario:      newConformanceScenario(tmpHome, fixture),
+		config:        config,
+		requiredTools: requiredTools,
+		toolNames:     make(map[string]toolRef),
 	}
 }
 
@@ -87,20 +98,27 @@ func (p *scriptedProvider) nextItem(req responsesRequest) (map[string]any, error
 		if direct := directPlumbTools(req.Tools); len(direct) > 0 {
 			return nil, fmt.Errorf("discovery: Plumb tools leaked onto the direct surface: %v", direct)
 		}
-		return toolSearchCall("search-1", "plumb "+strings.Join(conformanceRequiredTools(), " ")), nil
+		queryTools := append([]string(nil), p.requiredTools...)
+		if p.config.hiddenTool != "" {
+			queryTools = append(queryTools, p.config.hiddenTool)
+		}
+		return toolSearchCall("search-1", "plumb "+strings.Join(queryTools, " ")), nil
 
 	case 1:
 		refs := searchedToolRefs(req.Input)
 		p.advertisedTools = len(refs)
 		for _, ref := range refs {
-			for _, base := range conformanceRequiredTools() {
+			for _, base := range p.requiredTools {
 				if strings.HasSuffix(ref.name, "__"+base) || ref.name == base {
 					p.toolNames[base] = ref
 				}
 			}
+			if base := p.config.hiddenTool; base != "" && (strings.HasSuffix(ref.name, "__"+base) || ref.name == base) {
+				p.toolNames[base] = ref
+			}
 		}
 		var missing []string
-		for _, base := range conformanceRequiredTools() {
+		for _, base := range p.requiredTools {
 			if p.toolNames[base].name == "" {
 				missing = append(missing, base)
 			}
@@ -108,12 +126,18 @@ func (p *scriptedProvider) nextItem(req responsesRequest) (map[string]any, error
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("discovery: tool_search did not return %v (returned %v)", missing, toolRefStrings(refs))
 		}
+		if base := p.config.hiddenTool; base != "" {
+			if p.toolNames[base].name != "" {
+				return nil, fmt.Errorf("discovery: Codex unexpectedly returned lean-hidden tool %q", base)
+			}
+			return assistantMessage("clientsmoke forced-lean hidden tool unavailable as expected"), nil
+		}
 		return p.nextScenarioItem("")
 
 	default:
 		body := requestInputText(req.Input)
-		if p.step == 2 && !strings.Contains(body, "unverified-deferred-discovery") {
-			return nil, errors.New("discovery: session_start did not report the expected conservative Codex profile reason")
+		if p.scenario.step == 1 && !strings.Contains(body, p.config.profileReason) {
+			return nil, fmt.Errorf("discovery: session_start did not report the expected Codex profile reason %q", p.config.profileReason)
 		}
 		return p.nextScenarioItem(body)
 	}
@@ -300,11 +324,18 @@ func requestInputText(input []any) string {
 	return string(encoded)
 }
 
-func writeCodexConformanceProfile(t *testing.T, tmpHome, providerURL string) {
+func writeCodexConformanceProfile(t *testing.T, tmpHome, providerURL, profile string) {
 	t.Helper()
 	dir := filepath.Join(tmpHome, ".codex")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal("create Codex profile directory:", err)
+	}
+	serverEnv := ""
+	if profile == "lean" {
+		serverEnv = `
+[mcp_servers.plumb.env]
+PLUMB_TOOLS_PROFILE = "lean"
+`
 	}
 	content := fmt.Sprintf(`model = "gpt-5.5"
 model_provider = "clientsmoke"
@@ -320,13 +351,32 @@ stream_idle_timeout_ms = 10000
 
 [mcp_servers.plumb]
 omit_tools_from = ["direct"]
-`, providerURL+"/v1")
+%s`, providerURL+"/v1", serverEnv)
 	if err := os.WriteFile(filepath.Join(dir, "clientsmoke.config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal("write Codex conformance profile:", err)
 	}
 }
 
 func TestCodexDeterministicConformance(t *testing.T) {
+	runCodexDeterministicConformance(t, codexConformanceConfig{
+		profile:       "full",
+		profileReason: "unverified-deferred-discovery",
+	})
+}
+
+// TestCodexForcedLeanHidesSearchInFiles preserves the negative evidence behind
+// ReliableDeferredToolDiscovery: a future discovery result requires review before
+// that capability changes.
+func TestCodexForcedLeanHidesSearchInFiles(t *testing.T) {
+	runCodexDeterministicConformance(t, codexConformanceConfig{
+		profile:       "lean",
+		profileReason: "explicit-config",
+		hiddenTool:    "search_in_files",
+	})
+}
+
+func runCodexDeterministicConformance(t *testing.T, config codexConformanceConfig) {
+	t.Helper()
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
 		t.Fatal("codex is required; run scripts/install-clients.sh")
@@ -351,10 +401,10 @@ func TestCodexDeterministicConformance(t *testing.T) {
 	t.Cleanup(func() { stopDaemon(tmpHome) })
 	runPlumbSetup(t, env, "setup", "codex")
 
-	provider := newScriptedProvider(tmpHome, fixture)
+	provider := newScriptedProvider(tmpHome, fixture, config)
 	server := httptest.NewServer(provider)
 	t.Cleanup(server.Close)
-	writeCodexConformanceProfile(t, tmpHome, server.URL)
+	writeCodexConformanceProfile(t, tmpHome, server.URL, config.profile)
 
 	versionCmd := exec.Command(codexPath, "--version")
 	versionCmd.Env = env
@@ -392,6 +442,17 @@ func TestCodexDeterministicConformance(t *testing.T) {
 	if steps == 0 {
 		t.Fatalf("no_tool_invocation: provider received no model request; stdout:\n%s\nstderr:\n%s", truncate(stdout.Bytes(), 4000), truncate(stderr.Bytes(), 4000))
 	}
+	if config.hiddenTool != "" {
+		if got := strings.TrimSpace(stdout.String()); !strings.Contains(got, "clientsmoke forced-lean hidden tool unavailable as expected") {
+			t.Fatalf("forced_lean_discovery: client did not report the expected unavailable hidden tool; stdout:\n%s\nstderr:\n%s", truncate(stdout.Bytes(), 4000), truncate(stderr.Bytes(), 4000))
+		}
+		if steps != 2 {
+			t.Fatalf("forced_lean_discovery: steps=%d want=2\nstdout:\n%s\nstderr:\n%s", steps, truncate(stdout.Bytes(), 4000), truncate(stderr.Bytes(), 4000))
+		}
+		t.Logf("PASS client=codex binary=%q os=%s arch=%s profile=%s reason=%s hidden_tool=%q result=unavailable advertised_tools=%d",
+			strings.TrimSpace(string(versionOut)), runtime.GOOS, runtime.GOARCH, config.profile, config.profileReason, config.hiddenTool, provider.advertisedToolCount())
+		return
+	}
 	if got := strings.TrimSpace(stdout.String()); !strings.Contains(got, "clientsmoke deterministic scenario complete") {
 		t.Fatalf("no_tool_invocation: client never completed the scripted tool scenario; stdout:\n%s\nstderr:\n%s", truncate(stdout.Bytes(), 4000), truncate(stderr.Bytes(), 4000))
 	}
@@ -425,6 +486,6 @@ func TestCodexDeterministicConformance(t *testing.T) {
 	if n < 7 {
 		t.Fatalf("missing_stats: got %d calls [%s], want at least 7 scenario calls", n, toolNames)
 	}
-	t.Logf("PASS client=codex binary=%q mcp_client=%q os=%s arch=%s profile=full reason=unverified-deferred-discovery advertised_tools=%d calls=%d tools=%s",
-		strings.TrimSpace(string(versionOut)), sess.ClientVersion, runtime.GOOS, runtime.GOARCH, provider.advertisedToolCount(), n, toolNames)
+	t.Logf("PASS client=codex binary=%q mcp_client=%q os=%s arch=%s profile=%s reason=%s hidden_tool=%q advertised_tools=%d calls=%d tools=%s",
+		strings.TrimSpace(string(versionOut)), sess.ClientVersion, runtime.GOOS, runtime.GOARCH, config.profile, config.profileReason, config.hiddenTool, provider.advertisedToolCount(), n, toolNames)
 }

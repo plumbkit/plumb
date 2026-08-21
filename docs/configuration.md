@@ -683,6 +683,14 @@ on `[mcp_servers.plumb]` in Codex's `config.toml`, `includeTools` on
 cannot be rescued by plumb's server-side bootstrap guarantee), and `plumb doctor`
 grades it. See [CLI reference → `plumb setup`](cli-reference.md#plumb-setup).
 
+Codex also has a separate client-side **deferred presentation** mode: `plumb setup codex`
+writes `omit_tools_from = ["direct"]` on its plumb entry. Plumb still advertises
+the full MCP catalogue, so Codex retains every schema and uses its own
+`tool_search` when a tool is needed; only the initial model-facing direct surface is
+trimmed. This is the appropriate context saving for Codex. Setting Plumb's
+server-side profile to `lean` instead withholds the schemas before Codex can search them,
+so it is deliberately not enabled by auto mode.
+
 plumb **cannot see** whether such an allowlist is in force: the client applies it
 before a call is ever made, and the daemon is shared and long-lived, so its
 environment is not reliably the connecting client's. `session_start` therefore

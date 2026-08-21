@@ -220,7 +220,7 @@ changing anything. Without a terminal, bare `plumb setup` prints help.
 | `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`); also heuristically repoints any sibling `Claude*/claude_desktop_config.json` profile that already exists (e.g. `Claude-Personal`) |
 | `plumb setup claude-code` | `~/.claude.json` (user scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
 | `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
-| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (skills via `plumb skills sync`) |
+| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (skills via `plumb skills sync`); writes `omit_tools_from = ["direct"]` so Codex defers Plumb schemas from its initial model surface while retaining the full MCP catalogue |
 | `plumb setup codex --lean` | Same, plus an `enabled_tools` allowlist pinning plumb's lean tool set |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
 | `plumb setup gemini --lean` | Same, plus an `includeTools` allowlist pinning plumb's lean tool set |

@@ -713,6 +713,18 @@
   complete, and since every co-located hit shares confidence 0.5 the cut falls in
   path order, dropping the one test that exercised the changed function.
 
+- **`plumb setup codex` now defers Plumb tools from Codex's direct model surface
+  without hiding their MCP schemas.** Its entry writes `omit_tools_from = ["direct"]`;
+  Plumb still advertises its full catalogue, which lets Codex's own `tool_search`
+  retrieve a needed schema. This is intentionally separate from server-side
+  `[tools] profile = "lean"`, which removes schemas before Codex can search them.
+
+- **Codex's deterministic client-conformance run now records why server-side lean
+  remains disabled.** With `PLUMB_TOOLS_PROFILE=lean`, Codex 0.149.0 sees the
+  21-tool lean surface but cannot discover hidden `search_in_files`. The guard
+  protects that distinction: no `ReliableDeferredToolDiscovery` flip is valid
+  unless Codex gains a way to retrieve schemas omitted from MCP `tools/list`.
+
 - **gotreesitter bumped v0.48.1 → v0.51.0, and the C enum recovery workaround is
   deleted — upstream fixed the defect plumb filed.** v0.48.1 arrived in a blanket
   dependency sweep with no entry of its own, so this is the first deliberate bump

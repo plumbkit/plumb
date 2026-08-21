@@ -680,3 +680,38 @@ func TestLeanClientsDeclareTheirCapability(t *testing.T) {
 		}
 	}
 }
+
+// TestCodexSetupDefersItsDirectToolPresentation keeps the workable Codex
+// optimisation distinct from server-side lean: Codex receives Plumb's complete
+// MCP catalogue, but keeps those schemas out of the initial model request.
+func TestCodexSetupDefersItsDirectToolPresentation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const bin = "/usr/local/bin/plumb"
+
+	if err := writeTOML(path, map[string]any{
+		"mcp_servers": map[string]any{
+			"plumb": map[string]any{"command": bin, "args": []string{"serve"}},
+		},
+	}); err != nil {
+		t.Fatal("write legacy Codex registration:", err)
+	}
+
+	added, _, err := codexLeanInto(path, bin, leanClear)
+	if err != nil {
+		t.Fatal("upgrade Codex:", err)
+	}
+	if !added {
+		t.Fatal("legacy Codex registration reported no change")
+	}
+	if got := readLeanPlumbEntry(t, codexLeanClient, path)["omit_tools_from"]; !stringSliceEqual(got, codexDeferredToolSurfaces) {
+		t.Errorf("omit_tools_from = %v, want %v", got, codexDeferredToolSurfaces)
+	}
+
+	added, _, err = codexLeanInto(path, bin, leanClear)
+	if err != nil {
+		t.Fatal("re-register Codex:", err)
+	}
+	if added {
+		t.Error("unchanged deferred Codex registration should be idempotent")
+	}
+}
