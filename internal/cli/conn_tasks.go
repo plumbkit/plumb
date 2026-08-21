@@ -235,7 +235,9 @@ func consumesNextArg(arg string) bool {
 }
 
 // configuredSlots lists the task slots that actually have a command, in a fixed
-// order.
+// order: the built-ins first, then the project's own extra slots. Both are
+// asked the same question, so an extra is reported — and refused — on exactly
+// the same terms as a built-in.
 //
 // It answers by asking buildTaskSteps — the same function run_task uses — rather
 // than by re-deriving the condition. Two hand-written predicates disagreed with
@@ -248,7 +250,7 @@ func consumesNextArg(arg string) bool {
 // worse than no section, so there is now one source of truth.
 func configuredSlots(tc config.TasksConfig) []string {
 	var out []string
-	for _, slot := range []string{"build", "lint", "test", "e2e", "verify"} {
+	for _, slot := range config.ConfiguredSlotNames(tc) {
 		steps, err := buildTaskSteps(tc, slot, "")
 		if err != nil || len(steps) == 0 {
 			continue

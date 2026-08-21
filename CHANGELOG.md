@@ -439,6 +439,32 @@
   (byte budget under realistic load, full render unchanged, auto-brief on a
   repeat `session_id`, first-contact stays full, explicit `detail` overrides
   either default).
+- **`run_task` no longer has a closed slot vocabulary — a project can name its
+  own.** The five slots (`build`/`lint`/`test`/`e2e`/`verify`) are Go's verbs, and
+  they were enforced as a JSON-schema `enum` plus a hardcoded set in the tool. A
+  project whose toolchain calls its verb something else — `pnpm check`,
+  `typecheck`, `audit` — could not reach `run_task` at all, and fell back to raw
+  shell for it, losing the no-shell argv contract and the trust gate along with
+  it. Any extra slot named under `[tasks.<lang>]` is now runnable:
+
+  ```toml
+  [tasks.typescript]
+  build = "pnpm build"
+  check = "pnpm check"     # runs via run_task {slot: "check"}
+  ```
+
+  Extras are **trust-gated exactly like a built-in** — the trust hash already
+  bound every `(lang, slot, command)` triple regardless of slot name, so a cloned
+  repository shipping one is still refused until `plumb trust` — and are **not
+  agent-writable**, since the `agent_config` allowlist is keyed by registry field
+  and an extra has no registry entry (fail closed). They are validated on the same
+  terms too: a command carrying a shell metacharacter is rejected at load, as is a
+  malformed slot name or one shadowing a built-in.
+
+  The slot `enum` is gone from the `run_task` and `mutation_test` schemas, because
+  a client enforces an enum on its side and an open vocabulary cannot coexist with
+  one. What replaces it is the refusal: an unconfigured slot now reports the slots
+  that *do* have a command, including the project's own.
 
 - **`edit_file` rejections now carry enough information for a one-call retry (worth-it W1-4).** Three targeted improvements, all suggestion-only — nothing is ever auto-applied, and the exactly-once `old_string` contract is unchanged. **(1) Multi-line `old_string` not found:** when `old_string` is 3+ lines, the rejection now runs a bounded fuzzy locate (whitespace-normalised line-window scoring, capped candidate scan — never O(n²) over a large file) and, when a sufficiently similar region exists, names the exact `lines N–M` and similarity plus a ready-to-use RANGE-mode suggestion: `{"start_line": N, "end_line": M, "new_string": ...}` — no old_string re-escaping needed. When nothing is similar enough it falls back to a generic RANGE-mode pointer instead of computed numbers. **(2) `expected_mtime`/`expected_sha` mismatch ("modified since you read it"):** the rejection now always inlines the CURRENT mtime **and** sha256, regardless of which guard was supplied, so a caller that only sent `expected_mtime` no longer needs a follow-up `read_file` just to learn the current hash; the existing `reconcile: true` escape hatch for an all-anchor-based batch is unchanged. **(3) Schema-shape rejections:** an unknown parameter that IS declared, just nested at the wrong level (e.g. `replace_all` sent at the top level instead of inside each `edits[]` item), now names the correct placement with a minimal valid JSON example instead of a bare "unknown parameter". An exact nested-name match outranks a fuzzy top-level "did you mean" suggestion, and the generated example pairs `old_string`+`new_string` whenever the child schema declares both, not just its `required` fields — otherwise the example for `replace_all` would itself be a shape `edit_file` rejects. New: `unknownDetail`/`placementHint`/`minimalNestedExample`/`nestedExampleFields` (`internal/mcp/argplacement.go`), `currentShaLine` (`internal/tools/write_guards.go`), `rangeModeHint`/`genericRangeModeHint` (`internal/tools/edit_file_closest.go`). Guarded by `TestEditFileRejection` (`internal/tools/edit_file_rejection_test.go`), new `TestResolveArgs` cases (ordering + valid-example round-trip), and `TestToolsCall_RealSchema_PlacementHintExampleRoundTrips` (`internal/mcp/argalias_realschema_test.go`), which replays the emitted example's own field list back through the real `edit_file` tool.
 ### Changed

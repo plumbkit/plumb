@@ -211,12 +211,46 @@ func validateTasks(tasks map[string]TasksConfig) error {
 				return fmt.Errorf("tasks.%s.%s: %w", lang, sl.name, err)
 			}
 		}
+		if err := validateExtraTaskSlots(lang, t.Extra); err != nil {
+			return err
+		}
 		// Same rule as a [[command]] working_dir: relative to the workspace root and
 		// no ".." escape. This is the LEXICAL half; the resolution-time half runs
 		// when the directory is made absolute, because a relative path naming a
 		// symlink passes every lexical check and still lands outside the tree.
 		if err := validateCommandWorkingDir(t.WorkingDir); err != nil {
 			return fmt.Errorf("tasks.%s: %w", lang, err)
+		}
+	}
+	return nil
+}
+
+// validateExtraTaskSlots applies to a project-named slot every rule a built-in
+// gets, and two it needs on top.
+//
+// The command check is the one that matters. The comment on validateTasks
+// states the stake: an un-validated command string lets a shell metacharacter
+// reach a slot that the runner will exec. Extras are agent-reachable through
+// run_task exactly like the built-ins, so leaving them out here would open
+// precisely the hole the exhaustive built-in loop exists to close.
+//
+// The name rules are the two a built-in cannot need. A malformed name is
+// rejected rather than ignored, because an ignored slot is a command the user
+// wrote and believes is configured. A name colliding with a built-in is
+// rejected rather than shadowing it: Get answers from the struct field, so the
+// extra would be silently dead — and `verify` would be worse than dead, since
+// it is a composite the runner synthesises and never reads a command for.
+func validateExtraTaskSlots(lang string, extra map[string]string) error {
+	for name, cmd := range extra {
+		if !ValidTaskSlotName(name) {
+			return fmt.Errorf("tasks.%s.%s: %q is not a valid slot name "+
+				"(lowercase letter first, then letters, digits, _ or -, max 32 characters)", lang, name, name)
+		}
+		if IsBuiltinTaskSlot(name) {
+			return fmt.Errorf("tasks.%s.%s: %q is a built-in slot and cannot be redefined as an extra", lang, name, name)
+		}
+		if _, err := ParseTaskCommand(cmd); err != nil {
+			return fmt.Errorf("tasks.%s.%s: %w", lang, name, err)
 		}
 	}
 	return nil

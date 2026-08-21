@@ -15,10 +15,62 @@ func runTask(t *testing.T, tool *Tasks, args string) (string, error) {
 	return tool.Execute(context.Background(), json.RawMessage(args))
 }
 
+// TestRunTask_ValidateSlot covers the two rejections that are now different
+// things. A MALFORMED name is refused by the tool as input hygiene; a
+// well-formed name with no command is refused by the resolver, which can say
+// what IS configured. Before project-defined slots existed both were one
+// closed-set check, and that check is what made the vocabulary Go-shaped.
 func TestRunTask_ValidateSlot(t *testing.T) {
 	tool := NewTasks(WriteDeps{}, func(string, string) (TaskCommand, error) { return TaskCommand{}, nil })
+
+	for _, bad := range []string{"Deploy", "9deploy", "de ploy", "deploy!", ""} {
+		args, _ := json.Marshal(map[string]any{"slot": bad})
+		if _, err := runTask(t, tool, string(args)); err == nil {
+			t.Errorf("slot %q is malformed and must be refused", bad)
+		}
+	}
+
+	// Well formed but unconfigured: still an error, from the resolver.
 	if _, err := runTask(t, tool, `{"slot":"deploy"}`); err == nil {
-		t.Error("expected an error for an unknown slot")
+		t.Error("expected an error for a slot with no command")
+	}
+}
+
+// TestRunTask_ProjectDefinedSlotReachesResolver is the point of the change: a
+// slot the project named, not one of the built-in five, must reach the resolver
+// rather than being refused by a closed set in this package.
+func TestRunTask_ProjectDefinedSlotReachesResolver(t *testing.T) {
+	var got string
+	tool := NewTasks(WriteDeps{}, func(slot, _ string) (TaskCommand, error) {
+		got = slot
+		return TaskCommand{Slot: slot, Provenance: "project", Steps: [][]string{{"true"}}}, nil
+	})
+	if _, err := runTask(t, tool, `{"slot":"check"}`); err != nil {
+		t.Fatalf("a project-defined slot must run: %v", err)
+	}
+	if got != "check" {
+		t.Errorf("resolver saw slot %q, want \"check\"", got)
+	}
+}
+
+// TestRunTask_SchemaHasNoSlotEnum pins the trade this change makes. An MCP
+// client enforces an enum on its side, so a static enum and a project-defined
+// vocabulary cannot both exist; the resolver's "configured slots" message is
+// what replaces the client-side constraint.
+func TestRunTask_SchemaHasNoSlotEnum(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Slot map[string]any `json:"slot"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal((&Tasks{}).InputSchema(), &schema); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
+	}
+	if _, ok := schema.Properties.Slot["enum"]; ok {
+		t.Error("slot must not declare an enum — it would re-close the vocabulary client-side")
+	}
+	if !strings.Contains(schema.Properties.Slot["description"].(string), "[tasks.<lang>]") {
+		t.Error("with no enum, the description must say where the vocabulary comes from")
 	}
 }
 
