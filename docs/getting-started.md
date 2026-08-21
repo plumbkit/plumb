@@ -144,9 +144,9 @@ on your `PATH`. Install `pyright-langserver` and Python is live; install
 `rust-analyzer` and every Cargo project resolves as Rust; and so on. Restart the
 daemon (`plumb stop`) or start a new session to pick up a newly-installed server.
 
-Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
-are validated; HTML is experimental (see the *Validation levels*
-table in [`docs/adding-an-lsp.md`](adding-an-lsp.md#validation-levels)).
+Go and Python are first-class; Java, Rust, Swift, Zig, TypeScript/JavaScript,
+Kotlin and HTML are validated (see the *Validation levels* table in
+[`docs/adding-an-lsp.md`](adding-an-lsp.md#validation-levels)).
 
 Bare Xcode projects need a `buildServer.json` and Xcode build data for reliable
 Swift semantics. `plumb doctor --workspace .` reports the exact state and manual

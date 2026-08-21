@@ -336,8 +336,16 @@ func (m Model) renderLogDetailContentLine(text string, innerW int, rBar string) 
 
 func (m Model) renderLogDetailStatusBar(innerW int) string {
 	contentW := max(innerW-2, 1)
-	if m.logDetailCopied {
-		content := StatusStyle.Render(render.PadRight("Copied to the clipboard", contentW))
+	if m.copyStatus.text != "" {
+		style := WarningMsgStyle
+		if m.copyStatus.verified {
+			style = StatusStyle
+		}
+		// Truncate before padding: render.PadRight only ever adds spaces, so a
+		// failure message longer than the frame would push the right border off
+		// the overlay.
+		text := ansi.Truncate(m.copyStatus.text, contentW, "…")
+		content := style.Render(render.PadRight(text, contentW))
 		return SepStyle.Render("│") + " " + content + " " + SepStyle.Render("│")
 	}
 	left := StatusKeyStyle.Render("c") + StatusStyle.Render(" copy")

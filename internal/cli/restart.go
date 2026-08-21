@@ -98,7 +98,7 @@ func respawnDaemon() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("daemon did not come back up within 10 seconds (socket: %s)", socketPath)
+	return daemonStartTimeoutError("come back up", socketPath)
 }
 
 // dialDaemonOnce reports whether the daemon socket accepts a connection.

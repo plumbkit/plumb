@@ -47,6 +47,22 @@ func homeRelConfigPath(parts ...string) (string, error) {
 	return filepath.Join(append([]string{home}, parts...)...), nil
 }
 
+// xdgConfigPath joins parts under $XDG_CONFIG_HOME, falling back to ~/.config.
+// Use it for clients that resolve their own config through XDG rather than a
+// fixed dotdir — plumb has to look where the client looks, and hardcoding
+// ~/.config writes a file the client never reads on any Linux box where the
+// variable is set.
+//
+// A relative value is ignored, per the XDG basedir spec ("If an implementation
+// encounters a relative path it must be considered invalid"). This mirrors what
+// internal/paths does for plumb's own directories.
+func xdgConfigPath(parts ...string) (string, error) {
+	if base := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(base) {
+		return filepath.Join(append([]string{base}, parts...)...), nil
+	}
+	return homeRelConfigPath(append([]string{".config"}, parts...)...)
+}
+
 // CursorConfigPath returns the global Cursor MCP config (~/.cursor/mcp.json),
 // shared by the Cursor editor and the cursor-agent CLI.
 func CursorConfigPath() (string, error) {
@@ -147,19 +163,21 @@ func dirExists(path string) bool {
 }
 
 // OpenCodeConfigPath returns the OpenCode global config
-// (~/.config/opencode/opencode.json).
+// ($XDG_CONFIG_HOME/opencode/opencode.json, else ~/.config/opencode/...).
 func OpenCodeConfigPath() (string, error) {
-	return homeRelConfigPath(".config", "opencode", "opencode.json")
+	return xdgConfigPath("opencode", "opencode.json")
 }
 
-// CrushConfigPath returns the Crush global config (~/.config/crush/crush.json).
+// CrushConfigPath returns the Crush global config
+// ($XDG_CONFIG_HOME/crush/crush.json, else ~/.config/crush/crush.json).
 func CrushConfigPath() (string, error) {
-	return homeRelConfigPath(".config", "crush", "crush.json")
+	return xdgConfigPath("crush", "crush.json")
 }
 
-// GooseConfigPath returns the Goose config (~/.config/goose/config.yaml).
+// GooseConfigPath returns the Goose config
+// ($XDG_CONFIG_HOME/goose/config.yaml, else ~/.config/goose/config.yaml).
 func GooseConfigPath() (string, error) {
-	return homeRelConfigPath(".config", "goose", "config.yaml")
+	return xdgConfigPath("goose", "config.yaml")
 }
 
 // HermesConfigPath returns the Hermes Agent config (~/.hermes/config.yaml).

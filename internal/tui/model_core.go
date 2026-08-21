@@ -31,8 +31,6 @@ type scrollBounds struct {
 	maxLogDetail   int
 }
 
-type logDetailCopyResetMsg struct{}
-
 // Model is the root Bubble Tea model for the sessions dashboard.
 type Model struct {
 	scrollBounds    *scrollBounds
@@ -108,7 +106,13 @@ type Model struct {
 
 	logDetailOpen   bool
 	logDetailScroll int
-	logDetailCopied bool
+
+	// Transient clipboard-copy status, shared by the log-detail overlay and the
+	// call-detail popup: whichever is open is the one that asked for the copy.
+	// Set only when a clipboardResultMsg reports what actually happened, never
+	// on the key press.
+	copyStatus   clipboardStatus
+	copyStatusID int
 
 	// Memory section (section 2).
 	memories            []memory.Memory

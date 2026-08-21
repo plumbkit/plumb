@@ -45,6 +45,64 @@ func TestNewClientConfigPaths(t *testing.T) {
 	}
 }
 
+// TestXDGClientPaths_HonourXDGConfigHome covers the three clients that resolve
+// their own config through XDG rather than a fixed dotdir. plumb used to
+// hardcode ~/.config for all three, so on any Linux box with XDG_CONFIG_HOME
+// set it registered itself in a file the client never reads — and reported
+// success.
+func TestXDGClientPaths_HonourXDGConfigHome(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func() (string, error)
+		rel  string
+	}{
+		{"opencode", OpenCodeConfigPath, filepath.Join("opencode", "opencode.json")},
+		{"crush", CrushConfigPath, filepath.Join("crush", "crush.json")},
+		{"goose", GooseConfigPath, filepath.Join("goose", "config.yaml")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			xdg := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			got, err := tc.fn()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if want := filepath.Join(xdg, tc.rel); got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestXDGClientPaths_FallBackToDotConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	got, err := OpenCodeConfigPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := filepath.Join(home, ".config", "opencode", "opencode.json"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// A relative XDG_CONFIG_HOME is invalid per the basedir spec and must be
+// ignored, not joined against the process cwd.
+func TestXDGClientPaths_IgnoreRelativeXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "relative/config")
+	got, err := CrushConfigPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := filepath.Join(home, ".config", "crush", "crush.json"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestWriteYAML_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.yaml")

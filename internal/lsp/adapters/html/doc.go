@@ -2,13 +2,17 @@
 // language server extracted from VS Code (built on the vscode-languageserver
 // framework, the same base as the TypeScript and CSS servers).
 //
-// Validation status: experimental — unit-tested with a mocked JSON-RPC
-// transport. An integration test (gated with the "integration" build tag)
-// spawns a real vscode-html-language-server binary against
-// testdata/html-fixture/ and confirms document-symbol extraction plus a
-// DidChangeWatchedFiles + DidOpen → diagnostics round-trip, but the binary is
-// not installed on the validation machine, so that test skips until it is on
-// PATH. Promote to "validated" once it has run green against a real server.
+// Validation status: validated — vscode-html-language-server 4.10.0
+// (vscode-langservers-extracted), Linux, 2026-08-21. The integration test
+// (gated with the "integration" build tag) spawns the real binary against
+// testdata/html-fixture/ and confirms document-symbol extraction plus the
+// DidChangeWatchedFiles + DidOpen → diagnostics round-trip; both pass, and CI
+// now installs the binary so they keep running rather than skipping.
+//
+// Validated describes the round-trip, not the server's reach. This one has no
+// filesystem access of its own: it answers only from documents the client has
+// opened, so a query against an unopened file returns nothing rather than
+// reading it from disk. See the capability notes below.
 //
 // Install with: npm install -g vscode-langservers-extracted
 // (provides vscode-html-language-server, vscode-css-language-server, …).

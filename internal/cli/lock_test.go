@@ -5,6 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,5 +190,80 @@ func TestLockPaths_RespectUserCacheDir(t *testing.T) {
 	}
 	if filepath.Dir(daemonLockPath()) != got {
 		t.Fatalf("daemonLockPath not under runtime dir: %s", daemonLockPath())
+	}
+}
+
+// An over-long socket path is rejected by bind() as EINVAL — "invalid
+// argument" — which says nothing about length, and the daemon's only report of
+// it goes to daemon.log while `plumb serve` shows a generic 10-second timeout.
+// Reproduced on Linux with a long XDG_CACHE_HOME.
+func TestSocketPathLengthHint(t *testing.T) {
+	if got := socketPathLengthHint("/home/u/.cache/plumb/plumb.sock"); got != "" {
+		t.Errorf("a short path needs no hint, got %q", got)
+	}
+
+	long := "/" + strings.Repeat("a", maxUnixSocketPath) + "/plumb.sock"
+	got := socketPathLengthHint(long)
+	if got == "" {
+		t.Fatal("an over-long path must be explained")
+	}
+	if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+		t.Errorf("the hint must name the cause and the lever, got %q", got)
+	}
+	if !strings.Contains(got, strconv.Itoa(len(long))) {
+		t.Errorf("the hint must state the actual length, got %q", got)
+	}
+}
+
+// The lever is not XDG_CACHE_HOME everywhere. os.UserCacheDir reads that
+// variable only in its Unix branch; on darwin it returns $HOME/Library/Caches
+// unconditionally, so telling a macOS user to set XDG_CACHE_HOME is advice
+// that cannot move the socket. That is the case this hint fires on soonest,
+// since maxUnixSocketPath is the macOS ceiling.
+func TestSocketPathShortenLever_IsThePlatformsRealLever(t *testing.T) {
+	if got := socketPathShortenLever("darwin"); got != "$HOME" {
+		t.Errorf("darwin lever = %q, want $HOME — XDG_CACHE_HOME does nothing there", got)
+	}
+	for _, goos := range []string{"linux", "freebsd", "openbsd"} {
+		if got := socketPathShortenLever(goos); got != "XDG_CACHE_HOME" {
+			t.Errorf("%s lever = %q, want XDG_CACHE_HOME", goos, got)
+		}
+	}
+}
+
+// The hint has to ride the error the USER sees. The daemon's own listen error
+// goes to daemon.log and then the daemon exits, so for anyone running plumb
+// through an MCP client the start timeout is the only report there is — which
+// is why both callers go through daemonStartTimeoutError.
+func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
+	short := "/home/u/.cache/plumb/plumb.sock"
+	if got := daemonStartTimeoutError("start", short).Error(); strings.Contains(got, "sun_path") {
+		t.Errorf("a short path must not be blamed on length: %q", got)
+	}
+
+	long := "/" + strings.Repeat("a", maxUnixSocketPath) + "/plumb.sock"
+	for _, action := range []string{"start", "come back up"} {
+		got := daemonStartTimeoutError(action, long).Error()
+		if !strings.Contains(got, action) {
+			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
+		}
+		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever(runtime.GOOS)) {
+			t.Errorf("%q: the timeout must carry the length hint, got %q", action, got)
+		}
+	}
+}
+
+// sun_path is 104 bytes on macOS/BSD *including* the NUL, so 104 usable bytes
+// already fails to bind and must still be explained.
+func TestSocketPathLengthHint_BoundaryIsPortable(t *testing.T) {
+	if maxUnixSocketPath != 103 {
+		t.Fatalf("maxUnixSocketPath = %d, want 103 (104-byte sun_path less the NUL)", maxUnixSocketPath)
+	}
+	atLimit := strings.Repeat("a", maxUnixSocketPath)
+	if got := socketPathLengthHint(atLimit); got != "" {
+		t.Errorf("a path exactly at the limit is fine, got %q", got)
+	}
+	if got := socketPathLengthHint(atLimit + "a"); got == "" {
+		t.Error("one byte over the limit must be explained")
 	}
 }

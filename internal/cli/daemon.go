@@ -291,7 +291,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
-		return fmt.Errorf("daemon: listening on %s: %w", socketPath, err)
+		return fmt.Errorf("daemon: listening on %s: %w%s", socketPath, err, socketPathLengthHint(socketPath))
 	}
 	defer os.Remove(socketPath)
 	defer ln.Close()

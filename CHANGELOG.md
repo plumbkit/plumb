@@ -7,6 +7,119 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Fixed
+
+- **The TUI's `c` copy now works on Wayland, and stops claiming success it
+  cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
+  to `xsel` **without checking it was installed** — X11 only, no `wl-copy`, no
+  `WAYLAND_DISPLAY` detection — and discarded the error with `_ = cmd.Run()`.
+  The log-detail handler compounded it by setting its "copied" flag *before and
+  independently of* the command running, so on a Wayland desktop the TUI printed
+  **"Copied to the clipboard"** for three seconds over a clipboard it had never
+  touched; the call-detail popup showed nothing at all either way. Copy helper
+  selection is now a pure, fully-tested function (`internal/tui/clipboard.go`):
+  `pbcopy` on macOS; `wl-copy` when `WAYLAND_DISPLAY` is set; `xclip`/`xsel`
+  when `DISPLAY` is — including the XWayland fall-through, which is gated on
+  `DISPLAY` being non-empty because `xclip` without a display dies with "Can't
+  open display"; and OSC 52 via `tea.SetClipboard` when no helper resolves,
+  which also covers SSH and bare TTYs. Every exec arm is `LookPath`-guarded. The
+  status line now reports what actually happened — verified copy, the failing
+  helper and its exit status, or "sent via OSC 52 (unverified)" — in both the
+  log detail and the popup. Wayland is detected by `WAYLAND_DISPLAY` rather than
+  `XDG_SESSION_TYPE`, which reads `tty` or is absent whenever the compositor is
+  started from a getty. An empty payload is refused at the choke point rather
+  than at the call sites: every helper accepts empty stdin and exits 0, so
+  copying nothing would replace the clipboard with nothing and then truthfully
+  report a verified copy. And the helper now runs under a 5s timeout — one that
+  cannot make progress (xclip against a wedged X server) used to hang the
+  goroutine forever, so no status ever appeared.
+
+- **`plumb setup opencode|crush|goose` ignored `XDG_CONFIG_HOME` (#9).** All
+  three clients resolve their own config through XDG, but plumb hardcoded
+  `~/.config`, so on any Linux box with the variable set it registered itself in
+  a file the client never reads — and reported success. They now go through a
+  new `xdgConfigPath` helper. Reproduced on a live binary before the fix.
+  **Migration:** if you ran one of those three with `XDG_CONFIG_HOME` set, the
+  old `~/.config/<client>/…` file is neither migrated nor removed by
+  `--uninstall` — delete it by hand. The client was never reading it, which is
+  the bug.
+
+- **A relative `XDG_CONFIG_HOME` diverted the config loader (#9).**
+  `legacyConfigPath` read the variable raw, while `internal/paths` correctly
+  ignores a relative value per the XDG basedir spec. The two then disagreed:
+  `plumb config show` reported the config directory as `~/.config/plumb` while
+  actually **loading** `<cwd>/<rel>/plumb/config.toml` — and since the daemon
+  chdirs to `/`, the CLI and the daemon resolved the same setting to different
+  files.
+
+- **An over-long daemon socket path now explains itself (#9).** A Unix socket
+  path must fit in `sun_path` (104–108 bytes); past that, `bind()` returns
+  `EINVAL` — "invalid argument", which says nothing about length. The daemon
+  wrote that to `daemon.log` and exited, and `plumb serve` reported only "daemon
+  did not start within 10 seconds". Hit for real on Linux with a long
+  `XDG_CACHE_HOME` (the runtime dir follows `os.UserCacheDir`). The error now
+  states the actual length, the limit, and the variable to shorten — on the
+  timeout `plumb serve` and `plumb restart` return, not only on the daemon's own
+  listen error, since that one goes to `daemon.log` and then the daemon exits,
+  so through an MCP client it is never seen. The portable ceiling is 103 usable
+  bytes, not 104: `sun_path` is 104 bytes on macOS/BSD *including* the NUL.
+
+### Changed
+
+- **HTML promoted to Validated (#9).** `vscode-html-language-server` 4.10.0
+  passes both integration tests against the real binary on Linux, and CI now
+  installs it, so the tier definition — "integration tests spawn the real binary
+  and pass" — is met. Its capability caveat is unchanged and is not a tier
+  matter: the server has no filesystem access, so it answers only from documents
+  the client has opened. That distinction is now written into the tier table,
+  which previously used HTML as its example of "has not run green against a real
+  binary".
+
+- **`plumb config show --adapters` no longer under-reports TypeScript and Zig
+  (#9).** Both were promoted to *Validated* in `docs/adding-an-lsp.md`,
+  `README.md`, `docs/roadmap.md` and their `doc.go` files, but stayed
+  `tierExperimental` in `internal/cli/config_adapters.go` — the one place the
+  promotion checklist never named. The checklist now names it, and
+  `TestAdapterCatalogueTiersMatchTheDocumentedStatus` pins every tier plus the
+  table's tier grouping.
+
+- **`plumb doctor` reports the clipboard helper under Dev Tools (#9).** It
+  resolves through the same `tui.ClipboardTool` the TUI uses, so the two cannot
+  disagree. Never fails the exit code; warns only when installing something
+  would actually help — a headless box has nothing to fix.
+
+- **The `integration` CI job installs `typescript-language-server` and
+  `vscode-html-language-server` (#9).** Both adapters already had integration
+  tests, and both skipped on every run because the binary was absent — so
+  "integration green" only ever meant Go and Python. `typescript@5` is pinned
+  deliberately: plain `typescript` now resolves to TypeScript 7, the Go-native
+  rewrite, which ships no `tsserver`, so the language server fails to initialize
+  and its test skips rather than failing.
+
+- **Linux real-binary validation is documented (#9).** Eight of the nine
+  adapters (Go, Python, Java, Rust, Swift, TypeScript/JS, Zig, HTML) now pass
+  their integration tests against real server binaries on Linux — CachyOS/Arch,
+  kernel 7.1.8, Go 1.26.5, 2026-08-21. Only Kotlin remains macOS-validated, since
+  JetBrains ship `kotlin-lsp` as a download rather than through a package
+  manager. `README.md` and `docs/adding-an-lsp.md` no longer say validation is
+  macOS-only, and the latter records three toolchain traps that present as
+  adapter bugs (the TypeScript 7 `tsserver` gap, the rustup `rust-analyzer` shim,
+  and the Kotlin fixture's JVM target).
+
+- **The Kotlin integration fixture could not build on any JDK newer than 23.**
+  Its generated Gradle project pinned `kotlin("jvm") 2.1.0` with no toolchain, so
+  on JDK 26 it failed with *"Inconsistent JVM-target compatibility"* —
+  `compileJava` inherits the host JDK while the Kotlin plugin caps `jvmTarget` at
+  23 — and the test skipped with a generic "gradle build did not succeed".
+  Adding a toolchain alone then hit *"Internal compiler error"*, because 2.1.0
+  cannot run on 26; the fixture now pins 2.2.20 **and** `jvmToolchain(21)`, both
+  of which are needed. The superseded comment claimed a toolchain "fails unless
+  that exact JDK is installed" — modern Gradle auto-provisions it.
+
+- **The Kotlin integration test ran an 80-second Gradle build before checking
+  whether `kotlin-lsp` existed**, so a machine without the server paid the full
+  build to reach a skip. The cheap check now comes first: 86s → 0.01s.
+
 ### Added
 
 - **The topology index now has cross-file edges — it had none at all.** Extractors

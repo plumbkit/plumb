@@ -339,12 +339,23 @@ func (m Model) renderPopupBody(visibleLeft, visibleRight []string, bodyHeight, p
 		if i >= bodyHeight-2 {
 			if i == bodyHeight-1 {
 				sep := StatusStyle.Render("  ·  ")
-				if m.popupRightFocus {
+				switch {
+				case m.copyStatus.text != "":
+					// The copy key works in either focus state, so the outcome
+					// replaces the whole hint row rather than only the focused
+					// variant. Truncated for the same reason as the log-detail
+					// bar: the cell pads but never trims.
+					style := WarningMsgStyle
+					if m.copyStatus.verified {
+						style = StatusStyle
+					}
+					rStr = "  " + style.Render(ansi.Truncate(m.copyStatus.text, max(pRW-2, 1), "…"))
+				case m.popupRightFocus:
 					left := StatusKeyStyle.Render("c") + StatusStyle.Render(" copy")
 					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" back")
 					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
 					rStr = "  " + left + sep + mid + sep + right
-				} else {
+				default:
 					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" detail")
 					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
 					rStr = "  " + mid + sep + right

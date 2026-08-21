@@ -56,6 +56,10 @@ func requireKotlinLSP(t *testing.T) string {
 // would prove nothing about the adapter either way.
 func gradleFixture(t *testing.T) string {
 	t.Helper()
+	// Cheapest skip first. Every caller goes on to start the server, so a box
+	// without kotlin-lsp is going to skip regardless — and doing the Gradle
+	// build first made it pay 80+ seconds to find that out.
+	requireKotlinLSP(t)
 	if _, err := exec.LookPath("gradle"); err != nil {
 		t.Skip("gradle not found on PATH — needed to build a resolvable Kotlin project")
 	}
@@ -71,11 +75,29 @@ func gradleFixture(t *testing.T) string {
 		}
 	}
 	write("settings.gradle.kts", `rootProject.name = "plumbfixture"`+"\n")
-	// No jvmToolchain(N): pinning one fails unless that exact JDK is installed,
-	// so the fixture uses whichever JDK Gradle already runs on.
-	write("build.gradle.kts", `plugins { kotlin("jvm") version "2.1.0" }
+	// Both lines below are load-bearing on a modern JDK, for two INDEPENDENT
+	// reasons — measured on JDK 26 (2026-08-21), where the previous fixture
+	// (2.1.0, no toolchain) could not build at all:
+	//
+	//   2.1.0, no toolchain   -> "Inconsistent JVM-target compatibility", because
+	//                            compileJava inherits the host JDK (26) while the
+	//                            Kotlin plugin caps jvmTarget at 23.
+	//   2.1.0 + jvmToolchain  -> "Internal compiler error": the Kotlin compiler
+	//                            runs in a Gradle worker on the host JVM, and
+	//                            2.1.0 cannot run on 26.
+	//   2.2.20, no toolchain  -> the JVM-target mismatch again.
+	//   2.2.20 + jvmToolchain -> builds.
+	//
+	// jvmToolchain(21) pins BOTH compile tasks to one target, which is what
+	// settles the mismatch. The superseded comment here said pinning a toolchain
+	// "fails unless that exact JDK is installed"; modern Gradle auto-provisions
+	// it (observed: "Eclipse Temurin JDK 21 — Auto-provisioned by Gradle"), and
+	// this fixture already requires the network to resolve, so that objection no
+	// longer holds.
+	write("build.gradle.kts", `plugins { kotlin("jvm") version "2.2.20" }
 repositories { mavenCentral() }
 dependencies { implementation(kotlin("stdlib")) }
+kotlin { jvmToolchain(21) }
 `)
 	write("src/main/kotlin/Greeter.kt", `package fixture
 
