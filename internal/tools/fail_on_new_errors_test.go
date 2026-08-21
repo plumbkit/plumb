@@ -351,8 +351,18 @@ func TestFailOnNewErrors_ConcurrentWriterAbortsTheRollback(t *testing.T) {
 	if got := e.content(t); got != peerContent {
 		t.Fatalf("the peer's content must survive the aborted rollback\n got: %q", got)
 	}
-	if !strings.Contains(err.Error(), "could NOT be rolled back") {
-		t.Errorf("the refusal must say the rollback did not happen, got:\n%s", err.Error())
+	msg := err.Error()
+	if !strings.Contains(msg, "could NOT be rolled back") {
+		t.Errorf("the refusal must say the rollback did not happen, got:\n%s", msg)
+	}
+	// It must name what the file ACTUALLY holds: not plumb's write, and not the
+	// pre-write content either. Sending the caller to "revert the post-write
+	// state" would point them at content that is not there.
+	if !strings.Contains(msg, "written by another process") {
+		t.Errorf("the refusal must say the file holds a third party's content, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "still in its post-write state") {
+		t.Errorf("the refusal must not claim the file holds plumb's write, got:\n%s", msg)
 	}
 }
 
@@ -467,6 +477,14 @@ func TestFailOnNewErrors_WriteFileRemovesAFileItCreated(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		t.Errorf("a rolled-back creation must leave no file behind (stat err: %v)", statErr)
+	}
+	// "byte-for-byte unchanged" would describe a file that no longer exists.
+	msg := err.Error()
+	if !strings.Contains(msg, "was removed (it did not exist before this call)") {
+		t.Errorf("a rolled-back creation must be described as removed, got:\n%s", msg)
+	}
+	if strings.Contains(msg, "byte-for-byte unchanged") {
+		t.Errorf("a file that never existed cannot be byte-for-byte unchanged, got:\n%s", msg)
 	}
 }
 

@@ -91,19 +91,29 @@ type rollbackRequest struct {
 // locked region as the write and the analysis, so no other plumb writer can
 // interleave between deciding and reverting.
 func (d WriteDeps) rollbackNewErrors(ctx context.Context, req rollbackRequest) error {
-	if err := d.revertWrite(ctx, req); err != nil {
+	if holds, err := d.revertWrite(ctx, req); err != nil {
+		// Say what the file ACTUALLY holds now. The commonest failure is a peer's
+		// write landing mid-call, where the file holds neither plumb's write nor
+		// the pre-write content — telling the caller "still in its post-write
+		// state" would send them to fix the wrong thing.
 		return fmt.Errorf("%s: this write introduced %s and was refused, but it could NOT be rolled back: %w\n"+
-			"The file is still in its post-write state — revert it yourself before continuing.%s",
-			req.tool, newErrorsPhrase(req.diag.delta), err, req.diag.text)
+			"%s now holds %s — sort that out before continuing.%s",
+			req.tool, newErrorsPhrase(req.diag.delta), err, req.path, holds, req.diag.text)
 	}
 	// The undo snapshot this write armed now points at a write that no longer
 	// exists on disk. Take it rather than leave it: an undo_edit against it would
 	// refuse anyway (the content no longer matches what plumb wrote), and a stale
 	// armed entry is worse than an honest "nothing to undo".
 	d.undo(ctx).Take(req.path)
-	return fmt.Errorf("%s: refused — %s, so the write was ROLLED BACK and %s is byte-for-byte unchanged (fail_on_new_errors).\n"+
+	// A rolled-back CREATION leaves no file at all, so "byte-for-byte unchanged"
+	// would describe a file that does not exist.
+	outcome := req.path + " is byte-for-byte unchanged"
+	if !req.existedBefore {
+		outcome = req.path + " was removed (it did not exist before this call)"
+	}
+	return fmt.Errorf("%s: refused — %s, so the write was ROLLED BACK and %s (fail_on_new_errors).\n"+
 		"%sFix the cause and retry, or drop fail_on_new_errors to land the change anyway.%s",
-		req.tool, newErrorsPhrase(req.diag.delta), req.path,
+		req.tool, newErrorsPhrase(req.diag.delta), outcome,
 		renderNewErrorList(req.diag.delta), req.diag.text)
 }
 
@@ -111,35 +121,38 @@ func (d WriteDeps) rollbackNewErrors(ctx context.Context, req rollbackRequest) e
 // CREATED the file is undone by removing it; otherwise the pre-write content is
 // written back through safeWrite, so the revert is as atomic and as durable as
 // the write it undoes.
-func (d WriteDeps) revertWrite(ctx context.Context, req rollbackRequest) error {
+//
+// On failure it also returns holds: a phrase naming what the file contains NOW,
+// which differs per branch and is what the caller must act on.
+func (d WriteDeps) revertWrite(ctx context.Context, req rollbackRequest) (holds string, err error) {
 	cur, err := os.ReadFile(req.path)
 	if err != nil {
 		if os.IsNotExist(err) && !req.existedBefore {
-			return nil // already gone; the state we wanted
+			return "", nil // already gone; the state we wanted
 		}
-		return fmt.Errorf("reading %q back: %w", req.path, err)
+		return "an unknown state — plumb could not read it back", fmt.Errorf("reading %q back: %w", req.path, err)
 	}
 	if sha256OfString(string(cur)) != sha256OfString(req.wrote) {
-		return fmt.Errorf(
+		return "content written by another process during this call — neither plumb's write nor the pre-write content", fmt.Errorf(
 			"%q no longer holds what plumb wrote — another process modified it during this call, and reverting would discard that change",
 			req.path)
 	}
 	if !req.existedBefore {
 		if err := os.Remove(req.path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("removing %q: %w", req.path, err)
+			return "the content this call wrote (the file plumb created is still there)", fmt.Errorf("removing %q: %w", req.path, err)
 		}
 		d.notifyReverted(ctx, req.path, req.uri, protocol.FileDeleted)
-		return nil
+		return "", nil
 	}
 	perm := os.FileMode(0o644)
 	if info, statErr := os.Stat(req.path); statErr == nil && info.Mode().Perm() != 0 {
 		perm = info.Mode().Perm()
 	}
 	if _, err := safeWrite(req.path, []byte(req.before), perm); err != nil {
-		return fmt.Errorf("restoring %q: %w", req.path, err)
+		return "the content this call wrote (the restore itself failed)", fmt.Errorf("restoring %q: %w", req.path, err)
 	}
 	d.notifyReverted(ctx, req.path, req.uri, protocol.FileChanged)
-	return nil
+	return "", nil
 }
 
 // notifyReverted mirrors the post-write notification, so the language server,

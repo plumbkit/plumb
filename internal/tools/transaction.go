@@ -182,24 +182,34 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	// error this transaction introduced from one already there.
 	baselines := t.txCaptureBaselines(a, prepared)
 
-	// The durable rollback log stays open until the transaction is ACCEPTED — with
-	// fail_on_new_errors that is after the diagnostics gate, so a crash mid-gate
-	// replays back to the pre-transaction state, which is the same answer the gate
-	// would have given. Without the gate the window is unchanged in practice: the
-	// next statements are the notify pass and an immediate commit.
 	written, txl, err := t.txPhase2Write(ctx, prepared)
 	if err != nil {
 		return "", err
 	}
+	if !a.FailOnNewErrors {
+		// Ungated: the transaction is ACCEPTED the moment its writes land, so the
+		// durable log closes here — before the notify pass, exactly as it did
+		// before the gate existed. Holding it open any longer would mean a daemon
+		// restart during, say, an await_diagnostics wait REVERTED a transaction
+		// that had already succeeded: a behaviour change for a call that never
+		// asked for the gate.
+		txl.Commit()
+	}
 
 	notifyFailed := t.txPhase3Notify(ctx, written)
 	diag := t.txPostWriteDiagnostics(a, written, baselines, notifyFailed)
-	if a.FailOnNewErrors && diag.anyNewErrors() {
-		// Still holding every per-path lock: write, analysis and rollback are one
-		// critical section for the whole batch.
-		return "", t.txRollbackNewErrors(ctx, written, txl, diag)
+	if a.FailOnNewErrors {
+		if diag.anyNewErrors() {
+			// Still holding every per-path lock: write, analysis and rollback are
+			// one critical section for the whole batch.
+			return "", t.txRollbackNewErrors(ctx, written, txl, diag)
+		}
+		// Gated and accepted: only NOW is the transaction final. The log stayed
+		// open across the gate on purpose — a crash mid-gate replays back to the
+		// pre-transaction state, which is the same answer the gate would have
+		// given.
+		txl.Commit()
 	}
-	txl.Commit()
 
 	var result strings.Builder
 	result.WriteString(formatTransactionResult(written, t.deps.showWriteDiff()))

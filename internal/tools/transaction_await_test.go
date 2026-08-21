@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -67,6 +68,11 @@ type txEnv struct {
 func newTxEnv(t *testing.T) *txEnv {
 	t.Helper()
 	dir := t.TempDir()
+	// txlog.Begin degrades to a no-op without a .plumb marker, which would make
+	// every commit-timing probe below vacuously "committed".
+	if err := os.MkdirAll(filepath.Join(dir, ".plumb"), 0o755); err != nil {
+		t.Fatalf("seed .plumb: %v", err)
+	}
 	e := &txEnv{dir: dir, diag: newTxDiagStub()}
 	for _, name := range []string{"a.go", "b.go"} {
 		p := filepath.Join(dir, name)
@@ -246,6 +252,82 @@ func TestTransactionApplyAwait_ExternallyChangedFileIsReportedNotReverted(t *tes
 	}
 	if !strings.Contains(err.Error(), "NOT restored") {
 		t.Errorf("the refusal must report the file it left alone, got:\n%s", err.Error())
+	}
+}
+
+// notifyHookLSP runs a hook from inside the post-write notify pass. The
+// embedded nil interface panics on any other method, so an unexpected call
+// fails loudly.
+type notifyHookLSP struct {
+	lsp.Client
+	onNotify func()
+}
+
+func (c notifyHookLSP) DidChangeWatchedFiles(context.Context, protocol.DidChangeWatchedFilesParams) error {
+	if c.onNotify != nil {
+		c.onNotify()
+	}
+	return nil
+}
+
+// txLogOpen reports whether an uncommitted transaction log exists under the
+// workspace. Commit removes the log directory, so this is a direct observation
+// of "has this transaction been committed yet?" — no sleeps, no timing guesses.
+func txLogOpen(dir string) bool {
+	entries, err := os.ReadDir(filepath.Join(dir, ".plumb", "tx-log"))
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+// TestTransactionApplyAwait_CommitTimingIsGatedNotDelayed pins WHEN the durable
+// rollback log is committed, probed from inside the notify and diagnostics
+// passes.
+//
+// The gate holds the log open on purpose: until fail_on_new_errors has decided,
+// the transaction is not accepted, and a crash mid-gate must replay back to the
+// pre-transaction state. But that window must NOT be paid by a call that did not
+// ask for the gate: a daemon restart during an await_diagnostics wait (seconds
+// per file) would otherwise REVERT a transaction that, before this feature
+// existed, had already survived. With the flag absent the behaviour must be
+// exactly as before — committed the moment the writes land.
+func TestTransactionApplyAwait_CommitTimingIsGatedNotDelayed(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       map[string]any
+		wantOpen   bool // is the log still open during the notify pass?
+		wantOpenDx bool // ...and during the diagnostics pass? (false when none runs)
+	}{
+		{name: "default path commits before notify", args: nil},
+		{name: "await-only commits before notify", args: map[string]any{"await_diagnostics": true}},
+		{name: "gated path holds the log across both", args: map[string]any{"fail_on_new_errors": true}, wantOpen: true, wantOpenDx: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTxEnv(t)
+			var openAtNotify, openAtDiag, diagRan bool
+			e.deps.Client = notifyHookLSP{onNotify: func() { openAtNotify = openAtNotify || txLogOpen(e.dir) }}
+			e.diag.onWait = func(string) {
+				diagRan = true
+				openAtDiag = openAtDiag || txLogOpen(e.dir)
+			}
+
+			if _, err := e.apply(t, tc.args); err != nil {
+				t.Fatalf("transaction: %v", err)
+			}
+			e.assertAll(t, txAfter)
+
+			if openAtNotify != tc.wantOpen {
+				t.Errorf("tx-log open during notify = %v, want %v", openAtNotify, tc.wantOpen)
+			}
+			if diagRan && openAtDiag != tc.wantOpenDx {
+				t.Errorf("tx-log open during diagnostics = %v, want %v", openAtDiag, tc.wantOpenDx)
+			}
+			if txLogOpen(e.dir) {
+				t.Error("the log must be committed by the time the call returns")
+			}
+		})
 	}
 }
 
