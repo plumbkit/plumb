@@ -117,7 +117,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	axes := db.SavingsAxes(versionedFilter)
 	prevented := db.PreventedIncidents(filter)
 
-	summaryLine := fmt.Sprintf("↳ %d total calls · ~%s tokens estimated read savings (model v%d, since this version only) · %d prevented incidents",
+	summaryLine := fmt.Sprintf("↳ %d total calls · ~%s tokens estimated read savings (model v%d, since this version only) · %d guard refusals",
 		total, stats.FormatSavings(int(axes.Total())), clientcaps.ModelVersion, prevented)
 
 	// Structured Context Block
@@ -136,7 +136,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	// Tool summary table
 	fmt.Println("Tool Call Summary")
-	summaryTable, err := statsToolSummaryTable(db, filter)
+	summaryTable, err := statsToolSummaryTable(db, filter, clientcaps.ModelVersion)
 	if err != nil {
 		return err
 	}
@@ -218,14 +218,22 @@ func scaledAge(orig, n, unitName string, unit time.Duration) (time.Duration, err
 	return time.Duration(v) * unit, nil
 }
 
-func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
-	summary, err := db.Summary(filter)
+// statsToolSummaryTable renders the per-tool table. Calls/Avg/P95/Errors/
+// bytes cover every row matching filter, whatever savings-model version it
+// carries (or none); the Capability/Efficiency columns are netted to
+// modelVersion ONLY (SummarySinceVersion) — the same rule the header line
+// above this table follows, so the two never contradict each other (PLAN-367
+// review round 1: a v3+v4-summed row here used to sit directly under a
+// v4-only total in the header).
+func statsToolSummaryTable(db *stats.DB, filter stats.Filter, modelVersion int) (string, error) {
+	summary, err := db.SummarySinceVersion(filter, modelVersion)
 	if err != nil {
 		return "", fmt.Errorf("querying summary: %w", err)
 	}
 
 	t1 := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
-		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Capability", "Efficiency")
+		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors",
+			fmt.Sprintf("Capability (v%d)", modelVersion), fmt.Sprintf("Efficiency (v%d)", modelVersion))
 
 	for _, s := range summary {
 		t1.Row(

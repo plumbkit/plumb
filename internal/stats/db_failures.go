@@ -224,13 +224,14 @@ var preventedIncidentKinds = []toolerror.Kind{
 	toolerror.KindConcurrentRefMove,
 }
 
-// PreventedIncidents counts failed calls matching filter whose error_kind is
-// one plumb's write guards use to stop a caller from silently clobbering
-// something — see preventedIncidentKinds. This is the number the PLAN-367
-// banner reports as "prevented incidents": unlike the savings axes, it is not
-// an estimate reconstructed from a counterfactual model — it is a direct
-// count of refusals the daemon actually issued, so it carries no model
-// version and needs no version filter.
+// PreventedIncidents counts failed CALLS (not distinct incidents — a caller
+// that retries after a refusal contributes one count per refusal) matching
+// filter whose error_kind is one plumb's write guards use to stop a caller
+// from silently clobbering something — see preventedIncidentKinds. This is
+// the number the PLAN-367 banner reports as "guard refusals": unlike the
+// savings axes, it is not an estimate reconstructed from a counterfactual
+// model — it is a direct count of refusals the daemon actually issued, so it
+// carries no model version and needs no version filter.
 func (d *DB) PreventedIncidents(filter Filter) int64 {
 	if d == nil {
 		return 0
