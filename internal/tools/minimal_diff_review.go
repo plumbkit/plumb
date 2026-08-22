@@ -228,13 +228,16 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	return text, capped, nil
 }
 
-// cappedFile names a file whose diff was left out of the analysis, and how big
-// it was. It is reported rather than dropped silently: a review that quietly
-// skipped half the change reads exactly like a review that found nothing wrong
-// with it.
+// cappedFile names a file whose diff was left out of the analysis, how big it
+// was, and WHY. It is reported rather than dropped silently: a review that
+// quietly skipped half the change reads exactly like a review that found
+// nothing wrong with it. The why matters too — a file dropped by the global
+// backstop may be well under the per-file budget itself; reporting it as "over
+// the per-file budget" would be a wrong reason attached to a correct fact.
 type cappedFile struct {
-	Path  string
-	Bytes int
+	Path         string
+	Bytes        int
+	GlobalCapped bool // true: dropped by the total-budget backstop, not its own size
 }
 
 // capPerFile bounds a diff FILE BY FILE, returning the kept text and the files
@@ -266,7 +269,7 @@ func capPerFile(text string, perFile, total int) (string, []cappedFile) {
 		case len(c.Text) > perFile:
 			capped = append(capped, cappedFile{Path: c.Path, Bytes: len(c.Text)})
 		case kept.Len()+len(c.Text) > total:
-			capped = append(capped, cappedFile{Path: c.Path, Bytes: len(c.Text)})
+			capped = append(capped, cappedFile{Path: c.Path, Bytes: len(c.Text), GlobalCapped: true})
 		default:
 			kept.WriteString(c.Text)
 		}
@@ -455,25 +458,46 @@ func nodeToSymbolRef(n topology.Node) minchange.SymbolRef {
 	return minchange.SymbolRef{Name: n.Name, Path: n.Path, Line: n.StartLine, Kind: string(n.Kind)}
 }
 
-// writeCappedFiles names the files left out of the analysis and how big they
-// were. Naming them is the point: the caller can see that the review covered
-// their source and skipped a bundle, which the previous "the diff exceeded N
-// bytes" note could not tell them — under a byte-prefix cut, the files it
-// dropped were whichever ones sorted last.
+// maxCappedFilesListed bounds how many dropped-file lines the report spells
+// out. The list is not itself budget-bounded (capped is already the tail end
+// of a diff walk), so without a cap a diff with hundreds of oversized files
+// would turn this note into most of the response.
+const maxCappedFilesListed = 10
+
+// writeCappedFiles names the files left out of the analysis, how big they
+// were, and WHY. Naming them is the point: the caller can see that the review
+// covered their source and skipped a bundle, which the previous "the diff
+// exceeded N bytes" note could not tell them — under a byte-prefix cut, the
+// files it dropped were whichever ones sorted last.
+//
+// The reason is per file, not a single blanket line: a file dropped by the
+// global backstop (GlobalCapped) can be well under the per-file budget on its
+// own — it was pushed out by everything kept before it, not by its own size —
+// so reporting every capped file as "over the per-file budget" would attach a
+// wrong reason to a correct fact.
 func writeCappedFiles(sb *strings.Builder, capped []cappedFile) {
 	if len(capped) == 0 {
 		return
 	}
-	fmt.Fprintf(sb, "note: %d %s over the %s per-file budget %s not analysed:\n",
-		len(capped), textfmt.Plural(len(capped), "file", "files"),
-		textfmt.HumanBytesCompact(maxReviewFileBytes),
-		textfmt.Plural(len(capped), "was", "were"))
-	for _, c := range capped {
+	fmt.Fprintf(sb, "note: %d %s not analysed:\n",
+		len(capped), textfmt.Plural(len(capped), "file", "files"))
+	shown := capped
+	if len(shown) > maxCappedFilesListed {
+		shown = shown[:maxCappedFilesListed]
+	}
+	for _, c := range shown {
 		path := c.Path
 		if path == "" {
 			path = "(unnamed file)"
 		}
-		fmt.Fprintf(sb, "        %s (%s)\n", path, textfmt.HumanBytesCompact(c.Bytes))
+		reason := fmt.Sprintf("over the %s per-file budget", textfmt.HumanBytesCompact(maxReviewFileBytes))
+		if c.GlobalCapped {
+			reason = fmt.Sprintf("dropped by the %s total-diff budget", textfmt.HumanBytesCompact(maxReviewDiffBytes))
+		}
+		fmt.Fprintf(sb, "        %s (%s) — %s\n", path, textfmt.HumanBytesCompact(c.Bytes), reason)
+	}
+	if n := len(capped) - len(shown); n > 0 {
+		fmt.Fprintf(sb, "        ...and %d more\n", n)
 	}
 	sb.WriteString("      every other file in scope was reviewed in full.\n")
 }
