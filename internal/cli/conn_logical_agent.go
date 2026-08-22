@@ -110,8 +110,20 @@ func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(i
 //
 // A per-call _meta identity, being the stronger channel (it is asserted per
 // call rather than per attach), always wins.
+//
+// The declaration is recorded as a CALL identity, never an attach. Both mark the
+// connection shared — which is what lets repinShard route this call to its own
+// agent — but only an attach moves attachIdentity, the fallback every
+// unattributed call is then resolved against. session_start commits that stronger
+// claim through externalIDFn, and only once the call has actually succeeded: an
+// agent whose re-pin was refused never attached, and must not become the identity
+// its peers' anonymous calls inherit.
 func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.Context {
-	if id == "" || mcp.LogicalAgentFromCtx(ctx) != "" {
+	if id == "" {
+		return ctx
+	}
+	s.recordLogicalAgentCall(id)
+	if mcp.LogicalAgentFromCtx(ctx) != "" {
 		return ctx
 	}
 	return mcp.WithLogicalAgent(ctx, id)

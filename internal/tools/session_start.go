@@ -329,15 +329,21 @@ func (*SessionStart) Description() string {
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	// Identity BEFORE workspace, deliberately. A subagent multiplexed over a
-	// shared connection declares itself with `session_id` in the SAME call that
-	// names its workspace, so resolving the workspace first left the caller
-	// unattributable at the exact moment the sticky-pin guard and the per-agent
-	// re-pin ran: the re-pin moved the CONNECTION's pin, dragging every peer agent
-	// (issue #182). resolveLinkage records the identity and declaredAgent puts it
-	// on the ctx the re-pin below runs under, so the re-pin lands on this agent's
-	// own shard and no peer's pin moves.
-	inheritedName, linked := t.resolveLinkage(raw)
+	// ATTRIBUTION before the workspace, LINKAGE after it — the split matters.
+	//
+	// A subagent multiplexed over a shared connection declares itself with
+	// `session_id` in the SAME call that names its workspace, so resolving the
+	// workspace first left the caller unattributable at the exact moment the
+	// sticky-pin guard and the per-agent re-pin ran: the re-pin moved the
+	// CONNECTION's pin, dragging every peer agent (issue #182). withDeclaredAgent
+	// therefore runs first, putting the declared identity on the ctx the re-pin
+	// below inherits, so the re-pin lands on this agent's own shard.
+	//
+	// resolveLinkage stays BELOW the error returns because its effects are
+	// commitments, not observations: it makes the session answerable to this
+	// external id, may rename it to inherit an ended session's name, and records
+	// the attach-time fallback identity for unattributed calls. A REFUSED call
+	// must commit none of that — an agent whose pin was refused never attached.
 	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
 	if err != nil {
@@ -346,6 +352,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
+	inheritedName, linked := t.resolveLinkage(raw)
 	lang, lspKey := detectLanguageInfo(ws)
 	// A forced/attached primary may have no root marker (e.g. swift pinned on an
 	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer

@@ -22,15 +22,26 @@
   submodule or worktree moved the coordinator and every sibling with it, and a
   `force: true` retry moved them silently. `session_start` now settles identity first and
   hands the re-pin a ctx carrying the declared `session_id` (new `WithDeclaredAgent`
-  channel, wired to `connSession.declaredAgentCtx`), so a subagent's re-pin moves its own
-  shard and nothing else; a per-call `_meta` identity still outranks the declaration.
-  The cross-workspace re-pin stays REFUSED with the remedy named, and refusing it no
-  longer flags the shared connection blocked. New acceptance harness
-  `TestMultiAgentPin` (`-tags=integration`) runs a coordinator plus five concurrent
-  subagents over one connection — mixed argument shapes, one cross-workspace drifter —
-  and asserts zero refusals for the legitimate calls, per-agent write attribution, and
-  the connection pin never moving. `internal/tools/session_start.go`,
-  `internal/cli/conn_logical_agent.go`.
+  channel, wired to `connSession.declaredAgentCtx`), so a subagent's **`session_start`**
+  moves its own shard and leaves the connection pin and every peer's pin where they are;
+  a per-call `_meta` identity still outranks the declaration. Scope, stated precisely:
+  this fixes the re-pin, which is the call that carries `session_id`. A LATER tool call
+  from the same client still carries no agent identity, so it is still attributed to
+  whichever agent attached last (the pre-existing `shardFor`/`attachIdentity` fallback) —
+  a separate, tracked defect, pinned as-is by
+  `TestMultiAgentPin/AnonymousCallsInheritTheLastAttachedAgent` so it cannot regress
+  silently. The linkage half of `session_start` (external-ID registration, session-name
+  inheritance, the attach-time fallback identity) now runs only once the call has
+  SUCCEEDED, so a refused re-pin no longer leaves the session answering to an agent that
+  never attached. The cross-workspace re-pin stays REFUSED with the remedy named; it no
+  longer flags the shared connection `blocked`, but it is not silent either — a refused
+  per-agent re-pin logs at Warn and sets an `agent_repin_refused` health note naming the
+  agent, both pins and the remedy, cleared by that agent's own successful re-pin. New
+  acceptance harness `TestMultiAgentPin` (`-tags=integration`) runs a coordinator plus
+  five concurrent subagents over one connection — mixed argument shapes, one
+  cross-workspace drifter. `internal/tools/session_start.go`,
+  `internal/tools/session_start_identity.go`, `internal/cli/conn_logical_agent.go`,
+  `internal/cli/conn_agent_shard.go`.
 
 ### Added
 

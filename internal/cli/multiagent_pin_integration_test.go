@@ -6,16 +6,33 @@ package cli
 // topology plumb is actually deployed into: a coordinator agent and N subagents
 // multiplexed over ONE MCP connection (Claude Code spawns subagents that inherit
 // the parent's single `plumb serve`), each declaring itself with
-// session_start.session_id, none of them able to inject a per-call `_meta`
-// identity.
+// session_start.session_id.
+//
+// READ THIS BEFORE TRUSTING A RESULT HERE — what the harness models, precisely:
+//
+//   - session_start calls carry NO per-call `_meta` identity. That is the honest
+//     model of the target client, and it is the channel the fix is about.
+//   - LATER calls (the write_file cases) DO carry one. That is NOT the target
+//     client: Claude Code's per-call `_meta` has a tool-use id and a progress
+//     token, nothing agent-scoped. Those subtests therefore prove per-agent
+//     routing for a client that CAN identify each call — a real supported
+//     topology, but not the one the subagents in the story are running.
+//
+// The gap between the two is deliberate and pinned, not overlooked:
+// testAnonymousCallsInheritTheLastAttachedAgent asserts what actually happens
+// today when a later call carries no identity at all. It is a KNOWN, TRACKED
+// defect (the shardFor/attachIdentity fallback, pre-existing to PLAN-286 and
+// filed separately), so the assertion records the broken behaviour on purpose:
+// closing that gap must turn that one subtest red and nothing else.
 //
 // PLAN-286 built per-agent state (shards, inverted sticky guard) and PLAN-300
 // closed the restore-path widening. What neither proved is the end-to-end claim
 // this file exists to pin: that N concurrent subagents get ZERO pin-guard
-// refusals for legitimate calls, that each one's calls resolve to the workspace
-// it is entitled to, that a cross-workspace re-pin is still REFUSED with an
-// actionable remedy (the #181/#182 fail-open class must stay closed), and that
-// every agent's writes are visible to workspace_sessions' feed.
+// refusals for legitimate calls, that each one's session_start resolves to the
+// workspace it is entitled to, that a cross-workspace re-pin is still REFUSED
+// with an actionable remedy AND a daemon-side trace (the #181/#182 fail-open
+// class must stay closed and must not go silent), and that the connection's own
+// pin never moves under any of it.
 //
 // The harness drives the REAL tool surface — tools.SessionStart and
 // tools.WriteFile wired exactly as registerAllTools wires them — because the
@@ -113,6 +130,7 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("CrossWorkspaceSubagentRefusedWithRemedy", testCrossWorkspaceRefusedWithRemedy)
 	t.Run("AnonymousStateChangeStillRefused", testAnonymousStateChangeStillRefused)
 	t.Run("EveryAgentWriteIsAttributedAndVisible", testEveryAgentWriteVisible)
+	t.Run("AnonymousCallsInheritTheLastAttachedAgent", testAnonymousCallsInheritTheLastAttachedAgent)
 }
 
 // testSubagentSameCallIdentity is the headline regression. A subagent's FIRST
@@ -256,12 +274,31 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 	if _, err := m.s.policyFor(agentCtx("drifter")).Check(filepath.Join(other, "x.go"), tools.AccessReadWrite); err == nil {
 		t.Error("the refused agent's boundary admits a path in the workspace it was refused — fail-open")
 	}
-	// One subagent asking for a project of its own is not an attack on the
-	// connection: refusing it must not mark the shared session blocked, which
-	// would raise a dashboard alert against the coordinator for a peer's call.
-	if health, msg := sessionHealth(t, m.s.sessID); health == "blocked" {
+	// The refusal must leave a TRACE. This is a past-vulnerability surface, and
+	// the connection-level guard has always marked the session on a refused
+	// steal; a per-agent refusal that recorded nothing would make a refused
+	// cross-workspace drift on a shared connection invisible to the operator.
+	// It must not mark it "blocked", though: one subagent asking for a project of
+	// its own is a scoping question about that agent, not the connection being
+	// unusable, and "blocked" raises a dashboard alert against the coordinator
+	// for a peer's call.
+	health, msg := sessionHealth(t, m.s.sessID)
+	if health == "blocked" {
 		t.Errorf("a per-agent refusal flagged the whole connection blocked: %s", msg)
 	}
+	if health != agentRepinRefusedHealth {
+		t.Errorf("a refused per-agent re-pin left no health trace: health = %q — a refused "+
+			"cross-workspace drift on a shared connection must not be silent", health)
+	}
+	for _, want := range []string{"drifter", other, "force: true"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the health note does not name %q, so an operator cannot act on it: %s", want, msg)
+		}
+	}
+
+	// And it heals: the agent's own successful re-pin clears the mark, exactly as
+	// a successful connection-level re-pin does. Otherwise the note outlives the
+	// condition and the next reader is chasing a resolved refusal.
 
 	// The remedy actually works, and only for the agent that used it.
 	if err := m.sessionStart(t, map[string]any{"workspace": other, "session_id": "drifter", "force": true}); err != nil {
@@ -275,6 +312,9 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 	}
 	if got := m.s.workspace(); got != ws {
 		t.Errorf("a peer's forced re-pin moved the CONNECTION pin to %q, want %q", got, ws)
+	}
+	if health, msg := sessionHealth(t, m.s.sessID); health == agentRepinRefusedHealth {
+		t.Errorf("the refusal mark survived the agent's own successful re-pin: %s", msg)
 	}
 }
 
@@ -351,5 +391,66 @@ func testEveryAgentWriteVisible(t *testing.T) {
 				t.Errorf("%s's write leaked into %s's tracker", id, peer)
 			}
 		}
+	}
+}
+
+// testAnonymousCallsInheritTheLastAttachedAgent PINS A KNOWN DEFECT, on purpose.
+// It asserts what plumb does today, not what it should do, so the gap cannot
+// widen or regress unnoticed — and so that closing it turns exactly this subtest
+// red, which is the signal to delete it.
+//
+// The defect: shardFor falls back to logicalAgents.attachIdentity() — the MOST
+// RECENTLY attached session_id — for a call carrying no per-call `_meta`. Every
+// agent on a shared connection that cannot inject `_meta` therefore has its
+// later calls attributed to whichever peer attached last: reads and writes are
+// recorded against that peer's trackers, and its workspace and boundary policy
+// are the ones resolved. It is pre-existing (PLAN-286 shipped it, this card did
+// not introduce it), it is filed as its own card, and it is deliberately NOT
+// fixed here.
+//
+// Why it matters to this file: every OTHER write subtest hands write_file a
+// per-call identity, which the target client cannot do. This is what the same
+// scenario actually does over the channel that client really has.
+func testAnonymousCallsInheritTheLastAttachedAgent(t *testing.T) {
+	m := newMultiAgentConn(t)
+	ws := freshTempDir(t)
+	mustGitDir(t, ws)
+
+	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "coordinator"}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "subagent-last"}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	// The coordinator writes, over the only channel it has: no per-call identity.
+	path := filepath.Join(ws, "coordinator-anonymous.txt")
+	if err := m.writeFile(t, "", path, "coordinator\n"); err != nil {
+		t.Fatalf("anonymous write_file: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the write did not land: %v", err)
+	}
+
+	// KNOWN GAP, asserted as-is. The write is attributed to the agent that
+	// attached LAST, not to the coordinator that made it.
+	if m.s.writeTrackerFor(agentCtx("coordinator")).Wrote(path) {
+		t.Error("FIXED? the coordinator's own anonymous write is now attributed to it — " +
+			"the shardFor/attachIdentity gap this subtest pins has been closed; delete this subtest " +
+			"and fold the case into testEveryAgentWriteVisible")
+	}
+	if !m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(path) {
+		t.Error("the known attachIdentity fallback did not route the anonymous write to the " +
+			"last-attached agent either — the behaviour changed in some third way; re-derive it " +
+			"before trusting anything else in this file")
+	}
+
+	// The load-bearing safety property still holds regardless of attribution: an
+	// anonymous call resolves to a workspace, and here every agent shares one, so
+	// no write escapes the coordinator's project. (The fail-open this gap CAN
+	// produce needs a peer to have force-pinned elsewhere first; that is the
+	// separate card's territory, not something to leave undocumented here.)
+	if got := m.s.workspaceFor(context.Background()); got != ws {
+		t.Errorf("anonymous call resolved to workspace %q, want %q", got, ws)
 	}
 }
