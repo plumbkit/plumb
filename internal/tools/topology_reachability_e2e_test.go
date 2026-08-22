@@ -13,6 +13,7 @@ import (
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // buildReachabilityFixture indexes a small synthetic Go workspace through the
@@ -602,27 +603,47 @@ func TestReachabilityTestOnlyEdgeWorkspaceNotGoOnlyRefused(t *testing.T) {
 // case (len(g.Dirs) is never >1), and must answer normally — reachable:1,
 // unreachable:0 — never a refusal.
 func TestReachabilitySingleDirZeroEdgesIsBenign(t *testing.T) {
+	// A real Go fixture would leave this test unable to fail: HasGoSignal is
+	// true for any Go workspace regardless of directory count, which makes
+	// the `len(g.Dirs) > 1` clause dead weight for Go — mutating `> 1` to
+	// `>= 1` would still pass. fakeNoImportEdgeExtractor (HasGoSignal=false,
+	// no language signal at all) with exactly ONE directory isolates the
+	// actual boundary this test names: the ONLY thing standing between this
+	// single-package workspace and the refusal is len(g.Dirs) > 1 being
+	// false.
 	ws := t.TempDir()
-	full := filepath.Join(ws, "onlydir", "a.go")
+	full := filepath.Join(ws, "onlydir", "a.fakelang")
 	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(full, []byte("package a\n\nfunc A() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(full, []byte("stub"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
-		[]topology.Extractor{goext.New()})
+		[]topology.Extractor{fakeNoImportEdgeExtractor{}})
 	if err != nil {
 		t.Fatalf("topology.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
 	deadline := time.Now().Add(10 * time.Second)
+	var g *topology.PackageGraph
 	for time.Now().Before(deadline) {
-		if n, _ := s.SymbolsInFile(context.Background(), full); len(n) > 0 {
+		gg, gerr := s.PackageGraph(context.Background())
+		if gerr == nil && len(gg.Dirs) == 1 {
+			g = gg
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if g == nil {
+		t.Fatal("timed out waiting for the single-dir fixture to index")
+	}
+	if g.HasGoSignal {
+		t.Fatal("test setup bug: fakeNoImportEdgeExtractor must not set HasGoSignal")
+	}
+	if g.TotalEdges() != 0 {
+		t.Fatalf("test setup bug: expected zero edges, got %v", g.Edges)
 	}
 
 	tool := tools.NewTopologyImpact(func() *topology.Store { return s })
@@ -632,9 +653,124 @@ func TestReachabilitySingleDirZeroEdgesIsBenign(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if strings.Contains(out, "Go-only") {
-		t.Errorf("a single-package workspace must never get the Go-only refusal, got:\n%s", out)
+		t.Errorf("a single-directory workspace (len(g.Dirs)==1) must never get the Go-only refusal, got:\n%s", out)
 	}
 	if !strings.Contains(out, "reachable: 1 package(s)") || !strings.Contains(out, "unreachable: 0 package(s)") {
 		t.Errorf("expected reachable:1/unreachable:0, got:\n%s", out)
+	}
+}
+
+// nonGoLanguageFixture is one of the four non-Go languages whose extractors
+// can populate g.Dirs at all (each emits KindPackage) and each ALSO emits
+// KindImport for its own import/using/require/alias syntax — the exact
+// shape that made a bare "any KindImport node" HasGoSignal clause
+// unreachable-refusal for every one of them (round-2->3 review finding).
+type nonGoLanguageFixture struct {
+	name      string
+	extractor topology.Extractor
+	ext       string
+	// src returns idiomatic, parse-clean source for one file declaring the
+	// given package/namespace/module name, importing something that never
+	// resolves to a local directory (so no edge folds).
+	src func(pkgName string) string
+}
+
+var nonGoLanguageFixtures = []nonGoLanguageFixture{
+	{
+		name:      "csharp",
+		extractor: treesitter.NewCSharp(),
+		ext:       ".cs",
+		src: func(pkgName string) string {
+			return "using System;\n\nnamespace " + pkgName + "\n{\n    public class Widget {}\n}\n"
+		},
+	},
+	{
+		name:      "php",
+		extractor: treesitter.NewPHP(),
+		ext:       ".php",
+		src: func(pkgName string) string {
+			return "<?php\n\nnamespace " + pkgName + ";\n\nuse Some\\Unrelated\\Thing;\n\nclass Widget {}\n"
+		},
+	},
+	{
+		name:      "elixir",
+		extractor: treesitter.NewElixir(),
+		ext:       ".ex",
+		src: func(pkgName string) string {
+			return "defmodule " + pkgName + " do\n  import Enum\nend\n"
+		},
+	},
+	{
+		name:      "scala",
+		extractor: treesitter.NewScala(),
+		ext:       ".sc",
+		src: func(pkgName string) string {
+			return "package " + pkgName + "\n\nimport scala.collection.mutable\n\nclass Widget\n"
+		},
+	},
+}
+
+// TestReachabilityNonGoLanguagesStillRefused pins round-2->3 review's
+// REQUIRED-1 across all four non-Go languages that can populate g.Dirs
+// without Go (csharp, php, elixir, scala — every extractor with a
+// KindPackage-shaped concept other than Go's): each must still get the
+// Go-only refusal, proving HasGoSignal is no longer spoofed by their own
+// KindImport nodes.
+func TestReachabilityNonGoLanguagesStillRefused(t *testing.T) {
+	for _, lf := range nonGoLanguageFixtures {
+		t.Run(lf.name, func(t *testing.T) {
+			ws := t.TempDir()
+			dirs := []string{"src/alpha", "src/beta", "src/gamma"}
+			names := []string{"Acme.Alpha", "Acme.Beta", "Acme.Gamma"}
+			for i, d := range dirs {
+				full := filepath.Join(ws, d, "File"+lf.ext)
+				if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(lf.src(names[i])), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+				[]topology.Extractor{lf.extractor})
+			if err != nil {
+				t.Fatalf("topology.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+
+			deadline := time.Now().Add(60 * time.Second)
+			var g *topology.PackageGraph
+			for time.Now().Before(deadline) {
+				gg, gerr := s.PackageGraph(context.Background())
+				if gerr == nil && len(gg.Dirs) >= 3 {
+					g = gg
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if g == nil {
+				t.Fatalf("timed out waiting for the %s fixture to index (cold grammar load?)", lf.name)
+			}
+			if g.HasGoSignal {
+				t.Fatalf("%s workspace must not set HasGoSignal (no Go anywhere), got true", lf.name)
+			}
+			if g.TotalEdges() != 0 {
+				t.Fatalf("%s test setup bug: expected zero foldable edges, got %v", lf.name, g.Edges)
+			}
+
+			tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+			args, _ := json.Marshal(map[string]any{"mode": "reachability", "roots": []string{dirs[0]}})
+			out, err := tool.Execute(context.Background(), args)
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if !strings.Contains(out, "Go-only") {
+				t.Errorf("%s: expected the Go-only refusal, got:\n%s", lf.name, out)
+			}
+			if strings.Contains(out, "unreachable:") {
+				t.Errorf("%s: must refuse, not confidently report every package unreachable, got:\n%s", lf.name, out)
+			}
+		})
 	}
 }

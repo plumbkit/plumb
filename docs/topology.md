@@ -246,8 +246,13 @@ unguarded version of this feature did. The detection is deliberately not "zero f
 edges" alone — a genuinely small Go workspace can have zero too (every cross-package
 import is stdlib-only, or its only cross-package import lives in a `_test.go` file,
 which is excluded per the production-imports-only rule above); the refusal fires only
-when the index ALSO carries no independent evidence of Go (no `package` node with
-`language=go`, no `import` node at all).
+when the index ALSO carries no independent evidence of Go — specifically, no `package`
+node with `language=go`. That check is deliberately narrower than "no `import` node at
+all": C#, PHP, Elixir, and Scala — the four non-Go languages whose extractors can
+populate a directory at all — each emit their own `import`-shaped nodes too, so a
+broader "any import node" signal would have made the refusal unreachable for every
+workspace it exists to catch. A Go `package` clause is mandatory and per-file, so a
+`language=go` package node is unambiguous evidence no other extractor produces.
 
 **Roots.** Every `package main` directory by default, plus `topology_routes`
 entry-point candidates (an HTTP handler, a Cobra command — labelled
