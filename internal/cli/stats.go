@@ -52,20 +52,31 @@ func init() {
 	statsCmd.Flags().StringVar(&statsFlagSince, "since", "", "only count calls newer than this age, e.g. 24h, 7d, 2w (default: all history)")
 }
 
-func runStats(_ *cobra.Command, _ []string) error {
-	PrintLogo()
-
+// resolveStatsWorkspace resolves the --workspace flag (defaulting to the
+// current directory) against the loaded config. Split out of runStats so
+// that function's own branch count stays under the gocyclo-15 contract.
+func resolveStatsWorkspace() (string, error) {
 	ws := statsFlagWorkspace
 	if ws == "" {
 		ws = "."
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return "", fmt.Errorf("loading config: %w", err)
 	}
-	ws, err = resolveCLIWorkspace(ws, cfg)
+	return resolveCLIWorkspace(ws, cfg)
+}
+
+func runStats(_ *cobra.Command, _ []string) error {
+	PrintLogo()
+
+	ws, err := resolveStatsWorkspace()
 	if err != nil {
 		return err
+	}
+
+	if statsFlagHealth {
+		return runStatsHealth(ws)
 	}
 
 	db, err := stats.OpenReadOnly()
