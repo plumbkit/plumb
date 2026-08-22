@@ -80,6 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_tc_tool_dur ON tool_calls(tool, duration_ms);
 
 ` + episodicMemoriesDDL + `;
 CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_at);
+
+` + healthDailyDDL + `
 `
 
 // migration describes a single forward schema step. For ADD COLUMN migrations,
@@ -138,6 +140,11 @@ SET input_json = CASE
     END,
     output_text = ''
 WHERE tool IN ('leave_note', 'share_intent', 'share_findings', 'check_messages', 'session_start')`},
+	// v18 adds the health_daily table (PLAN-368): three standing health metrics
+	// (lane-defection rate, semantic-surface error rate, net economics),
+	// computed idempotently per day and upserted here — additive only, no
+	// existing column changes. See health.go.
+	{from: 17, to: 18, sql: healthDailyDDL},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -229,7 +236,8 @@ func DBPathFor() string {
 //	15 — added error_retryable column (failure telemetry)
 //	16 — added remediation_class column (failure telemetry)
 //	17 — scrubbed historical collaboration bodies from tool-call telemetry
-const SchemaVersion = 17
+//	18 — added health_daily table (three standing health metrics, PLAN-368)
+const SchemaVersion = 18
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {

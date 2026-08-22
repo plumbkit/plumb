@@ -33,6 +33,27 @@
 
 ### Added
 
+- **`plumb stats --health`: three standing health metrics (PLAN-368).** A new,
+  additive `health_daily` table (stats schema v18) and CLI flag compute, idempotently
+  per UTC day, the three metrics the worth-it strategy's W2-14 names so a regression in
+  plumb's own value proposition shows up in days rather than a year later by anecdote:
+  **lane-defection rate** — the share of sessions where a plumb-read file was
+  subsequently modified by something other than plumb, detected via the SAME machinery
+  that already refuses a stale write (`toolerror.KindUnreadOrStale`, stamped by
+  `changedSinceSessionRead`/strict-mode's read-before-write guard) — an approximation
+  that undercounts (it only catches a defection the session later tried to write over),
+  documented as such in the output; **semantic-surface error rate**, a 7-day rolling
+  per-tool rate across the LSP query/edit surface (`stats.SemanticTools`), with an
+  `advertised` flag sourced from the pin set (`tools.PinnedTools`, PLAN-355) and a
+  `flagged` verdict when an advertised tool's rate crosses read_file's own rate times a
+  configurable multiplier (`stats.DefaultSemanticBaselineMultiplier`, default 3×); and
+  **net economics per client, trended daily** — two of PLAN-367's three economics lines
+  (estimated read savings netted to the current savings-model version only, and the
+  guard-refusal count), deliberately NOT three: the profile tool-schema surcharge is a
+  live per-connection figure `plumb stats` itself already declines to show for the same
+  reason (`internal/stats/health_economics.go` explains why trending it here would mean
+  fabricating a number for a day nobody measured it on). Read-only over `calls`; no
+  existing column changes. `internal/stats/health*.go`, `internal/cli/stats_health.go`.
 - **MCP `initialize` instructions aligned with the managed brief (PLAN-366).**
   `internal/mcp`'s `initialize` response `instructions` field previously carried its own,
   separately authored text (session_start-first orientation) — different substance from what
