@@ -56,9 +56,10 @@ type agentShard struct {
 // agent starts isolated from its peers.
 func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	id := mcp.LogicalAgentFromCtx(ctx)
-	// sharedWith, not isShared: a caller declaring an identity the connection has
-	// not recorded yet is still a second agent, and must be routed to its own
-	// shard without that routing being written down (see sharedWith).
+	// sharedWith counts the CALLER, not just the identities already committed: an
+	// agent declaring one the connection has not recorded yet is still a second
+	// agent, and must be routed to its own shard without that routing being
+	// written down. See sharedWith for why the commitment waits for success.
 	if !s.logicalAgents.sharedWith(id) {
 		return nil
 	}
