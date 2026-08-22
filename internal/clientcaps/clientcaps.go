@@ -101,12 +101,19 @@ type Capabilities struct {
 
 	// DescriptionCapRunes, when nonzero, is a measured rune ceiling the client
 	// truncates a single tool description at. Zero means no cap has been
-	// measured for this client — NOT "no cap exists". No client's real cap is
-	// known yet (internal/tools/profile_test.go's maxDescriptionChars is a
-	// measurement of Claude Code specifically, not yet copied here), so every
-	// row below leaves this at zero; populate it only from a reviewed
-	// measurement, the same rule ReliableDeferredToolDiscovery follows —
-	// guessing a number here would be fake precision, not a real cap.
+	// measured for this client — NOT "no cap exists". Populate it only from a
+	// reviewed measurement, the same rule ReliableDeferredToolDiscovery follows
+	// — guessing a number here would be fake precision, not a real cap.
+	//
+	// claude-code is the one measured row (PLAN-370): a live Claude Code
+	// session truncated six tool descriptions, and locating each one's last
+	// surviving word in its source string puts every cut at exactly 2048 —
+	// see internal/tools/profile_test.go's maxDescriptionChars comment for the
+	// full evidence. No other client has been measured; a description
+	// conformance check for an unmeasured client falls back to the strictest
+	// known cap (clientcaps.StrictestDescriptionCapRunes) rather than skipping
+	// the check — an absent number is evidence of nothing, not evidence of
+	// safety.
 	DescriptionCapRunes int
 
 	Tokeniser Family
@@ -165,7 +172,10 @@ var registry = []Capabilities{
 		// proven reader of _meta["anthropic/alwaysLoad"]).
 		SupportsMCPInstructions: true,
 		SupportsAlwaysLoadPin:   true,
-		Tokeniser:               FamilyClaude,
+		// DescriptionCapRunes: measured (PLAN-370) — see the field's doc comment
+		// for the live-truncation evidence.
+		DescriptionCapRunes: 2048,
+		Tokeniser:           FamilyClaude,
 	},
 	{
 		Name:           "codex",
@@ -310,4 +320,35 @@ func Lookup(clientName string) Capabilities {
 		}
 	}
 	return best
+}
+
+// All returns every registered client's Capabilities, in registry order. It
+// exists for callers — the PLAN-370 description-conformance check is the
+// first — that must iterate every known client without duplicating the
+// registry itself, so a client added here is covered automatically. The
+// slice is a copy; mutating it does not affect the package's registry.
+func All() []Capabilities {
+	out := make([]Capabilities, len(registry))
+	copy(out, registry)
+	return out
+}
+
+// StrictestDescriptionCapRunes returns the smallest nonzero DescriptionCapRunes
+// among all registered clients — the cap a conformance check should apply to a
+// client whose own DescriptionCapRunes is unmeasured (0). An absent measurement
+// is evidence of nothing, not evidence the client tolerates a longer
+// description than the one client that has been measured, so "no data" must
+// not read as "no limit". Returns 0 only if no client's cap has been measured
+// yet, in which case a caller has nothing to enforce against.
+func StrictestDescriptionCapRunes() int {
+	strictest := 0
+	for _, c := range registry {
+		if c.DescriptionCapRunes == 0 {
+			continue
+		}
+		if strictest == 0 || c.DescriptionCapRunes < strictest {
+			strictest = c.DescriptionCapRunes
+		}
+	}
+	return strictest
 }
