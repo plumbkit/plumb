@@ -39,6 +39,26 @@
   template will read, not something wired into the `initialize` response's
   content here.
 
+- **Truncation-proof description conformance per client (PLAN-370, test-only).**
+  `internal/clientcaps.Capabilities.DescriptionCapRunes` now carries a reviewed
+  measurement for `claude-code` (2048 runes — the live-truncation evidence
+  already on record in `internal/tools/profile_test.go`'s `maxDescriptionChars`
+  comment); every other registered client stays at 0 (unmeasured), guarded by
+  `TestClientCapsDescriptionCapRunesUnmeasured`. Two new exported accessors,
+  `clientcaps.All()` and `clientcaps.StrictestDescriptionCapRunes()`, let a
+  caller iterate every registered client without duplicating the registry, and
+  fall back to the smallest measured cap for an unmeasured one. A new test,
+  `internal/tools.TestDescriptionConformance`, renders every registered tool's
+  description and checks it against every client's cap this way — an
+  unmeasured client is checked against the strictest known cap rather than
+  skipped, so a future client row is covered automatically with no second
+  constant to remember to update. Verified against the live codebase: as of
+  this PR no tool description exceeds any client's cap (`TestDescriptionConformance`
+  is green), and `internal/mcp/server_handlers.go`'s `snapshotTools` confirms
+  no per-client rendering exists today — `Tool.Description()` is already the
+  exact bytes every client's `tools/list` receives, so there is no separate
+  "rendered form" to diverge from the source constant yet.
+
 - **Managed instruction block — the mechanism, PR 1 of 2 (PLAN-364).** `plumb setup <client>`
   (codex, gemini, claude-code) now writes a small, versioned, idempotent block into the
   client's project-level instruction file (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, per client

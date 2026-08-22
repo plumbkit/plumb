@@ -267,18 +267,55 @@ func TestClientCapsSupportsAlwaysLoadPinEntries(t *testing.T) {
 	}
 }
 
-// TestDescriptionCapRunesUnmeasured guards the evidence-gate DescriptionCapRunes'
-// own doc comment promises: no client's real description-truncation cap has
-// been measured yet, so every row — registered or unknown — must leave it at
-// zero rather than a guessed number.
+// measuredDescriptionCapRunes names the registry rows whose DescriptionCapRunes
+// is a reviewed measurement, and the value (PLAN-370). claude-code is the one
+// entry so far: see the field's doc comment in clientcaps.go for the
+// live-truncation evidence. A row absent from this map must stay at zero.
+var measuredDescriptionCapRunes = map[string]int{
+	"claude-code": 2048,
+}
+
+// TestClientCapsDescriptionCapRunesUnmeasured guards the evidence-gate
+// DescriptionCapRunes' own doc comment promises: every row's value must equal
+// its reviewed measurement (measuredDescriptionCapRunes), or zero if it has
+// none — never a guessed number, and never a value that drifted from the
+// measurement on record.
 func TestClientCapsDescriptionCapRunesUnmeasured(t *testing.T) {
 	for _, c := range registry {
-		if c.DescriptionCapRunes != 0 {
-			t.Errorf("%s: DescriptionCapRunes = %d, want 0 (unmeasured) — populate only from a reviewed measurement",
-				c.Name, c.DescriptionCapRunes)
+		want := measuredDescriptionCapRunes[c.Name]
+		if c.DescriptionCapRunes != want {
+			t.Errorf("%s: DescriptionCapRunes = %d, want %d — populate only from a reviewed measurement, recorded in measuredDescriptionCapRunes",
+				c.Name, c.DescriptionCapRunes, want)
 		}
 	}
 	if unknownCaps.DescriptionCapRunes != 0 {
 		t.Errorf("unknownCaps.DescriptionCapRunes = %d, want 0", unknownCaps.DescriptionCapRunes)
+	}
+}
+
+// TestStrictestDescriptionCapRunes pins the fallback a description-conformance
+// check applies to an unmeasured client: the smallest nonzero cap on record,
+// currently claude-code's 2048 (the only measured row). Guards against a
+// silent widening if a stricter client is measured later without this test
+// being revisited, and against StrictestDescriptionCapRunes drifting to 0
+// ("nothing to enforce") while a measured row exists.
+func TestStrictestDescriptionCapRunes(t *testing.T) {
+	const want = 2048
+	if got := StrictestDescriptionCapRunes(); got != want {
+		t.Errorf("StrictestDescriptionCapRunes() = %d, want %d", got, want)
+	}
+}
+
+// TestAll_MatchesRegistry pins All() to the registry it copies from, so a
+// caller iterating All() is provably iterating every registered client.
+func TestAll_MatchesRegistry(t *testing.T) {
+	all := All()
+	if len(all) != len(registry) {
+		t.Fatalf("All() returned %d entries, registry has %d", len(all), len(registry))
+	}
+	for i, c := range all {
+		if c.Name != registry[i].Name {
+			t.Errorf("All()[%d].Name = %q, want %q", i, c.Name, registry[i].Name)
+		}
 	}
 }
