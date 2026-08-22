@@ -296,6 +296,18 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 		}
 	}
 
+	// A refused agent never ATTACHED, so it must not have become the attach-time
+	// fallback identity — the one every unattributed call on this connection is
+	// resolved against. Declaring an identity inside a call is a per-call claim;
+	// only a call that succeeded commits the stronger one.
+	if got := m.s.logicalAgents.attachIdentity(); got != "coordinator" {
+		t.Errorf("attach-time fallback identity = %q after a REFUSED re-pin, want %q — "+
+			"a refused agent became the identity its peers' anonymous calls inherit", got, "coordinator")
+	}
+	if got := m.s.workspaceFor(context.Background()); got != ws {
+		t.Errorf("an unattributed call resolves to %q after a refused cross-workspace re-pin, want %q", got, ws)
+	}
+
 	// And it heals: the agent's own successful re-pin clears the mark, exactly as
 	// a successful connection-level re-pin does. Otherwise the note outlives the
 	// condition and the next reader is chasing a resolved refusal.
