@@ -240,7 +240,7 @@ func IsLean(name string) bool { return LeanTools[name] }
 // resolved tool profile and the reason it was chosen (see autoProfileFor's
 // stable kebab-case reasons: client-override, explicit-config,
 // schema-discovery-only-client, verified-deferred-discovery,
-// client-side-allowlist, unknown-client-baseline, unverified-deferred-discovery).
+// client-side-allowlist, unknown-deferred-discovery, unverified-deferred-discovery).
 //
 // Under "lean" it deliberately does NOT enumerate the hidden tools (they stay
 // callable by name); hidden is the count suppressed from tools/list, folded in
@@ -280,13 +280,21 @@ func ProfileNote(profile string, hidden int, reason string) string {
 // client's OWN config, which plumb cannot observe — tools/call arrives
 // identically whether or not it is in force. The sentence therefore states
 // the conditional truthfully instead of guessing which state this session is
-// in, and points at the one command that actually knows (`plumb doctor`
-// grades the allowlist's content against today's lean set — see
-// docs/cli-reference.md's `--lean` row). The lean count is read live off
-// LeanToolNames so a future lean-set change cannot make this sentence stale.
+// in.
+//
+// It does NOT claim `plumb doctor` will affirmatively report "what your
+// config actually allows" — it doesn't: per docs/cli-reference.md's `--lean`
+// row, doctor grades the allowlist's CONTENT (a stale snapshot, an empty or
+// malformed list) and stays SILENT when the allowlist already matches today's
+// lean set, so a clean run proves nothing was found wrong, not that a filter
+// is or isn't in force. The sentence is worded to match that: it points at
+// doctor as the place to check for drift, not as an oracle for the filter's
+// current state. The lean count is read live off LeanToolNames so a future
+// lean-set change cannot make this sentence stale.
 func ClientSideAllowlistNote() string {
 	return fmt.Sprintf("Your client config may filter this further: if you ran "+
 		"`plumb setup <client> --lean`, only the %d lean tools are actually loaded "+
-		"regardless of what tools/list advertises above — run `plumb doctor` to check "+
-		"what your config actually allows.\n\n", len(LeanToolNames()))
+		"regardless of what tools/list advertises above — run `plumb doctor`, which "+
+		"flags a stale, empty, or malformed allowlist and stays quiet when yours "+
+		"already matches today's lean set.\n\n", len(LeanToolNames()))
 }

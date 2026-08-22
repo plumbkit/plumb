@@ -83,14 +83,14 @@ func assertBootstrapAlwaysVisible(t *testing.T, s *connSession) {
 // auto+unknown, auto+codex, auto+claude-code, explicit lean, client-override
 // lean, and a synthetic verified-deferred-discovery client.
 func TestClientProfileContractMatrix(t *testing.T) {
-	t.Run("auto + unrecognised client (lean baseline, PLAN-369)", func(t *testing.T) {
+	t.Run("auto + unknown client", func(t *testing.T) {
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "a-client-nobody-registered")
 		profile, reason := s.resolveToolProfile()
-		if profile != "lean" || reason != "unknown-client-baseline" {
-			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"lean\", \"unknown-client-baseline\")", profile, reason)
+		if profile != "full" || reason != "unknown-deferred-discovery" {
+			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"unknown-deferred-discovery\")", profile, reason)
 		}
 		assertBootstrapAlwaysVisible(t, s)
-		assertLeanExact(t, s)
+		assertFullAdmitsEverything(t, s)
 	})
 
 	t.Run("auto + codex", func(t *testing.T) {
@@ -119,8 +119,8 @@ func TestClientProfileContractMatrix(t *testing.T) {
 		// Claude Code does — not the weaker "unverified-deferred-discovery" a
 		// registry entry without SchemaDiscoveryOnly would produce, not
 		// "client-side-allowlist" (Kimi Code also carries that flag, but
-		// SchemaDiscoveryOnly is checked first), and not the "unknown-client-baseline"
-		// an unregistered client now gets.
+		// SchemaDiscoveryOnly is checked first), and not the "unknown-deferred-discovery"
+		// an unregistered client gets.
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi-code")
 		profile, reason := s.resolveToolProfile()
 		if profile != "full" || reason != "schema-discovery-only-client" {
@@ -135,17 +135,12 @@ func TestClientProfileContractMatrix(t *testing.T) {
 		// than splitting a Kimi Desktop entry off the way claude-desktop is split
 		// from claude-code. That choice is only defensible while it cannot cost a
 		// sibling product capability, so pin the property the comment in
-		// internal/clientcaps rests on: since PLAN-369, an unregistered "kimi*"
-		// client falling through to unknownCaps would now get the LEAN baseline
-		// ("lean", unknown-client-baseline) — a smaller advertised surface than the
-		// alias gives ("full", schema-discovery-only-client). The alias exists
-		// precisely to avoid that gap: it keeps a Kimi Desktop client on the same
-		// full surface as Kimi Code, on the reasoning that a sibling product
-		// sharing Kimi Code's mcp.json is more likely to share its
-		// schema-discovery-only constraint than to be a generic unknown client.
-		// If the alias is ever dropped, this test goes red — the bare "kimi"
-		// client would then be demoted to lean with no evidence it can discover a
-		// hidden tool, exactly the outcome the alias exists to prevent.
+		// internal/clientcaps rests on: the alias serves the SAME surface an
+		// unregistered "kimi*" client would get by falling through to unknownCaps
+		// (full, above), differing only in the reason it arrives at it. If the
+		// alias is ever dropped or the flag removed, this stays green and the
+		// serving is unchanged — it goes red only if the alias starts hiding
+		// tools from a client, the one outcome the split was meant to prevent.
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi")
 		profile, reason := s.resolveToolProfile()
 		if profile != "full" {

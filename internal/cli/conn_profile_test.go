@@ -107,9 +107,9 @@ func TestAutoProfileFor(t *testing.T) {
 		wantReason  string
 	}{
 		{
-			"unrecognised client (new lean baseline, PLAN-369)",
+			"unrecognised client (unknown-deferred-discovery)",
 			clientcaps.Capabilities{Name: "unknown"},
-			"lean", "unknown-client-baseline",
+			"full", "unknown-deferred-discovery",
 		},
 		{
 			"schema-discovery-only client",
@@ -154,7 +154,7 @@ func TestResolveToolProfile(t *testing.T) {
 		{"auto + codex => full (client-side allowlist)", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "full", "client-side-allowlist"},
 		{"auto + gemini => full (client-side allowlist)", config.ToolsConfig{Profile: "auto"}, "gemini-cli/1.0.0", "full", "client-side-allowlist"},
 		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full", "unverified-deferred-discovery"},
-		{"auto + unrecognised client => lean baseline (PLAN-369)", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "lean", "unknown-client-baseline"},
+		{"auto + unrecognised client => full (unknown-deferred-discovery)", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full", "unknown-deferred-discovery"},
 		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean", "explicit-config"},
 		{"explicit full wins over claude-code", config.ToolsConfig{Profile: "full"}, "claude-code", "full", "explicit-config"},
 		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "full", "client-side-allowlist"},

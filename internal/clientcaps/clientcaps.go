@@ -123,11 +123,12 @@ var registry = []Capabilities{
 		Name:     "claude-desktop",
 		Prefixes: []string{"claude-desktop", "claude-ai", "claude"},
 		// Thin client: no native filesystem, search, shell, or LSP.
-		// SupportsMCPInstructions: shipped (Claude Desktop is named in the
-		// `instructions` field's own CHANGELOG entry as a client that injects it
-		// as a system-prompt-style hint).
-		SupportsMCPInstructions: true,
-		Tokeniser:               FamilyClaude,
+		// SupportsMCPInstructions: unmeasured. The `instructions` field's own
+		// CHANGELOG entry names Claude Desktop as injecting it, but that is a
+		// shipping blurb, not an observed integration result — no test exercises
+		// it, and nothing consumes this flag yet. Leave false until a reviewed
+		// measurement says otherwise, same discipline as ReliableDeferredToolDiscovery.
+		Tokeniser: FamilyClaude,
 	},
 	{
 		Name:           "junie",
@@ -151,10 +152,17 @@ var registry = []Capabilities{
 		NativeSearch:        true,
 		NativeShell:         true,
 		SchemaDiscoveryOnly: true,
-		// Both shipped: the `instructions` field's CHANGELOG entry names Claude
-		// Code, and PLAN-355's AlwaysLoad pin ladder (conn_register.go) is
-		// Claude-Code-specific in practice today (the sole proven reader of
-		// _meta["anthropic/alwaysLoad"]).
+		// SupportsMCPInstructions: Claude Code is dogfooded directly on this very
+		// codebase — every Claude Code agent session working on plumb receives
+		// DefaultInstructions as its own MCP server preamble and visibly acts on
+		// it (opens with session_start, as instructed), which is first-hand
+		// observed behaviour, not a shipping blurb. The claude-desktop/gemini rows
+		// have no equivalent first-party evidence — their only source is the
+		// `instructions` field's own CHANGELOG entry naming them — so they stay
+		// false pending a real measurement.
+		// SupportsAlwaysLoadPin: shipped — PLAN-355's AlwaysLoad pin ladder
+		// (conn_register.go) is Claude-Code-specific in practice today (the sole
+		// proven reader of _meta["anthropic/alwaysLoad"]).
 		SupportsMCPInstructions: true,
 		SupportsAlwaysLoadPin:   true,
 		Tokeniser:               FamilyClaude,
@@ -179,9 +187,10 @@ var registry = []Capabilities{
 		// `plumb setup gemini --lean` writes tools.LeanToolNames() into the
 		// includeTools key of mcpServers.plumb in the user's settings.json.
 		ClientSideAllowlist: true,
-		// Shipped: the `instructions` field's CHANGELOG entry names Gemini CLI.
-		SupportsMCPInstructions: true,
-		Tokeniser:               FamilyGemini,
+		// SupportsMCPInstructions: unmeasured, same reasoning as claude-desktop
+		// above — the CHANGELOG names Gemini CLI, but that is not an observed
+		// result. Leave false until measured.
+		Tokeniser: FamilyGemini,
 	},
 	{
 		// Kimi Code is schema-discovery-only: it builds its tool set purely from
@@ -206,12 +215,9 @@ var registry = []Capabilities{
 		// bare "kimi" alias covers sibling products (Kimi Desktop) that share the
 		// same mcp.json. Longest-prefix matching in Lookup keeps "kimi-code"
 		// winning over "kimi". If a future build reports some other name, Lookup
-		// simply falls through to unknownCaps, which (PLAN-369) now resolves to
-		// the LEAN baseline ("lean", reason unknown-client-baseline) rather than
-		// full — never to a BROKEN surface (the session_start pointer keeps every
-		// tool reachable), but a strictly smaller advertised one than this entry
-		// gives. That is exactly why the alias matters more after this change,
-		// not less: see below.
+		// simply falls through to unknownCaps and the client degrades gracefully
+		// to unrecognised-client behaviour (still "full", reason
+		// unknown-deferred-discovery) — never to a broken lean surface.
 		//
 		// WHY THE BARE ALIAS SHARES THIS ENTRY, unlike claude/claude-desktop.
 		// Reading it as "Kimi Desktop is handed the CLI's native-capability
@@ -226,16 +232,13 @@ var registry = []Capabilities{
 		//
 		// The alias only changes the two fields where sharing is the safer
 		// answer. SchemaDiscoveryOnly resolves the profile to "full"
-		// (schema-discovery-only-client); unknownCaps (PLAN-369) now resolves to
-		// "lean" (unknown-client-baseline) — a SMALLER served surface, not the
-		// same one this comment used to claim. That asymmetry is exactly the
-		// dangerous direction the alias exists to avoid: a wrongly-absent
-		// SchemaDiscoveryOnly flag on a client that in fact cannot invoke an
-		// unadvertised tool would silently break it under the new lean baseline,
-		// where a wrongly-present flag only costs advertised bytes. Tokeniser
-		// FamilyGPT is nearer a Kimi model than unknownCaps' FamilyClaude. So the
-		// alias is strictly better-informed than the fallback and cannot cost
-		// capability.
+		// (schema-discovery-only-client) where unknownCaps resolves it to "full"
+		// too (unknown-deferred-discovery) — same served surface, and the
+		// dangerous direction would be a wrongly-absent flag on a client that
+		// cannot invoke an unadvertised tool, never a wrongly-present one.
+		// Tokeniser FamilyGPT is nearer a Kimi model than unknownCaps'
+		// FamilyClaude. So the alias is strictly better-informed than the
+		// fallback and cannot cost capability.
 		//
 		// This is deliberately NOT the rule isKimiCode follows
 		// (session_start_detect.go), which refuses the bare alias. The two
