@@ -44,14 +44,14 @@ Passing tests do not prove the tree compiles, and a clean-looking answer may hav
     diagnostics(uris=["internal/tools/git.go"])
     edit_file(file_path="/abs/path/internal/tools/git.go", await_diagnostics=true)
 
-`await_diagnostics` blocks briefly for the language server's post-write pass; only `edit_file` and `write_file` take it. The response carries a structured delta (`fresh`, `new_errors`, `resolved`, `pre_existing`) plus a label naming exactly how much to trust it — read the label, not just the delta:
+`await_diagnostics` blocks briefly for the language server's post-write pass; `edit_file`, `write_file`, and `transaction_apply` take it — no other write tool does. The response carries a structured delta (`fresh`, `new_errors`, `resolved`, `pre_existing`) plus a label naming exactly how much to trust it — read the label, not just the delta:
 
 - **authoritative** — the language server re-published after this write (or, in pull/hybrid mode, a pull succeeded); the delta reflects this edit.
 - **pre-write snapshot** — no re-publish arrived within the wait window, so the data may predate the write.
 - **unverified** — a post-write pull was attempted and errored; there is no fresh answer and no stale one either, just a failure.
-- **not-analysed** — nothing was checked at all: no diagnostics source is wired for this file, or the language server could not be told it changed.
+- **not analysed** — nothing was checked at all: no diagnostics source is wired for this file, or the language server could not be told it changed.
 
-Only **authoritative** is compile truth for this write; the other three are various shades of "ask again". `fail_on_new_errors=true` on the same call goes one step further: it implies `await_diagnostics` and rolls the write back — unchanged, delta returned as the error — when the server CONFIRMS a new error at the write's own location. A plain `diagnostics()` call afterwards uses a separate, coarser label: a report marked **INCOMPLETE** means the server was still indexing, so a clean result then is not evidence — ask again.
+Only **authoritative** is compile truth for this write; the other three are various shades of "ask again". `fail_on_new_errors=true` on the same call goes one step further: it implies `await_diagnostics` and rolls the write back — unchanged, delta returned as the error — when the server CONFIRMS a new error in the edited file. On `transaction_apply` the rollback is batch-wide: any one written file with confirmed new errors restores every file in the transaction, not just that one. A plain `diagnostics()` call afterwards uses a separate, coarser label: a report marked **INCOMPLETE** means the server was still indexing, so a clean result then is not evidence — ask again.
 
 ## 3. Separate "broken" from "not ready"
 
