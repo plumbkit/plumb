@@ -39,6 +39,19 @@ const (
 	sessionStartTimeout = 120 * time.Second
 	// toolTimeout is used for all subsequent tool calls once gopls is warm.
 	toolTimeout = 20 * time.Second
+	// lspToolTimeout is the budget for a tool call that may be the FIRST to
+	// touch the language server. session_start deliberately does not wait for
+	// gopls (internal/cli: firstStartGrace), so the whole cold start lands
+	// inside that first LSP-backed call, and sessionStartTimeout's cold-start
+	// allowance protects a call that no longer pays for it.
+	//
+	// It MUST stay above the SERVER-side [lsp_query] deadline. Below it the
+	// client gives up first, so the daemon's own degradation — the tree-sitter
+	// fallback, or its actionable timeout message — can never be observed, and
+	// a slow runner surfaces as a bare "timeout waiting for response" that
+	// looks like a product bug (PLAN-390). TestLSPToolTimeoutOutlastsServer is
+	// the guard.
+	lspToolTimeout = 90 * time.Second
 )
 
 // ─── prerequisites ────────────────────────────────────────────────────────────

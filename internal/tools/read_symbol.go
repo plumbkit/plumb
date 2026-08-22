@@ -165,9 +165,12 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	// The fallback paths below deliberately take ctx, NOT lspCtx: lspCtx is spent
+	// once the server misses its attempt budget, and a fresh tree-sitter parse
+	// cannot start on an expired context. See withFallbackLSPDeadline.
+	lspCtx, cancel, waited := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	syms, err := t.fetchReadSymbolSymbols(ctx, uri)
+	syms, err := t.fetchReadSymbolSymbols(lspCtx, uri, waited)
 	if err != nil {
 		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
 			return fb, nil
@@ -247,7 +250,11 @@ func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn) (f
 	return fpath, toFileURI(fpath)
 }
 
-func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {
+// fetchReadSymbolSymbols queries the document symbols for uri. waited is the
+// attempt budget ctx carries, quoted in a timeout message so the operator is
+// told the wait that actually happened rather than the full [lsp_query]
+// timeout; zero means the cap was disabled and t.timeout is quoted instead.
+func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string, waited time.Duration) ([]protocol.DocumentSymbol, error) {
 	key := uri + ":docSymbols"
 	if t.cache != nil {
 		if v, ok := t.cache.Get(key); ok {
@@ -258,7 +265,10 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
-		return nil, lspTimeoutErr("read_symbol", t.timeout, err)
+		if waited <= 0 {
+			waited = t.timeout
+		}
+		return nil, lspTimeoutErr("read_symbol", waited, err)
 	}
 	if t.cache != nil {
 		t.cache.Set(key, syms, t.ttl)
