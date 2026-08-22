@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -62,10 +61,13 @@ func (s *connSession) isShared() bool {
 // the connection's current pin/language, with fresh trackers/limiter/undo so each
 // agent starts isolated from its peers.
 func (s *connSession) shardFor(ctx context.Context) *agentShard {
-	if !s.isShared() {
+	id := mcp.LogicalAgentFromCtx(ctx)
+	// sharedWith, not isShared: a caller declaring an identity the connection has
+	// not recorded yet is still a second agent, and must be routed to its own
+	// shard without that routing being written down (see sharedWith).
+	if !s.logicalAgents.sharedWith(id) {
 		return nil
 	}
-	id := mcp.LogicalAgentFromCtx(ctx)
 	if id == "" {
 		// A call with no per-call _meta is attributed to the attach-time
 		// session_id, exactly as the refusal path does — on a shared connection
@@ -120,9 +122,6 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 // NOT used here — a roots-list or serve-proxy-replay pin is unattributable and
 // stays on the connection's sessionView, so it can never move an agent's pin.
 func (s *connSession) repinShard(ctx context.Context) *agentShard {
-	if !s.isShared() {
-		return nil
-	}
 	if mcp.LogicalAgentFromCtx(ctx) == "" {
 		return nil
 	}
@@ -212,6 +211,18 @@ func (s *connSession) rateLimiterFor(ctx context.Context) *tools.RateLimiter {
 // agent's re-pin lands on its own shard, which is the actual issue #182 fix — the
 // connection-level guard refused a second agent's re-pin outright, but the right
 // behaviour on a shared connection is isolation, not refusal.
+//
+// A refusal leaves ONE trace: a Warn in the daemon log. Not a session health
+// note — deliberately, and not for lack of trying. Health is a single field per
+// session, and on the very connection this feature exists for it is rewritten by
+// the next peer that declares an identity (markSharedConnectionDetected fires on
+// every declaration). A note whose lifetime is "until the next peer call" is
+// worse than none: it reads as durable, decays to noise, and would need a heal
+// keyed per agent on a field that has no room for one. Nor "blocked" — one agent
+// asking for a project of its own is a scoping question about that agent, not the
+// connection being unusable, and flagging it would raise a dashboard alert
+// against the coordinator for a peer's call. The log line is greppable, carries
+// the agent id and both roots, and does not expire.
 func (s *connSession) repinAgent(ctx context.Context, root, language string, origin sessionstate.PinSource, force bool) (changed bool, refused error) {
 	sh := s.repinShard(ctx)
 	if sh == nil {
@@ -222,14 +233,19 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	prev := sh.root
 	if !force && prev != "" && root != prev && sh.pinOrigin == sessionstate.PinSourceSessionStart {
 		refused = fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root)
-		s.markAgentRepinRefused(sh.id, prev, root)
+		// Leave a trace on this past-vulnerability surface: the connection-level
+		// guard has always logged a refused steal, and a refused cross-workspace
+		// drift on a SHARED connection is exactly the event an operator needs to
+		// find afterwards. The daemon log is the whole trace, deliberately — see
+		// the note on repinAgent.
+		s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
+			"agent", sh.id, "pinned", prev, "requested", root, "remedy", repinStickyRemedy)
 		return false, refused
 	}
 	if root == prev && language == sh.language {
 		return false, nil
 	}
 	changed = true
-	s.clearAgentRepinRefused()
 	sh.root = root
 	sh.language = language
 	sh.pinOrigin = origin
@@ -240,51 +256,6 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
-}
-
-// agentRepinRefusedHealth is the session-health value for a refused per-agent
-// re-pin. It is deliberately NOT "blocked", the value markBoundaryViolation sets
-// for the connection-level refusal: one agent asking for a project of its own is
-// a scoping question about that agent, not the connection being unusable, and
-// flagging the whole shared session would raise a dashboard alert against the
-// coordinator for a peer's call. But it must not be SILENT either — the
-// connection-level guard has always left a trace on this past-vulnerability
-// surface, and a shared connection is exactly where a refused cross-workspace
-// drift most wants investigating.
-const agentRepinRefusedHealth = "agent_repin_refused"
-
-// markAgentRepinRefused records the per-agent refusal where an operator can see
-// it: a Warn in the daemon log (the durable, greppable trace) and a health note
-// on the session naming the agent, the pin it holds, what it asked for, and the
-// remedy — the same remedy wording the connection-level refusal carries, so the
-// two surfaces cannot drift apart.
-func (s *connSession) markAgentRepinRefused(agentID, pinned, requested string) {
-	s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
-		"agent", agentID, "pinned", pinned, "requested", requested)
-	if s.sessionID() == "" {
-		return
-	}
-	msg := fmt.Sprintf("logical agent %q re-pin refused: its pin %s is sticky; requested %s (issue #182). %s",
-		agentID, pinned, requested, repinStickyRemedy)
-	session.Patch(s.sessionID(), func(info *session.Info) {
-		info.Health = agentRepinRefusedHealth
-		info.HealthMessage = msg
-	})
-}
-
-// clearAgentRepinRefused heals the mark above once a per-agent re-pin actually
-// lands, mirroring attachOrRepinTo's rule that a successful re-pin clears the
-// health it set. Only this mark is cleared: a "blocked" or
-// "shared_connection_detected" state was set by a different condition and is not
-// this call's to resolve.
-func (s *connSession) clearAgentRepinRefused() {
-	session.Patch(s.sessionID(), func(info *session.Info) {
-		if info.Health != agentRepinRefusedHealth {
-			return
-		}
-		info.Health = ""
-		info.HealthMessage = ""
-	})
 }
 
 // persistReadShard mirrors a per-agent recorded read to the durable store, keyed

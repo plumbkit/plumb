@@ -65,6 +65,35 @@ func (l *logicalAgentState) isShared() bool {
 	return len(l.seen) > 1
 }
 
+// sharedWith reports whether the connection is shared once the caller of THIS
+// request is counted — the observed set plus id. It exists so a call can be
+// routed to its own agent without that routing decision being a commitment.
+//
+// A subagent's first session_start declares an identity the connection has never
+// seen. Recording it up front would answer isShared() correctly, but `seen` only
+// grows, so a call that is then REFUSED would have permanently flipped the
+// connection into per-agent keying for every peer — each peer's next call landing
+// on a fresh shard with an empty read tracker, and strict mode rejecting its edits
+// with "has not been read". Asking the question hypothetically instead lets the
+// refusal leave no trace in the identity set: the commitment happens on the
+// success path, through session_start's external-ID linker.
+//
+// An anonymous call (id == "") asks exactly what isShared() asks.
+func (l *logicalAgentState) sharedWith(id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.seen) > 1 {
+		return true
+	}
+	if id == "" {
+		return false
+	}
+	if _, ok := l.seen[id]; ok {
+		return false
+	}
+	return len(l.seen) == 1
+}
+
 // attachIdentity returns the attach-time session_id fallback identity (last one
 // recorded), or "". It is the attribution for a call carrying no per-call _meta.
 func (l *logicalAgentState) attachIdentity() string {
@@ -111,19 +140,17 @@ func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(i
 // A per-call _meta identity, being the stronger channel (it is asserted per
 // call rather than per attach), always wins.
 //
-// The declaration is recorded as a CALL identity, never an attach. Both mark the
-// connection shared — which is what lets repinShard route this call to its own
-// agent — but only an attach moves attachIdentity, the fallback every
-// unattributed call is then resolved against. session_start commits that stronger
-// claim through externalIDFn, and only once the call has actually succeeded: an
-// agent whose re-pin was refused never attached, and must not become the identity
-// its peers' anonymous calls inherit.
+// Nothing is RECORDED here. Putting the id on the ctx is enough for shardFor and
+// repinShard to route this call to its own agent (they ask sharedWith, which
+// counts the caller hypothetically), and it leaves the identity set untouched if
+// the call is then refused. The commitment — the observed set, the attach-time
+// fallback identity, the external-ID registration — happens on session_start's
+// success path through externalIDFn. An agent whose re-pin was refused never
+// attached, and must leave nothing behind: not an identity its peers' anonymous
+// calls could inherit, and not a shared-connection flag that resets every peer's
+// read tracking.
 func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.Context {
-	if id == "" {
-		return ctx
-	}
-	s.recordLogicalAgentCall(id)
-	if mcp.LogicalAgentFromCtx(ctx) != "" {
+	if id == "" || mcp.LogicalAgentFromCtx(ctx) != "" {
 		return ctx
 	}
 	return mcp.WithLogicalAgent(ctx, id)

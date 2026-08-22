@@ -33,10 +33,15 @@
   silently. The linkage half of `session_start` (external-ID registration, session-name
   inheritance, the attach-time fallback identity) now runs only once the call has
   SUCCEEDED, so a refused re-pin no longer leaves the session answering to an agent that
-  never attached. The cross-workspace re-pin stays REFUSED with the remedy named; it no
-  longer flags the shared connection `blocked`, but it is not silent either — a refused
-  per-agent re-pin logs at Warn and sets an `agent_repin_refused` health note naming the
-  agent, both pins and the remedy, cleared by that agent's own successful re-pin. New
+  never attached — and neither does it flip the connection into per-agent keying, which
+  would have reset every PEER's read tracking and started failing their edits with "has
+  not been read". The cross-workspace re-pin stays REFUSED with the remedy named; it does
+  not flag the shared connection `blocked` (one agent's scoping question is not the
+  connection being unusable), but it is not silent either — the refusal logs at Warn with
+  the agent id, both roots and the remedy. That log line is the whole trace, deliberately:
+  session health is a single field per session that the next peer's identity declaration
+  rewrites, so a health note here would read as durable and decay to noise within one
+  call. New
   acceptance harness `TestMultiAgentPin` (`-tags=integration`) runs a coordinator plus
   five concurrent subagents over one connection — mixed argument shapes, one
   cross-workspace drifter. `internal/tools/session_start.go`,

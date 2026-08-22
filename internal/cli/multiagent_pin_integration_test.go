@@ -30,9 +30,11 @@ package cli
 // this file exists to pin: that N concurrent subagents get ZERO pin-guard
 // refusals for legitimate calls, that each one's session_start resolves to the
 // workspace it is entitled to, that a cross-workspace re-pin is still REFUSED
-// with an actionable remedy AND a daemon-side trace (the #181/#182 fail-open
-// class must stay closed and must not go silent), and that the connection's own
-// pin never moves under any of it.
+// with an actionable remedy and without flagging the whole connection blocked
+// (the #181/#182 fail-open class must stay closed), and that the connection's
+// own pin never moves under any of it. The refusal's daemon-log trace is
+// asserted by TestAgentRepinRefusalLogsATrace instead, where the logger can be
+// captured.
 //
 // The harness drives the REAL tool surface — tools.SessionStart and
 // tools.WriteFile wired exactly as registerAllTools wires them — because the
@@ -274,26 +276,14 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 	if _, err := m.s.policyFor(agentCtx("drifter")).Check(filepath.Join(other, "x.go"), tools.AccessReadWrite); err == nil {
 		t.Error("the refused agent's boundary admits a path in the workspace it was refused — fail-open")
 	}
-	// The refusal must leave a TRACE. This is a past-vulnerability surface, and
-	// the connection-level guard has always marked the session on a refused
-	// steal; a per-agent refusal that recorded nothing would make a refused
-	// cross-workspace drift on a shared connection invisible to the operator.
-	// It must not mark it "blocked", though: one subagent asking for a project of
-	// its own is a scoping question about that agent, not the connection being
-	// unusable, and "blocked" raises a dashboard alert against the coordinator
-	// for a peer's call.
-	health, msg := sessionHealth(t, m.s.sessID)
-	if health == "blocked" {
+	// The refusal's durable trace is a Warn in the daemon log, asserted by
+	// TestAgentRepinRefusalLogsATrace where the logger can be captured. What this
+	// harness owns is the other half: it must NOT mark the shared session
+	// "blocked". One subagent asking for a project of its own is a scoping
+	// question about that agent, not the connection being unusable, and "blocked"
+	// raises a dashboard alert against the coordinator for a peer's call.
+	if health, msg := sessionHealth(t, m.s.sessID); health == "blocked" {
 		t.Errorf("a per-agent refusal flagged the whole connection blocked: %s", msg)
-	}
-	if health != agentRepinRefusedHealth {
-		t.Errorf("a refused per-agent re-pin left no health trace: health = %q — a refused "+
-			"cross-workspace drift on a shared connection must not be silent", health)
-	}
-	for _, want := range []string{"drifter", other, "force: true"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("the health note does not name %q, so an operator cannot act on it: %s", want, msg)
-		}
 	}
 
 	// A refused agent never ATTACHED, so it must not have become the attach-time
@@ -308,10 +298,6 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 		t.Errorf("an unattributed call resolves to %q after a refused cross-workspace re-pin, want %q", got, ws)
 	}
 
-	// And it heals: the agent's own successful re-pin clears the mark, exactly as
-	// a successful connection-level re-pin does. Otherwise the note outlives the
-	// condition and the next reader is chasing a resolved refusal.
-
 	// The remedy actually works, and only for the agent that used it.
 	if err := m.sessionStart(t, map[string]any{"workspace": other, "session_id": "drifter", "force": true}); err != nil {
 		t.Fatalf("force: true is the named remedy and must land: %v", err)
@@ -324,9 +310,6 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 	}
 	if got := m.s.workspace(); got != ws {
 		t.Errorf("a peer's forced re-pin moved the CONNECTION pin to %q, want %q", got, ws)
-	}
-	if health, msg := sessionHealth(t, m.s.sessID); health == agentRepinRefusedHealth {
-		t.Errorf("the refusal mark survived the agent's own successful re-pin: %s", msg)
 	}
 }
 
@@ -444,17 +427,24 @@ func testAnonymousCallsInheritTheLastAttachedAgent(t *testing.T) {
 		t.Fatalf("the write did not land: %v", err)
 	}
 
-	// KNOWN GAP, asserted as-is. The write is attributed to the agent that
+	// KNOWN GAP, asserted as-is: the write is attributed to the agent that
 	// attached LAST, not to the coordinator that made it.
-	if m.s.writeTrackerFor(agentCtx("coordinator")).Wrote(path) {
-		t.Error("FIXED? the coordinator's own anonymous write is now attributed to it — " +
-			"the shardFor/attachIdentity gap this subtest pins has been closed; delete this subtest " +
-			"and fold the case into testEveryAgentWriteVisible")
-	}
+	//
+	// ONE assertion, deliberately. Any change to the attachIdentity fallback —
+	// closing it, or replacing it with something else — makes this the failing
+	// line, so the reader who broke it gets the instruction below rather than a
+	// second, alarming message about unrecognised behaviour.
 	if !m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(path) {
-		t.Error("the known attachIdentity fallback did not route the anonymous write to the " +
-			"last-attached agent either — the behaviour changed in some third way; re-derive it " +
-			"before trusting anything else in this file")
+		t.Error("the anonymous write is no longer attributed to the last-attached agent. " +
+			"If PLAN-394 closed the shardFor/attachIdentity fallback, this subtest has done its " +
+			"job: DELETE it and fold the anonymous case into testEveryAgentWriteVisible with the " +
+			"attribution you now expect. If PLAN-394 is still open, the behaviour changed some " +
+			"other way — re-derive it before trusting anything else in this file.")
+	}
+	if m.s.writeTrackerFor(agentCtx("coordinator")).Wrote(path) {
+		t.Error("the anonymous write reached the coordinator's tracker as well as the " +
+			"last-attached agent's — attribution is now duplicated, which is neither the known " +
+			"gap nor a fix")
 	}
 
 	// The load-bearing safety property still holds regardless of attribution: an
