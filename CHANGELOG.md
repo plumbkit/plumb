@@ -37,20 +37,27 @@
   additive `health_daily` table (stats schema v18) and CLI flag compute, idempotently
   per UTC day, the three metrics the worth-it strategy's W2-14 names so a regression in
   plumb's own value proposition shows up in days rather than a year later by anecdote:
-  **lane-defection rate** — the share of sessions where a plumb-read file was
-  subsequently modified by something other than plumb, detected via the SAME machinery
-  that already refuses a stale write (`toolerror.KindUnreadOrStale`, stamped by
-  `changedSinceSessionRead`/strict-mode's read-before-write guard) — an approximation
-  that undercounts (it only catches a defection the session later tried to write over),
-  documented as such in the output; **semantic-surface error rate**, a 7-day rolling
-  per-tool rate across the LSP query/edit surface (`stats.SemanticTools`), with an
-  `advertised` flag sourced from the pin set (`tools.PinnedTools`, PLAN-355) and a
-  `flagged` verdict when an advertised tool's rate crosses read_file's own rate times a
-  configurable multiplier (`stats.DefaultSemanticBaselineMultiplier`, default 3×); and
-  **net economics per client, trended daily** — two of PLAN-367's three economics lines
-  (estimated read savings netted to the current savings-model version only, and the
-  guard-refusal count), deliberately NOT three: the profile tool-schema surcharge is a
-  live per-connection figure `plumb stats` itself already declines to show for the same
+  **lane-defection rate** — of sessions that read a file (denominator: `read_file`/
+  `read_symbol`/`read_multiple_files`), the share where a later `write_file` or
+  `transaction_apply` call was refused because the file changed on disk since that read
+  (`toolerror.KindUnreadOrStale` on either of those two tools — both the guarded
+  `expected_mtime`/`expected_sha` path, internal/tools' `verifyExpectedVersion`, and the
+  unguarded auto-detect path, `changedSinceSessionRead`, count; neither tool has a
+  separate "never read at all" refusal to confuse the signal with, unlike `edit_file` and
+  the symbol-edit tools, whose refusals are NOT counted at all for exactly that reason —
+  disclosed, not silently dropped, in the output and `internal/stats/
+  health_lane_defection.go`'s doc comment). An approximation that undercounts a session
+  that never retries the write; **semantic-surface error rate**, a 7-day rolling per-tool
+  rate across the LSP query/edit surface (`stats.SemanticTools`), with an `advertised`
+  flag sourced from the pin set (`tools.PinnedTools`, PLAN-355), a `flagged` verdict when
+  an advertised tool's rate crosses read_file's own rate times a configurable multiplier
+  (`stats.DefaultSemanticBaselineMultiplier`, default 3×), and a minimum-sample floor on
+  BOTH sides of that ratio (`stats.MinSemanticToolCalls`/`MinSemanticBaselineCalls`,
+  default 10) so a handful of calls can never flag on its own; and **net economics per
+  client, trended daily** — two of PLAN-367's three economics lines (estimated read
+  savings netted to the current savings-model version only, and the guard-refusal
+  count), deliberately NOT three: the profile tool-schema surcharge is a live
+  per-connection figure `plumb stats` itself already declines to show for the same
   reason (`internal/stats/health_economics.go` explains why trending it here would mean
   fabricating a number for a day nobody measured it on). Read-only over `calls`; no
   existing column changes. `internal/stats/health*.go`, `internal/cli/stats_health.go`.
