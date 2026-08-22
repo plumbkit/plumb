@@ -337,6 +337,12 @@ func TestRemoveHooksAt_KeepsStructureItDidNotEmpty(t *testing.T) {
 	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
 		"Notification": []any{map[string]any{"matcher": "*", "hooks": []any{}}},
 		"PreCompact":   []any{},
+		// A BARE empty group, with no keys of its own. Without one here the
+		// plumbShapedGroup clause keeps every fixture group on its own and the
+		// "did I empty it" half of the guard goes unpinned — which an
+		// independent review demonstrated by mutating it out and watching this
+		// test stay green.
+		"Notification2": []any{map[string]any{"hooks": []any{}}},
 	}})
 
 	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
@@ -366,6 +372,9 @@ func TestRemoveHooksAt_KeepsStructureItDidNotEmpty(t *testing.T) {
 	}
 	if _, ok := hooks["PreCompact"]; !ok {
 		t.Errorf("the user's empty event was removed: %v", hooks)
+	}
+	if groups, ok := hooks["Notification2"].([]any); !ok || len(groups) != 1 {
+		t.Errorf("a bare empty group the user already had was removed: %v", hooks)
 	}
 	for _, event := range []string{"SessionStart", "Stop"} {
 		if _, ok := hooks[event]; ok {
@@ -517,4 +526,78 @@ func countHandlers(cfg map[string]any, event string) int {
 		n += len(handlers)
 	}
 	return n
+}
+
+// TestInstallHooksAt_KeepsABareEmptyGroupItDidNotEmpty is the install-side twin
+// of the removal rule. The two writers share the "only what I emptied, only if
+// it was mine" test, and only the removal path had it — so an install deleted a
+// bare empty group the user already had, and reported a change for it.
+func TestInstallHooksAt_KeepsABareEmptyGroupItDidNotEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{map[string]any{"hooks": []any{}}},
+	}})
+
+	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := readHookJSON(t, path)["hooks"].(map[string]any)["SessionStart"].([]any)
+	if len(groups) != 2 {
+		t.Errorf("SessionStart has %d group(s), want the user's empty one plus plumb's: %v", len(groups), groups)
+	}
+	if n := countHandlers(readHookJSON(t, path), "SessionStart"); n != 1 {
+		t.Errorf("SessionStart has %d handlers, want 1", n)
+	}
+}
+
+// TestCommandExecutable covers the hand-rolled command-line parsing that decides
+// ownership. Nothing tested it directly, so the tab case and the quoting rules
+// rested on inspection alone.
+func TestCommandExecutable(t *testing.T) {
+	for _, tc := range []struct{ name, cmd, want string }{
+		{"quoted path", `"/opt/plumb" hooks run-claude`, "/opt/plumb"},
+		{"quoted path with a space", `"/opt/my plumb/plumb" hooks run-claude`, "/opt/my plumb/plumb"},
+		{"unquoted", "/opt/plumb hooks run-claude", "/opt/plumb"},
+		{"tab separated", "/opt/plumb\thooks run-claude", "/opt/plumb"},
+		{"bare name on PATH", "plumb hooks run-claude", "plumb"},
+		{"leading whitespace", "   /opt/plumb hooks run-claude", "/opt/plumb"},
+		{"no arguments", "/opt/plumb", "/opt/plumb"},
+		{"script", "/home/u/.claude/hooks/plumb-mail-wake.sh", "/home/u/.claude/hooks/plumb-mail-wake.sh"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commandExecutable(tc.cmd); got != tc.want {
+				t.Errorf("commandExecutable(%q) = %q, want %q", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunsPlumbVerb: the verb has to be what the command RUNS, not a string that
+// appears somewhere in it.
+func TestRunsPlumbVerb(t *testing.T) {
+	for _, tc := range []struct {
+		cmd  string
+		want bool
+	}{
+		{`"/opt/plumb" hooks run-claude`, true},
+		{"/opt/plumb hooks run-claude", true},
+		{"/opt/plumb\thooks run-claude", true},
+		{"plumb hooks run-claude --debug", true},
+		{"/home/u/bin/logger --note 'hooks run-claude'", false},
+		{"/home/u/bin/hooks run-claude.sh", false},
+		{"", false},
+	} {
+		if got := runsPlumbVerb(tc.cmd, claudeHookVerb); got != tc.want {
+			t.Errorf("runsPlumbVerb(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestPlumbShapedGroup(t *testing.T) {
+	if !plumbShapedGroup(map[string]any{"hooks": []any{}}) {
+		t.Error("a bare hooks group is plumb's own shape")
+	}
+	if plumbShapedGroup(map[string]any{"hooks": []any{}, "matcher": "*"}) {
+		t.Error("a group carrying a matcher is the user's, not plumb's shape")
+	}
 }

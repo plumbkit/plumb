@@ -480,12 +480,21 @@ func (l *wakeLock) release() {
 // different conversation is stale by definition: if the name resolved to us, we
 // ARE that session now.
 func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
+	return acquireWakeLockWith(dir, key, sessionID, isPlumbProcess)
+}
+
+// acquireWakeLockWith takes the process-identity test as a parameter so both of
+// its directions are reachable from a test: a test binary is never a plumb
+// process, so with the real check wired in, "the holder is a live plumb" could
+// not be exercised at all — and that is the branch that decides whether a
+// session can ever arm a watcher again.
+func acquireWakeLockWith(dir, key, sessionID string, isPlumb func(int) bool) (*wakeLock, bool) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, false
 	}
 	lock := filepath.Join(dir, key+".lock")
 	if err := os.Mkdir(lock, 0o755); err != nil {
-		if !reclaimableLock(lock, sessionID) {
+		if !reclaimableLock(lock, sessionID, isPlumb) {
 			return nil, false
 		}
 		_ = os.RemoveAll(lock)
@@ -499,7 +508,7 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 }
 
 // reclaimableLock decides whether an existing lock may be taken over.
-func reclaimableLock(lock, sessionID string) bool {
+func reclaimableLock(lock, sessionID string, isPlumb func(int) bool) bool {
 	pidRaw, _ := os.ReadFile(filepath.Join(lock, "pid"))   //nolint:gosec // G304: inside plumb's own wake dir
 	convRaw, _ := os.ReadFile(filepath.Join(lock, "conv")) //nolint:gosec // G304: inside plumb's own wake dir
 
@@ -514,14 +523,19 @@ func reclaimableLock(lock, sessionID string) bool {
 		// lock older than one is debris, not a tenant.
 		return lockOutlivedAnyWatcher(lock)
 	}
-	if !processAlive(pid) {
+	// A pid that is alive but is not a plumb cannot be our watcher: the lock
+	// outlived a crash or a reboot and something unrelated has taken the number.
+	// Without this the stand-down is permanent whenever the same conversation
+	// resumes — the third form of a defect this file has now had twice, and the
+	// same check terminate() already refuses to signal without.
+	if !processAlive(pid) || !isPlumb(pid) {
 		return true
 	}
 	owner := strings.TrimSpace(string(convRaw))
 	if sessionID == "" || owner == "" || owner == sessionID {
 		return false // our own watcher is already running
 	}
-	terminate(pid) // a previous tenant of this reused session name
+	_ = terminate(pid, isPlumb) // a previous tenant of this reused session name
 	return true
 }
 
@@ -549,11 +563,16 @@ func lockOutlivedAnyWatcher(lock string) bool {
 // something unrelated — "the pid exists" is not evidence it is ours. Signalling
 // a stranger's process is a far worse failure than leaving a dead lock behind,
 // which the caller reclaims anyway.
-func terminate(pid int) {
-	if pid <= 0 || pid == os.Getpid() || !isPlumbProcess(pid) {
-		return
+// It reports whether it signalled, so the refusal is observable — a guard whose
+// only effect is NOT doing something is otherwise untestable, and this one
+// stands between plumb and a stranger's process.
+func terminate(pid int, isPlumb func(int) bool) bool {
+	if pid <= 0 || pid == os.Getpid() || !isPlumb(pid) {
+		return false
 	}
-	if proc, err := os.FindProcess(pid); err == nil {
-		_ = proc.Signal(syscall.SIGTERM)
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
 	}
+	return proc.Signal(syscall.SIGTERM) == nil
 }

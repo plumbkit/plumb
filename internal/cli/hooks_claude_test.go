@@ -2,7 +2,9 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,16 +260,19 @@ func TestClaudeStopHook_WokenTurnRearmsAfterConsumption(t *testing.T) {
 func TestAcquireWakeLock(t *testing.T) {
 	dir := t.TempDir()
 
-	first, ok := acquireWakeLock(dir, "grey-lynx", "conv-1")
+	// The holder is a plumb process in production; a test binary never is, so
+	// the identity check is supplied here rather than inferred from ps.
+	alwaysPlumb := func(int) bool { return true }
+	first, ok := acquireWakeLockWith(dir, "grey-lynx", "conv-1", alwaysPlumb)
 	if !ok {
 		t.Fatal("first watcher could not take the lock")
 	}
-	if _, ok := acquireWakeLock(dir, "grey-lynx", "conv-1"); ok {
+	if _, ok := acquireWakeLockWith(dir, "grey-lynx", "conv-1", alwaysPlumb); ok {
 		t.Error("the same conversation stacked a second watcher")
 	}
 	// A different conversation answering to the same session name IS that
 	// session now, so it takes the lock over.
-	second, ok := acquireWakeLock(dir, "grey-lynx", "conv-2")
+	second, ok := acquireWakeLockWith(dir, "grey-lynx", "conv-2", alwaysPlumb)
 	if !ok {
 		t.Fatal("a new tenant of a reused session name was locked out")
 	}
@@ -281,7 +286,7 @@ func TestAcquireWakeLock(t *testing.T) {
 	}
 	second.release()
 
-	third, ok := acquireWakeLock(dir, "grey-lynx", "conv-3")
+	third, ok := acquireWakeLockWith(dir, "grey-lynx", "conv-3", alwaysPlumb)
 	if !ok {
 		t.Fatal("lock was not reclaimable after release")
 	}
@@ -437,5 +442,85 @@ func TestWakeLock_ReleaseFailsClosed(t *testing.T) {
 	lock.release()
 	if _, err := os.Stat(lock.dir); err != nil {
 		t.Error("release deleted a lock whose ownership it could not prove")
+	}
+}
+
+// TestIsPlumbProcess: the guard that stops plumb SIGTERMing a stranger's
+// process, and stops a reused pid making a session permanently unwakeable. It
+// had no test at all — terminate() short-circuits on our own pid, so nothing
+// ever reached it.
+func TestIsPlumbProcess(t *testing.T) {
+	// This test binary is cli.test, not plumb — so a live pid that is provably
+	// not plumb is available without spawning anything.
+	if isPlumbProcess(os.Getpid()) {
+		t.Error("the test binary was identified as plumb")
+	}
+	if isPlumbProcess(-1) || isPlumbProcess(0) {
+		t.Error("an impossible pid was identified as a live plumb")
+	}
+}
+
+// TestReclaimableLock_LiveNonPlumbPid: a lock whose recorded pid is alive but is
+// NOT plumb belongs to nothing — the number was reused after a crash or reboot.
+// Without this the stand-down is permanent for a resumed conversation, since the
+// age escape applies only to an unstamped lock.
+func TestReclaimableLock_LiveNonPlumbPid(t *testing.T) {
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "grey-lynx.lock")
+	if err := os.Mkdir(lock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A live pid that is not plumb: this test process.
+	if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lock, "conv"), []byte("conv-1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same conversation — the resumed-session case, where the old code stood
+	// down forever.
+	neverPlumb := func(int) bool { return false }
+	if !reclaimableLock(lock, "conv-1", neverPlumb) {
+		t.Error("a lock held by a live NON-plumb pid was not reclaimable — the session is unwakeable forever")
+	}
+	// The control: the same live pid, but it IS a plumb — our own watcher, so
+	// standing down is correct and the lock must NOT be reclaimable.
+	if reclaimableLock(lock, "conv-1", func(int) bool { return true }) {
+		t.Error("stole a lock held by our own live watcher")
+	}
+	// And with no conversation recorded at all.
+	if err := os.Remove(filepath.Join(lock, "conv")); err != nil {
+		t.Fatal(err)
+	}
+	if !reclaimableLock(lock, "conv-1", neverPlumb) {
+		t.Error("an unattributed lock held by a live non-plumb pid was not reclaimable")
+	}
+}
+
+// TestTerminate_RefusesAStrangersProcess pins the safety property directly, with
+// a real child process: after a crash or a reboot the pid in a lock file is
+// likely to have been reused, and signalling whatever now holds it is a far
+// worse failure than leaving a dead lock behind.
+func TestTerminate_RefusesAStrangersProcess(t *testing.T) {
+	victim := exec.Command("sleep", "30")
+	if err := victim.Start(); err != nil {
+		t.Skipf("cannot spawn a child process here: %v", err)
+	}
+	defer func() {
+		_ = victim.Process.Kill()
+		_ = victim.Wait()
+	}()
+
+	if terminate(victim.Process.Pid, func(int) bool { return false }) {
+		t.Error("signalled a live process that is not a plumb")
+	}
+	if !processAlive(victim.Process.Pid) {
+		t.Fatal("the stranger's process was killed")
+	}
+
+	// The control: when it IS ours, the signal must actually go.
+	if !terminate(victim.Process.Pid, func(int) bool { return true }) {
+		t.Error("refused to signal a stale plumb watcher")
 	}
 }

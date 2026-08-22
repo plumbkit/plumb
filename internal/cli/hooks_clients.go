@@ -358,6 +358,7 @@ func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, er
 			continue
 		}
 		kept := make([]any, 0, len(handlers))
+		took := 0
 		for _, handlerAny := range handlers {
 			handler, isHandler := handlerAny.(map[string]any)
 			if !isHandler || !ours(e.event, handler) {
@@ -370,7 +371,7 @@ func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, er
 				// handlers that both fire — on SessionStart, the linkage
 				// sentence would enter the agent's context twice — while the
 				// status table reported one clean install. Duplicates go.
-				changed = true
+				changed, took = true, took+1
 				continue
 			}
 			seen = true
@@ -381,8 +382,10 @@ func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, er
 			kept = append(kept, e.handler)
 			changed = true
 		}
-		if len(kept) == 0 && plumbShapedGroup(group) {
-			changed = true
+		// Same rule as the removal path: a group goes only when THIS write
+		// emptied it and it was plumb's own. A bare empty group the user already
+		// had is not residue of ours to tidy away.
+		if took > 0 && len(kept) == 0 && plumbShapedGroup(group) {
 			continue
 		}
 		group["hooks"] = kept
