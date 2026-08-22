@@ -67,8 +67,12 @@ func resolveStatsWorkspace() (string, error) {
 	return resolveCLIWorkspace(ws, cfg)
 }
 
-func runStats(_ *cobra.Command, _ []string) error {
+func runStats(cmd *cobra.Command, _ []string) error {
 	PrintLogo()
+
+	if err := checkHealthFlagCompat(cmd); err != nil {
+		return err
+	}
 
 	ws, err := resolveStatsWorkspace()
 	if err != nil {

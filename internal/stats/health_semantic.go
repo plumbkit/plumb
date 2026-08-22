@@ -14,10 +14,23 @@ package stats
 // multiplier. This is deliberately the shape of the incident the strategy
 // doc names: an advertised semantic tool sliding to a double-digit error
 // rate while read_file stayed under 2%, discovered by anecdote a year later.
+//
+// SAMPLE-SIZE GUARD (review round 1). A rate computed from a handful of
+// calls is noise, not signal, and the failure mode is exactly backwards from
+// what this metric exists to catch: with no baseline calls in the window,
+// baselineRate is 0, so ANY single semantic-tool error — one call, one
+// failure — crosses "0 × multiplier" and flags. That false-fires hardest in
+// the precise regime this metric is meant to detect (agents have gone
+// native, so read_file's own call count in the window has also collapsed).
+// MinSemanticBaselineCalls and MinSemanticToolCalls gate flagging on both
+// sides of the ratio having enough data to mean something; below either
+// floor the row reports InsufficientSample/BaselineInsufficient instead of a
+// verdict.
 
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 )
@@ -31,6 +44,15 @@ import (
 // replace_symbol_body and their siblings — exactly where the strategy doc's
 // cited error rates (rename_symbol 17.2%, replace_symbol_body 16.9%,
 // safe_delete_symbol 50%) were found.
+//
+// read_symbol is deliberately EXCLUDED (review round 1), unlike every other
+// member here: it falls back to a fresh tree-sitter parse when the language
+// server is cold or absent (internal/tools/read_symbol.go's
+// topologyReadFallback), so it can succeed with the LSP fully down, and it
+// can fail for reasons — an ambiguous or unmatched symbol name — that have
+// nothing to do with LSP health. Its error rate does not cleanly answer the
+// "is the LSP-driven surface degrading" question this metric asks; every
+// other tool here has no such fallback; an LSP failure IS its failure.
 var SemanticTools = map[string]bool{
 	"workspace_symbols":    true,
 	"get_definition":       true,
@@ -40,7 +62,6 @@ var SemanticTools = map[string]bool{
 	"call_hierarchy":       true,
 	"type_hierarchy":       true,
 	"diagnostics":          true,
-	"read_symbol":          true,
 	"rename_symbol":        true,
 	"replace_symbol_body":  true,
 	"insert_before_symbol": true,
@@ -55,14 +76,40 @@ var SemanticTools = map[string]bool{
 // SemanticErrorRatesSince's multiplier parameter.
 const DefaultSemanticBaselineMultiplier = 3.0
 
+// MinSemanticBaselineCalls is the minimum number of read_file calls the
+// window must contain before its rate is trusted as a baseline. Below this,
+// baselineRate is one or two calls away from 0 or 100%, and "0 × multiplier"
+// would flag any semantic-tool error at all.
+const MinSemanticBaselineCalls = 10
+
+// MinSemanticToolCalls is the minimum number of calls a semantic tool itself
+// must have in the window before its OWN rate is trusted enough to flag —
+// one error in one call is not a rate.
+const MinSemanticToolCalls = 10
+
 // SemanticErrorRate is one tool's rolling error rate over some window.
 type SemanticErrorRate struct {
 	Tool       string
 	Calls      int64
 	Errors     int64
 	Advertised bool
-	Baseline   float64 // read_file's rate over the same window × multiplier
-	Flagged    bool    // Advertised && Rate() > Baseline
+	// AdvertisedUnknown is true when SemanticErrorRatesSince was called with
+	// a nil advertised func — Advertised then reads false for every row, but
+	// that false means "not evaluated", not "not pinned". Surfaced here
+	// (rather than only logged) so a caller reading the struct sees the
+	// distinction, not just a silent false.
+	AdvertisedUnknown bool
+	Baseline          float64 // read_file's rate over the same window × multiplier
+	BaselineCalls     int64   // read_file's call count backing Baseline — the sample-size evidence
+	// InsufficientSample is true when this tool's own Calls < MinSemanticToolCalls.
+	InsufficientSample bool
+	// BaselineInsufficient is true when BaselineCalls < MinSemanticBaselineCalls
+	// — Baseline is not trustworthy regardless of this tool's own sample size.
+	BaselineInsufficient bool
+	// Flagged is Advertised && !InsufficientSample && !BaselineInsufficient &&
+	// Rate() > Baseline. Never true when either sample is too small to mean
+	// anything, whatever the raw rate says.
+	Flagged bool
 }
 
 // Rate is Errors / Calls, or 0 when the tool had no calls in the window.
@@ -79,14 +126,22 @@ func (s SemanticErrorRate) Rate() float64 {
 // context on every Claude Code connection (tools.IsPinned, PLAN-355) —
 // injected rather than imported, since internal/tools sits above
 // internal/stats in the layered architecture (internal/arch) and cannot be
-// imported from here. multiplier <= 0 uses DefaultSemanticBaselineMultiplier.
-// Results are sorted by tool name for a stable, diffable render.
+// imported from here. A nil advertised is accepted (every row reads
+// Advertised=false, AdvertisedUnknown=true) but is logged loudly — see
+// SemanticErrorRate.AdvertisedUnknown — since a caller that forgot to wire it
+// would otherwise see a quiet "nothing is ever flagged" with no clue why.
+// multiplier <= 0 uses DefaultSemanticBaselineMultiplier. Results are sorted
+// by tool name for a stable, diffable render.
 func (d *DB) SemanticErrorRatesSince(since, until time.Time, workspace string, advertised func(tool string) bool, multiplier float64) ([]SemanticErrorRate, error) {
 	if d == nil {
 		return nil, nil
 	}
 	if multiplier <= 0 {
 		multiplier = DefaultSemanticBaselineMultiplier
+	}
+	if advertised == nil {
+		slog.Warn("stats: SemanticErrorRatesSince called with advertised=nil — every row reads Advertised=false " +
+			"and nothing can ever flag; pass tools.IsPinned (or an equivalent) unless that is truly intended")
 	}
 	where, args := dayWhere(since.UnixMilli(), until.UnixMilli(), workspace)
 
@@ -99,6 +154,7 @@ func (d *DB) SemanticErrorRatesSince(since, until time.Time, workspace string, a
 		baselineRate = float64(baselineErrors) / float64(baselineCalls)
 	}
 	baseline := baselineRate * multiplier
+	baselineInsufficient := baselineCalls < MinSemanticBaselineCalls
 
 	tools := make([]string, 0, len(SemanticTools))
 	for tool := range SemanticTools {
@@ -118,9 +174,11 @@ func (d *DB) SemanticErrorRatesSince(since, until time.Time, workspace string, a
 		isAdvertised := advertised != nil && advertised(tool)
 		s := SemanticErrorRate{
 			Tool: tool, Calls: calls, Errors: errs,
-			Advertised: isAdvertised, Baseline: baseline,
+			Advertised: isAdvertised, AdvertisedUnknown: advertised == nil,
+			Baseline: baseline, BaselineCalls: baselineCalls,
+			InsufficientSample: calls < MinSemanticToolCalls, BaselineInsufficient: baselineInsufficient,
 		}
-		s.Flagged = isAdvertised && s.Rate() > baseline
+		s.Flagged = isAdvertised && !s.InsufficientSample && !baselineInsufficient && s.Rate() > baseline
 		out = append(out, s)
 	}
 	return out, nil
