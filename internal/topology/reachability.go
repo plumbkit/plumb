@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 )
 
 // PackageInfo is one directory-granularity package: every file in Dir that
@@ -20,7 +21,7 @@ type PackageInfo struct {
 
 // PackageGraph is the directory-granularity import graph: every indexed
 // directory that owns at least one package declaration, and the directory-level
-// edges derived from it.
+// PRODUCTION edges derived from it.
 //
 // Edges are folded from the two-hop node chain linkImports produces — a
 // package node's own imports edge to an import node in the same file
@@ -30,9 +31,47 @@ type PackageInfo struct {
 // exactly the edges matchImportDir/minImportSegments already validated, so a
 // stdlib or third-party import (never linked to a local directory) never
 // produces an edge here either.
+//
+// PRODUCTION ONLY: an edge whose importing file is a Go `_test.go` file is
+// deliberately excluded. Go forbids real import cycles, so every cycle this
+// graph's SCC condensation can ever report is either genuine (a _test.go-only
+// edge, which Go's own compiler does not enforce acyclicity over) or an
+// artefact of counting it — and "what does this binary actually pull in" is a
+// question about what SHIPS, which test-only imports never do. Mixing the two
+// in was measured on plumb's own index: 38,446 of 59,841 folded rows (64%)
+// originated in a _test.go importer, and every SCC>1 the unfiltered graph
+// reported (internal/mcp+memory+tools; the golang/treesitter extractors; ten
+// lsp adapters+conformance) disappeared once _test.go importers were
+// excluded — i.e. was entirely a test-only-edge artefact, not a real cycle.
+// A package reached only via a _test.go importer is intentionally still
+// UNREACHABLE here: it is exactly the case (test helper packages, fixtures)
+// this feature's "what does the binary pull in" question is asking about.
 type PackageGraph struct {
 	Dirs  map[string]*PackageInfo
-	Edges map[string]map[string]bool // fromDir -> set of toDir it directly imports
+	Edges map[string]map[string]bool // fromDir -> set of toDir it directly imports (production imports only; see above)
+}
+
+// TotalEdges returns the number of directory-level edges in g, summed across
+// every source directory. Used to detect the case where package directories
+// were indexed but no edges could be folded at all — see isTestGoImporter's
+// sibling guard in executeReachability (topology_reachability.go): that shape
+// means the current language's extractor does not emit the
+// KindPackage -(imports)-> KindImport edge this pass depends on (only Go's
+// does today), not that the workspace genuinely has zero internal imports.
+func (g *PackageGraph) TotalEdges() int {
+	n := 0
+	for _, tos := range g.Edges {
+		n += len(tos)
+	}
+	return n
+}
+
+// isTestGoImporter reports whether relPath is a Go test file — the importer
+// side of an edge this graph excludes. A simple suffix check rather than a
+// language-aware one: package-level reachability is Go-only today (see
+// TotalEdges' doc), and Go's own `_test.go` convention is unambiguous.
+func isTestGoImporter(relPath string) bool {
+	return strings.HasSuffix(relPath, "_test.go")
 }
 
 // LoadPackageGraph builds the full directory-granularity import graph from the
@@ -113,7 +152,9 @@ func loadPackageNodeCounts(ctx context.Context, db *sql.DB, g *PackageGraph) err
 // directory self-loop (a file importing another file whose package node
 // resolves to its own directory) is dropped: Go cannot produce one, and for
 // languages that could, a directory "importing itself" is not the kind of
-// edge reachability or cycle-detection means to report.
+// edge reachability or cycle-detection means to report. An edge whose
+// IMPORTER is a _test.go file is also dropped — see PackageGraph's doc for
+// why counting it produces cycles Go's compiler never actually enforces.
 func loadPackageEdges(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 	rows, err := db.QueryContext(ctx, `
 		SELECT ff.path, ft.path
@@ -136,6 +177,9 @@ func loadPackageEdges(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 		var fromPath, toPath string
 		if scanErr := rows.Scan(&fromPath, &toPath); scanErr != nil {
 			return fmt.Errorf("topology: load package edges: scan: %w", scanErr)
+		}
+		if isTestGoImporter(fromPath) {
+			continue
 		}
 		from, to := path.Dir(fromPath), path.Dir(toPath)
 		if from == to {
@@ -170,7 +214,16 @@ func (g *PackageGraph) MainDirs() []string {
 // "cmd/plumb" and a deeper repo-relative form still resolves. Returns false
 // when nothing matches or more than one directory shares the suffix
 // (ambiguous — a caller should be more specific rather than have this guess).
+//
+// root is normalised the same way matchImportDir normalises an import
+// path (path.Clean, then trim a leading/trailing "/") before either match is
+// attempted, so "./cmd/plumb", "cmd/plumb/", and "/cmd/plumb" all resolve
+// like the canonical "cmd/plumb" instead of refusing on a cosmetic mismatch.
 func (g *PackageGraph) ResolveDir(root string) (string, bool) {
+	root = strings.Trim(path.Clean(strings.TrimSpace(root)), "/")
+	if root == "" || root == "." {
+		return "", false
+	}
 	if _, ok := g.Dirs[root]; ok {
 		return root, true
 	}

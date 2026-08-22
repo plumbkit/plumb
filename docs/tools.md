@@ -777,12 +777,16 @@ Bidirectional blast-radius: what a symbol depends on and what depends on it.
 entry point (a `package main` directory, or a `topology_routes` candidate) actually pull
 in, and what is unreachable from every entry point — see
 [Topology → Package-level reachability](topology.md#package-level-reachability) for the
-full shape and its correctness note. **Inputs (reachability mode):** `roots` (array of
-directories, or `"main"`; default every `package main` directory plus `topology_routes`
-candidates), `path_to` (a directory — returns one root→target chain instead of the
-summary), `layers` (boolean — returns a package-SCC condensation instead of the
-summary). Every response opens with `package-level (import edges); function-level
-unavailable` and is capped at ~5 KB.
+full shape, its production-imports-only scoping, its Go-only limitation, and its
+correctness note. **Inputs (reachability mode; `roots`/`path_to`/`layers` are rejected
+outside this mode, not silently ignored):** `roots` (array of directories, or `"main"`;
+default every `package main` directory plus `topology_routes` candidates), `path_to` (a
+directory — returns one root→target chain instead of the summary), `layers` (boolean —
+returns a package-SCC condensation instead of the summary). Every response opens with
+`package-level (import edges, production imports only — Go _test.go importers
+excluded); function-level unavailable` and is capped at ~5 KB. Go-only for now: a
+workspace whose extractor doesn't emit the per-file package/import edge shape refuses
+with a clear message rather than reporting every package unreachable.
 
 ### `topology_affected`
 Given changed files/symbols, return likely affected files and tests. **Inputs:**

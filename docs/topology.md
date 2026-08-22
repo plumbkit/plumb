@@ -207,13 +207,36 @@ already produces — no schema change, no new tool (`topology_impact` gained a `
 rather than adding to the tool count).
 
 **Granularity, stated plainly.** Every reachability response opens with `package-level
-(import edges); function-level unavailable` — this is directory granularity, not
-function-level. The import graph is real and cross-file; there is no cross-package call
-graph yet, so this cannot answer "is this *function* dead" — only "is this *package*
-dead from every entry point". Treat a small unreachable package as a strong signal and
-a genuinely large one as worth a second look before deleting; a symbol re-exported by an
-otherwise-unreachable package could still be imported reflectively or via a build tag
-this pass does not see.
+(import edges, production imports only — Go _test.go importers excluded);
+function-level unavailable` — this is directory granularity, not function-level. The
+import graph is real and cross-file; there is no cross-package call graph yet, so this
+cannot answer "is this *function* dead" — only "is this *package* dead from every entry
+point". Treat a small unreachable package as a strong signal and a genuinely large one
+as worth a second look before deleting; a symbol re-exported by an otherwise-unreachable
+package could still be imported reflectively.
+
+**Production imports only.** An edge whose importer is a Go `_test.go` file is excluded
+from the graph, on purpose. Go forbids real import cycles, so any cycle a naive version
+of this feature could report was necessarily a `_test.go`-only artefact — measured on
+plumb's own index, 64% of the folded edges originated in a test file, and every cycle an
+early build of `layers` reported vanished once those edges were excluded. The
+consequence for the default shape: a package pulled in only by a sibling package's test
+file (a test helper, a fixture) is reported **unreachable**, which is the intended
+answer to "what does the binary pull in" — it never ships.
+
+**Build-tag-excluded files are still indexed, and still counted.** The extractor is
+syntactic (`go/parser`), not build-aware: a file gated to another OS/arch (e.g.
+`foo_linux.go` on a macOS index) is parsed and its imports folded into the graph
+regardless of whether the current build would ever compile it. A package reachable only
+through such a file may be reported reachable on a platform where it is not actually
+built — check `go list` or the build tags directly before trusting a borderline result.
+
+**Go-only, for now.** Folding edges into this graph needs a package node to carry its
+own outward `imports` edge to an import node in the same file — today only the Go
+extractor (`extractors/golang`) emits that shape. On a workspace whose primary language
+doesn't (C#, PHP, Scala, Elixir, …), `mode="reachability"` detects the empty-edge case
+and refuses with a clear message rather than reporting every package "unreachable",
+which is what an unguarded version of this feature did.
 
 **Roots.** Every `package main` directory by default, plus `topology_routes`
 entry-point candidates (an HTTP handler, a Cobra command — labelled

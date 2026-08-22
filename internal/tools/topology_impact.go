@@ -48,20 +48,20 @@ var topologyImpactSchema = json.RawMessage(`{
     },
     "mode": {
       "type": "string",
-      "description": "Optional. \"reachability\" switches to PACKAGE-LEVEL reachability from entry points (directory granularity, over 'imports' edges only) instead of the default single-symbol blast-radius analysis. Function-level reachability is not available; see docs/topology.md."
+      "description": "Optional. \"reachability\" switches to PACKAGE-LEVEL reachability from entry points (directory granularity, over 'imports' edges only, PRODUCTION imports only — Go _test.go importers excluded) instead of the default single-symbol blast-radius analysis. Function-level reachability is not available; Go-only for now (refuses with a clear message otherwise); see docs/topology.md. roots/path_to/layers require this mode — they are rejected otherwise, not silently ignored."
     },
     "roots": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "reachability mode only. Root package directories to traverse outward from, or the literal \"main\" for every \"package main\" directory. Omit for the default: every \"package main\" directory PLUS topology_routes entry-point candidates (labelled candidate-seeded, lower confidence)."
+      "description": "Requires mode=\"reachability\". Root package directories to traverse outward from, or the literal \"main\" for every \"package main\" directory. Omit for the default: every \"package main\" directory PLUS topology_routes entry-point candidates (labelled candidate-seeded, lower confidence)."
     },
     "path_to": {
       "type": "string",
-      "description": "reachability mode only. When set, the response is the single shortest root -> path_to directory chain (or a clear \"no path\" answer) instead of the reachable/unreachable summary."
+      "description": "Requires mode=\"reachability\". When set, the response is the single shortest root -> path_to directory chain (or a clear \"no path\" answer) instead of the reachable/unreachable summary."
     },
     "layers": {
       "type": "boolean",
-      "description": "reachability mode only. When true, the response is a package-SCC condensation of the reachable subgraph — topological layers of strongly-connected components, with any component holding more than one package flagged as a cycle — instead of the reachable/unreachable summary."
+      "description": "Requires mode=\"reachability\". When true, the response is a package-SCC condensation of the reachable subgraph — topological layers of strongly-connected components, with any component holding more than one package flagged as a cycle — instead of the reachable/unreachable summary."
     }
   },
   "required": [],
@@ -105,12 +105,17 @@ func (*TopologyImpact) Description() string {
 		"mode=\"reachability\" switches to a different question at PACKAGE (directory) granularity: " +
 		"what does this binary/entry-point actually pull in, and what is dead from every entry point. " +
 		"It traverses only 'imports' edges outward from roots (every \"package main\" directory by " +
-		"default, plus topology_routes candidates), and every reachability response opens with " +
-		"'package-level (import edges); function-level unavailable' — the import graph is real and " +
-		"cross-file, but there is no function-level call graph across packages yet. Three shapes: the " +
-		"default (reachable/unreachable package counts and samples), path_to=<dir> (one root->target " +
-		"chain), and layers=true (package-SCC condensation; a component with more than one package IS " +
-		"a reported import cycle). " +
+		"default, plus topology_routes candidates), counting PRODUCTION imports only — an edge whose " +
+		"importer is a Go _test.go file is excluded, so a package pulled in only by a test " +
+		"helper/fixture is reported unreachable, and every layers cycle is a real production cycle. " +
+		"Go-only for now: a workspace whose extractor does not emit the per-file package/import edge " +
+		"shape (only Go's does today) gets a clear refusal rather than a false \"everything is dead\" " +
+		"answer. Every reachability response opens with 'package-level (import edges, production " +
+		"imports only — Go _test.go importers excluded); function-level unavailable' — the import " +
+		"graph is real and cross-file, but there is no function-level call graph across packages yet. " +
+		"Three shapes: the default (reachable/unreachable package counts and samples), path_to=<dir> " +
+		"(one root->target chain), and layers=true (package-SCC condensation; a component with more " +
+		"than one package IS a reported import cycle). " +
 		"Returns a clear message when topology is disabled or the symbol is not in the index."
 }
 
@@ -177,8 +182,18 @@ func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
 }
 
 func (a *topologyImpactArgs) validate() error {
+	if a.Mode != "" && a.Mode != modeReachability {
+		return fmt.Errorf("topology_impact: unknown mode %q (expected \"reachability\", or omit for the default blast-radius mode)", a.Mode)
+	}
 	if a.Mode == modeReachability {
 		return nil // name is not used in reachability mode; roots/path_to/layers stand alone
+	}
+	// reachability-only fields silently doing nothing outside reachability mode
+	// is exactly the failure this guards against: a caller who sets roots/
+	// path_to/layers without mode="reachability" almost certainly meant to be
+	// in reachability mode, and the classic path ignores all three.
+	if len(a.Roots) > 0 || a.PathTo != "" || a.Layers {
+		return errors.New(`topology_impact: roots/path_to/layers require mode="reachability" — they are ignored otherwise`)
 	}
 	if a.Name == "" {
 		return errors.New("topology_impact: name is required")
