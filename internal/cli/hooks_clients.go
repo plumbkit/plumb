@@ -189,15 +189,33 @@ func claudeHookOwned(event string, h map[string]any) bool {
 // codexHookOwned matches the command first and the statusMessage second: the
 // first Codex installer marked its entries by status line, so hooks it wrote
 // are still recognised — and therefore refreshed and removable — by this one.
-func codexHookOwned(_ string, h map[string]any) bool {
+func codexHookOwned(event string, h map[string]any) bool {
 	if cmd, _ := h["command"].(string); runsPlumbVerb(cmd, codexHookVerb) {
 		return true
+	}
+	// The status line is a marker only on the events plumb installs on — the same
+	// scoping the Claude predicate needs, and for the same reason: a user's own
+	// handler that happens to carry this label, on an event plumb has never
+	// touched, is not plumb's to delete.
+	if !slices.Contains(codexHookEvents, event) {
+		return false
 	}
 	switch h["statusMessage"] {
 	case codexSessionHookStatus, codexMailboxHookStatus:
 		return true
 	}
 	return false
+}
+
+// codexHookEvents are the events plumb installs Codex hooks on.
+var codexHookEvents = []string{"SessionStart", "Stop"}
+
+// plumbShapedGroup reports whether a hook group is one plumb wrote: a bare
+// {"hooks": […]} and nothing else. A group carrying anything more — a matcher,
+// a note of the user's own — is theirs even when plumb's handler is the only
+// thing inside it, so emptying it must not take the group with it.
+func plumbShapedGroup(group map[string]any) bool {
+	return len(group) == 1
 }
 
 // runsPlumbVerb reports whether cmd invokes one of plumb's own hook verbs. The
@@ -228,8 +246,8 @@ func commandExecutableToken(cmd string) string {
 		}
 		return cmd
 	}
-	if field, _, found := strings.Cut(cmd, " "); found {
-		return field
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		return cmd[:i]
 	}
 	return cmd
 }
@@ -325,39 +343,57 @@ func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, er
 	if !ok {
 		return false, fmt.Errorf("%s must be an array of hook groups, got %T — refusing to change it", e.event, existing)
 	}
-	var changed, found bool
+
+	changed, seen := false, false
+	keptGroups := make([]any, 0, len(groups))
 	for _, groupAny := range groups {
-		group, ok := groupAny.(map[string]any)
-		if !ok {
+		group, isGroup := groupAny.(map[string]any)
+		if !isGroup {
+			keptGroups = append(keptGroups, groupAny)
 			continue
 		}
-		handlers, ok := group["hooks"].([]any)
-		if !ok {
+		handlers, hasHandlers := group["hooks"].([]any)
+		if !hasHandlers {
+			keptGroups = append(keptGroups, groupAny)
 			continue
 		}
-		for i, handlerAny := range handlers {
-			handler, ok := handlerAny.(map[string]any)
-			if !ok || !ours(e.event, handler) {
+		kept := make([]any, 0, len(handlers))
+		for _, handlerAny := range handlers {
+			handler, isHandler := handlerAny.(map[string]any)
+			if !isHandler || !ours(e.event, handler) {
+				kept = append(kept, handlerAny)
 				continue
 			}
+			if seen {
+				// A SECOND plumb handler on one event is a duplicate, whatever
+				// it currently runs: refreshing it in place would leave two
+				// handlers that both fire — on SessionStart, the linkage
+				// sentence would enter the agent's context twice — while the
+				// status table reported one clean install. Duplicates go.
+				changed = true
+				continue
+			}
+			seen = true
 			if reflect.DeepEqual(handler, e.handler) {
-				found = true
+				kept = append(kept, handlerAny)
 				continue
 			}
-			// Every plumb handler on this event is refreshed, not just the first:
-			// a config carrying both a legacy script entry and a current one would
-			// otherwise keep the leftover, and both would fire while the status
-			// table reported a clean install.
-			handlers[i] = e.handler
-			group["hooks"] = handlers
-			changed, found = true, true
+			kept = append(kept, e.handler)
+			changed = true
 		}
+		if len(kept) == 0 && plumbShapedGroup(group) {
+			changed = true
+			continue
+		}
+		group["hooks"] = kept
+		keptGroups = append(keptGroups, group)
 	}
-	if found {
-		return changed, nil
+	if !seen {
+		keptGroups = append(keptGroups, map[string]any{"hooks": []any{e.handler}})
+		changed = true
 	}
-	hooks[e.event] = append(groups, map[string]any{"hooks": []any{e.handler}})
-	return true, nil
+	hooks[e.event] = keptGroups
+	return changed, nil
 }
 
 // removeHooksAt takes plumb's handlers back out of path and reports how many
@@ -457,7 +493,7 @@ func groupsWithout(event string, groups []any, ours ownershipTest) ([]any, int) 
 			}
 			kept = append(kept, handlerAny)
 		}
-		if took > 0 && len(kept) == 0 {
+		if took > 0 && len(kept) == 0 && plumbShapedGroup(group) {
 			continue
 		}
 		group["hooks"] = kept

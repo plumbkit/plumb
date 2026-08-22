@@ -454,10 +454,13 @@ func (l *wakeLock) release() {
 		return
 	}
 	l.released = true
-	if owner, err := os.ReadFile(filepath.Join(l.dir, "conv")); err == nil { //nolint:gosec // G304: inside plumb's own wake dir
-		if strings.TrimSpace(string(owner)) != l.conv {
-			return
-		}
+	// Delete only when ownership is PROVABLE. An unreadable conv file is the
+	// successor's window between mkdir and its own stamp — failing open here
+	// would delete the lock it has just taken, which is the bug this guard
+	// exists to prevent. A lock left behind is reclaimed by age instead.
+	owner, err := os.ReadFile(filepath.Join(l.dir, "conv")) //nolint:gosec // G304: inside plumb's own wake dir
+	if err != nil || strings.TrimSpace(string(owner)) != l.conv {
+		return
 	}
 	_ = os.RemoveAll(l.dir)
 }
@@ -482,23 +485,8 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 	}
 	lock := filepath.Join(dir, key+".lock")
 	if err := os.Mkdir(lock, 0o755); err != nil {
-		oldPID, _ := os.ReadFile(filepath.Join(lock, "pid")) //nolint:gosec // G304: inside plumb's own wake dir
-		oldConv, _ := os.ReadFile(filepath.Join(lock, "conv"))
-		pid, pidErr := strconv.Atoi(strings.TrimSpace(string(oldPID)))
-		if pidErr != nil {
-			// A lock with no readable pid is most likely one another watcher
-			// created microseconds ago and has not finished stamping. Standing
-			// down costs at most one watch window; stealing it would let two
-			// watchers run for one session, which is what this lock exists to
-			// prevent.
+		if !reclaimableLock(lock, sessionID) {
 			return nil, false
-		}
-		if processAlive(pid) {
-			owner := strings.TrimSpace(string(oldConv))
-			if sessionID == "" || owner == "" || owner == sessionID {
-				return nil, false // our own watcher is already running
-			}
-			terminate(pid) // a previous tenant of this name
 		}
 		_ = os.RemoveAll(lock)
 		if err := os.Mkdir(lock, 0o755); err != nil {
@@ -508,6 +496,43 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 	_ = os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
 	_ = os.WriteFile(filepath.Join(lock, "conv"), []byte(orDash(sessionID)), 0o600)
 	return &wakeLock{dir: lock, conv: orDash(sessionID)}, true
+}
+
+// reclaimableLock decides whether an existing lock may be taken over.
+func reclaimableLock(lock, sessionID string) bool {
+	pidRaw, _ := os.ReadFile(filepath.Join(lock, "pid"))   //nolint:gosec // G304: inside plumb's own wake dir
+	convRaw, _ := os.ReadFile(filepath.Join(lock, "conv")) //nolint:gosec // G304: inside plumb's own wake dir
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidRaw)))
+	if err != nil {
+		// No readable pid. Most likely a watcher that took the lock moments ago
+		// and has not finished stamping it, so stand down — stealing it would
+		// let two watchers run for one session. But a watcher that DIED in that
+		// window leaves a lock nothing can ever claim, and a session that can
+		// never arm a watcher is silently unwakeable with nothing in any output
+		// saying so. No live watcher outlives its own window, so an unstamped
+		// lock older than one is debris, not a tenant.
+		return lockOutlivedAnyWatcher(lock)
+	}
+	if !processAlive(pid) {
+		return true
+	}
+	owner := strings.TrimSpace(string(convRaw))
+	if sessionID == "" || owner == "" || owner == sessionID {
+		return false // our own watcher is already running
+	}
+	terminate(pid) // a previous tenant of this reused session name
+	return true
+}
+
+// lockOutlivedAnyWatcher reports whether a lock is older than the longest a live
+// watcher could still be holding it.
+func lockOutlivedAnyWatcher(lock string) bool {
+	info, err := os.Stat(lock)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) > wakeWindow()+claudeStopTimeoutSlack
 }
 
 // terminate asks a stale watcher to stop. Failure is ignored: the lock is

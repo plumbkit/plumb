@@ -334,14 +334,20 @@ Properties both hooks hold, and that the tests pin:
 
 Writing is conservative in both directions. An install **merges**: hooks the
 user wrote on the same events keep their place, the file is backed up before it
-changes, re-running is a no-op once it matches, and every one of plumb's own
-entries on an event is refreshed after the binary moves. An uninstall removes
+changes, re-running is a no-op once it matches, and plumb's own entry on an
+event is refreshed after the binary moves — with any duplicate of it on the same
+event removed, so an install always converges on exactly one handler per event
+rather than leaving two that both fire. An uninstall removes
 **only** plumb's handlers, and drops surrounding structure **only where it
-emptied it** — a group it took the last handler from, then an event key with no
-group left, then the file itself if the whole config was plumb's hooks and
-nothing else. A group the user left empty (Claude Code's own `/hooks` editor
-does that) is structure plumb never wrote and stays untouched, and an uninstall
-with nothing of plumb's to remove writes nothing at all — not even a backup.
+emptied it and only where that structure was plumb's own** — a bare
+`{"hooks": [...]}` group it took the last handler from, then an event key with
+no group left, then the file itself if the whole config was plumb's hooks and
+nothing else. A group carrying anything more — a `matcher`, a note of your own —
+is yours even when plumb's handler is the only thing inside it, so it stays with
+its keys intact and an emptied `hooks` array. A group you left empty (Claude
+Code's own `/hooks` editor leaves those) is structure plumb never wrote and is
+untouched. An uninstall with nothing of plumb's to remove writes nothing at all
+— not even a backup.
 
 The hand-installed shell hooks plumb's own recipe documented
 (`plumb-session-link.sh`, `plumb-mail-wake.sh`) count as plumb's: an install

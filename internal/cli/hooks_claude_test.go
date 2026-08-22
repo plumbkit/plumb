@@ -391,3 +391,51 @@ func TestClaudeHookEntries_TimeoutTracksATunedWindow(t *testing.T) {
 	}
 	t.Fatal("no Stop entry in the Claude Code pack")
 }
+
+// TestAcquireWakeLock_UnstampedLockIsReclaimedByAge: standing down on a lock
+// with no readable pid stops two watchers racing — but a watcher that died in
+// that window would otherwise leave a lock nothing can ever claim, and a
+// session that can never arm a watcher is silently unwakeable. No live watcher
+// outlives its own window, so an unstamped lock older than one is debris.
+func TestAcquireWakeLock_UnstampedLockIsReclaimedByAge(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PLUMB_WAKE_WINDOW", "1")
+	lock := filepath.Join(dir, "grey-lynx.lock")
+	if err := os.Mkdir(lock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh and unstamped: another watcher may be mid-acquire, so stand down.
+	if _, ok := acquireWakeLock(dir, "grey-lynx", "conv-1"); ok {
+		t.Error("stole a lock another watcher may have just taken")
+	}
+
+	// Older than any window a live watcher could still be inside: debris.
+	old := time.Now().Add(-2 * (time.Second + claudeStopTimeoutSlack))
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := acquireWakeLock(dir, "grey-lynx", "conv-1")
+	if !ok {
+		t.Fatal("an abandoned unstamped lock was never reclaimable — the session is unwakeable forever")
+	}
+	got.release()
+}
+
+// TestWakeLock_ReleaseFailsClosed: an unreadable conv file is the successor's
+// window between mkdir and its own stamp. Deleting then would remove the lock
+// it has just taken — the very bug the ownership check exists to prevent.
+func TestWakeLock_ReleaseFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	lock, ok := acquireWakeLock(dir, "grey-lynx", "conv-1")
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	if err := os.Remove(filepath.Join(lock.dir, "conv")); err != nil {
+		t.Fatal(err)
+	}
+	lock.release()
+	if _, err := os.Stat(lock.dir); err != nil {
+		t.Error("release deleted a lock whose ownership it could not prove")
+	}
+}
