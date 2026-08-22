@@ -46,12 +46,6 @@ type agentShard struct {
 	writeLimiter *tools.RateLimiter
 }
 
-// isShared reports whether this connection has observed two or more distinct
-// logical-agent identities, i.e. whether per-agent keying is in effect.
-func (s *connSession) isShared() bool {
-	return s.logicalAgents.isShared()
-}
-
 // shardFor resolves the per-agent shard for the logical agent carried in ctx.
 // It returns nil — signalling "use the connection's own state" — when the
 // connection is not shared, or when ctx carries no logical-agent identity AND

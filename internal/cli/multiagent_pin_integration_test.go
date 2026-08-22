@@ -166,7 +166,7 @@ func testSubagentSameCallIdentity(t *testing.T) {
 	if got := m.s.workspaceFor(agentCtx("coordinator")); got != ws {
 		t.Fatalf("coordinator workspace = %q after the subagent attached, want %q", got, ws)
 	}
-	if !m.s.isShared() {
+	if !committedShared(m.s) {
 		t.Fatal("two declared session_ids must mark the connection shared, so per-agent keying is in effect")
 	}
 	if health, msg := sessionHealth(t, m.s.sessID); health == "blocked" {
@@ -478,7 +478,7 @@ func testSingleAgentConnectionStillPinsTheConnection(t *testing.T) {
 	if got := m.s.workspace(); got != first {
 		t.Fatalf("connection pin = %q, want %q", got, first)
 	}
-	if m.s.isShared() {
+	if committedShared(m.s) {
 		t.Fatal("one agent must not mark the connection shared")
 	}
 

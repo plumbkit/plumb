@@ -56,29 +56,23 @@ func (l *logicalAgentState) record(id string, attach bool) bool {
 	return len(l.seen) > 1
 }
 
-// isShared reports whether two or more distinct logical-agent IDs have been
-// observed on this connection. It is the gate for per-agent keying: below it the
-// connection itself is the identity and no shard is ever created.
-func (l *logicalAgentState) isShared() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.seen) > 1
-}
-
 // sharedWith reports whether the connection is shared once the caller of THIS
-// request is counted — the observed set plus id. It exists so a call can be
-// routed to its own agent without that routing decision being a commitment.
+// request is counted — the observed set plus id. It is THE gate for per-agent
+// keying: below it the connection itself is the identity and no shard is created.
+//
+// It counts the caller because a routing decision must not require a commitment.
 //
 // A subagent's first session_start declares an identity the connection has never
-// seen. Recording it up front would answer isShared() correctly, but `seen` only
-// grows, so a call that is then REFUSED would have permanently flipped the
+// seen. Recording it up front would make the plain "len(seen) > 1" reading true,
+// but `seen` only grows, so a call that is then REFUSED would have flipped the
 // connection into per-agent keying for every peer — each peer's next call landing
 // on a fresh shard with an empty read tracker, and strict mode rejecting its edits
 // with "has not been read". Asking the question hypothetically instead lets the
 // refusal leave no trace in the identity set: the commitment happens on the
 // success path, through session_start's external-ID linker.
 //
-// An anonymous call (id == "") asks exactly what isShared() asks.
+// An anonymous call (id == "") has no caller to count, so it asks the plain
+// question: are two or more identities already committed.
 func (l *logicalAgentState) sharedWith(id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
