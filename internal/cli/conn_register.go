@@ -262,6 +262,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithTasks(s.taskState).
 		WithProjectPolicy(s.projectGitStatus).
 		WithRepin(s.repinWorkspace).
+		WithDeclaredAgent(s.declaredAgentCtx).
 		WithPinConflict(s.onPinConflict).
 		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {

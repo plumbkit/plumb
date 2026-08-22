@@ -98,6 +98,7 @@ type SessionStart struct {
 	lspLangsFn    func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn   func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
 	externalIDFn  func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
+	declaredAgent func(ctx context.Context, id string) context.Context                              // may be nil; derives the per-call ctx carrying the logical-agent identity declared by session_id
 	pinConflict   func(requested string)                                                            // may be nil; records a same-connection workspace switch attempt
 	repin         func(ctx context.Context, workspace, language string, force bool) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language; force overrides the sticky-pin guard
 	episodicFn    func(ws string) (string, bool)                                                    // may be nil; returns the last episodic summary for the workspace
@@ -270,15 +271,6 @@ func (t *SessionStart) WithLSPLanguages(fn func() []string) *SessionStart {
 	return t
 }
 
-// WithExternalID wires the external-ID linker: fn receives the session_id
-// argument, persists it on the session file, and may return an inherited
-// session name (non-empty when a matching ended session was found). Nil-safe.
-// Returns the receiver for chaining.
-func (t *SessionStart) WithExternalID(fn func(id string) string) *SessionStart {
-	t.externalIDFn = fn
-	return t
-}
-
 // WithPinConflict wires a callback invoked when the caller asks session_start
 // to switch an already-pinned connection to a different workspace. The tool
 // still returns an error; the callback is for session health/observability.
@@ -337,6 +329,16 @@ func (*SessionStart) Description() string {
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	// Identity BEFORE workspace, deliberately. A subagent multiplexed over a
+	// shared connection declares itself with `session_id` in the SAME call that
+	// names its workspace, so resolving the workspace first left the caller
+	// unattributable at the exact moment the sticky-pin guard and the per-agent
+	// re-pin ran: the re-pin moved the CONNECTION's pin, dragging every peer agent
+	// (issue #182). resolveLinkage records the identity and declaredAgent puts it
+	// on the ctx the re-pin below runs under, so the re-pin lands on this agent's
+	// own shard and no peer's pin moves.
+	inheritedName, linked := t.resolveLinkage(raw)
+	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
 	if err != nil {
 		return "", err
@@ -344,7 +346,6 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
-	inheritedName, linked := t.resolveLinkage(raw)
 	lang, lspKey := detectLanguageInfo(ws)
 	// A forced/attached primary may have no root marker (e.g. swift pinned on an
 	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer
@@ -424,25 +425,6 @@ func (t *SessionStart) applyPurpose(raw json.RawMessage) error {
 		t.purposeFn(purpose)
 	}
 	return nil
-}
-
-// resolveLinkage reports whether the caller passed a non-empty session_id
-// (linked) — the external id that makes this session addressable by name from
-// plumb mail and the peer wake hook — and, when so, the name inherited from a
-// previous session with the same external id (see WithExternalID). linked is
-// derived from the raw input regardless of whether an externalIDFn is wired;
-// the accessor is consulted only when it is non-nil.
-func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string, linked bool) {
-	var a struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(raw, &a); err != nil || a.SessionID == "" {
-		return "", false
-	}
-	if t.externalIDFn != nil {
-		inheritedName = t.externalIDFn(a.SessionID)
-	}
-	return inheritedName, true
 }
 
 // resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is
