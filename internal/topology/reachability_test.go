@@ -416,3 +416,74 @@ func TestReachabilityFrom_DeterministicPredecessorOverManyRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestReachabilityHasGoSignal_PackageLanguageAlone pins the first clause of
+// loadHasGoSignal in isolation: a Go-language package node with NO import
+// node at all must still set HasGoSignal.
+func TestReachabilityHasGoSignal_PackageLanguageAlone(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "reach.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	f := insertTestFile(t, db, "internal/a/a.go")
+	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "go"})
+
+	g, err := LoadPackageGraph(context.Background(), db)
+	if err != nil {
+		t.Fatalf("LoadPackageGraph: %v", err)
+	}
+	if !g.HasGoSignal {
+		t.Error("a Go-language package node alone must set HasGoSignal")
+	}
+}
+
+// TestReachabilityHasGoSignal_ImportNodeAlone pins the second clause in
+// isolation: any KindImport node, even one whose language field is not
+// literally "go", must still set HasGoSignal — no extractor other than
+// Go's emits KindImport today, so its mere presence is itself the signal.
+func TestReachabilityHasGoSignal_ImportNodeAlone(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "reach.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	f := insertTestFile(t, db, "internal/a/a.go")
+	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "notgo"})
+	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindImport, Name: "x", Language: "notgo"})
+
+	g, err := LoadPackageGraph(context.Background(), db)
+	if err != nil {
+		t.Fatalf("LoadPackageGraph: %v", err)
+	}
+	if !g.HasGoSignal {
+		t.Error("an import node alone must set HasGoSignal")
+	}
+}
+
+// TestReachabilityHasGoSignal_NeitherIsFalse pins the negative case: no
+// go-language package node and no import node at all leaves HasGoSignal
+// false — the genuine other-language shape the refusal must still catch.
+func TestReachabilityHasGoSignal_NeitherIsFalse(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "reach.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	f := insertTestFile(t, db, "internal/a/a.go")
+	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "csharp"})
+
+	g, err := LoadPackageGraph(context.Background(), db)
+	if err != nil {
+		t.Fatalf("LoadPackageGraph: %v", err)
+	}
+	if g.HasGoSignal {
+		t.Error("neither a go-language package node nor any import node exists; HasGoSignal must be false")
+	}
+}
