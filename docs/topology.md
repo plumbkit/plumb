@@ -222,7 +222,13 @@ plumb's own index, 64% of the folded edges originated in a test file, and every 
 early build of `layers` reported vanished once those edges were excluded. The
 consequence for the default shape: a package pulled in only by a sibling package's test
 file (a test helper, a fixture) is reported **unreachable**, which is the intended
-answer to "what does the binary pull in" — it never ships.
+answer to "what does the binary pull in" — it never ships. **This cuts both ways, and
+the destructive direction is undisclosed nowhere else but here without this sentence:**
+on plumb's own index, `internal/lsp/conformance` and `internal/lsp/lsptest` — real,
+in-use test-support packages — show up in the unreachable list precisely because
+nothing but a `_test.go` file imports them. The response's `unreachable` line says so
+directly: *"a package used only by tests appears here by design — confirm before
+deleting."* Treat every unreachable result as a lead to verify, not a deletion list.
 
 **Build-tag-excluded files are still indexed, and still counted.** The extractor is
 syntactic (`go/parser`), not build-aware: a file gated to another OS/arch (e.g.
@@ -234,9 +240,14 @@ built — check `go list` or the build tags directly before trusting a borderlin
 **Go-only, for now.** Folding edges into this graph needs a package node to carry its
 own outward `imports` edge to an import node in the same file — today only the Go
 extractor (`extractors/golang`) emits that shape. On a workspace whose primary language
-doesn't (C#, PHP, Scala, Elixir, …), `mode="reachability"` detects the empty-edge case
-and refuses with a clear message rather than reporting every package "unreachable",
-which is what an unguarded version of this feature did.
+doesn't (C#, PHP, Scala, Elixir, …), `mode="reachability"` detects the case and refuses
+with a clear message rather than reporting every package "unreachable", which is what an
+unguarded version of this feature did. The detection is deliberately not "zero foldable
+edges" alone — a genuinely small Go workspace can have zero too (every cross-package
+import is stdlib-only, or its only cross-package import lives in a `_test.go` file,
+which is excluded per the production-imports-only rule above); the refusal fires only
+when the index ALSO carries no independent evidence of Go (no `package` node with
+`language=go`, no `import` node at all).
 
 **Roots.** Every `package main` directory by default, plus `topology_routes`
 entry-point candidates (an HTTP handler, a Cobra command — labelled

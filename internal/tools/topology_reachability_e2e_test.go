@@ -425,3 +425,216 @@ func TestReachabilityGoOnlyRefusal(t *testing.T) {
 		t.Errorf("must refuse, not confidently report every package unreachable, got:\n%s", out)
 	}
 }
+
+// buildStdlibOnlyFixture is round-2 review's B1: three real Go package
+// directories whose only imports are stdlib. Before HasGoSignal, this
+// workspace had TotalEdges()==0 (stdlib imports are never linked to a local
+// directory — matchImportDir's whole point) and len(g.Dirs)>1, so the
+// Go-only guard fired on a genuine Go workspace and told its user it
+// "wasn't Go".
+func buildStdlibOnlyFixture(t *testing.T) *topology.Store {
+	t.Helper()
+	ws := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(ws, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/a/a.go", "package a\n\nimport \"fmt\"\n\nfunc A() { fmt.Println(\"x\") }\n")
+	write("internal/b/b.go", "package b\n\nimport \"strings\"\n\nfunc B() { strings.ToUpper(\"x\") }\n")
+	write("internal/c/c.go", "package c\n\nimport \"errors\"\n\nfunc C() { _ = errors.New(\"x\") }\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		g, gerr := s.PackageGraph(context.Background())
+		if gerr == nil {
+			if _, ok := g.Dirs["internal/a"]; ok {
+				if _, ok2 := g.Dirs["internal/b"]; ok2 {
+					if _, ok3 := g.Dirs["internal/c"]; ok3 {
+						return s
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the stdlib-only fixture to index")
+	return nil
+}
+
+// TestReachabilityStdlibOnlyWorkspaceNotGoOnlyRefused pins round-2 finding
+// REQUIRED-1's B1: a real Go workspace with zero foldable edges (stdlib-only
+// imports) must NOT get the Go-only refusal, and must answer normally.
+func TestReachabilityStdlibOnlyWorkspaceNotGoOnlyRefused(t *testing.T) {
+	s := buildStdlibOnlyFixture(t)
+	g, err := s.PackageGraph(context.Background())
+	if err != nil {
+		t.Fatalf("PackageGraph: %v", err)
+	}
+	if g.TotalEdges() != 0 {
+		t.Fatalf("test setup bug: expected zero foldable edges (stdlib-only), got %v", g.Edges)
+	}
+	if !g.HasGoSignal {
+		t.Fatal("test setup bug: a real Go workspace must set HasGoSignal")
+	}
+
+	tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"mode": "reachability", "roots": []string{"internal/a"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "Go-only") {
+		t.Errorf("a real Go workspace (stdlib-only imports) must not get the Go-only refusal, got:\n%s", out)
+	}
+	if !strings.Contains(out, "reachable: 1 package(s)") {
+		t.Errorf("expected the normal reachable:1/unreachable:2 answer, got:\n%s", out)
+	}
+	if !strings.Contains(out, "unreachable: 2 package(s)") {
+		t.Errorf("expected internal/b and internal/c reported unreachable, got:\n%s", out)
+	}
+}
+
+// buildTestOnlyEdgeFixture is round-2 review's B2: three real Go package
+// directories whose ONLY cross-package import lives in a _test.go file. This
+// case is CREATED by isTestGoImporter's own filter — before it existed, this
+// workspace had a real foldable edge and the Go-only guard never fired on it.
+func buildTestOnlyEdgeFixture(t *testing.T) *topology.Store {
+	t.Helper()
+	ws := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(ws, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/a/a.go", "package a\n\nfunc A() {}\n")
+	write("internal/a/a_test.go", `package a
+
+import (
+	"testing"
+
+	"myapp/internal/b"
+)
+
+func TestA(t *testing.T) { b.B() }
+`)
+	write("internal/b/b.go", "package b\n\nfunc B() {}\n")
+	write("internal/c/c.go", "package c\n\nfunc C() {}\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		g, gerr := s.PackageGraph(context.Background())
+		if gerr == nil {
+			_, okA := g.Dirs["internal/a"]
+			_, okB := g.Dirs["internal/b"]
+			_, okC := g.Dirs["internal/c"]
+			if okA && okB && okC {
+				return s
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the test-only-edge fixture to index")
+	return nil
+}
+
+// TestReachabilityTestOnlyEdgeWorkspaceNotGoOnlyRefused pins round-2 finding
+// REQUIRED-1's B2: a real Go workspace whose only cross-package import is a
+// _test.go-sourced edge (filtered out by isTestGoImporter) must still NOT
+// get the Go-only refusal — the production-imports-only filter creating a
+// zero-foldable-edge shape is not the same thing as "wrong language".
+func TestReachabilityTestOnlyEdgeWorkspaceNotGoOnlyRefused(t *testing.T) {
+	s := buildTestOnlyEdgeFixture(t)
+	g, err := s.PackageGraph(context.Background())
+	if err != nil {
+		t.Fatalf("PackageGraph: %v", err)
+	}
+	if g.TotalEdges() != 0 {
+		t.Fatalf("test setup bug: expected zero foldable production edges (only a _test.go edge exists), got %v", g.Edges)
+	}
+	if !g.HasGoSignal {
+		t.Fatal("test setup bug: a real Go workspace must set HasGoSignal")
+	}
+
+	tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"mode": "reachability", "roots": []string{"internal/a"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "Go-only") {
+		t.Errorf("a real Go workspace whose only cross-package edge is _test.go-sourced must not get the Go-only refusal, got:\n%s", out)
+	}
+	if !strings.Contains(out, "reachable: 1 package(s)") {
+		t.Errorf("expected internal/a alone reachable (the b edge is test-only, filtered), got:\n%s", out)
+	}
+	if !strings.Contains(out, "unreachable: 2 package(s)") {
+		t.Errorf("expected internal/b and internal/c reported unreachable, got:\n%s", out)
+	}
+}
+
+// TestReachabilitySingleDirZeroEdgesIsBenign pins B3 from round-2 review: a
+// single-package-directory workspace with zero edges is NOT the Go-only
+// case (len(g.Dirs) is never >1), and must answer normally — reachable:1,
+// unreachable:0 — never a refusal.
+func TestReachabilitySingleDirZeroEdgesIsBenign(t *testing.T) {
+	ws := t.TempDir()
+	full := filepath.Join(ws, "onlydir", "a.go")
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte("package a\n\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, _ := s.SymbolsInFile(context.Background(), full); len(n) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"mode": "reachability", "roots": []string{"onlydir"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "Go-only") {
+		t.Errorf("a single-package workspace must never get the Go-only refusal, got:\n%s", out)
+	}
+	if !strings.Contains(out, "reachable: 1 package(s)") || !strings.Contains(out, "unreachable: 0 package(s)") {
+		t.Errorf("expected reachable:1/unreachable:0, got:\n%s", out)
+	}
+}

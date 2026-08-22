@@ -60,6 +60,24 @@ func TestReachabilityFieldsWithoutModeRejected(t *testing.T) {
 	}
 }
 
+// TestReachabilitySummaryFormat_UnreachableDisclosesTestOnlyCaveat pins
+// round-2 review finding REQUIRED-2: the unreachable bucket's header must
+// warn that a test-only package lands there BY DESIGN, so an agent reading
+// the response does not treat every unreachable entry as safe to delete.
+func TestReachabilitySummaryFormat_UnreachableDisclosesTestOnlyCaveat(t *testing.T) {
+	g := &topology.PackageGraph{Dirs: map[string]*topology.PackageInfo{
+		"internal/lsptest": {Dir: "internal/lsptest", NumNodes: 60},
+	}}
+	res := &topology.ReachabilityResult{Roots: nil, Reachable: map[string]bool{}, Predecessor: map[string]string{}}
+	out := formatReachabilitySummary(g, res, nil, "")
+	if !strings.Contains(out, "a package used only by tests appears here by design") {
+		t.Errorf("expected the unreachable header to warn about test-only packages, got:\n%s", out)
+	}
+	if !strings.Contains(out, "confirm before deleting") {
+		t.Errorf("expected the unreachable header to warn against deleting on sight, got:\n%s", out)
+	}
+}
+
 // TestReachabilitySummaryFormat_SamplesCappedWithRemainder pins the output
 // shape's byte discipline directly (no DB/extractor involved): with more
 // packages than reachabilitySampleLimit in each bucket, each bucket shows
