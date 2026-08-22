@@ -130,15 +130,16 @@ func runHooksInstall(args []string) error {
 			report.clientError(t, err)
 			continue
 		}
-		changed, err := installHooksAt(path, entries, t.ours)
-		if err != nil {
+		if _, err := installHooksAt(path, entries, t.ours); err != nil {
 			report.clientError(t, err)
 			continue
 		}
 		report.group(t, path, before, installAction)
-		if changed {
-			report.note(t.notes...)
-		}
+		// The notes print on the no-op path too. Codex re-hashes and un-trusts a
+		// hook whose command changes, so the user re-running install after a Codex
+		// upgrade needs the `/hooks` reminder most precisely when plumb writes
+		// nothing — the same call `plumb setup` makes about its own per-client note.
+		report.note(t.notes...)
 	}
 	report.render(skips)
 	return nil

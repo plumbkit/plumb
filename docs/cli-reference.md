@@ -255,6 +255,7 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
 | `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. It also removes that client's lifecycle hooks (`plumb hooks uninstall`'s writer, so only plumb's own handlers go and the user's survive), and for a skill-capable client the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
+
 ---
 
 ## `plumb hooks`
@@ -291,10 +292,16 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
 - **Claude Code wakes.** The handler installs as a background watcher (`async` +
   `asyncRewake`), which is the pair that lets a hook reach a session with **no
   turn in flight**. It polls `plumb mail` for up to `PLUMB_WAKE_WINDOW` seconds
-  (default 300, every `PLUMB_WAKE_INTERVAL`, default 7) and exits 2 with one
-  line on stderr the moment mail is waiting — that pair is the wake payload. The
-  client's hook timeout is set above the window on purpose: a shorter one would
-  kill the watcher mid-watch, and nothing in any output would say so.
+  (default 300, every `PLUMB_WAKE_INTERVAL`, default 7 and never longer than the
+  window) and exits 2 with one line on stderr the moment mail is waiting — that
+  pair is the wake payload. The installed handler's `timeout` sits above the
+  window on purpose: a shorter one kills the watcher mid-watch, and nothing in
+  any output would say so. Because that timeout is written at install time from
+  the window in effect *then*, **re-tune and re-install together** — exporting a
+  larger `PLUMB_WAKE_WINDOW` without re-running `plumb hooks install` leaves the
+  client cancelling the watcher early. `plumb hooks` reports the mismatch as
+  `stale`. `PLUMB_WAKE_DIR` (default `~/.claude/plumb-wake`) is where the watcher
+  keeps its per-session stamp, lock and re-arm records.
 - **Codex checks.** Codex has no background-wake mechanism, so its handler makes
   one read-only probe as the turn ends and keeps the turn going only when mail
   is pending. That narrows the end-of-turn race; it is **not** push delivery.
@@ -327,14 +334,25 @@ Properties both hooks hold, and that the tests pin:
 
 Writing is conservative in both directions. An install **merges**: hooks the
 user wrote on the same events keep their place, the file is backed up before it
-changes, re-running is a no-op once it matches, and plumb's own entries are
-refreshed in place after the binary moves. An uninstall removes **only** plumb's
-handlers — dropping a group and then an event key that its handlers leave empty,
-and writing nothing at all when there is nothing of plumb's to remove. The
-hand-installed shell hooks plumb's own recipe documented
+changes, re-running is a no-op once it matches, and every one of plumb's own
+entries on an event is refreshed after the binary moves. An uninstall removes
+**only** plumb's handlers, and drops surrounding structure **only where it
+emptied it** — a group it took the last handler from, then an event key with no
+group left, then the file itself if the whole config was plumb's hooks and
+nothing else. A group the user left empty (Claude Code's own `/hooks` editor
+does that) is structure plumb never wrote and stays untouched, and an uninstall
+with nothing of plumb's to remove writes nothing at all — not even a backup.
+
+The hand-installed shell hooks plumb's own recipe documented
 (`plumb-session-link.sh`, `plumb-mail-wake.sh`) count as plumb's: an install
 replaces those entries in place, so the migration leaves one pair of hooks
 rather than two that both fire, and the `.sh` files themselves are left on disk.
+That match is narrow on purpose, because it also decides what an uninstall
+deletes: the command's own executable must **be** one of those two scripts, and
+it must sit on an event the recipe used. A wrapper called
+`wrap-plumb-mail-wake.sh`, a command that merely names the script in an
+argument, or anything at all on an event plumb does not install on, is the
+user's and is never removed.
 
 Installation is always explicit. Hooks execute commands with the user's
 credentials, so nothing installs them as a side effect — not `plumb setup`, not

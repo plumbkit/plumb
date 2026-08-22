@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -41,6 +42,12 @@ const (
 	codexHookVerb  = "hooks run-codex"
 )
 
+// ownershipTest decides whether one handler on one event is plumb's. The event
+// is part of the question, not context: a hook plumb has never installed on
+// that event cannot be plumb's, however its command reads — and this predicate
+// is what an uninstall deletes by.
+type ownershipTest func(event string, handler map[string]any) bool
+
 // hookEntry is one handler plumb wants installed for a client: the event in
 // that client's own vocabulary, a short label for the status table, and the
 // rendered handler object.
@@ -63,7 +70,7 @@ type hooksTarget struct {
 	setup   setupTarget
 	pathFn  func() (string, error)
 	entries func(plumbBin string) []hookEntry
-	ours    func(handler map[string]any) bool
+	ours    ownershipTest
 	notes   []string
 }
 
@@ -154,26 +161,36 @@ func plumbHookCommand(plumbBin, verb string) string {
 // pair of hooks rather than two that both fire — and an uninstall clears them.
 // Only the settings entry is touched: the .sh files on disk are the user's and
 // are never removed.
+//
+// The match is deliberately narrow, in two ways, because this predicate also
+// decides what an UNINSTALL deletes. It is basename EQUALITY on the command's
+// own executable, not a substring of the whole command line: a user's
+// `wrap-plumb-mail-wake.sh`, or a command that merely mentions the script in an
+// argument, is not plumb's. And it applies only on the events the recipe ever
+// used, so a hook the user hung on PreToolUse is out of scope whatever it is
+// called. Removing a hook plumb never installed is the one failure this whole
+// command must not have.
 var legacyClaudeHookScripts = []string{"plumb-session-link.sh", "plumb-mail-wake.sh"}
 
-func claudeHookOwned(h map[string]any) bool {
+// legacyClaudeHookEvents are the events the documented recipe installed on.
+var legacyClaudeHookEvents = []string{"SessionStart", "Stop"}
+
+func claudeHookOwned(event string, h map[string]any) bool {
 	cmd, _ := h["command"].(string)
-	if strings.Contains(cmd, claudeHookVerb) {
+	if runsPlumbVerb(cmd, claudeHookVerb) {
 		return true
 	}
-	for _, script := range legacyClaudeHookScripts {
-		if strings.Contains(cmd, script) {
-			return true
-		}
+	if !slices.Contains(legacyClaudeHookEvents, event) {
+		return false
 	}
-	return false
+	return slices.Contains(legacyClaudeHookScripts, filepath.Base(commandExecutable(cmd)))
 }
 
 // codexHookOwned matches the command first and the statusMessage second: the
 // first Codex installer marked its entries by status line, so hooks it wrote
 // are still recognised — and therefore refreshed and removable — by this one.
-func codexHookOwned(h map[string]any) bool {
-	if cmd, _ := h["command"].(string); strings.Contains(cmd, codexHookVerb) {
+func codexHookOwned(_ string, h map[string]any) bool {
+	if cmd, _ := h["command"].(string); runsPlumbVerb(cmd, codexHookVerb) {
 		return true
 	}
 	switch h["statusMessage"] {
@@ -181,6 +198,40 @@ func codexHookOwned(h map[string]any) bool {
 		return true
 	}
 	return false
+}
+
+// runsPlumbVerb reports whether cmd invokes one of plumb's own hook verbs. The
+// verb has to follow the executable rather than appear anywhere in the line, so
+// a user's command that merely mentions it — in an argument, a comment, a path —
+// is not mistaken for plumb's.
+func runsPlumbVerb(cmd, verb string) bool {
+	return strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cmd), commandExecutableToken(cmd))), verb)
+}
+
+// commandExecutable returns the executable a hook command line runs, unquoted.
+func commandExecutable(cmd string) string {
+	token := commandExecutableToken(cmd)
+	if unquoted, err := strconv.Unquote(token); err == nil {
+		return unquoted
+	}
+	return token
+}
+
+// commandExecutableToken returns the first token of a hook command line, keeping
+// a double-quoted path (which plumb writes, since these lines reach a shell)
+// intact rather than splitting it on the spaces inside the quotes.
+func commandExecutableToken(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, `"`) {
+		if end := strings.Index(cmd[1:], `"`); end >= 0 {
+			return cmd[:end+2]
+		}
+		return cmd
+	}
+	if field, _, found := strings.Cut(cmd, " "); found {
+		return field
+	}
+	return cmd
 }
 
 // readHookConfig reads a client's hook config. An absent file is an empty
@@ -220,7 +271,7 @@ func hookMap(cfg map[string]any) (map[string]any, error) {
 // installHooksAt merges entries into path, returning whether anything changed.
 // Re-running is a no-op once the file matches, which is what makes this safe to
 // call from `plumb setup` flows and from a shell loop alike.
-func installHooksAt(path string, entries []hookEntry, ours func(map[string]any) bool) (bool, error) {
+func installHooksAt(path string, entries []hookEntry, ours ownershipTest) (bool, error) {
 	cfg, isNew, err := readHookConfig(path)
 	if err != nil {
 		return false, err
@@ -264,7 +315,7 @@ func installHooksAt(path string, entries []hookEntry, ours func(map[string]any) 
 // changing position. An event whose value is not an array of groups is refused
 // rather than overwritten — a shape plumb cannot have written is a shape plumb
 // must not silently redefine.
-func upsertHook(hooks map[string]any, e hookEntry, ours func(map[string]any) bool) (bool, error) {
+func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, error) {
 	existing, ok := hooks[e.event]
 	if !ok {
 		hooks[e.event] = []any{map[string]any{"hooks": []any{e.handler}}}
@@ -274,6 +325,7 @@ func upsertHook(hooks map[string]any, e hookEntry, ours func(map[string]any) boo
 	if !ok {
 		return false, fmt.Errorf("%s must be an array of hook groups, got %T — refusing to change it", e.event, existing)
 	}
+	var changed, found bool
 	for _, groupAny := range groups {
 		group, ok := groupAny.(map[string]any)
 		if !ok {
@@ -285,16 +337,24 @@ func upsertHook(hooks map[string]any, e hookEntry, ours func(map[string]any) boo
 		}
 		for i, handlerAny := range handlers {
 			handler, ok := handlerAny.(map[string]any)
-			if !ok || !ours(handler) {
+			if !ok || !ours(e.event, handler) {
 				continue
 			}
 			if reflect.DeepEqual(handler, e.handler) {
-				return false, nil
+				found = true
+				continue
 			}
+			// Every plumb handler on this event is refreshed, not just the first:
+			// a config carrying both a legacy script entry and a current one would
+			// otherwise keep the leftover, and both would fire while the status
+			// table reported a clean install.
 			handlers[i] = e.handler
 			group["hooks"] = handlers
-			return true, nil
+			changed, found = true, true
 		}
+	}
+	if found {
+		return changed, nil
 	}
 	hooks[e.event] = append(groups, map[string]any{"hooks": []any{e.handler}})
 	return true, nil
@@ -306,11 +366,14 @@ func upsertHook(hooks map[string]any, e hookEntry, ours func(map[string]any) boo
 // writes — so an uninstall cannot leave orphans pointing at a binary that is
 // about to stop being registered.
 //
-// A group left with no handlers goes with them (a group matches nothing once
-// it is empty, and plumb only ever creates single-handler groups of its own); a
-// hooks map left empty loses its key entirely, restoring the pre-plumb shape of
-// a file plumb created. Nothing is written when nothing matched.
-func removeHooksAt(path string, ours func(map[string]any) bool) (int, error) {
+// Structure is dropped only where plumb emptied it. A group loses its place
+// only if a handler was removed FROM IT and nothing is left; an event key goes
+// only if a handler was removed from that event and no group survives; and the
+// file itself is removed only when the whole config was plumb's hooks and
+// nothing else. A user's empty matcher group — which Claude Code's own /hooks
+// editor leaves behind — is structure plumb never wrote, and mistaking it for
+// residue is how an uninstall eats a settings file.
+func removeHooksAt(path string, ours ownershipTest) (int, error) {
 	cfg, isNew, err := readHookConfig(path)
 	if err != nil || isNew {
 		return 0, err
@@ -326,9 +389,9 @@ func removeHooksAt(path string, ours func(map[string]any) bool) (int, error) {
 		if !ok {
 			continue
 		}
-		keptGroups, n := groupsWithout(groups, ours)
+		keptGroups, n := groupsWithout(event, groups, ours)
 		removed += n
-		if len(keptGroups) == 0 {
+		if n > 0 && len(keptGroups) == 0 {
 			delete(hooks, event)
 			continue
 		}
@@ -350,7 +413,9 @@ func removeHooksAt(path string, ours func(map[string]any) bool) (int, error) {
 	// hooks (Codex's hooks.json is the clear case): removing it restores the
 	// pre-plumb shape rather than leaving an empty object behind — the same call
 	// `plumb setup --uninstall` makes about a server map it emptied. The backup
-	// above means the removal is still recoverable.
+	// above means the removal is still recoverable. Reachable only when every
+	// event and group in the file was plumb's, since the guards above keep
+	// everything else in place.
 	if len(cfg) == 0 {
 		if err := os.Remove(path); err != nil {
 			return 0, fmt.Errorf("removing %s: %w", path, err)
@@ -364,11 +429,11 @@ func removeHooksAt(path string, ours func(map[string]any) bool) (int, error) {
 }
 
 // groupsWithout filters one event's hook groups, returning the groups to keep
-// and how many handlers went. A group whose handlers were all plumb's is
-// dropped: an empty group matches nothing, and plumb only ever creates
-// single-handler groups of its own. Anything this cannot read as a group — a
+// and how many handlers went. A group is dropped only when a handler was
+// removed from IT and nothing remains — an already-empty group is the user's
+// structure, not plumb's residue. Anything this cannot read as a group — a
 // shape plumb did not write — is kept exactly as it is.
-func groupsWithout(groups []any, ours func(map[string]any) bool) ([]any, int) {
+func groupsWithout(event string, groups []any, ours ownershipTest) ([]any, int) {
 	removed := 0
 	keptGroups := make([]any, 0, len(groups))
 	for _, groupAny := range groups {
@@ -383,14 +448,16 @@ func groupsWithout(groups []any, ours func(map[string]any) bool) ([]any, int) {
 			continue
 		}
 		kept := make([]any, 0, len(handlers))
+		took := 0
 		for _, handlerAny := range handlers {
-			if handler, isHandler := handlerAny.(map[string]any); isHandler && ours(handler) {
+			if handler, isHandler := handlerAny.(map[string]any); isHandler && ours(event, handler) {
 				removed++
+				took++
 				continue
 			}
 			kept = append(kept, handlerAny)
 		}
-		if len(kept) == 0 {
+		if took > 0 && len(kept) == 0 {
 			continue
 		}
 		group["hooks"] = kept
@@ -411,7 +478,7 @@ type hookState struct {
 // disk: missing (nothing of plumb's on that event), installed (byte-identical
 // to what this binary writes), or stale (plumb's, but written by a different
 // binary path or an older entry shape — including a legacy script hook).
-func hookStatesAt(path string, entries []hookEntry, ours func(map[string]any) bool) ([]hookState, error) {
+func hookStatesAt(path string, entries []hookEntry, ours ownershipTest) ([]hookState, error) {
 	cfg, isNew, err := readHookConfig(path)
 	if err != nil {
 		return nil, err
@@ -438,7 +505,7 @@ func hookStatesAt(path string, entries []hookEntry, ours func(map[string]any) bo
 
 // findHookHandler returns plumb's handler on one event, or nil. A nil hooks map
 // (no config, or no "hooks" key) simply finds nothing.
-func findHookHandler(hooks map[string]any, event string, ours func(map[string]any) bool) map[string]any {
+func findHookHandler(hooks map[string]any, event string, ours ownershipTest) map[string]any {
 	groups, ok := hooks[event].([]any)
 	if !ok {
 		return nil
@@ -453,7 +520,7 @@ func findHookHandler(hooks map[string]any, event string, ours func(map[string]an
 			continue
 		}
 		for _, handlerAny := range handlers {
-			if handler, ok := handlerAny.(map[string]any); ok && ours(handler) {
+			if handler, ok := handlerAny.(map[string]any); ok && ours(event, handler) {
 				return handler
 			}
 		}
