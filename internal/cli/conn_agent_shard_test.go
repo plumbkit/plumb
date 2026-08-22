@@ -249,7 +249,7 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 		t.Fatal("precondition: the cross-workspace re-pin should have been refused")
 	}
 
-	if s.isShared() {
+	if committedShared(s) {
 		t.Error("a REFUSED session_start permanently flipped the connection into per-agent keying: " +
 			"every peer's next call now lands on a fresh shard")
 	}
@@ -261,3 +261,13 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 		t.Errorf("unattributed calls resolve to %q after a refused re-pin, want %q", got, rootA)
 	}
 }
+
+// committedShared reports the connection's COMMITTED sharing state — two or more
+// identities actually recorded — as distinct from sharedWith's question, which
+// counts the caller of the request in hand. Tests assert the committed state,
+// because "did this call write an identity down" is exactly what a refused call
+// must answer no to. Spelled out here rather than as a method on connSession: a
+// production gate that reads the committed state instead of sharedWith would
+// route a lone declaring agent to the connection and a refused one to a shard,
+// which is the bug this file exists to keep closed.
+func committedShared(s *connSession) bool { return s.logicalAgents.sharedWith("") }

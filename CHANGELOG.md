@@ -1,11 +1,5 @@
 # Changelog
-## 0.17.2 (2026-08-22)
-
-<!-- New entries go HERE, under the unreleased heading. Date-stamping a
-     release does not conflict with a branch that adds entries under the
-     stamped heading, so a clean rebase is not evidence your entry is in the
-     right section — check which heading it landed under. CI checks it for you
-     now: scripts/check-changelog-placement.sh, a step in the verify job. -->
+## 0.17.3 (unreleased)
 
 ### Fixed
 
@@ -47,6 +41,14 @@
   cross-workspace drifter. `internal/tools/session_start.go`,
   `internal/tools/session_start_identity.go`, `internal/cli/conn_logical_agent.go`,
   `internal/cli/conn_agent_shard.go`.
+
+## 0.17.2 (2026-08-22)
+
+<!-- New entries go HERE, under the unreleased heading. Date-stamping a
+     release does not conflict with a branch that adds entries under the
+     stamped heading, so a clean rebase is not evidence your entry is in the
+     right section — check which heading it landed under. CI checks it for you
+     now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
 ### Added
 
