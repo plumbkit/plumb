@@ -109,9 +109,9 @@
     {/if}
   </Card>
 
-  <Card title="Cost vs frequency" badge="bubble scatter" desc="x=calls · y=p95 · size=tokens saved">
+  <Card title="Cost vs frequency" badge="bubble scatter" desc={`x=calls · y=p95 · size=tokens saved${stats.modelVersion ? ` (v${stats.modelVersion})` : ""}`}>
     {#if stats.tools?.length}
-      <Chart option={bubbleScatter(P, stats.tools)} height="320px" />
+      <Chart option={bubbleScatter(P, stats.tools, stats.modelVersion)} height="320px" />
     {:else}
       <div class="text-[12px] py-8 text-center" style="color:var(--faint)">No data yet.</div>
     {/if}
