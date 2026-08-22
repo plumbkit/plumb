@@ -16,10 +16,12 @@ import (
 )
 
 // This file is the inverse of the registration writers: `plumb setup <client>
-// --uninstall` removes plumb's server entry from that client's config — and,
-// for a skill-capable client, the skill files plumb itself installed. Every
-// removal backs up before writing, preserves sibling entries, and is a no-op
-// when plumb is not registered: an uninstall must be as safe to repeat as a
+// --uninstall` removes plumb's server entry from that client's config —
+// and, for a skill-capable client, the skill files plumb itself installed,
+// and, for an instructions-capable client, plumb's managed instruction block
+// (see removeInstructionsBlock in setup_instructions.go). Every removal
+// backs up before writing, preserves sibling entries, and is a no-op when
+// plumb is not registered: an uninstall must be as safe to repeat as a
 // registration.
 
 var setupUninstallFlag bool
@@ -75,16 +77,8 @@ func uninstallTargetAt(t setupTarget, paths []string, removeSkills bool) error {
 		}
 	}
 
-	if removedAny && removeSkills && t.skillsDirFn != nil {
-		if dir, err := t.skillsDirFn(); err == nil {
-			removed, kept := removePlumbSkills(dir)
-			if len(removed) > 0 {
-				lines = append(lines, fmt.Sprintf("skills removed: %d from %s", len(removed), render.ContractPath(dir)))
-			}
-			if len(kept) > 0 {
-				lines = append(lines, "skills left in place (not plumb's): "+strings.Join(kept, ", "))
-			}
-		}
+	if removedAny {
+		lines = uninstallSideEffectLines(t, removeSkills, lines)
 	}
 
 	if !removedAny {
@@ -99,6 +93,36 @@ func uninstallTargetAt(t setupTarget, paths []string, removeSkills bool) error {
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render("Unregistered from "+t.name+"\n"+strings.Join(lines, "\n")), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	return nil
+}
+
+// uninstallSideEffectLines appends the skill-removal and instructions-block-
+// removal report lines onto lines, returning the extended slice — factored
+// out of uninstallTargetAt to keep that function under the project's
+// cyclomatic-complexity budget. Only called once something was actually
+// unregistered (see uninstallTargetAt), so both removals here are
+// unconditional on that account.
+func uninstallSideEffectLines(t setupTarget, removeSkills bool, lines []string) []string {
+	if removeSkills && t.skillsDirFn != nil {
+		if dir, err := t.skillsDirFn(); err == nil {
+			removed, kept := removePlumbSkills(dir)
+			if len(removed) > 0 {
+				lines = append(lines, fmt.Sprintf("skills removed: %d from %s", len(removed), render.ContractPath(dir)))
+			}
+			if len(kept) > 0 {
+				lines = append(lines, "skills left in place (not plumb's): "+strings.Join(kept, ", "))
+			}
+		}
+	}
+
+	if t.instructionsFn != nil {
+		instrLines, err := removeInstructionsBlock(t)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("instructions: error: %v", err))
+		} else {
+			lines = append(lines, instrLines...)
+		}
+	}
+	return lines
 }
 
 // removeServerEntry is mergeServerEntry's inverse: it deletes the "plumb" key

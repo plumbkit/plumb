@@ -296,6 +296,77 @@ func Apply(path, body, version string) (changed bool, err error) {
 	return true, nil
 }
 
+// Remove deletes the managed block from the file at path, following a
+// symlink to its real target first (mirrors Apply/Check). Behaviour:
+//
+//   - File absent: no-op, removed=false.
+//   - File present without a well-formed managed block (what Check reports
+//     as StatusMissing): no-op, removed=false.
+//   - File present with malformed markers: refuses with an error, matching
+//     Apply's own malformed-safe rigor — a caller cannot trust which bytes
+//     to erase from a file whose markers do not parse (see scanBlocks).
+//   - File present with exactly one well-formed block: the block is deleted
+//     via removeBlockSpan, which also absorbs the one blank-line separator
+//     mergeBlock's own append path would have inserted — so Remove is
+//     Apply's append case run backwards, not just a byte-range deletion.
+//
+// If deleting the block leaves nothing but whitespace, the file itself is
+// removed too, mirroring Apply's "absent file means no managed content"
+// symmetry — a bare uninstall of a plumb-created, otherwise-empty
+// instructions file should not leave a zero-byte file behind.
+func Remove(path string) (removed bool, err error) {
+	target := resolveTarget(path)
+	data, readErr := os.ReadFile(target) //nolint:gosec // G304: target is caller-supplied by design, same trust boundary as every other setup writer in this codebase
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading %s: %w", target, readErr)
+	}
+
+	content := string(data)
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return false, fmt.Errorf("%s: managed block markers are malformed or duplicated (an orphan start/end marker, or more than one block) — refusing to remove; repair the file by hand and re-run", target)
+	}
+	if len(blocks) == 0 {
+		return false, nil
+	}
+
+	next := removeBlockSpan(content, blocks[0])
+	if strings.TrimSpace(next) == "" {
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("removing %s: %w", target, err)
+		}
+		return true, nil
+	}
+	if err := writeBlock(target, next); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// removeBlockSpan deletes b (and its own line terminator) from content, and
+// — when the block was preceded by the blank-line separator mergeBlock's
+// append path inserts ("\n\n" between prior content and a fresh block) —
+// absorbs that one blank line too, so removing a block Apply appended
+// reconstructs the pre-Apply content exactly rather than leaving a widowed
+// blank line behind. A block that instead sits mid-file surrounded by other
+// content (the common case after a version bump replaced it in place) is
+// left with whatever surrounded it untouched.
+func removeBlockSpan(content string, b blockSpan) string {
+	start, end := b.start, b.end
+	if end < len(content) && content[end] == '\n' {
+		end++
+	}
+	before := content[:start]
+	after := content[end:]
+	if strings.HasSuffix(before, "\n\n") {
+		before = before[:len(before)-1]
+	}
+	return before + after
+}
+
 // mergeBlock returns content with its single well-formed managed block (if
 // any — blocks has at most one entry whenever scanBlocks reports
 // malformed=false) replaced by block, or block appended — separated from any

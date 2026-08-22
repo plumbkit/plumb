@@ -81,6 +81,16 @@ func instructionRoots() (cwd, home string, err error) {
 // now — only claude-code/codex/gemini carry one) is silently a no-op, per
 // the "no auto-writes without an explicit setup/init invocation" rule: a
 // target that never gets an instructionsFn never gets a write.
+//
+// Which BODY gets written differs between the two files. The project file
+// goes through templateForProject, which checks whether t's project path is
+// shared with another instruction-capable client (a symlinked CLAUDE.md/
+// GEMINI.md -> AGENTS.md layout, this repo's own) and, if so, writes the
+// shared/client-agnostic DefaultTemplate instead of t's own — see
+// templateForGroup for why this is what keeps three clients' templates from
+// fighting over one span. The global file is never shared this way (
+// ~/.codex, ~/.claude, ~/.gemini always name distinct directories), so it
+// always gets t's own template when one exists.
 func applyInstructionsBlock(t setupTarget) ([]string, error) {
 	if t.instructionsFn == nil {
 		return nil, nil
@@ -90,14 +100,20 @@ func applyInstructionsBlock(t setupTarget) ([]string, error) {
 		return nil, fmt.Errorf("locating %s instructions file: %w", t.name, err)
 	}
 
-	changed, err := setup.Apply(project, setup.DefaultTemplate, setup.DefaultVersion)
+	projectBody, err := templateForProject(t, project)
+	if err != nil {
+		return nil, fmt.Errorf("resolving instructions template for %s: %w", t.name, err)
+	}
+
+	changed, err := setup.Apply(project, projectBody, setup.DefaultVersion)
 	if err != nil {
 		return nil, fmt.Errorf("writing managed instruction block to %s: %w", project, err)
 	}
 	lines := []string{instructionsResultLine(project, changed)}
 
 	if setupGlobalInstructionsFlag {
-		changed, err := setup.Apply(global, setup.DefaultTemplate, setup.DefaultVersion)
+		globalBody := clientTemplateOrDefault(t.use)
+		changed, err := setup.Apply(global, globalBody, setup.DefaultVersion)
 		if err != nil {
 			return lines, fmt.Errorf("writing managed instruction block to %s: %w", global, err)
 		}
@@ -106,11 +122,89 @@ func applyInstructionsBlock(t setupTarget) ([]string, error) {
 	return lines, nil
 }
 
+// clientTemplateOrDefault returns client's own template (setup.
+// ClientTemplates, keyed by setupTarget.use) when one is registered, or
+// setup.DefaultTemplate otherwise.
+func clientTemplateOrDefault(client string) string {
+	if body, ok := setup.TemplateForClient(client); ok {
+		return body
+	}
+	return setup.DefaultTemplate
+}
+
+// templateForProject resolves the body that should be written to t's
+// project-level instruction file: t's own template when t is the SOLE
+// instruction-capable client naming that real file, or the shared
+// DefaultTemplate when the file's canonical path is also named by another
+// client (found via groupInstructionFiles, the same grouping --check/--sync
+// use). Basing the choice on the file's grouping — a fact of the project's
+// symlink topology, not of which command happened to run — is what makes
+// repeated `plumb setup <client>` calls in any order converge on the same
+// content instead of oscillating between different clients' templates.
+func templateForProject(t setupTarget, project string) (string, error) {
+	groups, err := groupInstructionFiles()
+	if err != nil {
+		return "", err
+	}
+	key := paths.Canonical(project)
+	for _, g := range groups {
+		if paths.Canonical(g.project) == key {
+			return templateForGroup(g), nil
+		}
+	}
+	// t wasn't found among instructionCapableClients' groups — should not
+	// happen given t.instructionsFn != nil, but fall back to t's own
+	// template (or DefaultTemplate) rather than erroring.
+	return clientTemplateOrDefault(t.use), nil
+}
+
 func instructionsResultLine(path string, changed bool) string {
 	if changed {
 		return "Instructions: " + path + " (managed block written)"
 	}
 	return "Instructions: " + path + " (already current)"
+}
+
+// removeInstructionsBlock deletes plumb's managed instruction block from t's
+// project-level instruction file — and the global one too when --global was
+// passed, mirroring applyInstructionsBlock's own project/global split. A
+// target with no instructionsFn is silently a no-op, and so is a file that
+// never had a block (setup.Remove itself is a no-op in both cases).
+//
+// On a shared/symlinked project file (CLAUDE.md/GEMINI.md -> AGENTS.md), the
+// block is client-agnostic (templateForGroup) and this removes it outright —
+// uninstalling one client from a file it shares with others still-registered
+// removes the whole file's block, since v1 has no per-client scoping within
+// one shared span. That is a deliberate, documented trade-off, not an
+// oversight: see the PR body.
+func removeInstructionsBlock(t setupTarget) ([]string, error) {
+	if t.instructionsFn == nil {
+		return nil, nil
+	}
+	project, global, err := t.instructionsFn()
+	if err != nil {
+		return nil, fmt.Errorf("locating %s instructions file: %w", t.name, err)
+	}
+
+	var lines []string
+	removed, err := setup.Remove(project)
+	if err != nil {
+		return nil, fmt.Errorf("removing managed instruction block from %s: %w", project, err)
+	}
+	if removed {
+		lines = append(lines, "Instructions: "+project+" (managed block removed)")
+	}
+
+	if setupGlobalInstructionsFlag {
+		removed, err := setup.Remove(global)
+		if err != nil {
+			return lines, fmt.Errorf("removing managed instruction block from %s: %w", global, err)
+		}
+		if removed {
+			lines = append(lines, "Instructions: "+global+" (managed block removed)")
+		}
+	}
+	return lines, nil
 }
 
 // printInstructionsResult writes t's managed instruction block(s) and prints
@@ -153,11 +247,31 @@ func instructionCapableClients() []setupTarget {
 // layout, for instance, CLAUDE.md and GEMINI.md both symlink to AGENTS.md, so
 // claude-code/codex/gemini all name one file. Grouping is what keeps
 // --check/--sync from Check-ing or Apply-ing that one file three times over
-// (previously: three rows for one file) — and, looking ahead to per-client
-// templates, from three clients fighting over which template last wrote it.
+// (previously: three rows for one file), and — via templateForGroup — from
+// three clients' differing per-client templates fighting over which one last
+// wrote it. uses parallels names but carries each client's setupTarget.use
+// key (e.g. "codex"), which is what ClientTemplates is keyed by; names holds
+// the display form ("Codex") shown in the --check/--sync table.
 type instructionFileGroup struct {
 	names   []string
+	uses    []string
 	project string
+}
+
+// templateForGroup returns the managed-block body that should be written to
+// a group's real file: the sole client's own template when it is the only
+// client naming this file, or the shared, client-agnostic DefaultTemplate
+// when more than one client's project path resolves to the same real file.
+// Because the choice depends only on the file's (stable) symlink topology —
+// never on which client or command happened to run, or in what order — every
+// caller that reaches the same group computes the same body, so repeated
+// `plumb setup <client>` / `--sync` calls converge on one piece of content
+// instead of oscillating between different clients' templates.
+func templateForGroup(g instructionFileGroup) string {
+	if len(g.uses) == 1 {
+		return clientTemplateOrDefault(g.uses[0])
+	}
+	return setup.DefaultTemplate
 }
 
 // groupInstructionFiles resolves every instruction-capable client's
@@ -174,10 +288,11 @@ func groupInstructionFiles() ([]instructionFileGroup, error) {
 		key := paths.Canonical(project)
 		if i, ok := index[key]; ok {
 			groups[i].names = append(groups[i].names, target.name)
+			groups[i].uses = append(groups[i].uses, target.use)
 			continue
 		}
 		index[key] = len(groups)
-		groups = append(groups, instructionFileGroup{names: []string{target.name}, project: project})
+		groups = append(groups, instructionFileGroup{names: []string{target.name}, uses: []string{target.use}, project: project})
 	}
 	return groups, nil
 }
@@ -206,9 +321,10 @@ func runSetupInstructionsCheckOrSync(sync bool) error {
 	drift := false
 	for _, g := range groups {
 		label := strings.Join(g.names, " / ")
+		body := templateForGroup(g)
 
 		if sync {
-			changed, err := setup.Apply(g.project, setup.DefaultTemplate, setup.DefaultVersion)
+			changed, err := setup.Apply(g.project, body, setup.DefaultVersion)
 			if err != nil {
 				drift = true
 				t.Row(label, render.ShortenPath(g.project, setupPathWidth), "error: "+err.Error())
@@ -223,7 +339,7 @@ func runSetupInstructionsCheckOrSync(sync bool) error {
 			continue
 		}
 
-		status, err := setup.Check(g.project, setup.DefaultTemplate, setup.DefaultVersion)
+		status, err := setup.Check(g.project, body, setup.DefaultVersion)
 		if err != nil {
 			return fmt.Errorf("checking %s: %w", label, err)
 		}

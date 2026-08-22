@@ -8,24 +8,28 @@ import "strings"
 // Apply (via a bare re-register or `--sync`) restores it to the new one.
 const DefaultVersion = "v1"
 
-// DefaultTemplate is the generic managed-block body every client gets until
-// per-client templates (a separate change) replace it with one template per
-// client. It deliberately omits any client-specific claim — like Codex's
-// apply_patch countermand — that only a per-client template can make safely,
-// per the pointer-style content this block is meant to carry: the edit lane,
-// the write-time compile-truth flags, the peer mailbox, and a pointer for
-// subagents. No lore.
+// DefaultTemplate is the client-agnostic managed-block body used two ways:
+// (1) the fallback for any client that has no entry in ClientTemplates
+// (client_templates.go) yet, and (2) — the important case — the body written
+// to a file whose canonical path is shared by MORE than one instruction-
+// capable client (this repo's own layout: CLAUDE.md/GEMINI.md symlink to
+// AGENTS.md, so claude-code/codex/gemini all name one real file). See
+// internal/cli/setup_instructions.go's templateForGroup.
+//
+// Case (2) is why this body is deliberately conservative rather than the
+// richest thing any one client could show: a shared file may belong to a
+// lean-configured Codex or Gemini, whose client-side tool allowlist
+// (tools.LeanToolNames) strips the peer mailbox and every symbol-scoped edit
+// tool — see client_templates.go's doc comment. Naming only lean-safe tools
+// here means the body written to a SHARED file is never a false claim for
+// whichever of its several audiences turns out to be the strictest one.
 const DefaultTemplate = `plumb is registered as an MCP server in this project — LSP-backed navigation and edits, a code-structure index, and per-project memory. Prefer its tools over native file/search/git operations where both cover the same task.
 
 **Edit lane.** Read a file with plumb before editing it (` + "`read_file`" + ` -> ` + "`edit_file`" + `/` + "`write_file`" + `), passing back ` + "`expected_mtime`" + `/` + "`expected_sha`" + `. Mixing a plumb read with a native edit on the same file produces "has not been read" / "modified since read" errors.
 
 **Compile truth on write.** Pass ` + "`fail_on_new_errors`" + ` or ` + "`await_diagnostics`" + ` on an edit/write to have plumb catch (or report) a change that breaks the build, instead of finding out later.
 
-**Peers.** If another agent may be working in this workspace, use ` + "`check_messages`" + `/` + "`leave_note`" + ` — delivery is poll-only, so silence is not refusal.
-
-**Subagents.** Call ` + "`session_start({detail:\"brief\"})`" + ` first for a short orientation packet.
-
-More detail lives in each tool's own description, in the plumb skills installed alongside this file, and in ` + "`session_start`" + `'s full output.`
+More detail lives in each tool's own description and in ` + "`session_start`" + `'s full output.`
 
 // MaxTemplateLines is the size budget every managed-block template must fit
 // inside — the ops check-agents-brief.sh pattern applied to this template

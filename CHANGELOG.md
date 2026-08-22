@@ -64,6 +64,38 @@
   reporting, so a symlinked layout like this repo's own (`CLAUDE.md`/`GEMINI.md` -> `AGENTS.md`)
   shows one row, not three.
 
+- **Managed instruction block — per-client templates, PR 2 of 2 (PLAN-364).** `internal/setup/templates/{claude-code,codex,gemini}.md`
+  replace the single client-agnostic placeholder with one body per client, embedded as data
+  files (`internal/setup.ClientTemplates`/`TemplateForClient`) rather than string constants,
+  each size-guarded at 25 lines (`TestManagedBlock_ClientTemplateSizeGuard`). Codex's carries
+  the promised `apply_patch` countermand — "off-limits for a file plumb has read... bypasses
+  plumb's per-path concurrency guard and diagnostics gate" — pointing at `edit_file`/
+  `write_file`/`transaction_apply` instead. Codex and Gemini's bodies name only tools that
+  survive `plumb setup <client> --lean`'s client-side allowlist (`tools.LeanToolNames`), which
+  strips the peer mailbox and every symbol-scoped edit tool — so the claim holds whether or
+  not `--lean` was actually passed, since a template is fixed once written. Claude Code has no
+  `--lean` flag, so its body keeps the mailbox and subagent pointers `DefaultTemplate` used to
+  carry.
+  **The shared-file problem** (flagged in PR 1's review): on a symlinked layout — this repo's
+  own `CLAUDE.md`/`GEMINI.md` -> `AGENTS.md` — differing per-client templates would fight over
+  one span, each client's `setup` overwriting the last one's content. Fixed by making the body
+  depend on the FILE's topology, not on which client or command ran: `groupInstructionFiles`
+  (already used by `--check`/`--sync` to dedupe rows) is now also consulted by a bare
+  `plumb setup <client>`, and `templateForGroup` writes a client's own template only when it is
+  the SOLE client naming that real file — a file shared by more than one collapses to the
+  shared, lean-safe `DefaultTemplate` instead. Since the choice is a deterministic function of
+  the file's (stable) symlink structure, `plumb setup <client>` in any order, and `--sync`,
+  converge on identical content rather than oscillating.
+  **`--uninstall` now removes the managed block** (deferred from PR 1): `setup.Remove` reverses
+  `Apply` — deletes the block, absorbing the blank-line separator `Apply`'s append path
+  inserts, deletes the file outright if the block was its only content, follows a symlink to
+  its real target, and refuses (matching `Apply`'s rigor) on a malformed file rather than
+  guessing. Wired into `plumb setup <client> --uninstall` alongside the existing config-entry
+  and skill removal, gated the same way (only when something was actually unregistered).
+  Documented trade-off: on a shared/symlinked file the block is client-agnostic, so uninstalling
+  one client removes the whole file's block even if another client sharing it is still
+  registered — v1 has no per-client scoping within one shared span.
+
 - **`fail_on_new_errors`: a plumb edit can now REFUSE to break the build — PR 2
   of 2 (PLAN-362).** `edit_file`, `write_file` and `transaction_apply` take
   `fail_on_new_errors: true` (implies `await_diagnostics`). When the language
