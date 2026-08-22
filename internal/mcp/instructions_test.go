@@ -103,6 +103,23 @@ func TestInstructions_DefaultMatchesSharedFallback(t *testing.T) {
 	}
 }
 
+// TestInstructions_DefaultCarriesPlumbInitRecovery pins the ".plumb/ marker
+// missing -> run `plumb init`" recovery text: the pre-PLAN-366
+// DefaultInstructions constant carried it for every client, and swapping in
+// clienttemplates.DefaultTemplate (TestInstructions_DefaultMatchesSharedFallback)
+// must not silently drop it from the only render an unrecognised/unmeasured
+// client — the only agent-facing surface left to carry it, once
+// InstructionsForClient renders a doctrine-only body for known clients — ever
+// sees.
+func TestInstructions_DefaultCarriesPlumbInitRecovery(t *testing.T) {
+	got := mcp.DefaultInstructions
+	for _, want := range []string{"plumb init", ".plumb/"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("DefaultInstructions missing the .plumb-marker recovery text (%q):\n%s", want, got)
+		}
+	}
+}
+
 // TestInstructions_InitializeRendersPerClient is the end-to-end proof: a real
 // initialize exchange carrying a clientInfo.name plumb recognises gets that
 // client's own body on the wire, not the generic default.
