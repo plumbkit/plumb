@@ -228,13 +228,17 @@ func TestClientCapsZCodeRegistryEntry(t *testing.T) {
 	}
 }
 
-// TestSupportsMCPInstructionsEntries pins exactly which clients are declared to
-// surface the MCP `initialize` response's `instructions` field — shipped
-// evidence only (the field's own CHANGELOG entry names Claude Desktop, Claude
-// Code, and Gemini CLI), never a guess. Every other registered client, and the
-// unknown fallback, must stay false until a similar entry documents them.
+// TestClientCapsSupportsMCPInstructionsEntries pins exactly which clients are
+// declared to surface the MCP `initialize` response's `instructions` field —
+// first-party OBSERVED evidence only, not a CHANGELOG shipping blurb naming a
+// client. Claude Code is the one row with that stronger footing: it is
+// dogfooded directly on this codebase, so every Claude Code session sees
+// DefaultInstructions and visibly acts on it. Claude Desktop and Gemini CLI
+// are also named in the `instructions` field's CHANGELOG entry, but that is
+// not an observed result for THIS purpose, so they stay false pending a real
+// measurement — same discipline as ReliableDeferredToolDiscovery.
 func TestClientCapsSupportsMCPInstructionsEntries(t *testing.T) {
-	want := map[string]bool{"claude-desktop": true, "claude-code": true, "gemini": true}
+	want := map[string]bool{"claude-code": true}
 	for _, c := range registry {
 		if got := c.SupportsMCPInstructions; got != want[c.Name] {
 			t.Errorf("%s: SupportsMCPInstructions = %v, want %v", c.Name, got, want[c.Name])

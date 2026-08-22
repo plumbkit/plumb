@@ -700,45 +700,57 @@ own file search rather than at `search_in_files`/`find_files`, which an allowlis
 would have removed. The profile line still reports `full` for them, because that
 is what plumb *advertised*; the filtering happens after — but a second, conditional
 sentence (`tools.ClientSideAllowlistNote`) now follows it for exactly these three
-clients, stating the client-side-filter possibility truthfully ("may filter this
-further... run `plumb doctor` to check") without claiming to know which state this
-session is actually in.
+clients, naming the real lean-tool count and pointing at `plumb doctor` — which
+grades the allowlist's content (flags a stale, empty, or malformed one) and stays
+silent when it already matches today's lean set, so a clean run is not proof a
+filter is or isn't in force, only that doctor found nothing wrong with it.
 
-**Auto resolution is a progressive ladder (PLAN-369, strategy §5 W2-15), not a
-single config setting.** The floor every client gets with zero positive
-detection used to be `full` (defensive: serve everything until proven safe to
-hide); it is now `full` only for a **registered** client with no matching flag
-(Claude Desktop, Junie — kept as-is because at least one has no native fallback
-for the tools lean would hide) and **`lean`** for an unrecognised client — the
-session_start guidance names what tools/list omits, so nothing is actually
-unreachable, and detection from here only ever adds:
+**Auto resolution is capability-gated (PLAN-369, strategy §5 W2-15), not a
+single config setting.** `auto` resolves to **lean** only when the connecting
+client's entry in `internal/clientcaps` declares `ReliableDeferredToolDiscovery
+= true` — reviewed, evidence-based proof that its model reliably discovers and
+invokes a tool absent from its initial `tools/list` (a ToolSearch-style
+deferred mechanism). That flag is compiled-in registry data, not a config key,
+and no shipped client carries it yet, so `auto` resolves to **full** for every
+client today, including an actually-unrecognised one (`Name == "unknown"`,
+matched no registry prefix). An earlier version of this card flipped that
+unrecognised-client default to `lean` on the theory that a session_start
+pointer keeps every tool reachable regardless of tools/list advertisement —
+review found `internal/clientcaps` carries only 7 registry rows against the
+~20 setup targets `docs/cli-reference.md` documents, so "unrecognised" meant
+overwhelmingly *documented* clients (cursor, opencode, goose, crush, qwen,
+augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~38/59 tools with
+zero evidence any of them can invoke a hidden one — exactly the tool-removal
+the card's Do-NOT forbids. That idea needs registry rows with positive
+deferral evidence before it can ship, not an absence of a row; the four
+resolution rungs below are what this PR actually carries:
 
 1. `SchemaDiscoveryOnly` (Claude Code, Kimi Code) → always `full`: the client
    builds even its ToolSearch deferred list purely from `tools/list`, so a
    lean-hidden tool has no schema to load.
 2. `ReliableDeferredToolDiscovery = true` → `lean` (`verified-deferred-discovery`)
    — reviewed, evidence-based proof the client's model reliably discovers and
-   invokes a tool absent from its initial `tools/list`. Compiled-in registry
-   data, not a config key, and no shipped client carries it yet.
+   invokes a tool absent from its initial `tools/list`. No shipped client
+   carries it yet.
 3. `ClientSideAllowlist` (Kimi Code, Codex, Gemini CLI) → `full`
    (`client-side-allowlist`) — plumb still serves everything; the reason is
    distinct from the generic default purely so the banner can carry the caveat
    above.
-4. An actually-unrecognised client (`Name == "unknown"`, matched no registry
-   prefix) → `lean` (`unknown-client-baseline`) — the new zero-detection floor.
-5. Otherwise (registered, none of the above — Claude Desktop, Junie) → `full`
-   (`unverified-deferred-discovery`), unchanged from before this card.
+4. Everyone else — a registered client with none of the above (Claude
+   Desktop, Junie), or an actually-unrecognised one — stays `full`
+   (`unverified-deferred-discovery` or `unknown-deferred-discovery`
+   respectively), unchanged from before this card.
 
 `session_start` and `daemon_info` report which rule decided, via a stable
-reason string: `client-override`, `explicit-config`, `schema-discovery-only-client`,
-`verified-deferred-discovery`, `client-side-allowlist`, `unknown-client-baseline`,
-or `unverified-deferred-discovery`. A fixed four-tool bootstrap set
-(`session_start`, `git`, `read_file`, `edit_file`) is always advertised
-regardless of the resolved profile.
+reason string: `client-override`, `explicit-config`, `unknown-deferred-discovery`,
+`schema-discovery-only-client`, `verified-deferred-discovery`,
+`client-side-allowlist`, or `unverified-deferred-discovery`. A fixed four-tool
+bootstrap set (`session_start`, `git`, `read_file`, `edit_file`) is always
+advertised regardless of the resolved profile.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (a progressive ladder — lean for an unrecognised client or one with a verified deferred-discovery capability, full otherwise; see above) \| `lean` (non-bootstrap commodity tools hidden) \| `full` (every tool advertised). |
+| `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (capability-gated — lean only for a client with a verified deferred-discovery capability, full otherwise; see above) \| `lean` (non-bootstrap commodity tools hidden) \| `full` (every tool advertised). |
 | `client_profiles` | map | `{}` | — | Per-client override, keyed by a case-insensitive `clientInfo.name` prefix (e.g. `"claude-code"`); each value is `auto`\|`lean`\|`full`. An empty or absent entry falls through to `profile`. |
 
 **The lean set and the mutation-lane rule.** The lean set

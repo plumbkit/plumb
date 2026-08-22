@@ -36,12 +36,23 @@ func autoProfile(client string) (string, string) {
 }
 
 // autoProfileFor is the auto-mode policy given a client's declared
-// capabilities — the progressive ladder (strategy doc §5 W2-15): the baseline
-// every client gets with zero positive detection is now LEAN (a session_start
-// pointer names what tools/list omits, so nothing is actually unreachable —
-// see session_start_guidance.go's writeGenericGuidance), and each rung above
-// that is a reviewed, evidence-based capability that earns MORE, never less.
-// Detection only ever adds.
+// capabilities — a ladder of reviewed, evidence-based rungs (strategy doc §5
+// W2-15) that each earn MORE than the conservative default, never less.
+// Detection only ever adds; it never demotes a client already being served
+// safely. The conservative default itself stays "full": review of an earlier
+// version of this function found it collapsing that default to "lean" for
+// EVERY client clientcaps does not carry a row for — cursor, opencode, goose,
+// crush, qwen, augment, antigravity(+desktop), hermes, dsh, zed, windsurf, and
+// any future client — with zero evidence any of them can invoke a tool hidden
+// from tools/list. clientcaps documents only 7 rows against the ~20 setup
+// targets docs/cli-reference.md names, so "unrecognised" was overwhelmingly
+// documented clients, not novel ones, and hiding ~38/59 tools from them is
+// exactly the tool-removal the Do-NOT forbids — indistinguishable from the
+// reasoning that keeps Claude Desktop and Junie on "full" below. A genuine
+// zero-detection lean floor needs registry rows with positive deferral
+// evidence for the clients it would apply to, not an absence of a row; that is
+// follow-up work, not something to ship by default-flipping every unlisted
+// client today.
 //
 // Order matters, and each rung is evaluated only once the ones above it have
 // ruled themselves out:
@@ -63,17 +74,13 @@ func autoProfile(client string) (string, string) {
 //     conservative default so callers can render the client-side-filter
 //     caveat truthfully (see tools.ClientSideAllowlistNote).
 //  4. An actually-unrecognised client (Name == "unknown", i.e. it matched no
-//     registry prefix) gets the new lean baseline: zero positive evidence, so
-//     zero reason to withhold it, and the session_start pointer keeps it
-//     working. This does NOT apply to a REGISTERED client that simply has none
-//     of the flags above (e.g. Claude Desktop, Junie) — those keep today's
-//     conservative default below, because at least one of them (Claude
-//     Desktop) is documented to have zero native fallback for the commodity
-//     tools lean hides, and flipping a working, already-shipped default without
-//     evidence would be exactly the tool-removal the Do-NOT forbids.
-//  5. Every other client (registered, but none of the above) defaults to
-//     "full" until one of the flags above is verified true — today's
-//     behaviour for claude-desktop and junie, unchanged.
+//     registry prefix) still gets "full", with its own reason
+//     (unknown-deferred-discovery) distinct from a registered client's
+//     unverified-deferred-discovery — the two are observably different
+//     situations even though they resolve to the same profile today.
+//  5. Every other client (registered, but none of the above — e.g. Claude
+//     Desktop, Junie) defaults to "full" until one of the flags above is
+//     verified true.
 func autoProfileFor(caps clientcaps.Capabilities) (profile, reason string) {
 	if caps.SchemaDiscoveryOnly {
 		return "full", "schema-discovery-only-client"
@@ -85,7 +92,7 @@ func autoProfileFor(caps clientcaps.Capabilities) (profile, reason string) {
 		return "full", "client-side-allowlist"
 	}
 	if caps.Name == "unknown" {
-		return "lean", "unknown-client-baseline"
+		return "full", "unknown-deferred-discovery"
 	}
 	return "full", "unverified-deferred-discovery"
 }

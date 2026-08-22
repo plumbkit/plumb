@@ -167,11 +167,8 @@ func TestPinMembership(t *testing.T) {
 		}
 	}
 
-	// Force the profile explicitly rather than relying on the default (as of
-	// PLAN-369, autoProfile("") already resolves to "lean", unknown-client-baseline
-	// — the new zero-detection floor — so this assignment is now redundant with
-	// the default rather than overriding it, but stays explicit so the test's
-	// intent does not depend on autoProfile's current default) — toolVisible
+	// Force the profile a bare connSession would never otherwise resolve to
+	// (autoProfile("") is "full", unknown-deferred-discovery) — toolVisible
 	// reads it live off the session view, so no re-registration is needed.
 	s.mutate(func(v *sessionView) { v.tools.Profile = "lean" })
 
