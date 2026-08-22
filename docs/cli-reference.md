@@ -609,9 +609,14 @@ of the most recent calls.
 `--health` renders and persists three metrics, idempotently per UTC day (safe to
 run more than once — a re-run overwrites that day's rows rather than duplicating
 them, so it doubles as a nightly cron job): **lane-defection rate** (share of
-sessions that read a file where a later `write_file` was refused because the file
-had changed on disk since — an approximation that undercounts, since it only
-catches a defection the session later tried to write over), **semantic-surface
+sessions that read a file where a later `write_file` or `transaction_apply` call
+was refused because the file had changed on disk since — both the guarded
+`expected_mtime`/`expected_sha` path and the unguarded auto-detect path count,
+since neither tool has a separate "never read at all" refusal to confuse it
+with; known undercounts, not an exhaustive list: a session that never tries the
+write again is invisible, and `edit_file`/the symbol-edit tools' refusals aren't
+counted at all, because `calls` can't tell their "changed since read" apart from
+their own "never read" refusal), **semantic-surface
 error rate** (a 7-day rolling per-tool error rate over the LSP query/edit surface,
 flagged only when the tool is advertised — pinned into a Claude Code connection's
 context, PLAN-355 — AND both its own sample and the `read_file` baseline sample

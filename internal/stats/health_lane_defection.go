@@ -4,26 +4,58 @@ package stats
 // sessions where a plumb-read file was subsequently modified by something
 // other than plumb, within the session, before plumb caught it.
 //
-// APPROXIMATION, documented rather than hidden. This reuses the SAME
-// machinery that already answers "did this change under me?" for a live
-// write — but review round 1 found the naive version of that reuse counts
-// the WRONG thing twice over, so read this carefully before touching the
-// query below.
+// APPROXIMATION, documented rather than hidden — and review round 2 found
+// round 1's fix had INVERTED the metric: restricting to write_file +
+// ClassPassForce only counts a defection when the caller passed NO
+// expected_mtime/expected_sha, which is the UNGUARDED overwrite path. A
+// caller that follows the documented protocol (read_file → pass its mtime
+// header as expected_mtime) hits verifyExpectedVersion's mismatch branch
+// instead (write_guards.go), which classifies as ClassReRead, not
+// ClassPassForce — so round 1's filter went to zero exactly as agents got
+// BETTER at using plumb, the opposite of what a health metric should do.
+// This is what "check the tool, not just the class" means below.
 //
 // toolerror.KindUnreadOrStale is stamped on TWO distinct refusals
-// (internal/tools/error_class.go): staleRead (ClassReRead) fires both when
-// the caller never read the file at all (strict mode's read-before-write
-// guard, internal/tools/strict_read.go) AND when expected_mtime/expected_sha
-// mismatches; staleOverride (ClassPassForce) fires ONLY from write_file's
-// default changedSinceSessionRead guard (internal/tools/write_guards.go) and
-// undo_edit's changed-since-plumb's-own-write guard — and ONLY when the
-// ReadTracker already held a recorded read that the on-disk mtime/sha then
-// moved past. ClassReRead is therefore ambiguous (it also fires on a file
-// NEVER read at all — not a defection, just strict mode doing its job);
-// ClassPassForce is not. Restricting to write_file + ClassPassForce is what
-// makes this specifically "a file this session read, then something else
-// changed" rather than "any stale-write refusal" — undo_edit's guard compares
-// against plumb's own WriteTracker, not a read, so it is excluded too.
+// (internal/tools/error_class.go): staleRead (ClassReRead) fires when the
+// caller never read the file at all (strict mode's read-before-write guard)
+// OR when an explicit expected_mtime/expected_sha mismatches; staleOverride
+// (ClassPassForce) fires only when the caller passed NEITHER guard and the
+// session's OWN recorded read (ReadTracker) shows the file changed anyway.
+// Both are genuine "read, then something else changed" defections — the
+// bug was treating ClassReRead as inherently untrustworthy everywhere,
+// when it only IS ambiguous on the tools that also have a "never read at
+// all" refusal path.
+//
+// That path — requireStrictRead (internal/tools/strict_read.go) — is called
+// from exactly two places (grep-verified): edit_file.go's checkStrictRead,
+// and symbol_edits_apply.go's semanticStrictGate (rename_symbol,
+// replace_symbol_body, insert_before_symbol, insert_after_symbol,
+// safe_delete_symbol, move_symbol). Neither write_file nor transaction_apply
+// ever calls it — grep for requireStrictRead's call sites confirms this, and
+// neither tool has any OTHER route to a "never read" refusal either
+// (write_file's only guards are the auto changedSinceSessionRead check and
+// verifyExpectedVersion, both of which require the ReadTracker or the
+// caller itself to already hold a read; transaction_apply's txValidateOp
+// only checks expected_mtime/expected_sha when the operation carries one).
+// So for THESE TWO TOOLS SPECIFICALLY, every KindUnreadOrStale row —
+// ClassReRead or ClassPassForce, no further split needed — is unambiguously
+// "this session read the file (or claimed to via expected_mtime/sha), then
+// something else changed it". That is exactly what this metric counts.
+//
+// STILL EXCLUDED, and this is a real, disclosed undercount, not an
+// oversight: edit_file and the six symbol-edit tools. edit_file DOES also
+// have an unambiguous expected_mtime/expected_sha mismatch path
+// (checkExpectedVersion, the same verifyExpectedVersion write_file uses),
+// but `calls` has no column recording whether a given row's args included
+// expected_mtime/expected_sha (only the possibly-truncated input_json blob),
+// so a ClassReRead row from edit_file cannot be split from its
+// requireStrictRead-sourced "never read at all" rows without parsing that
+// JSON — not attempted here. The six symbol-edit tools have NO unambiguous
+// sub-case at all: requireStrictRead is their ONLY refusal source, so every
+// row they produce genuinely conflates the two meanings. undo_edit is
+// excluded on different grounds — its guard compares against plumb's OWN
+// WriteTracker (did plumb's last write survive), not a read, so it isn't
+// this metric's signal at all.
 //
 // The denominator is scoped the same way: SessionsTotal counts sessions with
 // at least one TRACKED READ call (read_file / read_symbol /
@@ -33,13 +65,13 @@ package stats
 // in the denominator would dilute the rate with sessions the metric was
 // never about.
 //
-// What this STILL does not catch: a session that read a file, never
-// attempted to write it again, and quietly moved on with the external edit
-// unnoticed — the guard never fires because nothing ever tried the write it
-// would have refused. That is real undercounting, not a bug: it is inherent
-// in reusing a REFUSAL as the durable signal `calls` carries for this, and
-// it is why this is a rate to trend rather than an absolute headcount — see
-// the package doc on health.go.
+// What this STILL does not catch, beyond the edit_file/symbol-tool
+// undercount above: a session that read a file, never attempted to write it
+// again (through ANY tool), and quietly moved on with the external edit
+// unnoticed — no guard ever fires because nothing ever tried the write it
+// would have refused. That is inherent in reusing a REFUSAL as the durable
+// signal `calls` carries for this, and it is why this is a rate to trend
+// rather than an absolute headcount — see the package doc on health.go.
 import (
 	"fmt"
 	"time"
@@ -52,6 +84,12 @@ import (
 // denominator requires at least one call to, per session, before that
 // session counts at all.
 var readTrackedTools = []string{"read_file", "read_symbol", "read_multiple_files"}
+
+// unambiguousDefectionTools are the write tools whose KindUnreadOrStale
+// refusals can ONLY mean "read (or claimed via expected_mtime/sha), then
+// changed" — never "never read at all". See the file doc comment for the
+// grep-verified reasoning (requireStrictRead is never called from either).
+var unambiguousDefectionTools = []string{"write_file", "transaction_apply"}
 
 // LaneDefectionDay is the lane-defection metric for one UTC day (and,
 // optionally, one workspace).
@@ -92,10 +130,14 @@ func (d *DB) LaneDefectionForDay(day time.Time, workspace string) (LaneDefection
 	}
 	res.SessionsTotal = total
 
-	// write_file's default guard only, via KindUnreadOrStale+ClassPassForce —
-	// see the file doc comment for why ClassReRead and undo_edit are excluded.
-	flaggedWhere := where + " AND success = 0 AND tool = ? AND error_kind = ? AND remediation_class = ?"
-	flaggedArgs := append(append([]any{}, args...), "write_file", string(toolerror.KindUnreadOrStale), string(toolerror.ClassPassForce))
+	// write_file + transaction_apply only, any KindUnreadOrStale refusal
+	// (ClassReRead covers the guarded expected_mtime/expected_sha path;
+	// ClassPassForce covers the unguarded auto-detect path) — see the file
+	// doc comment for why these two tools' rows need no further split, and
+	// why edit_file/the symbol-edit tools cannot safely be added the same way.
+	toolPlaceholders, toolArgs := inClause(unambiguousDefectionTools)
+	flaggedWhere := where + " AND success = 0 AND tool IN (" + toolPlaceholders + ") AND error_kind = ?"
+	flaggedArgs := append(append(append([]any{}, args...), toolArgs...), string(toolerror.KindUnreadOrStale))
 	flagged, err := d.countDistinctSessions(flaggedWhere, flaggedArgs)
 	if err != nil {
 		return res, err

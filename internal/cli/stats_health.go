@@ -134,11 +134,14 @@ func renderLaneDefection(ld stats.LaneDefectionDay) {
 	fmt.Println("Lane-defection rate")
 	fmt.Println(tui.HintStyle.Render(
 		"  of sessions that read a file (read_file/read_symbol/read_multiple_files — the denominator), the\n" +
-			"  share where write_file's default guard later refused a write because the file changed on disk\n" +
-			"  since that read (error_kind=unread_or_stale, remediation_class=pass_force — never strict mode's\n" +
-			"  separate \"never read at all\" refusal, and never undo_edit's guard). This is an APPROXIMATION\n" +
-			"  that undercounts: it only catches a defection the session later tried to write over. Trend\n" +
-			"  matters, not the absolute."))
+			"  share where a LATER write_file or transaction_apply call was refused because the file changed\n" +
+			"  on disk since that read (error_kind=unread_or_stale — both the guarded expected_mtime/sha path\n" +
+			"  and the unguarded auto-detect path count; only these two tools, since neither has any \"never\n" +
+			"  read at all\" refusal to confuse it with). KNOWN UNDERCOUNTS, not an exhaustive exclusion list:\n" +
+			"  (1) a session that read a file and never tried to write it again — the guard never fires; (2)\n" +
+			"  edit_file and the symbol-edit tools' refusals aren't counted AT ALL, even genuine ones, because\n" +
+			"  `calls` can't tell their \"changed since read\" apart from their separate \"never read\" refusal.\n" +
+			"  This is an APPROXIMATION. Trend matters, not the absolute."))
 	if ld.SessionsTotal == 0 {
 		fmt.Println("  no sessions read a file today")
 	} else {

@@ -375,6 +375,108 @@ func TestHealthLaneDefection_MixedSessionsOnlyCountsReaders(t *testing.T) {
 	}
 }
 
+// recordGuardedWriteDefection mirrors the tool_calls row write_file's
+// EXPLICIT version-guard path leaves behind (internal/tools/write_guards.go's
+// verifyExpectedVersion, called from write_file.go:211 when the caller
+// passes expected_mtime/expected_sha — the DOCUMENTED, protocol-following
+// way to detect a concurrent change): success=false, error_kind=
+// unread_or_stale, remediation_class=re_read. This is the review round 2
+// probe: round 1's fix only counted the UNGUARDED path (ClassPassForce),
+// so a caller that follows the documented read_file→expected_mtime protocol
+// scored 0 defections here even when one genuinely happened.
+func recordGuardedWriteDefection(t *testing.T, db *DB, session, workspace string, at time.Time) {
+	t.Helper()
+	if err := db.Record(Call{
+		SessionID: session, Workspace: workspace, Tool: "write_file",
+		CalledAt: at, Success: false,
+		ErrorKind: toolerror.KindUnreadOrStale, RemediationClass: toolerror.ClassReRead,
+	}); err != nil {
+		t.Fatalf("Record guarded-write defection: %v", err)
+	}
+}
+
+// TestHealthLaneDefection_GuardedWriteDefectionCounts is the red-then-green
+// fixture for review round 2's BLOCKING finding: a session that read a file,
+// passed its recorded mtime back as expected_mtime on the write (the
+// DOCUMENTED protocol — AGENTS.md's "read before edit" recipe), and hit a
+// genuine concurrent change must score as a defection. Before this round's
+// fix, restricting the numerator to ClassPassForce only (round 1's fix)
+// scored this scenario 0/1 — the better an agent followed the protocol, the
+// less visible its defections became. After: 1/1.
+func TestHealthLaneDefection_GuardedWriteDefectionCounts(t *testing.T) {
+	db := openHealthTestDB(t)
+	day := time.Now().UTC()
+	recordRead(t, db, "sess-guarded-defect", "/ws", day)
+	recordGuardedWriteDefection(t, db, "sess-guarded-defect", "/ws", day.Add(time.Second))
+
+	got, err := db.LaneDefectionForDay(day, "/ws")
+	if err != nil {
+		t.Fatalf("LaneDefectionForDay: %v", err)
+	}
+	if got.SessionsTotal != 1 {
+		t.Fatalf("SessionsTotal = %d, want 1", got.SessionsTotal)
+	}
+	if got.SessionsFlagged != 1 {
+		t.Errorf("SessionsFlagged = %d, want 1 — a guarded (expected_mtime) write_file defection must count, "+
+			"not just the unguarded auto-detect path (review round 2 probe)", got.SessionsFlagged)
+	}
+}
+
+// TestHealthLaneDefection_GuardedTransactionApplyDefectionCounts is the same
+// probe against transaction_apply's own explicit expected_mtime/expected_sha
+// guard (transaction.go's txValidateOp) — the other tool review round 2
+// named as invisible under round 1's write_file-only, ClassPassForce-only
+// filter.
+func TestHealthLaneDefection_GuardedTransactionApplyDefectionCounts(t *testing.T) {
+	db := openHealthTestDB(t)
+	day := time.Now().UTC()
+	recordRead(t, db, "sess-tx-defect", "/ws", day)
+	if err := db.Record(Call{
+		SessionID: "sess-tx-defect", Workspace: "/ws", Tool: "transaction_apply",
+		CalledAt: day.Add(time.Second), Success: false,
+		ErrorKind: toolerror.KindUnreadOrStale, RemediationClass: toolerror.ClassReRead,
+	}); err != nil {
+		t.Fatalf("Record transaction_apply defection: %v", err)
+	}
+
+	got, err := db.LaneDefectionForDay(day, "/ws")
+	if err != nil {
+		t.Fatalf("LaneDefectionForDay: %v", err)
+	}
+	if got.SessionsFlagged != 1 {
+		t.Errorf("SessionsFlagged = %d, want 1 — a guarded transaction_apply defection must count", got.SessionsFlagged)
+	}
+}
+
+// TestHealthLaneDefection_EditFileStrictModeStaysExcluded pins the
+// deliberate, disclosed undercount: edit_file's requireStrictRead-sourced
+// refusals (strict mode) are NOT counted, even when they represent a genuine
+// "changed since read" (not just "never read") — because `calls` cannot
+// distinguish the two for edit_file specifically (see the file doc comment).
+// This is not a bug to fix; it is the boundary review round 2 asked to be
+// checked and, where genuinely ambiguous, disclosed rather than guessed at.
+func TestHealthLaneDefection_EditFileStrictModeStaysExcluded(t *testing.T) {
+	db := openHealthTestDB(t)
+	day := time.Now().UTC()
+	recordRead(t, db, "sess-edit-strict", "/ws", day)
+	if err := db.Record(Call{
+		SessionID: "sess-edit-strict", Workspace: "/ws", Tool: "edit_file",
+		CalledAt: day.Add(time.Second), Success: false,
+		ErrorKind: toolerror.KindUnreadOrStale, RemediationClass: toolerror.ClassReRead,
+	}); err != nil {
+		t.Fatalf("Record edit_file strict-mode refusal: %v", err)
+	}
+
+	got, err := db.LaneDefectionForDay(day, "/ws")
+	if err != nil {
+		t.Fatalf("LaneDefectionForDay: %v", err)
+	}
+	if got.SessionsFlagged != 0 {
+		t.Errorf("SessionsFlagged = %d, want 0 — edit_file's ClassReRead is genuinely ambiguous "+
+			"(requireStrictRead conflates \"never read\" with \"changed since read\") and stays excluded", got.SessionsFlagged)
+	}
+}
+
 // TestHealthSemanticErrorRates_InsufficientToolSampleNeverFlags is the
 // red-then-green fixture for review round 1's BLOCKING 2, tool side: one
 // call and one error is a 100% rate, comfortably over any baseline — but one
