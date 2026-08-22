@@ -51,17 +51,29 @@ type PackageGraph struct {
 	Edges map[string]map[string]bool // fromDir -> set of toDir it directly imports (production imports only; see above)
 
 	// HasGoSignal is true when the index shows independent evidence this is a
-	// Go workspace: at least one KindPackage node with Language=="go", or at
-	// least one KindImport node at all. It exists to break a real ambiguity
-	// TotalEdges()==0 cannot resolve on its own: a genuine Go workspace can
-	// legitimately have zero FOLDABLE edges — every cross-package import
-	// might be stdlib-only (no local directory to link to), or the only
-	// cross-package import might live in a _test.go file, which
-	// isTestGoImporter now deliberately excludes. Gating the Go-only refusal
-	// on TotalEdges() alone therefore told a real, small Go workspace it
-	// "wasn't Go"; HasGoSignal lets the refusal fire only when there is no
-	// language evidence for Go at all (the actual C#/PHP/Scala/Elixir/etc
-	// case this feature cannot serve yet).
+	// Go workspace: at least one KindPackage node with Language=="go". It
+	// exists to break a real ambiguity TotalEdges()==0 cannot resolve on its
+	// own: a genuine Go workspace can legitimately have zero FOLDABLE edges —
+	// every cross-package import might be stdlib-only (no local directory to
+	// link to), or the only cross-package import might live in a _test.go
+	// file, which isTestGoImporter now deliberately excludes. Gating the
+	// Go-only refusal on TotalEdges() alone therefore told a real, small Go
+	// workspace it "wasn't Go"; HasGoSignal lets the refusal fire only when
+	// there is no language evidence for Go at all.
+	//
+	// Deliberately NOT "any KindImport node at all": every extractor that
+	// emits a KindPackage node also emits KindImport for that language's own
+	// import/using/require syntax — csharp, php, elixir and scala all do,
+	// and they are exactly the four non-Go languages that can populate
+	// g.Dirs without Go (every other extractor with a KindPackage-shaped
+	// concept still tags it with its own language, never "go"). A bare
+	// "kind == import" clause made HasGoSignal true for ANY indexed
+	// language, which made the Go-only refusal unreachable for the entire
+	// class of workspace it exists to catch — restoring, verbatim, the
+	// "every package is dead" false answer this field was added to prevent.
+	// Only a Go-language PACKAGE node is unambiguous evidence, because Go's
+	// package clause is mandatory and per-file: no other extractor's package
+	// node is ever labelled Language=="go".
 	HasGoSignal bool
 }
 
@@ -113,16 +125,16 @@ func LoadPackageGraph(ctx context.Context, db *sql.DB) (*PackageGraph, error) {
 }
 
 // loadHasGoSignal reports whether the index carries independent evidence of
-// a Go workspace: any KindPackage node whose Language is "go", or any
-// KindImport node at all (every extractor that emits import nodes today is
-// Go's). See PackageGraph.HasGoSignal's doc for why this matters.
+// a Go workspace: any KindPackage node whose Language is "go". See
+// PackageGraph.HasGoSignal's doc for why a bare "any KindImport node"
+// clause is wrong — csharp/php/elixir/scala emit KindImport too.
 func loadHasGoSignal(ctx context.Context, db *sql.DB) (bool, error) {
 	var exists int
 	err := db.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM topology_nodes
-			 WHERE (kind = ? AND language = 'go') OR kind = ?
-		)`, string(KindPackage), string(KindImport)).Scan(&exists)
+			 WHERE kind = ? AND language = 'go'
+		)`, string(KindPackage)).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("topology: load go signal: %w", err)
 	}

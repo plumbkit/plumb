@@ -440,11 +440,16 @@ func TestReachabilityHasGoSignal_PackageLanguageAlone(t *testing.T) {
 	}
 }
 
-// TestReachabilityHasGoSignal_ImportNodeAlone pins the second clause in
-// isolation: any KindImport node, even one whose language field is not
-// literally "go", must still set HasGoSignal — no extractor other than
-// Go's emits KindImport today, so its mere presence is itself the signal.
-func TestReachabilityHasGoSignal_ImportNodeAlone(t *testing.T) {
+// TestReachabilityHasGoSignal_ImportNodeAloneIsNotEnough pins round-2->3
+// review's finding: a KindImport node alone (even one tagged
+// Language=="go", which nothing in practice would ever set, since a Go
+// import node inherits its file's "go" language too, but the point is the
+// clause must not trust import nodes at all) must NOT set HasGoSignal —
+// csharp/php/elixir/scala all emit KindImport for their own import/using/
+// require/alias syntax, so trusting any import node made the Go-only
+// refusal unreachable for every non-Go workspace it exists to catch. Only a
+// Language=="go" PACKAGE node counts.
+func TestReachabilityHasGoSignal_ImportNodeAloneIsNotEnough(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "reach.db"))
 	if err != nil {
@@ -454,20 +459,20 @@ func TestReachabilityHasGoSignal_ImportNodeAlone(t *testing.T) {
 
 	f := insertTestFile(t, db, "internal/a/a.go")
 	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "notgo"})
-	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindImport, Name: "x", Language: "notgo"})
+	insertTestNode(t, db, f, "internal/a/a.go", Node{Kind: KindImport, Name: "x", Language: "go"})
 
 	g, err := LoadPackageGraph(context.Background(), db)
 	if err != nil {
 		t.Fatalf("LoadPackageGraph: %v", err)
 	}
-	if !g.HasGoSignal {
-		t.Error("an import node alone must set HasGoSignal")
+	if g.HasGoSignal {
+		t.Error("an import node alone (package node is non-go) must NOT set HasGoSignal")
 	}
 }
 
 // TestReachabilityHasGoSignal_NeitherIsFalse pins the negative case: no
-// go-language package node and no import node at all leaves HasGoSignal
-// false — the genuine other-language shape the refusal must still catch.
+// go-language package node leaves HasGoSignal false — the genuine
+// other-language shape the refusal must still catch.
 func TestReachabilityHasGoSignal_NeitherIsFalse(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "reach.db"))
