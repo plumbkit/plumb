@@ -740,11 +740,38 @@
   build to reach a skip. The cheap check now comes first: 86s → 0.01s.
 
 ### Added
-- **Codex now has an opt-in Plumb mailbox hook pack.** `plumb hooks install codex`
-  merges a `SessionStart` session-link hook and a fail-open `Stop` mailbox probe into
-  Codex's user `hooks.json`, preserving existing handlers and requiring Codex's normal
-  `/hooks` trust review. It intentionally checks only as a turn ends: Codex cannot
-  wake an already-idle session from a background hook.
+- **`plumb hooks` — lifecycle hooks for Claude Code and Codex, installable and
+  removable from the CLI.** Bare `plumb hooks` is a read-only per-client,
+  per-hook status table (installed / missing / stale, `unregistered` for a
+  client whose config lacks plumb); `plumb hooks install [client]` installs or
+  refreshes; `plumb hooks uninstall [client]` takes them back out. Two hooks per
+  client: `SessionStart` states the conversation ID that `session_start` records
+  as `session_id`, and `Stop` reports unread peer mail.
+
+  **Claude Code's `Stop` hook is a real wake.** It installs as an `async` +
+  `asyncRewake` background watcher, so a peer's `leave_note` reaches a session
+  that has already gone idle — the shell recipe `plumb-chat` documented, now
+  built in, with no `jq` dependency and no `plumb mail` subprocess per poll. It
+  self-limits to plumb workspaces (a user-scoped install must not change every
+  repository on the machine), takes a single-instance lock per session, and
+  re-arms after a woken turn only when that turn provably consumed mail, capped
+  per chain. **Codex has no equivalent**, so its `Stop` hook performs one
+  read-only check as a turn ends: that narrows the end-of-turn race, it is not
+  push delivery, and it is described that way everywhere it appears.
+
+  Every writer merges rather than replaces: hooks the user wrote on the same
+  events survive an install, a refresh and an uninstall, the file is backed up
+  first, and re-running is a no-op once it matches. The hand-installed shell
+  hooks plumb's own recipe told users to write are recognised as plumb's, so an
+  install migrates them in place instead of adding a second pair that both fire.
+  Both hooks fail open throughout — no linkage, no session, a dead daemon and an
+  ambiguous workspace all let the turn end — and neither ever carries a message
+  body: the count is the whole disclosure, and `check_messages` remains the only
+  path that reads a peer's text, labelled as the unverified claim it is.
+
+  `plumb setup <client> --uninstall` now removes that client's hooks as well as
+  its skills. Installation stays explicit in the other direction: no setup flow,
+  no project config and no cloned repository can install a hook.
 
 - **The topology index now has cross-file edges — it had none at all.** Extractors
   run per file and emit edges as indices into that file's own node slice, so

@@ -1,250 +1,220 @@
 package cli
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
-const (
-	codexSessionHookStatus = "Linking Plumb session"
-	codexMailboxHookStatus = "Checking Plumb mailbox"
-)
+// `plumb hooks` is the lifecycle-hook counterpart of `plumb setup` and
+// `plumb skills`: bare it reports, and the two writers install and remove.
+//
+//	plumb hooks                    # read-only status, per client, per hook
+//	plumb hooks install [client]   # install or refresh
+//	plumb hooks uninstall [client] # remove plumb's handlers, and only those
+//
+// The split mirrors `plumb skills` deliberately. Hooks execute commands with
+// the user's credentials, so installation is always an explicit, consented
+// step: nothing here runs from `plumb setup`, from project config, or from a
+// repository a user cloned. Removal is the one direction that also happens
+// elsewhere — `plumb setup <client> --uninstall` calls it, because hooks left
+// pointing at a deregistered plumb are dead weight.
+//
+// The per-client data lives in hooks_clients.go; the writers and the ownership
+// rules they depend on live there too.
 
 var hooksCmd = &cobra.Command{
 	Use:   "hooks",
-	Short: "Install Plumb lifecycle hooks for supported clients",
+	Short: "Show which plumb lifecycle hooks are installed per client",
+	Long: `Show, for every client plumb ships lifecycle hooks for (claude-code, codex),
+whether each hook is installed, missing, or stale relative to what this binary
+would write. Read-only.
+
+` + "`plumb hooks install [client]`" + ` installs or refreshes them;
+` + "`plumb hooks uninstall [client]`" + ` removes them again. A client whose
+config does not register plumb is shown as unregistered — hooks are only
+installed where plumb is registered, since the linkage they supply and the
+mailbox they probe both need plumb's tool surface to be reachable.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error { return runHooksStatus() },
 }
 
 var hooksInstallCmd = &cobra.Command{
-	Use:   "install <client>",
-	Short: "Install Plumb's opt-in Codex mailbox hooks",
-	Long: `Install two opt-in hooks in Codex's user hooks.json: SessionStart states the
-conversation ID needed by session_start, and Stop checks for unread Plumb mail.
+	Use:   "install [client]",
+	Short: "Install or refresh plumb's lifecycle hooks",
+	Long: `Install plumb's opt-in lifecycle hooks in every registered client, or in the
+named one. Two hooks per client: SessionStart states the conversation ID that
+session_start records as session_id, and Stop reports unread peer mail.
 
-The Stop hook only checks as Codex is ending the current turn. Codex background
-hooks cannot wake an already-idle session, so this narrows the end-of-turn race;
-it is not push delivery. Both hooks fail open: a missing mailbox, unavailable
-daemon, or ambiguous session allows Codex to stop normally.
+Claude Code's Stop hook is a background watcher (async + asyncRewake): it wakes
+a session that has already gone idle. Codex has no equivalent, so its Stop hook
+performs one read-only check as a turn ends — that narrows the end-of-turn race,
+it is not push delivery. Both fail open: a missing mailbox, an unavailable
+daemon or an ambiguous session all let the turn end normally, and neither ever
+carries a message body.
 
-Codex requires an interactive trust review for non-managed command hooks. After
-installation, use /hooks in Codex to inspect and trust the two Plumb entries.`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if args[0] != "codex" {
-			return fmt.Errorf("unsupported hooks client %q (supported: codex)", args[0])
-		}
-		return runInstallCodexHooks(cmd, args)
-	},
+Existing entries are merged, never replaced wholesale: hooks the user wrote
+survive, the file is backed up first, and re-running refreshes plumb's own
+entries after the binary moves.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error { return runHooksInstall(args) },
 }
 
-var hooksRunCodexCmd = &cobra.Command{
-	Use:    "run-codex",
-	Short:  "Run a Codex lifecycle hook",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE:   runCodexHook,
+var hooksUninstallCmd = &cobra.Command{
+	Use:   "uninstall [client]",
+	Short: "Remove plumb's lifecycle hooks",
+	Long: `Remove plumb's lifecycle hooks from every client that has them, or from the
+named one. Only plumb's own handlers go — hooks the user wrote on the same
+events survive, the file is backed up first, and a client plumb has no hooks in
+is a no-op. Hooks installed by an earlier plumb, including the hand-installed
+shell scripts plumb's own recipe documented, are recognised and removed too;
+script files on disk are left alone.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error { return runHooksUninstall(args) },
 }
 
 func init() {
-	hooksCmd.AddCommand(hooksInstallCmd, hooksRunCodexCmd)
+	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd)
 }
 
-// runInstallCodexHooks installs only after Codex already has Plumb registered:
-// linkage is otherwise context with no receiver, and the Stop hook could only
-// emit an instruction for an unavailable tool surface.
-func runInstallCodexHooks(_ *cobra.Command, _ []string) error {
-	if !plumbRegisteredIn(codexTarget) {
-		return errors.New("plumb is not registered in Codex — run `plumb setup codex` first")
+// resolveHooksTargets turns an optional client argument into the set to act on.
+// A named client is an error when it is unknown, or — for install — when plumb
+// is not registered in it; the sweep skips an unregistered client with a note
+// instead, exactly as `plumb skills sync` does.
+func resolveHooksTargets(args []string, requireRegistration bool) (targets []hooksTarget, skips []string, err error) {
+	if len(args) == 1 {
+		t, ok := findHooksTarget(args[0])
+		if !ok {
+			return nil, nil, fmt.Errorf("unknown hooks client %q — supported: %s", args[0], hooksClientNames())
+		}
+		if requireRegistration && !plumbRegisteredIn(t.setup) {
+			return nil, nil, fmt.Errorf("plumb is not registered in %s — run `plumb setup %s` first, then re-run `plumb hooks install %s`",
+				t.name, t.setup.use, t.use)
+		}
+		return []hooksTarget{t}, nil, nil
 	}
-	bin, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving Plumb binary path: %w", err)
+	for _, t := range hooksTargets() {
+		if requireRegistration && !plumbRegisteredIn(t.setup) {
+			skips = append(skips, fmt.Sprintf("Skipping %s — plumb is not registered (`plumb setup %s`).", t.name, t.setup.use))
+			continue
+		}
+		targets = append(targets, t)
 	}
-	path, err := codexHooksPath()
-	if err != nil {
-		return fmt.Errorf("locating Codex hooks config: %w", err)
-	}
-	changed, err := installCodexHooks(path, bin)
+	return targets, skips, nil
+}
+
+// runHooksInstall installs or refreshes hooks, reporting the action taken per
+// hook. The action comes from the state BEFORE the write, so "installed",
+// "updated" and "current" say what actually happened rather than restating the
+// end state three times.
+func runHooksInstall(args []string) error {
+	PrintLogo()
+	targets, skips, err := resolveHooksTargets(args, true)
 	if err != nil {
 		return err
 	}
-	if changed {
-		fmt.Printf("Installed Plumb Codex hooks in %s.\n", path)
-	} else {
-		fmt.Printf("Plumb Codex hooks are already current in %s.\n", path)
+	plumbBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving plumb binary path: %w", err)
 	}
-	fmt.Println("Use /hooks in Codex to review and trust the two Plumb command hooks.")
-	fmt.Println("The Stop hook checks only as a turn ends; it cannot wake an already-idle Codex session.")
+
+	report := newHookReport()
+	for _, t := range targets {
+		path, entries, before, err := hookPlan(t, plumbBin)
+		if err != nil {
+			report.clientError(t, err)
+			continue
+		}
+		changed, err := installHooksAt(path, entries, t.ours)
+		if err != nil {
+			report.clientError(t, err)
+			continue
+		}
+		report.group(t, path, before, installAction)
+		if changed {
+			report.note(t.notes...)
+		}
+	}
+	report.render(skips)
 	return nil
 }
 
-// codexHooksPath follows CodexConfigPath's CODEX_HOME precedence, but hooks have
-// their own JSON file so one representation per config layer remains possible.
-func codexHooksPath() (string, error) {
-	if home := os.Getenv("CODEX_HOME"); home != "" {
-		return filepath.Join(home, "hooks.json"), nil
-	}
-	home, err := os.UserHomeDir()
+// runHooksUninstall removes plumb's hooks. It is deliberately ungated on
+// registration: removing a registration and then being unable to remove its
+// hooks would be the wrong way round.
+func runHooksUninstall(args []string) error {
+	PrintLogo()
+	targets, _, err := resolveHooksTargets(args, false)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return filepath.Join(home, ".codex", "hooks.json"), nil
-}
-
-// installCodexHooks merges only handlers carrying Plumb's stable statusMessage
-// marker. Existing user groups, including other handlers on these events, remain
-// untouched; re-running also refreshes the executable path after an upgrade.
-func installCodexHooks(path, bin string) (bool, error) {
-	cfg := map[string]any{}
-	data, err := os.ReadFile(path)
-	newFile := os.IsNotExist(err)
-	if err != nil && !newFile {
-		return false, fmt.Errorf("reading %s: %w", path, err)
-	}
-	if !newFile && len(data) > 0 {
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return false, fmt.Errorf("parsing %s as JSON: %w — will not overwrite", path, err)
-		}
-	}
-
-	hooks, err := hookMap(cfg)
+	plumbBin, err := os.Executable()
 	if err != nil {
-		return false, fmt.Errorf("reading %s: %w", path, err)
+		return fmt.Errorf("resolving plumb binary path: %w", err)
 	}
-	command := strconv.Quote(bin) + " hooks run-codex"
-	changed := upsertCodexHook(hooks, "SessionStart", codexSessionHookStatus, command, 5)
-	changed = upsertCodexHook(hooks, "Stop", codexMailboxHookStatus, command, 5) || changed
-	if !changed {
-		return false, nil
-	}
-	cfg["hooks"] = hooks
-	if !newFile {
-		if err := backupFile(path); err != nil {
-			return false, fmt.Errorf("backing up %s: %w", path, err)
-		}
-	}
-	if err := writeJSON(path, cfg); err != nil {
-		return false, fmt.Errorf("writing %s: %w", path, err)
-	}
-	return true, nil
-}
 
-func hookMap(cfg map[string]any) (map[string]any, error) {
-	if existing, ok := cfg["hooks"]; ok {
-		hooks, ok := existing.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("hooks must be an object, got %T", existing)
-		}
-		return hooks, nil
-	}
-	return map[string]any{}, nil
-}
-
-func upsertCodexHook(hooks map[string]any, event, status, command string, timeout int) bool {
-	want := map[string]any{
-		"type":          "command",
-		"command":       command,
-		"timeout":       float64(timeout),
-		"statusMessage": status,
-	}
-	existing, ok := hooks[event]
-	if !ok {
-		hooks[event] = []any{map[string]any{"hooks": []any{want}}}
-		return true
-	}
-	groups, ok := existing.([]any)
-	if !ok {
-		return false
-	}
-	for _, groupAny := range groups {
-		group, ok := groupAny.(map[string]any)
-		if !ok {
+	report := newHookReport()
+	for _, t := range targets {
+		path, _, before, err := hookPlan(t, plumbBin)
+		if err != nil {
+			report.clientError(t, err)
 			continue
 		}
-		handlers, ok := group["hooks"].([]any)
-		if !ok {
+		removed, err := removeHooksAt(path, t.ours)
+		if err != nil {
+			report.clientError(t, err)
 			continue
 		}
-		for i, handlerAny := range handlers {
-			handler, ok := handlerAny.(map[string]any)
-			if !ok || handler["statusMessage"] != status {
-				continue
-			}
-			if reflect.DeepEqual(handler, want) {
-				return false
-			}
-			handlers[i] = want
-			group["hooks"] = handlers
-			return true
+		report.group(t, path, before, uninstallAction)
+		// Every handler plumb owns goes, including one an older plumb installed
+		// on an event this version no longer writes. Saying so keeps the count
+		// in the output honest when it exceeds the rows above.
+		if extra := removed - installedCount(before); extra > 0 {
+			report.note(fmt.Sprintf("%s: %d further plumb hook %s removed (installed by an earlier version).",
+				t.name, extra, textfmt.Plural(extra, "entry", "entries")))
 		}
 	}
-	hooks[event] = append(groups, map[string]any{"hooks": []any{want}})
-	return true
+	report.render(nil)
+	return nil
 }
 
-type codexHookInput struct {
-	SessionID      string `json:"session_id"`
-	CWD            string `json:"cwd"`
-	Event          string `json:"hook_event_name"`
-	StopHookActive bool   `json:"stop_hook_active"`
-}
-
-func runCodexHook(_ *cobra.Command, _ []string) error {
-	var input codexHookInput
-	if err := json.NewDecoder(io.LimitReader(os.Stdin, 64<<10)).Decode(&input); err != nil {
-		return nil // Hook failures must never strand a Codex turn.
+// hookPlan resolves one client's config path, the entries this binary would
+// write, and their current state on disk — the common preamble of both writers
+// and of the status table.
+func hookPlan(t hooksTarget, plumbBin string) (path string, entries []hookEntry, before []hookState, err error) {
+	path, err = t.pathFn()
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("locating %s hooks config: %w", t.name, err)
 	}
-	output := codexHookResult(input, codexHookMailReport)
-	if output == nil {
-		return nil
+	entries = t.entries(plumbBin)
+	before, err = hookStatesAt(path, entries, t.ours)
+	if err != nil {
+		return "", nil, nil, err
 	}
-	return json.NewEncoder(os.Stdout).Encode(output)
+	return path, entries, before, nil
 }
 
-// codexHookResult is deliberately pure apart from the supplied probe so the
-// protocol shape and fail-open recursion guard stay testable without a daemon.
-func codexHookResult(input codexHookInput, probe func(string, string) (mailReport, bool)) map[string]any {
-	switch input.Event {
-	case "SessionStart":
-		if strings.TrimSpace(input.SessionID) == "" {
-			return nil
+func installedCount(states []hookState) int {
+	n := 0
+	for _, s := range states {
+		if s.state != hookStateMissing {
+			n++
 		}
-		return map[string]any{"hookSpecificOutput": map[string]any{
-			"hookEventName": "SessionStart",
-			"additionalContext": fmt.Sprintf(
-				"Plumb session linkage: this Codex conversation has id %s. Pass it as session_id on your first session_start call so Plumb mail can address this session.",
-				strconv.Quote(input.SessionID)),
-		}}
-	case "Stop":
-		if input.StopHookActive || probe == nil {
-			return nil
-		}
-		report, ok := probe(input.SessionID, input.CWD)
-		if !ok || report.Count == 0 {
-			return nil
-		}
-		return map[string]any{
-			"decision": "block",
-			"reason":   fmt.Sprintf("You have %d unread Plumb message(s) from a peer agent. Call check_messages before finishing.", report.Count),
-		}
-	default:
-		return nil
 	}
+	return n
 }
 
-// codexHookMailReport prefers the stable conversation ID and falls back to cwd
-// only when it identifies exactly one live session. Every error is intentionally
-// converted to no output: this hook is advisory and must fail open.
-func codexHookMailReport(sessionID, cwd string) (mailReport, bool) {
+// Shared hook runtime — used by both clients' hidden run verbs.
+
+// hookMailReport prefers the stable conversation ID and falls back to cwd only
+// when it identifies exactly one live session. Every error is intentionally
+// converted to "no report": these hooks are advisory and must fail open.
+func hookMailReport(sessionID, cwd string) (mailReport, bool) {
 	if id := strings.TrimSpace(sessionID); id != "" {
 		if report, err := mailReportFor("external-id", id); err == nil {
 			return report, true
@@ -256,4 +226,16 @@ func codexHookMailReport(sessionID, cwd string) (mailReport, bool) {
 		}
 	}
 	return mailReport{}, false
+}
+
+// sessionLinkageSentence states the conversation id as a fact and names the
+// parameter that records it. The phrasing is deliberate: context injected by a
+// hook should read as a factual statement rather than an out-of-band
+// instruction, which a client may surface to the user instead of acting on.
+func sessionLinkageSentence(id, subject string) string {
+	quoted := strconv.Quote(id)
+	return fmt.Sprintf(
+		"Plumb session linkage: this %s has id %s. The plumb session_start tool records it via its "+
+			"session_id parameter, which is what lets plumb mail address this session: session_start({session_id: %s}).",
+		subject, quoted, quoted)
 }

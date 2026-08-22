@@ -26,7 +26,7 @@ language `none`.
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
 | [`plumb skills`](#plumb-skills) | Show or sync plumb's embedded skills per client |
-| [`plumb hooks`](#plumb-hooks) | Install opt-in lifecycle hooks for supported clients |
+| [`plumb hooks`](#plumb-hooks) | Status of the opt-in lifecycle hooks, per client (`install` / `uninstall` write them) |
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
@@ -254,27 +254,94 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
 | `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
-| `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. For a skill-capable client it also removes the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
+| `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. It also removes that client's lifecycle hooks (`plumb hooks uninstall`'s writer, so only plumb's own handlers go and the user's survive), and for a skill-capable client the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
 ---
 
 ## `plumb hooks`
 
 ```
-plumb hooks install codex
+plumb hooks                      # read-only status, per client, per hook
+plumb hooks install [client]     # install or refresh
+plumb hooks uninstall [client]   # remove plumb's handlers, and only those
 ```
 
-Install Plumb's opt-in Codex mailbox hooks after `plumb setup codex`. The installer
-merges named `SessionStart` and `Stop` command hooks into `$CODEX_HOME/hooks.json`
-(or `~/.codex/hooks.json`), preserves other hook entries, refreshes its own binary
-path on re-run, and backs up an existing file before changing it. The `SessionStart`
-hook supplies Codex's conversation ID so the first `session_start` can pass it as
-`session_id`; the `Stop` hook performs one read-only `plumb mail` probe and keeps the
-turn going only when mail is pending.
+Lifecycle hooks are the one place plumb can reach an agent between tool calls:
+at the start of a session, and at the end of a turn. Bare `plumb hooks` is
+**read-only** — a per-client, per-hook table showing `installed`, `missing`, or
+`stale` (present, but written by a different binary path or an older entry
+shape), with `unregistered` for a client whose config does not register plumb.
+The two writers are `install` and `uninstall`; with no client argument each
+sweeps every client, and `install` skips an unregistered one with the
+`plumb setup <client>` fix rather than writing hooks for a plumb the client
+cannot reach.
 
-Use Codex's `/hooks` command to review and trust the installed commands. The hook is
-fail-open and does not expose message bodies. Codex cannot wake an already-idle
-session from a background hook, so this narrows the end-of-turn race rather than
-providing push delivery.
+| Client | Config | Hooks installed |
+|---|---|---|
+| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s) and `Stop` (`async` + `asyncRewake`, timeout 330s) |
+| `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
+
+Both clients get the same pair. **`SessionStart`** states the client's own
+conversation ID as a fact, so the agent's first `session_start` can pass it as
+`session_id` — the linkage that lets `plumb mail`, `leave_note` and the wake
+path address that exact session rather than guessing from a shared directory.
+**`Stop`** reports unread peer mail as a turn ends.
+
+What `Stop` can do differs by client, and the difference is not cosmetic:
+
+- **Claude Code wakes.** The handler installs as a background watcher (`async` +
+  `asyncRewake`), which is the pair that lets a hook reach a session with **no
+  turn in flight**. It polls `plumb mail` for up to `PLUMB_WAKE_WINDOW` seconds
+  (default 300, every `PLUMB_WAKE_INTERVAL`, default 7) and exits 2 with one
+  line on stderr the moment mail is waiting — that pair is the wake payload. The
+  client's hook timeout is set above the window on purpose: a shorter one would
+  kill the watcher mid-watch, and nothing in any output would say so.
+- **Codex checks.** Codex has no background-wake mechanism, so its handler makes
+  one read-only probe as the turn ends and keeps the turn going only when mail
+  is pending. That narrows the end-of-turn race; it is **not** push delivery.
+  Codex also requires an interactive trust review for non-managed command hooks
+  — run `/hooks` in Codex after installing.
+
+Properties both hooks hold, and that the tests pin:
+
+- **Fail open, always.** No linkage, no matching session, an ambiguous
+  workspace, an unreadable mailbox, a daemon that is down — every one of them
+  lets the turn end silently. A hook that failed closed would strand turns on an
+  unrelated fault.
+- **A count, never a body.** `plumb mail` does not claim and does not disclose
+  message text. Pasting a peer's words into hook feedback would be a direct
+  injection channel into the agent; the body stays unclaimed and arrives through
+  `check_messages`, labelled as the unverified claim it is.
+- **Silent when there is nothing to say.** The Claude Code watcher emits nothing
+  and costs nothing unless mail is actually waiting; a hook that woke an agent
+  on a timer would burn paid turns for no reason.
+- **Scoped to plumb workspaces.** `settings.json` is user-wide, so the Claude
+  Code hook checks for a `.plumb` marker at or above the session's working
+  directory and stands down before touching anything when there is none.
+- **One watcher per session.** A lock keyed by the resolved session name, and
+  recording the conversation that owns it, stops repeated turns from stacking
+  watcher processes — and lets a session that reuses a name take the lock over
+  from a previous tenant instead of being silently unwakeable.
+- **Bounded continuation.** A woken turn re-arms only when it provably consumed
+  mail (the pending count dropped), capped at `PLUMB_WAKE_CHAIN_MAX` (default
+  10) wakes per chain; any ambiguity stands the chain down.
+
+Writing is conservative in both directions. An install **merges**: hooks the
+user wrote on the same events keep their place, the file is backed up before it
+changes, re-running is a no-op once it matches, and plumb's own entries are
+refreshed in place after the binary moves. An uninstall removes **only** plumb's
+handlers — dropping a group and then an event key that its handlers leave empty,
+and writing nothing at all when there is nothing of plumb's to remove. The
+hand-installed shell hooks plumb's own recipe documented
+(`plumb-session-link.sh`, `plumb-mail-wake.sh`) count as plumb's: an install
+replaces those entries in place, so the migration leaves one pair of hooks
+rather than two that both fire, and the `.sh` files themselves are left on disk.
+
+Installation is always explicit. Hooks execute commands with the user's
+credentials, so nothing installs them as a side effect — not `plumb setup`, not
+project config, not a repository someone cloned. Removal is the one direction
+that also happens elsewhere: `plumb setup <client> --uninstall` removes that
+client's hooks along with its registration and skills, because hooks left
+pointing at a deregistered plumb are dead weight.
 
 ---
 

@@ -8,7 +8,11 @@ import (
 	"testing"
 )
 
-func TestInstallCodexHooks_MergesAndRefreshesOwnEntries(t *testing.T) {
+// The writers are exercised through the registry's own entry sets rather than
+// hand-written handlers: a test that invented its own would keep passing after
+// the shipped entries drifted away from what it asserts.
+
+func TestInstallHooksAt_MergesAndRefreshesOwnEntries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	original := map[string]any{
 		"description": "user hooks",
@@ -19,15 +23,9 @@ func TestInstallCodexHooks_MergesAndRefreshesOwnEntries(t *testing.T) {
 			}},
 		},
 	}
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeJSONFixture(t, path, original)
 
-	changed, err := installCodexHooks(path, "/opt/plumb")
+	changed, err := installHooksAt(path, codexHookEntries("/opt/plumb"), codexHookOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +33,7 @@ func TestInstallCodexHooks_MergesAndRefreshesOwnEntries(t *testing.T) {
 		t.Fatal("first install reported no change")
 	}
 
-	got := readHookConfig(t, path)
+	got := readHookJSON(t, path)
 	if got["description"] != "user hooks" {
 		t.Errorf("description = %v, want user metadata preserved", got["description"])
 	}
@@ -57,7 +55,7 @@ func TestInstallCodexHooks_MergesAndRefreshesOwnEntries(t *testing.T) {
 		t.Error("changed existing config was not backed up")
 	}
 
-	changed, err = installCodexHooks(path, "/opt/plumb")
+	changed, err = installHooksAt(path, codexHookEntries("/opt/plumb"), codexHookOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,28 +63,50 @@ func TestInstallCodexHooks_MergesAndRefreshesOwnEntries(t *testing.T) {
 		t.Error("second install was not idempotent")
 	}
 
-	changed, err = installCodexHooks(path, "/new/plumb")
+	changed, err = installHooksAt(path, codexHookEntries("/new/plumb"), codexHookOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !changed {
 		t.Error("new executable path did not refresh Plumb handlers")
 	}
-	got = readHookConfig(t, path)
+	got = readHookJSON(t, path)
 	hooks = got["hooks"].(map[string]any)
 	if !hasCodexHook(hooks, "Stop", codexMailboxHookStatus, `"/new/plumb" hooks run-codex`) {
 		t.Error("Stop hook did not refresh to the new executable")
 	}
+	if hasCommand(hooks, "Stop", `"/opt/plumb" hooks run-codex`) {
+		t.Error("refresh left the old executable's handler behind")
+	}
 }
 
-func TestInstallCodexHooks_RefusesInvalidConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "hooks.json")
-	if err := os.WriteFile(path, []byte(`{"hooks":"wrong"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := installCodexHooks(path, "/opt/plumb")
-	if err == nil || !strings.Contains(err.Error(), "hooks must be an object") {
-		t.Fatalf("installCodexHooks error = %v, want hooks type error", err)
+func TestInstallHooksAt_RefusesInvalidConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"hooks not an object", `{"hooks":"wrong"}`, "hooks must be an object"},
+		{"event not an array", `{"hooks":{"Stop":{"nope":true}}}`, "must be an array of hook groups"},
+		{"not JSON at all", `{`, "will not overwrite"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hooks.json")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := installHooksAt(path, codexHookEntries("/opt/plumb"), codexHookOwned)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want one mentioning %q", err, tc.want)
+			}
+			// The refusal must leave the file exactly as it was: plumb does not
+			// "fix" a shape it did not write.
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(data) != tc.body {
+				t.Errorf("file was rewritten despite the refusal:\n%s", data)
+			}
+		})
 	}
 }
 
@@ -127,7 +147,18 @@ func TestCodexHookResult(t *testing.T) {
 	}
 }
 
-func readHookConfig(t *testing.T, path string) map[string]any {
+func writeJSONFixture(t *testing.T, path string, v any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readHookJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
