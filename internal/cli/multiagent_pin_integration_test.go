@@ -230,10 +230,12 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "coordinator"}); err != nil {
 		t.Fatalf("coordinator session_start: %v", err)
 	}
-	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "subagent-1"}); err != nil {
-		t.Fatalf("legitimate subagent: %v", err)
-	}
 
+	// The drifter is deliberately the SECOND agent to declare itself, so this is
+	// the call that makes the connection shared. Identity has to be settled
+	// BEFORE the re-pin for that to be true at the moment the re-pin runs; if it
+	// is settled after, this call is still seen as a single-agent connection
+	// re-pinning itself and moves the coordinator's pin instead of its own shard.
 	err := m.sessionStart(t, map[string]any{"workspace": other, "session_id": "drifter"})
 	if err == nil {
 		t.Fatal("a subagent re-pinning to a workspace outside the coordinator's project was accepted — the #182 guard is fail-open")
