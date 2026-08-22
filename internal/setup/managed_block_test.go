@@ -181,6 +181,87 @@ func TestManagedBlock_Symlink(t *testing.T) {
 	}
 }
 
+// TestManagedBlock_DanglingSymlinkStaysASymlink is the regression for a
+// review-round-1-on-PR-2 blocking defect: a project's VERY FIRST
+// `plumb setup <client>` on a symlinked layout (CLAUDE.md -> AGENTS.md, this
+// repo's own convention) hits the target BEFORE it has ever been created —
+// a dangling symlink. paths.Canonical's missing-path fallback does not read
+// symlink targets, so it answered with the LINK's own path, and Apply's
+// AtomicWrite rename onto that path REPLACED THE SYMLINK ITSELF with a
+// regular file — silently converting CLAUDE.md from "symlinks to AGENTS.md"
+// into "is its own independent file", which then falsifies the whole
+// convergence story two callers apart (a second client applying through a
+// DIFFERENT symlink to what should be the same real file instead creates
+// yet another independent file). Apply must instead create the file the
+// dangling link NAMES (AGENTS.md) and leave the symlink itself untouched.
+func TestManagedBlock_DanglingSymlinkStaysASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "AGENTS.md")
+	link := filepath.Join(dir, "CLAUDE.md")
+
+	// The symlink exists, but its target does not — the exact state of a
+	// fresh checkout of this repo's own layout before anyone has ever run
+	// `plumb setup`.
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("test setup: AGENTS.md must not exist yet, stat err=%v", err)
+	}
+
+	if _, err := setup.Apply(link, testBody, "v1"); err != nil {
+		t.Fatalf("Apply via dangling symlink: %v", err)
+	}
+
+	linkInfo, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("CLAUDE.md was replaced with a regular file — it must stay a symlink even when its target was dangling")
+	}
+
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatalf("resolving symlink after Apply: %v", err)
+	}
+	resolvedInfo, err := os.Stat(resolved)
+	if err != nil {
+		t.Fatalf("stat resolved: %v", err)
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("AGENTS.md (the symlink's target) was not created: %v", err)
+	}
+	if !os.SameFile(resolvedInfo, targetInfo) {
+		t.Fatalf("symlink now points at %s, want %s", resolved, target)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if !strings.Contains(string(got), setup.RenderBlock(testBody, "v1")) {
+		t.Errorf("managed block not written to the resolved target; got:\n%s", got)
+	}
+
+	// A second client applying through a DIFFERENT symlink to the same
+	// (now-real) target must land on the identical file, matching
+	// TestManagedBlock_Symlink's already-passing case for a non-dangling
+	// target.
+	link2 := filepath.Join(dir, "GEMINI.md")
+	if err := os.Symlink(target, link2); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := setup.Apply(link2, testBody, "v1")
+	if err != nil {
+		t.Fatalf("Apply via second symlink: %v", err)
+	}
+	if changed {
+		t.Error("applying the same current block through a second symlink to the now-real target should be a no-op")
+	}
+}
+
 func TestManagedBlock_CheckDetectsMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "AGENTS.md")

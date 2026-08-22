@@ -86,6 +86,29 @@
   shared, lean-safe `DefaultTemplate` instead. Since the choice is a deterministic function of
   the file's (stable) symlink structure, `plumb setup <client>` in any order, and `--sync`,
   converge on identical content rather than oscillating.
+  **Review round 1 fix: a DANGLING symlink no longer loses its symlink-ness.** On a project's
+  very first `plumb setup <client>` against a symlinked layout, the target (`AGENTS.md`) does
+  not exist yet, so `CLAUDE.md`/`GEMINI.md` are dangling. `paths.Canonical`'s own missing-path
+  fallback does not read a symlink's target in that case, so it answered with the LINK's own
+  path — and `Apply`'s atomic rename onto that answer REPLACED THE SYMLINK ITSELF with a
+  regular file, silently turning a shared instruction file into an independent one and
+  falsifying the convergence property above whenever the first client to run happened to reach
+  the file through a link rather than by its real name. `resolveTarget` now walks a dangling
+  chain by hand (`resolveDanglingSymlinkChain`, one `os.Readlink` hop at a time, bounded against
+  a loop) to the real path it names, and `Apply` creates THAT — the symlink itself is never
+  touched, on the first call or any later one (`TestManagedBlock_DanglingSymlinkStaysASymlink`).
+  **Review round 1 fix: Codex/Gemini/the shared template no longer quote Claude Code's OWN
+  harness error strings.** "has not been read" / "modified since read" are strings Claude
+  Code's native Read/Edit tracker produces (`internal/tools/edit_lane.go`'s `isClaudeCode`
+  gate) — a Codex agent using `apply_patch` after a plumb read sees no such error, so quoting
+  them there taught a false consequence. The Codex, Gemini, and shared (`DefaultTemplate`)
+  bodies now describe the real, client-agnostic mechanic instead: a native edit bypasses
+  plumb's own read-tracking, so the *next* plumb edit call against that file is refused as
+  modified since read (`internal/tools/write_guards.go`'s `verifyExpectedVersion`) —
+  `claude-code.md` keeps the harness-specific quote, since Claude Code is the one confirmed
+  case. Also corrected: `claude-code.md` no longer claims skills live "alongside this file" —
+  a bare `plumb setup` never installs them; the body now points at
+  `plumb skills sync claude-code`.
   **`--uninstall` now removes the managed block** (deferred from PR 1): `setup.Remove` reverses
   `Apply` — deletes the block, absorbing the blank-line separator `Apply`'s append path
   inserts, deletes the file outright if the block was its only content, follows a symlink to

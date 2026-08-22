@@ -8,4 +8,4 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **Subagents.** Call `session_start({detail:"brief"})` first for a short orientation packet.
 
-More detail lives in each tool's own description, in the plumb skills installed alongside this file, and in `session_start`'s full output.
+More detail lives in each tool's own description, in the plumb skills (`plumb skills sync claude-code` installs them), and in `session_start`'s full output.

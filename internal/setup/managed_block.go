@@ -160,15 +160,79 @@ func isVersionToken(v string) bool {
 	return true
 }
 
+// maxDanglingSymlinkHops bounds resolveDanglingSymlinkChain's manual walk —
+// a conventional loop guard, well above any real instruction-file symlink
+// depth (one hop, in every case this package ships for).
+const maxDanglingSymlinkHops = 40
+
 // resolveTarget follows path if it is a symlink (or a chain of them) and
-// returns the real file it names, via paths.Canonical — the tree's one
-// "same place?" answer. A path that does not exist yet, or that is not a
-// symlink, resolves to itself unchanged — the caller creates it directly.
-// This is what keeps Apply from ever replacing a symlink (e.g. this repo's
-// CLAUDE.md -> AGENTS.md) with a plain file: every write below targets the
-// resolved path, never the link.
+// returns the real file it names. Two cases:
+//
+//   - The chain resolves cleanly (the target exists, or path is not a
+//     symlink at all): delegates to paths.Canonical, the tree's one "same
+//     place?" answer. A path that does not exist and is not a symlink
+//     resolves to itself, unchanged — the caller creates it directly.
+//   - path is ITSELF a symlink whose target does not exist yet — a
+//     DANGLING symlink, the exact state of this repo's own CLAUDE.md ->
+//     AGENTS.md / GEMINI.md -> AGENTS.md on a project's very first
+//     `plumb setup <client>`, before AGENTS.md has ever been created.
+//     paths.Canonical's own missing-path fallback does not read symlink
+//     targets in this case (it walks up to the nearest EXISTING ancestor
+//     directory and reappends path's own tail literally), so it answers
+//     with the LINK's own path — and Apply writing through that answer
+//     would have AtomicWrite's rename REPLACE THE SYMLINK ITSELF with a
+//     regular file, which this package promises never to do. So a dangling
+//     chain is instead walked by hand (resolveDanglingSymlinkChain) to the
+//     real path it names, and Apply creates THAT — the symlink is never
+//     touched.
 func resolveTarget(path string) string {
+	if target, ok := resolveDanglingSymlinkChain(path); ok {
+		return target
+	}
 	return paths.Canonical(path)
+}
+
+// resolveDanglingSymlinkChain walks path's symlink chain by hand — one
+// os.Readlink hop at a time, resolving a relative target against the link's
+// own directory — for the one case paths.Canonical cannot answer: path
+// itself is a symlink, but the chain is DANGLING (its target, or some link
+// further down the chain, does not exist). ok is true only in that case,
+// with target set to the real path the chain names (which Apply should
+// create); ok is false when path is not a symlink at all (nothing to
+// resolve by hand — paths.Canonical already handles that), when the chain
+// is NOT dangling (resolves to an existing, non-symlink file — again
+// paths.Canonical's job), or when it loops or runs deeper than
+// maxDanglingSymlinkHops.
+func resolveDanglingSymlinkChain(path string) (target string, ok bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+
+	current := path
+	for range maxDanglingSymlinkHops {
+		linkTarget, err := os.Readlink(current)
+		if err != nil {
+			return "", false
+		}
+		if !filepath.IsAbs(linkTarget) {
+			linkTarget = filepath.Join(filepath.Dir(current), linkTarget)
+		}
+		linkTarget = filepath.Clean(linkTarget)
+
+		nextInfo, err := os.Lstat(linkTarget)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return linkTarget, true // the chain bottoms out at a name that does not exist yet: the real target
+			}
+			return "", false
+		}
+		if nextInfo.Mode()&os.ModeSymlink == 0 {
+			return "", false // resolves to a real, existing file — not dangling; paths.Canonical handles this
+		}
+		current = linkTarget
+	}
+	return "", false // a chain this deep is a loop, not a real instruction-file symlink
 }
 
 // Status reports how a file's on-disk managed block compares to the current
