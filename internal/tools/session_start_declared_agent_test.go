@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -11,16 +12,17 @@ import (
 // keeps this package from importing it).
 type declaredAgentKeyType struct{}
 
-// TestSessionStart_IdentityIsResolvedBeforeTheWorkspace pins the ORDER
-// session_start does its work in. A subagent multiplexed over a shared
-// connection declares its identity with `session_id` in the same call that names
-// its workspace; if the workspace re-pin runs first, that call is unattributable
-// exactly when the daemon decides whose pin to move, and the re-pin lands on the
-// connection — dragging every peer agent's workspace with it (issue #182).
+// TestSessionStart_AttributionPrecedesTheWorkspace pins the ORDER session_start
+// does its work in. A subagent multiplexed over a shared connection declares its
+// identity with `session_id` in the same call that names its workspace; if the
+// workspace re-pin runs before that identity reaches the ctx, the call is
+// unattributable exactly when the daemon decides whose pin to move, and the
+// re-pin lands on the connection — dragging every peer agent's workspace with it
+// (issue #182).
 //
-// Both identity channels must therefore be settled before the re-pin: the
-// external-ID linker AND the ctx the re-pin runs under.
-func TestSessionStart_IdentityIsResolvedBeforeTheWorkspace(t *testing.T) {
+// The linkage half runs the other way round: it COMMITS things (see
+// TestSessionStart_LinkageNotCommittedOnARefusedCall), so it must come after.
+func TestSessionStart_AttributionPrecedesTheWorkspace(t *testing.T) {
 	ws := t.TempDir()
 	var order []string
 	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
@@ -40,7 +42,7 @@ func TestSessionStart_IdentityIsResolvedBeforeTheWorkspace(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+ws+`","session_id":"subagent-7"}`)); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	want := []string{"external-id", "declared-agent", "repin"}
+	want := []string{"declared-agent", "repin", "external-id"}
 	if len(order) != len(want) {
 		t.Fatalf("call order = %v, want %v", order, want)
 	}
@@ -48,6 +50,43 @@ func TestSessionStart_IdentityIsResolvedBeforeTheWorkspace(t *testing.T) {
 		if order[i] != want[i] {
 			t.Fatalf("call order = %v, want %v", order, want)
 		}
+	}
+}
+
+// TestSessionStart_LinkageNotCommittedOnARefusedCall guards the other half of
+// that split. The external-ID linker does not observe, it COMMITS: it makes the
+// session answerable to this id from plumb mail and the wake hook, it may rename
+// the session to inherit an ended one's name, and on the daemon side it records
+// the attach-time fallback identity that every unattributed call is then
+// resolved against. A call the daemon REFUSED must commit none of it — an agent
+// whose re-pin was refused never attached, and a session that answers to its id
+// is a lie about what happened.
+//
+// The attribution channel still fires: the refusal itself has to be attributed
+// to the agent that asked, or it is the connection's pin being refused, not
+// theirs.
+func TestSessionStart_LinkageNotCommittedOnARefusedCall(t *testing.T) {
+	ws := t.TempDir()
+	linked, attributed := false, false
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithExternalID(func(string) string { linked = true; return "" }).
+		WithDeclaredAgent(func(ctx context.Context, id string) context.Context {
+			attributed = true
+			return context.WithValue(ctx, declaredAgentKeyType{}, id)
+		}).
+		WithRepin(func(context.Context, string, string, bool) (string, error) {
+			return "", errors.New("refusing to re-pin: sticky (issue #182)")
+		})
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+t.TempDir()+`","session_id":"drifter"}`))
+	if err == nil {
+		t.Fatal("precondition: the re-pin was supposed to be refused")
+	}
+	if !attributed {
+		t.Error("the refused call was never attributed to the agent that made it")
+	}
+	if linked {
+		t.Error("a REFUSED session_start committed the external-ID linkage: the session now answers to an id whose call was rejected, may have inherited an ended session's name, and the attach-time fallback identity points at an agent that never attached")
 	}
 }
 
