@@ -2,7 +2,7 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **apply_patch is off-limits for a file plumb has read.** It bypasses plumb's per-path concurrency guard and diagnostics gate — use `edit_file`/`write_file` instead (`transaction_apply` for one atomic multi-file change), passing back the `expected_mtime`/`expected_sha` from your last `read_file`.
 
-**Edit lane.** Read a file with plumb before editing it (`read_file` -> `edit_file`/`write_file`). Mixing a plumb read with `apply_patch` on the same file produces "has not been read" / "modified since read" errors.
+**Edit lane.** Read a file with plumb before editing it (`read_file` -> `edit_file`/`write_file`). If you use `apply_patch` on it anyway, plumb never sees the change — its own read-tracking goes stale, so your next `edit_file`/`write_file` call on that file is refused as modified since you read it. Re-`read_file` and retry.
 
 **Compile truth on write.** Pass `fail_on_new_errors` or `await_diagnostics` on an edit/write to have plumb catch (or report) a change that breaks the build, instead of finding out later.
 
