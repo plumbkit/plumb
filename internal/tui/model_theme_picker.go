@@ -53,12 +53,17 @@ func (m Model) renderThemePicker(bg string) string {
 	innerW := contentW + pad*2
 
 	var b strings.Builder
-	b.WriteString(themePickerTop(innerW) + "\n")
+	b.WriteString(themePickerTop(innerW))
+	b.WriteString("\n")
 	for _, ln := range rows {
-		b.WriteString(themePickerBodyLine(ln, innerW, pad, contentW) + "\n")
+		b.WriteString(themePickerBodyLine(ln, innerW, pad, contentW))
+		b.WriteString("\n")
 	}
 	// Footer status bar (same treatment as the Settings status bar).
-	b.WriteString(SepStyle.Render("│") + statusBarLine(themePickerFooterContent(innerW-4), innerW, false) + SepStyle.Render("│") + "\n")
+	b.WriteString(SepStyle.Render("│"))
+	b.WriteString(statusBarLine(themePickerFooterContent(innerW-4), innerW, false))
+	b.WriteString(SepStyle.Render("│"))
+	b.WriteString("\n")
 	b.WriteString(SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
 
 	return spliceOverlay(bg, b.String(), m.width, m.height)

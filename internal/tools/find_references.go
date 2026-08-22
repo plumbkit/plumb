@@ -334,5 +334,8 @@ func readFileLines(path string, lines map[uint32]bool) map[uint32]string {
 		}
 		lineNum++
 	}
+	// Best-effort per the doc comment above: a scan error just means fewer
+	// lines were recovered, which the caller already treats as "not found".
+	_ = scanner.Err()
 	return result
 }

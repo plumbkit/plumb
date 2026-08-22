@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,9 +130,7 @@ func (e *failEnv) edit(t *testing.T, args map[string]any) (string, error) {
 		"file_path": e.path,
 		"edits":     []map[string]any{{"old_string": "return 1", "new_string": "return \"x\""}},
 	}
-	for k, v := range args {
-		req[k] = v
-	}
+	maps.Copy(req, args)
 	return NewEditFile(e.deps).Execute(context.Background(), mustJSON(req))
 }
 
@@ -149,11 +148,11 @@ func (e *failEnv) content(t *testing.T) string {
 // fixed prefix and unmarshals the rest.
 func parseDelta(t *testing.T, out string) diagDelta {
 	t.Helper()
-	i := strings.Index(out, diagDeltaPrefix)
-	if i < 0 {
+	_, after, ok := strings.Cut(out, diagDeltaPrefix)
+	if !ok {
 		t.Fatalf("no %q line in output:\n%s", diagDeltaPrefix, out)
 	}
-	rest := out[i+len(diagDeltaPrefix):]
+	rest := after
 	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
 		rest = rest[:nl]
 	}

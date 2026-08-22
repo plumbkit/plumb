@@ -39,8 +39,8 @@ var dangerousGitGlobalFlags = map[string]bool{
 func checkGitGlobalFlags(args []string) error {
 	for _, a := range args {
 		name := a
-		if i := strings.IndexByte(a, '='); i >= 0 {
-			name = a[:i]
+		if before, _, ok := strings.Cut(a, "="); ok {
+			name = before
 		}
 		if dangerousGitGlobalFlags[name] {
 			return fmt.Errorf("git: flag %q is not permitted", name)

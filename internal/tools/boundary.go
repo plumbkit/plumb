@@ -39,14 +39,19 @@ func (p PinProvenance) String() string {
 	var sb strings.Builder
 	sb.WriteString("Pin provenance: set")
 	if !p.At.IsZero() {
-		sb.WriteString(" " + humaniseAge(time.Since(p.At)) + " ago")
+		sb.WriteString(" ")
+		sb.WriteString(humaniseAge(time.Since(p.At)))
+		sb.WriteString(" ago")
 	}
-	sb.WriteString(" via " + source)
+	sb.WriteString(" via ")
+	sb.WriteString(source)
 	if restored {
 		sb.WriteString(", restored on reconnect")
 	}
 	if p.Previous != "" {
-		sb.WriteString(" (previously " + p.Previous + ")")
+		sb.WriteString(" (previously ")
+		sb.WriteString(p.Previous)
+		sb.WriteString(")")
 	}
 	sb.WriteString(".")
 	return sb.String()
@@ -123,12 +128,10 @@ func NewWorkspaceBoundaryError(workspace, path string) error {
 // %w, so errors.As alone is the contract — do not add a substring fallback, as
 // it would false-positive on unrelated errors that happen to echo the message.
 func IsWorkspaceBoundaryError(err error) bool {
-	var boundaryErr WorkspaceBoundaryError
-	if errors.As(err, &boundaryErr) {
+	if _, ok := errors.AsType[WorkspaceBoundaryError](err); ok {
 		return true
 	}
-	var unattachedErr UnattachedWorkspaceError
-	if errors.As(err, &unattachedErr) {
+	if _, ok := errors.AsType[UnattachedWorkspaceError](err); ok {
 		return true
 	}
 	var traversalErr ParentTraversalError

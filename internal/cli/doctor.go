@@ -283,10 +283,7 @@ func printSubCheck(c checkResult, nameW int) {
 	// Five leading spaces put the glyph under the parent's name column; "╰─ "
 	// ends three columns later, so the label starts eight columns in and pads
 	// out to the parent's detail column.
-	pad := detailCol - 8 - len(subLabel(c))
-	if pad < 1 {
-		pad = 1
-	}
+	pad := max(detailCol-8-len(subLabel(c)), 1)
 	lines := subDetailLines(c.detail, detailCol, terminalWidth(os.Stdout))
 	fmt.Printf("     %s%s%s\n",
 		tui.HintStyle.Render("╰─ "+subLabel(c)),

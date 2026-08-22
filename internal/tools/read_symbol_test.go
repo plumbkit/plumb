@@ -244,13 +244,13 @@ func TestReadSymbol_NoEditLaneHint_OtherClients(t *testing.T) {
 // readSymbolHeaderMtime pulls the mtime= value out of a plumb-read header line.
 func readSymbolHeaderMtime(header string) string {
 	const key = "mtime="
-	i := strings.Index(header, key)
-	if i < 0 {
+	_, after, ok := strings.Cut(header, key)
+	if !ok {
 		return ""
 	}
-	rest := header[i+len(key):]
-	if j := strings.IndexByte(rest, ' '); j >= 0 {
-		return rest[:j]
+	rest := after
+	if before, _, ok := strings.Cut(rest, " "); ok {
+		return before
 	}
 	return rest
 }

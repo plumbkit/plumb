@@ -136,7 +136,11 @@ func (idx *Indexer) pruneDeleted(present map[string]bool) error {
 			stale = append(stale, e)
 		}
 	}
+	scanErr := rows.Err()
 	rows.Close()
+	if scanErr != nil {
+		return fmt.Errorf("topology: prune scan: %w", scanErr)
+	}
 	var firstErr error
 	for _, e := range stale {
 		tx, txErr := idx.db.Begin()

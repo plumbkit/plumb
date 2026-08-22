@@ -142,6 +142,9 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			slog.Debug("daemon: control socket read failed", "error", err)
+		}
 		return
 	}
 	line := strings.TrimSpace(scanner.Text())

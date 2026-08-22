@@ -207,7 +207,7 @@ func (w *tsWalk) fieldReadonly(m *tsg.Node) bool {
 	if name == nil {
 		return false
 	}
-	for _, tok := range strings.Fields(string(w.src[m.StartByte():name.StartByte()])) {
+	for tok := range strings.FieldsSeq(string(w.src[m.StartByte():name.StartByte()])) {
 		if tok == "readonly" {
 			return true
 		}

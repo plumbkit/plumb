@@ -237,6 +237,9 @@ func (d *DB) p95All(filter Filter) map[string]int64 {
 		}
 		cur.durs = append(cur.durs, ms)
 	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 
 	out := make(map[string]int64, len(groups))
 	for _, g := range groups {

@@ -94,10 +94,7 @@ func nodeToDocSymbol(n topology.Node, lines []string) protocol.DocumentSymbol {
 // last line.
 func lineGranularRange(n topology.Node, lines []string) protocol.Range {
 	start := lineToUint32(n.StartLine - 1)
-	endIdx := n.EndLine - 1
-	if endIdx < int(start) {
-		endIdx = int(start)
-	}
+	endIdx := max(n.EndLine-1, int(start))
 	endChar := 0
 	if endIdx >= 0 && endIdx < len(lines) {
 		endChar = len(lines[endIdx])

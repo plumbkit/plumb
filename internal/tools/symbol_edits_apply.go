@@ -82,8 +82,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	if dryRun {
 		edit, sym, fallbackNote, err := resolve(ctx)
 		if err != nil {
-			var refusal symbolEditRefusal
-			if errors.As(err, &refusal) {
+			if refusal, ok := errors.AsType[symbolEditRefusal](err); ok {
 				return refusal.msg, nil
 			}
 			return "", err
@@ -114,8 +113,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	}
 	edit, sym, fallbackNote, err := resolve(ctx)
 	if err != nil {
-		var refusal symbolEditRefusal
-		if errors.As(err, &refusal) {
+		if refusal, ok := errors.AsType[symbolEditRefusal](err); ok {
 			return refusal.msg, nil
 		}
 		return "", err

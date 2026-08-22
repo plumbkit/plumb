@@ -396,11 +396,13 @@ func formatPullIncomplete(byURI map[string][]protocol.Diagnostic, notes, unresol
 	if len(notes) > 0 {
 		fmt.Fprintf(&sb, "\n⚠ pull failed for %d file(s) — their state is UNVERIFIED (any cached entries above may be stale):", len(notes))
 		for _, note := range notes {
-			sb.WriteString("\n  " + note)
+			sb.WriteString("\n  ")
+			sb.WriteString(note)
 		}
 	}
 	if len(unresolved) > 0 {
-		sb.WriteString("\n" + unverifiedPullNote(unresolved))
+		sb.WriteString("\n")
+		sb.WriteString(unverifiedPullNote(unresolved))
 	}
 	return sb.String()
 }
@@ -410,7 +412,8 @@ func unverifiedPullNote(uris []string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "⚠ %d diagnostic report(s) could not be validated — state unverified (UNVERIFIED); do not treat these files as clean:", len(uris))
 	for _, uri := range uris {
-		sb.WriteString("\n  " + paths.URIToPath(uri))
+		sb.WriteString("\n  ")
+		sb.WriteString(paths.URIToPath(uri))
 	}
 	return sb.String()
 }

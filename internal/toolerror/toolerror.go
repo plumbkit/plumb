@@ -385,8 +385,7 @@ func Wrap(cause error, kind Kind, class RemediationClass, opts ...Option) *Error
 // errors.As-based, so it finds an *Error anywhere in the chain — including
 // beneath a wrapper a caller added afterwards.
 func Classify(err error) (*Error, bool) {
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*Error](err); ok {
 		return e, true
 	}
 	return nil, false

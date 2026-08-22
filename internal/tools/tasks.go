@@ -184,10 +184,12 @@ func formatStep(argv []string, res ExecResult) string {
 		b.WriteString("(timed out)\n")
 	}
 	if out := strings.TrimSpace(res.Stdout); out != "" {
-		b.WriteString(out + "\n")
+		b.WriteString(out)
+		b.WriteString("\n")
 	}
 	if errOut := strings.TrimSpace(res.Stderr); errOut != "" {
-		b.WriteString(errOut + "\n")
+		b.WriteString(errOut)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

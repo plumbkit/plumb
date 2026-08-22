@@ -252,8 +252,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 
 	we, note, err := t.renameWorkspaceEdit(dctx, a)
 	if err != nil {
-		var pre preLSPErr
-		if errors.As(err, &pre) {
+		if pre, ok := errors.AsType[preLSPErr](err); ok {
 			return "", pre.err
 		}
 		return t.onRenameUnavailable(ctx, a, "the language server returned an error", err)
@@ -539,10 +538,7 @@ const maxRenameDiffFiles = 20
 // or reconstructed is skipped (the rename itself is unaffected).
 func renameFileDiffs(we *protocol.WorkspaceEdit, files []string) string {
 	byPath := groupEditsByPath(we)
-	limit := len(files)
-	if limit > maxRenameDiffFiles {
-		limit = maxRenameDiffFiles
-	}
+	limit := min(len(files), maxRenameDiffFiles)
 	var sb strings.Builder
 	for _, path := range files[:limit] {
 		d := symbolEditsDiff(path, byPath[path])

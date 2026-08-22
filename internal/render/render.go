@@ -38,10 +38,7 @@ func LeaderRows(pairs [][2]string) []string {
 	total := maxLabel + maxValue + minLeaderDots + 2 // +2 for the spaces around the leader
 	rows := make([]string, 0, len(pairs))
 	for _, p := range pairs {
-		dots := total - lipgloss.Width(p[0]) - lipgloss.Width(p[1]) - 2
-		if dots < minLeaderDots {
-			dots = minLeaderDots
-		}
+		dots := max(total-lipgloss.Width(p[0])-lipgloss.Width(p[1])-2, minLeaderDots)
 		rows = append(rows, p[0]+" "+strings.Repeat(leaderDot, dots)+" "+p[1])
 	}
 	return rows

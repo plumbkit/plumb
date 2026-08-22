@@ -516,7 +516,7 @@ func TestGit_AddAndCommit(t *testing.T) {
 	if !strings.Contains(out, "add new.txt") {
 		t.Errorf("expected subject in output, got %q", out)
 	}
-	hash := strings.SplitN(out, " ", 2)[0]
+	hash, _, _ := strings.Cut(out, " ")
 	if len(hash) != 7 {
 		t.Errorf("expected 7-char short hash, got %q in %q", hash, out)
 	}

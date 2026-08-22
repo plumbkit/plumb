@@ -120,8 +120,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	target, err := t.resolveTarget(ctx, args.To, ws, args.ConversationID)
 	if err != nil {
-		var refusal *refusalError
-		if errors.As(err, &refusal) {
+		if refusal, ok := errors.AsType[*refusalError](err); ok {
 			return refusal.msg, nil
 		}
 		return "", err

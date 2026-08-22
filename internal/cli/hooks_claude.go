@@ -401,7 +401,7 @@ func readRearm(path string) (pending, chain int, found bool) {
 		return 0, 0, false
 	}
 	chain = wakeChainMax()
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		key, value, hasSep := strings.Cut(strings.TrimSpace(line), "=")
 		if !hasSep {
 			continue
@@ -429,7 +429,7 @@ func recordWake(rearm string, report mailReport) {
 	if _, prev, found := readRearm(rearm); found && prev < wakeChainMax() {
 		chain = prev + 1
 	}
-	_ = os.WriteFile(rearm, []byte(fmt.Sprintf("pending=%d\nchain=%d\n", report.Count, chain)), 0o600)
+	_ = os.WriteFile(rearm, fmt.Appendf(nil, "pending=%d\nchain=%d\n", report.Count, chain), 0o600)
 }
 
 // wakeLock is the single-instance guard. Repeated turns must not stack

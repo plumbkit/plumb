@@ -135,8 +135,8 @@ func redactURLUserinfo(s string) string {
 }
 
 func topSection(key string) string {
-	if i := strings.IndexByte(key, '.'); i >= 0 {
-		return key[:i]
+	if before, _, ok := strings.Cut(key, "."); ok {
+		return before
 	}
 	return key
 }

@@ -66,10 +66,7 @@ func (e *DiagWaitEstimator) window(ceiling time.Duration) time.Duration {
 	if e.count == 0 {
 		return ceiling
 	}
-	w := diagWaitK * e.ewma
-	if w < diagWaitFloor {
-		w = diagWaitFloor
-	}
+	w := max(diagWaitK*e.ewma, diagWaitFloor)
 	if w > ceiling {
 		w = ceiling
 	}

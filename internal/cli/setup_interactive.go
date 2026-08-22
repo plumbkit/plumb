@@ -259,7 +259,8 @@ func renderSetupPicker(m setupPickerModel) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(tui.ItemStyle.Render("Select clients — space toggles, enter applies.") + "\n\n")
+	b.WriteString(tui.ItemStyle.Render("Select clients — space toggles, enter applies."))
+	b.WriteString("\n\n")
 	for i, r := range m.rows {
 		cursor := "  "
 		if i == m.cursor {
@@ -287,8 +288,17 @@ func renderSetupPicker(m setupPickerModel) string {
 		if i == m.cursor {
 			name = tui.SelectedStyle.Render(r.target.name)
 		}
-		b.WriteString("  " + cursor + checkbox + " " + render.PadRight(name, nameW) + "  " + tag + "\n")
+		b.WriteString("  ")
+		b.WriteString(cursor)
+		b.WriteString(checkbox)
+		b.WriteString(" ")
+		b.WriteString(render.PadRight(name, nameW))
+		b.WriteString("  ")
+		b.WriteString(tag)
+		b.WriteString("\n")
 	}
-	b.WriteString("\n" + tui.HintStyle.Render("  space toggle · a register all · enter apply · q quit") + "\n\n")
+	b.WriteString("\n")
+	b.WriteString(tui.HintStyle.Render("  space toggle · a register all · enter apply · q quit"))
+	b.WriteString("\n\n")
 	return b.String()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -274,9 +275,7 @@ func (inv *Invalidator) AllDiagnosticTimes() map[string]time.Time {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
 	out := make(map[string]time.Time, len(inv.diagTimes)+len(inv.pullTimes))
-	for k, v := range inv.diagTimes {
-		out[k] = v
-	}
+	maps.Copy(out, inv.diagTimes)
 	for k, v := range inv.pullTimes {
 		if cur, ok := out[k]; !ok || v.After(cur) {
 			out[k] = v

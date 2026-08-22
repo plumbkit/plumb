@@ -186,8 +186,7 @@ func gitFailureDetails(sub string, runErr error, truncated bool) []toolerror.Opt
 // gitExitCode reports the git child's exit code when it ran to completion, and
 // ok=false when there was none (a start failure or a cancellation).
 func gitExitCode(err error) (int, bool) {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return ee.ExitCode(), true
 	}
 	return 0, false

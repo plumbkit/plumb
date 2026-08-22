@@ -58,8 +58,7 @@ func TestCheckBoundary_UnattachedRefuses(t *testing.T) {
 			if err == nil {
 				t.Fatalf("checkBoundary(%q) allowed the path on an unattached session; it must fail closed", c.path)
 			}
-			var unattached tools.UnattachedWorkspaceError
-			if !errors.As(err, &unattached) {
+			if _, ok := errors.AsType[tools.UnattachedWorkspaceError](err); !ok {
 				t.Fatalf("checkBoundary(%q) = %v, want UnattachedWorkspaceError", c.path, err)
 			}
 			if !tools.IsWorkspaceBoundaryError(err) {
@@ -123,8 +122,7 @@ func TestCheckBoundary_AttachedAllowsInsideRefusesOutside(t *testing.T) {
 	if err == nil {
 		t.Fatal("write outside the workspace allowed")
 	}
-	var boundary tools.WorkspaceBoundaryError
-	if !errors.As(err, &boundary) {
+	if _, ok := errors.AsType[tools.WorkspaceBoundaryError](err); !ok {
 		t.Errorf("outside-workspace error = %v, want WorkspaceBoundaryError", err)
 	}
 }

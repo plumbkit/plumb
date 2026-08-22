@@ -256,7 +256,7 @@ func globReachesDir(g, rel string) bool {
 // location. A mixed result ("../sibling") means repoRoot sits outside the
 // workspace tree entirely, not above it.
 func pureAncestorRel(rel string) bool {
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if part != ".." {
 			return false
 		}

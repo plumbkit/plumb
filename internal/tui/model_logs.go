@@ -232,9 +232,12 @@ func (m Model) renderLogsSection() string {
 	logoW := lipgloss.Width(logoLines[0])
 	menu := m.renderTopMenu(m.width-logoW, isOverlay)
 	for i := range 3 {
-		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+		sb.WriteString(menu[i])
+		sb.WriteString(sepStyle.Render(logoLines[i]))
+		sb.WriteString("\n")
 	}
-	sb.WriteString(m.renderTopBorderLogs(isOverlay) + "\n")
+	sb.WriteString(m.renderTopBorderLogs(isOverlay))
+	sb.WriteString("\n")
 
 	// Body: filtered log entries with scroll.
 	filtered := m.filteredLogEntries()
@@ -253,12 +256,15 @@ func (m Model) renderLogsSection() string {
 			e := visible[i]
 			entry = &e
 		}
-		sb.WriteString(m.renderLogBodyLine(entry, innerW, scroll+i == selectedIdx, isOverlay, rBar) + "\n")
+		sb.WriteString(m.renderLogBodyLine(entry, innerW, scroll+i == selectedIdx, isOverlay, rBar))
+		sb.WriteString("\n")
 	}
 
 	// In-frame status bar and bottom border.
-	sb.WriteString(m.renderLogStatusBar(filtered, innerW, isOverlay) + "\n")
-	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
+	sb.WriteString(m.renderLogStatusBar(filtered, innerW, isOverlay))
+	sb.WriteString("\n")
+	sb.WriteString(sepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
 	final := sb.String()

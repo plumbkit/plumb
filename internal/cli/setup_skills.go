@@ -394,7 +394,7 @@ func parseSkillMarker(line string) (string, bool) {
 // skillMarkerVersion returns the version recorded by the first provenance
 // marker in data, if one is present.
 func skillMarkerVersion(data string) (string, bool) {
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		if v, ok := parseSkillMarker(line); ok {
 			return v, true
 		}

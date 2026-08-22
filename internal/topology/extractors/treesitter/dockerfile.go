@@ -120,7 +120,7 @@ func (w *dockerWalk) addArg(n *tsg.Node, stage int64) {
 // addVar records an ENV/ARG binding. A `NAME=value` token is split on the first
 // `=` so only the name is indexed; the binding is linked to its stage.
 func (w *dockerWalk) addVar(n *tsg.Node, raw string, stage int64) {
-	name := strings.SplitN(raw, "=", 2)[0]
+	name, _, _ := strings.Cut(raw, "=")
 	if name == "" {
 		return
 	}

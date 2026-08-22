@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -226,9 +227,7 @@ func TestToolVisible_BootstrapAlwaysVisible(t *testing.T) {
 		delete(tools.LeanTools, name)
 	}
 	defer func() {
-		for name, v := range saved {
-			tools.LeanTools[name] = v
-		}
+		maps.Copy(tools.LeanTools, saved)
 	}()
 	for _, name := range bootstrapNames {
 		if !s.toolVisible(name) {
@@ -290,7 +289,7 @@ func TestToolProfileClassification(t *testing.T) {
 		t.Fatal("could not locate registerAllTools in conn_register.go")
 	}
 	registered := map[string]bool{}
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "srv.Register(tools.New") {
 			continue

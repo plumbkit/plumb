@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -87,9 +88,7 @@ func saveSkillManifest(skillsDir string, m *skillManifest) error {
 // shipped hash.
 func cloneSkillManifest(m *skillManifest) *skillManifest {
 	out := &skillManifest{Skills: make(map[string]skillManifestEntry, len(m.Skills))}
-	for k, v := range m.Skills {
-		out.Skills[k] = v
-	}
+	maps.Copy(out.Skills, m.Skills)
 	return out
 }
 

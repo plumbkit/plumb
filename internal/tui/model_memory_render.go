@@ -41,9 +41,11 @@ func clampWidth(v, lo, hi int) int { return min(max(v, lo), hi) }
 func (m Model) renderMemoryPanels(bodyHeight int, isOverlay bool) string {
 	wsW, memW, detW := m.memoryColumnWidths()
 	var sb strings.Builder
-	sb.WriteString(m.renderMemoryBorder("╭", "╮", "┬", wsW, memW, detW, isOverlay, true) + "\n")
+	sb.WriteString(m.renderMemoryBorder("╭", "╮", "┬", wsW, memW, detW, isOverlay, true))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMemoryBody(wsW, memW, detW, bodyHeight, isOverlay))
-	sb.WriteString(m.renderMemoryBorder("╰", "╯", "┴", wsW, memW, detW, isOverlay, false) + "\n")
+	sb.WriteString(m.renderMemoryBorder("╰", "╯", "┴", wsW, memW, detW, isOverlay, false))
+	sb.WriteString("\n")
 	return sb.String()
 }
 
@@ -116,7 +118,8 @@ func (m Model) renderMemoryBody(wsW, memW, detW, bodyHeight int, isOverlay bool)
 			midDiv = memBar[i]
 		}
 		cells := memRowCells{ws: ws, mem: mem, det: det, leftBar: wsB, midBar: midDiv, rightBar: detB}
-		sb.WriteString(assembleMemoryRow(cells, wsW, memW, detW, isOverlay) + "\n")
+		sb.WriteString(assembleMemoryRow(cells, wsW, memW, detW, isOverlay))
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

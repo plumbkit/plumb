@@ -190,11 +190,11 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 	// Column, not byte offset: the markers and branch glyphs are multi-byte
 	// runes, and the layout arithmetic is in visible columns.
 	col := func(line, sub string) int {
-		i := strings.Index(line, sub)
-		if i < 0 {
+		before, _, ok := strings.Cut(line, sub)
+		if !ok {
 			return -1
 		}
-		return len([]rune(line[:i]))
+		return len([]rune(before))
 	}
 
 	t.Run("a clean branch aligns with the parent's columns", func(t *testing.T) {

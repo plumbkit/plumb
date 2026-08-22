@@ -205,8 +205,7 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			msg := strings.TrimSpace(string(exitErr.Stderr))
 			if msg == "" {
 				msg = err.Error()
@@ -245,7 +244,7 @@ func (t *MinimalDiffReview) untrackedDiffs(ctx context.Context, repoRoot, ws str
 		return ""
 	}
 	var sb strings.Builder
-	for _, rel := range strings.Split(string(out), "\x00") {
+	for rel := range strings.SplitSeq(string(out), "\x00") {
 		if rel == "" || sb.Len() >= budget {
 			break
 		}
@@ -284,7 +283,9 @@ func synthesiseNewFileDiff(repoRoot, rel string) string {
 	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	fmt.Fprintf(&sb, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, ln := range lines {
-		sb.WriteString("+" + ln + "\n")
+		sb.WriteString("+")
+		sb.WriteString(ln)
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

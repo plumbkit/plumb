@@ -67,10 +67,7 @@ func (m Model) setNumber(it settingItem, dir int) Model {
 	if it.key == skTopoMaxFileSize { // the only int64 field
 		var cur int64
 		_, _ = fmt.Sscanf(it.value, "%d", &cur)
-		n := cur + int64(dir*step)
-		if n < 0 {
-			n = 0
-		}
+		n := max(cur+int64(dir*step), 0)
 		if m.applyScopedSetting(it.key, n, func(c *config.Config) { c.Topology.MaxFileSizeBytes = n }) {
 			m.settingsStatus = m.scopedStatus(it.key, fmt.Sprintf("%s → %d", label, n))
 		}
@@ -80,10 +77,7 @@ func (m Model) setNumber(it settingItem, dir int) Model {
 	if it.value != "off" { // rate limit renders 0 as "off"
 		_, _ = fmt.Sscanf(it.value, "%d", &cur)
 	}
-	n := cur + dir*step
-	if n < 0 {
-		n = 0
-	}
+	n := max(cur+dir*step, 0)
 	apply := func(c *config.Config) {
 		if p := intField(c, it.key); p != nil {
 			*p = n

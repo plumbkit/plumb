@@ -67,8 +67,7 @@ func TestDocumentSymbolDecodeErrorLabel(t *testing.T) {
 		t.Fatalf("error = %q, want prefix %q", err.Error(), want)
 	}
 	// encoding/json's message wording is not plumb's to pin; the unwrap is.
-	var typeErr *json.UnmarshalTypeError
-	if !errors.As(err, &typeErr) {
+	if _, ok := errors.AsType[*json.UnmarshalTypeError](err); !ok {
 		t.Fatalf("error %q does not unwrap to the decode cause — the %%w wrapping was lost", err)
 	}
 }
