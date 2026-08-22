@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 func TestLogicalAgentStateRefuse(t *testing.T) {
@@ -57,5 +59,26 @@ func TestRefuseSharedStateChange(t *testing.T) {
 	s2.recordLogicalAgentCall("only")
 	if err := s2.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
 		t.Fatalf("a single-agent connection must not refuse an anonymous write: %v", err)
+	}
+}
+
+// TestDeclaredAgentCtx pins the precedence between session_start's own identity
+// channel and the per-call _meta one. session_id is the only channel a client
+// that cannot inject _meta has, so it must reach the ctx; but _meta is asserted
+// per call rather than per attach, so where both are present _meta wins and a
+// stale or reused session_id can never re-label a call.
+func TestDeclaredAgentCtx(t *testing.T) {
+	s := &connSession{}
+	if got := mcp.LogicalAgentFromCtx(s.declaredAgentCtx(context.Background(), "sub-1")); got != "sub-1" {
+		t.Errorf("declared session_id = %q on the ctx, want %q", got, "sub-1")
+	}
+	// An empty declaration adds nothing.
+	if got := mcp.LogicalAgentFromCtx(s.declaredAgentCtx(context.Background(), "")); got != "" {
+		t.Errorf("empty session_id put %q on the ctx, want none", got)
+	}
+	// A per-call _meta identity outranks the declaration.
+	withMeta := mcp.WithLogicalAgent(context.Background(), "meta-agent")
+	if got := mcp.LogicalAgentFromCtx(s.declaredAgentCtx(withMeta, "sub-1")); got != "meta-agent" {
+		t.Errorf("logical agent = %q, want the per-call _meta identity %q", got, "meta-agent")
 	}
 }

@@ -7,6 +7,31 @@
      right section — check which heading it landed under. CI checks it for you
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
+### Fixed
+
+- **A subagent's `session_start` no longer drags every peer agent's workspace with it
+  (issue #182, PLAN-375).** `session_start` resolved the workspace — including the
+  re-pin — *before* it resolved the caller's identity, so the one call a multiplexed
+  subagent actually makes first (`{workspace, session_id}`: identity and workspace
+  together) ran unattributed at the exact moment the daemon decided whose pin to move.
+  PLAN-286's per-agent shards were in place but unreachable on that path: `repinShard`
+  needs a logical-agent identity on the request ctx, a multiplexing client cannot supply
+  one (Claude Code's per-call `_meta` carries a tool-use id and a progress token, nothing
+  agent-scoped), and the attach-time `session_id` was recorded a few statements too late
+  to help. The re-pin therefore landed on the CONNECTION: a subagent switching to a
+  submodule or worktree moved the coordinator and every sibling with it, and a
+  `force: true` retry moved them silently. `session_start` now settles identity first and
+  hands the re-pin a ctx carrying the declared `session_id` (new `WithDeclaredAgent`
+  channel, wired to `connSession.declaredAgentCtx`), so a subagent's re-pin moves its own
+  shard and nothing else; a per-call `_meta` identity still outranks the declaration.
+  The cross-workspace re-pin stays REFUSED with the remedy named, and refusing it no
+  longer flags the shared connection blocked. New acceptance harness
+  `TestMultiAgentPin` (`-tags=integration`) runs a coordinator plus five concurrent
+  subagents over one connection — mixed argument shapes, one cross-workspace drifter —
+  and asserts zero refusals for the legitimate calls, per-agent write attribution, and
+  the connection pin never moving. `internal/tools/session_start.go`,
+  `internal/cli/conn_logical_agent.go`.
+
 ### Added
 
 - **`plumb stats --health`: three standing health metrics (PLAN-368).** A new,

@@ -96,6 +96,27 @@ func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent
 // recordLogicalAgentCall records a per-call tools/call._meta identity.
 func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id, false) }
 
+// declaredAgentCtx is the third identity channel: the `session_id` a caller
+// declares INSIDE session_start, promoted to this call's logical-agent identity.
+//
+// The two channels above arrive before the tool runs — _meta is parsed at
+// dispatch, and an attach-time session_id from a PREVIOUS call is already
+// recorded. Neither covers the case the field actually produces: a subagent
+// whose first contact declares its identity and names its workspace in one call,
+// over a client that cannot inject a per-call _meta. Without an identity on that
+// call's ctx, repinShard declines it and the re-pin runs on the CONNECTION,
+// moving every peer agent's workspace with it (issue #182). Attributing it to
+// the id the caller just declared keeps the move on that agent's own shard.
+//
+// A per-call _meta identity, being the stronger channel (it is asserted per
+// call rather than per attach), always wins.
+func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.Context {
+	if id == "" || mcp.LogicalAgentFromCtx(ctx) != "" {
+		return ctx
+	}
+	return mcp.WithLogicalAgent(ctx, id)
+}
+
 // recordLogicalAgent is the single choke point every identity channel feeds
 // (session_id at attach, _meta per call), so the shared-connection detection
 // sees one consistent view regardless of how the ID arrived. The first time the
