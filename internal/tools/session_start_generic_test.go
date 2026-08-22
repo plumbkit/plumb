@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func TestGenericGuidance_CoversEveryClientWithNoBespokeBlock(t *testing.T) {
 	// no-client cases: an empty clientInfo.name and one plumb does not know.
 	fallsThrough := []string{
 		"codex", "gemini", "cursor", "augment", "qwen",
-		"antigravity", "antigravity-desktop", "opencode", "crush", "goose", "hermes", "dsh",
+		"antigravity", "antigravity-desktop", "opencode", "crush", "goose", "hermes", "dsh", "zcode",
 		"", "some-agent-nobody-has-heard-of",
 	}
 	for _, name := range fallsThrough {
@@ -192,6 +193,30 @@ func TestGenericGuidance_AllowlistClientStillGetsRouting(t *testing.T) {
 		if !strings.Contains(noMap, want) {
 			t.Errorf("topology-off guidance dropped %q:\n%s", want, noMap)
 		}
+	}
+}
+
+// TestGenericGuidance_AllowlistBannerTruthful is the PLAN-369 fix for the
+// defect profile.go's ProfileNote doc comment used to admit by name: a
+// ClientSideAllowlist client (Kimi Code, Codex, Gemini CLI) was told "full"
+// with no caveat at all, even though `plumb setup <client> --lean` may have
+// filtered its actually-loaded tools down to the lean set behind plumb's back.
+// The banner must now name that possibility and the real lean count, and point
+// at the one command that can actually confirm it. A non-allowlist client
+// (cursor) must get neither sentence — the caveat is conditional, not global.
+func TestGenericGuidance_AllowlistBannerTruthful(t *testing.T) {
+	for _, client := range allowlistClients {
+		out := genericGuidance(client, "full", true)
+		if !strings.Contains(out, "plumb doctor") {
+			t.Errorf("%s: banner does not point at `plumb doctor` to check the client-side filter:\n%s", client, out)
+		}
+		wantCount := fmt.Sprintf("%d lean tools", len(LeanToolNames()))
+		if !strings.Contains(out, wantCount) {
+			t.Errorf("%s: banner does not name the real lean count %q:\n%s", client, wantCount, out)
+		}
+	}
+	if out := genericGuidance("cursor", "full", true); strings.Contains(out, "plumb doctor") {
+		t.Errorf("cursor has no client-side allowlist — the caveat must not appear:\n%s", out)
 	}
 }
 
