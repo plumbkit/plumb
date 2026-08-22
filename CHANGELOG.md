@@ -56,6 +56,115 @@
   not landed, so the "confirm with `find_references`" caveat stays. No mechanism changes
   (PLAN-365 owns `plumb skills sync`); a version-stamped manifest update happens automatically on
   the next sync, keyed off each file's content hash.
+- **`run_task` no longer has a closed slot vocabulary — a project can name its
+  own.** The five slots (`build`/`lint`/`test`/`e2e`/`verify`) are Go's verbs, and
+  they were enforced as a JSON-schema `enum` plus a hardcoded set in the tool. A
+  project whose toolchain calls its verb something else — `pnpm check`,
+  `typecheck`, `audit` — could not reach `run_task` at all, and fell back to raw
+  shell for it, losing the no-shell argv contract and the trust gate along with
+  it. Any extra slot named under `[tasks.<lang>]` is now runnable:
+
+  ```toml
+  [tasks.typescript]
+  build = "pnpm build"
+  check = "pnpm check"     # runs via run_task {slot: "check"}
+  ```
+
+  Extras are **trust-gated exactly like a built-in** — the trust hash already
+  bound every `(lang, slot, command)` triple regardless of slot name, so a cloned
+  repository shipping one is still refused until `plumb trust` — and are **not
+  agent-writable**, since the `agent_config` allowlist is keyed by registry field
+  and an extra has no registry entry (fail closed). They are validated on the same
+  terms too: a command carrying a shell metacharacter is rejected at load, as is a
+  malformed slot name or one shadowing a built-in.
+
+  The slot `enum` is gone from the `run_task` and `mutation_test` schemas, because
+  a client enforces an enum on its side and an open vocabulary cannot coexist with
+  one. What replaces it is the refusal: an unconfigured slot now reports the slots
+  that *do* have a command, including the project's own.
+
+### Changed
+
+- **The shipped `typescript` task defaults now name the package manager the
+  workspace declares.** `npm run build` / `npm test` were assumed for every JS/TS
+  workspace, which is itself a guess — and on a pnpm or yarn project a wrong one
+  rather than merely an unhelpful one, since npm cannot resolve pnpm's non-flat
+  `node_modules` or a `workspace:*` dependency. A `pnpm-lock.yaml`, `yarn.lock` or
+  `bun.lock*` now selects that runner, and a corepack `"packageManager"` field in
+  `package.json` beats a lockfile (an explicit statement over a possible
+  leftover); for the same reason a non-npm lockfile beats `package-lock.json`,
+  which is the usual residue of a migration.
+
+  This applies the "never guess a tool that may not be installed" rule rather than
+  relaxing it: a lockfile is the project *stating* its runner, so reading it is
+  evidence. Only a slot still holding the shipped default is rewritten, compared
+  byte for byte — anything you, your global config or the project set is left
+  exactly as written, including a command that names npm deliberately. Note
+  `bun run test` rather than `bun test`: the latter runs bun's own test runner
+  instead of the project's `test` script.
+
+- **`plumb task <slot>` reaches a slot the project defined.** The five built-in
+  verbs (`plumb build`, `plumb test`, …) are registered before any workspace is
+  resolved, so a project-defined slot cannot have a verb of its own. One generic
+  verb avoids dynamic registration entirely and runs through the same resolver and
+  trust gate; it works for the built-ins too. A bare `plumb task` lists the slots
+  configured for the workspace, and an unconfigured slot is now refused with that
+  list rather than a bare "no X command configured".
+
+### Fixed
+
+- **A rejected parameter no longer gets suggested its own opposite.**
+  `search_in_files` declares both `glob` (the include filter) and `exclude`, and
+  `include` is nearer to `exclude` by edit distance than to anything else — so
+  `search_in_files({include: "*.go"})` was rejected with `did you mean
+  "exclude"?`. An agent taking that advice searches with the inverse filter and
+  gets a confidently wrong answer instead of an error. 12 such calls in the stats
+  DB. The alias table's stated rule — never a semantic flip, `include` ≠
+  `exclude` — was enforced on the two paths that *rewrite* a call and missing on
+  the path that *advises* one. `closest` now skips a candidate whose meaning
+  inverts the key's and offers the next-nearest instead, matching antonyms as
+  whole tokens so `append` is not read as containing `end`.
+
+- **Seven parameter spellings agents actually send now resolve instead of being
+  rejected**, mined from 296 unknown-parameter rejections in the stats DB:
+  `symbol_name` and `name_path` → `name` (`read_symbol`; 43 calls, the largest
+  single group — `get_definition` and `find_references` call the same thing
+  `symbol_name`, so an agent moving between them sends the other tool's
+  spelling), `memory_name` → `name`, `include` → `glob`, `max_results` → `limit`
+  (the reciprocal of an existing row), `line_end`/`line_start` → `end_line`/
+  `start_line`, and `op` → `subcommand`. Each carries the caller's value to the
+  canonical, so none of them drops anything.
+
+  Deliberately **not** added: `column` → `character`. It is a real spelling (3
+  calls) but `character` is *required* on `explain_symbol` and `type_hierarchy`,
+  and every alias target is dropped from the published `required` list so a
+  pre-validating host cannot reject the alias before it reaches plumb. Three
+  calls does not buy weakening that signal on two other tools.
+
+- **`minimal_diff_review` no longer lets one generated file decide which files
+  get reviewed.** The 1 MiB budget was spent as a byte *prefix* of the whole
+  diff. git emits a diff in path order, so a bundle sorting early (`dist/` before
+  `src/`) consumed all of it: every later file was cut, the cut could land
+  mid-hunk, and the report said only that a byte count had been exceeded — never
+  which files it had therefore not looked at. On a pnpm project with a committed
+  bundle the tool would report `1 file(s) reviewed` and `findings: none` for a
+  change it had never seen, which reads exactly like a clean bill of health.
+
+  The budget is now spent **per file** (128 KiB, the cap the untracked path
+  already used "so one large generated file cannot dominate the review budget"),
+  an over-budget file is dropped **whole** rather than sliced mid-hunk, and the
+  files left out are **named with their sizes**. The 1 MiB total remains as a
+  backstop and is likewise spent in whole files. No path is guessed to be
+  "generated" — the bias is removed without the tool having to decide what a
+  project considers generated.
+
+- **`topology_explore` and `topology_search` now lead with their own narrowing
+  knobs.** Both already accepted them (`include_source`, `depth`, `max_nodes`,
+  `max_bytes`; `kinds`, `limit`, `include_snippets`), but the descriptions
+  buried them under the per-parameter schema text, and the defaults are tuned for
+  Go-sized files — so on a large TypeScript file an agent got a large response
+  and no hint that a smaller one was one argument away. `session_start` guidance
+  says the same thing.
 
 ## 0.17.1 (2026-08-22)
 
@@ -439,33 +548,6 @@
   (byte budget under realistic load, full render unchanged, auto-brief on a
   repeat `session_id`, first-contact stays full, explicit `detail` overrides
   either default).
-- **`run_task` no longer has a closed slot vocabulary — a project can name its
-  own.** The five slots (`build`/`lint`/`test`/`e2e`/`verify`) are Go's verbs, and
-  they were enforced as a JSON-schema `enum` plus a hardcoded set in the tool. A
-  project whose toolchain calls its verb something else — `pnpm check`,
-  `typecheck`, `audit` — could not reach `run_task` at all, and fell back to raw
-  shell for it, losing the no-shell argv contract and the trust gate along with
-  it. Any extra slot named under `[tasks.<lang>]` is now runnable:
-
-  ```toml
-  [tasks.typescript]
-  build = "pnpm build"
-  check = "pnpm check"     # runs via run_task {slot: "check"}
-  ```
-
-  Extras are **trust-gated exactly like a built-in** — the trust hash already
-  bound every `(lang, slot, command)` triple regardless of slot name, so a cloned
-  repository shipping one is still refused until `plumb trust` — and are **not
-  agent-writable**, since the `agent_config` allowlist is keyed by registry field
-  and an extra has no registry entry (fail closed). They are validated on the same
-  terms too: a command carrying a shell metacharacter is rejected at load, as is a
-  malformed slot name or one shadowing a built-in.
-
-  The slot `enum` is gone from the `run_task` and `mutation_test` schemas, because
-  a client enforces an enum on its side and an open vocabulary cannot coexist with
-  one. What replaces it is the refusal: an unconfigured slot now reports the slots
-  that *do* have a command, including the project's own.
-
 - **`edit_file` rejections now carry enough information for a one-call retry (worth-it W1-4).** Three targeted improvements, all suggestion-only — nothing is ever auto-applied, and the exactly-once `old_string` contract is unchanged. **(1) Multi-line `old_string` not found:** when `old_string` is 3+ lines, the rejection now runs a bounded fuzzy locate (whitespace-normalised line-window scoring, capped candidate scan — never O(n²) over a large file) and, when a sufficiently similar region exists, names the exact `lines N–M` and similarity plus a ready-to-use RANGE-mode suggestion: `{"start_line": N, "end_line": M, "new_string": ...}` — no old_string re-escaping needed. When nothing is similar enough it falls back to a generic RANGE-mode pointer instead of computed numbers. **(2) `expected_mtime`/`expected_sha` mismatch ("modified since you read it"):** the rejection now always inlines the CURRENT mtime **and** sha256, regardless of which guard was supplied, so a caller that only sent `expected_mtime` no longer needs a follow-up `read_file` just to learn the current hash; the existing `reconcile: true` escape hatch for an all-anchor-based batch is unchanged. **(3) Schema-shape rejections:** an unknown parameter that IS declared, just nested at the wrong level (e.g. `replace_all` sent at the top level instead of inside each `edits[]` item), now names the correct placement with a minimal valid JSON example instead of a bare "unknown parameter". An exact nested-name match outranks a fuzzy top-level "did you mean" suggestion, and the generated example pairs `old_string`+`new_string` whenever the child schema declares both, not just its `required` fields — otherwise the example for `replace_all` would itself be a shape `edit_file` rejects. New: `unknownDetail`/`placementHint`/`minimalNestedExample`/`nestedExampleFields` (`internal/mcp/argplacement.go`), `currentShaLine` (`internal/tools/write_guards.go`), `rangeModeHint`/`genericRangeModeHint` (`internal/tools/edit_file_closest.go`). Guarded by `TestEditFileRejection` (`internal/tools/edit_file_rejection_test.go`), new `TestResolveArgs` cases (ordering + valid-example round-trip), and `TestToolsCall_RealSchema_PlacementHintExampleRoundTrips` (`internal/mcp/argalias_realschema_test.go`), which replays the emitted example's own field list back through the real `edit_file` tool.
 ### Changed
 
@@ -589,32 +671,6 @@
   drifted, reporting the cache dir as the runtime dir.
 
 - **Position-argument failures killed: `symbol_name` primary everywhere, snap never errors (worth-it W2-9, PLAN-363).** Informed by a 90-day DB autopsy of real tool-call failures (PLAN-359): `explain_symbol` and `type_hierarchy` were the two remaining position-only LSP query tools — every other query/edit tool already preferred `symbol_name` (PR #160). Both now accept `symbol_name` (PREFERRED — resolves via the document-symbol tree, avoiding hand-computed off-by-one coordinates), and a raw `line`/`character` that misses an identifier snaps once to the enclosing symbol instead of terminally erroring "no identifier found" — the same snap contract `get_definition`/`find_references`/`call_hierarchy` already had. A `symbol_name` matching several symbols renders every match in turn rather than guessing or bare-erroring (never auto-pick among ambiguous candidates). `rename_symbol`'s ambiguous-name error — previously "N symbols named X; use line/character to disambiguate," with no way to act on it without falling back to raw coordinates — now returns copy-pasteable `symbol_name` candidates (`Recv.Method` for gopls' flat method form, `Parent.Child` for nested symbols) — but only when a live `resolveSymbolsByName` call PROVES the candidate resolves back to exactly that one symbol; a match with no such proven name gets an explicit `line`/`character` retry hint instead, never a fabricated name (review round 1 caught two ways a plausible-looking candidate could fail to round-trip): `disambiguatedNames`/`provenSymbolName` (`internal/tools/symbol_resolve.go`). New cross-tool adapter hardening: `get_definition`, `find_references`, `rename_symbol`, `explain_symbol`, and `type_hierarchy` (five tools — the last two picked it up incidentally, wired into the same `Hover`/`PrepareTypeHierarchy` call sites touched for item 1/2 above) now retry once, after a short bounded delay, on the specific sourcekit-lsp "No language service for" / "Failed to find snapshot for" rejections the autopsy found behind 83%/36%/50% of `get_definition`/`find_references`/`rename_symbol`'s respective failures — a narrow build-graph-indexing race distinct from the daemon-level "still warming" signal, which reports the LSP connection ready while sourcekit-lsp's own per-document state has not caught up with a just-sent `didOpen`. `call_hierarchy` deliberately does NOT have it yet — it was not touched for this retry (its `PrepareCallHierarchy` call site is unchanged); a follow-up could add it for consistency. New: `retryOnServerNotReady`/`isServerNotReadyErr` (`internal/tools/lsp_retry.go`); the four query tools' `Execute` (`get_definition`, `explain_symbol`, `call_hierarchy`, `type_hierarchy`) now share one `executeLSPQuery` dispatch skeleton (`internal/tools/lsp_snap.go`) instead of reimplementing the symbol_name/position branch. **Deviation from the autopsy:** its "confirmed `replace_symbol_body` range-computation bug" (item 4) — re-verified against a scratch, read-only copy of `stats.db` — turned out to be already fixed: all 12 all-time `edit end position out of range` failures date to 2026-05-17, and commit `878c960e` (2026-07-07, "notify+invalidate on semantic edits, clamp end-past-EOF") already fixes exactly this defect, well before this branch's base. No code change was needed for item 4; the existing `TestApplyTextEdits_ClampEndPastEOF`/`TestReplaceSymbolBody_NotifiesLSPAndInvalidatesCache` coverage stands. Guarded by `TestExplainSymbol_ByName*`/`TestExplainSymbol_Snap*` (`internal/tools/explain_symbol_snap_test.go`), `TestTypeHierarchy_ByName*`/`TestTypeHierarchy_Snap*` (`internal/tools/type_hierarchy_snap_test.go`), `TestDisambiguatedNames_*` (`internal/tools/symbol_resolve_disambiguate_test.go`), and `TestRetryOnServerNotReady_*`/`TestIsServerNotReadyErr_*`/`TestGetDefinition_RetriesOnceOnServerNotReady`/`TestFindReferences_RetriesOnceOnServerNotReady`/`TestRenameSymbol_RetriesOnceOnServerNotReady` (`internal/tools/lsp_retry_test.go`, `internal/tools/lsp_retry_wiring_test.go`). The rename_symbol re-pin into `PinnedTools` (PLAN-355) is deliberately NOT included here — the card's closing criterion needs 2 weeks of `plumb stats --failures` dogfood data first.
-- **The shipped `typescript` task defaults now name the package manager the
-  workspace declares.** `npm run build` / `npm test` were assumed for every JS/TS
-  workspace, which is itself a guess — and on a pnpm or yarn project a wrong one
-  rather than merely an unhelpful one, since npm cannot resolve pnpm's non-flat
-  `node_modules` or a `workspace:*` dependency. A `pnpm-lock.yaml`, `yarn.lock` or
-  `bun.lock*` now selects that runner, and a corepack `"packageManager"` field in
-  `package.json` beats a lockfile (an explicit statement over a possible
-  leftover); for the same reason a non-npm lockfile beats `package-lock.json`,
-  which is the usual residue of a migration.
-
-  This applies the "never guess a tool that may not be installed" rule rather than
-  relaxing it: a lockfile is the project *stating* its runner, so reading it is
-  evidence. Only a slot still holding the shipped default is rewritten, compared
-  byte for byte — anything you, your global config or the project set is left
-  exactly as written, including a command that names npm deliberately. Note
-  `bun run test` rather than `bun test`: the latter runs bun's own test runner
-  instead of the project's `test` script.
-
-- **`plumb task <slot>` reaches a slot the project defined.** The five built-in
-  verbs (`plumb build`, `plumb test`, …) are registered before any workspace is
-  resolved, so a project-defined slot cannot have a verb of its own. One generic
-  verb avoids dynamic registration entirely and runs through the same resolver and
-  trust gate; it works for the built-ins too. A bare `plumb task` lists the slots
-  configured for the workspace, and an unconfigured slot is now refused with that
-  list rather than a bare "no X command configured".
-
 ### Fixed
 
 - **`topology_routes` description and docs no longer oversell what it does
@@ -724,60 +780,6 @@
   users' clients for exactly this workflow, so the instruction channel was
   actively steering agents away from the handoff the tool had been fixed to
   support. It now shows the two composing directly.
-- **A rejected parameter no longer gets suggested its own opposite.**
-  `search_in_files` declares both `glob` (the include filter) and `exclude`, and
-  `include` is nearer to `exclude` by edit distance than to anything else — so
-  `search_in_files({include: "*.go"})` was rejected with `did you mean
-  "exclude"?`. An agent taking that advice searches with the inverse filter and
-  gets a confidently wrong answer instead of an error. 12 such calls in the stats
-  DB. The alias table's stated rule — never a semantic flip, `include` ≠
-  `exclude` — was enforced on the two paths that *rewrite* a call and missing on
-  the path that *advises* one. `closest` now skips a candidate whose meaning
-  inverts the key's and offers the next-nearest instead, matching antonyms as
-  whole tokens so `append` is not read as containing `end`.
-
-- **Seven parameter spellings agents actually send now resolve instead of being
-  rejected**, mined from 296 unknown-parameter rejections in the stats DB:
-  `symbol_name` and `name_path` → `name` (`read_symbol`; 43 calls, the largest
-  single group — `get_definition` and `find_references` call the same thing
-  `symbol_name`, so an agent moving between them sends the other tool's
-  spelling), `memory_name` → `name`, `include` → `glob`, `max_results` → `limit`
-  (the reciprocal of an existing row), `line_end`/`line_start` → `end_line`/
-  `start_line`, and `op` → `subcommand`. Each carries the caller's value to the
-  canonical, so none of them drops anything.
-
-  Deliberately **not** added: `column` → `character`. It is a real spelling (3
-  calls) but `character` is *required* on `explain_symbol` and `type_hierarchy`,
-  and every alias target is dropped from the published `required` list so a
-  pre-validating host cannot reject the alias before it reaches plumb. Three
-  calls does not buy weakening that signal on two other tools.
-
-- **`minimal_diff_review` no longer lets one generated file decide which files
-  get reviewed.** The 1 MiB budget was spent as a byte *prefix* of the whole
-  diff. git emits a diff in path order, so a bundle sorting early (`dist/` before
-  `src/`) consumed all of it: every later file was cut, the cut could land
-  mid-hunk, and the report said only that a byte count had been exceeded — never
-  which files it had therefore not looked at. On a pnpm project with a committed
-  bundle the tool would report `1 file(s) reviewed` and `findings: none` for a
-  change it had never seen, which reads exactly like a clean bill of health.
-
-  The budget is now spent **per file** (128 KiB, the cap the untracked path
-  already used "so one large generated file cannot dominate the review budget"),
-  an over-budget file is dropped **whole** rather than sliced mid-hunk, and the
-  files left out are **named with their sizes**. The 1 MiB total remains as a
-  backstop and is likewise spent in whole files. No path is guessed to be
-  "generated" — the bias is removed without the tool having to decide what a
-  project considers generated.
-
-- **`topology_explore` and `topology_search` now lead with their own narrowing
-  knobs.** Both already accepted them (`include_source`, `depth`, `max_nodes`,
-  `max_bytes`; `kinds`, `limit`, `include_snippets`), but the descriptions
-  buried them under the per-parameter schema text, and the defaults are tuned for
-  Go-sized files — so on a large TypeScript file an agent got a large response
-  and no hint that a smaller one was one argument away. `session_start` guidance
-  says the same thing.
-
-### Fixed
 
 - **The TUI's `c` copy now works on Wayland, and stops claiming success it
   cannot verify (#9).** `copyTextToClipboard` tried `xclip` and then fell back
