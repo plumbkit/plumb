@@ -1,5 +1,5 @@
 # Changelog
-## 0.17.2 (unreleased)
+## 0.17.2 (2026-08-22)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
@@ -171,7 +171,12 @@
   and no hint that a smaller one was one argument away. `session_start` guidance
   says the same thing.
 
-## 0.17.1 (2026-08-22)
+## 0.17.1 (2026-08-22) — tagged, never published
+
+> The `v0.17.1` tag exists but no release was built from it: `release.yml` gates
+> `goreleaser` and `publish-mcp` on client conformance, which was red at the time
+> (a stale Codex profile-reason expectation, fixed in 0.17.2). Nothing below
+> reached a user as 0.17.1 — it all ships in 0.17.2.
 
 ### Added
 
