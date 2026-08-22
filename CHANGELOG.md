@@ -62,7 +62,11 @@
   caller imposed the deadline — and hands the fallback the live parent context. The
   timeout message, when there is no fallback to reach, now quotes the wait that actually
   happened rather than the full `[lsp_query]` timeout. Behaviour is unchanged for a
-  healthy server, which answers in milliseconds.
+  healthy server, which answers in milliseconds. One narrow trade-off, stated rather
+  than buried: with `[topology] enabled = false` there is no fallback to catch the
+  shortened attempt, so a language server that would have answered between 15s and 30s
+  now errors where it previously succeeded — every language plumb ships an adapter for
+  has topology on by default, and those get a fallback answer sooner instead.
 - **The `integration (macos-latest)` job no longer fails on a cold gopls
   (PLAN-390).** `TestStrictReadRoundTrip/read_symbol` is the only subtest that touches a
   `.go` file, so it is the only LSP-backed call, and `session_start` deliberately does not
