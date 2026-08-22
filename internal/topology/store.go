@@ -267,6 +267,12 @@ func (s *Store) ImpactFrom(ctx context.Context, centre Node, opts ImpactOpts) (*
 	return ImpactFrom(ctx, s.db, centre, opts)
 }
 
+// PackageGraph builds the directory-granularity import graph backing
+// package-level reachability (topology_impact mode="reachability").
+func (s *Store) PackageGraph(ctx context.Context) (*PackageGraph, error) {
+	return LoadPackageGraph(ctx, s.db)
+}
+
 // Status returns a snapshot of the index health.
 func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)

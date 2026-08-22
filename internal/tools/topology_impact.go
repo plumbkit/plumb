@@ -15,7 +15,7 @@ var topologyImpactSchema = json.RawMessage(`{
   "properties": {
     "name": {
       "type": "string",
-      "description": "Symbol name or qualified name to analyse. Must exist in the topology index."
+      "description": "Symbol name or qualified name to analyse. Must exist in the topology index. Required unless mode=\"reachability\"."
     },
     "depth": {
       "type": "integer",
@@ -45,9 +45,26 @@ var topologyImpactSchema = json.RawMessage(`{
     "kind": {
       "type": "string",
       "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
+    },
+    "mode": {
+      "type": "string",
+      "description": "Optional. \"reachability\" switches to PACKAGE-LEVEL reachability from entry points (directory granularity, over 'imports' edges only) instead of the default single-symbol blast-radius analysis. Function-level reachability is not available; see docs/topology.md."
+    },
+    "roots": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "reachability mode only. Root package directories to traverse outward from, or the literal \"main\" for every \"package main\" directory. Omit for the default: every \"package main\" directory PLUS topology_routes entry-point candidates (labelled candidate-seeded, lower confidence)."
+    },
+    "path_to": {
+      "type": "string",
+      "description": "reachability mode only. When set, the response is the single shortest root -> path_to directory chain (or a clear \"no path\" answer) instead of the reachable/unreachable summary."
+    },
+    "layers": {
+      "type": "boolean",
+      "description": "reachability mode only. When true, the response is a package-SCC condensation of the reachable subgraph — topological layers of strongly-connected components, with any component holding more than one package flagged as a cycle — instead of the reachable/unreachable summary."
     }
   },
-  "required": ["name"],
+  "required": [],
   "additionalProperties": false
 }`)
 
@@ -85,6 +102,15 @@ func (*TopologyImpact) Description() string {
 		"the topology call graph is intra-file, so for a function/method the inward section is " +
 		"augmented with a 'cross-file callers' block resolved via the language server (source=lsp) " +
 		"when one is available. " +
+		"mode=\"reachability\" switches to a different question at PACKAGE (directory) granularity: " +
+		"what does this binary/entry-point actually pull in, and what is dead from every entry point. " +
+		"It traverses only 'imports' edges outward from roots (every \"package main\" directory by " +
+		"default, plus topology_routes candidates), and every reachability response opens with " +
+		"'package-level (import edges); function-level unavailable' — the import graph is real and " +
+		"cross-file, but there is no function-level call graph across packages yet. Three shapes: the " +
+		"default (reachable/unreachable package counts and samples), path_to=<dir> (one root->target " +
+		"chain), and layers=true (package-SCC condensation; a component with more than one package IS " +
+		"a reported import cycle). " +
 		"Returns a clear message when topology is disabled or the symbol is not in the index."
 }
 
@@ -96,7 +122,16 @@ type topologyImpactArgs struct {
 	EdgeKinds []string `json:"edge_kinds"`
 	Path      string   `json:"path"`
 	Kind      string   `json:"kind"`
+	Mode      string   `json:"mode"`
+	Roots     []string `json:"roots"`
+	PathTo    string   `json:"path_to"`
+	Layers    bool     `json:"layers"`
 }
+
+// modeReachability selects package-level reachability from entry points
+// instead of the default single-symbol blast-radius analysis. See
+// topology_reachability.go.
+const modeReachability = "reachability"
 
 func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	a, err := parseTopologyImpactArgs(raw)
@@ -109,6 +144,9 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 	store := t.storeFn()
 	if store == nil {
 		return topologyDisabledMessage(), nil
+	}
+	if a.Mode == modeReachability {
+		return t.executeReachability(ctx, store, a)
 	}
 	result, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
@@ -139,6 +177,9 @@ func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
 }
 
 func (a *topologyImpactArgs) validate() error {
+	if a.Mode == modeReachability {
+		return nil // name is not used in reachability mode; roots/path_to/layers stand alone
+	}
 	if a.Name == "" {
 		return errors.New("topology_impact: name is required")
 	}
