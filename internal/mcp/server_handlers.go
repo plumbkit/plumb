@@ -42,7 +42,7 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 	instructions := s.info.Instructions
 	switch instructions {
 	case "":
-		instructions = DefaultInstructions
+		instructions = InstructionsForClient(clientInfoNameFromParams(req.Params))
 	case "-":
 		instructions = ""
 	}

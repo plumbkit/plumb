@@ -1,46 +1,20 @@
 package setup
 
-import (
-	_ "embed"
-	"strings"
-)
+import "github.com/plumbkit/plumb/internal/clienttemplates"
 
-// Per-client managed-block bodies, embedded as data files rather than string
-// constants in code (PLAN-364 PR 2). Each is size-guarded to MaxTemplateLines
-// by TestManagedBlock_ClientTemplateSizeGuard, and each is written so it holds
-// even under a lean/allowlisted client config: `plumb setup gemini --lean` and
-// `plumb setup codex --lean` write a client-side tool allowlist
-// (tools.LeanToolNames — read_file/edit_file/write_file/transaction_apply/
-// run_task/git/session_start, among others) that strips both the peer
-// mailbox (leave_note/check_messages) and every symbol-scoped edit tool
-// (replace_symbol_body, insert_before/after_symbol, ...). Since a template is
-// fixed once written — v1 has no per-invocation "is --lean in force?"
-// branching — the codex and gemini bodies below name ONLY tools inside that
-// allowlist, so the claim holds whether or not --lean was actually passed.
-// claude-code has no --lean flag, so its body is free to name the peer
-// mailbox and the subagent session_start pointer.
-var (
-	//go:embed templates/claude-code.md
-	claudeCodeTemplateRaw string
-	//go:embed templates/codex.md
-	codexTemplateRaw string
-	//go:embed templates/gemini.md
-	geminiTemplateRaw string
-)
-
-// ClientTemplates maps a setup client key (setupTarget.use — "claude-code",
-// "codex", "gemini") to its own managed-block body. A client not present here
-// has no per-client template yet and callers fall back to DefaultTemplate,
-// same as before this map existed.
-var ClientTemplates = map[string]string{
-	"claude-code": strings.TrimRight(claudeCodeTemplateRaw, "\n"),
-	"codex":       strings.TrimRight(codexTemplateRaw, "\n"),
-	"gemini":      strings.TrimRight(geminiTemplateRaw, "\n"),
-}
+// ClientTemplates re-exports internal/clienttemplates.ByClient under setup's
+// established name — kept for API stability (internal/cli and this package's
+// own tests reference it). PLAN-366 relocated the embedded template bodies to
+// internal/clienttemplates (a Foundation-layer package) so internal/mcp can
+// render the SAME per-client body into the MCP initialize `instructions`
+// field without importing this Domain-layer package (internal/arch's layer
+// rule forbids Transport importing Domain). setup remains the place client
+// setup code reaches for these bodies; clienttemplates is the shared source.
+var ClientTemplates = clienttemplates.ByClient
 
 // TemplateForClient returns client's own managed-block body and true, or
-// ("", false) when client has no per-client template registered.
+// ("", false) when client has no per-client template registered. Delegates to
+// internal/clienttemplates.ForClient — see ClientTemplates' doc comment.
 func TemplateForClient(client string) (string, bool) {
-	body, ok := ClientTemplates[client]
-	return body, ok
+	return clienttemplates.ForClient(client)
 }
