@@ -38,10 +38,7 @@ func BenchmarkChatWatchGate_Idle(b *testing.B) {
 	w := &chatWatch{}
 	w.due(keys, n.Gens(keys), time.Now()) // prime the baseline and the backstop
 
-	step := (b.N + benchGateSamples - 1) / benchGateSamples
-	if step < 1 {
-		step = 1
-	}
+	step := max((b.N+benchGateSamples-1)/benchGateSamples, 1)
 	kept := make([]time.Duration, 0, min(b.N, benchGateSamples)+1)
 	fired := 0
 	for i := range b.N {

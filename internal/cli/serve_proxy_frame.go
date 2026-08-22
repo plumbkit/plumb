@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 )
@@ -139,9 +140,7 @@ func injectInitMeta(frame []byte, kv map[string]json.RawMessage) []byte {
 			return frame
 		}
 	}
-	for k, v := range kv {
-		meta[k] = v
-	}
+	maps.Copy(meta, kv)
 	if !encodeInto(meta, params, "_meta") {
 		return frame
 	}

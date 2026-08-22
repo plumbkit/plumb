@@ -107,7 +107,9 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	}
 	sb.WriteString(briefMemoriesLine(ws))
 	if clientHasNativeEditConflict(t.clientNameFn) {
-		sb.WriteString("\n" + strings.TrimRight(nativeEditLaneWarning, "\n") + "\n")
+		sb.WriteString("\n")
+		sb.WriteString(strings.TrimRight(nativeEditLaneWarning, "\n"))
+		sb.WriteString("\n")
 	}
 	t.writeSessionMessages(&sb, ws)
 	sb.WriteString("\n" + briefOrientationFooter)

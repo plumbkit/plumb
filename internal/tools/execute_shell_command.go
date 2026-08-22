@@ -110,10 +110,12 @@ func (t *ExecuteShellCommand) Execute(ctx context.Context, raw json.RawMessage) 
 	}
 	fmt.Fprintf(&b, "$ %s\n", a.Command)
 	if out := strings.TrimSpace(res.Stdout); out != "" {
-		b.WriteString(out + "\n")
+		b.WriteString(out)
+		b.WriteString("\n")
 	}
 	if errOut := strings.TrimSpace(res.Stderr); errOut != "" {
-		b.WriteString(errOut + "\n")
+		b.WriteString(errOut)
+		b.WriteString("\n")
 	}
 	switch {
 	case res.TimedOut:

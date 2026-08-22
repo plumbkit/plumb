@@ -91,10 +91,7 @@ func dryRunDisabled(inputJSON string) bool {
 // the whole table.
 func feedFetchLimit(limit int) int {
 	const factor, floor, ceiling = 5, 50, 250
-	n := limit * factor
-	if n < floor {
-		n = floor
-	}
+	n := max(limit*factor, floor)
 	if n > ceiling {
 		n = ceiling
 	}

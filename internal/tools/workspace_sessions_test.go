@@ -256,7 +256,7 @@ func TestFormatWorkspaceSessions_CommitAttribution(t *testing.T) {
 	// The failed commit stays in the feed — evidence of peer activity — but is
 	// labelled with its subcommand and marked as not applied.
 	failed := ""
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "git commit") && !strings.Contains(line, "[repo:") {
 			failed = line
 		}

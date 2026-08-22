@@ -310,8 +310,8 @@ func (w *xmlWalk) link(parent, child int64) {
 
 // localName strips a namespace prefix: `xs:element` → `element`.
 func localName(tag string) string {
-	if i := strings.IndexByte(tag, ':'); i >= 0 {
-		return tag[i+1:]
+	if _, after, ok := strings.Cut(tag, ":"); ok {
+		return after
 	}
 	return tag
 }

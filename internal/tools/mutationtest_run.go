@@ -336,8 +336,7 @@ func gitCleanliness(ctx context.Context, path string) (inRepo, dirty bool) {
 	cmd.Dir = filepath.Dir(path)
 	out, err := cmd.Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if _, ok := errors.AsType[*exec.ExitError](err); ok {
 			return false, false // not a repository
 		}
 		return false, false // git unusable — treat as no safety net

@@ -166,7 +166,7 @@ func (w *walk) fieldReadonly(m node) bool {
 	if s < 0 || e > len(w.src) || s > e {
 		return false
 	}
-	for _, tok := range strings.Fields(string(w.src[s:e])) {
+	for tok := range strings.FieldsSeq(string(w.src[s:e])) {
 		if tok == "readonly" {
 			return true
 		}

@@ -282,7 +282,7 @@ func goToolBinDirs() []string {
 	}
 	if gopath := os.Getenv("GOPATH"); gopath != "" {
 		// GOPATH may be a list; only the first element receives installs.
-		first := strings.Split(gopath, string(os.PathListSeparator))[0]
+		first, _, _ := strings.Cut(gopath, string(os.PathListSeparator))
 		if first != "" {
 			dirs = append(dirs, filepath.Join(first, "bin"))
 		}

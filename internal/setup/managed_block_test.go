@@ -696,7 +696,7 @@ func TestManagedBlock_QuotedMarkerInProseDoesNotGrowOnRepeatedApply(t *testing.T
 // quoted mid-sentence elsewhere in the file is not counted as a real one.
 func countMarkerLines(content string) int {
 	n := 0
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if strings.HasPrefix(line, "<!-- plumb:managed:start ") && strings.HasSuffix(line, " -->") {
 			n++
 		}

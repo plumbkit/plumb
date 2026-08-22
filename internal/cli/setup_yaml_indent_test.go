@@ -108,10 +108,10 @@ func TestWriteYAML_LeavesForeignLinesUntouched(t *testing.T) {
 	// "    enabled:" contains "  enabled:" as a substring, so a Contains check
 	// passes under exactly the bug this test exists to catch.
 	got := make(map[string]bool)
-	for _, line := range strings.Split(string(after), "\n") {
+	for line := range strings.SplitSeq(string(after), "\n") {
 		got[line] = true
 	}
-	for _, line := range strings.Split(original, "\n") {
+	for line := range strings.SplitSeq(original, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}

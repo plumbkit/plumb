@@ -126,7 +126,9 @@ func (m Model) renderSettingsSection() string {
 	logoW := lipgloss.Width(logoLines[0])
 	menu := m.renderTopMenu(m.width-logoW, isOverlay)
 	for i := range 3 {
-		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+		sb.WriteString(menu[i])
+		sb.WriteString(sepStyle.Render(logoLines[i]))
+		sb.WriteString("\n")
 	}
 	// Connect the scope/rows divider to the top border with a ┬ junction (top
 	// only — the footer status bars span the full width below the divider).
@@ -134,11 +136,13 @@ func (m Model) renderSettingsSection() string {
 	if sw := m.settingsScopeWidth(); sw < len(topFill) {
 		topFill[sw] = '┬'
 	}
-	sb.WriteString(sepStyle.Render(overlayLogoBottom("╭"+string(topFill)+"╮", m.width)) + "\n")
+	sb.WriteString(sepStyle.Render(overlayLogoBottom("╭"+string(topFill)+"╮", m.width)))
+	sb.WriteString("\n")
 
 	sb.WriteString(m.renderSettingsBody(innerW, bodyHeight, isOverlay))
 
-	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
+	sb.WriteString(sepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
 	final := m.applyOverlays(sb.String())
@@ -230,7 +234,10 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 				// vertical line reaches the footer instead of stopping a row short.
 				footer = settingsBlankDividerRow(scopeW, innerW, isOverlay || m.settingsScopeFocus)
 			}
-			sb.WriteString(sepStyle.Render("│") + footer + sepStyle.Render("│") + "\n")
+			sb.WriteString(sepStyle.Render("│"))
+			sb.WriteString(footer)
+			sb.WriteString(sepStyle.Render("│"))
+			sb.WriteString("\n")
 			continue
 		}
 		scope, _ := bodyColumn(scopeVis, scopeBar, i)
@@ -250,7 +257,12 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 			rowCell = InactiveStyle.Render(ansi.Strip(rowCell))
 			div = SepInactiveStyle.Render("┆")
 		}
-		sb.WriteString(sepStyle.Render("│") + scopeCell + div + rowCell + rightEdge + "\n")
+		sb.WriteString(sepStyle.Render("│"))
+		sb.WriteString(scopeCell)
+		sb.WriteString(div)
+		sb.WriteString(rowCell)
+		sb.WriteString(rightEdge)
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

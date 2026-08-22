@@ -240,11 +240,11 @@ func stripABPrefix(p string) string {
 // parseHunkNewStart reads the new-side start line from a hunk header
 // "@@ -l,s +l,s @@". Returns 1 on any parse failure (a safe lower bound).
 func parseHunkNewStart(line string) int {
-	plus := strings.IndexByte(line, '+')
-	if plus < 0 {
+	_, after, ok := strings.Cut(line, "+")
+	if !ok {
 		return 1
 	}
-	rest := line[plus+1:]
+	rest := after
 	// rest is like "l,s @@ heading" or "l @@ heading".
 	end := len(rest)
 	for i, r := range rest {

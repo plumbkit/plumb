@@ -112,7 +112,7 @@ func changedPackageTarget(t *testing.T, out string) string {
 	// Anchored on the column separator, not a bare suffix: "changed package" is
 	// also a suffix of "imports the changed package", so HasSuffix alone picks up
 	// an importer row whenever one happens to sort first.
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.HasPrefix(line, "  ") || !strings.HasSuffix(line, "   changed package") {
 			continue
 		}

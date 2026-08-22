@@ -265,8 +265,7 @@ func postProcessGit(ctx context.Context, repoRoot, sub, out string) (string, err
 
 // isExitCode reports whether err is an *exec.ExitError with the given exit code.
 func isExitCode(err error, code int) bool {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return ee.ExitCode() == code
 	}
 	return false
@@ -357,16 +356,16 @@ func untrackedPathspecHint(msg string) string {
 // firstQuoted returns the text inside the first pair of single quotes in s, or
 // "" when there is no such pair. git quotes pathspec and submodule names this way.
 func firstQuoted(s string) string {
-	i := strings.IndexByte(s, '\'')
-	if i < 0 {
+	_, after, ok := strings.Cut(s, "'")
+	if !ok {
 		return ""
 	}
-	rest := s[i+1:]
-	j := strings.IndexByte(rest, '\'')
-	if j < 0 {
+	rest := after
+	before0, _, ok0 := strings.Cut(rest, "'")
+	if !ok0 {
 		return ""
 	}
-	return rest[:j]
+	return before0
 }
 
 func formatGitOutput(sub, result string) string {

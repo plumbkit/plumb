@@ -160,6 +160,9 @@ func (st *ignoreStack) load(dir string) ignoreStack {
 				patterns = append(patterns, p)
 			}
 		}
+		// Best-effort like the os.Open failure above: a truncated read still
+		// uses whatever patterns were parsed before the scan error.
+		_ = sc.Err()
 		_ = f.Close()
 	}
 	if len(patterns) == 0 {

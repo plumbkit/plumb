@@ -75,8 +75,7 @@ func TestReadFileBoundaryRejectsOutsideWorkspace(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected boundary error")
 	}
-	var boundaryErr WorkspaceBoundaryError
-	if !errors.As(err, &boundaryErr) {
+	if _, ok := errors.AsType[WorkspaceBoundaryError](err); !ok {
 		t.Fatalf("expected WorkspaceBoundaryError, got %v", err)
 	}
 }

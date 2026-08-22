@@ -7,6 +7,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,9 +100,7 @@ func (e *txEnv) apply(t *testing.T, extra map[string]any) (string, error) {
 		})
 	}
 	req := map[string]any{"operations": ops}
-	for k, v := range extra {
-		req[k] = v
-	}
+	maps.Copy(req, extra)
 	return NewTransactionApply(e.deps).Execute(context.Background(), mustJSON(req))
 }
 
@@ -335,13 +334,13 @@ func TestTransactionApplyAwait_CommitTimingIsGatedNotDelayed(t *testing.T) {
 func parseDeltas(t *testing.T, out string) []diagDelta {
 	t.Helper()
 	var deltas []diagDelta
-	for _, line := range strings.Split(out, "\n") {
-		i := strings.Index(line, diagDeltaPrefix)
-		if i < 0 {
+	for line := range strings.SplitSeq(out, "\n") {
+		_, after, ok := strings.Cut(line, diagDeltaPrefix)
+		if !ok {
 			continue
 		}
 		var d diagDelta
-		if err := json.Unmarshal([]byte(line[i+len(diagDeltaPrefix):]), &d); err != nil {
+		if err := json.Unmarshal([]byte(after), &d); err != nil {
 			t.Fatalf("delta line is not valid JSON (%v): %s", err, line)
 		}
 		deltas = append(deltas, d)

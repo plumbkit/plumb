@@ -210,10 +210,7 @@ func splitGroups(capTokens, effTokens int64, groups int) (capGroups, effGroups i
 	if groups <= 0 || total <= 0 {
 		return 0, 0
 	}
-	capGroups = int(math.Round(float64(capTokens) / float64(total) * float64(groups)))
-	if capGroups < 0 {
-		capGroups = 0
-	}
+	capGroups = max(int(math.Round(float64(capTokens)/float64(total)*float64(groups))), 0)
 	if capGroups > groups {
 		capGroups = groups
 	}

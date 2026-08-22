@@ -103,7 +103,7 @@ func TestBoundaryGuardWiringComplete(t *testing.T) {
 		t.Fatal("could not locate registerAllTools in conn_register.go — was it renamed?")
 	}
 
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "srv.Register(tools.New") {
 			continue

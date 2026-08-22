@@ -407,7 +407,7 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 	}
 	tracked := map[string]bool{}
 	trackedDirs := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
 		}

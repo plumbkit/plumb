@@ -112,6 +112,9 @@ func skippedFileErrors(db *sql.DB) []FileError {
 			out = append(out, fe)
 		}
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return out
 }
 
@@ -140,6 +143,9 @@ func uncoveredCensus(db *sql.DB) map[string]int {
 			out = make(map[string]int)
 		}
 		out[lang] = n
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return out
 }
@@ -193,6 +199,9 @@ func indexedLanguages(db *sql.DB) []string {
 		if rows.Scan(&l) == nil && l != "" {
 			langs = append(langs, l)
 		}
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return langs
 }

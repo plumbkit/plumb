@@ -462,10 +462,7 @@ func runProbes(b *testing.B, sessions int, build func(id int) probe) {
 
 	// Ceil, not floor: a floor of b.N/benchMaxSamples is 1 for every b.N below
 	// twice the cap, so the cap would not bind at all between 100k and 200k.
-	step := (b.N + benchMaxSamples - 1) / benchMaxSamples
-	if step < 1 {
-		step = 1
-	}
+	step := max((b.N+benchMaxSamples-1)/benchMaxSamples, 1)
 	per := make([]latencies, sessions)
 	var wg sync.WaitGroup
 	b.ResetTimer()

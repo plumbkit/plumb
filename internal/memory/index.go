@@ -323,8 +323,12 @@ func (ix *Index) removeMissing(live map[string]bool) error {
 			gone = append(gone, name)
 		}
 	}
+	scanErr := rows.Err()
 	rows.Close()
 	ix.mu.Unlock()
+	if scanErr != nil {
+		return fmt.Errorf("memory: list indexed files: %w", scanErr)
+	}
 	for _, name := range gone {
 		if err := ix.Remove(name); err != nil {
 			return err

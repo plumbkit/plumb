@@ -242,7 +242,7 @@ func registeredToolCount(t *testing.T) int {
 		t.Fatalf("reading ../cli/conn_register.go: %v", err)
 	}
 	n := 0
-	for _, line := range strings.Split(string(src), "\n") {
+	for line := range strings.SplitSeq(string(src), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "srv.Register(tools.New") {
 			n++
 		}

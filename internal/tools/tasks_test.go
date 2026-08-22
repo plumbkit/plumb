@@ -91,7 +91,7 @@ func TestRunTask_RunsInTheResolvedWorkingDir(t *testing.T) {
 // reportedCwd pulls the directory /bin/pwd printed out of a run_task report.
 func reportedCwd(t *testing.T, out string) string {
 	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "/") && !strings.HasPrefix(line, "$") {
 			return line

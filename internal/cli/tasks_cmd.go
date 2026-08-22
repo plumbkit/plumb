@@ -87,8 +87,7 @@ func runTaskSteps(root, slot string, steps [][]string) error {
 	for i, argv := range steps {
 		fmt.Fprintf(os.Stderr, "$ %s\n", strings.Join(argv, " "))
 		if err := streamArgv(root, argv); err != nil {
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
+			if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 				return fmt.Errorf("%s: step %d/%d failed (exit %d)", slot, i+1, len(steps), ee.ExitCode())
 			}
 			return fmt.Errorf("%s: %w", slot, err)

@@ -197,14 +197,14 @@ func (s *connSession) javaPostWriteNotify(ctx context.Context, path string) erro
 func baselineBytesFrom(output string) int {
 	const key = "baseline="
 	line := output
-	if i := strings.IndexByte(output, '\n'); i >= 0 {
-		line = output[:i]
+	if before, _, ok := strings.Cut(output, "\n"); ok {
+		line = before
 	}
-	i := strings.Index(line, key)
-	if i < 0 {
+	_, after, ok := strings.Cut(line, key)
+	if !ok {
 		return 0
 	}
-	rest := line[i+len(key):]
+	rest := after
 	end := 0
 	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
 		end++

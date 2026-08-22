@@ -288,10 +288,7 @@ func nestByRange(nodes []topology.Node) []outlineEntry {
 	}
 	spans := make([]span, 0, len(nodes))
 	for _, n := range nodes {
-		end := n.EndLine
-		if end < n.StartLine {
-			end = n.StartLine
-		}
+		end := max(n.EndLine, n.StartLine)
 		spans = append(spans, span{name: n.Name, kind: string(n.Kind), start: n.StartLine, end: end})
 	}
 	sort.SliceStable(spans, func(i, j int) bool {
@@ -343,7 +340,8 @@ func formatFileOutline(res *outlineResult) string {
 	if len(res.entries) == 0 {
 		sb.WriteString("(no symbols)\n")
 		if note := uncoveredOutlineNote(res.uri); note != "" {
-			sb.WriteString("\n" + note)
+			sb.WriteString("\n")
+			sb.WriteString(note)
 		}
 		return sb.String()
 	}

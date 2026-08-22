@@ -129,11 +129,11 @@ func fillFuncBody(sym *addedSymbol, lines []Line, start int) {
 // signature and the ordered parameter names.
 func splitSignature(block []string) (sig string, params []string) {
 	joined := strings.Join(block, " ")
-	brace := strings.IndexByte(joined, '{')
-	if brace < 0 {
+	before, _, ok := strings.Cut(joined, "{")
+	if !ok {
 		return strings.TrimSpace(joined), nil
 	}
-	sig = strings.TrimSpace(joined[:brace])
+	sig = strings.TrimSpace(before)
 	return sig, paramNames(sig)
 }
 
@@ -193,7 +193,7 @@ func singleBodyStatement(block []string) string {
 	}
 	body := joined[open+1 : closeIdx]
 	var stmts []string
-	for _, raw := range strings.Split(body, "\n") {
+	for raw := range strings.SplitSeq(body, "\n") {
 		s := stripLineComment(strings.TrimSpace(raw))
 		if s == "" {
 			continue

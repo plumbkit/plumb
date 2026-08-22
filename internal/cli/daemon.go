@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/signal"
@@ -191,9 +192,7 @@ func workspaceDiagnostics(pool *workspacePool, workspace string) string {
 	}
 	merged := entries[0].inv.AllDiagnostics()
 	for _, e := range entries[1:] {
-		for uri, diags := range e.inv.AllDiagnostics() {
-			merged[uri] = diags
-		}
+		maps.Copy(merged, e.inv.AllDiagnostics())
 	}
 	return tools.FormatDiagnostics(merged)
 }

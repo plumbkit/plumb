@@ -16,8 +16,8 @@ import (
 // — sourcekit-lsp reports Swift methods as "show()" / "show(animated:)". Returns
 // the name unchanged when there is no "(".
 func baseSymbolName(name string) string {
-	if i := strings.IndexByte(name, '('); i >= 0 {
-		return strings.TrimSpace(name[:i])
+	if before, _, ok := strings.Cut(name, "("); ok {
+		return strings.TrimSpace(before)
 	}
 	return name
 }

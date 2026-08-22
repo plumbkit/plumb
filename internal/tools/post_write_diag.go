@@ -230,10 +230,9 @@ func changedLineRange(before, after string) (lo, hi int, ok bool) {
 		s++
 	}
 	lo = p
-	hi = len(a) - 1 - s
-	if hi < lo {
-		hi = lo // pure deletion: attribute to the join point
-	}
+	hi = max(len(a)-1-s,
+		// pure deletion: attribute to the join point
+		lo)
 	return lo, hi, true
 }
 

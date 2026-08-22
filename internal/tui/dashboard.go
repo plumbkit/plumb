@@ -173,12 +173,15 @@ func (m Model) renderDashboard() string {
 	logoW := lipgloss.Width(logoLines[0])
 	menu := m.renderTopMenu(m.width-logoW, isOverlay)
 	for i := range 3 {
-		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+		sb.WriteString(menu[i])
+		sb.WriteString(sepStyle.Render(logoLines[i]))
+		sb.WriteString("\n")
 	}
 
 	// Top border integrated with the logo bottom line.
 	line := "╭" + strings.Repeat("─", innerW) + "╮"
-	sb.WriteString(sepStyle.Render(overlayLogoBottom(line, m.width)) + "\n")
+	sb.WriteString(sepStyle.Render(overlayLogoBottom(line, m.width)))
+	sb.WriteString("\n")
 
 	// Body: scrollable widget grid.
 	// contentW is 6 chars narrower than innerW to leave 3-space margins on each side.
@@ -212,10 +215,14 @@ func (m Model) renderDashboard() string {
 		if isOverlay {
 			padded = InactiveStyle.Render(ansi.Strip(padded))
 		}
-		sb.WriteString(sepStyle.Render("│") + padded + rBarChar + "\n")
+		sb.WriteString(sepStyle.Render("│"))
+		sb.WriteString(padded)
+		sb.WriteString(rBarChar)
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
+	sb.WriteString(sepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
+	sb.WriteString("\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
 	return m.applyOverlays(sb.String())

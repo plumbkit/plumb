@@ -255,7 +255,7 @@ func wantsDocstring(includeSource string) bool {
 // firstLine returns the first non-empty line of s, trimmed and length-capped,
 // so a multi-line docstring contributes one compact line to the output.
 func firstLine(s string) string {
-	for _, ln := range strings.Split(s, "\n") {
+	for ln := range strings.SplitSeq(s, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln != "" {
 			// Byte budget, rune-safe: this is an arbitrary source line, so a

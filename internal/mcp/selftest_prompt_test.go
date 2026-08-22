@@ -138,12 +138,12 @@ func TestSelftestPrompt_CoversEveryTool(t *testing.T) {
 // and any bold label are stripped too: "- **Memory (read):**" says which group
 // this is, not what to do with it.
 func selftestInstructionFor(text, roster string) string {
-	i := strings.Index(text, roster)
-	if i < 0 {
+	before, _, ok := strings.Cut(text, roster)
+	if !ok {
 		return ""
 	}
 	lines := strings.Split(text, "\n")
-	at := strings.Count(text[:i], "\n") // the line the roster sits on
+	at := strings.Count(before, "\n") // the line the roster sits on
 
 	isBoundary := func(s string) bool {
 		return strings.TrimSpace(s) == "" || strings.HasPrefix(s, "#")
