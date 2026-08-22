@@ -83,7 +83,7 @@ func uninstallTargetAt(t setupTarget, paths []string, userScoped bool) error {
 	}
 
 	if removedAny {
-		lines = uninstallSideEffectLines(t, removeSkills, lines)
+		lines = uninstallSideEffectLines(t, userScoped, lines)
 	}
 
 	if !removedAny {
@@ -107,11 +107,12 @@ func uninstallTargetAt(t setupTarget, paths []string, userScoped bool) error {
 // unregistered (see uninstallTargetAt), so the removals here are
 // unconditional on that account.
 //
-// removeSkills gates everything user-scoped, not just skills: hooks and the
-// instructions block live in the user scope too, so a project-scoped Claude
-// Code uninstall must leave all three alone.
-func uninstallSideEffectLines(t setupTarget, removeSkills bool, lines []string) []string {
-	if removeSkills && t.skillsDirFn != nil {
+// userScoped gates the removals that live in the USER scope — the skills and
+// the lifecycle hooks — so a project-scoped Claude Code uninstall leaves both
+// alone. The instructions block is not gated: it is written into the project
+// plumb was registered in, so it goes with that registration either way.
+func uninstallSideEffectLines(t setupTarget, userScoped bool, lines []string) []string {
+	if userScoped && t.skillsDirFn != nil {
 		if dir, err := t.skillsDirFn(); err == nil {
 			removed, kept := removePlumbSkills(dir)
 			if len(removed) > 0 {
@@ -123,7 +124,9 @@ func uninstallSideEffectLines(t setupTarget, removeSkills bool, lines []string) 
 		}
 	}
 
-	lines = append(lines, removePlumbHooksFor(t)...)
+	if userScoped {
+		lines = append(lines, removePlumbHooksFor(t)...)
+	}
 
 	if t.instructionsFn != nil {
 		instrLines, err := removeInstructionsBlock(t)
@@ -134,6 +137,8 @@ func uninstallSideEffectLines(t setupTarget, removeSkills bool, lines []string) 
 		}
 	}
 	return lines
+}
+
 // removePlumbHooksFor takes plumb's lifecycle hooks back out of a client whose
 // registration has just been removed, returning the report lines for the
 // uninstall box. A client with no hooks pack, an unreadable hooks config, or no
