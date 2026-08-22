@@ -299,3 +299,207 @@ func TestHealthDailyUpsert_IsIdempotent(t *testing.T) {
 		t.Errorf("row = %+v, want the SECOND upsert's values (9, 3)", rows[0])
 	}
 }
+
+// recordNeverReadRefusal mirrors strict mode's read-before-write refusal
+// (internal/tools/strict_read.go's requireStrictRead, when the ReadTracker
+// never recorded a read at all): success=false, error_kind=unread_or_stale,
+// remediation_class=re_read — the SAME error_kind recordGuardRefusal uses,
+// but the OTHER remediation_class, and critically no prior read anywhere in
+// the session. Naively counting every KindUnreadOrStale refusal (review
+// round 1's finding) would flag this as a lane defection even though
+// nothing was ever read, let alone changed under the session.
+func recordNeverReadRefusal(t *testing.T, db *DB, session, workspace string, at time.Time) {
+	t.Helper()
+	if err := db.Record(Call{
+		SessionID: session, Workspace: workspace, Tool: "edit_file",
+		CalledAt: at, Success: false,
+		ErrorKind: toolerror.KindUnreadOrStale, RemediationClass: toolerror.ClassReRead,
+	}); err != nil {
+		t.Fatalf("Record never-read refusal: %v", err)
+	}
+}
+
+// TestHealthLaneDefection_NeverReadRefusalDoesNotInflate is the red-then-green
+// fixture for review round 1's BLOCKING 1: a session that calls edit_file on
+// a path it never read hits strict mode's "never read" guard
+// (KindUnreadOrStale + ClassReRead) — not a lane defection, since nothing was
+// ever read for anything to change under. Before the fix, the query counted
+// ANY KindUnreadOrStale failure (flagging this) and ANY session in the
+// denominator (counting a session with zero reads) — the review's probe got
+// 50% from two such sessions. After the fix: SessionsTotal must be 0 (this
+// session never read a file, so it isn't in the denominator at all) and
+// SessionsFlagged must be 0.
+func TestHealthLaneDefection_NeverReadRefusalDoesNotInflate(t *testing.T) {
+	db := openHealthTestDB(t)
+	day := time.Now().UTC()
+	recordNeverReadRefusal(t, db, "sess-never-read-1", "/ws", day)
+	recordNeverReadRefusal(t, db, "sess-never-read-2", "/ws", day)
+
+	got, err := db.LaneDefectionForDay(day, "/ws")
+	if err != nil {
+		t.Fatalf("LaneDefectionForDay: %v", err)
+	}
+	if got.SessionsTotal != 0 {
+		t.Errorf("SessionsTotal = %d, want 0 — neither session ever read a file, so neither belongs in the denominator", got.SessionsTotal)
+	}
+	if got.SessionsFlagged != 0 {
+		t.Errorf("SessionsFlagged = %d, want 0 — a never-read refusal is not a lane defection", got.SessionsFlagged)
+	}
+	if got.Rate() != 0 {
+		t.Errorf("Rate() = %v, want 0 (not the review-probe 50%%)", got.Rate())
+	}
+}
+
+// TestHealthLaneDefection_MixedSessionsOnlyCountsReaders combines a
+// never-read session, a read-but-clean session, and a read-then-defected
+// session in the SAME day, asserting the denominator counts only the two
+// that read something and the numerator counts only the one that actually
+// defected.
+func TestHealthLaneDefection_MixedSessionsOnlyCountsReaders(t *testing.T) {
+	db := openHealthTestDB(t)
+	day := time.Now().UTC()
+	recordNeverReadRefusal(t, db, "sess-never-read", "/ws", day)
+	recordRead(t, db, "sess-clean", "/ws", day)
+	recordRead(t, db, "sess-defected", "/ws", day)
+	recordGuardRefusal(t, db, "sess-defected", "/ws", "", day.Add(time.Second))
+
+	got, err := db.LaneDefectionForDay(day, "/ws")
+	if err != nil {
+		t.Fatalf("LaneDefectionForDay: %v", err)
+	}
+	if got.SessionsTotal != 2 {
+		t.Errorf("SessionsTotal = %d, want 2 (the never-read session excluded)", got.SessionsTotal)
+	}
+	if got.SessionsFlagged != 1 {
+		t.Errorf("SessionsFlagged = %d, want 1", got.SessionsFlagged)
+	}
+}
+
+// TestHealthSemanticErrorRates_InsufficientToolSampleNeverFlags is the
+// red-then-green fixture for review round 1's BLOCKING 2, tool side: one
+// call and one error is a 100% rate, comfortably over any baseline — but one
+// call is not a sample. Before the fix nothing guarded this; after,
+// InsufficientSample must be true and Flagged must be false regardless of
+// how high the raw rate is.
+func TestHealthSemanticErrorRates_InsufficientToolSampleNeverFlags(t *testing.T) {
+	db := openHealthTestDB(t)
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	until := time.Now().Add(time.Hour)
+	mid := time.Now()
+
+	// A healthy, well-sampled read_file baseline: 1 error in 20 = 5%.
+	for range 19 {
+		if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "read_file", CalledAt: mid, Success: true}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "read_file", CalledAt: mid, Success: false}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	// get_definition: exactly the review's probe — 1 call, 1 error, 100% rate.
+	if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "get_definition", CalledAt: mid, Success: false}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	advertised := func(tool string) bool { return tool == "get_definition" }
+	rates, err := db.SemanticErrorRatesSince(since, until, "/ws", advertised, 0)
+	if err != nil {
+		t.Fatalf("SemanticErrorRatesSince: %v", err)
+	}
+	var gd SemanticErrorRate
+	found := false
+	for _, r := range rates {
+		if r.Tool == "get_definition" {
+			gd, found = r, true
+		}
+	}
+	if !found {
+		t.Fatal("get_definition missing from results")
+	}
+	if gd.Rate() != 1.0 {
+		t.Fatalf("test setup: get_definition.Rate() = %v, want 1.0 (100%%, matching the review probe)", gd.Rate())
+	}
+	if !gd.InsufficientSample {
+		t.Error("InsufficientSample = false, want true — 1 call is not a sample")
+	}
+	if gd.Flagged {
+		t.Error("Flagged = true, want false — a 100% rate on 1 call must not flag (review round 1 probe: false-fires precisely when agents have gone native)")
+	}
+}
+
+// TestHealthSemanticErrorRates_InsufficientBaselineNeverFlags is the
+// red-then-green fixture for review round 1's BLOCKING 2, baseline side: zero
+// read_file calls in the window used to make baselineRate 0, so ANY semantic
+// error crossed "0 × multiplier" and flagged — the exact false-fire the
+// review's probe demonstrated. After the fix, BaselineInsufficient must be
+// true and Flagged must be false even though the tool's own sample is large.
+func TestHealthSemanticErrorRates_InsufficientBaselineNeverFlags(t *testing.T) {
+	db := openHealthTestDB(t)
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	until := time.Now().Add(time.Hour)
+	mid := time.Now()
+
+	// Zero read_file calls in the window — the review's exact probe setup.
+	// get_definition: a large, well-sampled, low error rate (1 in 20 = 5%).
+	for range 19 {
+		if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "get_definition", CalledAt: mid, Success: true}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "get_definition", CalledAt: mid, Success: false}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	advertised := func(tool string) bool { return tool == "get_definition" }
+	rates, err := db.SemanticErrorRatesSince(since, until, "/ws", advertised, 0)
+	if err != nil {
+		t.Fatalf("SemanticErrorRatesSince: %v", err)
+	}
+	var gd SemanticErrorRate
+	found := false
+	for _, r := range rates {
+		if r.Tool == "get_definition" {
+			gd, found = r, true
+		}
+	}
+	if !found {
+		t.Fatal("get_definition missing from results")
+	}
+	if gd.BaselineCalls != 0 {
+		t.Fatalf("test setup: BaselineCalls = %d, want 0", gd.BaselineCalls)
+	}
+	if !gd.BaselineInsufficient {
+		t.Error("BaselineInsufficient = false, want true — 0 read_file calls is not a baseline")
+	}
+	if gd.Flagged {
+		t.Error("Flagged = true, want false — an untrustworthy (zero-sample) baseline must not flag ANY error rate (review round 1 probe)")
+	}
+}
+
+// TestHealthSemanticErrorRates_AdvertisedUnknownIsLoud proves a nil
+// advertised func is surfaced in the returned data (not just a silent
+// false), per review round 1 item (b).
+func TestHealthSemanticErrorRates_AdvertisedUnknownIsLoud(t *testing.T) {
+	db := openHealthTestDB(t)
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	until := time.Now().Add(time.Hour)
+	mid := time.Now()
+	if err := db.Record(Call{SessionID: "s", Workspace: "/ws", Tool: "get_definition", CalledAt: mid, Success: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	rates, err := db.SemanticErrorRatesSince(since, until, "/ws", nil, 0)
+	if err != nil {
+		t.Fatalf("SemanticErrorRatesSince: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rates))
+	}
+	if !rates[0].AdvertisedUnknown {
+		t.Error("AdvertisedUnknown = false, want true when advertised func is nil")
+	}
+	if rates[0].Advertised {
+		t.Error("Advertised = true, want false when advertised func is nil")
+	}
+}

@@ -589,6 +589,7 @@ Claude Code Stop-hook recipe built on this command.
 
 ```
 plumb stats [--workspace <dir>] [--limit <n>] [--since <age>] [--failures]
+plumb stats --health [--workspace <dir>]
 ```
 
 Aliases: **`plumb status`**.
@@ -600,9 +601,27 @@ of the most recent calls.
 | Flag | Default | Effect |
 |---|---|---|
 | `--workspace <dir>` | current dir | Workspace to inspect. |
-| `--limit <n>` | `20` | Number of recent calls to show. |
-| `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. |
-| `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. |
+| `--limit <n>` | `20` | Number of recent calls to show. Rejected together with `--health`. |
+| `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. Rejected together with `--health`. |
+| `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. Rejected together with `--health`. |
+| `--health` | `false` | Replace the default view with the three standing health metrics (PLAN-368), computed for today (UTC) and upserted into `stats.db`'s `health_daily` table. |
+
+`--health` renders and persists three metrics, idempotently per UTC day (safe to
+run more than once — a re-run overwrites that day's rows rather than duplicating
+them, so it doubles as a nightly cron job): **lane-defection rate** (share of
+sessions that read a file where a later `write_file` was refused because the file
+had changed on disk since — an approximation that undercounts, since it only
+catches a defection the session later tried to write over), **semantic-surface
+error rate** (a 7-day rolling per-tool error rate over the LSP query/edit surface,
+flagged only when the tool is advertised — pinned into a Claude Code connection's
+context, PLAN-355 — AND both its own sample and the `read_file` baseline sample
+are large enough to trust), and **net economics per client** (the estimated read
+savings and guard-refusal count, trended per day per client; the third PLAN-367
+line, the tool-schema surcharge, is a live per-connection figure this offline
+view has no access to, the same reason the default view above omits it too).
+`--health` always covers today and has no recent-calls list or failure breakdown
+to filter or limit, so it is rejected in combination with `--limit`, `--since`,
+or `--failures` rather than silently ignoring them.
 
 `--failures` is the triage view. It groups failed calls by their machine-readable
 kind (`dirty_file`, `lsp_timeout`, …), the tool, and the client build, and reports
