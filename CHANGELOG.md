@@ -9,30 +9,6 @@
 
 ### Added
 
-- **Shipped skills content refresh — the fourth instruction channel taught the old story (PLAN-376).**
-  `internal/cli/skills/{plumb-explore,plumb-refactor,plumb-testing,plumb-diagnose,plumb-minimal-change}/SKILL.md`
-  — the skills `plumb skills sync` installs — still taught pre-wave-2 doctrine even after the
-  other three instruction channels (managed blocks, MCP `initialize` instructions,
-  `session_start` guidance) all point agents at them. `plumb-explore` now teaches
-  `session_start({detail:"brief"})` for cheap subagent re-orientation. `plumb-refactor` teaches
-  `read_multiple_files` for batching reads before a multi-file edit and `fail_on_new_errors` as
-  the default verify move on an edit that must keep compiling — including the multi-file
-  `transaction_apply` batch-rollback case. `plumb-testing` teaches the same `fail_on_new_errors`
-  default plus the four-label `await_diagnostics` vocabulary (authoritative/pre-write
-  snapshot/unverified/not analysed, PLAN-362). `plumb-diagnose` spells out what each of those
-  four labels actually means, sourced from `post_write_diag.go`'s own doc comments, and notes
-  that `transaction_apply` (not just `edit_file`/`write_file`) takes both `await_diagnostics`
-  and `fail_on_new_errors` (PLAN-362 PR 2). `plumb-minimal-change` now names `minimal_diff_review`
-  explicitly and states its single-use-abstraction finding's Low-confidence cap (intra-file call
-  graph; `internal/minchange/abstraction_checks.go`) — PLAN-372, which would raise that cap, has
-  not landed, so the "confirm with `find_references`" caveat stays. No mechanism changes
-  (PLAN-365 owns `plumb skills sync`); a version-stamped manifest update happens automatically on
-  the next sync, keyed off each file's content hash.
-
-## 0.17.1 (2026-08-22)
-
-### Added
-
 - **`plumb stats --health`: three standing health metrics (PLAN-368).** A new,
   additive `health_daily` table (stats schema v18) and CLI flag compute, idempotently
   per UTC day, the three metrics the worth-it strategy's W2-14 names so a regression in
@@ -61,6 +37,30 @@
   reason (`internal/stats/health_economics.go` explains why trending it here would mean
   fabricating a number for a day nobody measured it on). Read-only over `calls`; no
   existing column changes. `internal/stats/health*.go`, `internal/cli/stats_health.go`.
+- **Shipped skills content refresh — the fourth instruction channel taught the old story (PLAN-376).**
+  `internal/cli/skills/{plumb-explore,plumb-refactor,plumb-testing,plumb-diagnose,plumb-minimal-change}/SKILL.md`
+  — the skills `plumb skills sync` installs — still taught pre-wave-2 doctrine even after the
+  other three instruction channels (managed blocks, MCP `initialize` instructions,
+  `session_start` guidance) all point agents at them. `plumb-explore` now teaches
+  `session_start({detail:"brief"})` for cheap subagent re-orientation. `plumb-refactor` teaches
+  `read_multiple_files` for batching reads before a multi-file edit and `fail_on_new_errors` as
+  the default verify move on an edit that must keep compiling — including the multi-file
+  `transaction_apply` batch-rollback case. `plumb-testing` teaches the same `fail_on_new_errors`
+  default plus the four-label `await_diagnostics` vocabulary (authoritative/pre-write
+  snapshot/unverified/not analysed, PLAN-362). `plumb-diagnose` spells out what each of those
+  four labels actually means, sourced from `post_write_diag.go`'s own doc comments, and notes
+  that `transaction_apply` (not just `edit_file`/`write_file`) takes both `await_diagnostics`
+  and `fail_on_new_errors` (PLAN-362 PR 2). `plumb-minimal-change` now names `minimal_diff_review`
+  explicitly and states its single-use-abstraction finding's Low-confidence cap (intra-file call
+  graph; `internal/minchange/abstraction_checks.go`) — PLAN-372, which would raise that cap, has
+  not landed, so the "confirm with `find_references`" caveat stays. No mechanism changes
+  (PLAN-365 owns `plumb skills sync`); a version-stamped manifest update happens automatically on
+  the next sync, keyed off each file's content hash.
+
+## 0.17.1 (2026-08-22)
+
+### Added
+
 - **MCP `initialize` instructions aligned with the managed brief (PLAN-366).**
   `internal/mcp`'s `initialize` response `instructions` field previously carried its own,
   separately authored text (session_start-first orientation) — different substance from what
