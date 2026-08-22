@@ -49,15 +49,31 @@ type PackageInfo struct {
 type PackageGraph struct {
 	Dirs  map[string]*PackageInfo
 	Edges map[string]map[string]bool // fromDir -> set of toDir it directly imports (production imports only; see above)
+
+	// HasGoSignal is true when the index shows independent evidence this is a
+	// Go workspace: at least one KindPackage node with Language=="go", or at
+	// least one KindImport node at all. It exists to break a real ambiguity
+	// TotalEdges()==0 cannot resolve on its own: a genuine Go workspace can
+	// legitimately have zero FOLDABLE edges — every cross-package import
+	// might be stdlib-only (no local directory to link to), or the only
+	// cross-package import might live in a _test.go file, which
+	// isTestGoImporter now deliberately excludes. Gating the Go-only refusal
+	// on TotalEdges() alone therefore told a real, small Go workspace it
+	// "wasn't Go"; HasGoSignal lets the refusal fire only when there is no
+	// language evidence for Go at all (the actual C#/PHP/Scala/Elixir/etc
+	// case this feature cannot serve yet).
+	HasGoSignal bool
 }
 
 // TotalEdges returns the number of directory-level edges in g, summed across
-// every source directory. Used to detect the case where package directories
-// were indexed but no edges could be folded at all — see isTestGoImporter's
-// sibling guard in executeReachability (topology_reachability.go): that shape
-// means the current language's extractor does not emit the
-// KindPackage -(imports)-> KindImport edge this pass depends on (only Go's
-// does today), not that the workspace genuinely has zero internal imports.
+// every source directory. Used together with HasGoSignal to detect the case
+// where package directories were indexed but no edges could be folded at
+// all AND there is no independent evidence this is a Go workspace — see
+// isTestGoImporter's sibling guard in executeReachability
+// (topology_reachability.go): that combined shape means the current
+// language's extractor does not emit the KindPackage -(imports)-> KindImport
+// edge this pass depends on (only Go's does today), not that a genuine Go
+// workspace happens to have zero internal (or non-test) imports.
 func (g *PackageGraph) TotalEdges() int {
 	n := 0
 	for _, tos := range g.Edges {
@@ -88,7 +104,29 @@ func LoadPackageGraph(ctx context.Context, db *sql.DB) (*PackageGraph, error) {
 	if err := loadPackageEdges(ctx, db, g); err != nil {
 		return nil, err
 	}
+	hasGo, err := loadHasGoSignal(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	g.HasGoSignal = hasGo
 	return g, nil
+}
+
+// loadHasGoSignal reports whether the index carries independent evidence of
+// a Go workspace: any KindPackage node whose Language is "go", or any
+// KindImport node at all (every extractor that emits import nodes today is
+// Go's). See PackageGraph.HasGoSignal's doc for why this matters.
+func loadHasGoSignal(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists int
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM topology_nodes
+			 WHERE (kind = ? AND language = 'go') OR kind = ?
+		)`, string(KindPackage), string(KindImport)).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("topology: load go signal: %w", err)
+	}
+	return exists != 0, nil
 }
 
 func loadPackageDirs(ctx context.Context, db *sql.DB, g *PackageGraph) error {

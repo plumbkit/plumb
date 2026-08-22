@@ -21,16 +21,23 @@ import (
 // shape can report is a real production cycle, never a test-only artefact.
 const reachabilityConfidenceLine = "package-level (import edges, production imports only — Go _test.go importers excluded); function-level unavailable — see roadmap"
 
-// reachabilityGoOnlyMessage is returned when package directories were indexed
-// but zero directory-level edges could be folded at all. loadPackageEdges
-// needs a KindPackage node to carry its own outward "imports" edge to a
-// KindImport node in the same file — today only the Go extractor emits that
-// shape (extractors/golang/extractor.go). A C#/PHP/Scala/Elixir/etc workspace
-// still indexes KindPackage nodes (so g.Dirs is non-empty) but produces none
-// of those edges, which would otherwise make every single package in the
-// codebase look "unreachable" — a confident, wrong answer. Refusing is
-// deliberately louder than that.
-const reachabilityGoOnlyMessage = "topology_impact: reachability: %d package director(ies) indexed but zero import edges were foldable — package-level reachability needs Go's per-file `package X` + `import` node/edge shape (extractors/golang), which other languages do not yet emit. Refusing rather than reporting every package unreachable; this mode is Go-only for now."
+// reachabilityGoOnlyMessage is returned when package directories were indexed,
+// zero directory-level edges could be folded at all, AND there is no
+// independent evidence (PackageGraph.HasGoSignal) that this is a Go
+// workspace. TotalEdges()==0 alone is not enough to conclude "wrong
+// language": a genuinely small Go workspace can have zero FOLDABLE edges too
+// (every cross-package import is stdlib-only, or its only cross-package
+// import lives in a _test.go file, which isTestGoImporter deliberately
+// excludes) — gating on edge count alone told real Go workspaces shaped like
+// that they "weren't Go". loadPackageEdges needs a KindPackage node to carry
+// its own outward "imports" edge to a KindImport node in the same file —
+// today only the Go extractor emits that shape (extractors/golang/
+// extractor.go). A C#/PHP/Scala/Elixir/etc workspace still indexes
+// KindPackage nodes (so g.Dirs is non-empty) but produces none of those
+// edges AND carries no Go signal, which would otherwise make every single
+// package in the codebase look "unreachable" — a confident, wrong answer.
+// Refusing is deliberately louder than that.
+const reachabilityGoOnlyMessage = "topology_impact: reachability: %d package director(ies) indexed but zero import edges were foldable, and nothing in the index looks like Go — package-level reachability needs Go's per-file `package X` + `import` node/edge shape (extractors/golang), which other languages do not yet emit. Refusing rather than reporting every package unreachable; this mode is Go-only for now."
 
 // reachabilityMaxBytes hard-caps every reachability response shape. Chosen
 // well under the ~5 KB budget in PLAN-371 so the truncation note itself never
@@ -64,7 +71,7 @@ func (t *TopologyImpact) executeReachability(ctx context.Context, store *topolog
 	if len(g.Dirs) == 0 {
 		return "topology_impact: reachability: no indexed packages", nil
 	}
-	if len(g.Dirs) > 1 && g.TotalEdges() == 0 {
+	if len(g.Dirs) > 1 && g.TotalEdges() == 0 && !g.HasGoSignal {
 		return fmt.Sprintf(reachabilityGoOnlyMessage, len(g.Dirs)), nil
 	}
 
@@ -226,7 +233,7 @@ func formatReachabilitySummary(g *topology.PackageGraph, res *topology.Reachabil
 	sb.WriteString("\n")
 
 	unreached := g.Unreachable(res.Reachable)
-	fmt.Fprintf(&sb, "unreachable: %d package(s) (sorted by size — the actionable ones)\n", len(unreached))
+	fmt.Fprintf(&sb, "unreachable: %d package(s) (sorted by size — the actionable ones; a package used only by tests appears here by design — confirm before deleting)\n", len(unreached))
 	ushown := unreached
 	if len(ushown) > reachabilitySampleLimit {
 		ushown = ushown[:reachabilitySampleLimit]
