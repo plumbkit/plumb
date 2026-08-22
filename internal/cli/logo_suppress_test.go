@@ -43,3 +43,16 @@ func TestSuppressLogo_NoJSONFlag(t *testing.T) {
 		t.Error("a command without --json must print the banner")
 	}
 }
+
+// The lifecycle-hook verbs are the same failure in a different costume: a hook
+// runs unattended, its stdout goes to the client. For Codex that stdout IS a
+// JSON document (a banner ahead of it fails the parse); for Claude Code's
+// SessionStart, plain stdout is injected into the agent's context, where an
+// ASCII banner is noise the model has to read past. Both must stay silent.
+func TestSuppressLogo_HookRunVerbs(t *testing.T) {
+	for _, cmd := range []*cobra.Command{hooksRunClaudeCmd, hooksRunCodexCmd} {
+		if !suppressLogo(cmd) {
+			t.Errorf("`plumb hooks %s` prints the banner — it reaches the client's stdout", cmd.Use)
+		}
+	}
+}
