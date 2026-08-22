@@ -38,6 +38,16 @@
   Claude Code's own harness error strings (same reasoning PLAN-364 PR 2 applied to Codex/
   Gemini's bodies) and remains the only place an agent that has already hit one finds the
   recognition text (`TestSessionStart_EditLaneWarning_ClaudeCode`).
+  **Review round 1 fixes.** `internal/tools/guidance_alignment_test.go` originally built its
+  `SessionStart` with no topology store wired, so `topologyActive()` was false and the trimmed
+  bullet lived in a branch the test never rendered — restoring the removed sentence still passed
+  both tests. Fixed to wire a real `topology.Store` (mirroring
+  `TestSessionStart_EditLaneWarning_ClaudeCode`'s topology-on case), proven red-then-green.
+  Also, the pre-PLAN-366 `DefaultInstructions` carried a "`.plumb/` marker missing -> ask the
+  user to run `plumb init`" recovery line that PLAN-366's swap to
+  `clienttemplates.DefaultTemplate` dropped, leaving it nowhere agent-facing for an
+  unrecognised/unmeasured client; restored as one lean-safe line in `DefaultTemplate` itself
+  (`TestInstructions_DefaultCarriesPlumbInitRecovery`).
 
 - **Client-awareness — capability probe and honest tool-profile reasons (PLAN-369).**
   `internal/clientcaps.Capabilities` gains three declared-evidence fields
