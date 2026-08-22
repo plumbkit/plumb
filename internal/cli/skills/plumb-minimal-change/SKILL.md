@@ -33,6 +33,8 @@ Symbol edits (`replace_symbol_body`, `insert_before_symbol`/`insert_after_symbol
 
 `topology_affected` to pick the focused tests; `run_task` for the smallest relevant check. Run the broader `verify` before claiming done only when the change's scope warrants it.
 
+Before committing, `minimal_diff_review(mode="changed")` reviews the working diff itself for signs of over-building — a newly-added function with a single call site, a thin forwarding wrapper, a new dependency with a stdlib equivalent, a possible duplicate helper. It is advisory only and never blocks a write; silence is not proof the change is minimal. Its single-use-abstraction finding in particular is capped at **Low** confidence today, because the call graph behind it is intra-file — a symbol it calls single-use can still have callers in another file. Confirm a Low-confidence single-use finding with `find_references` before acting on it; do not inline a symbol on this finding alone.
+
 ## 8. Name the ceiling of a simplified approach
 
 If you chose a simpler implementation with a known limit, leave a short `plumb:` comment naming the ceiling and the upgrade path — don't let it pass as the general solution.
