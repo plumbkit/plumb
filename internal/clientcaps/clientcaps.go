@@ -79,13 +79,16 @@ type Capabilities struct {
 
 	// SupportsMCPInstructions is true only where shipped evidence shows the
 	// client surfaces the MCP `initialize` response's `instructions` field to
-	// the model as a system-prompt-style hint (internal/mcp/instructions.go,
-	// internal/mcp/server_handlers.go — sent to every client today regardless
-	// of this flag, since an unaware client just ignores an unknown field).
-	// PLAN-366 will render a per-client template into that field; this flag is
-	// the seam it will read, not something this package wires into a template
-	// — no such template exists yet. Unproven ⇒ false, the same evidence
-	// discipline as ReliableDeferredToolDiscovery.
+	// the model as a system-prompt-style hint (internal/mcp/instructions.go's
+	// InstructionsForClient, internal/mcp/server_handlers.go — sent to every
+	// client today regardless of this flag, since an unaware client just
+	// ignores an unknown field). PLAN-366 renders a per-client body into that
+	// field, drawn from the same internal/clienttemplates source as this
+	// client's managed AGENTS.md/CLAUDE.md/GEMINI.md block (PLAN-364) — this
+	// flag is evidence of observed CONSUMPTION, not a gate InstructionsForClient
+	// reads: it renders for every client with a clienttemplates body whether or
+	// not this flag is set. Unproven ⇒ false, the same evidence discipline as
+	// ReliableDeferredToolDiscovery.
 	SupportsMCPInstructions bool
 
 	// SupportsAlwaysLoadPin is true only where shipped evidence shows the
@@ -161,10 +164,12 @@ var registry = []Capabilities{
 		SchemaDiscoveryOnly: true,
 		// SupportsMCPInstructions: Claude Code is dogfooded directly on this very
 		// codebase — every Claude Code agent session working on plumb receives
-		// DefaultInstructions as its own MCP server preamble and visibly acts on
-		// it (opens with session_start, as instructed), which is first-hand
-		// observed behaviour, not a shipping blurb. The claude-desktop/gemini rows
-		// have no equivalent first-party evidence — their only source is the
+		// this client's rendered `instructions` body as its own MCP server
+		// preamble and visibly acts on it (opens with session_start, per the
+		// tool's own description and the AGENTS.md quick reference this body's
+		// content is aligned with — PLAN-366), which is first-hand observed
+		// behaviour, not a shipping blurb. The claude-desktop/gemini rows have no
+		// equivalent first-party evidence — their only source is the
 		// `instructions` field's own CHANGELOG entry naming them — so they stay
 		// false pending a real measurement.
 		// SupportsAlwaysLoadPin: shipped — PLAN-355's AlwaysLoad pin ladder

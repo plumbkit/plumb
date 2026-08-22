@@ -232,9 +232,10 @@ func TestClientCapsZCodeRegistryEntry(t *testing.T) {
 // declared to surface the MCP `initialize` response's `instructions` field —
 // first-party OBSERVED evidence only, not a CHANGELOG shipping blurb naming a
 // client. Claude Code is the one row with that stronger footing: it is
-// dogfooded directly on this codebase, so every Claude Code session sees
-// DefaultInstructions and visibly acts on it. Claude Desktop and Gemini CLI
-// are also named in the `instructions` field's CHANGELOG entry, but that is
+// dogfooded directly on this codebase, so every Claude Code session sees its
+// rendered `instructions` body (internal/mcp.InstructionsForClient) and
+// visibly acts on it. Claude Desktop and Gemini CLI are also named in the
+// `instructions` field's CHANGELOG entry, but that is
 // not an observed result for THIS purpose, so they stay false pending a real
 // measurement — same discipline as ReliableDeferredToolDiscovery.
 func TestClientCapsSupportsMCPInstructionsEntries(t *testing.T) {

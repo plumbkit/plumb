@@ -9,6 +9,36 @@
 
 ### Added
 
+- **MCP `initialize` instructions aligned with the managed brief (PLAN-366).**
+  `internal/mcp`'s `initialize` response `instructions` field previously carried its own,
+  separately authored text (session_start-first orientation) — different substance from what
+  `plumb setup <client>` writes into the managed AGENTS.md/CLAUDE.md/GEMINI.md block
+  (PLAN-364). Two policy sources with different content is how an agent ends up ignoring both,
+  so this aligns them onto one shared source: the per-client bodies (`internal/setup.
+  ClientTemplates`) moved to a new Foundation-layer package, `internal/clienttemplates`
+  (`internal/arch`'s layering rule forbids Transport-layer `internal/mcp` from importing
+  Domain-layer `internal/setup` directly — `internal/setup` now re-exports the same names for
+  API stability). `internal/mcp.InstructionsForClient(clientName)` resolves the client via
+  `clientcaps.Lookup` (the same detection `autoProfileFor` uses) and renders that client's own
+  body — claude-code, codex, and gemini today — falling back to the client-agnostic
+  `DefaultInstructions` (now `clienttemplates.DefaultTemplate` itself, not a separate constant)
+  for every other client. Content: the edit lane, the refuse-to-break-the-build pointer
+  (`fail_on_new_errors`/`await_diagnostics`, PLAN-362), the peer mailbox pointer, and — for
+  claude-code, the only body that carries it — the `session_start({detail:"brief"})` hint for a
+  subagent, which never sees this field itself since it shares its parent's already-negotiated
+  MCP connection. Every known client's render is well inside the ~1.5 KB channel budget
+  (`mcp.MaxInstructionsBytes`). Rendering is independent of `clientcaps.SupportsMCPInstructions`
+  (PLAN-369) — that flag records observed consumption, not eligibility to receive one; an
+  unaware client still just ignores an unrecognised response field, same as before this change.
+  `session_start`'s own Claude Code guidance (`session_start_guidance.go`) drops the
+  "`await_diagnostics` returns the authoritative post-write pass" sentence it used to restate,
+  since the instructions field now states that doctrine in full for every Claude Code
+  connection before session_start ever runs; the edit-lane harness-error warning
+  (`nativeEditLaneWarning`) stays, since the instructions field deliberately does not quote
+  Claude Code's own harness error strings (same reasoning PLAN-364 PR 2 applied to Codex/
+  Gemini's bodies) and remains the only place an agent that has already hit one finds the
+  recognition text (`TestSessionStart_EditLaneWarning_ClaudeCode`).
+
 - **Client-awareness — capability probe and honest tool-profile reasons (PLAN-369).**
   `internal/clientcaps.Capabilities` gains three declared-evidence fields
   (`SupportsMCPInstructions`, `SupportsAlwaysLoadPin`, `DescriptionCapRunes`, all
