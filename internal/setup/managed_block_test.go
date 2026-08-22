@@ -270,6 +270,211 @@ func TestManagedBlock_TemplateSizeGuard(t *testing.T) {
 	}
 }
 
+// TestManagedBlock_ClientTemplateSizeGuard applies the same 25-line budget to
+// every per-client template (client_templates.go) that TestManagedBlock_
+// TemplateSizeGuard applies to DefaultTemplate — a per-client body earns its
+// place in someone else's file only by staying short too.
+func TestManagedBlock_ClientTemplateSizeGuard(t *testing.T) {
+	for client, body := range setup.ClientTemplates {
+		if !setup.TemplateWithinBudget(body) {
+			n := setup.TemplateLineCount(body)
+			t.Errorf("%s template is %d lines, want <= %d — trim it, don't raise the budget", client, n, setup.MaxTemplateLines)
+		}
+	}
+}
+
+// TestManagedBlock_RemoveDeletesBlockPreservingUserContent is Remove's
+// counterpart to TestManagedBlock_PreservesOutsideContent: removing a block
+// Apply appended after existing user prose must reconstruct that prose
+// exactly, byte for byte, not just delete the marker span.
+func TestManagedBlock_RemoveDeletesBlockPreservingUserContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+
+	userContent := "# My Project\n\nSome hand-written notes for agents.\n"
+	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	removed, err := setup.Remove(path)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !removed {
+		t.Fatal("Remove should report removed=true")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if string(got) != userContent {
+		t.Errorf("content after Remove = %q, want original %q", got, userContent)
+	}
+}
+
+// TestManagedBlock_RemoveDeletesFileWhenOnlyContentWasTheBlock covers the
+// fresh-file case: a file whose ONLY content is the managed block should be
+// deleted outright, not left behind as an empty file.
+func TestManagedBlock_RemoveDeletesFileWhenOnlyContentWasTheBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+
+	if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	removed, err := setup.Remove(path)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !removed {
+		t.Fatal("Remove should report removed=true")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file should be gone after removing its only content, stat err=%v", err)
+	}
+}
+
+// TestManagedBlock_RemoveNoBlockIsNoOp covers a file that exists but has no
+// managed block: Remove must be a no-op, matching Check's StatusMissing.
+func TestManagedBlock_RemoveNoBlockIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	content := "# no managed block here\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := setup.Remove(path)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if removed {
+		t.Error("Remove on a file without a managed block should report removed=false")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Errorf("Remove must not touch a file with no managed block")
+	}
+}
+
+// TestManagedBlock_RemoveAbsentFileIsNoOp covers a file that does not exist
+// at all.
+func TestManagedBlock_RemoveAbsentFileIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+
+	removed, err := setup.Remove(path)
+	if err != nil {
+		t.Fatalf("Remove on an absent file: %v", err)
+	}
+	if removed {
+		t.Error("Remove on an absent file should report removed=false")
+	}
+}
+
+// TestManagedBlock_RemoveMalformedRefuses matches Apply's own rigor: a file
+// whose markers do not parse cleanly must be refused, not guessed at.
+func TestManagedBlock_RemoveMalformedRefuses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+	content := "some user prose\n" + setup.EndMarker + "\nmore prose\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := setup.Remove(path); err == nil {
+		t.Fatal("Remove on a file with an orphan end marker must refuse")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != content {
+		t.Errorf("Remove must not touch the file when refusing")
+	}
+}
+
+// TestManagedBlock_RemoveFollowsSymlink mirrors TestManagedBlock_Symlink:
+// Remove must resolve a symlinked instruction file (CLAUDE.md -> AGENTS.md)
+// to its real target, remove the block there, and leave the symlink itself
+// untouched.
+func TestManagedBlock_RemoveFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "AGENTS.md")
+	link := filepath.Join(dir, "CLAUDE.md")
+
+	if err := os.WriteFile(target, []byte("# shared brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setup.Apply(link, testBody, "v1"); err != nil {
+		t.Fatalf("Apply via symlink: %v", err)
+	}
+
+	removed, err := setup.Remove(link)
+	if err != nil {
+		t.Fatalf("Remove via symlink: %v", err)
+	}
+	if !removed {
+		t.Fatal("Remove should report removed=true")
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat link: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("CLAUDE.md was replaced or removed — it must stay a symlink")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(got) != "# shared brief\n" {
+		t.Errorf("target content after Remove = %q, want original brief preserved", got)
+	}
+}
+
+// TestManagedBlock_RemoveThenApplyRoundTrips checks Remove and Apply compose
+// cleanly: Apply, Remove, Apply again should reproduce the exact bytes the
+// first Apply produced — Remove leaves nothing behind that would make a
+// fresh Apply diverge.
+func TestManagedBlock_RemoveThenApplyRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AGENTS.md")
+
+	if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := setup.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := setup.Apply(path, testBody, "v1"); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("Apply after Remove diverged:\nfirst:  %q\nsecond: %q", first, second)
+	}
+}
+
 // TestManagedBlock_MalformedOrphanStartRefusesRatherThanCorrupt is the
 // regression for the destructive sequence: a user deletes just the end
 // marker, leaving an orphan start. A permissive scanner treats that as

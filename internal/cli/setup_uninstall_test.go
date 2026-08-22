@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/plumbkit/plumb/internal/setup"
 )
 
 // The uninstall tests pin the safety properties the feature promises: plumb's
@@ -337,5 +339,89 @@ func TestRemovePlumbSkills(t *testing.T) {
 		t.Error("skill backup directory missing")
 	} else if _, err := os.Stat(filepath.Join(matches[0], "SKILL.md")); err != nil {
 		t.Errorf("backup exists but holds no SKILL.md: %v", err)
+	}
+}
+
+// TestUninstallTargetAt_RemovesInstructionsBlock is the PLAN-364 PR-2
+// deferred item: `plumb setup <client> --uninstall` must remove the managed
+// instruction block it (or a bare `plumb setup <client>`) wrote, not just
+// the client's MCP config entry. Drives the same two steps a real `plumb
+// setup codex` then `plumb setup codex --uninstall` would: register, apply
+// the instructions block, uninstall, and confirm the block is gone while the
+// rest of the file the block was appended to would have survived.
+func TestUninstallTargetAt_RemovesInstructionsBlock(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	setupGlobalInstructionsFlag = false
+
+	cfgPath, err := codexTarget.pathFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := codexTarget.intoFn(cfgPath, "/bin/plumb"); err != nil {
+		t.Fatalf("intoFn: %v", err)
+	}
+	if _, err := applyInstructionsBlock(codexTarget); err != nil {
+		t.Fatalf("applyInstructionsBlock: %v", err)
+	}
+
+	agentsPath := filepath.Join(dir, "AGENTS.md")
+	before, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("AGENTS.md not written by setup: %v", err)
+	}
+	if !strings.Contains(string(before), "<!-- plumb:managed:start") {
+		t.Fatal("AGENTS.md has no managed block to begin with")
+	}
+
+	if err := uninstallTargetAt(codexTarget, []string{cfgPath}, true); err != nil {
+		t.Fatalf("uninstallTargetAt: %v", err)
+	}
+
+	status, err := setup.Check(agentsPath, setup.DefaultTemplate, setup.DefaultVersion)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status != setup.StatusMissing {
+		t.Errorf("status after --uninstall = %v, want %v (block removed)", status, setup.StatusMissing)
+	}
+}
+
+// TestUninstallTargetAt_NoRegistrationLeavesInstructionsBlockAlone is the
+// inverse: uninstall is a no-op (matching the skills-removal precedent) when
+// plumb was not registered in the client's config to begin with, even if an
+// instructions block happens to be present — an uninstall must not delete
+// content it had no registration to reverse.
+func TestUninstallTargetAt_NoRegistrationLeavesInstructionsBlockAlone(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	setupGlobalInstructionsFlag = false
+
+	if _, err := applyInstructionsBlock(codexTarget); err != nil {
+		t.Fatalf("applyInstructionsBlock: %v", err)
+	}
+	agentsPath := filepath.Join(dir, "AGENTS.md")
+
+	cfgPath, err := codexTarget.pathFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No intoFn call: plumb was never registered in the config.
+	if err := uninstallTargetAt(codexTarget, []string{cfgPath}, true); err != nil {
+		t.Fatalf("uninstallTargetAt: %v", err)
+	}
+
+	after, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("reading AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(after), "<!-- plumb:managed:start") {
+		t.Error("instructions block was removed even though plumb was never registered in the config")
 	}
 }
