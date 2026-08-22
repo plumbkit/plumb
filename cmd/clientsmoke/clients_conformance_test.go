@@ -358,9 +358,19 @@ omit_tools_from = ["direct"]
 }
 
 func TestCodexDeterministicConformance(t *testing.T) {
+	// Codex resolves to full/client-side-allowlist, not the generic
+	// full/unverified-deferred-discovery it reported before PLAN-369 gave
+	// allowlist-capable clients their own rung in autoProfileFor. The reason is
+	// the point of the assertion — plumb still SERVES full to Codex either way,
+	// so a profile-only check would not have noticed the rung at all.
+	//
+	// This expectation went stale silently: the conformance workflow runs on a
+	// schedule, on tags, and only on PRs touching cmd/clientsmoke, the Makefile
+	// or its own workflow file — so the PR that changed the rung could not run
+	// it, and main stayed red until a release tag tripped over it.
 	runCodexDeterministicConformance(t, codexConformanceConfig{
 		profile:       "full",
-		profileReason: "unverified-deferred-discovery",
+		profileReason: "client-side-allowlist",
 	})
 }
 
