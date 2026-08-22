@@ -294,3 +294,125 @@ func TestReachabilityResolveDir_ExactThenSuffix(t *testing.T) {
 		t.Error("no match must refuse")
 	}
 }
+
+// TestReachabilityLoadPackageEdges_TestGoImporterExcluded pins the
+// production-imports-only scoping (independent review findings 2/3): an
+// import whose SOURCE file is a Go `_test.go` file must not become a
+// directory-level edge. Go forbids real import cycles, so counting a
+// _test.go-only edge is how a false cycle gets reported — 64% of the folded
+// edges on plumb's own index originated in a test file, and every SCC>1 an
+// early build of this feature reported was one of these, not a real cycle.
+func TestReachabilityLoadPackageEdges_TestGoImporterExcluded(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "reach.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	// internal/a's _test.go file imports internal/b — must NOT become an edge.
+	fileATest := insertTestFile(t, db, "internal/a/a_test.go")
+	pkgATest := insertTestNode(t, db, fileATest, "internal/a/a_test.go", Node{Kind: KindPackage, Name: "a", Language: "go"})
+	fileB := insertTestFile(t, db, "internal/b/b.go")
+	pkgB := insertTestNode(t, db, fileB, "internal/b/b.go", Node{Kind: KindPackage, Name: "b", Language: "go"})
+	buildPackageEdge(t, db, fileATest, "internal/a/a_test.go", pkgATest, pkgB)
+
+	// internal/a's PRODUCTION file imports internal/c — must still count.
+	fileA := insertTestFile(t, db, "internal/a/a.go")
+	pkgA := insertTestNode(t, db, fileA, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "go"})
+	fileC := insertTestFile(t, db, "internal/c/c.go")
+	pkgC := insertTestNode(t, db, fileC, "internal/c/c.go", Node{Kind: KindPackage, Name: "c", Language: "go"})
+	buildPackageEdge(t, db, fileA, "internal/a/a.go", pkgA, pkgC)
+
+	g, err := LoadPackageGraph(context.Background(), db)
+	if err != nil {
+		t.Fatalf("LoadPackageGraph: %v", err)
+	}
+	if g.Edges["internal/a"]["internal/b"] {
+		t.Errorf("a _test.go importer must not produce a directory edge; got edges=%v", g.Edges)
+	}
+	if !g.Edges["internal/a"]["internal/c"] {
+		t.Errorf("a production (non-_test.go) importer must still produce a directory edge; got edges=%v", g.Edges)
+	}
+}
+
+// TestReachabilityLoadPackageEdges_TestOnlyCycleNotFolded is the direct SCC
+// consequence: a two-directory "cycle" that only exists because one leg is a
+// _test.go import must not appear as a cycle at all — Go's compiler would
+// refuse a REAL one, so reporting it is always a test-import artefact.
+func TestReachabilityLoadPackageEdges_TestOnlyCycleNotFolded(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "reach.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileA := insertTestFile(t, db, "internal/a/a.go")
+	pkgA := insertTestNode(t, db, fileA, "internal/a/a.go", Node{Kind: KindPackage, Name: "a", Language: "go"})
+	fileB := insertTestFile(t, db, "internal/b/b.go")
+	pkgB := insertTestNode(t, db, fileB, "internal/b/b.go", Node{Kind: KindPackage, Name: "b", Language: "go"})
+	fileBTest := insertTestFile(t, db, "internal/b/b_test.go")
+	pkgBTest := insertTestNode(t, db, fileBTest, "internal/b/b_test.go", Node{Kind: KindPackage, Name: "b", Language: "go"})
+
+	// Production: a -> b. Test-only: b_test.go -> a (would look like a cycle
+	// if test edges were counted).
+	buildPackageEdge(t, db, fileA, "internal/a/a.go", pkgA, pkgB)
+	buildPackageEdge(t, db, fileBTest, "internal/b/b_test.go", pkgBTest, pkgA)
+
+	g, err := LoadPackageGraph(context.Background(), db)
+	if err != nil {
+		t.Fatalf("LoadPackageGraph: %v", err)
+	}
+	scope := map[string]bool{"internal/a": true, "internal/b": true}
+	sccs := CondenseSCCs(g, scope)
+	for _, s := range sccs {
+		if s.Cycle {
+			t.Errorf("a _test.go-only back-edge must not produce a reported cycle; got %+v", sccs)
+		}
+	}
+}
+
+// TestReachabilityResolveDir_NormalisesPath pins that ResolveDir normalises
+// its input the same way matchImportDir normalises an import path, so a
+// leading "./", a trailing "/", or a leading "/" is a cosmetic difference,
+// not a refusal.
+func TestReachabilityResolveDir_NormalisesPath(t *testing.T) {
+	g := &PackageGraph{Dirs: map[string]*PackageInfo{"cmd/plumb": {}}}
+	for _, in := range []string{"./cmd/plumb", "cmd/plumb/", "/cmd/plumb", "cmd/plumb"} {
+		if d, ok := g.ResolveDir(in); !ok || d != "cmd/plumb" {
+			t.Errorf("ResolveDir(%q) = (%q,%v), want (cmd/plumb,true)", in, d, ok)
+		}
+	}
+	if _, ok := g.ResolveDir(""); ok {
+		t.Error("ResolveDir(\"\") must refuse, not match every directory via path.Clean(\"\")==\".\"")
+	}
+}
+
+// TestReachabilityFrom_DeterministicPredecessorOverManyRuns pins the
+// sort.Strings(neighbours) determinism guarantee in ReachableFrom: when a
+// target has several equally-short predecessors, the SAME one must be chosen
+// every time. Go's map iteration order is randomised per range, so a build
+// with the sort removed is expected to occasionally disagree across enough
+// repetitions — this mirrors the reviewer's own 200-run determinism probe.
+func TestReachabilityFrom_DeterministicPredecessorOverManyRuns(t *testing.T) {
+	g := &PackageGraph{
+		Dirs: map[string]*PackageInfo{"root": {}, "target": {}},
+		Edges: map[string]map[string]bool{
+			"root": {},
+		},
+	}
+	// Many single-hop predecessors of "target", alphabetically after "aaa" —
+	// "aaa" must always win the predecessor slot.
+	for _, d := range []string{"zzz", "yyy", "xxx", "www", "vvv", "uuu", "ttt", "sss", "rrr", "qqq", "aaa"} {
+		g.Dirs[d] = &PackageInfo{}
+		g.Edges["root"][d] = true
+		g.Edges[d] = map[string]bool{"target": true}
+	}
+	for i := range 200 {
+		res := ReachableFrom(g, []string{"root"})
+		if got := res.Predecessor["target"]; got != "aaa" {
+			t.Fatalf("run %d: predecessor of target = %q, want the deterministic \"aaa\"", i, got)
+		}
+	}
+}

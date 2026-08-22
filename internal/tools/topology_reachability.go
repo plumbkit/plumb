@@ -13,8 +13,24 @@ import (
 // reachabilityConfidenceLine opens every reachability response. The import
 // graph is real and cross-file (linkImports), but there is no cross-package
 // call graph yet — this label keeps that honest rather than implying a
-// function-level answer this mode cannot give.
-const reachabilityConfidenceLine = "package-level (import edges); function-level unavailable — see roadmap"
+// function-level answer this mode cannot give. "production imports only"
+// discloses the other direction a caller must know: an edge whose importer is
+// a Go _test.go file is excluded (see PackageGraph's doc in
+// internal/topology/reachability.go) — a package pulled in only by a test
+// helper/fixture is reported unreachable here, and every SCC>1 the layers
+// shape can report is a real production cycle, never a test-only artefact.
+const reachabilityConfidenceLine = "package-level (import edges, production imports only — Go _test.go importers excluded); function-level unavailable — see roadmap"
+
+// reachabilityGoOnlyMessage is returned when package directories were indexed
+// but zero directory-level edges could be folded at all. loadPackageEdges
+// needs a KindPackage node to carry its own outward "imports" edge to a
+// KindImport node in the same file — today only the Go extractor emits that
+// shape (extractors/golang/extractor.go). A C#/PHP/Scala/Elixir/etc workspace
+// still indexes KindPackage nodes (so g.Dirs is non-empty) but produces none
+// of those edges, which would otherwise make every single package in the
+// codebase look "unreachable" — a confident, wrong answer. Refusing is
+// deliberately louder than that.
+const reachabilityGoOnlyMessage = "topology_impact: reachability: %d package director(ies) indexed but zero import edges were foldable — package-level reachability needs Go's per-file `package X` + `import` node/edge shape (extractors/golang), which other languages do not yet emit. Refusing rather than reporting every package unreachable; this mode is Go-only for now."
 
 // reachabilityMaxBytes hard-caps every reachability response shape. Chosen
 // well under the ~5 KB budget in PLAN-371 so the truncation note itself never
@@ -48,6 +64,9 @@ func (t *TopologyImpact) executeReachability(ctx context.Context, store *topolog
 	if len(g.Dirs) == 0 {
 		return "topology_impact: reachability: no indexed packages", nil
 	}
+	if len(g.Dirs) > 1 && g.TotalEdges() == 0 {
+		return fmt.Sprintf(reachabilityGoOnlyMessage, len(g.Dirs)), nil
+	}
 
 	roots, candidateDirs, rootNote, err := t.resolveReachabilityRoots(ctx, store, g, a)
 	if err != nil {
@@ -61,9 +80,9 @@ func (t *TopologyImpact) executeReachability(ctx context.Context, store *topolog
 
 	switch {
 	case a.PathTo != "":
-		return formatReachabilityPath(g, res, a.PathTo, rootNote), nil
+		return formatReachabilityPath(g, res, a.PathTo, candidateDirs, rootNote), nil
 	case a.Layers:
-		return formatReachabilityLayers(g, res, rootNote), nil
+		return formatReachabilityLayers(g, res, candidateDirs, rootNote), nil
 	default:
 		return formatReachabilitySummary(g, res, candidateDirs, rootNote), nil
 	}
@@ -225,9 +244,9 @@ func formatReachabilitySummary(g *topology.PackageGraph, res *topology.Reachabil
 // formatReachabilityPath returns the single shortest root -> target directory
 // chain, or a clear no-path answer — an unreached target is a legitimate
 // finding, never an error.
-func formatReachabilityPath(g *topology.PackageGraph, res *topology.ReachabilityResult, pathTo string, rootNote string) string {
+func formatReachabilityPath(g *topology.PackageGraph, res *topology.ReachabilityResult, pathTo string, candidateDirs map[string]bool, rootNote string) string {
 	var sb strings.Builder
-	writeReachabilityHeader(&sb, res.Roots, nil, rootNote)
+	writeReachabilityHeader(&sb, res.Roots, candidateDirs, rootNote)
 
 	target, ok := g.ResolveDir(pathTo)
 	if !ok {
@@ -246,9 +265,9 @@ func formatReachabilityPath(g *topology.PackageGraph, res *topology.Reachability
 // formatReachabilityLayers returns the package-SCC condensation of the
 // reachable subgraph as topological layers. A component with more than one
 // package IS the finding — it is flagged [cycle] rather than filtered.
-func formatReachabilityLayers(g *topology.PackageGraph, res *topology.ReachabilityResult, rootNote string) string {
+func formatReachabilityLayers(g *topology.PackageGraph, res *topology.ReachabilityResult, candidateDirs map[string]bool, rootNote string) string {
 	var sb strings.Builder
-	writeReachabilityHeader(&sb, res.Roots, nil, rootNote)
+	writeReachabilityHeader(&sb, res.Roots, candidateDirs, rootNote)
 
 	sccs := topology.CondenseSCCs(g, res.Reachable)
 	cycles := 0

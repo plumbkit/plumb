@@ -17,10 +17,18 @@
   import cycle, not filtered out). `roots` defaults to every `package main` directory plus
   `topology_routes` entry-point candidates (labelled candidate-seeded — lower confidence,
   per `topology_routes`' own contract), or accepts explicit directories / the literal
-  `"main"`. Every response opens with `package-level (import edges); function-level
-  unavailable` — this is directory granularity only; a cross-package call graph does not
-  exist yet (tracked separately). New `internal/topology/reachability.go` folds the
-  existing `pkg -(imports)-> import -(imports)-> pkg` two-hop node chain (the same edges
+  `"main"`. Every response opens with `package-level (import edges, production imports
+  only — Go _test.go importers excluded); function-level unavailable` — directory
+  granularity only, a cross-package call graph does not exist yet (tracked separately),
+  and an edge whose importer is a `_test.go` file is excluded: Go forbids real import
+  cycles, so counting test-only imports produced cycles that were entirely artefacts (64%
+  of the folded edges on plumb's own index originated in a test file, and every cycle an
+  early build of `layers` reported vanished once they were excluded). Go-only for now:
+  folding an edge needs a package node's own `imports` edge to an import node in the same
+  file, which today only the Go extractor emits — a workspace whose primary language
+  doesn't produce that shape gets a clear refusal instead of a confident "every package is
+  dead" answer. New `internal/topology/reachability.go` folds the existing
+  `pkg -(imports)-> import -(imports)-> pkg` two-hop node chain (the same edges
   `linkImports`/`matchImportDir` already validate) into direct directory-level edges via
   one SQL join, deliberately NOT by re-walking the depth-capped node-level `bfs()` spine
   `explore.go` uses for a symbol neighbourhood — that cap (`hardCapDepth=4`) would
@@ -28,10 +36,13 @@
   unreachable, the false-negative direction this feature exists to avoid. Full transitive
   closure, not a bounded neighbourhood, is what "reachable" has to mean here. Root
   resolution goes through the package graph's own directory index rather than
-  re-deriving identity from a raw name (the 636-node `strings`-collision class of bug).
-  `internal/topology/reachability_scc.go` adds Tarjan SCC plus longest-path layering.
-  `internal/tools/topology_reachability.go` wires the tool-facing response shapes.
-  `docs/topology.md` gains a reachability section.
+  re-deriving identity from a raw name (the 636-node `strings`-collision class of bug), and
+  is normalised the same way `matchImportDir` normalises an import path (`path.Clean`) so
+  `./cmd/plumb`, `cmd/plumb/`, and `cmd/plumb` all resolve alike. `mode="reachability"`
+  rejects `roots`/`path_to`/`layers` set without it, and rejects an unrecognised `mode`,
+  rather than silently ignoring either. `internal/topology/reachability_scc.go` adds
+  Tarjan SCC plus longest-path layering. `internal/tools/topology_reachability.go` wires
+  the tool-facing response shapes. `docs/topology.md` gains a reachability section.
 
 ### Fixed
 

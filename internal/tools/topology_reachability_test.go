@@ -25,6 +25,41 @@ func TestReachabilityModeNameNotRequired(t *testing.T) {
 	}
 }
 
+// TestReachabilityModeUnknownRejected pins that a typo'd/unknown mode is
+// rejected rather than silently falling through to the classic blast-radius
+// path (independent review finding 9).
+func TestReachabilityModeUnknownRejected(t *testing.T) {
+	a, err := parseTopologyImpactArgs(json.RawMessage(`{"name":"foo","mode":"reachabilty"}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := a.validate(); err == nil {
+		t.Error("expected an error for an unrecognised mode, got nil")
+	}
+}
+
+// TestReachabilityFieldsWithoutModeRejected pins that roots/path_to/layers
+// are rejected, not silently ignored, when mode is not "reachability" —
+// independent review finding 9: those fields doing nothing outside
+// reachability mode is exactly the kind of silent no-op this project's
+// memory (half-fix-passes-its-own-tests, green-but-false) warns about.
+func TestReachabilityFieldsWithoutModeRejected(t *testing.T) {
+	cases := []string{
+		`{"name":"foo","roots":["cmd/x"]}`,
+		`{"name":"foo","path_to":"internal/y"}`,
+		`{"name":"foo","layers":true}`,
+	}
+	for _, raw := range cases {
+		a, err := parseTopologyImpactArgs(json.RawMessage(raw))
+		if err != nil {
+			t.Fatalf("parse %s: %v", raw, err)
+		}
+		if err := a.validate(); err == nil {
+			t.Errorf("%s: expected an error (reachability-only field without mode=\"reachability\"), got nil", raw)
+		}
+	}
+}
+
 // TestReachabilitySummaryFormat_SamplesCappedWithRemainder pins the output
 // shape's byte discipline directly (no DB/extractor involved): with more
 // packages than reachabilitySampleLimit in each bucket, each bucket shows
