@@ -74,23 +74,29 @@ func TestReachabilitySummaryFormat_SamplesCappedWithRemainder(t *testing.T) {
 // TestReachabilitySummaryFormat_UnreachableSortedBySize pins that the
 // unreachable bucket surfaces the BIGGEST (most actionable) dead packages
 // first, not insertion or alphabetical order.
+// Directory names are deliberately alphabetically ASCENDING in the opposite
+// order of their NumNodes (aaa=smallest .. zzz=biggest): if the sort ever
+// regressed to alphabetical (or any name-based) ordering, this test would
+// observe the exact REVERSE of the expected size-descending order and fail —
+// unlike same-direction names, which would pass whether the code sorts by
+// size or by name and so cannot catch that mutation.
 func TestReachabilitySummaryFormat_UnreachableSortedBySize(t *testing.T) {
 	g := &topology.PackageGraph{Dirs: map[string]*topology.PackageInfo{
-		"small": {Dir: "small", NumNodes: 2},
-		"big":   {Dir: "big", NumNodes: 200},
-		"mid":   {Dir: "mid", NumNodes: 20},
+		"aaa_small": {Dir: "aaa_small", NumNodes: 2},
+		"zzz_big":   {Dir: "zzz_big", NumNodes: 200},
+		"mmm_mid":   {Dir: "mmm_mid", NumNodes: 20},
 	}}
 	res := &topology.ReachabilityResult{Roots: nil, Reachable: map[string]bool{}, Predecessor: map[string]string{}}
 	out := formatReachabilitySummary(g, res, nil, "")
 
-	bigIdx := strings.Index(out, "big (200")
-	midIdx := strings.Index(out, "mid (20")
-	smallIdx := strings.Index(out, "small (2")
+	bigIdx := strings.Index(out, "zzz_big (200")
+	midIdx := strings.Index(out, "mmm_mid (20")
+	smallIdx := strings.Index(out, "aaa_small (2")
 	if bigIdx == -1 || midIdx == -1 || smallIdx == -1 {
 		t.Fatalf("expected all three packages with their node counts; got:\n%s", out)
 	}
 	if bigIdx >= midIdx || midIdx >= smallIdx {
-		t.Errorf("expected big < mid < small ordering by size descending; got:\n%s", out)
+		t.Errorf("expected zzz_big < mmm_mid < aaa_small ordering by size descending (opposite of name order); got:\n%s", out)
 	}
 }
 
