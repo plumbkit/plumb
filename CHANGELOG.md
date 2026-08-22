@@ -46,6 +46,35 @@
 
 ### Fixed
 
+- **`read_symbol` now degrades to its tree-sitter fallback when the language server is
+  merely SLOW, instead of timing out (PLAN-390).** The fallback exists for a cold
+  server — the pool hands back a not-yet-ready entry after a 2s grace precisely "so the
+  tool falls back to the tree-sitter index instead of blocking until the MCP client times
+  out" — but two inversions made it unreachable on exactly that path. The
+  language-server attempt was granted the WHOLE `[lsp_query]` budget (30s by default), so
+  the tool could not answer before a client whose patience is that same budget gave up;
+  and when the attempt did expire, the fallback was invoked with that same, now-dead
+  context, which `topology`'s `safeExtract` refuses to start a parse on — so the fallback
+  reported "unavailable" and the tool surfaced the timeout it was meant to replace. Cold
+  gopls on a cold module cache is the case the fallback was written for, and it was the
+  one case the fallback could not serve. New `withFallbackLSPDeadline` bounds the server
+  attempt at half the time available — always strictly inside it, including when the
+  caller imposed the deadline — and hands the fallback the live parent context. The
+  timeout message, when there is no fallback to reach, now quotes the wait that actually
+  happened rather than the full `[lsp_query]` timeout. Behaviour is unchanged for a
+  healthy server, which answers in milliseconds.
+- **The `integration (macos-latest)` job no longer fails on a cold gopls
+  (PLAN-390).** `TestStrictReadRoundTrip/read_symbol` is the only subtest that touches a
+  `.go` file, so it is the only LSP-backed call, and `session_start` deliberately does not
+  wait for gopls — the whole cold start landed inside it. Its 20s client budget sat BELOW
+  the 30s server-side `[lsp_query]` deadline, so the client abandoned the request before
+  the daemon's own degradation could be observed and the failure surfaced as a bare
+  transport timeout. Eleven occurrences in ~48h, including twice on the same head and
+  twice on `main`. That call now gets a budget that outlasts the server deadline (and a
+  subprocess context derived from it), and `TestLSPToolTimeoutOutlastsServer` asserts the
+  RELATIONSHIP rather than either number, so re-inverting them goes red immediately
+  instead of turning the job flaky again weeks later.
+
 - **A subagent's `session_start` no longer drags every peer agent's workspace with it
   (issue #182, PLAN-375).** `session_start` resolved the workspace — including the
   re-pin — *before* it resolved the caller's identity, so the one call a multiplexed

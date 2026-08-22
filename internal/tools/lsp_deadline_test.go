@@ -61,3 +61,78 @@ func TestLSPTimeoutErr_WrapsOtherErrors(t *testing.T) {
 		t.Errorf("expected the tool name in the message, got: %v", err)
 	}
 }
+
+// TestWithFallbackLSPDeadline_LeavesHeadroom is the structural half of the
+// PLAN-390 guard: the language-server attempt of a fallback-capable tool must
+// end STRICTLY BEFORE the time available to the tool, so the tree-sitter parse
+// still has a live context to run on. Re-point read_symbol at withLSPDeadline
+// and the third case here goes red, because that helper hands an
+// already-bounded context straight through.
+func TestWithFallbackLSPDeadline_LeavesHeadroom(t *testing.T) {
+	t.Run("no caller deadline", func(t *testing.T) {
+		const timeout = time.Second
+		start := time.Now()
+		ctx, cancel, budget := withFallbackLSPDeadline(context.Background(), timeout)
+		defer cancel()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected the attempt to be bounded")
+		}
+		if !dl.Before(start.Add(timeout)) {
+			t.Errorf("attempt deadline %v is not before the budget end %v — no headroom for the fallback",
+				dl.Sub(start), timeout)
+		}
+		if budget <= 0 || budget >= timeout {
+			t.Errorf("reported budget %v must be positive and shorter than %v", budget, timeout)
+		}
+	})
+
+	t.Run("caller deadline shorter than the timeout", func(t *testing.T) {
+		parent, pcancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer pcancel()
+		pdl, _ := parent.Deadline()
+		ctx, cancel, budget := withFallbackLSPDeadline(parent, time.Hour)
+		defer cancel()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected the attempt to be bounded by the caller's deadline")
+		}
+		if !dl.Before(pdl) {
+			t.Errorf("attempt deadline %v is not before the caller's %v — the caller's whole "+
+				"budget goes to the server and the fallback can never run", dl, pdl)
+		}
+		if budget >= 200*time.Millisecond {
+			t.Errorf("budget %v consumed the caller's entire remaining time", budget)
+		}
+	})
+
+	t.Run("caller deadline with the cap disabled", func(t *testing.T) {
+		parent, pcancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer pcancel()
+		pdl, _ := parent.Deadline()
+		ctx, cancel, budget := withFallbackLSPDeadline(parent, 0)
+		defer cancel()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected the caller's deadline to still bound the attempt")
+		}
+		if !dl.Before(pdl) {
+			t.Errorf("with [lsp_query] disabled the attempt still took the caller's whole "+
+				"budget (%v vs %v): a fallback-capable tool must always reserve headroom", dl, pdl)
+		}
+		if budget <= 0 {
+			t.Errorf("expected a positive budget derived from the caller's deadline, got %v", budget)
+		}
+	})
+
+	t.Run("no bound at all", func(t *testing.T) {
+		ctx, cancel, budget := withFallbackLSPDeadline(context.Background(), 0)
+		defer cancel()
+		if _, ok := ctx.Deadline(); ok {
+			t.Error("a disabled timeout with no caller deadline must not impose one")
+		}
+		if budget != 0 {
+			t.Errorf("expected a zero budget when uncapped, got %v", budget)
+		}
+	})
+}

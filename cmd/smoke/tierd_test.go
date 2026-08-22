@@ -364,6 +364,11 @@ func TestStrictReadRoundTrip(t *testing.T) {
 		readArgs  func(path string) map[string]any
 		oldString string
 		newString string
+		// lspBacked marks the case whose read touches a .go file and is
+		// therefore the first — and only — call in this test to reach the
+		// language server, absorbing the whole gopls cold start. See
+		// lspToolTimeout.
+		lspBacked bool
 	}{
 		{
 			tool:      "read_file",
@@ -380,6 +385,7 @@ func TestStrictReadRoundTrip(t *testing.T) {
 			},
 			oldString: "hi",
 			newString: "hello",
+			lspBacked: true,
 		},
 		{
 			tool: "read_multiple_files",
@@ -398,7 +404,17 @@ func TestStrictReadRoundTrip(t *testing.T) {
 				"note.txt":  "alpha\n",
 				"sample.go": sampleGo,
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), tierDTimeout)
+			// The LSP-backed case gets the cold-start budget on its read AND on
+			// the subprocess context that has to outlive it — a call timeout
+			// longer than the context bounding the client is not a budget, it is
+			// a comment. Both are derived from lspToolTimeout so raising one
+			// carries to the other.
+			readTimeout, budget := toolTimeout, tierDTimeout
+			if tc.lspBacked {
+				readTimeout = lspToolTimeout
+				budget = tierDTimeout + lspToolTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()
 
 			c := newMCPClient(t, ctx, plumbBin, mkTmpHome(t), fixture, "PLUMB_STRICT_EDITS=true")
@@ -415,7 +431,7 @@ func TestStrictReadRoundTrip(t *testing.T) {
 				t.Fatalf("%s: strict mode did not reject an unread edit on %s", tc.tool, path)
 			}
 
-			readOut := c.call(t, tc.tool, tc.readArgs(path), toolTimeout)
+			readOut := c.call(t, tc.tool, tc.readArgs(path), readTimeout)
 			mtime := extractAnyMtime(t, readOut)
 
 			editOut := c.call(t, "edit_file", map[string]any{
