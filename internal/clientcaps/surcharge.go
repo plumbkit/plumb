@@ -15,20 +15,22 @@ package clientcaps
 // second measurement. PLAN-323's own headline "~28,700 tokens" used an
 // ASSUMED 3.7 chars/token with no tokenizer behind it — restated here so a
 // reader does not inherit that as settled: a PLAN-367 review-round
-// measurement tokenised the live 59-tool payload with a real cl100k
-// tokenizer and got 106,401 chars / 23,276 tokens = 4.57 chars/token, ~24%
-// fewer tokens than the 3.7 assumption implied. surchargeCharsPerToken uses
-// that measured ratio; it is still an estimate (a different client's actual
-// tokenizer vocabulary will differ), just no longer an invented one.
+// measurement (measured 2026-08-22, review round) tokenised the live 59-tool
+// payload with a real cl100k tokenizer and got 106,401 chars / 23,276 tokens
+// = 4.57 chars/token, ~24% fewer tokens than the 3.7 assumption implied.
+// surchargeCharsPerToken uses that measured ratio; it is still an estimate (a
+// different client's actual tokenizer vocabulary will differ, and the live
+// registry's size drifts as tools are added), just no longer an invented one.
 
 // surchargeCharsPerToken is the characters-per-token ratio used to convert
 // the advertised tool-schema byte total into a token ESTIMATE — the measured
 // cl100k ratio on a real 59-tool tools/list payload (106,401 chars / 23,276
-// tokens), not a guess. Different clients tokenise differently, so treat any
-// Tokens figure this produces as an approximation labelled by this ratio and
-// tokenizer, never as exact. Named distinctly from tokeniser.go's per-family
-// charsPerToken map: this is a single fixed ratio for raw schema text, not a
-// per-client/per-content lookup.
+// tokens, measured 2026-08-22, review round), not a guess. Different clients
+// tokenise differently, so treat any Tokens figure this produces as an
+// approximation labelled by this ratio and tokenizer, never as exact. Named
+// distinctly from tokeniser.go's per-family charsPerToken map: this is a
+// single fixed ratio for raw schema text, not a per-client/per-content
+// lookup.
 const surchargeCharsPerToken = 4.57
 
 // SurchargeReport is the estimated per-request cost of the tool schemas a

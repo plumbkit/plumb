@@ -229,15 +229,20 @@ export function latencyBoxplot(P, tools) {
   };
 }
 
-// bubbleScatter — x=calls, y=p95, bubble=tokens saved.
-export function bubbleScatter(P, tools) {
+// bubbleScatter — x=calls, y=p95, bubble=tokens saved. modelVersion labels the
+// bubble size/tooltip figure with the savings-model version it was netted to
+// (statsDTO.modelVersion) — the same DB can hold calls scored under an
+// earlier model that credited a different, since-retired counterfactual, so
+// the figure must never read as version-agnostic (PLAN-367 review round 2).
+export function bubbleScatter(P, tools, modelVersion) {
   const data = tools
     .filter((t) => t.calls > 0)
     .map((t) => ({ value: [t.calls, Math.max(1, t.p95Ms), t.tokensSaved], name: t.tool }));
+  const versionLabel = modelVersion ? ` (v${modelVersion})` : "";
   return {
     tooltip: {
       ...tip(P),
-      formatter: (p) => `<b>${p.data.name}</b><br/>${p.value[0]} calls · ${p.value[1]} ms p95<br/>${p.value[2]} tokens saved`,
+      formatter: (p) => `<b>${p.data.name}</b><br/>${p.value[0]} calls · ${p.value[1]} ms p95<br/>${p.value[2]} tokens saved${versionLabel}`,
     },
     grid: { left: 8, right: 20, top: 16, bottom: 40, containLabel: true },
     xAxis: { name: "calls", type: "log", nameTextStyle: { color: P.faint }, axisLabel: { color: P.faint, fontSize: 10 }, splitLine: { lineStyle: { color: "rgba(120,116,101,.12)" } } },
