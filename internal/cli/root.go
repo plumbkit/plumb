@@ -149,6 +149,12 @@ func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
 		var silent silentExitError
 		if !errors.As(err, &silent) {
+			// The theme is applied in PersistentPreRun, which an unknown command
+			// never reaches — cobra fails during command resolution. Without this
+			// the banner and the diagnostic render in the default palette while
+			// every other path renders in the user's, so an error looks like a
+			// different program. Applying it here is idempotent.
+			applyConfiguredTheme()
 			printLogoIfNeeded(os.Stderr)
 			printCLIDiagnostic(os.Stderr, cliDiagnostic{
 				Kind:        "error",

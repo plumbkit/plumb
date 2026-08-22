@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/tui"
 )
@@ -18,7 +20,7 @@ import (
 // that does not register plumb is shown as "unregistered" with the fix on its
 // own rows, rather than as a pile of missing hooks whose reason the reader has
 // to guess.
-func runHooksStatus() error {
+func runHooksStatus(cmd *cobra.Command) error {
 	plumbBin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolving plumb binary path: %w", err)
@@ -37,7 +39,7 @@ func runHooksStatus() error {
 		}
 		report.group(t, path, states, statusAction)
 	}
-	report.render(nil)
+	report.render(nil, cmd)
 	return nil
 }
 
@@ -125,13 +127,21 @@ func (r *hookReport) note(lines ...string) {
 }
 
 // render prints the table, then any notes, then the clients skipped in a sweep.
-func (r *hookReport) render(skips []string) {
+// verbsOf, when set, adds that command's subcommands under the table — bare `plumb hooks` is
+// read-only, so the two commands that change anything are worth naming where
+// the reader is already looking, rather than only in --help.
+func (r *hookReport) render(skips []string, verbsOf *cobra.Command) {
 	if r.rows == 0 {
 		fmt.Println("No hook-capable clients to report on.")
 		return
 	}
 	fmt.Println(r.table.Render())
+	if verbsOf != nil {
+		printHookVerbs(verbsOf)
+	}
 	if len(r.notes) > 0 {
+		fmt.Println()
+		fmt.Println(tui.HintStyle.Render("● Notes"))
 		fmt.Println()
 		for _, n := range dedupeStrings(r.notes) {
 			fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"), tui.MutedStyle.Render(n))
@@ -143,6 +153,43 @@ func (r *hookReport) render(skips []string) {
 			fmt.Println(tui.MutedStyle.Render(s))
 		}
 	}
+}
+
+// printHookVerbs lists the two writers under the read-only table, in the same
+// shape `--help` uses — heading, bold name, muted description — with the text
+// taken from the cobra commands themselves so the two can never drift apart.
+// Bare `plumb hooks` changes nothing, so the commands that do are worth naming
+// where the reader is already looking.
+func printHookVerbs(cmd *cobra.Command) {
+	if cmd == nil {
+		return
+	}
+	// The command comes from cobra rather than the package vars: naming those
+	// here would close an initialisation cycle (the command's RunE reaches this
+	// function), and walking the real command tree also means a verb added later
+	// appears without anyone remembering to list it twice.
+	verbs := make([]*cobra.Command, 0, len(cmd.Commands()))
+	width := 0
+	for _, c := range cmd.Commands() {
+		if c.Hidden || !c.IsAvailableCommand() {
+			continue
+		}
+		verbs = append(verbs, c)
+		if n := len(c.Name()); n > width {
+			width = n
+		}
+	}
+	if len(verbs) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(tui.ItemStyle.Render("Available Commands:"))
+	for _, c := range verbs {
+		name := fmt.Sprintf("  %-*s", width+2, c.Name())
+		fmt.Printf("%s%s\n", tui.HintStyle.Bold(true).Render(name), tui.MutedStyle.Render(c.Short))
+	}
+	fmt.Println()
+	fmt.Printf("%s\n", tui.MutedStyle.Render(fmt.Sprintf("Use \"%s [command] --help\" for more information about a command.", cmd.CommandPath())))
 }
 
 // dedupeStrings keeps the first occurrence of each line. Two clients installed

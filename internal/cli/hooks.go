@@ -41,7 +41,7 @@ config does not register plumb is shown as unregistered — hooks are only
 installed where plumb is registered, since the linkage they supply and the
 mailbox they probe both need plumb's tool surface to be reachable.`,
 	Args: cobra.NoArgs,
-	RunE: func(_ *cobra.Command, _ []string) error { return runHooksStatus() },
+	RunE: func(cmd *cobra.Command, _ []string) error { return runHooksStatus(cmd) },
 }
 
 var hooksInstallCmd = &cobra.Command{
@@ -141,7 +141,7 @@ func runHooksInstall(args []string) error {
 		// nothing — the same call `plumb setup` makes about its own per-client note.
 		report.note(t.notes...)
 	}
-	report.render(skips)
+	report.render(skips, nil)
 	return nil
 }
 
@@ -180,7 +180,7 @@ func runHooksUninstall(args []string) error {
 				t.name, extra, textfmt.Plural(extra, "entry", "entries")))
 		}
 	}
-	report.render(nil)
+	report.render(nil, nil)
 	return nil
 }
 

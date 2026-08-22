@@ -89,8 +89,8 @@ var claudeCodeHooksTarget = hooksTarget{
 	entries: claudeHookEntries,
 	ours:    claudeHookOwned,
 	notes: []string{
-		"Claude Code hot-reloads settings.json, so sessions already running pick these up without a restart.",
-		"The Stop hook stays silent and costs nothing unless `plumb mail` reports unread peer messages for that session.",
+		"Claude Code — settings.json hot-reloads, so sessions already running pick these up without a restart.",
+		"Claude Code — the Stop hook stays silent, and costs nothing, unless `plumb mail` reports unread peer messages.",
 	},
 }
 
@@ -102,8 +102,8 @@ var codexHooksTarget = hooksTarget{
 	entries: codexHookEntries,
 	ours:    codexHookOwned,
 	notes: []string{
-		"Use /hooks in Codex to review and trust the two Plumb command hooks.",
-		"The Stop hook checks only as a turn ends; Codex cannot wake an already-idle session.",
+		"Codex — run /hooks in Codex to review and trust the two plumb command hooks.",
+		"Codex — the Stop hook checks only as a turn ends; Codex cannot wake an already-idle session.",
 	},
 }
 

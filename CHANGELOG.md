@@ -1,5 +1,5 @@
 # Changelog
-## 0.17.1 (unreleased)
+## 0.17.1 (2026-08-22)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
@@ -798,6 +798,23 @@
 - **The Kotlin integration test ran an 80-second Gradle build before checking
   whether `kotlin-lsp` existed**, so a machine without the server paid the full
   build to reach a skip. The cheap check now comes first: 86s → 0.01s.
+
+### Fixed
+
+- **An error printed plumb's banner in the wrong palette.** The theme is applied
+  in the root command's `PersistentPreRun`, which an unknown command never
+  reaches — cobra fails during command resolution — so `plumb sync help` drew
+  its banner and diagnostic in the default colours while every other command
+  drew the user's. One `applyConfiguredTheme()` on the error path; the whole CLI
+  now renders as one program.
+
+- **`plumb hooks` output now follows the house patterns instead of inventing
+  its own.** Bare `plumb hooks` lists its writers in the same
+  `Available Commands:` shape `--help` uses, with the names and descriptions
+  taken from the cobra commands themselves so the two cannot drift — and walked
+  from the real command tree, so a verb added later needs no second list. The
+  post-install notes get the `● Notes` heading the `┊` gutter implies elsewhere
+  in the CLI, and each line names the client it belongs to.
 
 ### Added
 - **`plumb hooks` — lifecycle hooks for Claude Code and Codex, installable and
