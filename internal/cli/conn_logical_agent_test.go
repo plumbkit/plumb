@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -80,5 +82,27 @@ func TestDeclaredAgentCtx(t *testing.T) {
 	withMeta := mcp.WithLogicalAgent(context.Background(), "meta-agent")
 	if got := mcp.LogicalAgentFromCtx(s.declaredAgentCtx(withMeta, "sub-1")); got != "meta-agent" {
 		t.Errorf("logical agent = %q, want the per-call _meta identity %q", got, "meta-agent")
+	}
+}
+
+// TestDeclaredAgentChannelIsWired guards the wiring, not the behaviour: the
+// declared-agent channel only closes issue #182 if session_start is actually
+// handed it, and nothing else in the suite exercises registerAllTools' own
+// chain (the harness wires its own tool). Dropping the line would leave every
+// behavioural test green while every real subagent went back to moving the
+// connection's pin. Same source-scanning idiom as
+// TestBoundaryGuardWiringComplete above it.
+func TestDeclaredAgentChannelIsWired(t *testing.T) {
+	src, err := os.ReadFile("conn_register.go")
+	if err != nil {
+		t.Fatalf("reading conn_register.go: %v", err)
+	}
+	body := registerAllToolsBody(string(src))
+	if body == "" {
+		t.Fatal("could not locate registerAllTools in conn_register.go — was it renamed?")
+	}
+	if !strings.Contains(body, "WithDeclaredAgent(s.declaredAgentCtx)") {
+		t.Error("session_start is registered without WithDeclaredAgent(s.declaredAgentCtx): " +
+			"a multiplexed subagent's session_start would re-pin the whole connection again (issue #182)")
 	}
 }
