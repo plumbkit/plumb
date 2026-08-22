@@ -27,6 +27,9 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 		{"kimchi-bot", "unknown", true},          // diverges at the 4th char, so no prefix matches
 		{"totally-unknown-xyz", "unknown", true}, // conservative default
 		{"", "unknown", true},
+		{"zcode", "zcode", true},
+		{"zcode/1.0.0", "zcode", true},
+		{"ZCode", "zcode", true}, // case-insensitive
 	}
 	for _, tc := range tests {
 		got := Lookup(tc.name)
@@ -178,7 +181,7 @@ func TestScoreBatchAvoidsPerCallOverhead(t *testing.T) {
 // change, not something to acquire by accident — and the set must stay in step
 // with `plumb setup <client> --lean`, which internal/cli asserts from its end
 // (TestLeanClientsDeclareTheirCapability).
-func TestClientSideAllowlistEntries(t *testing.T) {
+func TestClientCapsClientSideAllowlistEntries(t *testing.T) {
 	want := map[string]bool{"codex": true, "gemini": true, "kimi-code": true}
 	for _, c := range registry {
 		if got := c.ClientSideAllowlist; got != want[c.Name] {
@@ -198,5 +201,80 @@ func TestClientSideAllowlistEntries(t *testing.T) {
 			t.Errorf("%s declares a client-side allowlist but no native search — session_start's "+
 				"fallback would leave it with no discovery at all", c.Name)
 		}
+	}
+}
+
+// TestZCodeRegistryEntry pins the PLAN-369 addition: ZCode is a CLI-style
+// coding agent (native file/search/shell, like Claude Code/Codex/Kimi Code),
+// but carries no ClientSideAllowlist — setup_zcode.go documents that an
+// unrecognised key on ZCode's strict server schema drops the plumb entry
+// entirely, so there is no --lean allowlist mechanism to declare.
+func TestClientCapsZCodeRegistryEntry(t *testing.T) {
+	got := Lookup("zcode")
+	if got.Name != "zcode" {
+		t.Fatalf(`Lookup("zcode").Name = %q, want "zcode"`, got.Name)
+	}
+	if !got.NativeFileRead || !got.NativeSearch || !got.NativeShell {
+		t.Errorf("zcode = %+v, want native file/search/shell all true", got)
+	}
+	if got.ClientSideAllowlist {
+		t.Error("zcode must not declare ClientSideAllowlist — no --lean mechanism exists for it (setup_zcode.go)")
+	}
+	if got.SchemaDiscoveryOnly {
+		t.Error("zcode must not declare SchemaDiscoveryOnly without measured evidence")
+	}
+	if got.ReliableDeferredToolDiscovery {
+		t.Error("zcode must not declare ReliableDeferredToolDiscovery without measured evidence (G8)")
+	}
+}
+
+// TestSupportsMCPInstructionsEntries pins exactly which clients are declared to
+// surface the MCP `initialize` response's `instructions` field — shipped
+// evidence only (the field's own CHANGELOG entry names Claude Desktop, Claude
+// Code, and Gemini CLI), never a guess. Every other registered client, and the
+// unknown fallback, must stay false until a similar entry documents them.
+func TestClientCapsSupportsMCPInstructionsEntries(t *testing.T) {
+	want := map[string]bool{"claude-desktop": true, "claude-code": true, "gemini": true}
+	for _, c := range registry {
+		if got := c.SupportsMCPInstructions; got != want[c.Name] {
+			t.Errorf("%s: SupportsMCPInstructions = %v, want %v", c.Name, got, want[c.Name])
+		}
+	}
+	if unknownCaps.SupportsMCPInstructions {
+		t.Error("an unrecognised client must not be assumed to surface MCP instructions")
+	}
+}
+
+// TestSupportsAlwaysLoadPinEntries pins the sole proven case: Claude Code is
+// the only client with shipped evidence it reads the proprietary
+// `_meta["anthropic/alwaysLoad"]=true` tools/list extension PLAN-355
+// introduced. Every other client, including its own claude-desktop sibling,
+// must stay false absent the same kind of evidence — the flag is declared data
+// only in this PR (conn_register.go still pins unconditionally for everyone).
+func TestClientCapsSupportsAlwaysLoadPinEntries(t *testing.T) {
+	for _, c := range registry {
+		want := c.Name == "claude-code"
+		if got := c.SupportsAlwaysLoadPin; got != want {
+			t.Errorf("%s: SupportsAlwaysLoadPin = %v, want %v", c.Name, got, want)
+		}
+	}
+	if unknownCaps.SupportsAlwaysLoadPin {
+		t.Error("an unrecognised client must not be assumed to read the AlwaysLoad pin extension")
+	}
+}
+
+// TestDescriptionCapRunesUnmeasured guards the evidence-gate DescriptionCapRunes'
+// own doc comment promises: no client's real description-truncation cap has
+// been measured yet, so every row — registered or unknown — must leave it at
+// zero rather than a guessed number.
+func TestClientCapsDescriptionCapRunesUnmeasured(t *testing.T) {
+	for _, c := range registry {
+		if c.DescriptionCapRunes != 0 {
+			t.Errorf("%s: DescriptionCapRunes = %d, want 0 (unmeasured) — populate only from a reviewed measurement",
+				c.Name, c.DescriptionCapRunes)
+		}
+	}
+	if unknownCaps.DescriptionCapRunes != 0 {
+		t.Errorf("unknownCaps.DescriptionCapRunes = %d, want 0", unknownCaps.DescriptionCapRunes)
 	}
 }

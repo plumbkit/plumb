@@ -77,6 +77,38 @@ type Capabilities struct {
 	// allowlist removes it, and there is no escape hatch.
 	ClientSideAllowlist bool
 
+	// SupportsMCPInstructions is true only where shipped evidence shows the
+	// client surfaces the MCP `initialize` response's `instructions` field to
+	// the model as a system-prompt-style hint (internal/mcp/instructions.go,
+	// internal/mcp/server_handlers.go — sent to every client today regardless
+	// of this flag, since an unaware client just ignores an unknown field).
+	// PLAN-366 will render a per-client template into that field; this flag is
+	// the seam it will read, not something this package wires into a template
+	// — no such template exists yet. Unproven ⇒ false, the same evidence
+	// discipline as ReliableDeferredToolDiscovery.
+	SupportsMCPInstructions bool
+
+	// SupportsAlwaysLoadPin is true only where shipped evidence shows the
+	// client reads Claude Code's proprietary tools/list extension
+	// `_meta["anthropic/alwaysLoad"]=true` (internal/mcp/meta_keys.go,
+	// PLAN-355) to pin a tool's schema into context ahead of a ToolSearch
+	// round-trip. Claude Code is the only proven case. Declared data only:
+	// conn_register.go still sets srv.AlwaysLoad unconditionally for every
+	// client, since the meta key costs a few bytes per tool that an unaware
+	// client silently ignores — gating it per-client to reclaim those bytes is
+	// a follow-up, not a correctness fix this flag forces in this PR.
+	SupportsAlwaysLoadPin bool
+
+	// DescriptionCapRunes, when nonzero, is a measured rune ceiling the client
+	// truncates a single tool description at. Zero means no cap has been
+	// measured for this client — NOT "no cap exists". No client's real cap is
+	// known yet (internal/tools/profile_test.go's maxDescriptionChars is a
+	// measurement of Claude Code specifically, not yet copied here), so every
+	// row below leaves this at zero; populate it only from a reviewed
+	// measurement, the same rule ReliableDeferredToolDiscovery follows —
+	// guessing a number here would be fake precision, not a real cap.
+	DescriptionCapRunes int
+
 	Tokeniser Family
 }
 
@@ -91,7 +123,11 @@ var registry = []Capabilities{
 		Name:     "claude-desktop",
 		Prefixes: []string{"claude-desktop", "claude-ai", "claude"},
 		// Thin client: no native filesystem, search, shell, or LSP.
-		Tokeniser: FamilyClaude,
+		// SupportsMCPInstructions: shipped (Claude Desktop is named in the
+		// `instructions` field's own CHANGELOG entry as a client that injects it
+		// as a system-prompt-style hint).
+		SupportsMCPInstructions: true,
+		Tokeniser:               FamilyClaude,
 	},
 	{
 		Name:           "junie",
@@ -115,7 +151,13 @@ var registry = []Capabilities{
 		NativeSearch:        true,
 		NativeShell:         true,
 		SchemaDiscoveryOnly: true,
-		Tokeniser:           FamilyClaude,
+		// Both shipped: the `instructions` field's CHANGELOG entry names Claude
+		// Code, and PLAN-355's AlwaysLoad pin ladder (conn_register.go) is
+		// Claude-Code-specific in practice today (the sole proven reader of
+		// _meta["anthropic/alwaysLoad"]).
+		SupportsMCPInstructions: true,
+		SupportsAlwaysLoadPin:   true,
+		Tokeniser:               FamilyClaude,
 	},
 	{
 		Name:           "codex",
@@ -137,7 +179,9 @@ var registry = []Capabilities{
 		// `plumb setup gemini --lean` writes tools.LeanToolNames() into the
 		// includeTools key of mcpServers.plumb in the user's settings.json.
 		ClientSideAllowlist: true,
-		Tokeniser:           FamilyGemini,
+		// Shipped: the `instructions` field's CHANGELOG entry names Gemini CLI.
+		SupportsMCPInstructions: true,
+		Tokeniser:               FamilyGemini,
 	},
 	{
 		// Kimi Code is schema-discovery-only: it builds its tool set purely from
@@ -162,9 +206,12 @@ var registry = []Capabilities{
 		// bare "kimi" alias covers sibling products (Kimi Desktop) that share the
 		// same mcp.json. Longest-prefix matching in Lookup keeps "kimi-code"
 		// winning over "kimi". If a future build reports some other name, Lookup
-		// simply falls through to unknownCaps and the client degrades gracefully
-		// to unrecognised-client behaviour (still "full", reason
-		// unknown-deferred-discovery) — never to a broken lean surface.
+		// simply falls through to unknownCaps, which (PLAN-369) now resolves to
+		// the LEAN baseline ("lean", reason unknown-client-baseline) rather than
+		// full — never to a BROKEN surface (the session_start pointer keeps every
+		// tool reachable), but a strictly smaller advertised one than this entry
+		// gives. That is exactly why the alias matters more after this change,
+		// not less: see below.
 		//
 		// WHY THE BARE ALIAS SHARES THIS ENTRY, unlike claude/claude-desktop.
 		// Reading it as "Kimi Desktop is handed the CLI's native-capability
@@ -179,13 +226,16 @@ var registry = []Capabilities{
 		//
 		// The alias only changes the two fields where sharing is the safer
 		// answer. SchemaDiscoveryOnly resolves the profile to "full"
-		// (schema-discovery-only-client) where unknownCaps resolves it to "full"
-		// too (unknown-deferred-discovery) — same served surface, and the
-		// dangerous direction would be a wrongly-absent flag on a client that
-		// cannot invoke an unadvertised tool, never a wrongly-present one.
-		// Tokeniser FamilyGPT is nearer a Kimi model than unknownCaps'
-		// FamilyClaude. So the alias is strictly better-informed than the
-		// fallback and cannot cost capability.
+		// (schema-discovery-only-client); unknownCaps (PLAN-369) now resolves to
+		// "lean" (unknown-client-baseline) — a SMALLER served surface, not the
+		// same one this comment used to claim. That asymmetry is exactly the
+		// dangerous direction the alias exists to avoid: a wrongly-absent
+		// SchemaDiscoveryOnly flag on a client that in fact cannot invoke an
+		// unadvertised tool would silently break it under the new lean baseline,
+		// where a wrongly-present flag only costs advertised bytes. Tokeniser
+		// FamilyGPT is nearer a Kimi model than unknownCaps' FamilyClaude. So the
+		// alias is strictly better-informed than the fallback and cannot cost
+		// capability.
 		//
 		// This is deliberately NOT the rule isKimiCode follows
 		// (session_start_detect.go), which refuses the bare alias. The two
@@ -203,6 +253,29 @@ var registry = []Capabilities{
 		SchemaDiscoveryOnly: true,
 		ClientSideAllowlist: true,
 		Tokeniser:           FamilyGPT,
+	},
+	{
+		// ZCode (Z.ai's desktop client, setup_zcode.go) is a CLI-style coding
+		// agent — it gets its own skills directory (~/.zcode/skills) like Claude
+		// Code, Codex, Junie, and Kimi Code, unlike the thin claude-desktop chat
+		// client — so native file/search/shell are set true on the same evidence
+		// basis as those clients. No --lean allowlist exists for it: setup_zcode.go
+		// documents that an unknown key on ZCode's strict server schema causes the
+		// server to be dropped entirely, so ClientSideAllowlist stays false. Its
+		// SchemaDiscoveryOnly / ReliableDeferredToolDiscovery / SupportsMCPInstructions
+		// / SupportsAlwaysLoadPin behaviour has not been measured — all left false,
+		// so auto mode falls through to today's conservative default ("full",
+		// unverified-deferred-discovery), exactly like Codex and Gemini before their
+		// allowlist flag existed. Tokeniser: no GLM-specific ratio has been
+		// measured, so FamilyGPT (tiktoken-lineage BPE) is the closest defensible
+		// family, the same reasoning the Kimi Code entry above gives rather than
+		// inventing a bespoke ratio.
+		Name:           "zcode",
+		Prefixes:       []string{"zcode"},
+		NativeFileRead: true,
+		NativeSearch:   true,
+		NativeShell:    true,
+		Tokeniser:      FamilyGPT,
 	},
 }
 

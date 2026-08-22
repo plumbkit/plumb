@@ -9,6 +9,30 @@
 
 ### Added
 
+- **Client-awareness — capability probe and progressive tool-profile ladder (PLAN-369).**
+  `internal/clientcaps.Capabilities` gains three declared-evidence fields
+  (`SupportsMCPInstructions`, `SupportsAlwaysLoadPin`, `DescriptionCapRunes`, all
+  false/zero until a reviewed measurement says otherwise — same discipline as
+  `ReliableDeferredToolDiscovery`) and a new registry row for ZCode (native
+  file/search/shell, no client-side allowlist — setup_zcode.go's strict server
+  schema drops an unrecognised key entirely). `autoProfileFor`'s auto-mode
+  policy is now a five-rung progressive ladder instead of a single conservative
+  default: `SchemaDiscoveryOnly` → full; `ReliableDeferredToolDiscovery` → lean;
+  `ClientSideAllowlist` (Kimi Code, Codex, Gemini CLI) → full, now with its own
+  `client-side-allowlist` reason distinct from the generic default; an
+  **actually-unrecognised** client (`Name == "unknown"`, matched no registry
+  prefix) → **lean** (`unknown-client-baseline`) — the new zero-detection floor,
+  where before it defaulted to full; every other **registered** client with none
+  of the flags (Claude Desktop, Junie) keeps today's `full`/`unverified-deferred-discovery`
+  unchanged, since Claude Desktop has no native fallback for the tools lean would
+  hide. `session_start`'s guidance now also appends a truthful
+  `tools.ClientSideAllowlistNote` sentence for a `ClientSideAllowlist` client,
+  naming the real lean-tool count and pointing at `plumb doctor` — fixing the gap
+  where such a client was told "full" with no mention that its own config might
+  filter that down. `SupportsMCPInstructions` is declared data only in this PR:
+  it is the seam PLAN-364/PLAN-366's per-client instructions template will read,
+  not something wired into the `initialize` response's content here.
+
 - **Managed instruction block — the mechanism, PR 1 of 2 (PLAN-364).** `plumb setup <client>`
   (codex, gemini, claude-code) now writes a small, versioned, idempotent block into the
   client's project-level instruction file (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, per client

@@ -5,6 +5,12 @@ import "strings"
 func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 	profile, hidden, reason := t.resolvedToolProfile()
 	sb.WriteString(ProfileNote(profile, hidden, reason))
+	// Truthful even though plumb cannot observe the client-side filter itself
+	// (see ClientSideAllowlistNote): appended whenever the client's clientcaps
+	// entry declares ClientSideAllowlist, independent of which profile rule fired.
+	if clientSideAllowlistCapable(t.clientNameFn) {
+		sb.WriteString(ClientSideAllowlistNote())
+	}
 	switch {
 	case isClaudeCode(t.clientNameFn):
 		t.writeClaudeCodeGuidance(sb)
