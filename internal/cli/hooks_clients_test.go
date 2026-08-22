@@ -236,6 +236,10 @@ func TestHookStatesAt_Classification(t *testing.T) {
 // silently break the wake: a client-side timeout at or below the watcher's own
 // window kills the watcher mid-watch, and nothing in any output would say so.
 func TestClaudeHookEntries_StopOutlivesItsWatcher(t *testing.T) {
+	// The entry is derived from the window in effect, so pin the window: a
+	// developer or runner with PLUMB_WAKE_WINDOW exported would otherwise get a
+	// red suite on correct code.
+	t.Setenv("PLUMB_WAKE_WINDOW", "300")
 	for _, e := range claudeHookEntries("/opt/plumb") {
 		if e.event != "Stop" {
 			continue
@@ -349,8 +353,16 @@ func TestRemoveHooksAt_KeepsStructureItDidNotEmpty(t *testing.T) {
 	if !ok {
 		t.Fatal("the hooks key was deleted along with the user's empty groups")
 	}
-	if _, ok := hooks["Notification"]; !ok {
-		t.Errorf("the user's empty matcher group was removed: %v", hooks)
+	// Assert the GROUP, not just the key: with only a key check, dropping the
+	// user's empty group leaves "Notification": [] behind and the test passes
+	// while the damage is done — which is exactly how this read before an
+	// independent review mutated the guard out and watched it stay green.
+	groups, ok := hooks["Notification"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("the user's empty matcher group was removed: %v", hooks)
+	}
+	if group, ok := groups[0].(map[string]any); !ok || group["matcher"] != "*" {
+		t.Errorf("the user's group lost its matcher: %v", groups[0])
 	}
 	if _, ok := hooks["PreCompact"]; !ok {
 		t.Errorf("the user's empty event was removed: %v", hooks)
@@ -398,4 +410,111 @@ func TestInstallHooksAt_RefreshesEveryPlumbHandlerOnAnEvent(t *testing.T) {
 			t.Errorf("%s = %q after install, want installed", s.entry.label, s.state)
 		}
 	}
+}
+
+// TestRemoveHooksAt_KeepsAGroupTheUserOwns: plumb only ever writes a bare
+// {"hooks":[handler]} group, so a group carrying a matcher — or any key of the
+// user's — is theirs even when plumb's handler is the only thing inside it.
+// Emptying it must not take the group, the event, or the file with it.
+func TestRemoveHooksAt_KeepsAGroupTheUserOwns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{map[string]any{
+			"matcher": "startup|resume",
+			"myNote":  "do not lose me",
+			"hooks": []any{map[string]any{
+				"type": "command", "command": `"/opt/plumb" hooks run-claude`, "timeout": float64(5),
+			}},
+		}},
+	}})
+
+	removed, err := removeHooksAt(path, claudeHookOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the settings file was deleted with the user's group: %v", err)
+	}
+	groups, ok := readHookJSON(t, path)["hooks"].(map[string]any)["SessionStart"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("the user's group was dropped: %v", readHookJSON(t, path))
+	}
+	group := groups[0].(map[string]any)
+	if group["matcher"] != "startup|resume" || group["myNote"] != "do not lose me" {
+		t.Errorf("the user's own keys went with plumb's handler: %v", group)
+	}
+	if handlers, _ := group["hooks"].([]any); len(handlers) != 0 {
+		t.Errorf("plumb's handler survived: %v", handlers)
+	}
+}
+
+// TestInstallHooksAt_CollapsesDuplicateHandlers: refreshing every plumb handler
+// on an event turned "legacy + current" into "current + current" — still two
+// handlers, both firing, still reported as one clean install. Only the first
+// survives.
+func TestInstallHooksAt_CollapsesDuplicateHandlers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{
+			map[string]any{"hooks": []any{map[string]any{
+				"type": "command", "command": `"/old/plumb" hooks run-claude`, "timeout": float64(5),
+			}}},
+			map[string]any{"hooks": []any{map[string]any{
+				"type": "command", "command": "/home/u/.claude/hooks/plumb-session-link.sh", "timeout": float64(5),
+			}}},
+		},
+	}})
+
+	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+	if n := countHandlers(readHookJSON(t, path), "SessionStart"); n != 1 {
+		t.Errorf("SessionStart has %d handlers after install, want 1 — duplicates both fire", n)
+	}
+
+	// And a re-run of an already-correct install stays a no-op.
+	changed, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("re-installing over the collapsed result reported a change")
+	}
+}
+
+// TestRemoveHooksAt_CodexMarkerIsEventScoped: the status line is plumb's marker
+// only on the events plumb installs on. A user's handler carrying that label on
+// another event is theirs — and taking it would empty the file and delete it.
+func TestRemoveHooksAt_CodexMarkerIsEventScoped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"PreToolUse": []any{map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": "/home/u/bin/audit.sh", "statusMessage": codexMailboxHookStatus,
+		}}}},
+	}})
+
+	removed, err := removeHooksAt(path, codexHookOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed %d handler(s) — a user's PreToolUse hook is not plumb's", removed)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the user's hooks.json was deleted: %v", err)
+	}
+}
+
+func countHandlers(cfg map[string]any, event string) int {
+	n := 0
+	groups, _ := cfg["hooks"].(map[string]any)[event].([]any)
+	for _, groupAny := range groups {
+		group, _ := groupAny.(map[string]any)
+		handlers, _ := group["hooks"].([]any)
+		n += len(handlers)
+	}
+	return n
 }
