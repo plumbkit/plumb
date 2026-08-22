@@ -113,7 +113,8 @@
 
 ### Fixed
 
-- **A rejected parameter no longer gets suggested its own opposite.**
+- **Exact-token antonym suggestions dropped from `closest`; `include` is now
+  aliased straight to `glob`.**
   `search_in_files` declares both `glob` (the include filter) and `exclude`, and
   `include` is nearer to `exclude` by edit distance than to anything else — so
   `search_in_files({include: "*.go"})` was rejected with `did you mean
@@ -123,7 +124,11 @@
   `exclude` — was enforced on the two paths that *rewrite* a call and missing on
   the path that *advises* one. `closest` now skips a candidate whose meaning
   inverts the key's and offers the next-nearest instead, matching antonyms as
-  whole tokens so `append` is not read as containing `end`.
+  whole tokens so `append` is not read as containing `end`; `include` is also now
+  a direct alias to `glob` (see below), so the common case never reaches the
+  suggestion path at all. The guard is exact-token, not fuzzy: a near-miss like
+  `includ` is not recognised as `include` and can still surface `exclude` as the
+  nearest candidate — only the exact antonym-stem tokens are guarded.
 
 - **Seven parameter spellings agents actually send now resolve instead of being
   rejected**, mined from 296 unknown-parameter rejections in the stats DB:

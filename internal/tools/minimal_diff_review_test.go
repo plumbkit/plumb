@@ -441,6 +441,9 @@ func TestCapPerFile_DropsWholeFilesOnly(t *testing.T) {
 	if len(capped) != 1 || capped[0].Path != "big.js" {
 		t.Fatalf("want big.js reported as capped, got %+v", capped)
 	}
+	if capped[0].GlobalCapped {
+		t.Errorf("big.js was dropped by its OWN size, not the global backstop: %+v", capped[0])
+	}
 	if strings.Contains(kept, "padding line") {
 		t.Error("an over-budget file must be dropped whole, not truncated")
 	}
@@ -469,6 +472,9 @@ func TestCapPerFile_GlobalBudgetAlsoSpentInWholeFiles(t *testing.T) {
 		if c.Path == "" {
 			t.Errorf("a dropped file must be named, got %+v", capped)
 		}
+		if !c.GlobalCapped {
+			t.Errorf("file dropped by the total budget must be marked GlobalCapped, got %+v", c)
+		}
 	}
 	if n := strings.Count(kept, "diff --git "); n*100 > 600+100 {
 		t.Errorf("kept %d files, over the total budget", n)
@@ -476,4 +482,64 @@ func TestCapPerFile_GlobalBudgetAlsoSpentInWholeFiles(t *testing.T) {
 	if kept != "" && !strings.HasPrefix(kept, "diff --git ") {
 		t.Error("kept text must start at a file header")
 	}
+}
+
+// TestWriteCappedFiles_ReasonMatchesWhyItWasDropped guards the fix for a
+// wrong-reason report: a file dropped by the global 1 MiB backstop can be well
+// under the 128 KiB per-file budget on its own, so it must never be reported as
+// "over the per-file budget" — that reason belongs only to a file whose OWN
+// diff exceeded the per-file cap.
+func TestWriteCappedFiles_ReasonMatchesWhyItWasDropped(t *testing.T) {
+	var sb strings.Builder
+	writeCappedFiles(&sb, []cappedFile{
+		{Path: "big.js", Bytes: 200 * 1024, GlobalCapped: false},
+		{Path: "small.go", Bytes: 50, GlobalCapped: true},
+	})
+	out := sb.String()
+
+	if !strings.Contains(out, "big.js") || !strings.Contains(out, "per-file budget") {
+		t.Errorf("big.js must be reported as over the per-file budget, got:\n%s", out)
+	}
+	bigLine := lineContaining(out, "big.js")
+	if strings.Contains(bigLine, "total-diff budget") {
+		t.Errorf("big.js was NOT dropped by the total budget, wrong reason attached:\n%s", bigLine)
+	}
+
+	if !strings.Contains(out, "small.go") || !strings.Contains(out, "total-diff budget") {
+		t.Errorf("small.go must be reported as dropped by the total budget, got:\n%s", out)
+	}
+	smallLine := lineContaining(out, "small.go")
+	if strings.Contains(smallLine, "per-file budget") {
+		t.Errorf("small.go was dropped by the GLOBAL backstop, not its own size — wrong reason attached:\n%s", smallLine)
+	}
+}
+
+// TestWriteCappedFiles_ListIsCapped guards against an unbounded capped-file
+// list turning the note into most of the response when many files are dropped.
+func TestWriteCappedFiles_ListIsCapped(t *testing.T) {
+	capped := make([]cappedFile, 25)
+	for i := range capped {
+		capped[i] = cappedFile{Path: fmt.Sprintf("f%d.go", i), Bytes: 200 * 1024}
+	}
+	var sb strings.Builder
+	writeCappedFiles(&sb, capped)
+	out := sb.String()
+
+	if n := strings.Count(out, ".go ("); n != maxCappedFilesListed {
+		t.Errorf("want exactly %d files spelled out, got %d:\n%s", maxCappedFilesListed, n, out)
+	}
+	if !strings.Contains(out, "and 15 more") {
+		t.Errorf("want the remaining 15 files summarised, got:\n%s", out)
+	}
+}
+
+// lineContaining returns the first line of s containing needle, for asserting
+// on one entry's reason without matching another entry's line by accident.
+func lineContaining(s, needle string) string {
+	for line := range strings.SplitSeq(s, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }
