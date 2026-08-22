@@ -1,6 +1,38 @@
 # Changelog
 ## 0.17.3 (unreleased)
 
+### Added
+
+- **`topology_impact mode="reachability"`: package-level reachability from entry points
+  (PLAN-371, worth-it W3-17).** The import graph has been real and cross-file since
+  `linkImports` (51k+ `imports` edges), but nothing surfaced it at package granularity —
+  "what does this binary actually pull in", "is this package dead from every entry
+  point", "what import cycles exist" had no honest answer. `topology_impact` gains
+  `mode: "reachability"` rather than a new tool (PLAN-323 tool-count pressure), with three
+  capped (≤5 KB) response shapes sharing one traversal: the default reachable/unreachable
+  package summary (counts plus up to 10 samples per bucket, unreachable sorted by size —
+  the actionable ones), `path_to: <dir>` (one root→target directory chain, or an honest
+  "no path"), and `layers: true` (Tarjan package-SCC condensation of the reachable
+  subgraph, topologically layered; a component with more than one package IS a reported
+  import cycle, not filtered out). `roots` defaults to every `package main` directory plus
+  `topology_routes` entry-point candidates (labelled candidate-seeded — lower confidence,
+  per `topology_routes`' own contract), or accepts explicit directories / the literal
+  `"main"`. Every response opens with `package-level (import edges); function-level
+  unavailable` — this is directory granularity only; a cross-package call graph does not
+  exist yet (tracked separately). New `internal/topology/reachability.go` folds the
+  existing `pkg -(imports)-> import -(imports)-> pkg` two-hop node chain (the same edges
+  `linkImports`/`matchImportDir` already validate) into direct directory-level edges via
+  one SQL join, deliberately NOT by re-walking the depth-capped node-level `bfs()` spine
+  `explore.go` uses for a symbol neighbourhood — that cap (`hardCapDepth=4`) would
+  silently truncate real dependency chains and misreport a genuinely reachable package as
+  unreachable, the false-negative direction this feature exists to avoid. Full transitive
+  closure, not a bounded neighbourhood, is what "reachable" has to mean here. Root
+  resolution goes through the package graph's own directory index rather than
+  re-deriving identity from a raw name (the 636-node `strings`-collision class of bug).
+  `internal/topology/reachability_scc.go` adds Tarjan SCC plus longest-path layering.
+  `internal/tools/topology_reachability.go` wires the tool-facing response shapes.
+  `docs/topology.md` gains a reachability section.
+
 ### Fixed
 
 - **A subagent's `session_start` no longer drags every peer agent's workspace with it

@@ -182,7 +182,8 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
 - **`topology_explore`** — BFS neighbourhood around a named symbol, with depth,
   node, and byte budgets.
 - **`topology_impact`** — bidirectional blast radius: what a symbol depends on,
-  and what depends on it.
+  and what depends on it. `mode: "reachability"` switches to a different, package-level
+  question — see [Package-level reachability](#package-level-reachability) below.
 - **`topology_affected`** — *the headline.* Given changed files/symbols, the
   files and tests most likely affected, by inward dependency edges **and**
   co-location (tests in the same directory as a changed/affected file — catching
@@ -194,6 +195,51 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   registrations or call sites, so it cannot recover a path-to-handler binding (e.g.
   `"/api/x" -> handlerFn`) — only symbol-name/signature candidates, each carrying a
   confidence annotation.
+
+## Package-level reachability
+
+`topology_impact mode="reachability"` answers a different question than the rest of
+the tools above, at a different granularity: not "what does this *symbol* touch" but
+**"what does this *binary* (or entry point) actually pull in"** — and its mirror,
+"which packages are unreachable from every entry point". This is honest, available
+today, package-level reachability, built entirely on the `imports` edges `linkImports`
+already produces — no schema change, no new tool (`topology_impact` gained a `mode`
+rather than adding to the tool count).
+
+**Granularity, stated plainly.** Every reachability response opens with `package-level
+(import edges); function-level unavailable` — this is directory granularity, not
+function-level. The import graph is real and cross-file; there is no cross-package call
+graph yet, so this cannot answer "is this *function* dead" — only "is this *package*
+dead from every entry point". Treat a small unreachable package as a strong signal and
+a genuinely large one as worth a second look before deleting; a symbol re-exported by an
+otherwise-unreachable package could still be imported reflectively or via a build tag
+this pass does not see.
+
+**Roots.** Every `package main` directory by default, plus `topology_routes`
+entry-point candidates (an HTTP handler, a Cobra command — labelled
+`candidate-seeded` in the response, since `topology_routes` results are themselves
+name/signature heuristics, not confirmed bindings). Pass `roots` explicitly to override:
+an array of directories, or the literal `"main"`.
+
+**Three response shapes**, each capped at ~5 KB:
+
+- **default** — reachable/unreachable package counts, with up to 10 samples per
+  bucket. Unreachable is sorted by size (indexed node count) descending — the biggest
+  dead package is the most actionable one to notice.
+- **`path_to: "<dir>"`** — the single shortest root → target directory chain, or an
+  honest "no path" when the target is not reachable from the given roots.
+- **`layers: true`** — a Tarjan strongly-connected-components condensation of the
+  reachable subgraph, laid out as topological layers. A component holding more than one
+  package **is** a reported import cycle (flagged `[cycle]`), not filtered out — that is
+  the finding this shape exists to surface.
+
+**Correctness note for the curious.** Computing "unreachable" correctly requires the
+*full* transitive closure from the roots, not a bounded neighbourhood — a depth-capped
+walk would silently misreport a genuinely reachable package as unreachable on any
+dependency chain longer than the cap, which is the false-negative direction this
+feature is built to avoid. The traversal therefore runs to full closure over a
+directory-level graph folded from the same `imports` edges, rather than reusing the
+depth/byte-capped symbol-neighbourhood BFS used elsewhere in this page.
 
 ## Configuration
 

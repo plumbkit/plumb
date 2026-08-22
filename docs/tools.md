@@ -769,9 +769,20 @@ the same budget.
 
 ### `topology_impact`
 Bidirectional blast-radius: what a symbol depends on and what depends on it.
-**Inputs:** `name` (required), `depth` (default 3, max 4), `max_nodes` (default
-100, max 200), `max_bytes` (default 30000), `edge_kinds` (default
+**Inputs:** `name` (required unless `mode="reachability"`), `depth` (default 3, max 4),
+`max_nodes` (default 100, max 200), `max_bytes` (default 30000), `edge_kinds` (default
 `["imports","calls"]`).
+
+`mode: "reachability"` switches to a different, package-level question: what does an
+entry point (a `package main` directory, or a `topology_routes` candidate) actually pull
+in, and what is unreachable from every entry point — see
+[Topology → Package-level reachability](topology.md#package-level-reachability) for the
+full shape and its correctness note. **Inputs (reachability mode):** `roots` (array of
+directories, or `"main"`; default every `package main` directory plus `topology_routes`
+candidates), `path_to` (a directory — returns one root→target chain instead of the
+summary), `layers` (boolean — returns a package-SCC condensation instead of the
+summary). Every response opens with `package-level (import edges); function-level
+unavailable` and is capped at ~5 KB.
 
 ### `topology_affected`
 Given changed files/symbols, return likely affected files and tests. **Inputs:**
