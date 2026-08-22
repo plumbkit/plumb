@@ -133,6 +133,7 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("AnonymousStateChangeStillRefused", testAnonymousStateChangeStillRefused)
 	t.Run("EveryAgentWriteIsAttributedAndVisible", testEveryAgentWriteVisible)
 	t.Run("AnonymousCallsInheritTheLastAttachedAgent", testAnonymousCallsInheritTheLastAttachedAgent)
+	t.Run("SingleAgentConnectionStillPinsTheConnection", testSingleAgentConnectionStillPinsTheConnection)
 }
 
 // testSubagentSameCallIdentity is the headline regression. A subagent's FIRST
@@ -454,5 +455,52 @@ func testAnonymousCallsInheritTheLastAttachedAgent(t *testing.T) {
 	// separate card's territory, not something to leave undocumented here.)
 	if got := m.s.workspaceFor(context.Background()); got != ws {
 		t.Errorf("anonymous call resolved to workspace %q, want %q", got, ws)
+	}
+}
+
+// testSingleAgentConnectionStillPinsTheConnection guards the hot path this whole
+// change promises not to disturb: ONE agent over one connection must keep
+// pinning the CONNECTION, never a shard. Per-agent keying is a shared-connection
+// affair — it is what makes a peer's re-pin harmless — and switching it on for a
+// lone agent would leave the connection pin frozen at whatever it first
+// resolved, so every unattributed call (background goroutines, the roots ladder,
+// any client that sends no identity) would keep resolving to the stale root
+// while the agent believed it had moved.
+func testSingleAgentConnectionStillPinsTheConnection(t *testing.T) {
+	m := newMultiAgentConn(t)
+	first, second := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, first)
+	mustGitDir(t, second)
+
+	if err := m.sessionStart(t, map[string]any{"workspace": first, "session_id": "solo"}); err != nil {
+		t.Fatalf("first session_start: %v", err)
+	}
+	if got := m.s.workspace(); got != first {
+		t.Fatalf("connection pin = %q, want %q", got, first)
+	}
+	if m.s.isShared() {
+		t.Fatal("one agent must not mark the connection shared")
+	}
+
+	// A re-orientation naming the same root changes nothing.
+	if err := m.sessionStart(t, map[string]any{"workspace": first, "session_id": "solo"}); err != nil {
+		t.Fatalf("re-orientation: %v", err)
+	}
+	if got := m.s.workspace(); got != first {
+		t.Errorf("connection pin = %q after a same-root call, want %q", got, first)
+	}
+
+	// A deliberate switch moves the CONNECTION, which is what a lone agent's
+	// session_start has always done.
+	if err := m.sessionStart(t, map[string]any{"workspace": second, "session_id": "solo", "force": true}); err != nil {
+		t.Fatalf("forced switch: %v", err)
+	}
+	if got := m.s.workspace(); got != second {
+		t.Errorf("connection pin = %q after a lone agent's deliberate switch, want %q — "+
+			"the switch landed on a shard, so every unattributed call still resolves to the old root",
+			got, second)
+	}
+	if got := m.s.workspaceFor(context.Background()); got != second {
+		t.Errorf("unattributed calls resolve to %q, want %q", got, second)
 	}
 }

@@ -240,9 +240,11 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 	s.readTrackerFor(context.Background()).Record(read, time.Unix(1_700_000_000, 0), "sha-peer")
 
 	// A second agent declares itself and asks for a project outside the pin. The
-	// call is routed to its own shard (so the refusal is ITS refusal, not the
-	// connection's) and refused.
-	ctxB := mcp.WithLogicalAgent(context.Background(), "drifter")
+	// ctx is derived through declaredAgentCtx — the real channel session_start
+	// uses — because what is under test is precisely whether THAT step writes the
+	// declaration down. Building the ctx with mcp.WithLogicalAgent directly would
+	// bypass the mechanism and pass no matter what it does.
+	ctxB := s.declaredAgentCtx(context.Background(), "drifter")
 	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err == nil {
 		t.Fatal("precondition: the cross-workspace re-pin should have been refused")
 	}
