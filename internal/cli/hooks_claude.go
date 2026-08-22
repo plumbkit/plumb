@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -63,6 +64,13 @@ const (
 // start reason — startup, resume, clear, compact and fork all rebuild the
 // context the linkage sentence belongs in — and Stop has no matcher support at
 // all.
+//
+// Stop's timeout is derived from the watch window IN THIS PROCESS, so a tuned
+// PLUMB_WAKE_WINDOW writes an entry that outlives its own watcher. The window is
+// therefore read at install time for the entry and at run time for the watcher:
+// re-tune and re-install together, or the client cancels the watcher mid-watch
+// and the wake is lost with nothing to see. `plumb hooks` reports the mismatch
+// as `stale`, which is the intended way to notice.
 func claudeHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, claudeHookVerb)
 	return []hookEntry{
@@ -74,7 +82,7 @@ func claudeHookEntries(plumbBin string) []hookEntry {
 		{event: "Stop", label: "mailbox wake", handler: map[string]any{
 			"type":        "command",
 			"command":     command,
-			"timeout":     float64((claudeWakeWindowDefault + claudeStopTimeoutSlack) / time.Second),
+			"timeout":     float64((wakeWindow() + claudeStopTimeoutSlack) / time.Second),
 			"async":       true,
 			"asyncRewake": true,
 		}},
@@ -267,11 +275,20 @@ func insidePlumbWorkspace(dir string) bool {
 // session name once linkage resolves one, and by the conversation id otherwise.
 // A conversation-id-keyed stamp means "hooked, but not linked to a plumb
 // session", which is itself the thing a peer needs to know.
+// A key that could escape the wake dir is refused rather than sanitised — the
+// same call this codebase makes about path traversal elsewhere. The conversation
+// id arrives from the client, and the lock path is the sharp end:
+// acquireWakeLock removes the directory it derives. No wake is a better failure
+// than a delete outside the directory plumb owns.
 func wakeStampKey(report mailReport, sessionID string) string {
-	if name := strings.TrimSpace(report.Session); name != "" {
-		return name
+	key := strings.TrimSpace(report.Session)
+	if key == "" {
+		key = strings.TrimSpace(sessionID)
 	}
-	return strings.TrimSpace(sessionID)
+	if key == "." || key == ".." || strings.ContainsAny(key, `/\`) || strings.Contains(key, "..") {
+		return ""
+	}
+	return key
 }
 
 // wakeDir is where the stamps, locks and re-arm records live. It stays under
@@ -292,8 +309,16 @@ func wakeWindow() time.Duration {
 	return envSeconds("PLUMB_WAKE_WINDOW", claudeWakeWindowDefault)
 }
 
+// wakeInterval is clamped to the window: a poll gap longer than the watch it
+// paces would park the watcher — holding this session's lock, so the session
+// cannot arm another — well past its own deadline, since the loop re-checks the
+// deadline only after sleeping.
 func wakeInterval() time.Duration {
-	return envSeconds("PLUMB_WAKE_INTERVAL", claudeWakeIntervalDefault)
+	interval := envSeconds("PLUMB_WAKE_INTERVAL", claudeWakeIntervalDefault)
+	if window := wakeWindow(); interval > window {
+		return window
+	}
+	return interval
 }
 
 // envSeconds reads a whole-second duration override, ignoring anything that is
@@ -305,6 +330,18 @@ func envSeconds(name string, fallback time.Duration) time.Duration {
 		}
 	}
 	return fallback
+}
+
+// isPlumbProcess reports whether pid is a running plumb. It shells out to ps
+// for the same reason the daemon's own liveness check does: there is no
+// portable way to read another process's name, and the alternative is
+// signalling blind.
+func isPlumbProcess(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output() //nolint:gosec // G204: pid is a strconv-formatted int read from plumb's own lock file, not user input
+	if err != nil {
+		return false
+	}
+	return filepath.Base(strings.TrimSpace(string(out))) == "plumb"
 }
 
 func wakeChainMax() int {
@@ -401,14 +438,27 @@ func recordWake(rearm string, report mailReport) {
 // lets a dead lock be reclaimed.
 type wakeLock struct {
 	dir      string
+	conv     string
 	released bool
 }
 
+// release drops this watcher's lock, once — but only while the lock still
+// records the conversation that took it. A lock reclaimed by a later tenant of
+// a reused session name (see acquireWakeLock) belongs to that watcher, and
+// releasing it out from under them would leave the session with no
+// single-instance guard at all. The conversation is the identity that
+// distinguishes them; the pid does not, since the evicted watcher may be a
+// goroutine of the very process that took over.
 func (l *wakeLock) release() {
 	if l == nil || l.released {
 		return
 	}
 	l.released = true
+	if owner, err := os.ReadFile(filepath.Join(l.dir, "conv")); err == nil { //nolint:gosec // G304: inside plumb's own wake dir
+		if strings.TrimSpace(string(owner)) != l.conv {
+			return
+		}
+	}
 	_ = os.RemoveAll(l.dir)
 }
 
@@ -434,7 +484,15 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 	if err := os.Mkdir(lock, 0o755); err != nil {
 		oldPID, _ := os.ReadFile(filepath.Join(lock, "pid")) //nolint:gosec // G304: inside plumb's own wake dir
 		oldConv, _ := os.ReadFile(filepath.Join(lock, "conv"))
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(oldPID)))
+		pid, pidErr := strconv.Atoi(strings.TrimSpace(string(oldPID)))
+		if pidErr != nil {
+			// A lock with no readable pid is most likely one another watcher
+			// created microseconds ago and has not finished stamping. Standing
+			// down costs at most one watch window; stealing it would let two
+			// watchers run for one session, which is what this lock exists to
+			// prevent.
+			return nil, false
+		}
 		if processAlive(pid) {
 			owner := strings.TrimSpace(string(oldConv))
 			if sessionID == "" || owner == "" || owner == sessionID {
@@ -449,7 +507,7 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 	}
 	_ = os.WriteFile(filepath.Join(lock, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
 	_ = os.WriteFile(filepath.Join(lock, "conv"), []byte(orDash(sessionID)), 0o600)
-	return &wakeLock{dir: lock}, true
+	return &wakeLock{dir: lock, conv: orDash(sessionID)}, true
 }
 
 // terminate asks a stale watcher to stop. Failure is ignored: the lock is
@@ -460,8 +518,14 @@ func acquireWakeLock(dir, key, sessionID string) (*wakeLock, bool) {
 // conversation, so a lock recording this pid under a different conversation is
 // not a stale tenant to evict — and signalling it would kill the very watcher
 // about to be armed.
+//
+// Nor is a pid that is no longer a plumb process. A lock survives a crash, a
+// SIGKILL and a reboot, after which the recorded pid is very likely to belong to
+// something unrelated — "the pid exists" is not evidence it is ours. Signalling
+// a stranger's process is a far worse failure than leaving a dead lock behind,
+// which the caller reclaims anyway.
 func terminate(pid int) {
-	if pid <= 0 || pid == os.Getpid() {
+	if pid <= 0 || pid == os.Getpid() || !isPlumbProcess(pid) {
 		return
 	}
 	if proc, err := os.FindProcess(pid); err == nil {

@@ -275,12 +275,127 @@ func TestHooksTargets_AreRegistryDriven(t *testing.T) {
 			if e.event == "" || e.label == "" {
 				t.Errorf("%s has an unlabelled entry: %+v", target.name, e)
 			}
-			if !target.ours(e.handler) {
+			if !target.ours(e.event, e.handler) {
 				t.Errorf("%s does not recognise its own handler for %s — install would duplicate on every run", target.name, e.event)
 			}
 		}
 	}
 	if _, ok := findHooksTarget("nope"); ok {
 		t.Error("findHooksTarget accepted an unknown client")
+	}
+}
+
+// TestRemoveHooksAt_NeverTouchesLookalikeHooks is the defect an independent
+// review of PR #396 found: ownership was a substring test over the whole
+// command line, applied to every event, so `plumb setup claude-code
+// --uninstall` deleted hooks belonging to a user who had never installed
+// plumb's. Removing a hook plumb did not install is the one failure this
+// command must not have.
+func TestRemoveHooksAt_NeverTouchesLookalikeHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, command string
+	}{
+		{"user wrapper around the legacy script", "Stop", "/home/u/bin/wrap-plumb-mail-wake.sh"},
+		{"legacy script name as an argument", "Stop", "/home/u/bin/runner --hook plumb-mail-wake.sh"},
+		{"legacy script on an event plumb never installs on", "PreToolUse", "/usr/local/bin/plumb-session-link.sh --mine"},
+		{"plumb's verb mentioned in an argument", "Stop", "/home/u/bin/logger --note 'hooks run-claude'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+				tc.event: []any{map[string]any{"hooks": []any{
+					map[string]any{"type": "command", "command": tc.command},
+				}}},
+			}})
+			removed, err := removeHooksAt(path, claudeHookOwned)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if removed != 0 {
+				t.Errorf("removed %d handler(s) — %q on %s is the user's, not plumb's", removed, tc.command, tc.event)
+			}
+			hooks := readHookJSON(t, path)["hooks"].(map[string]any)
+			if !hasCommand(hooks, tc.event, tc.command) {
+				t.Errorf("the user's own hook was deleted: %v", hooks)
+			}
+		})
+	}
+}
+
+// TestRemoveHooksAt_KeepsStructureItDidNotEmpty is the second blocking defect
+// from that review: a group the user left empty (Claude Code's own /hooks
+// editor does this) was read as plumb's residue, so the group, then the event
+// key, then — when nothing else was in the file — the settings file itself were
+// deleted.
+func TestRemoveHooksAt_KeepsStructureItDidNotEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"Notification": []any{map[string]any{"matcher": "*", "hooks": []any{}}},
+		"PreCompact":   []any{},
+	}})
+
+	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := removeHooksAt(path, claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the settings file was deleted: %v", err)
+	}
+	hooks, ok := readHookJSON(t, path)["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("the hooks key was deleted along with the user's empty groups")
+	}
+	if _, ok := hooks["Notification"]; !ok {
+		t.Errorf("the user's empty matcher group was removed: %v", hooks)
+	}
+	if _, ok := hooks["PreCompact"]; !ok {
+		t.Errorf("the user's empty event was removed: %v", hooks)
+	}
+	for _, event := range []string{"SessionStart", "Stop"} {
+		if _, ok := hooks[event]; ok {
+			t.Errorf("%s survived the uninstall: %v", event, hooks)
+		}
+	}
+}
+
+// TestInstallHooksAt_RefreshesEveryPlumbHandlerOnAnEvent: the upsert stopped at
+// the first match while the removal took them all, so a config holding both a
+// legacy script entry and a current one kept the leftover — two hooks firing,
+// reported as one clean install.
+func TestInstallHooksAt_RefreshesEveryPlumbHandlerOnAnEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{
+			map[string]any{"hooks": []any{map[string]any{
+				"type": "command", "command": `"/old/plumb" hooks run-claude`, "timeout": float64(5),
+			}}},
+			map[string]any{"hooks": []any{map[string]any{
+				"type": "command", "command": "/home/u/.claude/hooks/plumb-session-link.sh", "timeout": float64(5),
+			}}},
+		},
+	}})
+
+	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+	hooks := readHookJSON(t, path)["hooks"].(map[string]any)
+	if hasCommand(hooks, "SessionStart", "/home/u/.claude/hooks/plumb-session-link.sh") {
+		t.Error("the legacy handler survived an install — it and the current hook would both fire")
+	}
+	if hasCommand(hooks, "SessionStart", `"/old/plumb" hooks run-claude`) {
+		t.Error("the stale handler survived an install")
+	}
+	states, err := hookStatesAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range states {
+		if s.state != hookStateInstalled {
+			t.Errorf("%s = %q after install, want installed", s.entry.label, s.state)
+		}
 	}
 }

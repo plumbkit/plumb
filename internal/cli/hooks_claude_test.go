@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The Stop hook is driven end to end here — probe injected, wake dir and
@@ -270,8 +271,15 @@ func TestAcquireWakeLock(t *testing.T) {
 	if !ok {
 		t.Fatal("a new tenant of a reused session name was locked out")
 	}
+	// The ownership check, probed in the order that actually exercises it: the
+	// previous tenant releasing AFTER the takeover must not remove the lock the
+	// new watcher now holds. Released in the other order this assertion passes
+	// vacuously, which is how it was first written.
+	first.release()
+	if _, err := os.Stat(filepath.Join(dir, "grey-lynx.lock")); err != nil {
+		t.Error("the evicted tenant's release deleted the lock its successor holds")
+	}
 	second.release()
-	first.release() // idempotent, and must not delete a lock it no longer owns
 
 	third, ok := acquireWakeLock(dir, "grey-lynx", "conv-3")
 	if !ok {
@@ -311,4 +319,75 @@ func TestSessionLinkageSentence(t *testing.T) {
 	if strings.HasPrefix(got, "Pass ") || strings.HasPrefix(got, "Call ") {
 		t.Errorf("linkage sentence opens as an instruction: %q", got)
 	}
+}
+
+// TestWakeStampKey_RefusesPathEscape: the conversation id comes from the client
+// and the lock path derived from it is removed with RemoveAll, so a key that
+// could leave the wake dir is refused outright rather than sanitised.
+func TestWakeStampKey_RefusesPathEscape(t *testing.T) {
+	for _, bad := range []string{
+		"../../../../tmp/escape", "a/b", `a\b`, "..", ".", "x..y",
+	} {
+		if got := wakeStampKey(mailReport{}, bad); got != "" {
+			t.Errorf("wakeStampKey(%q) = %q, want refusal", bad, got)
+		}
+	}
+	if got := wakeStampKey(mailReport{Session: "grey-lynx"}, "conv-1"); got != "grey-lynx" {
+		t.Errorf("wakeStampKey resolved session = %q, want grey-lynx", got)
+	}
+}
+
+// TestClaudeStopHook_RefusedKeyWritesNothing: a refused key must stand the whole
+// hook down before it writes a stamp or arms a watcher.
+func TestClaudeStopHook_RefusedKeyWritesNothing(t *testing.T) {
+	dir := wakeSandbox(t)
+	ws := plumbWorkspace(t)
+
+	wake := claudeStopHook(
+		claudeHookInput{Event: "Stop", SessionID: "../../../../tmp/plumb-escape", CWD: ws},
+		func(_, _ string) (mailReport, bool) { return mailReport{Count: 3}, true })
+
+	if wake != nil {
+		t.Error("a session whose key was refused still produced a wake")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("wrote %d file(s) for a refused key", len(entries))
+	}
+}
+
+// TestWakeInterval_ClampedToWindow: an interval longer than the window would
+// park the watcher past its own deadline still holding the session's lock,
+// since the loop re-checks the deadline only after sleeping.
+func TestWakeInterval_ClampedToWindow(t *testing.T) {
+	t.Setenv("PLUMB_WAKE_WINDOW", "10")
+	t.Setenv("PLUMB_WAKE_INTERVAL", "100000")
+	if got := wakeInterval(); got != 10*time.Second {
+		t.Errorf("wakeInterval = %v, want it clamped to the 10s window", got)
+	}
+	t.Setenv("PLUMB_WAKE_INTERVAL", "3")
+	if got := wakeInterval(); got != 3*time.Second {
+		t.Errorf("wakeInterval = %v, want the configured 3s", got)
+	}
+}
+
+// TestClaudeHookEntries_TimeoutTracksATunedWindow: the entry's timeout is
+// derived from the window this process would watch for, so tuning the window
+// and re-installing keeps the client's cancel above the watcher's deadline.
+func TestClaudeHookEntries_TimeoutTracksATunedWindow(t *testing.T) {
+	t.Setenv("PLUMB_WAKE_WINDOW", "900")
+	for _, e := range claudeHookEntries("/opt/plumb") {
+		if e.event != "Stop" {
+			continue
+		}
+		timeout, _ := e.handler["timeout"].(float64)
+		if timeout <= 900 {
+			t.Errorf("Stop timeout %.0fs does not outlive a tuned 900s window", timeout)
+		}
+		return
+	}
+	t.Fatal("no Stop entry in the Claude Code pack")
 }

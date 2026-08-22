@@ -28,7 +28,10 @@ which is exactly when peers message each other — cannot name one of them.
 the hook exits 2, and that notification reaches a session with **no turn in
 flight** (verified on Claude Code 2.1.233). So the watcher outlives the turn that
 started it: it polls for up to `PLUMB_WAKE_WINDOW` seconds (default 300, every
-`PLUMB_WAKE_INTERVAL`, default 7) and fires the moment mail arrives.
+`PLUMB_WAKE_INTERVAL`, default 7) and fires the moment mail arrives. If you
+raise the window, re-run `plumb hooks install claude-code` — the handler's own
+timeout is written from the window in effect at install time, and a client that
+cancels the hook early kills the watcher with nothing to see.
 
 What it deliberately does not do:
 
@@ -61,7 +64,9 @@ Everything below is the hand-rolled version of what `plumb hooks install` now
 does for you — useful for a client plumb has no pack for, or to understand the
 shape. The Claude Code contract was verified against
 <https://code.claude.com/docs/en/hooks> on 2026-08-13. Everything about plumb
-was verified against the source in this repository. Note that the Stop hook
+was verified against the source in this repository.
+
+Note that the Stop hook
 sketched below is the **synchronous** form: it keeps a turn alive when mail is
 already waiting, but it cannot wake a session that has already gone quiet — for
 that it needs the `async` + `asyncRewake` pair the installed hook uses.
