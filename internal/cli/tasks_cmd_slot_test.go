@@ -99,3 +99,61 @@ func TestWriteTaskSlotListing_NoCommandsIsAnActionableError(t *testing.T) {
 		t.Errorf("the error should name the config key to set, got: %v", err)
 	}
 }
+
+// TestWriteTaskSlotListing_ShowsWhatRunTaskWillActuallyRun is the listing half
+// of placeholder reconciliation.
+//
+// A workspace storing plumb's own default with the placeholder spelled out —
+// `[tasks.go] test = "go test ./..."`, the config behind every observed failure
+// — had `plumb task` print that raw string, from which a reader correctly
+// concludes the slot takes no target and a scoped run will be refused. It is the
+// exact wrong belief this change exists to correct, printed by plumb itself,
+// while run_task happily scopes the same slot. Same doctrine as configuredSlots:
+// a report that contradicts the tool it describes is worse than no report.
+func TestWriteTaskSlotListing_ShowsWhatRunTaskWillActuallyRun(t *testing.T) {
+	stored := expandShippedDefault(t, "go", "test")
+	tc := config.TasksConfig{Build: config.DefaultTaskCommand("go", "build"), Test: stored}
+
+	var out bytes.Buffer
+	if err := writeTaskSlotListing(&out, "/ws", "go", tc); err != nil {
+		t.Fatal(err)
+	}
+	line := ""
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "test") && !strings.Contains(l, "composite") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no test slot in the listing:\n%s", out.String())
+	}
+
+	// The listing must show the argv run_task builds, not the raw stored string,
+	// and must still name the stored string so the reader can find it in the file.
+	scoped, err := buildTaskSteps(tc, "go", "test", "./internal/cli")
+	if err != nil {
+		t.Fatalf("the fixture no longer reconciles, so this test proves nothing: %v", err)
+	}
+	tmpl, err := taskArgvTemplate(tc, "go", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(line, strings.Join(tmpl, " ")) {
+		t.Errorf("the listing shows the raw stored command while run_task runs %v; got line %q", scoped[0], line)
+	}
+	if !strings.Contains(line, stored) {
+		t.Errorf("the listing must still name what the config actually says (%q); got line %q", stored, line)
+	}
+
+	// The other direction, same build: a command plumb does NOT rewrite is printed
+	// verbatim, with no note claiming a restoration that never happened.
+	var plain bytes.Buffer
+	untouched := config.TasksConfig{Test: "gotestsum ./..."}
+	if err := writeTaskSlotListing(&plain, "/ws", "go", untouched); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.String(), "placeholder restored") {
+		t.Errorf("a command that was not rewritten must not claim a restoration:\n%s", plain.String())
+	}
+}

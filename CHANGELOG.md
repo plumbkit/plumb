@@ -122,10 +122,38 @@
   caller could not tell a slot that cannot take a target from one merely written without
   the placeholder; it now quotes the stored command, names the config file it came from
   (project, global, or "plumb's shipped defaults", read through the same provenance the
-  trust gate uses), and quotes the placeholder spelling to restore. The
-  no-command-configured refusal — which gained its language and slot list in 0.17.2 — now
-  names the project config file by ABSOLUTE path rather than a bare `.plumb/config.toml`
-  relative to a root the agent may not have in hand.
+  trust gate uses), and hands back **the caller's own command with plumb's placeholder put
+  into it** rather than telling them to adopt plumb's default. That distinction is the
+  whole remedy: because reconciliation now handles the command that IS the expanded
+  default, the only commands that can still reach this refusal are commands that DIFFER
+  from it — so "set the slot to plumb's default" was destructive in every case that could
+  actually reach it, silently costing `go test -race ./...` its race detector,
+  `go test ./... -tags=integration` its build tag, and `gotestsum ./...` its runner. The
+  remedy is derived from the caller's argv (substituted for the default's operand, or
+  appended where the default is empty), so an unscoped run is unchanged by construction,
+  and it declines rather than guesses when the stored command never spells that operand.
+  The no-command-configured refusal — which gained its language and slot list in 0.17.2 —
+  now names the project config file by ABSOLUTE path rather than a bare
+  `.plumb/config.toml` relative to a root the agent may not have in hand, and says that a
+  command written there needs `plumb trust` before it will run (with the global config
+  named as the alternative that needs none) — without that clause, following the remedy
+  exactly landed the caller in the next-largest refusal family.
+
+- **`run_task` no longer discards a target in silence, and `plumb task` lists what will
+  actually run (PLAN-374).** `run_task({slot: "verify", target: …})` accepted the target,
+  dropped it, ran the WHOLE suite and reported success — a green over a scope nobody asked
+  for, and `mutation_test` with `test_task: "verify"` printed `scoped to <target>` in its
+  header for that same full run. A composite slot has no single command for a target to
+  land in, and REFUSING would open a new rejection cluster — the exact failure family this
+  card exists to shrink — so the response now states that the target was not applied, why,
+  and which sub-slot to call instead (asked of the same step builder, so it never
+  recommends a sub-slot that would itself refuse). The same channel discloses placeholder
+  reconciliation, since a rewrite of a user's own command being provably
+  meaning-preserving is a reason to allow it, not a reason to do it quietly. And
+  `plumb task` printed the raw stored string, from which a reader of
+  `test   go test ./...` correctly concludes a scoped call will be refused — the exact
+  wrong belief this change exists to correct, printed by plumb itself — so the listing now
+  renders the reconciled command and names what the config spells.
 
 - **`topology_affected`'s 2000-node traversal budget reaches the traversal, and a
   traversal that does run out of budget now says so (PLAN-407).**

@@ -58,6 +58,17 @@ type TaskCommand struct {
 	// that cannot find the file falls back to raw shell instead. Empty when the
 	// resolver could not name one, in which case the relative form is used.
 	ConfigPath string
+	// Notes are things the resolver DID to this call that the caller did not ask
+	// for and cannot see in Steps: a target accepted but not applied (a composite
+	// slot has no single command for one to land in), and a stored command whose
+	// {target} placeholder plumb restored to make the target land at all.
+	//
+	// They are notes and not refusals on purpose. Both cases used to be silent —
+	// run_task(slot:"verify", target:…) ran the WHOLE suite and reported success,
+	// a green over a scope nobody asked for — and the obvious fix, refusing,
+	// would open a new rejection cluster, which is the failure family this whole
+	// change exists to shrink. Saying so costs a line and shrinks nothing.
+	Notes []string
 }
 
 // noCommandError explains an unconfigured slot in terms the caller can act on:
@@ -79,10 +90,18 @@ func noCommandError(cmd TaskCommand, slot string) error {
 	if cmd.ConfigPath != "" {
 		where = cmd.ConfigPath
 	}
+	// The trust clause is not optional politeness. Both remedies above write the
+	// PROJECT config, and a project-supplied task command is refused by the trust
+	// gate until `plumb trust` runs in the workspace — so a caller that follows
+	// this message exactly lands in the next-largest refusal family instead of
+	// running its command. Naming the global config as the no-trust alternative
+	// closes the loop rather than moving the caller along it.
 	return fmt.Errorf(
 		"run_task: no %s command configured for %s (%s). "+
 			"Set one with [tasks.%s] %s = \"...\" in %s, "+
-			"or via agent_config op=set when the user has enabled [agent_config_writes]",
+			"or via agent_config op=set when the user has enabled [agent_config_writes]; "+
+			"then run `plumb trust` in the workspace, since a command from the project's config "+
+			"is not run until it is trusted. A command in your global config needs no trust",
 		slot, subject, have, key, slot, where)
 }
 
@@ -182,6 +201,9 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run_task %s (source=%s)\n", cmd.Slot, cmd.Provenance)
+	for _, note := range cmd.Notes {
+		fmt.Fprintf(&b, "note: %s\n", note)
+	}
 	for i, argv := range cmd.Steps {
 		res, err := RunArgv(ctx, ws, argv, defaultTaskTimeout)
 		if err != nil {
