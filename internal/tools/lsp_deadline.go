@@ -49,15 +49,22 @@ const lspAttemptDivisor = 2
 //     dead exactly where it was written to help.
 //
 // A non-positive timeout with no caller deadline disables the cap, matching
-// withLSPDeadline; the reported budget is then zero.
+// withLSPDeadline; the reported budget is then zero. A caller whose deadline has
+// ALREADY passed is a different thing and is reported as attemptExpired: no
+// attempt is made and no time is spent, so quoting the configured timeout would
+// claim a wait that never happened.
 func withFallbackLSPDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc, time.Duration) {
 	avail := timeout
-	if dl, ok := ctx.Deadline(); ok {
+	dl, hasDeadline := ctx.Deadline()
+	if hasDeadline {
 		if remaining := time.Until(dl); avail <= 0 || remaining < avail {
 			avail = remaining
 		}
 	}
 	if avail <= 0 {
+		if hasDeadline {
+			return ctx, func() {}, attemptExpired
+		}
 		return ctx, func() {}, 0
 	}
 	budget := avail / lspAttemptDivisor
@@ -65,26 +72,46 @@ func withFallbackLSPDeadline(ctx context.Context, timeout time.Duration) (contex
 	return lspCtx, cancel, budget
 }
 
+// attemptExpired is the budget withFallbackLSPDeadline reports when the CALLER's
+// own deadline had already passed: the server was never given any time, which
+// attemptBudget must not conflate with the cap being disabled (0).
+const attemptExpired time.Duration = -1
+
 // lspTimeoutErr wraps err with the tool name. A deadline-exceeded failure is
 // rewritten into actionable guidance, because the raw "context deadline
 // exceeded" leaves the caller with nothing to act on; other errors pass
 // through wrapped unchanged.
 func lspTimeoutErr(tool string, timeout time.Duration, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
+		// A non-positive budget means there was no wait to name: the caller's
+		// deadline had already passed, or [lsp_query] is 0. Naming one anyway
+		// prints "did not respond within 0s".
+		if timeout <= 0 {
+			return lspTimedOut(fmt.Errorf("%s: language server did not respond before the deadline "+
+				"(it may still be indexing the workspace — retry shortly; %s)", tool, ColdLSPToolsHint))
+		}
 		return lspTimedOut(fmt.Errorf("%s: language server did not respond within %s "+
-			"(it may still be indexing the workspace — retry shortly; %s)", tool, timeout, ColdLSPToolsHint))
+			"(it may still be indexing the workspace — retry shortly; %s)", tool, roundedDuration(timeout), ColdLSPToolsHint))
 	}
 	return fmt.Errorf("%s: %w", tool, err)
 }
 
 // attemptBudget resolves the duration to quote to a caller after a language
-// server missed its attempt: the budget actually granted, or the configured
-// [lsp_query] timeout when the cap was disabled (granted is then zero).
+// server missed its attempt: the budget actually granted, the configured
+// [lsp_query] timeout when the cap was disabled (granted is then zero), or ZERO
+// when the caller's deadline had already passed (attemptExpired) — there the
+// tool waited essentially no time at all, and quoting 30s would be a message
+// that is literally false. A zero result means "no wait to name"; every caller
+// treats it as such rather than printing it.
 func attemptBudget(granted, configured time.Duration) time.Duration {
-	if granted <= 0 {
+	switch {
+	case granted > 0:
+		return granted
+	case granted == attemptExpired:
+		return 0
+	default:
 		return configured
 	}
-	return granted
 }
 
 // fallbackDeadlines splits a tool's time into the two contexts a
@@ -96,10 +123,15 @@ func attemptBudget(granted, configured time.Duration) time.Duration {
 //     inside it. This is the deliberate half: a symbol-edit tool must not become
 //     unbounded just because its lookup learned to give up earlier (PLAN-403).
 //   - lspCtx is the server attempt, half of what remains of toolCtx, so the
-//     fallback parse has both headroom and a LIVE context to run on.
+//     fallback parse has both headroom and a LIVE context to run on. The ONE
+//     exception is a disabled cap ([lsp_query] = 0) with an unbounded caller:
+//     there is nothing to take half of, so lspCtx == toolCtx and there is no
+//     headroom — the documented "0 disables" contract, pinned deliberately by
+//     TestWithFallbackLSPDeadline_LeavesHeadroom/no bound at all.
 //
 // cancel releases both. waited is the attempt budget to quote in a timeout
-// message, already resolved through attemptBudget.
+// message, already resolved through attemptBudget — zero when there was no wait
+// to name.
 func fallbackDeadlines(ctx context.Context, timeout time.Duration) (toolCtx, lspCtx context.Context, cancel context.CancelFunc, waited time.Duration) {
 	toolCtx, cancelTool := withLSPDeadline(ctx, timeout)
 	lspCtx, cancelLSP, granted := withFallbackLSPDeadline(toolCtx, timeout)
