@@ -188,7 +188,10 @@ func readToolCases() []fallbackToolCase {
 				store, _ := newIndexedStore(t)
 				tool := tools.NewWorkspaceSymbols(client, nil, 0, slowFallbackBudget, nil).
 					WithTopologyFallback(func() *topology.Store { return store })
-				args := slowFallbackArgs(t, map[string]any{"query": "HandleRequest"})
+				// "Handle", not "HandleRequest": the response header echoes the
+				// query back, so asking for the exact name would let the assertion
+				// below pass on the echo alone, whatever the Map returned.
+				args := slowFallbackArgs(t, map[string]any{"query": "Handle"})
 				return func(ctx context.Context) (string, error) { return tool.Execute(ctx, args) }, nil
 			},
 		},
