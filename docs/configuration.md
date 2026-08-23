@@ -645,17 +645,32 @@ The timeout is applied at the tool layer (`withLSPDeadline`) and is a no-op when
 the context already carries a deadline, so the cold-start handshake is never
 shortened.
 
-**LSP → topology fallback:** on LSP error/timeout, `workspace_symbols` and
-`file_outline` fall back to the topology index (when enabled), annotated
-`source=topology, mode=indexed-approximate`; a no-op when topology is disabled
-or has no match. `get_definition` **by name** (`symbol_name`) also falls back to
-the index when the server is unavailable — approximate (the declaration line
+**Except for the fallback-capable tools.** Every tool that can answer from the
+tree-sitter index instead — `read_symbol`, `file_outline`, `workspace_symbols`
+(both modes), `call_hierarchy`, `insert_before_symbol`, `insert_after_symbol`,
+`replace_symbol_body`, `move_symbol` — goes through `withFallbackLSPDeadline`
+and deliberately bounds its **server attempt** at half the time available, even
+when the caller already carries a deadline. The remainder is reserved for the
+local parse, which needs both headroom and a live context to run on. The tool's
+own budget is unchanged; only the lookup gives up sooner. The trade-off is that
+a server slower than that half-budget — one that would previously have answered
+— now yields an approximate index result, and the response says so
+(`LSP did not answer within <budget>`) rather than claiming the server is
+unavailable.
+
+**LSP → topology fallback:** on LSP error/timeout, `workspace_symbols`,
+`file_outline`, `read_symbol` and `call_hierarchy` fall back to the topology
+index (when enabled), annotated `source=topology, mode=indexed-approximate`
+(`call_hierarchy` reconstructs the hierarchy: callers via LSP references,
+callees via the topology call graph); a no-op when topology is disabled or has
+no match. `get_definition` **by name** (`symbol_name`) also falls back to the
+index when the server is unavailable — approximate (the declaration line
 resolved by name, annotated `source=topology, mode=indexed-approximate`), since
 the index has no position-level go-to-definition. The raw-position form of
-`get_definition` and the other position/semantic tools (`find_references`, the
-call/type hierarchies, `rename_symbol`) have no equivalent and surface the error
-unchanged — they need a precise position or a whole-workspace reference graph
-the index does not hold. **Empty-result fill:** `workspace_symbols` additionally
+`get_definition` and the other position/semantic tools (`find_references`,
+`explain_symbol`, `type_hierarchy`, `rename_symbol`) have no equivalent and
+surface the error unchanged — they need a precise position or a whole-workspace
+reference graph the index does not hold. **Empty-result fill:** `workspace_symbols` additionally
 supplements an *empty-but-no-error* LSP answer from the index for **tree-sitter**
 languages (annotated `topology fill … source=topology, mode=indexed-approximate`)
 — lazy servers like zls only answer for files they have already analysed, so a

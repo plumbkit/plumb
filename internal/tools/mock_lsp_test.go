@@ -88,9 +88,13 @@ func (m *mockLSP) Definition(_ context.Context, p protocol.DefinitionParams) ([]
 	return m.locations, m.err
 }
 
-func (m *mockLSP) References(_ context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
+func (m *mockLSP) References(ctx context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
 	m.lastRefPos = p.Position
 	m.lastRefURI = p.TextDocument.URI
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.locations, m.err
 }
 
@@ -116,7 +120,11 @@ func (m *mockLSP) Rename(_ context.Context, p protocol.RenameParams) (*protocol.
 	return m.renameResult, m.err
 }
 
-func (m *mockLSP) PrepareCallHierarchy(_ context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+func (m *mockLSP) PrepareCallHierarchy(ctx context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.chItems, m.err
 }
 
