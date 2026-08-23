@@ -263,6 +263,13 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 		slog.Warn("topology: import linking error", "err", err)
 		lastErr = err
 	}
+	// Cross-file CALL edges are resolved after the imports pass for the same
+	// reason and one more: a call's target may live in a file indexed later in
+	// this very batch, so nothing per-file can see it.
+	if err := idx.resolveCalls(context.Background()); err != nil {
+		slog.Warn("topology: call resolution error", "err", err)
+		lastErr = err
+	}
 	if lastErr != nil {
 		idx.setState("error", lastErr.Error())
 	} else {

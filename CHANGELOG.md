@@ -3,6 +3,47 @@
 
 ### Added
 
+- **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
+  headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
+  is now recorded in a new `topology_call_sites` table — including the ones no single-file
+  pass can resolve, which were previously dropped without a trace — and a resolver turns
+  the package-qualified ones into cross-file `calls` edges tagged
+  `source = "call-resolver"`. Measured on plumb's own tree (1,407 indexed files): **2,532**
+  cross-file call edges across 378 distinct targets, **882** of them from non-`_test.go`
+  callers, out of **89,970** recorded Go call sites — **2.8%**. The remaining 60,821
+  qualified sites break down as **37,650** method calls on a receiver (left permanently
+  unresolved: the Go extractor parses with `SkipObjectResolution`, so no type information
+  exists to turn a receiver *variable* into the type whose method was called, and 20.8% of
+  plumb's callables share a name with another, so textual matching would manufacture wrong
+  edges at scale) and **20,378** qualified calls leaving the indexed tree. Those edges are
+  **absent and counted, never guessed**; `topology_status` prints the whole breakdown for
+  your workspace. Two shapes the old edge walk never saw are captured: package-level
+  initialiser calls (`var _ = mux.HandleFunc("/x", h)` — the Go extractor descended
+  `fn.Body` only) and composite-literal field values (`&cobra.Command{Use: "serve"}` — not
+  a call at all, and where a command's name actually lives). Call sites also record the
+  qualifier, byte/line position, first string argument, capped identifier arguments, the
+  true (pre-cap) argument count and whether the call used a spread, so a truncated or
+  spread argument list is detectable rather than silently misread.
+- **`_test.go` callers are resolved and counted, and the split is published.** A test
+  calling the function it exercises is the most useful cross-file call edge there is, so
+  they are included; the non-test subset is reported alongside so a consumer that must
+  exclude them can filter on the caller's path. This is deliberately the opposite of
+  `mode="reachability"`'s production-imports-only rule — that rule exists because Go
+  forbids import cycles, and a call edge implies no such constraint. Vendored and
+  generated code get no special case beyond the walk exclusions the index already applies
+  (`vendor/`, `node_modules/`, `testdata/`, `dist/`, `build/`).
+- **Language admission for function-level call answers is two positive terms and nothing
+  else.** A language is served iff it is in a compile-time supported set (today exactly
+  `{go}`) **and** the index holds a `package` node with that language — no edge count, no
+  coverage ratio, no "primary language" heuristic, since each of those is a threshold and
+  a threshold is what oscillates. The *subject* of a query selects which language's
+  admission is consulted, so a repository that is 90% TypeScript with one `tools/gen.go`
+  gives the Go subject a scoped Go answer and the TypeScript subject an honest refusal,
+  and neither answer includes the other's files. A refused language is offered
+  `find_references`/`call_hierarchy` where plumb ships a language server adapter for it,
+  and `search_in_files` where it does not — never package-level reachability, which is
+  gated to the same set.
+
 - **`topology_impact mode="reachability"`: package-level reachability from entry points
   (PLAN-371, worth-it W3-17).** The import graph has been real and cross-file since
   `linkImports` (51k+ `imports` edges), but nothing surfaced it at package granularity —
@@ -43,6 +84,19 @@
   rather than silently ignoring either. `internal/topology/reachability_scc.go` adds
   Tarjan SCC plus longest-path layering. `internal/tools/topology_reachability.go` wires
   the tool-facing response shapes. `docs/topology.md` gains a reachability section.
+
+### Changed
+
+- **Nothing reads the new `call-resolver` edges yet, on purpose.** They are derived data
+  rebuilt wholesale on every indexing pass, exactly like the `import-resolver` edges, and
+  their behaviour under an incremental single-file re-index is not yet pinned. No tool
+  consumes them in this release; do not build on them until that lifecycle work lands.
+- **The topology schema version is bumped to 3, so the index is rebuilt once on upgrade.**
+  A row written before this release carries no call sites and nothing about it says so, so
+  the table cannot backfill itself. Measured on plumb's own tree, the full cold re-index
+  goes from **4.0s to 5.0s** for 1,407 files (+25%, the cost of the call-site walk and its
+  ~101k rows, measured three times with identical results); the index grows to 31.7 MiB. It runs in the background at
+  first attach.
 
 ### Removed
 

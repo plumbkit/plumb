@@ -494,12 +494,12 @@ func (p *panicExtractor) Extract(_ context.Context, _ string, _ []byte) ([]Node,
 
 func TestSafeExtract_PanicRecovery(t *testing.T) {
 	ex := &panicExtractor{}
-	nodes, edges, err := safeExtract(context.Background(), ex, "test.go", []byte("package p"))
+	out, err := safeExtract(context.Background(), ex, "test.go", []byte("package p"))
 	if err == nil {
 		t.Error("expected error from panic recovery, got nil")
 	}
-	if nodes != nil || edges != nil {
-		t.Error("expected nil nodes/edges after panic")
+	if out.nodes != nil || out.edges != nil || out.sites != nil {
+		t.Error("expected nil nodes/edges/sites after panic")
 	}
 }
 

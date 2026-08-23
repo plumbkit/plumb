@@ -280,6 +280,76 @@ feature is built to avoid. The traversal therefore runs to full closure over a
 directory-level graph folded from the same `imports` edges, rather than reusing the
 depth/byte-capped symbol-neighbourhood BFS used elsewhere in this page.
 
+## Cross-file call edges (Go only, and small)
+
+The index records **call sites** — every call expression, resolved or not — in
+`topology_call_sites`, and a resolver turns the package-qualified ones into cross-file
+`calls` edges tagged `source = "call-resolver"`. Before this, every call edge in the
+index was intra-file: extractors run per file and emit edges as indices into that file's
+own node slice, so nothing they produced could name a symbol in another file, and a
+callee the extractor could not match was dropped without a trace.
+
+**Read the reach number before you read the graph.** Measured on plumb's own tree
+(1,407 indexed files, 1,284 of them Go):
+
+| | |
+|---|---:|
+| recorded Go call sites | 89,970 |
+| …carrying a qualifier (`x.F()`) | 60,821 |
+| cross-file `call-resolver` edges | **2,532** |
+| …with a non-`_test.go` caller | **882** |
+| distinct targets reached | 378 |
+| **share of all call sites resolved** | **2.8%** |
+| method calls on a receiver, left unresolved | 37,650 |
+| qualified calls leaving the indexed tree (stdlib, third party) | 20,378 |
+
+`topology_status` prints these for your own workspace. **2.8% is the headline, not a
+caveat.** A package-qualified-functions-only resolver reaches the calls that cross a
+package boundary and nothing else; the single most common Go call is a method call on a
+receiver variable, and the Go extractor parses with `SkipObjectResolution`, so there is
+no type information anywhere in the index that could turn a receiver *variable* into the
+type whose method was called. Those edges are **absent and counted**, never guessed:
+20.8% of plumb's own callables share a name with another callable, so textual receiver
+matching would manufacture wrong edges at scale.
+
+**What resolves.** A call `pkg.Fn()` whose `pkg` is an import of *that same file*, whose
+import path names a directory the index holds, and whose `Fn` is an exported top-level
+function declared there. Per-file import sets are the whole precision story — a global
+by-name resolver is what the name-collision figure above rules out. An unexported callee
+behind a qualifier is treated as a receiver call, because a local variable can shadow an
+import name and that is the only reading which cannot invent an edge.
+
+**Test callers are included, and the split is published.** A test calling the function it
+exercises is the most useful cross-file call edge there is, so `_test.go` callers are
+resolved and counted; the non-test subset is reported alongside so a consumer that must
+exclude them (import-cycle reasoning, for one) can filter on the caller's path. This is
+the opposite of `mode="reachability"`'s production-imports-only rule, deliberately: that
+rule exists because Go forbids import cycles, and a call edge implies no such constraint.
+Vendored and generated code follow the index's existing rule and get no special case —
+`vendor/`, `node_modules/`, `testdata/`, `dist/` and `build/` are excluded from the walk,
+and everything else that is indexed contributes call sites.
+
+**Nothing consumes these edges yet.** They are derived data, rebuilt wholesale on every
+indexing pass exactly like the `import-resolver` edges, and their behaviour under an
+incremental single-file re-index is not yet pinned. No tool reads them, on purpose.
+
+**Language admission.** A language is served iff it is in the resolver's compile-time
+supported set (today exactly `{go}`) **and** the index holds a `package` node with that
+language. Both terms are positive: no edge count, no coverage ratio, no "primary
+language" heuristic. The *subject* of a query — the symbol or file asked about — selects
+which language's admission is consulted, so a repository that is 90% TypeScript with one
+`tools/gen.go` gives the Go subject a normal Go answer and the TypeScript subject an
+honest refusal, and neither answer silently includes the other language's files. A
+traversal admitted for one language never crosses into another's nodes; those are
+reported *out of scope*, which is a different fact from having no callers.
+
+For a language that is refused, the alternatives offered depend on whether plumb ships a
+language server adapter for it: with one, `find_references` and `call_hierarchy` answer
+the cross-file question properly through the server; without one, `search_in_files` over
+the symbol name is the honest tool and the refusal says so rather than implying a server
+exists. Package-level reachability is **not** offered as the coarser answer, because it
+is gated to the same language set.
+
 ## Configuration
 
 All `[topology]` fields (see the
@@ -306,6 +376,10 @@ never committed.
 
 - **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
   dispatch. Treat its graph as a strong hint, then confirm with LSP.
+- **Cross-file call edges cover ~3% of call sites, in Go only.** See the section above:
+  method calls on a receiver are the modal Go call and are left unresolved by design, so
+  a caller list from the topology call graph is a lower bound and never a complete one.
+  Confirm with `find_references`.
 - **`topology_routes` is heuristic and name/signature-only.** It pattern-matches
   known entry-point idioms against symbol names and signatures; it does **not** parse
   route registrations or call sites, so it cannot map a path to its handler. Always

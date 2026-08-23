@@ -54,11 +54,11 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	if !stale {
 		return nil
 	}
-	nodes, edges, err := idx.extractFile(ctx, ex, relPath, src)
+	out, err := idx.extractFile(ctx, ex, relPath, src)
 	if err != nil {
 		return idx.recordFileError(relPath, info, err)
 	}
-	return idx.persistFile(fileID, relPath, info, hash, lang, nodes, edges)
+	return idx.persistFile(fileID, relPath, info, hash, lang, out)
 }
 
 // symlinkEscapesWorkspace reports whether absPath is a symlink whose target
@@ -189,13 +189,35 @@ func effectiveExtractTimeout(configured time.Duration) time.Duration {
 // deadline so a pathological file cannot stall the single indexer worker; on
 // expiry the file is recorded as an error by the caller and the worker moves
 // on.
-func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
+func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (extractOutput, error) {
 	if ex == nil {
-		return nil, nil, nil
+		return extractOutput{}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, effectiveExtractTimeout(idx.extractTimeout))
 	defer cancel()
 	return safeExtract(ctx, ex, relPath, src)
+}
+
+// extractOutput is one file's extraction result. It exists so the call sites an
+// extractor may also produce travel with the nodes and edges they index into,
+// rather than through a second parse that could disagree with the first.
+type extractOutput struct {
+	nodes []Node
+	edges []Edge
+	sites []CallSite
+}
+
+// runExtract calls the richer ExtractWithCallSites when the extractor offers it,
+// and plain Extract otherwise. An extractor with no call-site support yields no
+// sites — which the resolver's language admission reads as "not supported",
+// never as "no calls here".
+func runExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (extractOutput, error) {
+	if cs, ok := ex.(CallSiteExtractor); ok {
+		n, e, s, err := cs.ExtractWithCallSites(ctx, relPath, src)
+		return extractOutput{nodes: n, edges: e, sites: s}, err
+	}
+	n, e, err := ex.Extract(ctx, relPath, src)
+	return extractOutput{nodes: n, edges: e}, err
 }
 
 // safeExtract wraps Extract in a recover so malformed files cannot panic the
@@ -218,14 +240,13 @@ func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath strin
 // the guard the select below races an already-closed ctx.Done() against a
 // goroutine this call itself spawned, so a fast extractor could win and return
 // a result where the caller was promised ctx.Err().
-func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
+func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (extractOutput, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, nil, fmt.Errorf("extract %s: %w", relPath, ctxErr)
+		return extractOutput{}, fmt.Errorf("extract %s: %w", relPath, ctxErr)
 	}
 	type result struct {
-		nodes []Node
-		edges []Edge
-		err   error
+		out extractOutput
+		err error
 	}
 	// Buffered so an abandoned extract can always send and exit rather than block
 	// on a receiver that has already given up.
@@ -238,17 +259,17 @@ func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) 
 				done <- result{err: fmt.Errorf("extractor panic: %v", r)}
 			}
 		}()
-		n, e, xerr := ex.Extract(ctx, relPath, src)
-		done <- result{nodes: n, edges: e, err: xerr}
+		out, xerr := runExtract(ctx, ex, relPath, src)
+		done <- result{out: out, err: xerr}
 	}()
 
 	select {
 	case r := <-done:
-		return r.nodes, r.edges, r.err
+		return r.out, r.err
 	case <-ctx.Done():
 		slog.Warn("topology: abandoning slow extract",
 			"path", relPath, "lang", ex.Language(),
 			"bytes", len(src), "elapsed", time.Since(started))
-		return nil, nil, fmt.Errorf("extract %s: %w", relPath, ctx.Err())
+		return extractOutput{}, fmt.Errorf("extract %s: %w", relPath, ctx.Err())
 	}
 }

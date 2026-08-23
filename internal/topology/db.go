@@ -80,6 +80,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS topology_fts USING fts5(
     tokenize='unicode61 remove_diacritics 2'
 );
 
+-- Raw call sites, recorded per file BEFORE resolution. Cross-file call
+-- resolution needs to see a call the extractor could not match, and today those
+-- are dropped; this table is where they are kept.
+--
+-- Everything addressable across files is TEXT (qualifier, callee), never a node
+-- rowid: an extractor sees one file, so a rowid could only ever name a callee in
+-- that same file. enclosing_id is a rowid because the enclosing declaration IS in
+-- this file and dies with it.
+CREATE TABLE IF NOT EXISTS topology_call_sites (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id      INTEGER NOT NULL REFERENCES topology_files(id) ON DELETE CASCADE,
+    enclosing_id INTEGER          REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    language     TEXT    NOT NULL DEFAULT '',
+    site_kind    TEXT    NOT NULL DEFAULT 'call',
+    callee       TEXT    NOT NULL DEFAULT '',
+    -- NULL, not '', when the call has no qualifier: "no qualifier" and "an empty
+    -- qualifier" are different facts and the resolver must not confuse them.
+    qualifier    TEXT,
+    start_byte   INTEGER NOT NULL DEFAULT 0,
+    start_line   INTEGER NOT NULL DEFAULT 0,
+    -- NULL when the call had no string-literal argument; '' when it had an empty one.
+    first_string_arg TEXT,
+    arg_idents   TEXT    NOT NULL DEFAULT '',
+    arg_count    INTEGER NOT NULL DEFAULT 0,
+    arg_spread   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tcs_file ON topology_call_sites(file_id);
+CREATE INDEX IF NOT EXISTS idx_tcs_lookup ON topology_call_sites(language, site_kind, qualifier);
+
 -- Opt-in semantic-search cache: one row per (embedding model, content hash).
 -- Keyed by content hash (not node id) so it survives re-indexing and shares a
 -- vector across identical symbol text. Populated lazily when a symbol appears as
@@ -117,13 +146,22 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	2 — uncovered-language stamping: rows indexed before it carry language='' and
 //	    content_hash='', which is indistinguishable from an unrecognised file and
 //	    cannot heal on its own (see below)
-const SchemaVersion = 2
+//	3 — topology_call_sites: raw, pre-resolution call sites. A row written before
+//	    this version has no sites at all, and nothing about it says so — the
+//	    absence of a call site is indistinguishable from a file with no calls — so
+//	    the table cannot backfill itself either. Same reasoning as 2.
+const SchemaVersion = 3
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The
 // embeddings cache is rebuildable too but is keyed by content hash, not node id,
 // so it is intentionally preserved across a schema recreate.
+//
+// topology_call_sites leads the list because it references BOTH topology_nodes
+// and topology_files: a child listed after either parent would survive the
+// parent's DROP on the next version bump and orphan its rows.
 var topologyTables = []string{
+	"topology_call_sites",
 	"topology_edges",
 	"topology_fts",
 	"topology_nodes",
