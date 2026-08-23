@@ -8,7 +8,8 @@
   is now recorded in a new `topology_call_sites` table — including the ones no single-file
   pass can resolve, which were previously dropped without a trace — and a resolver turns
   the package-qualified ones into cross-file `calls` edges tagged
-  `source = "call-resolver"`. Measured on plumb's own tree (1,414 indexed files): **2,531**
+  `source = "call-resolver"`. Measured on plumb's own tree at this commit (1,414 indexed
+  files, 1,283 of them Go): **2,531**
   cross-file call edges across 378 distinct targets, **882** of them from non-`_test.go`
   callers, out of **89,942** recorded Go call sites — **2.8%**. The **60,803** qualified
   sites fall into six buckets, every site in exactly one, and they RECONCILE — the six add
