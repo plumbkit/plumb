@@ -202,3 +202,39 @@ func TestPolicySourceFor_AnnotatesIgnoredRequest(t *testing.T) {
 		t.Errorf("a trusted request should be attributed to the project, got %q", got)
 	}
 }
+
+// TestTrustDisclosure_DescribesOnlyLiveCommandsKeys pins `plumb trust`'s own
+// prose to the config surface that still exists.
+//
+// Both strings are executable user-facing text on the security-disclosure
+// surface — the cobra Long is `plumb trust --help`, and the summary prints after
+// every grant. Both went on describing `[commands]` as "the shell policy —
+// allow_shell and deny_network" for a release after execute_shell_command and
+// those two keys were removed, naming retired keys as the reason the grant exists
+// while omitting require_sandbox, the one [commands] key it actually covers.
+//
+// It survived a stale-reference sweep because the sweep grepped the tool name and
+// the deleted Go identifiers, and this text contains neither. Hence a test rather
+// than another grep.
+func TestTrustDisclosure_DescribesOnlyLiveCommandsKeys(t *testing.T) {
+	surfaces := map[string]string{
+		"trust --help":       trustCmd.Long,
+		"post-grant summary": ansiStripForCLITest(captureStdout(t, func() { printTrustGrantSummary("/w") })),
+	}
+	for name, text := range surfaces {
+		for _, retired := range []string{"allow_shell", "deny_network", "execute_shell_command", "shell policy"} {
+			if strings.Contains(text, retired) {
+				t.Errorf("`plumb trust`'s %s still names %q, which plumb no longer has. "+
+					"This text is what a user reads before granting execution.\ngot:\n%s", name, retired, text)
+			}
+		}
+		if !strings.Contains(text, "[commands]") {
+			t.Errorf("`plumb trust`'s %s does not mention [commands] at all, though the grant covers it:\n%s", name, text)
+		}
+	}
+	// And the help must name the key the grant genuinely covers, or the section
+	// is listed with no content.
+	if !strings.Contains(trustCmd.Long, "require_sandbox") {
+		t.Errorf("`plumb trust --help` lists [commands] without naming require_sandbox:\n%s", trustCmd.Long)
+	}
+}

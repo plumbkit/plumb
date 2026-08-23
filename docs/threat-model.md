@@ -680,8 +680,8 @@ Tracked, not hidden. Each is real today.
    - The coarse flag is set by the TUI's Commands tab on **any** project-scope
      save ("trusted by authorship"). Saving one unrelated setting in a freshly
      cloned repository therefore blessed every `[[command]]` that repository
-     already shipped, plus `allow_shell`, plus `auto_build_server` — none of
-     which the user authored or was shown.
+     already shipped, plus its `[commands]` policy, plus `auto_build_server` —
+     none of which the user authored or was shown.
 
    The gate is now the conjunction of both grants (`config.ExecTrustedFor`): the
    coarse flag still answers "has the user approved execution in this workspace

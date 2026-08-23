@@ -148,11 +148,9 @@ func TestDefaults_CommandsAreReadOnlyAndBounded(t *testing.T) {
 			t.Errorf("default command %q uses %d placeholders; at most one is allowed", c.Name, placeholders)
 		}
 	}
-	if d.CommandPolicy.AllowShell {
-		t.Fatal("Defaults must have allow_shell = false")
-	}
-	if !d.CommandPolicy.DenyNetwork {
-		t.Fatal("Defaults must deny the shell tier's network by default (deny_network = true)")
+	if d.CommandPolicy.RequireSandbox {
+		t.Fatal("Defaults must not demand a sandbox (require_sandbox = false), or every " +
+			"machine without sandbox-exec/bwrap loses run_command out of the box")
 	}
 }
 
@@ -209,8 +207,8 @@ timeout = "90s"
 allow_writes = true
 
 [commands]
-allow_shell = true
 require_sandbox = true
+allow_shell = true
 deny_network = true
 `)
 	got, err := LoadProject(Defaults(), ws)
@@ -224,9 +222,14 @@ deny_network = true
 	if c.Timeout.Duration != 90*time.Second || !c.AllowWrites {
 		t.Fatalf("command fields not merged: %+v", c)
 	}
-	if !got.CommandPolicy.AllowShell || !got.CommandPolicy.RequireSandbox || !got.CommandPolicy.DenyNetwork {
+	if !got.CommandPolicy.RequireSandbox {
 		t.Fatalf("policy not merged: %+v", got.CommandPolicy)
 	}
+	// allow_shell / deny_network went with execute_shell_command in 0.17.3. They
+	// are left in the fixture deliberately: a config written against an older
+	// plumb must still LOAD, because nothing here sets DisallowUnknownFields. If
+	// that ever changes, this test is where it surfaces — as a decode error, not
+	// as a user's config failing to open.
 }
 
 // TestLoadProject_ProjectCommandsShadowGlobal documents the array-replace merge:

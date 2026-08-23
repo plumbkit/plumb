@@ -32,6 +32,10 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 		{"docs/architecture.md", fmt.Sprintf("(%d tools —", n)},
 		{"docs/token-efficiency.md", fmt.Sprintf("same %d tools", n)},
 		{"docs/index.md", fmt.Sprintf("the %d tools", n)},
+		// Added after this file's own absence let docs/cli-reference.md go on
+		// saying "all 59" through a 59 → 58 fold: an unpinned restatement is one
+		// nobody is told about.
+		{"docs/cli-reference.md", fmt.Sprintf("instead of all %d", n)},
 		{"site/index.html", fmt.Sprintf(`data-count="%d">0</div><div class="l">structured tools`, n)},
 		{"site/index.html", titleWord(n) + " structured tools"},
 	}

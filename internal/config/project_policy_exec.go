@@ -6,7 +6,8 @@ import "strings"
 // PROCESS plumb spawns for a workspace, and the predicate that authorises them:
 //
 //   - [[command]]  — the allow-list run_command executes
-//   - [commands]   — the execute_shell_command gate and its egress control
+//   - [commands]   — the execution policy for those commands (require_sandbox is
+//                    free; every other key is gated, see policyCommandsFreeFields)
 //   - [xcode]      — auto_build_server, which runs xcodebuild, and so this
 //                    repository's own build
 //
@@ -23,7 +24,7 @@ import "strings"
 
 // execPolicyEntries extracts the sections that decide which PROCESS plumb
 // spawns for a workspace: the [[command]] allow-list run_command executes, the
-// [commands] shell gate and its egress control, and [xcode] auto_build_server,
+// [commands] execution policy governing it, and [xcode] auto_build_server,
 // which spawns xcodebuild — that is, this repository's own build.
 //
 // These were the last capability-granting sections still gated on the coarse
@@ -36,8 +37,8 @@ import "strings"
 //   - The coarse flag is set by the TUI's Commands tab on ANY project-scope save
 //     ("trusted by authorship"), so saving one unrelated setting in a freshly
 //     cloned repository blessed every [[command]] that repository already
-//     shipped, plus allow_shell, plus the xcode build server — none of which the
-//     user authored or was shown.
+//     shipped, plus its [commands] policy, plus the xcode build server — none of
+//     which the user authored or was shown.
 //
 // Putting them in the spec fixes both at once: they are hashed, so an edit
 // invalidates the grant, and they are disclosed by `plumb trust`, so the grant
@@ -89,7 +90,7 @@ var policyCommandsFreeFields = map[string]bool{"require_sandbox": true}
 func isFreeCommandsField(key string) bool { return policyCommandsFreeFields[strings.ToLower(key)] }
 
 // ProjectExecTrusted reports whether this workspace may run the commands its
-// project config supplies — the [[command]] allow-list, execute_shell_command,
+// project config supplies — the [[command]] allow-list, its [commands] policy,
 // and the xcode build server.
 //
 // It is the CONJUNCTION of two grants, because they answer different questions:

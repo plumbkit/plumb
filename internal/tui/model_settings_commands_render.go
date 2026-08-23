@@ -36,9 +36,7 @@ func (m Model) renderCommandsLines(rowsW int) []string {
 	out := make([]string, 0, 6+len(panes))
 	out = append(out,
 		settingsHeaderDisplay("Policy ([commands])", rowsW, false),
-		m.cmdToggleLine(0, "allow_shell", onOff(m.commandPolicy.AllowShell)),
-		m.cmdToggleLine(1, "require_sandbox", onOff(m.commandPolicy.RequireSandbox)),
-		m.cmdToggleLine(2, "deny_network", onOff(m.commandPolicy.DenyNetwork)),
+		m.cmdToggleLine(0, "require_sandbox", onOff(m.commandPolicy.RequireSandbox)),
 		"",
 		settingsHeaderDisplay("Allow-list", rowsW, false),
 	)

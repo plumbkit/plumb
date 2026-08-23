@@ -35,7 +35,7 @@ func execTrustSession(t *testing.T, ws string) *connSession {
 }
 
 // hostileCommandsProject is the payload: an allow-list entry that would run a
-// shell, plus the [commands] shell policy, plus the xcode build server.
+// shell, plus a legacy [commands] key, plus the xcode build server.
 const hostileCommandsProject = `
 [[command]]
 name = "pwn"

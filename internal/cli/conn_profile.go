@@ -46,7 +46,7 @@ func autoProfile(client string) (string, string) {
 // any future client — with zero evidence any of them can invoke a tool hidden
 // from tools/list. clientcaps documents only 7 rows against the ~20 setup
 // targets docs/cli-reference.md names, so "unrecognised" was overwhelmingly
-// documented clients, not novel ones, and hiding ~38/59 tools from them is
+// documented clients, not novel ones, and hiding ~37/58 tools from them is
 // exactly the tool-removal the Do-NOT forbids — indistinguishable from the
 // reasoning that keeps Claude Desktop and Junie on "full" below. A genuine
 // zero-detection lean floor needs registry rows with positive deferral

@@ -46,9 +46,10 @@
 
 ### Removed
 
-- **`execute_shell_command` is gone from the registered tool surface (PLAN-408,
-  PLAN-374 item 3).** The ad-hoc `sh -c` tool is no longer registered, and its
-  implementation (`internal/tools/execute_shell_command.go`) and cli-seam wiring
+- **`execute_shell_command` is gone from the registered tool surface, and so are
+  the two config keys that gated it (PLAN-408, PLAN-374 item 3).** The ad-hoc
+  `sh -c` tool is no longer registered, and its implementation
+  (`internal/tools/execute_shell_command.go`) and cli-seam wiring
   (`shellResolver`, `gatedAllowShell`, `gatedDenyNetwork`) are deleted. Tool
   count 59 → 58.
   **If you had it enabled**, use one of the two execution surfaces that stay:
@@ -60,16 +61,29 @@
   **Why:** the tool shipped disabled by default and stayed that way. Every one of
   its 25 recorded calls over 90 days was the disabled-state refusal — the gate
   working, and nobody ever enabling it — while its schema and description were
-  paid for on every `tools/list` of every session. Removing it takes **1,171
+  paid for on every `tools/list` of every session. Removing it takes **1,177
   bytes** off the full `tools/list` payload (112,160 → 110,983 B measured, the
-  remaining 6 B from `run_command`'s description no longer pointing at it).
-  `run_command`'s own trust gate, the `[[command]]` allow-list, `require_sandbox`
-  and the OS sandbox are untouched — `internal/config/` is byte-for-byte
-  unchanged by this release note's change.
-  **Config:** `[commands] allow_shell` and `[commands] deny_network` still parse
-  (an existing config keeps loading) but are now inert — nothing reads them.
-  `[commands] require_sandbox` and each `[[command]]` entry's own `deny_network`
-  are unaffected. Retiring the two dead keys is tracked separately.
+  last few bytes from `run_command`'s description no longer pointing at it). The
+  `tools/list` payload plumb PINS for a lean client is unchanged (44,975 B before
+  and after): `execute_shell_command` was never in the pinned set.
+  **Config — this is the breaking part.** `[commands] allow_shell` and
+  `[commands] deny_network` are **removed**. They existed only to gate the shell
+  tool, so a key left in a config now means nothing, and leaving them half-alive
+  was worse than removing them: they were still hashed into the `plumb trust`
+  grant, so *editing* one could revoke a workspace's trust and thereby refuse
+  every project `[[command]]` — a live malfunction caused by a key that no longer
+  controlled anything.
+  **What to do:** delete both keys from your config. Nothing else is needed —
+  plumb ignores an unknown key, so an existing config keeps loading untouched, and
+  a workspace already granted `plumb trust` keeps its grant. In a *project*
+  `.plumb/config.toml` a leftover key is still gated (the `[commands]` free-list
+  admits only `require_sandbox`, so anything else needs trust) and `plumb trust`
+  now discloses it honestly as a `[commands]` key plumb does not recognise,
+  instead of describing a tool that no longer exists. If you had
+  `deny_network = true` set at the `[commands]` level for `run_command`, note it
+  never applied there: set `deny_network` on the individual `[[command]]` entry.
+  `[commands] require_sandbox`, each `[[command]]` entry's own `deny_network`,
+  `run_command`'s trust gate and the OS sandbox are all unaffected.
 
 ### Fixed
 

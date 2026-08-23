@@ -859,7 +859,7 @@ rather than granting, so nothing acquires the grant as a side effect of running
 in a script.
 
 One `plumb trust` records **one grant per workspace**, covering the project's
-task commands, its `[[command]]` allow-list, its `[commands]` shell policy, its
+task commands, its `[[command]]` allow-list, its `[commands]` execution policy, its
 LSP config, and its git policy. The record lives in `DataDir/trust.json`, never
 in the project, so a repository cannot mark itself trusted.
 
@@ -1260,13 +1260,20 @@ deny_network = false        # sandbox: cut network for this command (default: al
 require_sandbox = false     # if true, refuse to run a command when no OS sandbox is active
 ```
 
-> **Removed in 0.17.3: the `execute_shell_command` tool.** plumb no longer
-> registers an ad-hoc `sh -c` tool. Use `run_command` with a `[[command]]`
-> allow-list entry (a fixed argv, no free text on the command line), or
-> `run_task` for an ordinary build/lint/test slot. The `[commands] allow_shell`
-> and `[commands] deny_network` keys are inert: nothing reads them any more, and
-> they are accepted only so an existing config keeps loading. Removing them is
-> tracked separately.
+> **Removed in 0.17.3: the `execute_shell_command` tool, and the two keys that
+> gated it.** plumb no longer registers an ad-hoc `sh -c` tool. Use `run_command`
+> with a `[[command]]` allow-list entry (a fixed argv, no free text on the command
+> line), or `run_task` for an ordinary build/lint/test slot.
+>
+> `[commands] allow_shell` and `[commands] deny_network` went with it, so
+> `require_sandbox` above is the whole table. Delete both keys from your config;
+> nothing else is needed. An existing config keeps loading either way — plumb
+> ignores an unknown key — and a workspace already granted `plumb trust` keeps its
+> grant, since the key has not changed. A leftover key in a *project*
+> `.plumb/config.toml` is still trust-gated (only `require_sandbox` is on the
+> `[commands]` free-list) and `plumb trust` discloses it as a `[commands]` key
+> plumb does not recognise. Table-level `deny_network` never applied to
+> `run_command`: set `deny_network` on the individual `[[command]]` entry.
 
 **Trust gate.** A `[[command]]` entry supplied by a *project* `.plumb/config.toml`
 is honoured only after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
