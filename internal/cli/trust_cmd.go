@@ -1,8 +1,9 @@
 package cli
 
 // trust_cmd.go — `plumb trust`: the per-workspace grant that lets a project's
-// .plumb/config.toml supply task commands, named commands, shell policy,
-// [xcode]/[lsp.<lang>] process argv, git tiers, and collab switches. The
+// .plumb/config.toml supply task commands, named commands, the [commands]
+// execution policy, [xcode]/[lsp.<lang>] process argv, git tiers, and collab
+// switches. The
 // disclosure below is the informed-consent record that gate rests on: the exact
 // content the grant binds to, values and all, printed before the Yes/No
 // selector — restyled to the shared CLI presentation (tui styles, ┊ rows, the
@@ -35,7 +36,7 @@ otherwise ignores. This is ONE grant per workspace, and it covers all of them:
 
   · [tasks.<lang>]        build/lint/test/e2e commands run by run_task
   · [[command]]           the named command allow-list run by run_command
-  · [commands]            the shell policy — allow_shell and deny_network
+  · [commands]            the execution policy — require_sandbox
   · [xcode]               auto_build_server, which runs xcodebuild here
   · [lsp.<lang>]          command, args, env, initialization_options and the
                           root markers — the argv of a process plumb spawns
@@ -110,7 +111,7 @@ func printTrustGrantSummary(root string) {
 	for _, line := range []string{
 		"This grant covers the project's task commands,",
 		"its [[command]] allow-list,",
-		"its [commands] shell policy,",
+		"its [commands] execution policy,",
 		"its [xcode] build-server settings,",
 		"its [lsp.<lang>] server command/args/env,",
 		"its [git] tier policy and its [collab] channel switches.",

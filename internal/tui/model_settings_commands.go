@@ -40,8 +40,13 @@ const (
 	commandDetailFieldCount
 )
 
-// commandsToggleCount is the number of [commands] policy toggles.
-const commandsToggleCount = 3
+// commandsToggleCount is the number of [commands] policy toggles. One, since
+// allow_shell and deny_network went with the shell tool they gated: a switch the
+// user can flip that changes nothing is worse than no switch at all, and this one
+// could also invalidate the workspace's `plumb trust` grant on its way to doing
+// nothing. Kept as a named constant because the cursor bounds in
+// handleCommandsTogglesKey and handleCommandsListKey are derived from it.
+const commandsToggleCount = 1
 
 // cmdField sentinel values carried by the text editor for the name add/rename
 // flows (the concrete field editors use the literal field names "exec" etc.).
@@ -140,8 +145,8 @@ func (m Model) saveCommands(cmds []config.CommandConfig, change string) Model {
 	return m
 }
 
-// toggleCommandPolicy flips the policy toggle at idx (allow_shell / require_sandbox)
-// and persists it in the current scope.
+// toggleCommandPolicy flips the policy toggle at idx (require_sandbox, the only
+// one) and persists it in the current scope.
 func (m Model) toggleCommandPolicy(idx int) Model {
 	var (
 		path   []string
@@ -151,20 +156,10 @@ func (m Model) toggleCommandPolicy(idx int) Model {
 	)
 	switch idx {
 	case 0:
-		v = !m.commandPolicy.AllowShell
-		path = []string{"commands", "allow_shell"}
-		change = "allow_shell " + onOff(v)
-		apply = func(c *config.Config) { c.CommandPolicy.AllowShell = v }
-	case 1:
 		v = !m.commandPolicy.RequireSandbox
 		path = []string{"commands", "require_sandbox"}
 		change = "require_sandbox " + onOff(v)
 		apply = func(c *config.Config) { c.CommandPolicy.RequireSandbox = v }
-	case 2:
-		v = !m.commandPolicy.DenyNetwork
-		path = []string{"commands", "deny_network"}
-		change = "deny_network " + onOff(v)
-		apply = func(c *config.Config) { c.CommandPolicy.DenyNetwork = v }
 	default:
 		return m
 	}

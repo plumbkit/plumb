@@ -198,21 +198,13 @@ func execFieldWarning(key string, v any) string {
 	if key == "command" {
 		return "this is the [[command]] allow-list — each entry is a fixed argv run_command will execute as you"
 	}
-	if field, ok := strings.CutPrefix(key, "commands."); ok {
-		switch field {
-		case "allow_shell":
-			if on, _ := v.(bool); !on {
-				return ""
-			}
-			return "opens execute_shell_command for this repository — arbitrary shell, as you, with your environment"
-		case "deny_network":
-			if off, ok := v.(bool); ok && off {
-				return ""
-			}
-			return "re-opens network access for shell commands; the sandbox is integrity-only, so reads stay permissive and a command could exfiltrate what it reads"
-		default:
-			return "a [commands] key plumb does not recognise as inert; it is gated because it may reach command execution"
-		}
+	if strings.HasPrefix(key, "commands.") {
+		// require_sandbox is the only key with a meaning, and it is on the
+		// free-list, so it never reaches here. Anything else — a legacy
+		// allow_shell/deny_network left over from the retired shell tier, or a
+		// key added later — gets the honest generic answer rather than prose
+		// about a tool that no longer exists.
+		return "a [commands] key plumb does not recognise as inert; it is gated because it may reach command execution"
 	}
 	if field, ok := strings.CutPrefix(key, "xcode."); ok {
 		if field == "auto_build_server" {

@@ -196,11 +196,10 @@ var defaults = Config{
 	// header comment above TargetToken in config_commands.go records why, and what
 	// confinement work has to land before defaults can ship.
 	Tools: ToolsConfig{Profile: "auto"},
-	// execute_shell_command runs with the user's credentials and the daemon env and
-	// the sandbox is integrity-only, so the shell tier denies the network by default
-	// (opt back in with [commands] deny_network = false). run_command entries set
-	// their own per-[[command]] deny_network (default false).
-	CommandPolicy: CommandsConfig{DenyNetwork: true},
+	// No [commands] policy either: require_sandbox is off by default, and the
+	// table-level deny_network default that used to live here belonged to the
+	// retired shell tier. run_command entries set their own per-[[command]]
+	// deny_network (default false).
 }
 
 // Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
