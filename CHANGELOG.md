@@ -46,10 +46,10 @@
 
 ### Fixed
 
-- **The symbol WRITE tools, `file_outline` and `workspace_symbols` now degrade to
-  tree-sitter when the language server is merely SLOW (PLAN-403).** PLAN-390 fixed this
-  shape in `read_symbol` only; its independent review found the same defect, in both
-  halves, across the tools deliberately deferred from that card. `insert_before_symbol`,
+- **The symbol WRITE tools, `file_outline`, `workspace_symbols` and `call_hierarchy` now
+  degrade to tree-sitter when the language server is merely SLOW (PLAN-403).** PLAN-390
+  fixed this shape in `read_symbol` only; its independent review found the same defect, in
+  both halves, across the tools deliberately deferred from that card. `insert_before_symbol`,
   `insert_after_symbol`, `replace_symbol_body` and `move_symbol` each shadowed `ctx` with
   the LSP-bounded deadline and then handed that **already-expired** context to their
   tree-sitter fallback; topology's `safeExtract` refuses to start a parse on a dead
@@ -66,6 +66,18 @@
   finishes inside the same budget as before — it simply now has more of it left, because
   the lookup gives up earlier. `resolveSymbolOrFallback` takes the attempt context and the
   live one separately and reports WHY the fallback answered.
+  `call_hierarchy` — an EIGHTH site the card's list did not name, found by this PR's own
+  independent review — had both halves through the `executeLSPQuery` skeleton it shared
+  with `get_definition`/`explain_symbol`/`type_hierarchy`; it is the only one of the four
+  with a topology fallback, so it now takes the two contexts directly and no longer shares
+  that skeleton. A slow server there previously consumed the whole budget and returned a
+  timeout whose text advertised the very index that could have answered; it now returns
+  the reconstructed hierarchy. Once the server HAS resolved an item the follow-up
+  incoming/outgoing calls keep the full tool budget, so the warm path is unchanged.
+  **`move_symbol` also refuses an ambiguous bare `name_path` on whichever tree answered.**
+  The refusal was gated on the language server having answered, so a cold or absent server
+  skipped it and the tree-sitter path's first-name-match silently moved one of two
+  same-named declarations, rewriting two files with no warning.
   **Trade-off, disclosed in the tool response as well as here:** the server attempt is now
   half the `[lsp_query]` budget (15s at the default 30s), so a server that answers between
   the attempt budget and the full timeout — one that would previously have won — now
@@ -73,8 +85,14 @@
   **line-granular** edit range rather than a byte-precise one, and the response banner
   says so explicitly: `[topology fallback — LSP did not answer within 15s; symbol located
   by tree-sitter, range is line-granular]`, replacing the inaccurate "LSP unavailable" for
-  this case. As with PLAN-390, a workspace with `[topology] enabled = false` has no
-  fallback to catch a slow server and now sees the timeout sooner.
+  this case. `workspace_symbols` (both modes) and `read_symbol` carry the same correction
+  in their own banner — `LSP did not answer within <budget>` in place of the unconditional
+  `LSP unavailable`, which after this change would mislabel a healthy-but-slow server and
+  argue an agent into abandoning semantic tools for the session. `file_outline` is
+  deliberately unchanged: it labels the answer `source=topology` and makes no claim about
+  why, so it has no wording to correct. As with PLAN-390, a workspace with
+  `[topology] enabled = false` has no fallback to catch a slow server and now sees the
+  timeout sooner.
 
 - **`read_symbol` now degrades to its tree-sitter fallback when the language server is
   merely SLOW, instead of timing out (PLAN-390).** The fallback exists for a cold

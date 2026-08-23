@@ -11,13 +11,21 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
-// executeLSPQuery is the shared skeleton every position-taking LSP query tool
-// (get_definition, explain_symbol, call_hierarchy, type_hierarchy) uses: anchor
-// uri to the pinned workspace, apply the query deadline, then dispatch to
-// byName when the caller passed symbol_name — PREFERRED — or to byPosition once
-// both line and character are confirmed present. Factored out so the four
-// tools' near-identical Execute bodies don't reimplement (and lint-duplicate,
-// `dupl`) the same handful of lines.
+// executeLSPQuery is the shared skeleton the position-taking LSP query tools
+// with NO topology fallback (get_definition, explain_symbol, type_hierarchy)
+// use: anchor uri to the pinned workspace, apply the query deadline, then
+// dispatch to byName when the caller passed symbol_name — PREFERRED — or to
+// byPosition once both line and character are confirmed present. Factored out
+// so those tools' near-identical Execute bodies don't reimplement (and
+// lint-duplicate, `dupl`) the same handful of lines.
+//
+// It shadows ctx with the bounded one, which is safe ONLY because nothing
+// downstream of these three needs a live context after the server attempt
+// fails. call_hierarchy used to share this skeleton and does not any more: it
+// has a topology fallback, and handing that fallback the spent attempt context
+// made it inoperative rather than merely late (PLAN-403). A future query tool
+// that gains a fallback must take fallbackDeadlines' two contexts instead of
+// being added here.
 func executeLSPQuery(ctx context.Context, tool string, ws WorkspaceFn, timeout time.Duration,
 	uri, symbolName string, line, character *uint32,
 	byName func(ctx context.Context, uri string) (string, error),

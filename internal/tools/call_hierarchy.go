@@ -129,53 +129,60 @@ func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 	return a, nil
 }
 
-// Execute's shape is intentionally near-identical to TypeHierarchy.Execute
-// (and, modulo the direction param, GetDefinition/ExplainSymbol.Execute) —
-// see the comment on GetDefinition.Execute in get_definition.go for why.
+// Execute deliberately does NOT route through executeLSPQuery, the skeleton the
+// other three position-taking query tools share. That skeleton shadows ctx with
+// the LSP deadline and hands the shadowed context onward, which is exactly the
+// PLAN-403 defect: call_hierarchy is the one of the four wired with a topology
+// fallback, so its fallback ran on an already-expired context (topology's
+// safeExtract refuses to start a parse on one) with no headroom left to run in,
+// and the tool surfaced the very timeout the fallback exists to replace.
 //
-//nolint:dupl // structurally identical by design across the four query tools, see get_definition.go
+// ctx below is the tool's own budget — unchanged, the same withLSPDeadline bound
+// it always had — and lspCtx bounds only the server attempt.
 func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	a, err := parseCallHierarchyArgs(args)
 	if err != nil {
 		return "", err
 	}
-	return executeLSPQuery(ctx, "call_hierarchy", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
-		func(ctx context.Context, uri string) (string, error) {
-			return t.executeByName(ctx, uri, a.SymbolName, a.Direction)
-		},
-		func(ctx context.Context, uri string, line, character uint32) (string, error) {
-			q := callHierarchyQuery{uri: uri, line: line, character: character, direction: a.Direction}
-			return t.executeByPosition(ctx, q, true)
-		},
-	)
+	uri := toFileURIAnchored(ctx, a.URI, t.ws)
+	ctx, lspCtx, cancel, waited := fallbackDeadlines(ctx, t.timeout)
+	defer cancel()
+	if a.SymbolName != "" {
+		return t.executeByName(ctx, lspCtx, waited, uri, a.SymbolName, a.Direction)
+	}
+	if a.Line == nil || a.Character == nil {
+		return "", errors.New("call_hierarchy: either symbol_name or both line and character are required")
+	}
+	q := callHierarchyQuery{uri: uri, line: *a.Line, character: *a.Character, direction: a.Direction}
+	return t.executeByPosition(ctx, lspCtx, waited, q, true)
 }
 
 // executeByName resolves the symbol by name against the file's document symbols
 // and queries at its SelectionRange.Start — the off-by-one-proof path shared
 // with find_references and get_definition. Multiple matches are rendered in
 // turn.
-func (t *CallHierarchy) executeByName(ctx context.Context, uri, name, direction string) (string, error) {
-	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+func (t *CallHierarchy) executeByName(ctx, lspCtx context.Context, waited time.Duration, uri, name, direction string) (string, error) {
+	syms, err := t.client.DocumentSymbols(lspCtx, protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
 		if werr := coldLSPWarmingErr("call_hierarchy", t.warmup, uri); werr != nil {
 			return "", werr
 		}
-		return "", lspTimeoutErr("call_hierarchy", t.timeout, fmt.Errorf("resolving symbol %q: %w", name, err))
+		return "", lspTimeoutErr("call_hierarchy", waited, fmt.Errorf("resolving symbol %q: %w", name, err))
 	}
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
 		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
 	}
 	if len(matches) == 1 {
-		return t.executeByPosition(ctx, queryForSymbol(uri, matches[0], direction, name), false)
+		return t.executeByPosition(ctx, lspCtx, waited, queryForSymbol(uri, matches[0], direction, name), false)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Call hierarchy for %q (%d symbol matches):\n", name, len(matches))
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.executeByPosition(ctx, queryForSymbol(uri, sym, direction, name), false)
+		result, err := t.executeByPosition(ctx, lspCtx, waited, queryForSymbol(uri, sym, direction, name), false)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -198,8 +205,13 @@ func queryForSymbol(uri string, sym protocol.DocumentSymbol, direction, name str
 	}
 }
 
-func (t *CallHierarchy) executeByPosition(ctx context.Context, q callHierarchyQuery, allowSnap bool) (string, error) {
-	items, err := t.client.PrepareCallHierarchy(ctx, protocol.PrepareCallHierarchyParams{
+// executeByPosition takes both contexts: lspCtx bounds the server attempt, ctx
+// is the tool's live budget and is what the topology fallback parses on. Once
+// the server HAS resolved an item the fallback is out of the picture, so
+// renderLSP gets ctx — the follow-up incoming/outgoing calls keep exactly the
+// budget they had before PLAN-403, and the warm path is unchanged.
+func (t *CallHierarchy) executeByPosition(ctx, lspCtx context.Context, waited time.Duration, q callHierarchyQuery, allowSnap bool) (string, error) {
+	items, err := t.client.PrepareCallHierarchy(lspCtx, protocol.PrepareCallHierarchyParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: q.uri},
 		Position:     protocol.Position{Line: q.line, Character: q.character},
 	})
@@ -207,12 +219,12 @@ func (t *CallHierarchy) executeByPosition(ctx context.Context, q callHierarchyQu
 		// The server resolved no call-hierarchy item (it may not implement
 		// prepareCallHierarchy at all). Try the topology call graph before
 		// snapping or surfacing the original error / empty result.
-		if out, ok := t.topologyCallHierarchy(ctx, q); ok {
+		if out, ok := t.topologyCallHierarchy(ctx, lspCtx, q); ok {
 			return out, nil
 		}
 		if err != nil {
 			if allowSnap && isPositionMissErr(err) {
-				return t.snapAndRetry(ctx, q)
+				return t.snapAndRetry(ctx, lspCtx, waited, q)
 			}
 			return "", queryErr("call_hierarchy", q.symbolName, err)
 		}
@@ -227,15 +239,15 @@ func (t *CallHierarchy) executeByPosition(ctx context.Context, q callHierarchyQu
 // SelectionRange.Start (topology fallback already tried and unavailable). When
 // nothing encloses the line it returns an actionable error naming nearby
 // symbols. The retry passes allowSnap=false so a snap can never recurse.
-func (t *CallHierarchy) snapAndRetry(ctx context.Context, q callHierarchyQuery) (string, error) {
-	snapped, syms, ok := snapPosition(ctx, t.client, q.uri, q.line)
+func (t *CallHierarchy) snapAndRetry(ctx, lspCtx context.Context, waited time.Duration, q callHierarchyQuery) (string, error) {
+	snapped, syms, ok := snapPosition(lspCtx, t.client, q.uri, q.line)
 	if !ok {
 		return "", positionMissErr("call_hierarchy", q.uri, q.line, syms)
 	}
 	snappedQ := q
 	snappedQ.line = snapped.Line
 	snappedQ.character = snapped.Character
-	out, err := t.executeByPosition(ctx, snappedQ, false)
+	out, err := t.executeByPosition(ctx, lspCtx, waited, snappedQ, false)
 	if err != nil {
 		return "", err
 	}
@@ -326,7 +338,7 @@ func writeCallHierarchySection(sb *strings.Builder, heading string, refs []callR
 // inside Zig `test "…" {}` blocks). Callees come from the topology call graph,
 // since references cannot answer "what does this call". ok is false when neither
 // source can resolve the symbol, so the caller keeps the original LSP behaviour.
-func (t *CallHierarchy) topologyCallHierarchy(ctx context.Context, q callHierarchyQuery) (string, bool) {
+func (t *CallHierarchy) topologyCallHierarchy(ctx, lspCtx context.Context, q callHierarchyQuery) (string, bool) {
 	store := activeTopology(t.topo)
 	if store == nil {
 		return "", false
@@ -341,7 +353,11 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx context.Context, q callHierarc
 		"callers via LSP references, callees via topology; approximate)\n\n",
 		centre.Name, string(centre.Kind), centre.Path, centre.StartLine)
 	if q.direction == "incoming" || q.direction == "both" {
-		callers := t.lspCallers(ctx, q)
+		// lspCallers takes the ATTEMPT context, not the live one: a server that
+		// never answers has already spent lspCtx, so this returns nil at once
+		// and the topology call graph answers. On ctx it would block for the
+		// rest of the budget and leave nothing for the graph query below.
+		callers := t.lspCallers(lspCtx, q)
 		if callers == nil {
 			callers = topologyCallRefs(ctx, store, centre, topology.DirectionInward)
 		}
