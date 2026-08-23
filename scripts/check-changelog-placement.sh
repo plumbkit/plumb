@@ -31,11 +31,37 @@
 #       a released one — and it is the case the guard most has to catch, since #310
 #       is one of the four incidents it cites. A move BETWEEN two released sections
 #       stays advisory: that is a cleanup, and only a human can judge it.
+#   R4  R1's own blind spot. The section that was unreleased at the merge-base may
+#       have SHIPPED on the target since the branch was cut, and R1 cannot see it:
+#       the branch's file still says '(unreleased)', the version number still matches,
+#       and the rebase that replays the entry into the now-dated section does not
+#       conflict. So an added line under the base's unreleased heading ALSO fails when
+#       that same version is date-stamped at the TARGET REF'S TIP. This is PR #404
+#       (2026-08-22), where the guard printed "OK (39 added line(s), all under
+#       ## 0.17.2 (unreleased))" over an entry sitting inside a released section, and
+#       a reviewer rather than CI caught it (plumb-ops PLAN-399).
 #
 # Why the BASE's first heading and not the new file's: when the diff range spans a
 # release cut, the old unreleased heading is no longer topmost, but entries added
 # under it were correct when they were written. Comparing against the new file would
 # fail every branch that is merely behind main.
+#
+# Why R4 needs the target's TIP and not the merge-base: the merge-base is, by
+# construction, a commit both sides already had, so it cannot know what shipped after
+# the fork. The tip can. And why a date STAMP rather than the heading's position at
+# the tip: a section that is no longer topmost has not necessarily shipped — this file
+# carries 50+ historical '(unreleased)' headings from an era when releases were not
+# dated — whereas a stamp is the repo's actual "this shipped" marker, written by
+# chore(release) (6e15982a), which stamps the section and opens the next one above it.
+# R4 looks up ONE heading by version number, so the historical headings never enter.
+#
+# Why R4 is not "every released section must be byte-identical to the target": that is
+# the by-hand check this rule automates, and it is only correct on a branch already
+# rebased onto the target. A branch that is merely behind main has an older copy of
+# the section main has since stamped — main accumulated other PRs' entries into it —
+# so a whole-span comparison reds every honest behind-main PR. R4 asks the narrower
+# question that survives being behind: did THIS change add a line to a section the
+# target has already stamped.
 #
 # Why blank added lines are ignored: a whitespace-only change inside an old section —
 # reflowing a paragraph, separating two bullets — is not a misplaced entry, and
@@ -81,6 +107,12 @@
 # heading to find, and the run skips. Not reachable in this file today (it has none),
 # and the fence handling is what stops a quoted heading in an example being mistaken
 # for a real one — but it is a silent green, so it belongs on this list.
+#
+# R4 adds three fail-opens of its own, all deliberate, all in the "a false red is
+# worse" direction: the base's first heading carries no '<major>.<minor>.<patch>'
+# version; CHANGELOG.md is absent from the target ref's tip; or the tip has no heading
+# for that version at all (it was renamed or removed there). Each leaves R4 disarmed
+# and R1..R3 to judge the change alone.
 set -eu
 
 usage() {
@@ -223,18 +255,54 @@ BASE_SPAN="$(awk '
 BASE_SPAN_START="${BASE_SPAN%,*}"
 BASE_SPAN_END="${BASE_SPAN#*,}"
 
+# R4's input: the heading the TARGET REF'S TIP currently carries for the version that
+# was unreleased at the merge-base. Empty means R4 is disarmed — no version number in
+# the base heading, no CHANGELOG.md at the tip, no heading for that version there, or
+# (the ordinary case) the tip still calls that section unreleased.
+#
+# BASE_REF, not BASE: BASE is the merge-base, a commit both sides already had, so it
+# cannot know what shipped after the fork. When the two are the same commit — every
+# historical replay, and any branch that is up to date — the tip's heading for that
+# version IS the base's own '(unreleased)' one, and this comes back empty on its own.
+BASE_VER="$(printf '%s\n' "$BASE_FIRST" |
+	awk 'match($0, /^## [0-9]+\.[0-9]+\.[0-9]+/) { print substr($0, 4, RLENGTH - 3) }')"
+TIP_HEAD=""
+if [ -n "$BASE_VER" ] && git cat-file -e "$BASE_REF:CHANGELOG.md" 2>/dev/null; then
+	git show "$BASE_REF:CHANGELOG.md" >"$TMP/tip.md"
+	# Fence-aware for the same reason every other scan here is. The trailing space in
+	# the prefix keeps '0.1.0' from matching a '## 0.1.01' heading; the match covers
+	# both spellings this file uses, '## X (date)' and '## X — date'.
+	TIP_HEAD="$(awk -v v="$BASE_VER" '
+		substr($0, 1, 3) == "```" { f = !f; next }
+		!f && substr($0, 1, length(v) + 4) == "## " v " " {
+			if (index($0, "(unreleased)") == 0) print
+			exit
+		}
+	' "$TMP/tip.md")"
+fi
+
 # Pass 1 reads the unified=0 diff and records which NEW-file line numbers were added
 # (plus a multiset of deleted line texts, for relocation detection). Pass 2 reads the
 # post-change file, so every added line can be mapped to the heading it landed under.
-awk -v basefirst="$BASE_FIRST" -v base="$BASE" \
+awk -v basefirst="$BASE_FIRST" -v base="$BASE" -v baseref="$BASE_REF" \
+	-v tiphead="$TIP_HEAD" \
 	-v spanstart="$BASE_SPAN_START" -v spanend="$BASE_SPAN_END" '
 # A move BETWEEN released sections is reported but never failed: only a human can tell
 # a deliberate cleanup from a mistake, and failing it would block the tidy-up PRs this
 # guard is supposed to survive. A move OUT of the unreleased section is different, and
 # is handled by R3 below.
+function notemove(h) {
+	nmoved++
+	if (!(h in mseen)) {
+		mseen[h] = ++nmt
+		mhead[nmt] = h
+	}
+	mcount[mseen[h]]++
+}
+
 function relocnote(   i) {
 	if (!nmoved) return
-	printf "  note: %d line(s) moved between already-released sections — their exact\n", nmoved
+	printf "  note: %d line(s) landed in an already-released section — their exact\n", nmoved
 	print "        text was also deleted in this diff, so this is a move, not a new entry."
 	print "        Advisory, never a failure; confirm it was deliberate:"
 	for (i = 1; i <= nmt; i++) printf "          %d line(s) under %s\n", mcount[i], mhead[i]
@@ -339,7 +407,39 @@ END {
 		if (h == 0) continue
 		if (hadded[h]) continue
 		if (version(htext[h]) == basever) {
-			checked++
+			# R4 — the heading matches the unreleased section at the merge-base,
+			# which is what R1 asks, but the TARGET has stamped that version since
+			# the branch forked. The line lands in shipped history. An empty tiphead
+			# means the
+			# target still calls it unreleased (or R4 could not tell), which is the
+			# ordinary case, and the R1 verdict above stands.
+			if (tiphead == "") {
+				checked++
+				continue
+			}
+			# Same two carve-outs R1 grants below, for the same reasons: a hunk that
+			# also deletes is someone rewriting a line that was already there, and a
+			# line whose text was deleted elsewhere in this diff is a move rather than
+			# new content. Neither can be a rebase replaying an entry, which is the
+			# only thing R4 is looking for, and failing them would red the legitimate
+			# tidy-ups this guard has to survive.
+			if (!(ln in pureadd)) {
+				checked++
+				continue
+			}
+			if (deleted[t] > 0) {
+				deleted[t]--
+				notemove(htext[h])
+				continue
+			}
+			status = 1
+			if (n4 > 0 && s4end[n4] == ln - 1) {
+				s4end[n4] = ln
+			} else {
+				n4++
+				s4start[n4] = ln
+				s4end[n4] = ln
+			}
 			continue
 		}
 		# R3 — the line came OUT of the unreleased section in the base and landed in a
@@ -373,12 +473,7 @@ END {
 		if (!(ln in pureadd)) continue
 		if (deleted[t] > 0) {
 			deleted[t]--
-			nmoved++
-			if (!(htext[h] in mseen)) {
-				mseen[htext[h]] = ++nmt
-				mhead[nmt] = htext[h]
-			}
-			mcount[mseen[htext[h]]]++
+			notemove(htext[h])
 			continue
 		}
 		status = 1
@@ -419,6 +514,23 @@ END {
 			else printf "    lines %d-%d", bstart[i], bend[i]
 			printf "  under %s\n", bhead[i]
 		}
+		print ""
+	}
+	if (n4) {
+		printf "  %s was still the unreleased section at the merge-base, but the\n", basefirst
+		printf "  target has RELEASED it since this branch was cut: at %s\n", baseref
+		printf "  that heading now reads %s.\n", tiphead
+		print ""
+		print "  These lines are therefore landing inside shipped history:"
+		for (i = 1; i <= n4; i++) {
+			if (s4start[i] == s4end[i]) printf "    line %d", s4start[i]
+			else printf "    lines %d-%d", s4start[i], s4end[i]
+			printf "  under %s\n", basefirst
+		}
+		print ""
+		print "  Nothing about the branch is wrong-looking here and the rebase will not"
+		print "  conflict — that is exactly why this needs a check. Move the entries under"
+		print "  the unreleased heading the target now carries, opening one if there is none."
 		print ""
 	}
 	if (nr3) {
