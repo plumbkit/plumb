@@ -214,9 +214,11 @@ func TestTargetPlaceholderRefusal_NamesStoredCommandAndConfigPath(t *testing.T) 
 			t.Errorf("refusal must name %q; got: %s", want, msg)
 		}
 	}
-	if strings.Contains(msg, "./internal/cli") {
-		t.Errorf("the refusal must not be satisfiable by echoing the caller's target: %s", msg)
-	}
+	// The echo guard is NOT here: targetPlaceholderRefusal takes no target, so it
+	// is structurally incapable of echoing one and an assertion to that effect
+	// could never fail. It lives in
+	// TestTaskResolver_TargetRefusalCrossesTheResolverSeam, the layer that does
+	// have the caller's target in hand.
 
 	// A slot plumb DOES ship a placeholder for points at that exact spelling
 	// instead, because restoring it is the whole remedy. Same build, opposite

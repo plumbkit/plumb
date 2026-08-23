@@ -304,3 +304,65 @@ func TestRunTask_TargetRefusalReachesTheCallerIntact(t *testing.T) {
 		t.Errorf("an unscoped call must still run: %v", err)
 	}
 }
+
+// TestRunTask_NotesReachTheResponse pins the delivery of the resolver's notes.
+//
+// The notes exist because two things used to happen silently: a composite slot
+// accepted a target, discarded it, ran the WHOLE suite and reported success; and
+// a stored command was rewritten to make a target land. The tool cannot build
+// either message (it does not import config), so the only thing that can go
+// wrong here is the tool dropping it — which is exactly what a silent failure
+// looks like from the caller's side.
+func TestRunTask_NotesReachTheResponse(t *testing.T) {
+	const note = `the target "./internal/cli" was NOT applied: verify is a composite`
+	tool := NewTasks(WriteDeps{}, func(slot, target string) (TaskCommand, error) {
+		cmd := TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{{"true"}}}
+		if target != "" {
+			cmd.Notes = []string{note}
+		}
+		return cmd, nil
+	})
+
+	out, err := runTask(t, tool, `{"slot":"verify","target":"./internal/cli"}`)
+	if err != nil {
+		t.Fatalf("a composite slot must not be refused a target: %v", err)
+	}
+	if !strings.Contains(out, note) {
+		t.Errorf("run_task swallowed the resolver's note.\n got: %s\nwant it to contain: %s", out, note)
+	}
+	// It must be legible as a note rather than mistaken for command output.
+	if !strings.Contains(out, "note: ") {
+		t.Errorf("the note is not labelled as one: %s", out)
+	}
+
+	// Other direction, same build: a call the resolver had nothing to say about
+	// carries no note, so the assertion above cannot be met by a constant string.
+	out, err = runTask(t, tool, `{"slot":"verify"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "note: ") {
+		t.Errorf("a call with nothing to disclose must carry no note: %s", out)
+	}
+}
+
+// TestRunTask_NoCommandRemedyClosesTheTrustLoop covers the clause that keeps the
+// remedy from delivering the caller into the NEXT refusal family. Both remedies
+// it offers write the project config, and a project-supplied task command does
+// not run until `plumb trust` — the second-largest policy refusal family in the
+// telemetry — so the message has to say so, and has to name the alternative that
+// needs no trust.
+func TestRunTask_NoCommandRemedyClosesTheTrustLoop(t *testing.T) {
+	tool := NewTasks(WriteDeps{}, func(slot, _ string) (TaskCommand, error) {
+		return TaskCommand{Slot: slot, Language: "go", Configured: []string{"build"}}, nil
+	})
+	_, err := runTask(t, tool, `{"slot":"lint"}`)
+	if err == nil {
+		t.Fatal("an unconfigured slot must be refused")
+	}
+	for _, want := range []string{"plumb trust", "global config"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the remedy must mention %q or it ends in the next refusal; got: %s", want, err)
+		}
+	}
+}

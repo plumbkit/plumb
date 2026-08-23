@@ -8,7 +8,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -26,11 +25,8 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		return tools.TaskCommand{}, errors.New("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
 	}
 	tc := s.view().tasks[lang]
-	steps, err := buildTaskSteps(tc, lang, slot, target)
+	steps, err := taskStepsOrRefusal(ws, tc, lang, slot, target)
 	if err != nil {
-		if errors.Is(err, errNoTargetPlaceholder) {
-			return tools.TaskCommand{}, targetPlaceholderRefusal(ws, tc, lang, slot)
-		}
 		return tools.TaskCommand{}, err
 	}
 	if len(steps) == 0 {
@@ -63,7 +59,107 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir,
 		Language: lang, Configured: configuredSlots(tc, lang),
 		ConfigPath: config.ProjectConfigPath(ws),
+		Notes:      taskNotes(tc, lang, slot, target),
 	}, nil
+}
+
+// taskStepsOrRefusal builds a slot's steps, replacing the bare
+// "no {target} placeholder" sentinel with the refusal that names the stored
+// command and the file holding it.
+//
+// It exists so there is ONE such seam rather than two. The resolver and the CLI
+// each used to do this mapping themselves, and the mapping is invisible to every
+// test that calls either the pure message builder or the pure step builder — so
+// deleting it from a caller left that caller silently emitting the bare sentence
+// this card exists to retire, with the whole suite still green.
+func taskStepsOrRefusal(ws string, tc config.TasksConfig, lang, slot, target string) ([][]string, error) {
+	steps, err := buildTaskSteps(tc, lang, slot, target)
+	if errors.Is(err, errNoTargetPlaceholder) {
+		return nil, targetPlaceholderRefusal(ws, tc, lang, slot)
+	}
+	return steps, err
+}
+
+// taskNotes reports what run_task did with this call that the caller cannot see
+// from the argv it gets back: a target that was accepted but not applied, and a
+// stored command plumb rewrote to make the target land.
+//
+// Both are silent rewrites of the caller's intent, and a silent rewrite is the
+// failure family this file exists to shrink (see testTargetStyle). Neither is
+// worth a REFUSAL — a refusal opens a new rejection cluster, which is the exact
+// thing being shrunk — so each is stated in the response instead. With no target
+// there is nothing to say: reconciliation is argv-identical unscoped, and a
+// composite had nothing to drop.
+func taskNotes(tc config.TasksConfig, lang, slot, target string) []string {
+	if target == "" {
+		return nil
+	}
+	var notes []string
+	if n, ok := compositeTargetNote(tc, lang, slot, target); ok {
+		notes = append(notes, n)
+	}
+	if n, ok := reconciledPlaceholderNote(tc, lang, slot); ok {
+		notes = append(notes, n)
+	}
+	return notes
+}
+
+// compositeTargetNote states that a composite slot ran its sub-commands
+// unscoped, and names the sub-slot that WOULD have taken the target.
+//
+// run_task(slot:"verify", target:…) accepted the target, discarded it, ran the
+// whole suite and reported success — a green over a scope the caller never
+// asked for, which this file elsewhere calls worse than the hardcoded command it
+// replaced. The sub-slots are asked the same question run_task would ask, so the
+// recommendation cannot claim a scope the workspace does not actually offer.
+func compositeTargetNote(tc config.TasksConfig, lang, slot, target string) (string, bool) {
+	subs, ok := compositeSubSlots(slot)
+	if !ok {
+		return "", false
+	}
+	var scopable []string
+	for _, sub := range subs {
+		if steps, err := buildTaskSteps(tc, lang, sub, target); err == nil && len(steps) > 0 {
+			scopable = append(scopable, sub)
+		}
+	}
+	remedy := fmt.Sprintf("no sub-slot of %s takes a target in this workspace, so there is nothing to scope it to", slot)
+	if len(scopable) > 0 {
+		remedy = fmt.Sprintf("call run_task again with slot %q and the same target",
+			strings.Join(scopable, `" or "`))
+	}
+	return fmt.Sprintf(
+		"the target %q was NOT applied: %s is a composite that runs %s in sequence and has no single "+
+			"command for a target to land in, so every step below ran unscoped, over everything. To scope, %s.",
+		target, slot, strings.Join(subs, " then "), remedy), true
+}
+
+// reconciledPlaceholderNote states that plumb restored its own {target:<D>}
+// placeholder in the stored command to make this scoped run possible.
+//
+// Reconciliation rewrites a command the user wrote. That it is provably
+// meaning-preserving (see reconcileTargetPlaceholder) is why it is allowed; it
+// is not a reason to do it silently, and the schema has no byte budget left to
+// say so, so the response says it.
+func reconciledPlaceholderNote(tc config.TasksConfig, lang, slot string) (string, bool) {
+	stored, err := config.ParseTaskCommand(tc.Get(slot))
+	if err != nil || stored == nil {
+		return "", false
+	}
+	reconciled := reconcileTargetPlaceholder(stored, lang, slot)
+	if reconciled == nil {
+		return "", false
+	}
+	idx, _, ok := soleDefaultedPlaceholder(reconciled)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"the stored %s command for %s (%q) is plumb's own default with the %s placeholder written out as "+
+			"its default value, so plumb scoped this run through that placeholder instead of refusing the "+
+			"target. An unscoped run builds the identical argv either way; write the placeholder into "+
+			"[tasks.%s] %s to make it explicit.",
+		slot, lang, strings.Join(stored, " "), reconciled[idx], lang, slot), true
 }
 
 // taskState reports the resolved run_task / run_command surface for this
@@ -274,12 +370,31 @@ func configuredSlots(tc config.TasksConfig, lang string) []string {
 	return out
 }
 
+// compositeSlots names the sub-slots a composite slot runs, in order. A
+// composite stores no command of its own (config.TasksConfig.Get returns "" for
+// it), so every place that has to answer "what does this slot actually run?" —
+// the step builder, the trust gate's provenance lookup, the CLI listing, and the
+// note that says a target was not applied — reads it from here rather than
+// re-spelling `slot == "verify"` and drifting.
+var compositeSlots = map[string][]string{"verify": {"build", "test"}}
+
+// compositeSubSlots reports the sub-slots slot runs, and whether it is composite
+// at all.
+func compositeSubSlots(slot string) ([]string, bool) {
+	subs, ok := compositeSlots[slot]
+	return subs, ok
+}
+
 // buildTaskSteps turns a slot into the argv steps to run. verify is the
 // composite build-then-test; every other slot is a single command.
 func buildTaskSteps(tc config.TasksConfig, lang, slot, target string) ([][]string, error) {
-	if slot == "verify" {
+	if subs, ok := compositeSubSlots(slot); ok {
 		var steps [][]string
-		for _, sub := range []string{"build", "test"} {
+		for _, sub := range subs {
+			// The target is deliberately not threaded into a sub-step: a composite
+			// has no single command for one to land in, and picking a sub-step to
+			// scope would report a partial run as a whole one. It is not silently
+			// dropped either — compositeTargetNote says so in the response.
 			argv, err := taskStep(tc, lang, sub, "")
 			if err != nil {
 				return nil, err
@@ -313,212 +428,6 @@ func taskStep(tc config.TasksConfig, lang, slot, target string) ([]string, error
 	return substituteTarget(argv, target)
 }
 
-// taskArgvTemplate parses a slot's stored command into an argv and, when that
-// command is the shipped default with its {target:<D>} placeholder written out
-// as D, restores the placeholder. A nil argv means the slot is unset.
-func taskArgvTemplate(tc config.TasksConfig, lang, slot string) ([]string, error) {
-	argv, err := config.ParseTaskCommand(tc.Get(slot))
-	if err != nil || argv == nil {
-		return nil, err
-	}
-	if reconciled := reconcileTargetPlaceholder(argv, lang, slot); reconciled != nil {
-		return reconciled, nil
-	}
-	return argv, nil
-}
-
-// reconcileTargetPlaceholder restores the shipped default's {target:<D>}
-// placeholder in a stored command that spells that element out as its own
-// default value. It returns nil when the stored command is anything else.
-//
-// This is the fix for the largest non-policy run_task failure family. A user
-// (or a template, or a copied snippet) writes `[tasks.go] test = "go test ./..."`
-// — the command plumb itself shipped before the placeholder existed — and every
-// scoped call is then refused, permanently, because that argv has no slot for a
-// target. The advertised topology_affected -> run_task(target:) handoff is
-// therefore broken for that workspace and stays broken: nothing in the refusal
-// used to say which command was stored or where it lived.
-//
-// The rule is deliberately an EQUIVALENCE, not a heuristic, because the two
-// obvious heuristics are both wrong in the same expensive direction:
-//
-//   - Appending the target to any placeholder-less command turns
-//     `go test ./...` into `go test ./... ./internal/cli`, which runs the WHOLE
-//     suite while reporting a scoped run. A green over the wrong test set is the
-//     failure mode this file already refuses to risk (see testTargetStyle).
-//   - Substituting the LAST element of any command guesses at commands whose
-//     final operand is not a scope at all.
-//
-// Requiring the stored command to be the shipped default with the placeholder
-// expanded makes the outcome provable instead: with no target both forms build a
-// byte-identical argv (TestReconcile_NoTargetArgvIsUnchanged pins that), and with
-// a target the stored command now behaves exactly as the shipped default would
-// have. Nothing is guessed and nothing new can run — the substitution lands in
-// the position plumb itself designated.
-//
-// A command that is NOT that equivalence keeps its refusal, which is the other
-// direction and matters just as much: `golangci-lint run` with a target is
-// meaningless, and `go test -count=1 ./...` is a command plumb never wrote and
-// must not rewrite.
-func reconcileTargetPlaceholder(argv []string, lang, slot string) []string {
-	def, err := config.ParseTaskCommand(config.DefaultTaskCommand(lang, slot))
-	if err != nil || def == nil {
-		return nil
-	}
-	idx, value, ok := soleDefaultedPlaceholder(def)
-	if !ok {
-		return nil
-	}
-	// An empty default means the shipped command spells "everything" as the
-	// ABSENCE of the operand (cargo test, pytest), so the expanded form is one
-	// element SHORTER; every other default expands in place.
-	expanded := slices.Concat(def[:idx:idx], []string{value}, def[idx+1:])
-	if value == "" {
-		expanded = slices.Concat(def[:idx:idx], def[idx+1:])
-	}
-	if !slices.Equal(argv, expanded) {
-		return nil
-	}
-	return slices.Clone(def)
-}
-
-// soleDefaultedPlaceholder returns the index and declared default of argv's
-// single {target:<D>} element. It reports false for an argv with no placeholder,
-// with more than one, or whose placeholder is the BARE {target} — a bare
-// placeholder has no expanded spelling to compare a stored command against, so
-// there is nothing to reconcile.
-func soleDefaultedPlaceholder(argv []string) (idx int, value string, ok bool) {
-	idx = -1
-	for i, a := range argv {
-		d, isPlaceholder := targetPlaceholder(a)
-		if !isPlaceholder {
-			continue
-		}
-		if idx >= 0 || d == nil {
-			return 0, "", false
-		}
-		idx, value = i, *d
-	}
-	return idx, value, idx >= 0
-}
-
-// errNoTargetPlaceholder is the sentinel for "a target was given but this
-// command has no slot for one". It is a sentinel rather than a bare string so
-// the resolver — the only layer that can see the workspace, and therefore the
-// config FILE the command came from — can replace it with a refusal that names
-// the stored command and where to edit it. run_command shares substituteTarget
-// and keeps the plain wording, since it has no shipped default to reconcile
-// against.
-var errNoTargetPlaceholder = errors.New("a target was given but the command has no {target} placeholder")
-
-// targetPlaceholderRefusal explains a refused target in terms the caller can act
-// on: the stored command, the file it came from, and what to change.
-//
-// The bare sentence it replaces named none of those, so a caller hitting it had
-// no way to tell a command that cannot take a target from one that was simply
-// written without the placeholder — and the same call failed the same way
-// forever. Every occurrence of this failure in 90 days of telemetry was the
-// latter.
-func targetPlaceholderRefusal(ws string, tc config.TasksConfig, lang, slot string) error {
-	stored := strings.TrimSpace(tc.Get(slot))
-	shipped := config.DefaultTaskCommand(lang, slot)
-	remedy := fmt.Sprintf("add a {target} placeholder to it under [tasks.%s] %s, or call run_task without a target", lang, slot)
-	if shippedTakesTarget(shipped) {
-		remedy = fmt.Sprintf("restore the placeholder plumb ships for it (%q) under [tasks.%s] %s", shipped, lang, slot)
-	}
-	return fmt.Errorf(
-		"run_task %s: a target was given but the stored %s command for %s has no {target} placeholder. "+
-			"Stored command: %q (from %s). To scope this slot, %s",
-		slot, slot, lang, stored, taskCommandSource(ws, lang, slot, stored, shipped), remedy)
-}
-
-// shippedTakesTarget reports whether a shipped default command carries a
-// {target} placeholder in either spelling.
-func shippedTakesTarget(shipped string) bool {
-	return strings.Contains(shipped, config.TargetToken) ||
-		strings.Contains(shipped, config.TargetTokenPrefix)
-}
-
-// taskCommandSource names the file a slot's command came from, so the refusal
-// above points at something the caller can open. It reads provenance the same
-// way the trust gate does rather than re-deriving it.
-func taskCommandSource(ws, lang, slot, stored, shipped string) string {
-	if _, fromProject := taskProvenance(ws, lang, slot); fromProject {
-		return config.ProjectConfigPath(ws)
-	}
-	if stored != strings.TrimSpace(shipped) {
-		return config.GlobalConfigPath()
-	}
-	return "plumb's shipped defaults"
-}
-
-// substituteTarget replaces a {target} argv element with target. A target with
-// no placeholder is an error; a placeholder with no target is an error UNLESS
-// the placeholder declares a default, written {target:<default>}.
-//
-// The inline default is what makes scoping reachable out of the box. Every
-// shipped test command was `go test ./...` — no placeholder — so run_task's
-// target and mutation_test's test_target were not merely undiscoverable but an
-// outright error on an unmodified install, and a mutation run therefore paid for
-// the WHOLE suite per mutant.
-//
-// Why a default attached to the placeholder rather than one held elsewhere: the
-// two alternatives both misfire. A per-language fallback applied to a bare
-// {target} would silently change the meaning of commands users already wrote —
-// `go test -run {target}` would quietly run everything instead of refusing — and
-// a separate "scoped" slot doubles the config surface for one argument. Written
-// inline, the default sits where the placeholder is and cannot drift from it,
-// and a bare {target} keeps its strict contract exactly as before, so no
-// existing configuration changes behaviour.
-//
-// An EMPTY default ({target:}) drops the element entirely. That is not a
-// curiosity: for cargo test, swift test and friends, "everything" is the ABSENCE
-// of a positional argument, so there is no string that could stand in for it.
-func substituteTarget(argv []string, target string) ([]string, error) {
-	out := make([]string, 0, len(argv))
-	found := false
-	for _, a := range argv {
-		def, ok := targetPlaceholder(a)
-		if !ok {
-			out = append(out, a)
-			continue
-		}
-		found = true
-		value := target
-		if value == "" {
-			if def == nil {
-				return nil, errors.New("this command needs a target ({target} placeholder)")
-			}
-			value = *def
-		}
-		if value == "" {
-			continue // an empty default means "omit this argument"
-		}
-		out = append(out, value)
-	}
-	if target != "" && !found {
-		return nil, errNoTargetPlaceholder
-	}
-	return out, nil
-}
-
-// targetPlaceholder recognises `{target}` and `{target:<default>}` as WHOLE argv
-// elements, returning the declared default (nil when there is none).
-//
-// Whole-element only, matching what the plain token always accepted: the argv is
-// split on whitespace with no quoting, so a placeholder glued to other text
-// would substitute into an argument whose boundaries nobody can see.
-func targetPlaceholder(arg string) (def *string, ok bool) {
-	if arg == config.TargetToken {
-		return nil, true
-	}
-	if !config.IsTargetToken(arg) {
-		return nil, false
-	}
-	value := arg[len(config.TargetTokenPrefix) : len(arg)-1]
-	return &value, true
-}
-
 // taskProvenance reports the layer a slot's command comes from and whether the
 // project overrides it (so the trust gate applies). verify consults build+test.
 // It asks ProjectTaskCommands — the same enumeration the trust hash binds to —
@@ -540,8 +449,8 @@ func targetPlaceholder(arg string) (def *string, ok bool) {
 // answer.
 func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
 	slots := []string{slot}
-	if slot == "verify" {
-		slots = []string{"build", "test"}
+	if subs, ok := compositeSubSlots(slot); ok {
+		slots = subs
 	}
 	cmds, err := config.ProjectTaskCommands(ws)
 	if err != nil {

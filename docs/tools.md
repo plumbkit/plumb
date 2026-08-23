@@ -932,6 +932,18 @@ one shell-safe argument). A project-supplied command must be trusted first
 `topology_affected` (which says *which* tests to run) — the `plumb-testing`
 skill walks the whole post-edit loop.
 
+**Two things run_task does to your call, and says so in the response.** A stored
+command that is plumb's own default with the `{target:<D>}` placeholder *written
+out as D* — `[tasks.go] test = "go test ./..."` — has the placeholder **restored**
+so a scoped call works instead of being refused forever. It is an exact
+equivalence, not a guess (both spellings build the same argv unscoped), it fires
+only on that exact match, and the response names the command it rewrote; see
+[`configuration.md`](configuration.md#a-stored-command-with-the-placeholder-spelled-out).
+And a **composite** slot (`verify`) has no single command for a target to land
+in, so a target passed to one is accepted, **not applied**, and the response says
+so and names the sub-slot to call instead — it runs the full suite, and never
+reports that as a scoped run.
+
 ### `mutation_test`
 Verify that tests actually assert what they appear to: apply an explicit mutant,
 prove it still **compiles**, run a scoped test set, classify the result, and

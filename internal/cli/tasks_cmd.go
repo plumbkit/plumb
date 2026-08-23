@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -100,16 +101,34 @@ func writeTaskSlotListing(w io.Writer, root, lang string, tc config.TasksConfig)
 	}
 	fmt.Fprintf(w, "task slots for %s in %s:\n", lang, root)
 	for _, slot := range have {
-		// verify is a composite the runner synthesises, so Get returns "" for it —
-		// printing that leaves a slot looking unconfigured in the very listing
-		// that exists to say it is runnable.
-		shown := tc.Get(slot)
-		if slot == "verify" {
-			shown = "(composite: build, then test)"
-		}
-		fmt.Fprintf(w, "  %-12s %s\n", slot, shown)
+		fmt.Fprintf(w, "  %-12s %s\n", slot, renderedTaskCommand(tc, lang, slot))
 	}
 	return nil
+}
+
+// renderedTaskCommand renders what run_task WILL run for a slot, not what the
+// config file happens to store.
+//
+// Two ways those differ. A composite stores no command of its own, so printing
+// the raw string leaves the slot looking unconfigured in the very listing that
+// exists to say it is runnable. And a stored command that reconciliation
+// restores a {target} placeholder into is scopable, while the raw string plainly
+// is not — a reader of `test  go test ./...` concludes a scoped run will be
+// refused, which is the exact wrong belief this card exists to correct, printed
+// by plumb itself. It is the doctrine configuredSlots already states: a report
+// that contradicts the tool it describes is worse than no report.
+func renderedTaskCommand(tc config.TasksConfig, lang, slot string) string {
+	stored := strings.TrimSpace(tc.Get(slot))
+	if subs, ok := compositeSubSlots(slot); ok {
+		return "(composite: " + strings.Join(subs, ", then ") + ")"
+	}
+	raw, rerr := config.ParseTaskCommand(stored)
+	tmpl, terr := taskArgvTemplate(tc, lang, slot)
+	if rerr != nil || terr != nil || tmpl == nil || slices.Equal(raw, tmpl) {
+		return stored
+	}
+	return fmt.Sprintf("%s   (placeholder restored from plumb's default; your config spells it %q)",
+		strings.Join(tmpl, " "), stored)
 }
 
 // resolveTaskWorkspace resolves the workspace root and its primary language for
@@ -143,11 +162,8 @@ func runTaskCLI(slot string, args []string) error {
 	if err != nil {
 		return err
 	}
-	steps, err := buildTaskSteps(projectCfg.Tasks[lang], lang, slot, target)
+	steps, err := taskStepsOrRefusal(root, projectCfg.Tasks[lang], lang, slot, target)
 	if err != nil {
-		if errors.Is(err, errNoTargetPlaceholder) {
-			return targetPlaceholderRefusal(root, projectCfg.Tasks[lang], lang, slot)
-		}
 		return err
 	}
 	if len(steps) == 0 {
@@ -164,6 +180,9 @@ func runTaskCLI(slot string, args []string) error {
 			return fmt.Errorf("the %s command for %s comes from this project's .plumb/config.toml and is not trusted "+
 				"(or the project's task commands changed since `plumb trust` was last run); run `plumb trust` in %s first", slot, lang, root)
 		}
+	}
+	for _, note := range taskNotes(projectCfg.Tasks[lang], lang, slot, target) {
+		fmt.Fprintf(os.Stderr, "note: %s\n", note)
 	}
 	return runTaskSteps(root, slot, steps)
 }
