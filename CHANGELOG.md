@@ -324,10 +324,27 @@
   deliberate case still has `CHANGELOG_PLACEMENT_ALLOW`. Not the whole-file check that
   was done by hand alongside it: comparing every released section byte-for-byte against
   main reds every honest behind-main PR, because main accumulated other entries into the
-  section it since stamped. `scripts/check-changelog-placement.sh`, and nine new
+  section it since stamped. `scripts/check-changelog-placement.sh`, and eleven new
   three-commit fixtures in `scripts/check-changelog-placement-test.sh` for the shape
   neither existing block could express: a base branch that moves on under a branch. One
   of them replaces an expectation that asserted the false green as correct behaviour.
+  Independent review then found the same false green still reachable through R4's
+  inherited pure-addition carve-out: with `--unified=0` git folds a reworded
+  pre-existing line together with the new lines contiguous below it into one hunk with
+  a non-zero minus count, exempting all of them. That is now REPORTED rather than
+  failed — hard-failing every add/delete hunk in a released section would red the
+  honest tidy-ups this guard has to survive, and a bypassed guard guards nothing — so
+  it prints an advisory note naming the count and the heading. The R4 failure paragraph
+  also no longer contradicts itself when the merge-base's own top heading is already
+  date-stamped, which is the state release 0.17.2 left this file in: it used to call a
+  dated heading "the unreleased section", claim it "was still the unreleased section at
+  the merge-base", and report that it "now reads" the identical string. A correct guard
+  whose report reads like a guard bug is one the next author bypasses. Both new
+  expectations assert on the report text, not just the exit code, because neither is
+  visible from the exit code. The guard's header and the `ci.yml` step now also name
+  R4's one environmental dependency: `base.sha` comes from the PR event payload and
+  does not move when main does, so R4's window is closed by branch protection's
+  require-branches-up-to-date setting rather than by anything in the script.
 
 ## 0.17.2 (2026-08-22)
 
