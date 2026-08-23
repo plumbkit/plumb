@@ -44,6 +44,33 @@
   Tarjan SCC plus longest-path layering. `internal/tools/topology_reachability.go` wires
   the tool-facing response shapes. `docs/topology.md` gains a reachability section.
 
+### Removed
+
+- **`execute_shell_command` is gone from the registered tool surface (PLAN-408,
+  PLAN-374 item 3).** The ad-hoc `sh -c` tool is no longer registered, and its
+  implementation (`internal/tools/execute_shell_command.go`) and cli-seam wiring
+  (`shellResolver`, `gatedAllowShell`, `gatedDenyNetwork`) are deleted. Tool
+  count 59 → 58.
+  **If you had it enabled**, use one of the two execution surfaces that stay:
+  `run_command` for anything you run repeatedly — add a `[[command]]` entry (a
+  name plus a *fixed* argv, with at most one `{target}`) to your global config or
+  a trusted project config and call it by name — and `run_task` for an ordinary
+  build/lint/test slot from `[tasks.<lang>]`. Neither builds a command line from
+  agent free text, so neither needs the shell tier's opt-in.
+  **Why:** the tool shipped disabled by default and stayed that way. Every one of
+  its 25 recorded calls over 90 days was the disabled-state refusal — the gate
+  working, and nobody ever enabling it — while its schema and description were
+  paid for on every `tools/list` of every session. Removing it takes **1,171
+  bytes** off the full `tools/list` payload (112,160 → 110,983 B measured, the
+  remaining 6 B from `run_command`'s description no longer pointing at it).
+  `run_command`'s own trust gate, the `[[command]]` allow-list, `require_sandbox`
+  and the OS sandbox are untouched — `internal/config/` is byte-for-byte
+  unchanged by this release note's change.
+  **Config:** `[commands] allow_shell` and `[commands] deny_network` still parse
+  (an existing config keeps loading) but are now inert — nothing reads them.
+  `[commands] require_sandbox` and each `[[command]]` entry's own `deny_network`
+  are unaffected. Retiring the two dead keys is tracked separately.
+
 ### Fixed
 
 - **The symbol WRITE tools, `file_outline`, `workspace_symbols` and `call_hierarchy` now

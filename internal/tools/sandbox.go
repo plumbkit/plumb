@@ -1,10 +1,10 @@
 package tools
 
-// sandbox.go is the OS-level execution sandbox shared by run_command and
-// execute_shell_command. It is defence-in-depth layered UNDER the primary
-// safety controls (the fixed-argv allow-list for run_command; the explicit
-// opt-in + trust gate for execute_shell_command): even a command that should
-// not have run is confined by the OS.
+// sandbox.go is the OS-level execution sandbox used by run_command. It is
+// defence-in-depth layered UNDER the primary safety control (the fixed-argv
+// [[command]] allow-list, plus the per-workspace trust gate for a
+// project-supplied entry): even a command that should not have run is confined
+// by the OS.
 //
 // The model is a write jail plus optional network denial: reads and process
 // execution stay permissive (build tools need the toolchain, the module cache,

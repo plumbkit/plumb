@@ -88,7 +88,6 @@ func nonLeanToolSet() []describable {
 		NewWorkspaceSearch(nil, nil),
 		NewMutationTest(WriteDeps{}, nil),
 		NewRunCommand(nil),
-		NewExecuteShellCommand(nil),
 		NewShareIntent(CollabDeps{}),
 		NewLeaveNote(CollabDeps{}),
 		NewCheckMessages(CollabDeps{}),

@@ -92,7 +92,6 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*deleteMemoryTool)(nil).Name():     (*deleteMemoryTool)(nil).InputSchema(),
 		(*Diagnostics)(nil).Name():          (*Diagnostics)(nil).InputSchema(),
 		(*EditFile)(nil).Name():             (*EditFile)(nil).InputSchema(),
-		(*ExecuteShellCommand)(nil).Name():  (*ExecuteShellCommand)(nil).InputSchema(),
 		(*ExplainSymbol)(nil).Name():        (*ExplainSymbol)(nil).InputSchema(),
 		(*FileDiff)(nil).Name():             (*FileDiff)(nil).InputSchema(),
 		(*FileOutline)(nil).Name():          (*FileOutline)(nil).InputSchema(),

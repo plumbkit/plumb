@@ -204,10 +204,11 @@ invocation are unreachable by construction rather than by filtering.
 
 **B5 — daemon → configured commands.** The sharpest boundary, because it is the
 one that executes. `run_command` runs a **fixed argv** from an allow-list with at
-most one `{target}` substitution restricted to `[A-Za-z0-9._/:@-]`.
-`execute_shell_command` runs an arbitrary `sh -c` line and is **disabled by
-default**. A command supplied by a *project's* config requires `plumb trust`
-before it will run; a command in the user's global config always runs.
+most one `{target}` substitution restricted to `[A-Za-z0-9._/:@-]`; `run_task`
+runs a stored `[tasks.<lang>]` slot. There is no ad-hoc-shell tool — plumb never
+builds a command line from agent free text. A command supplied by a *project's*
+config requires `plumb trust` before it will run; a command in the user's global
+config always runs.
 
 **B6 — daemon → language servers.** LSP servers are separate processes that read
 the workspace and return structured data plumb parses. A malicious workspace can
@@ -527,11 +528,10 @@ Stated plainly, because an unclaimed property is not a guarantee:
   with a status line saying so, because `require_sandbox` defaults to false. The
   default posture is therefore "run unsandboxed and report it", not "refuse".
 
-  Network egress differs by tool and the default is not uniform:
-  `execute_shell_command` denies egress by default (`[commands] deny_network`),
-  precisely because an integrity-only sandbox would otherwise let a shell command
-  read a secret and post it; a `[[command]]` entry defaults to **allowing**
-  egress unless its own `deny_network` is set.
+  Network egress is per-command and **allowed** by default: a `[[command]]` entry
+  cuts it only when its own `deny_network` is set. Because the sandbox is
+  integrity-only, an entry that has no business reaching the network should set
+  it — otherwise a command that reads a secret can post it.
 - **A malicious language server.** An LSP binary named in the *global* config is
   the user's own choice and runs with their privileges; plumb does not sandbox
   it or inspect what it does.
@@ -666,7 +666,7 @@ Tracked, not hidden. Each is real today.
 
 8. ~~**Trust binding is uneven.**~~ **CLOSED.** Every project-supplied surface
    that decides which process plumb spawns is now bound to a content hash. The
-   `[[command]]` allow-list, `[commands] allow_shell`/`deny_network` and the
+   `[[command]]` allow-list, the `[commands]` policy table and the
    whole `[xcode]` table join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and
    `[collab]` in `ProjectPolicySpec`, so they are disclosed by `plumb trust`
    with their values and invalidated by any edit.
