@@ -175,3 +175,114 @@ func wideCallGraphStore(t *testing.T, n int) *topology.Store {
 	t.Fatalf("index did not settle: fewer than %d nodes in wide.go", n)
 	return nil
 }
+
+// TestTopologyExplore_ClampsAnOverCapMaxBytesArgument is the byte ceiling's
+// counterpart to the node one, and it needs its own test for the same reason
+// the node clamp did: the traversal's byte ceiling is now far above the number
+// the schema advertises, so nothing but this clamp keeps an agent's
+// `max_bytes: 1000000` from being honoured.
+//
+// The fixture uses fat nodes (long doc comments, include_source "full") because
+// max_nodes is clamped to 200 first — under that ceiling only a large node makes
+// the byte budget the binding one, which is exactly the case the clamp exists
+// for.
+func TestTopologyExplore_ClampsAnOverCapMaxBytesArgument(t *testing.T) {
+	s := fatCallGraphStore(t, 300)
+	ask := func(maxBytes int) int {
+		t.Helper()
+		tool := tools.NewTopologyExplore(func() *topology.Store { return s })
+		args, _ := json.Marshal(map[string]any{
+			"name": "Centre", "depth": 1, "max_nodes": math.MaxInt32,
+			"max_bytes": maxBytes, "include_source": "full", "edge_kinds": []string{"calls"},
+		})
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return parseNeighbours(t, out)
+	}
+
+	atCeiling := ask(topology.ClampToolBytes(math.MaxInt32))
+	nodeCeiling := topology.ClampToolNodes(math.MaxInt32)
+	if atCeiling >= nodeCeiling {
+		t.Fatalf("test is vacuous: at the advertised byte ceiling the answer holds %d of the "+
+			"%d nodes max_nodes allows, so max_bytes is not the binding bound", atCeiling, nodeCeiling)
+	}
+	if got := ask(math.MaxInt32); got != atCeiling {
+		t.Errorf("max_bytes=MaxInt32 returned %d neighbours, the advertised ceiling returns %d; "+
+			"the byte ceiling the schema advertises is not being applied", got, atCeiling)
+	}
+	// The other direction: the clamp is a ceiling, not a rewrite.
+	if got := ask(topology.ClampToolBytes(math.MaxInt32) / 4); got >= atCeiling {
+		t.Errorf("a quarter of the byte budget returned %d neighbours, not fewer than the %d "+
+			"the full budget returns: an under-cap max_bytes is being ignored", got, atCeiling)
+	}
+}
+
+// TestTopologyImpact_ClampsAnOverCapMaxBytesArgument mirrors it on the other
+// tool that advertises the ceiling: a clamp applied at one call site and not the
+// other is the half-fix this change exists to undo.
+func TestTopologyImpact_ClampsAnOverCapMaxBytesArgument(t *testing.T) {
+	s := fatCallGraphStore(t, 300)
+	ask := func(maxBytes int) int {
+		t.Helper()
+		tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+		args, _ := json.Marshal(map[string]any{
+			"name": "Centre", "depth": 1, "max_nodes": math.MaxInt32,
+			"max_bytes": maxBytes, "edge_kinds": []string{"calls"},
+		})
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return parseInwardNodes(t, out)
+	}
+
+	atCeiling := ask(topology.ClampToolBytes(math.MaxInt32))
+	if atCeiling >= topology.ClampToolNodes(math.MaxInt32) {
+		t.Fatalf("test is vacuous: max_bytes is not the binding bound at %d nodes", atCeiling)
+	}
+	if got := ask(math.MaxInt32); got != atCeiling {
+		t.Errorf("max_bytes=MaxInt32 returned %d inward nodes, the advertised ceiling returns %d",
+			got, atCeiling)
+	}
+}
+
+// fatCallGraphStore is wideCallGraphStore with a long doc comment on every
+// caller, so a node costs enough for the byte budget to bind before max_nodes.
+func fatCallGraphStore(t *testing.T, n int) *topology.Store {
+	t.Helper()
+	ws := t.TempDir()
+	doc := strings.Repeat("// padding padding padding padding padding padding padding\n", 12)
+	// A long signature as well as a long docstring: topology_impact has no
+	// include_source argument, so the docstring alone never reaches its estimate.
+	params := make([]string, 0, 24)
+	for p := range 24 {
+		params = append(params, fmt.Sprintf("parameterNamedAtLength%02d string", p))
+	}
+	sig := strings.Join(params, ", ")
+	var src strings.Builder
+	src.WriteString("package fat\n\nfunc Centre() {}\n")
+	for i := range n {
+		fmt.Fprintf(&src, "\n%sfunc Caller%d(%s) (string, error) { Centre(); return \"\", nil }\n", doc, i, sig)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "fat.go"), []byte(src.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 8 << 20}, []topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		nodes, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "fat.go"))
+		if len(nodes) > n {
+			return s
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("index did not settle: fewer than %d nodes in fat.go", n)
+	return nil
+}
