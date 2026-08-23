@@ -67,6 +67,9 @@ type resolverFixture struct {
 	betaDo        int64
 	alphaHidden   int64
 	run           int64
+	// callerFile is internal/caller/caller.go, so a test can add an import or a
+	// site to the calling file without re-deriving its id.
+	callerFile int64
 	// helper is a function in the SAME file as run, reached by an
 	// extractor-emitted intra-file `calls` edge.
 	helper int64
@@ -140,6 +143,7 @@ func newResolverFixture(t *testing.T) *resolverFixture {
 	return &resolverFixture{
 		db: db, alphaDo: alphaDo, alphaMethodDo: alphaMethodDo,
 		betaDo: betaDo, alphaHidden: alphaHidden, run: run, helper: helper, runTest: runTest,
+		callerFile: callerFile,
 	}
 }
 
@@ -497,5 +501,39 @@ func TestResolveCalls_PackageLevelSiteDoesNotAbortThePass(t *testing.T) {
 	}
 	if got := callMeta(t, f.db, metaCallUnmatched); got != 1 {
 		t.Errorf("unmatched-target = %d, want 1 — a caller-less site must not borrow the target's label", got)
+	}
+}
+
+// TestResolveCalls_ImportOfAnotherLanguagesDirectoryIsExternalNotUnmatched pins
+// packageDirsForLanguage's language filter. Without it, an import path that
+// happens to name a directory whose only package node belongs to ANOTHER
+// language is treated as an indexed target directory, and the site is then
+// mis-bucketed as "names no top-level function there" — a claim about a Go
+// package that is not a Go package at all. No false edge is reachable either way
+// (targetsByDir is language-filtered too), which is exactly why nothing noticed:
+// the census is the only observable, so the census is what has to assert it.
+func TestResolveCalls_ImportOfAnotherLanguagesDirectoryIsExternalNotUnmatched(t *testing.T) {
+	f := newResolverFixture(t)
+
+	csFile := insertLangFile(t, f.db, "src/Alpha/Alpha.cs", "csharp")
+	insertTestNode(t, f.db, csFile, "src/Alpha/Alpha.cs", Node{Kind: KindPackage, Name: "Alpha", Language: "csharp"})
+	insertTestNode(t, f.db, f.callerFile, "internal/caller/caller.go",
+		Node{Kind: KindImport, Name: "Alpha", Qualified: "example.com/m/src/Alpha", Language: "go"})
+	insertSite(t, f.db, f.callerFile, f.run, "go", CallSiteCall, "Alpha", "Do")
+
+	f.resolve(t)
+
+	// Baseline from the shared fixture: one external site (strings.Join) and one
+	// unmatched (alpha.Missing). The new site must join the FIRST group.
+	if got := callMeta(t, f.db, metaCallExternal); got != 2 {
+		t.Errorf("external-package sites = %d, want 2 — a directory holding no %s package is outside "+
+			"the indexed tree as far as this resolver is concerned", got, "go")
+	}
+	if got := callMeta(t, f.db, metaCallUnmatched); got != 1 {
+		t.Errorf("unmatched-target sites = %d, want 1 — a C#-only directory must not be reported as a "+
+			"Go package that declares no such function", got)
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 1 {
+		t.Errorf("Run→alpha.Do edges = %d, want 1 — the real edge must survive", got)
 	}
 }

@@ -381,8 +381,15 @@ func hasPackageNodeTx(ctx context.Context, tx *sql.Tx, lang string) (bool, error
 
 // packageDirsForLanguage groups package-node ids by directory, restricted to one
 // language. matchImportDir needs the same directory keys linkImports uses, but a
-// resolver admitted for one language must never match a directory whose only
-// package node belongs to another.
+// resolver admitted for one language must never treat a directory whose only
+// package node belongs to another as one of its own.
+//
+// What the filter actually buys is HONEST BUCKETING, not edge safety: targets
+// are language-filtered too, so dropping this filter cannot produce a
+// cross-language edge — it would only move such a site from "leaves the indexed
+// tree" (true) to "the target package declares no such function" (a claim about a
+// Go package that is not a Go package). Since the census is the only place the
+// difference shows, the census is where the test asserts it.
 func packageDirsForLanguage(ctx context.Context, tx *sql.Tx, lang string) (map[string][]int64, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT n.id, f.path FROM topology_nodes n
