@@ -92,14 +92,14 @@ type sessionView struct {
 	tasks             map[string]config.TasksConfig
 	agentConfigWrites bool
 	// commands is the resolved [[command]] allow-list; commandPolicy is the
-	// resolved [commands] table (allow_shell / require_sandbox). Both are swapped
+	// resolved [commands] table (require_sandbox). Both are swapped
 	// per project on every attach / re-pin / reload, like the blocks above; the
 	// trust gate is applied at the resolver seam (conn_commands.go).
 	commands      []config.CommandConfig
 	commandPolicy config.CommandsConfig
 	// execTrusted is whether this workspace may run the commands its project
-	// config supplies (run_command's [[command]] entries, execute_shell_command,
-	// the xcode build server). Resolved at config apply from the SAME bytes as
+	// config supplies (run_command's [[command]] entries, the xcode build
+	// server). Resolved at config apply from the SAME bytes as
 	// commands/commandPolicy above, so the authorisation and the thing it
 	// authorises can never disagree — see config.ExecTrustedFor. Re-checking at the
 	// point of use would let a repository load hostile content and then restore the

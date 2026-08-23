@@ -74,7 +74,7 @@ func (t *RunCommand) Description() string {
 		"It runs only the exact fixed argv the user configured (no shell, no agent-supplied command line); the optional target fills a single {target} placeholder with one shell-safe argument. " +
 		"A command from a project's .plumb/config.toml must be trusted first (run `plumb trust`); a command from your global config always runs. " +
 		"The command runs under an OS sandbox (a write jail) when one is available. Output and runtime are bounded. " +
-		"Use execute_shell_command instead only for an ad-hoc command not worth adding to the allow-list (it must be enabled first)."
+		"For an ordinary build/lint/test, prefer run_task and its [tasks.<lang>] slots — those ship with defaults."
 }
 
 type runCommandArgs struct {

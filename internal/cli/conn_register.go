@@ -163,7 +163,6 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
 	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
-	srv.Register(tools.NewExecuteShellCommand(s.shellResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewFindReplace(wd))

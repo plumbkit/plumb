@@ -683,7 +683,7 @@ excluded so an authoritative empty answer is never supplanted.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (38 tools today). Project-overridable.
+the non-lean remainder (37 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability
@@ -734,7 +734,7 @@ pointer keeps every tool reachable regardless of tools/list advertisement —
 review found `internal/clientcaps` carries only 7 registry rows against the
 ~20 setup targets `docs/cli-reference.md` documents, so "unrecognised" meant
 overwhelmingly *documented* clients (cursor, opencode, goose, crush, qwen,
-augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~38/59 tools with
+augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~37/58 tools with
 zero evidence any of them can invoke a hidden one — exactly the tool-removal
 the card's Do-NOT forbids. That idea needs registry rows with positive
 deferral evidence before it can ship, not an absence of a row; the four
@@ -1253,20 +1253,23 @@ allow_writes = true         # sandbox: may write inside the workspace (default: 
 deny_network = false        # sandbox: cut network for this command (default: allowed)
 ```
 
-**`execute_shell_command` — the opt-in escape hatch.** Runs an arbitrary command
-through `sh -c` (pipes/redirects/globs work). It is the one place agent free-text
-reaches a command line, so it is **disabled by default**.
+**`[commands]` — the execution policy table.**
 
 ```toml
 [commands]
-allow_shell     = false     # gate for execute_shell_command
-require_sandbox = false     # if true, refuse to run (either tool) when no OS sandbox is active
-deny_network    = true      # execute_shell_command network egress; default ON — false to allow (a [[command]] sets its own, default false)
+require_sandbox = false     # if true, refuse to run a command when no OS sandbox is active
 ```
 
-**Trust gate.** A `[[command]]` entry — and a project raising `[commands]`
-`allow_shell` — supplied by a *project* `.plumb/config.toml` is honoured only
-after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
+> **Removed in 0.17.3: the `execute_shell_command` tool.** plumb no longer
+> registers an ad-hoc `sh -c` tool. Use `run_command` with a `[[command]]`
+> allow-list entry (a fixed argv, no free text on the command line), or
+> `run_task` for an ordinary build/lint/test slot. The `[commands] allow_shell`
+> and `[commands] deny_network` keys are inert: nothing reads them any more, and
+> they are accepted only so an existing config keeps loading. Removing them is
+> tracked separately.
+
+**Trust gate.** A `[[command]]` entry supplied by a *project* `.plumb/config.toml`
+is honoured only after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
 the project — a cloned repo cannot self-enable execution). Commands and policy in
 your *global* config are user-authored and always honoured. Editing a command in
 the TUI Settings **Commands** tab auto-trusts that workspace. A project that
@@ -1274,7 +1277,7 @@ declares its own `[[command]]` block **replaces** the global allow-list entirely
 (global entries are shadowed while the project defines any) — to keep a global
 command in a project, redefine it there.
 
-**OS sandbox.** Both tools run under a best-effort write jail: reads and process
+**OS sandbox.** `run_command` runs under a best-effort write jail: reads and process
 execution stay permissive (toolchains need them), writes are confined to a
 temp/cache set plus the workspace (when `allow_writes`), and the network is cut
 only when `deny_network`. macOS uses `sandbox-exec`, Linux uses `bwrap`; when the
@@ -1286,15 +1289,13 @@ timeout).
 
 **Two limits to understand.** (1) The sandbox is **integrity-only, not
 confidentiality**: reads stay permissive and a command inherits the daemon's
-environment, so an enabled+trusted `execute_shell_command` can *read* any file or
-secret your user can (`~/.ssh`, API keys in the daemon env). To bound the damage,
-the shell tier **denies the network by default** (`[commands] deny_network =
-true`) so a read secret cannot be exfiltrated over the wire; set `deny_network =
-false` (in global config, or a trusted project) only when a command genuinely
-needs the network. When a command runs with the network off, the tool's reply
-says `network=off` with a note, so the agent can tell you to flip it. Still: only
-enable the shell tier for repositories you trust. (A `[[command]]` entry sets its
-own per-command `deny_network`, default false, since those are deliberate.) (2) The writable set is tuned for **Go** (build
+environment, so a trusted `[[command]]` entry can *read* any file or secret your
+user can (`~/.ssh`, API keys in the daemon env). Set that entry's `deny_network =
+true` (default false, since an allow-list argv is deliberate) when it has no
+business reaching the network — a read secret then cannot be exfiltrated over the
+wire. When a command runs with the network off, the tool's reply says
+`network=off` with a note, so the agent can tell you to flip it. Still: only
+trust a project's own commands for repositories you trust. (2) The writable set is tuned for **Go** (build
 cache, module cache, `$TMPDIR`, the workspace). Other toolchains that write
 outside those (e.g. `cargo`'s `~/.cargo/registry`, `npm`'s cache) may need
 `allow_writes` and may fail under `require_sandbox = true`; only Go is validated.
