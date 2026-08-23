@@ -172,7 +172,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	defer cancel()
 	syms, err := t.fetchReadSymbolSymbols(lspCtx, uri, waited)
 	if err != nil {
-		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+		if fb, ok := t.topologyReadFallback(ctx, lspFallbackReason(lspCtx), waited, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
 		return "", err
@@ -182,8 +182,10 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		// The LSP answered but did not resolve the name (commonly a cold server,
 		// or a bare method name it indexes only as a qualified symbol). Try the
 		// structural Map before giving up — the Go extractor names methods by their
-		// bare name, so it resolves what the LSP missed.
-		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+		// bare name, so it resolves what the LSP missed. The server DID answer
+		// here, so no attempt budget was missed and the banner keeps its
+		// historical wording.
+		if fb, ok := t.topologyReadFallback(ctx, fallbackNotUsed, 0, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
 		return t.noSymbolMessage(a.Name, fpath, syms), nil
@@ -195,7 +197,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 // when the language server cannot answer, and reads its source the same way the
 // LSP path does. ok is false when topology is unavailable or has no match, so
 // the caller surfaces the original LSP error.
-func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name string) (string, bool) {
+func (t *ReadSymbol) topologyReadFallback(ctx context.Context, reason symbolFallbackReason, waited time.Duration, fpath, uri, name string) (string, bool) {
 	nodes, ok := freshTopologyNodes(ctx, t.topo, uri)
 	if !ok {
 		return "", false
@@ -213,7 +215,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name 
 	if err != nil {
 		return "", false
 	}
-	return topologyFallbackNoteFor(t.warmup, uri) + "\n" + out, true
+	return topologyFallbackNoteWhen(reason, t.warmup, uri, waited) + "\n" + out, true
 }
 
 func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {

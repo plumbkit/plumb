@@ -46,19 +46,51 @@ func warmupElapsedSuffix(elapsed time.Duration) string {
 	return fmt.Sprintf(" (~%s elapsed)", rounded)
 }
 
-// topologyFallbackNoteFor picks the fallback banner for a symbol-query tool:
-// the warming variant when the server that would own uri is still completing
-// its handshake (so the agent retries instead of concluding the LSP is broken),
-// else topologyFallbackNote — byte-identical to the historical text — for the
-// genuinely-unavailable case.
+// roundedDuration renders a budget at a precision a human reads rather than the
+// raw monotonic figure: whole seconds from a second up, milliseconds below it.
+// Without it a caller that supplied its own deadline is told the server "did
+// not answer within 999.997166ms".
+func roundedDuration(d time.Duration) time.Duration {
+	if d >= time.Second {
+		return d.Round(time.Second)
+	}
+	return d.Round(time.Millisecond)
+}
+
+// topologyFallbackNoteFor picks the fallback banner for a symbol-query tool
+// that has no attempt budget to report — the server answered, just not with
+// anything usable. See topologyFallbackNoteWhen for the timed-out variant.
 func topologyFallbackNoteFor(fn LSPWarmupFn, uri string) string {
+	return topologyFallbackNoteWhen(fallbackLSPUnavailable, fn, uri, 0)
+}
+
+// topologyFallbackNoteWhen picks the fallback banner for a symbol-query tool
+// from WHY the language server did not answer: the warming variant when the
+// server that would own uri is still completing its handshake (so the agent
+// retries instead of concluding the LSP is broken), then the timed-out variant
+// when the server is up and merely missed its attempt budget, else
+// topologyFallbackNote — byte-identical to the historical text — for the
+// genuinely-unavailable case.
+//
+// The timed-out variant is the trade-off PLAN-403 owes the agent WHERE IT READS
+// IT: the attempt is now bounded well inside the tool's budget so the index has
+// time to answer, which means a server slower than that budget — one that would
+// previously have answered — now yields an approximate index result. Calling
+// that "LSP unavailable" argues for exactly the wrong conclusion (the server is
+// broken, stop using semantic tools) instead of the right one (retry shortly).
+func topologyFallbackNoteWhen(reason symbolFallbackReason, fn LSPWarmupFn, uri string, waited time.Duration) string {
 	warming, elapsed := lspWarmup(fn, uri)
-	if !warming {
+	switch {
+	case warming:
+		return fmt.Sprintf("[topology fallback — LSP still warming%s; results are approximate and may be stale; "+
+			"semantic tools will answer once it is ready — retry shortly. source=topology, mode=indexed-approximate]",
+			warmupElapsedSuffix(elapsed))
+	case reason == fallbackLSPTimedOut && waited > 0:
+		return fmt.Sprintf("[topology fallback — LSP did not answer within %s; results are approximate and may be "+
+			"stale. source=topology, mode=indexed-approximate]", roundedDuration(waited))
+	default:
 		return topologyFallbackNote
 	}
-	return fmt.Sprintf("[topology fallback — LSP still warming%s; results are approximate and may be stale; "+
-		"semantic tools will answer once it is ready — retry shortly. source=topology, mode=indexed-approximate]",
-		warmupElapsedSuffix(elapsed))
 }
 
 // activeTopology resolves the store from a nil-safe accessor.
