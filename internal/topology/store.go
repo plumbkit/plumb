@@ -236,8 +236,8 @@ func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes, _, err := s.idx.extractFile(ctx, ex, rel, src)
-	return nodes, err
+	out, err := s.idx.extractFile(ctx, ex, rel, src)
+	return out.nodes, err
 }
 
 // Explore performs a bounded BFS neighbourhood from the named symbol.
@@ -276,6 +276,18 @@ func (s *Store) PackageGraph(ctx context.Context) (*PackageGraph, error) {
 // Status returns a snapshot of the index health.
 func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)
+}
+
+// AdmitCallGraph reports whether function-level, cross-file call answers are
+// available for a subject in this workspace, and carries the wording to show
+// when they are not. See callgraph.go for the rule.
+//
+// Nothing in the tool layer calls this yet, deliberately: the edges it gates are
+// rebuilt wholesale on every indexing pass and their behaviour under an
+// incremental re-index is not yet pinned, so no user-visible answer may depend
+// on them.
+func (s *Store) AdmitCallGraph(ctx context.Context, subject CallGraphSubject) (CallGraphAdmission, error) {
+	return AdmitCallGraph(ctx, s.db, subject)
 }
 
 // toRelative expresses an absolute path the way the index stores it: relative to

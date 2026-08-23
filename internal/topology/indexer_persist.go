@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/tokenise"
@@ -15,7 +16,7 @@ import (
 // extraction concerns — see indexer.go for the worker loop, indexer_extract.go
 // for extraction, and indexer_resync.go for the full-tree walk.
 
-func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash, lang string, nodes []Node, edges []Edge) error {
+func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash, lang string, out extractOutput) error {
 	tx, err := idx.db.Begin()
 	if err != nil {
 		return fmt.Errorf("topology: begin tx: %w", err)
@@ -29,11 +30,14 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 	if err := deleteFileNodes(tx, newFileID); err != nil {
 		return err
 	}
-	nodeIDs, err := insertNodes(tx, newFileID, relPath, nodes)
+	nodeIDs, err := insertNodes(tx, newFileID, relPath, out.nodes)
 	if err != nil {
 		return err
 	}
-	if err := insertEdges(tx, nodeIDs, edges); err != nil {
+	if err := insertEdges(tx, nodeIDs, out.edges); err != nil {
+		return err
+	}
+	if err := insertCallSites(tx, newFileID, lang, nodeIDs, out.sites); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -85,6 +89,13 @@ func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo
 // node — this runs on the hot write path (every upsert) and per stale file in
 // prune/delete, where a per-node loop costs M FTS5 round-trips for M symbols.
 func deleteFileNodes(tx *sql.Tx, fileID int64) error {
+	// Call sites go first and by file_id, not by cascade. A package-level site has
+	// no enclosing node, so its enclosing_id is NULL and the node cascade would
+	// leave it behind — the rows for exactly the sites this feature was added to
+	// capture would accumulate one stale copy per re-index.
+	if _, err := tx.Exec(`DELETE FROM topology_call_sites WHERE file_id = ?`, fileID); err != nil {
+		return fmt.Errorf("topology: delete call sites: %w", err)
+	}
 	if _, err := tx.Exec(
 		`DELETE FROM topology_fts WHERE rowid IN (SELECT id FROM topology_nodes WHERE file_id = ?)`,
 		fileID); err != nil {
@@ -142,6 +153,45 @@ func insertEdges(tx *sql.Tx, nodeIDs []int64, edges []Edge) error {
              VALUES (?, ?, ?, ?, ?)`,
 			fromID, toID, string(e.Kind), e.Confidence, e.Source); err != nil {
 			return fmt.Errorf("topology: insert edge: %w", err)
+		}
+	}
+	return nil
+}
+
+// insertCallSites persists a file's raw call sites. The enclosing declaration is
+// remapped from an extractor-local node index to a rowid the same way edges are;
+// a site with no enclosing declaration is stored with a NULL enclosing_id rather
+// than dropped, because a package-level registration call is one of the two
+// shapes this table exists to capture.
+func insertCallSites(tx *sql.Tx, fileID int64, lang string, nodeIDs []int64, sites []CallSite) error {
+	if len(sites) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO topology_call_sites(file_id, enclosing_id, language, site_kind, callee, qualifier,
+            start_byte, start_line, first_string_arg, arg_idents, arg_count, arg_spread)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("topology: prepare call site: %w", err)
+	}
+	defer stmt.Close()
+	for _, s := range sites {
+		var enclosing any
+		if id := remapNodeID(int64(s.EnclosingIdx), nodeIDs); id != 0 {
+			enclosing = id
+		}
+		var qualifier any
+		if s.Qualifier != "" {
+			qualifier = s.Qualifier
+		}
+		var firstString any
+		if s.HasStringArg {
+			firstString = s.FirstStringArg
+		}
+		if _, err := stmt.Exec(fileID, enclosing, lang, string(s.Kind), s.Callee, qualifier,
+			s.StartByte, s.StartLine, firstString, strings.Join(s.ArgIdents, ","),
+			s.ArgCount, boolToInt(s.ArgSpread)); err != nil {
+			return fmt.Errorf("topology: insert call site: %w", err)
 		}
 	}
 	return nil

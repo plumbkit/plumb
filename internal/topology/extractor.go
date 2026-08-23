@@ -20,6 +20,23 @@ type Extractor interface {
 	Extract(ctx context.Context, path string, src []byte) ([]Node, []Edge, error)
 }
 
+// CallSiteExtractor is the optional half of Extractor: an extractor that also
+// records raw, unresolved call sites. It is one method rather than a second
+// Extract call so a file is parsed once — the nodes, the edges and the sites all
+// come out of the same parse.
+//
+// An extractor that does not implement it contributes no call sites, and the
+// resolver's language admission (see callgraph.go) keeps that from being read as
+// "this language has no calls".
+type CallSiteExtractor interface {
+	Extractor
+	// ExtractWithCallSites parses src and returns what Extract returns, plus the
+	// call sites found in it. Implementations must keep Extract and this method
+	// in agreement on nodes and edges: CallSite.EnclosingIdx indexes the returned
+	// nodes slice.
+	ExtractWithCallSites(ctx context.Context, path string, src []byte) ([]Node, []Edge, []CallSite, error)
+}
+
 // findExtractor returns the first Extractor whose patterns match relPath, or nil.
 // A pattern is either a dot-prefixed extension (".go") matched against the file
 // extension, or a bare filename stem ("dockerfile") matched against the basename

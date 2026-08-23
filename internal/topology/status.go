@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 	}
 	countFiles(db, &s)
 	countEntities(db, &s)
+	s.CallGraph = callGraphCensus(db)
 	s.DBSizeBytes = dbSize(workspace)
 	s.Languages = indexedLanguages(db)
 	return s
@@ -176,6 +178,58 @@ func countEntities(db *sql.DB, s *Status) {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM topology_edges`).Scan(&s.TotalEdges)
 }
 
+// callGraphCensus reads back the tallies the call resolver published on its last
+// pass. They come from topology_meta rather than being recounted here: three of
+// the four outcome buckets are decisions the resolver made (an import that left
+// the tree, a qualifier that was not an import at all), and re-deriving them
+// with a different query would eventually report a number the resolver never
+// produced.
+func callGraphCensus(db *sql.DB) CallGraphStatus {
+	var c CallGraphStatus
+	into := map[string]*int{
+		metaCallSites:           &c.CallSites,
+		metaCallQualifiedSites:  &c.QualifiedSites,
+		metaCallResolved:        &c.Resolved,
+		metaCallResolvedNonTest: &c.ResolvedNonTest,
+		metaCallUnresolvedRecv:  &c.UnresolvedReceiver,
+		metaCallExternal:        &c.ExternalPackage,
+		metaCallUnmatched:       &c.UnmatchedTarget,
+	}
+	for key, dst := range into {
+		var v string
+		if err := db.QueryRow(`SELECT value FROM topology_meta WHERE key = ?`, key).Scan(&v); err != nil {
+			continue
+		}
+		if n, err := strconv.Atoi(v); err == nil {
+			*dst = n
+		}
+	}
+	return c
+}
+
+// formatCallGraph is where a user is told what the cross-file call graph does
+// and does not cover. The reach percentage leads because it is the fact most
+// likely to be assumed away: a resolver that follows package-qualified calls
+// only reaches a small minority of a Go project's call sites, and a caller list
+// read as complete is worse than no caller list.
+func formatCallGraph(c CallGraphStatus) string {
+	if c.CallSites == 0 {
+		return ""
+	}
+	pct := float64(c.Resolved) / float64(c.CallSites) * 100
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "  call graph:    %d cross-file call edges — %.1f%% of this workspace's %d\n",
+		c.Resolved, pct, c.CallSites)
+	fmt.Fprintf(&sb, "                 recorded call sites (%d from non-test callers). Go only.\n",
+		c.ResolvedNonTest)
+	fmt.Fprintf(&sb, "                 Of %d qualified sites: %d are method calls on a receiver and\n"+
+		"                  are NOT resolved (syntactic parsing carries no type information),\n"+
+		"                  %d leave the indexed tree, %d name no top-level function. Those are\n"+
+		"                  absent, not caller-free — do not read this graph as complete.\n",
+		c.QualifiedSites, c.UnresolvedReceiver, c.ExternalPackage, c.UnmatchedTarget)
+	return sb.String()
+}
+
 func dbSize(workspace string) int64 {
 	info, err := os.Stat(DBPath(workspace))
 	if err != nil {
@@ -239,6 +293,7 @@ func FormatStatus(s Status, workspace string) string {
 	if s.UnrecognisedFiles > 0 {
 		fmt.Fprintf(&sb, "  unrecognised:  %d\n", s.UnrecognisedFiles)
 	}
+	sb.WriteString(formatCallGraph(s.CallGraph))
 	if s.LastError != "" {
 		fmt.Fprintf(&sb, "  last error:    %s\n", s.LastError)
 	}
