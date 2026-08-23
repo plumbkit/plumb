@@ -53,7 +53,8 @@ func treeSitterFallbackNote(reason symbolFallbackReason, fn LSPWarmupFn, uri str
 		// parse can still run, which means a server slower than that budget —
 		// one that would previously have answered — now yields a line-granular
 		// tree-sitter range instead of a byte-precise LSP one.
-		return fmt.Sprintf("[topology fallback — LSP did not answer within %s; symbol located by tree-sitter, range is line-granular]\n\n", waited)
+		return fmt.Sprintf("[topology fallback — LSP did not answer within %s; symbol located by tree-sitter, range is line-granular]\n\n",
+			roundedDuration(waited))
 	default:
 		return treeSitterFallbackLegacyNote
 	}

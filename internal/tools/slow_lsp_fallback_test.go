@@ -87,8 +87,14 @@ type diskCheck struct {
 // fallbackToolCase is one tool under one server, plus what its answer must have
 // left on disk.
 type fallbackToolCase struct {
-	name  string
-	setup func(t *testing.T, client *mockLSP) (exec func(context.Context) (string, error), checks []diskCheck)
+	name string
+	// disclosesTimeout says the tool's fallback banner must name the missed
+	// attempt budget ("did not answer within …") rather than call a healthy but
+	// slow server unavailable. False for file_outline alone: it labels the
+	// answer source=topology and makes no claim about WHY the server did not
+	// own it, so it has no "LSP unavailable" wording to correct (review §2).
+	disclosesTimeout bool
+	setup            func(t *testing.T, client *mockLSP) (exec func(context.Context) (string, error), checks []diskCheck)
 }
 
 // writeToolCases covers every tool PLAN-403 names whose fallback also WRITES.
@@ -182,7 +188,8 @@ func readToolCases() []fallbackToolCase {
 			},
 		},
 		{
-			name: "workspace_symbols",
+			name:             "workspace_symbols",
+			disclosesTimeout: true,
 			setup: func(t *testing.T, client *mockLSP) (func(context.Context) (string, error), []diskCheck) {
 				t.Helper()
 				store, _ := newIndexedStore(t)
@@ -196,7 +203,8 @@ func readToolCases() []fallbackToolCase {
 			},
 		},
 		{
-			name: "workspace_symbols/in_file",
+			name:             "workspace_symbols/in_file",
+			disclosesTimeout: true,
 			setup: func(t *testing.T, client *mockLSP) (func(context.Context) (string, error), []diskCheck) {
 				t.Helper()
 				store, uri := newIndexedStore(t)
@@ -293,6 +301,15 @@ func TestSymbolReadTools_SlowLSPAnswersInsideBudget(t *testing.T) {
 				}
 				if !strings.Contains(out, "HandleRequest") {
 					t.Errorf("expected the Map's answer naming HandleRequest:\n%s", out)
+				}
+				// The same disclosure the write tools owe: the server was up and
+				// merely slower than its (now shortened) attempt budget, so
+				// "LSP unavailable" argues the agent into the wrong conclusion.
+				if tc.disclosesTimeout && !strings.Contains(out, "did not answer within") {
+					t.Errorf("a timed-out server must be reported as such, not as unavailable:\n%s", out)
+				}
+				if tc.disclosesTimeout && strings.Contains(out, "LSP unavailable") {
+					t.Errorf("a server that answered nothing inside its attempt budget is slow, not absent:\n%s", out)
 				}
 			})
 		}
