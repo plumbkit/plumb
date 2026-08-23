@@ -302,6 +302,33 @@
   `internal/tools/session_start_identity.go`, `internal/cli/conn_logical_agent.go`,
   `internal/cli/conn_agent_shard.go`.
 
+### Fixed
+
+- **`check-changelog-placement.sh` no longer passes an entry that landed in a section
+  released after the branch was cut (PLAN-399).** The guard matched the merge-base's
+  first heading by version number, so the one shape it most exists to catch was
+  invisible to it: fork while `## 0.17.2 (unreleased)` is open, write the entry there
+  correctly, watch 0.17.2 ship on main, rebase — the entry replays into the now-dated
+  section without conflicting and the guard printed `OK (39 added line(s), all under
+  ## 0.17.2 (unreleased))` over it. That is PR #404 on 2026-08-22, caught by a reviewer
+  rather than by CI, and the fourth by-hand relocation of its kind. New rule R4 resolves
+  the target REF'S TIP — not the merge-base, which by construction cannot know what
+  shipped after the fork — and fails an added line under the base's unreleased heading
+  when that same version carries a date stamp there. It keys on the stamp rather than on
+  the heading having moved down the file, because this changelog carries 50+ historical
+  `(unreleased)` headings from an era before releases were dated, and it looks up exactly
+  one heading by version number so those never enter. R4 inherits R1's two carve-outs
+  unchanged — a hunk that also deletes is a rewrite, and a line whose text was deleted
+  elsewhere in the diff is a move — so the branches this guard has to survive (a branch
+  merely behind main, a typo fix in an old section, a changelog tidy-up) stay green; the
+  deliberate case still has `CHANGELOG_PLACEMENT_ALLOW`. Not the whole-file check that
+  was done by hand alongside it: comparing every released section byte-for-byte against
+  main reds every honest behind-main PR, because main accumulated other entries into the
+  section it since stamped. `scripts/check-changelog-placement.sh`, and nine new
+  three-commit fixtures in `scripts/check-changelog-placement-test.sh` for the shape
+  neither existing block could express: a base branch that moves on under a branch. One
+  of them replaces an expectation that asserted the false green as correct behaviour.
+
 ## 0.17.2 (2026-08-22)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a

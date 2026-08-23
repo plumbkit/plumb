@@ -70,9 +70,12 @@ jobs:
       # head.sha is passed for a reason worth keeping: this job checks out
       # refs/pull/N/merge, whose parent IS base.sha, so without it the merge-base is
       # the base branch tip rather than the branch's fork point — and a branch that is
-      # merely behind a release cut then fails. --require-base turns an unresolvable
-      # base into an error, because on the one path that gates a merge, a skip is a
-      # green tick for a check that never ran.
+      # merely behind main then fails for lines it added under a heading that was open
+      # when it forked. A branch behind a RELEASE cut is a different matter and is
+      # supposed to fail: rule R4 compares base.sha's own headings against the fork
+      # point's, so it still catches an entry landing in a section stamped since.
+      # --require-base turns an unresolvable base into an error, because on the one
+      # path that gates a merge, a skip is a green tick for a check that never ran.
       - name: CHANGELOG placement guard
         if: github.event_name == 'pull_request'
         run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }} --head ${{ github.event.pull_request.head.sha }} --require-base
