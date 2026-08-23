@@ -175,6 +175,19 @@ func defaultTasks() map[string]TasksConfig {
 	}
 }
 
+// DefaultTaskCommand returns the command plumb SHIPS for (lang, slot), or ""
+// when it ships none. It exists so the cli seam can compare a stored command
+// against the default it replaced — the one comparison that makes placeholder
+// reconciliation provable rather than guessed (see reconcileTargetPlaceholder).
+//
+// The language is matched case-insensitively, the same way go-toml binds a
+// table name to a struct field: a config written `[TASKS.Go]` reaches the
+// runner, so it must reach this lookup too or reconciliation would silently
+// decline for exactly the configs that need it most.
+func DefaultTaskCommand(lang, slot string) string {
+	return defaultTasks()[strings.ToLower(lang)].Get(slot)
+}
+
 // builtinTaskKeys are the keys go-toml binds to a declared TasksConfig field.
 // Everything else under [tasks.<lang>] is an extra slot.
 var builtinTaskKeys = map[string]bool{

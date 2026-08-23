@@ -93,6 +93,39 @@
   why, so it has no wording to correct. As with PLAN-390, a workspace with
   `[topology] enabled = false` has no fallback to catch a slow server and now sees the
   timeout sooner.
+- **`run_task` accepts a target again when the stored command is a shipped default with
+  its `{target}` placeholder spelled out (PLAN-374, worth-it W3-20).** `a target was given
+  but the command has no {target} placeholder` was the largest NON-policy `run_task`
+  failure family in 90 days of telemetry — 13 of 41 failures, every one of them
+  `slot: "test"` with a Go package path, and still growing. The cause was not the message:
+  a config that sets `[tasks.go] test = "go test ./..."` — the command plumb itself shipped
+  before the placeholder existed — has no slot for a target, so the advertised
+  `topology_affected` → `run_task(target:)` handoff failed permanently for that workspace
+  and no amount of retrying fixed it. `reconcileTargetPlaceholder` (`internal/cli/conn_tasks.go`)
+  now restores the placeholder when a stored command is EXACTLY the shipped default with
+  `{target:<D>}` written out as `D` (or, for `pytest`/`cargo test`, with the operand
+  omitted, since an empty default spells "everything" as the absence of the argument).
+  Deliberately an equivalence, not a heuristic: appending the target to any
+  placeholder-less command would turn `go test ./...` into `go test ./... ./internal/cli`
+  and run the whole suite while reporting a scoped run, and substituting the last element
+  of any command would guess at commands whose final operand is not a scope. Because the
+  stored and shipped spellings build a byte-identical argv when no target is given, the
+  rewrite is provably meaning-preserving — a test asserts that relationship across every
+  shipped default rather than against literal argvs. A command plumb never wrote
+  (`go test -count=1 ./...`, `gotestsum ./...`) keeps its refusal, as does a slot where a
+  target is genuinely meaningless (`golangci-lint run`). `topology_affected` reads the
+  reconciled command through the same function, so it emits package targets for these
+  workspaces instead of bare directories.
+
+- **`run_task`'s two rejections now name the file to edit (PLAN-374).** The `{target}`
+  refusal was a bare sentence naming neither the stored command nor where it lives, so a
+  caller could not tell a slot that cannot take a target from one merely written without
+  the placeholder; it now quotes the stored command, names the config file it came from
+  (project, global, or "plumb's shipped defaults", read through the same provenance the
+  trust gate uses), and quotes the placeholder spelling to restore. The
+  no-command-configured refusal — which gained its language and slot list in 0.17.2 — now
+  names the project config file by ABSOLUTE path rather than a bare `.plumb/config.toml`
+  relative to a root the agent may not have in hand.
 
 - **`topology_affected`'s 2000-node traversal budget reaches the traversal, and a
   traversal that does run out of budget now says so (PLAN-407).**

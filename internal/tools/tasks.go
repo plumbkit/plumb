@@ -51,6 +51,13 @@ type TaskCommand struct {
 	// shell for every build and test.
 	Language   string
 	Configured []string // slots that DO have a command, for the empty-slot message
+	// ConfigPath is the absolute path of the project config file a command for
+	// this slot would be written to. It is the difference between a remedy a
+	// caller can act on and one it has to go looking for: ".plumb/config.toml" is
+	// relative to a workspace root the agent may not have in hand, and an agent
+	// that cannot find the file falls back to raw shell instead. Empty when the
+	// resolver could not name one, in which case the relative form is used.
+	ConfigPath string
 }
 
 // noCommandError explains an unconfigured slot in terms the caller can act on:
@@ -68,11 +75,15 @@ func noCommandError(cmd TaskCommand, slot string) error {
 	if subject == "" {
 		subject, key = "this workspace", "<lang>"
 	}
+	where := ".plumb/config.toml"
+	if cmd.ConfigPath != "" {
+		where = cmd.ConfigPath
+	}
 	return fmt.Errorf(
 		"run_task: no %s command configured for %s (%s). "+
-			"Set one with [tasks.%s] %s = \"...\" in .plumb/config.toml, "+
+			"Set one with [tasks.%s] %s = \"...\" in %s, "+
 			"or via agent_config op=set when the user has enabled [agent_config_writes]",
-		slot, subject, have, key, slot)
+		slot, subject, have, key, slot, where)
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -100,7 +111,7 @@ var runTaskSchema = json.RawMessage(`{
     },
     "target": {
       "type": "string",
-      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the stored command has no {target}."
+      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target} slot."
     }
   },
   "required": ["slot"],

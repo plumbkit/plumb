@@ -343,3 +343,50 @@ func TestExecTrust_RefusalNamesTheRemedy(t *testing.T) {
 // path is synchronous for everything asserted above except the xcode goroutine,
 // which waitXcodeState already polls.
 var _ = time.Second
+
+// TestShellResolver_DisabledRefusalCarriesTheEnableRecipe is PLAN-374 item 3's
+// regression fixture, and the reason the item resolved to "keep it, gated"
+// rather than "retire it".
+//
+// execute_shell_command measured 25 calls at a 100% error rate, which reads as a
+// dead tool until the errors are read: all 25 are this one refusal, because the
+// tool is disabled by default and nobody had enabled it. That is the gate
+// working, not a defect — so what the refusal SAYS is the whole product surface,
+// and it is the thing worth pinning.
+//
+// The assertions name the cheaper alternative first (run_command), then the
+// switch, then the trust step, then the sandbox's actual limit — an agent that
+// reads only "enable allow_shell" reaches for the broadest option available for
+// what is usually a one-off `wc -l`.
+func TestShellResolver_DisabledRefusalCarriesTheEnableRecipe(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+
+	s := execTrustSession(t, ws)
+	_, err := s.shellResolver()
+	if err == nil {
+		t.Fatal("execute_shell_command must be refused when no config enables it")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"run_command",
+		"[[command]]",
+		"[commands] allow_shell = true",
+		"plumb trust",
+		"confines writes, not reads",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the disabled refusal must carry %q so a caller can act on it; got: %s", want, msg)
+		}
+	}
+
+	// The other direction, so the assertions above cannot be satisfied by a
+	// resolver that refuses unconditionally: a project that enables shell
+	// execution AND has been trusted resolves.
+	writeExecProject(t, ws, "[commands]\nallow_shell = true\n")
+	grantExecTrust(t, ws)
+	if _, err := execTrustSession(t, ws).shellResolver(); err != nil {
+		t.Errorf("allow_shell the user approved was refused: %v", err)
+	}
+}

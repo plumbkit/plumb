@@ -1122,6 +1122,21 @@ is the *absence* of an argument (`cargo test`, `swift test`).
 runner-specific flags whose spelling depends on the project, and a wrong guess is
 worse than none. Add your own `{target}` to those slots.
 
+#### A stored command with the placeholder spelled out
+
+If your config sets a slot to the shipped default **with the placeholder written
+out** — `[tasks.go] test = "go test ./..."`, the command plumb shipped before the
+placeholder existed — plumb restores the placeholder rather than refusing every
+scoped call. The rewrite is an exact equivalence, never a guess: the two
+spellings build the same argv when no target is given, so nothing about an
+unscoped run changes, and a target lands in the position plumb's own default
+designates.
+
+It fires **only** for that exact match. `go test -count=1 ./...` and
+`gotestsum ./...` are commands plumb never wrote, so they keep their refusal —
+which now quotes the stored command and names the config file holding it, so you
+can add a `{target}` where it belongs.
+
 ### Project-defined slots
 
 `build`, `lint`, `test`, `e2e` and `verify` are Go's verbs, and they are not

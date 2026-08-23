@@ -218,3 +218,89 @@ func TestRunTask_AllStepsOK(t *testing.T) {
 		t.Errorf("expected an ok result:\n%s", out)
 	}
 }
+
+// TestRunTask_NoCommandRefusalCarriesItsRemedy is the rejection fixture for the
+// larger of run_task's two message families, asserted at the MCP surface the
+// agent actually sees rather than on noCommandError alone.
+//
+// It exists because the remedy is the whole point of the message: 15 of 41
+// run_task failures in 90 days of telemetry were the bare sentence this
+// replaced ("no test command configured for this workspace"), which named no
+// config file, no language and no alternative slot, so the caller's only move
+// was to abandon run_task for raw shell.
+//
+// Every assertion names something the CALLER never supplied — the language, the
+// other configured slots, the absolute config path — so none of them can be
+// satisfied by an echo of the request.
+func TestRunTask_NoCommandRefusalCarriesItsRemedy(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), ".plumb", "config.toml")
+	tool := NewTasks(WriteDeps{}, func(slot, _ string) (TaskCommand, error) {
+		return TaskCommand{
+			Slot: slot, Language: "go",
+			Configured: []string{"build", "test"},
+			ConfigPath: cfgPath,
+		}, nil
+	})
+	_, err := runTask(t, tool, `{"slot":"lint"}`)
+	if err == nil {
+		t.Fatal("an unconfigured slot must be refused")
+	}
+	msg := err.Error()
+	for _, want := range []string{"go", "build, test", "[tasks.go] lint", cfgPath, "agent_config"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal must name %q; got: %s", want, msg)
+		}
+	}
+
+	// The fallback direction: a resolver that could not name a file must still
+	// point at one, or the remedy is unactionable. Asserting only the presence of
+	// cfgPath above would be satisfied by a message that hardcoded it.
+	bare := NewTasks(WriteDeps{}, func(slot, _ string) (TaskCommand, error) {
+		return TaskCommand{Slot: slot, Language: "go"}, nil
+	})
+	_, err = runTask(t, bare, `{"slot":"lint"}`)
+	if err == nil {
+		t.Fatal("an unconfigured slot must be refused")
+	}
+	if !strings.Contains(err.Error(), ".plumb/config.toml") {
+		t.Errorf("with no resolved path the refusal must still name the config file; got: %s", err)
+	}
+	if strings.Contains(err.Error(), cfgPath) {
+		t.Errorf("the fallback message leaked the other fixture's path: %s", err)
+	}
+}
+
+// TestRunTask_TargetRefusalReachesTheCallerIntact pins that the resolver's
+// enriched {target} refusal — the largest non-policy failure family — is passed
+// through to the agent rather than flattened into the tool's own wording.
+//
+// The tool cannot build this message itself (it does not import config and
+// cannot see the stored command or the file it came from), so the only thing
+// that can go wrong here is the tool swallowing or rewriting it. The fixture
+// spells the resolver's message out in full and requires it verbatim.
+func TestRunTask_TargetRefusalReachesTheCallerIntact(t *testing.T) {
+	const resolved = `run_task test: a target was given but the stored test command for go has no ` +
+		`{target} placeholder. Stored command: "go test -count=1 ./..." (from /tmp/ws/.plumb/config.toml). ` +
+		`To scope this slot, restore the placeholder plumb ships for it ("go test {target:./...}") ` +
+		`under [tasks.go] test`
+	tool := NewTasks(WriteDeps{}, func(_, target string) (TaskCommand, error) {
+		if target == "" {
+			return TaskCommand{Slot: "test", Steps: [][]string{{"true"}}}, nil
+		}
+		return TaskCommand{}, errors.New(resolved)
+	})
+	_, err := runTask(t, tool, `{"slot":"test","target":"./internal/cli"}`)
+	if err == nil {
+		t.Fatal("the resolver refused this call; run_task must surface that")
+	}
+	if err.Error() != resolved {
+		t.Errorf("run_task rewrote the resolver's remedy.\n got: %s\nwant: %s", err, resolved)
+	}
+
+	// The other direction, in the same build: the same tool must still RUN when
+	// no target is given, so the assertion above cannot be satisfied by a tool
+	// that refuses everything.
+	if _, err := runTask(t, tool, `{"slot":"test"}`); err != nil {
+		t.Errorf("an unscoped call must still run: %v", err)
+	}
+}
