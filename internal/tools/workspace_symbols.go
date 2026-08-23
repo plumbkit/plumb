@@ -175,14 +175,18 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
+	// The attempt is bounded strictly inside the caller's budget so the Map
+	// fallback below — which runs on the live ctx, not lspCtx — has time left to
+	// answer in. withLSPDeadline handed the server the whole budget whenever the
+	// caller had already set a deadline (PLAN-403).
+	lspCtx, cancel, granted := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
 	syms, err := t.client.WorkspaceSymbols(lspCtx, protocol.WorkspaceSymbolParams{Query: a.Query})
 	if err != nil {
 		if out, ok := t.topologyFallback(ctx, a.Query); ok {
 			return out, nil
 		}
-		return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
+		return "", lspTimeoutErr("workspace_symbols", attemptBudget(granted, t.timeout), err)
 	}
 
 	// Drop dependency-cache and stdlib hits so results stay focused on the
@@ -226,9 +230,9 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 // language server's documentSymbol tree, with the topology index as the
 // fallback when the server errors or times out.
 func (t *WorkspaceSymbols) inFile(ctx context.Context, uri, query string) (string, error) {
-	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
+	lspCtx, cancel, granted := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	out, err := t.inDocument(lspCtx, uri, query)
+	out, err := t.inDocument(lspCtx, uri, query, attemptBudget(granted, t.timeout))
 	if err != nil {
 		if IsWorkspaceBoundaryError(err) {
 			return "", err
@@ -259,7 +263,10 @@ func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, uri, quer
 	return formatTopologyMatches(note, fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
 }
 
-func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (string, error) {
+// inDocument answers an in-file query from the server's documentSymbol tree.
+// ctx is the ALREADY-BOUNDED server-attempt context (see inFile); waited is the
+// budget it carries, quoted when the server misses it.
+func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string, waited time.Duration) (string, error) {
 	// Cache the full symbol list per document; filtering is client-side.
 	key := uri + ":docSymbols"
 	var syms []protocol.DocumentSymbol
@@ -275,7 +282,7 @@ func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (s
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
-			return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
+			return "", lspTimeoutErr("workspace_symbols", waited, err)
 		}
 		if t.cache != nil {
 			t.cache.Set(key, syms, t.ttl)

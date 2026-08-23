@@ -76,3 +76,32 @@ func lspTimeoutErr(tool string, timeout time.Duration, err error) error {
 	}
 	return fmt.Errorf("%s: %w", tool, err)
 }
+
+// attemptBudget resolves the duration to quote to a caller after a language
+// server missed its attempt: the budget actually granted, or the configured
+// [lsp_query] timeout when the cap was disabled (granted is then zero).
+func attemptBudget(granted, configured time.Duration) time.Duration {
+	if granted <= 0 {
+		return configured
+	}
+	return granted
+}
+
+// fallbackDeadlines splits a tool's time into the two contexts a
+// language-server-with-tree-sitter-fallback tool needs, WITHOUT widening the
+// tool's own budget:
+//
+//   - toolCtx keeps exactly the bound the tool has always had (withLSPDeadline,
+//     the [lsp_query] timeout). Everything downstream — including a WRITE — stays
+//     inside it. This is the deliberate half: a symbol-edit tool must not become
+//     unbounded just because its lookup learned to give up earlier (PLAN-403).
+//   - lspCtx is the server attempt, half of what remains of toolCtx, so the
+//     fallback parse has both headroom and a LIVE context to run on.
+//
+// cancel releases both. waited is the attempt budget to quote in a timeout
+// message, already resolved through attemptBudget.
+func fallbackDeadlines(ctx context.Context, timeout time.Duration) (toolCtx, lspCtx context.Context, cancel context.CancelFunc, waited time.Duration) {
+	toolCtx, cancelTool := withLSPDeadline(ctx, timeout)
+	lspCtx, cancelLSP, granted := withFallbackLSPDeadline(toolCtx, timeout)
+	return toolCtx, lspCtx, func() { cancelLSP(); cancelTool() }, attemptBudget(granted, timeout)
+}
