@@ -94,6 +94,26 @@
   `[topology] enabled = false` has no fallback to catch a slow server and now sees the
   timeout sooner.
 
+- **`topology_affected`'s 2000-node traversal budget reaches the traversal; it was
+  silently cut to 200 (PLAN-407).** `topology_affected` sizes a deliberate
+  `graphNodeBudget` of 2000 for its depth-2 dependent-discovery BFS — the comment on it
+  explains that the budget exists so the walk cannot run out of room before the
+  `imports`/`contains` edges that reach test files are visited. `topology.ImpactFrom`
+  then clamped it to `hardCapNodes` (200), the ceiling the `topology_explore` /
+  `topology_impact` schemas advertise for a caller-supplied `max_nodes`. One constant was
+  doing two jobs: bounding an untrusted MCP argument, and overruling a budget the code
+  itself sized. The two are now separate — the advertised ceiling (`ClampToolNodes`, still
+  200) is applied by the tools that advertise it, and the traversal keeps its own, far
+  higher backstop. **No change to which tests `topology_affected` reports on this repo:**
+  measured over all 13,657 declaration roots in the plumb index, the widest depth-2
+  inward neighbourhood is 187 nodes, so nothing truncated at 200 and the tests-to-run
+  answer is byte-identical before and after (21,622 tests over 8 sampled files). The
+  defect was 13 nodes of headroom from firing, and function-granular `calls` edges will
+  cross it. Cost, measured on the same index: the depth-2 hot path is unchanged (3.5s vs
+  4.0s to walk every root, within noise, because no walk reaches its budget); where the
+  budget does bind — a synthetic depth-4 frontier — the traversal goes from 200 nodes
+  truncated in 1.3ms to a complete 435 nodes in 11.0ms. `max_bytes` remains the practical
+  bound on any large answer.
 - **`read_symbol` now degrades to its tree-sitter fallback when the language server is
   merely SLOW, instead of timing out (PLAN-390).** The fallback exists for a cold
   server — the pool hands back a not-yet-ready entry after a 2s grace precisely "so the

@@ -214,7 +214,7 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 	}
 	opts := topology.ImpactOpts{
 		Depth:     a.Depth,
-		MaxNodes:  a.MaxNodes,
+		MaxNodes:  topology.ClampToolNodes(a.MaxNodes),
 		MaxBytes:  a.MaxBytes,
 		EdgeKinds: a.EdgeKinds,
 	}
