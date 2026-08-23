@@ -75,7 +75,11 @@ while IFS= read -r line; do
 		continue
 	fi
 
-	if out=$("$GUARD" --base "$sha^" --head "$sha" 2>&1); then rc=0; else rc=$?; fi
+	# CHANGELOG_PLACEMENT_ALLOW='' for the same reason synth() clears it: a developer
+	# with the bypass exported would otherwise run every `pass` case vacuously — the
+	# guard skips, prints a green tick, and asserts nothing. The `fail` cases would go
+	# red so the suite is not silently green, but "safe" is not "asserted".
+	if out=$(CHANGELOG_PLACEMENT_ALLOW='' "$GUARD" --base "$sha^" --head "$sha" 2>&1); then rc=0; else rc=$?; fi
 
 	case "$want:$rc" in
 	fail:1 | pass:0)
@@ -531,13 +535,21 @@ SYNTH_ALLOW=""
 # The merge commit CI checks out is deliberately not built here: the guard is pointed
 # at the base and head SHAs, never at the merge, so it would be scenery.
 
-# forkcase <pass|fail> <name> <fork-md> <base-tip-md> <branch-md>
+# forkcase <pass|fail> <name> <fork-md> <base-tip-md> <branch-md> [expected-substring]
+#
+# The optional sixth argument asserts on the guard's OUTPUT as well as its exit code.
+# Two of the cases below are about what the report SAYS — an advisory note that must
+# appear on a passing run, and a paragraph that must stop contradicting itself — and
+# an exit-code-only assertion cannot see either. Both already held the wrong way round
+# before this argument existed, which is exactly the vacuous-pass the harness header
+# warns about for the synthetic cases.
 forkcase() {
 	want="$1"
 	name="$2"
 	fork_md="$3"
 	base_md="$4"
 	branch_md="$5"
+	expect="${6:-}"
 	total=$((total + 1))
 	d="$(mktemp -d)"
 	mkdir -p "$d/scripts"
@@ -566,20 +578,29 @@ forkcase() {
 	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'base moves on'
 	fork_base="$(git -C "$d" rev-parse HEAD)"
 
-	if out=$("$d/scripts/check-changelog-placement.sh" \
+	if out=$(CHANGELOG_PLACEMENT_ALLOW='' "$d/scripts/check-changelog-placement.sh" \
 		--base "$fork_base" --head "$fork_head" 2>&1); then rc=0; else rc=$?; fi
 	rm -rf "$d"
 
 	case "$want:$rc" in
-	fail:1 | pass:0)
-		printf '  ok    %-38s %s\n' "$name" "$want"
-		;;
+	fail:1 | pass:0) ;;
 	*)
 		printf '  FAIL  %-38s wanted %s, got exit %d\n' "$name" "$want" "$rc"
 		printf '%s\n' "$out" | sed 's/^/          | /'
 		failed=$((failed + 1))
+		return
 		;;
 	esac
+
+	if [ -n "$expect" ] && ! printf '%s\n' "$out" | grep -qF -- "$expect"; then
+		printf '  FAIL  %-38s exit %d as wanted, but the report never said: %s\n' \
+			"$name" "$rc" "$expect"
+		printf '%s\n' "$out" | sed 's/^/          | /'
+		failed=$((failed + 1))
+		return
+	fi
+
+	printf '  ok    %-38s %s\n' "$name" "$want"
 }
 
 # The base tip after a release: 0.2.0 stamped, 0.3.0 opened above it, and an entry
@@ -771,6 +792,64 @@ FORK_BRANCH_ENTRY='# Changelog
 - first released entry
 - second released entry'
 
+# The branch reworded the line that was already in the open section AND appended a
+# genuinely new entry directly below it. Contiguity is the whole point: under
+# --unified=0 git folds the two into ONE hunk with a non-zero minus count, which
+# exempts every added line in it from R4's pure-addition gate. That is how the exact
+# false green this guard exists to kill survives R4 (independent review, finding 4).
+FORK_BRANCH_REWORD_AND_ENTRY='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place, slightly reworded
+- a genuinely new entry, added on the branch, long enough that it runs
+  onto a second line
+  and a third
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# A fork point whose top heading is ALREADY date-stamped, so the file has no open
+# section at all. This is not a hypothetical: 7a75dec0 (release 0.17.2, the most recent
+# one) left CHANGELOG.md in exactly this state.
+FORK_STAMPED_TOP_AHEAD='# Changelog
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+- an entry from another PR that landed after the release
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+FORK_BRANCH_UNDER_STAMPED_TOP='# Changelog
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+- a second entry, added on the branch
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
 # The branch opened its own unreleased section above the one it forked from, which is
 # what a branch caught by the case below is told to do.
 FORK_BRANCH_NEW_SECTION='# Changelog
@@ -858,6 +937,32 @@ forkcase pass 'stamped heading quoted at the tip' \
 # shipped history.
 forkcase fail 'entry under a stamped top heading' \
 	"$SYNTH_BASE" "$FORK_BASE_STAMPED_TOP" "$FORK_BRANCH_ENTRY"
+
+# Independent review, finding 4. R4 inherits R1's "a hunk that also deletes is a
+# rewrite" carve-out, and --unified=0 folds a reworded pre-existing line together with
+# the new lines CONTIGUOUS below it into one such hunk — so all of them are exempt, and
+# the guard prints the very "OK (N added line(s), all under ## 0.2.0 (unreleased))"
+# message the card was filed about, over lines landing in shipped history.
+#
+# The fix is deliberately ASYMMETRIC: still a pass, because hard-failing every
+# add/delete hunk in a released section would red the honest tidy-ups this guard has to
+# survive and a bypassed guard guards nothing — but no longer SILENT. The expectation
+# is therefore on the report text, not on the exit code; asserting the exit code alone
+# would pass against the guard that has the hole.
+forkcase pass 'new entry folded into a rewrite hunk' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$FORK_BRANCH_REWORD_AND_ENTRY" \
+	'in a hunk that also deletes'
+
+# Independent review, finding 5. When the MERGE-BASE's own top heading is already
+# date-stamped — the state 7a75dec0 left this repo in — R4's verdict is right but its
+# explanation used to assert three falsehoods in five lines: it labelled a dated
+# heading "unreleased section", claimed that heading "was still the unreleased section
+# at the merge-base", and then reported that it "now reads" the identical string the
+# reader was already looking at. A correct guard whose report reads like a guard bug is
+# a guard the next author bypasses, so the wording is asserted here.
+forkcase fail 'shipped top heading at the merge-base' \
+	"$FORK_BASE_STAMPED_TOP" "$FORK_STAMPED_TOP_AHEAD" "$FORK_BRANCH_UNDER_STAMPED_TOP" \
+	'the merge-base carried no open section at all'
 
 echo ""
 

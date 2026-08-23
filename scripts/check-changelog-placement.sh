@@ -111,8 +111,38 @@
 # R4 adds three fail-opens of its own, all deliberate, all in the "a false red is
 # worse" direction: the base's first heading carries no '<major>.<minor>.<patch>'
 # version; CHANGELOG.md is absent from the target ref's tip; or the tip has no heading
-# for that version at all (it was renamed or removed there). Each leaves R4 disarmed
-# and R1..R3 to judge the change alone.
+# matching that version at all. That last one covers two shapes, not one — the heading
+# was renamed or removed there, OR it is present but carries NOTHING after the version
+# number ('## 0.7.3' and '## 0.7.2' both exist in this file). The tip scan matches on
+# '## <ver> ' with a trailing space, which a bare heading cannot satisfy; loosening it
+# would cost the '0.1.0' vs '0.1.01' disambiguation the space buys, and chore(release)
+# never writes a bare heading, so this stays a documented fail-open. Each leaves R4
+# disarmed and R1..R3 to judge the change alone.
+#
+# R4 also has a FOURTH soft spot, which is reported rather than failed: it inherits
+# R1's "a hunk that also deletes is a rewrite" carve-out, and under --unified=0 git
+# folds a reworded pre-existing line together with a block of new lines contiguous
+# with it into one such hunk. Those added lines are exempt from R4, however many there
+# are — the one route by which PR #404 could happen again with CI green. It is NOT
+# hard-failed, because failing every add/delete hunk in a released section would red
+# the honest tidy-ups this guard has to survive, and a bypassed guard guards nothing.
+# Instead it prints an advisory note naming the count and the heading, so the hole is
+# visible in the report. See noterewrite() below.
+#
+# ENVIRONMENTAL DEPENDENCY, worth naming because nothing in this script can enforce it:
+# R4 asks what the TARGET REF'S TIP says, and CI hands that ref in as
+# github.event.pull_request.base.sha — a snapshot from the PR's last opened/synchronize
+# event, which does NOT move when main does. The bug R4 catches is, by construction,
+# "main released after my last push", so if no further CI run happens on that PR the
+# last (green, pre-release) run is what the merge button sees and R4 never fires. What
+# closes that today is branch protection's "require branches to be up to date before
+# merging" (strict status checks), which is ON for this repo and forces a push, and so
+# a fresh base.sha, before a merge can land. If strict checks are ever turned off — to
+# add a merge queue, say — R4 silently stops firing on that window. The alternative is
+# to resolve R4's tip from origin/main rather than from base.sha; it is not done here
+# because origin/main's presence in the CI checkout is exactly the guessing the
+# workflow comment says base.sha exists to avoid, and getting it wrong disarms R4 on
+# every PR at once rather than on a narrow window.
 set -eu
 
 usage() {
@@ -271,7 +301,10 @@ if [ -n "$BASE_VER" ] && git cat-file -e "$BASE_REF:CHANGELOG.md" 2>/dev/null; t
 	git show "$BASE_REF:CHANGELOG.md" >"$TMP/tip.md"
 	# Fence-aware for the same reason every other scan here is. The trailing space in
 	# the prefix keeps '0.1.0' from matching a '## 0.1.01' heading; the match covers
-	# both spellings this file uses, '## X (date)' and '## X — date'.
+	# both spellings this file uses, '## X (date)' and '## X — date'. It deliberately
+	# does NOT match a heading with nothing after the version ('## 0.7.3'), which is
+	# the second trigger of the "no heading for that version at the tip" fail-open
+	# enumerated in the header.
 	TIP_HEAD="$(awk -v v="$BASE_VER" '
 		substr($0, 1, 3) == "```" { f = !f; next }
 		!f && substr($0, 1, length(v) + 4) == "## " v " " {
@@ -306,6 +339,34 @@ function relocnote(   i) {
 	print "        text was also deleted in this diff, so this is a move, not a new entry."
 	print "        Advisory, never a failure; confirm it was deliberate:"
 	for (i = 1; i <= nmt; i++) printf "          %d line(s) under %s\n", mcount[i], mhead[i]
+	print ""
+}
+
+# The R4 pure-addition carve-out, surfaced instead of swallowed. Advisory rather than a
+# failure ON PURPOSE: the carve-out exists because a hunk that also deletes is normally
+# someone rewriting a line that was already there, and hard-failing that would red the
+# honest tidy-ups this guard has to survive — a false red is the worse direction here.
+# But with --unified=0 git folds a reworded pre-existing line and a block of genuinely
+# new lines CONTIGUOUS with it into one hunk, and every added line in it is exempted.
+# That reproduces the exact false green this guard exists to kill, so it must at least
+# be visible in the report rather than vanishing into `checked++`.
+function noterewrite(h) {
+	nrew++
+	if (!(h in rwseen)) {
+		rwseen[h] = ++nrwt
+		rwhead[nrwt] = h
+	}
+	rwcount[rwseen[h]]++
+}
+
+function rewritenote(   i) {
+	if (!nrew) return
+	printf "  note: %d line(s) were added under a heading the TARGET HAS ALREADY\n", nrew
+	print "        RELEASED, in a hunk that also deletes — so they read as a rewrite of"
+	print "        text that was already there, not as a replayed entry, and R4 did not"
+	print "        fail them. Advisory, never a failure; if any of them is genuinely new"
+	print "        content it is landing inside shipped history:"
+	for (i = 1; i <= nrwt; i++) printf "          %d line(s) under %s\n", rwcount[i], rwhead[i]
 	print ""
 }
 
@@ -410,9 +471,8 @@ END {
 			# R4 — the heading matches the unreleased section at the merge-base,
 			# which is what R1 asks, but the TARGET has stamped that version since
 			# the branch forked. The line lands in shipped history. An empty tiphead
-			# means the
-			# target still calls it unreleased (or R4 could not tell), which is the
-			# ordinary case, and the R1 verdict above stands.
+			# means the target still calls it unreleased (or R4 could not tell),
+			# which is the ordinary case, and the R1 verdict above stands.
 			if (tiphead == "") {
 				checked++
 				continue
@@ -423,8 +483,13 @@ END {
 			# new content. Neither can be a rebase replaying an entry, which is the
 			# only thing R4 is looking for, and failing them would red the legitimate
 			# tidy-ups this guard has to survive.
+			#
+			# The first one is ASYMMETRICALLY handled: still never a failure, but
+			# reported, because it is the one carve-out that can hide genuinely new
+			# lines in shipped history — see noterewrite() above.
 			if (!(ln in pureadd)) {
 				checked++
+				noterewrite(htext[h])
 				continue
 			}
 			if (deleted[t] > 0) {
@@ -493,13 +558,20 @@ END {
 		else if (nmoved) print "check-changelog-placement: OK (nothing NEW was added to a released section)"
 		else print "check-changelog-placement: OK (nothing was added to a released section)"
 		relocnote()
+		rewritenote()
 		exit 0
 	}
 
 	print "check-changelog-placement: CHANGELOG.md additions landed under the wrong heading."
 	print ""
+	# The label is conditional because the first heading at the merge-base is not always an
+	# unreleased one: a stamp-only release (7a75dec0, the most recent one here) leaves
+	# the file with a dated top heading and no open section at all, and calling that
+	# "unreleased section" in the report is a falsehood a reader will read as a guard
+	# bug — which is how a guard gets bypassed.
+	baseopen = (index(basefirst, "(unreleased)") > 0)
 	printf "  base:                %s\n", base
-	printf "  unreleased section:  %s\n", basefirst
+	printf "  %-20s %s\n", (baseopen ? "unreleased section:" : "base top heading:"), basefirst
 	print ""
 	if (nv) {
 		print "  A new version heading was added BELOW an existing one — a release heading"
@@ -517,9 +589,23 @@ END {
 		print ""
 	}
 	if (n4) {
-		printf "  %s was still the unreleased section at the merge-base, but the\n", basefirst
-		printf "  target has RELEASED it since this branch was cut: at %s\n", baseref
-		printf "  that heading now reads %s.\n", tiphead
+		if (baseopen) {
+			printf "  %s was still the unreleased section at the merge-base, but the\n", basefirst
+			printf "  target has RELEASED it since this branch was cut: at %s\n", baseref
+			printf "  that heading now reads %s.\n", tiphead
+		} else {
+			# basefirst carries no (unreleased) marker, so there was never an open section
+			# to write into — the branch forked from a file whose top heading had
+			# already shipped. Naming tiphead here would just echo the string the
+			# reader is already looking at, so it is mentioned only when it differs.
+			printf "  %s is the top heading at the merge-base, and it does NOT\n", basefirst
+			print "  carry the (unreleased) marker: the merge-base carried no open section at all."
+			if (tiphead == basefirst) {
+				printf "  At %s it is unchanged and still date-stamped.\n", baseref
+			} else {
+				printf "  At %s the heading for that version reads %s.\n", baseref, tiphead
+			}
+		}
 		print ""
 		print "  These lines are therefore landing inside shipped history:"
 		for (i = 1; i <= n4; i++) {
@@ -545,6 +631,7 @@ END {
 		print ""
 	}
 	relocnote()
+	rewritenote()
 	print "Move them under the topmost \"## \" heading, the unreleased section. A clean"
 	print "rebase is NOT evidence an entry is in the right place: date-stamping a release"
 	print "does not conflict with a branch that adds entries under the stamped heading,"
