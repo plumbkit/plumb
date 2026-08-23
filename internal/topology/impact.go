@@ -32,6 +32,17 @@ func ImpactFrom(ctx context.Context, db *sql.DB, centre Node, opts ImpactOpts) (
 	return impactBFS(ctx, db, centre, clampImpactOpts(opts))
 }
 
+// ClampTraversalOpts reports what ImpactFrom will actually run with after the
+// traversal's own ceilings are applied.
+//
+// It is exported for the assertion an in-process caller owes itself: the budget
+// it sizes lives in its package and the ceilings live here, so nothing at the
+// edit site shows that raising one past the other silently reinstates the
+// clamping PLAN-407 removed. A test in the calling package that compares this
+// against the opts it passes closes that gap, and follows the clamp if the
+// clamp changes — which a test reading the constants would not.
+func ClampTraversalOpts(opts ImpactOpts) ImpactOpts { return clampImpactOpts(opts) }
+
 func clampImpactOpts(opts ImpactOpts) ImpactOpts {
 	if opts.Depth <= 0 {
 		opts.Depth = defaultImpactDepth

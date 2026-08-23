@@ -12,18 +12,36 @@ const (
 	defaultMaxNodes = 50
 	defaultMaxBytes = 30000
 	hardCapDepth    = 4
-	// hardCapNodes is the traversal's own ceiling: the most nodes any caller,
-	// including in-process code, may walk in one direction. It is a backstop for a
-	// pathological graph, not a response-size limit — hardCapBytes is what bounds
-	// the answer, and on real Go nodes (~200 estimated bytes each) it binds at
-	// roughly 500 nodes, an order of magnitude below this.
-	hardCapNodes = 5000
-	hardCapBytes = 100000
 
-	// toolCapNodes bounds a max_nodes that arrived as an MCP tool ARGUMENT. It is
-	// the number topology_explore's and topology_impact's schemas advertise, and
-	// exists to stop an agent asking for a neighbourhood larger than it can read.
+	// maxNodeBytes is the per-node cost the traversal's two ceilings are sized
+	// against. estimateBytes over this repo's own index (26,826 nodes, the
+	// IncludeSource mode impactBFS uses) measures avg 150 B, median 142, p90 223,
+	// p99.9 332; three nodes exceed 512 and the largest is 1,831.
+	maxNodeBytes = 512
+
+	// hardCapNodes and hardCapBytes are the traversal's own ceilings: the most any
+	// caller, in-process code included, may walk in one direction. They are
+	// backstops against a pathological graph, not response-size limits — a
+	// response is bounded by toolCapNodes/toolCapBytes, which the tools apply to
+	// their own arguments.
+	//
+	// They are sized as a pair so that BOTH can fire and neither is decoration.
+	// hardCapBytes is hardCapNodes × maxNodeBytes, so the NODE ceiling binds first
+	// at any average node size the index has been measured to produce, and the
+	// byte ceiling binds only when the average node costs more than maxNodeBytes —
+	// 3.4× the measured average. Before PLAN-407 the pair was 5000 × 100000, where
+	// the byte ceiling bound at ~660 real nodes and the node ceiling could not fire
+	// at all: an inert cap that read as protective, which is the defect this card
+	// exists to remove. TestTraversalCeilingsBindInThatOrder pins the ordering.
+	hardCapNodes = 5000
+	hardCapBytes = hardCapNodes * maxNodeBytes
+
+	// toolCapNodes and toolCapBytes bound a max_nodes / max_bytes that arrived as
+	// an MCP tool ARGUMENT. They are the numbers topology_explore's and
+	// topology_impact's schemas advertise, and exist to stop an agent asking for a
+	// neighbourhood larger than it can read.
 	toolCapNodes = 200
+	toolCapBytes = 100000
 )
 
 // ClampToolNodes bounds a caller-supplied max_nodes to the ceiling the topology
@@ -44,6 +62,27 @@ func ClampToolNodes(n int) int {
 	}
 	return n
 }
+
+// ClampToolBytes bounds a caller-supplied max_bytes the same way, and for the
+// same reason: a response-size limit belongs to the tool that serialises the
+// answer, not to the traversal. An in-process caller that reads a handful of
+// fields off each node and discards the rest — topology_affected reads Kind, ID
+// and Path — is not producing a response, so bounding it at the schema's number
+// is the node clamp's bug in the other ceiling: it cut a requested 2000-node
+// budget to about 660 whatever ClampToolNodes did.
+//
+// A non-positive n is returned unchanged so the traversal's own default applies.
+func ClampToolBytes(n int) int {
+	if n > toolCapBytes {
+		return toolCapBytes
+	}
+	return n
+}
+
+// MaxTraversalBytes is the byte ceiling the traversal itself enforces. An
+// in-process caller that does not serialise the nodes it walks asks for this,
+// so its node budget is what bounds the walk.
+func MaxTraversalBytes() int { return hardCapBytes }
 
 // Explore performs a bounded BFS from the named symbol and returns its neighbourhood.
 func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*Neighbourhood, error) {

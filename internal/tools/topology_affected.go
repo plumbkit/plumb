@@ -128,20 +128,19 @@ const (
 )
 
 // graphNodeBudget bounds the dependent-discovery traversal. It is deliberately
-// far above any real fan-out (the widest here is 152 importers): its job is to
-// stop a pathological graph, not to shape the answer. The answer is shaped by
-// max_results, which bounds PACKAGES — conflating the two is what made a change
-// to a widely-imported file report fewer of its dependents, not more.
+// far above any real fan-out — over this repo's 18,182 declaration nodes the
+// widest depth-2 inward neighbourhood is 174 and no root reaches 200 — so its
+// job is to stop a pathological graph, not to shape the answer. max_results
+// shapes the answer, and bounds PACKAGES; conflating the two is what made a
+// change to a widely-imported file report fewer of its dependents, not more.
 //
-// It reaches the traversal intact. It did not until PLAN-407: the topology layer
-// clamped every caller's MaxNodes with the ceiling its MCP tool schemas
-// advertise (200), so this number documented a budget the BFS never had. The
-// walk is bounded by MaxBytes below, and by topology's own hardCapNodes.
+// 2000 is the honest effective ceiling, which took removing TWO clamps. PLAN-407
+// found the topology layer cutting MaxNodes to the 200 its MCP schemas advertise;
+// splitting that ceiling alone left max_bytes doing the same job, stopping the
+// walk at roughly 660 at a measured 150 B per node. graphTraversalOpts explains
+// why the byte allowance is no longer the schema's, and
+// TestGraphBudgetSurvivesTheTraversalCeilings pins both halves.
 const graphNodeBudget = 2000
-
-// maxNamedTests caps the individually-named tests in the changed package. Past
-// a few dozen the list stops informing a decision and starts costing context.
-const maxNamedTests = 40
 
 // defaultMaxPackages is the max_results default applied when the caller names
 // none. It is the RUNTIME cap — the one that actually shapes the answer — and
@@ -198,10 +197,16 @@ func aggregateTestsByPackage(tests []affectedTest) []affectedPackage {
 }
 
 // affectedResult collects dependents and likely-affected tests.
+//
+// The two truncation flags stay separate because a banner naming the wrong cause
+// is worse than none: Truncated is the max_results cut on PACKAGES, which the
+// caller fixes by raising max_results; GraphTruncated is the traversal running
+// out of budget, which max_results cannot fix at all.
 type affectedResult struct {
-	Dependents []topology.Node
-	Tests      []affectedTest
-	Truncated  bool
+	Dependents     []topology.Node
+	Tests          []affectedTest
+	Truncated      bool
+	GraphTruncated bool
 }
 
 func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -363,7 +368,12 @@ func collectAffected(ctx context.Context, store *topology.Store, roots []topolog
 	}
 	g.fromColocation(ctx)
 	g.sortTests()
-	return &affectedResult{Dependents: g.dependents, Tests: g.tests, Truncated: g.truncated}, nil
+	return &affectedResult{
+		Dependents:     g.dependents,
+		Tests:          g.tests,
+		Truncated:      g.truncated,
+		GraphTruncated: g.graphTruncated,
+	}, nil
 }
 
 // affectedGather accumulates affected nodes across roots, de-duplicating by ID
@@ -376,6 +386,31 @@ type affectedGather struct {
 	dependents []topology.Node
 	tests      []affectedTest
 	truncated  bool
+	// graphTruncated: a dependent-discovery BFS hit its budget, so the affected
+	// set is short by an unknown amount. Distinct from truncated, the max_results
+	// cut on the package list.
+	graphTruncated bool
+}
+
+// graphTraversalOpts sizes the dependent-discovery walk in one place, so the
+// node budget and the byte allowance that must accommodate it cannot drift, and
+// a test can assert against the exact opts the tool uses.
+//
+// MaxNodes is NOT g.maxResults: that is the caller's cap on PACKAGES, and
+// spending it here let one heavily-imported root exhaust the answer before the
+// other roots were walked. MaxBytes is the traversal's own ceiling rather than
+// the 100000 the schemas advertise for max_bytes, because that number bounds a
+// response an agent reads and this walk returns nothing to an agent — it takes
+// Kind, ID and Path off each node and discards the rest. Charging it a
+// response-size limit is the same category error as clamping its node budget
+// with the schema's max_nodes.
+func graphTraversalOpts() topology.ImpactOpts {
+	return topology.ImpactOpts{
+		Depth:     2,
+		MaxNodes:  graphNodeBudget,
+		MaxBytes:  topology.MaxTraversalBytes(),
+		EdgeKinds: []string{"calls", "imports", "contains"},
+	}
 }
 
 // fromGraph adds inward (dependedOnBy) neighbours of root: tests are flagged
@@ -390,18 +425,16 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 	// internal/stats/savings.go reported cmd/clientsmoke and internal/cli as
 	// affected — 984 false positives — while pushing the one test that covers the
 	// changed function out of the default result window entirely.
-	nb, err := g.store.ImpactFrom(ctx, root, topology.ImpactOpts{
-		Depth: 2,
-		// NOT g.maxResults. That is the caller's cap on PACKAGES; spending it here
-		// as a node budget is what let one heavily-imported root exhaust the answer
-		// before the other roots were walked. This bound exists only to stop a
-		// pathological fan-out, and is far above any real one.
-		MaxNodes:  graphNodeBudget,
-		MaxBytes:  100000,
-		EdgeKinds: []string{"calls", "imports", "contains"},
-	})
+	nb, err := g.store.ImpactFrom(ctx, root, graphTraversalOpts())
 	if err != nil {
 		return
+	}
+	// The only signal that this answer is short. Discarding it reproduced, in the
+	// consumer, the silent-drop half of the defect PLAN-407 is about: a caller told
+	// "these are the tests" after a slice of the frontier was dropped runs an
+	// incomplete set and reads it as complete.
+	if nb.DependedOnBy.Truncated {
+		g.graphTruncated = true
 	}
 	conf := incidentConfidence(nb.DependedOnBy.Edges)
 	for _, n := range nb.DependedOnBy.Nodes {
@@ -495,79 +528,4 @@ func incidentConfidence(edges []topology.Edge) map[int64]float64 {
 		}
 	}
 	return m
-}
-
-func formatAffectedResult(result *affectedResult, a topologyAffectedArgs, scope TestScope) string {
-	if result == nil {
-		return "topology_affected: none of the given files or symbols are in the index"
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "topology affected: %d files, %d symbols changed\n",
-		len(a.Files), len(a.Symbols))
-	sb.WriteString("source=topology — heuristic, biased toward recall: a missed test is worse " +
-		"than an extra. A package is reached by containing the change, or by importing a " +
-		"package that does; within a reached package every test is listed, because " +
-		"co-location cannot say which ones exercise the change. Verify before relying.\n\n")
-
-	if len(result.Tests) == 0 {
-		sb.WriteString("likely affected tests: (none found)\n")
-		if len(result.Dependents) > 0 {
-			fmt.Fprintf(&sb, "\naffected files (%d):\n", len(result.Dependents))
-			for _, n := range result.Dependents {
-				fmt.Fprintf(&sb, "  %s %s — %s\n", string(n.Kind), n.Name, n.Path)
-			}
-		}
-		return strings.TrimRight(sb.String(), "\n")
-	}
-
-	// Aggregate by package. Enumerating every test is what made this response
-	// 298 KB for a one-line change: 2,546 lines carrying the same two labels. The
-	// unit a caller acts on is the package, because that is the granularity every
-	// test runner scopes at, so lead with one row per package — carrying the
-	// run_task target where one can be spelled for this workspace.
-	pkgs := aggregateTestsByPackage(result.Tests)
-	fmt.Fprintf(&sb, "run these packages (%d)%s\n", len(pkgs), runHeaderSuffix(scope))
-	for _, p := range pkgs {
-		fmt.Fprintf(&sb, "  %-42s %5d tests   %s\n", packageRunLabel(scope, p.Dir), p.Count, p.Reason)
-	}
-
-	// Name individual tests only where naming them helps: the packages the change
-	// actually landed in. Elsewhere every test carries an identical label, so the
-	// list is noise. EVERY changed package is named, not just the first — a caller
-	// who changed three files in three packages has no reason to get test names for
-	// one of them and a bare count for the others.
-	for i := range pkgs {
-		p := &pkgs[i]
-		if p.Reason != reasonChanged {
-			continue
-		}
-		fmt.Fprintf(&sb, "\ntests in %s (%d):\n", p.Dir, p.Count)
-		shown := p.Tests
-		if len(shown) > maxNamedTests {
-			shown = shown[:maxNamedTests]
-		}
-		for _, ts := range shown {
-			fmt.Fprintf(&sb, "  %s — %s L%d\n", ts.Node.Name, ts.Node.Path, ts.Node.StartLine)
-		}
-		if rest := p.Count - len(shown); rest > 0 {
-			fmt.Fprintf(&sb, "  … (+%d more in this package)\n", rest)
-		}
-	}
-
-	if result.Truncated {
-		sb.WriteString("\n[truncated: max_results reached — raise max_results for the full package list]\n")
-	}
-	return withTruncationBanner(strings.TrimRight(sb.String(), "\n"), cutPackagesNotice(result, a))
-}
-
-// cutPackagesNotice describes the cut for the leading banner, or "" when the
-// answer is complete. Named for what it reports rather than for the word
-// "truncate": it shortens no string, and the arch guard that watches for
-// re-implemented string truncation is right to read that name as a claim.
-func cutPackagesNotice(result *affectedResult, a topologyAffectedArgs) string {
-	if !result.Truncated {
-		return ""
-	}
-	return fmt.Sprintf("packages were cut at max_results=%d. Some packages that should be "+
-		"tested are NOT listed below. Raise max_results for the full set.", a.MaxResults)
 }

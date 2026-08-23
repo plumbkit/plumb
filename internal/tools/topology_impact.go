@@ -215,7 +215,7 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 	opts := topology.ImpactOpts{
 		Depth:     a.Depth,
 		MaxNodes:  topology.ClampToolNodes(a.MaxNodes),
-		MaxBytes:  a.MaxBytes,
+		MaxBytes:  topology.ClampToolBytes(a.MaxBytes),
 		EdgeKinds: a.EdgeKinds,
 	}
 	result, err := store.ImpactFrom(ctx, cands[0], opts)

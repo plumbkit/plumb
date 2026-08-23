@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +138,69 @@ func TestClampToolNodes_KeepsTheAdvertisedCeiling(t *testing.T) {
 	if toolCapNodes > hardCapNodes {
 		t.Errorf("the tool-argument ceiling (%d) exceeds the traversal ceiling (%d), so "+
 			"clamping a tool argument would no longer bound anything", toolCapNodes, hardCapNodes)
+	}
+}
+
+// TestTraversalCeilingsBindInThatOrder pins the relationship that makes both
+// traversal ceilings live.
+//
+// Before PLAN-407 the pair was 5000 nodes × 100000 bytes. At the measured cost
+// of a real node the byte ceiling bound at roughly 660, so the node ceiling
+// could never fire — an inert cap that read as protective, which is the class of
+// defect this card exists to remove. Swapping which of the two is decoration
+// would be no better, so the assertion is on the ORDER they bind in, not on
+// either constant.
+//
+// It goes through estimateBytes rather than arithmetic on the constants, so a
+// change to what a node costs is caught here too.
+func TestTraversalCeilingsBindInThatOrder(t *testing.T) {
+	// A node engineered to cost exactly maxNodeBytes, the size the pair is sized
+	// against.
+	n := Node{Name: strings.Repeat("x", maxNodeBytes-50)}
+	if got := estimateBytes(n, ""); got != maxNodeBytes {
+		t.Fatalf("fixture node costs %d B, want %d: estimateBytes changed shape", got, maxNodeBytes)
+	}
+
+	// At that size the two ceilings are reached together — the node ceiling is
+	// exactly reachable, and the byte ceiling still bounds a graph of larger nodes.
+	if fits := hardCapBytes / maxNodeBytes; fits != hardCapNodes {
+		t.Errorf("the byte ceiling admits %d nodes of %d B but the node ceiling is %d; the "+
+			"smaller of the two is the only live bound and the other is decoration",
+			fits, maxNodeBytes, hardCapNodes)
+	}
+
+	// At the size real nodes actually are, the NODE ceiling binds first. This is
+	// the direction that matters for an in-process caller sizing a node budget:
+	// it gets the budget it asked for, not a byte-derived fraction of it.
+	const measuredAvgNodeBytes = 150 // avg over this repo's 26,826-node index
+	avg := Node{Name: strings.Repeat("x", measuredAvgNodeBytes-50)}
+	if got := estimateBytes(avg, ""); got != measuredAvgNodeBytes {
+		t.Fatalf("fixture node costs %d B, want %d", got, measuredAvgNodeBytes)
+	}
+	if fits := hardCapBytes / measuredAvgNodeBytes; fits <= hardCapNodes {
+		t.Errorf("at the measured average node size the byte ceiling stops the walk at %d "+
+			"nodes, before the node ceiling at %d: a caller's node budget is again being "+
+			"overruled by a byte ceiling", fits, hardCapNodes)
+	}
+}
+
+// TestClampToolBytes_KeepsTheAdvertisedCeiling is ClampToolNodes' counterpart
+// for the other advertised bound. Both tools apply both clamps now; a clamp
+// applied to one ceiling and not the other is the half-fix this card is about.
+func TestClampToolBytes_KeepsTheAdvertisedCeiling(t *testing.T) {
+	if got := ClampToolBytes(math.MaxInt32); got != toolCapBytes {
+		t.Errorf("an over-cap tool argument resolved to %d, want %d", got, toolCapBytes)
+	}
+	if got := ClampToolBytes(1234); got != 1234 {
+		t.Errorf("an under-cap tool argument was altered: got %d, want 1234", got)
+	}
+	if got := ClampToolBytes(0); got != 0 {
+		t.Errorf("an unspecified tool argument must stay 0 so the traversal default "+
+			"applies; got %d", got)
+	}
+	if toolCapBytes >= hardCapBytes {
+		t.Errorf("the tool-argument byte ceiling (%d) is not below the traversal ceiling (%d), "+
+			"so an in-process caller has no headroom the tools do not also get",
+			toolCapBytes, hardCapBytes)
 	}
 }
