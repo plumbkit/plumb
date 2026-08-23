@@ -167,6 +167,12 @@ func hasPackageNode(ctx context.Context, db *sql.DB, lang string) (bool, error) 
 // intraFileCallEdges counts the extractor-emitted call edges the refusal offers
 // as the coarser answer: for the subject's own file when there is one, and for
 // the language's whole indexed set otherwise.
+//
+// Resolver edges are excluded by source rather than left out by circumstance.
+// They cannot exist for a refused language today — the resolver runs only for an
+// admitted one — but the string this number goes into says "intra-file call edges
+// only", and a count that is right only while a separate invariant holds is a
+// claim waiting to become false.
 func intraFileCallEdges(ctx context.Context, db *sql.DB, lang, path string) (int, error) {
 	var n int
 	var err error
@@ -175,12 +181,14 @@ func intraFileCallEdges(ctx context.Context, db *sql.DB, lang, path string) (int
 			`SELECT COUNT(*) FROM topology_edges e
                JOIN topology_nodes fn ON fn.id = e.from_id
                JOIN topology_files f  ON f.id = fn.file_id
-              WHERE e.kind = ? AND f.path = ?`, string(EdgeCalls), path).Scan(&n)
+              WHERE e.kind = ? AND e.source <> ? AND f.path = ?`,
+			string(EdgeCalls), callResolverSource, path).Scan(&n)
 	} else {
 		err = db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM topology_edges e
                JOIN topology_nodes fn ON fn.id = e.from_id
-              WHERE e.kind = ? AND fn.language = ?`, string(EdgeCalls), lang).Scan(&n)
+              WHERE e.kind = ? AND e.source <> ? AND fn.language = ?`,
+			string(EdgeCalls), callResolverSource, lang).Scan(&n)
 	}
 	if err != nil && err != sql.ErrNoRows {
 		return 0, fmt.Errorf("topology: call-graph intra-file count: %w", err)
