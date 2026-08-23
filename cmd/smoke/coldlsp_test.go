@@ -98,3 +98,82 @@ func TestColdLanguageServerStillAnswersReadSymbol(t *testing.T) {
 			"the PLAN-390 inversion.", elapsed, stubServerDeadline)
 	}
 }
+
+// TestColdLanguageServerStillAppliesSymbolEdit is the PLAN-403 half of the same
+// proof, and the one that could not be deferred any further: the WRITE tools.
+//
+// A symbol edit against a never-answering server has to do everything
+// read_symbol does — degrade to tree-sitter, inside the server-side budget —
+// and then still land the write. Before the fix the resolver was handed the
+// expired attempt context, so the fallback could not start a parse and the tool
+// returned the timeout instead of editing anything.
+//
+// The disk assertion is the load-bearing one. A fallback that is reached but
+// cannot run is indistinguishable from a working one in any check that only
+// looks at the error, which is how this survived PLAN-390's review of the read
+// path and had to be filed separately.
+func TestColdLanguageServerStillAppliesSymbolEdit(t *testing.T) {
+	plumbBin := buildPlumb(t)
+	stub := buildStubLSP(t)
+	fixture := makeFixture(t)
+	tmpHome := mkTmpHome(t)
+
+	globalDir := filepath.Join(tmpHome, ".config", "plumb")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal("create global config dir:", err)
+	}
+	cfg := fmt.Sprintf("[lsp.go]\ncommand = %q\nargs = []\n\n[lsp_query]\ntimeout = %q\n",
+		stub, stubServerDeadline.String())
+	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal("write global config:", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), tierDTimeout+lspToolTimeout)
+	defer cancel()
+
+	c := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	c.initialize(t, fixture)
+	c.call(t, "session_start", map[string]any{"workspace": fixture}, sessionStartTimeout)
+
+	mainGo := filepath.Join(fixture, "main.go")
+	const replacement = "func (g Greeter) Greet(name string) string {\n\treturn \"rewritten by the fallback\"\n}"
+	args := map[string]any{"uri": mainGo, "name_path": "Greet", "content": replacement}
+
+	// The dry run is what the elapsed bound is asserted against, and the split is
+	// deliberate: a dry run is resolve-and-preview and nothing else, so its
+	// duration IS the lookup PLAN-403 bounds. An apply adds the post-write
+	// pipeline — differential diagnostics plus the offline quality analysers,
+	// which shell out to golangci-lint over the fixture module and routinely take
+	// seconds — none of which the [lsp_query] budget governs, before or after this
+	// change. Timing the apply would measure that pipeline and call it a
+	// regression here.
+	start := time.Now()
+	preview := c.call(t, "replace_symbol_body", args, lspToolTimeout)
+	elapsed := time.Since(start)
+
+	if strings.Contains(preview, "did not respond in time") {
+		t.Fatalf("a language server that is merely slow must degrade to the tree-sitter "+
+			"fallback, not surface a timeout (after %v):\n%s", elapsed, preview)
+	}
+	if !strings.Contains(preview, "topology fallback") {
+		t.Errorf("the response must say the symbol came from tree-sitter (after %v):\n%s", elapsed, preview)
+	}
+	if elapsed >= stubServerDeadline {
+		t.Errorf("the symbol resolved after %v, at or past the whole %v [lsp_query] budget — a "+
+			"caller whose patience equals that budget never sees the fallback", elapsed, stubServerDeadline)
+	}
+
+	// And the assertion a reached-but-dead fallback cannot satisfy.
+	args["dry_run"] = false
+	applied := c.call(t, "replace_symbol_body", args, lspToolTimeout)
+	if strings.Contains(applied, "did not respond in time") {
+		t.Fatalf("the apply surfaced a timeout instead of degrading:\n%s", applied)
+	}
+	got, err := os.ReadFile(mainGo)
+	if err != nil {
+		t.Fatal("read back the edited file:", err)
+	}
+	if !strings.Contains(string(got), "rewritten by the fallback") {
+		t.Errorf("the fallback did not reach disk — main.go is unchanged:\n%s", got)
+	}
+}
