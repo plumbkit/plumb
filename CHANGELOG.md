@@ -46,6 +46,36 @@
 
 ### Fixed
 
+- **The symbol WRITE tools, `file_outline` and `workspace_symbols` now degrade to
+  tree-sitter when the language server is merely SLOW (PLAN-403).** PLAN-390 fixed this
+  shape in `read_symbol` only; its independent review found the same defect, in both
+  halves, across the tools deliberately deferred from that card. `insert_before_symbol`,
+  `insert_after_symbol`, `replace_symbol_body` and `move_symbol` each shadowed `ctx` with
+  the LSP-bounded deadline and then handed that **already-expired** context to their
+  tree-sitter fallback; topology's `safeExtract` refuses to start a parse on a dead
+  context, so the fallback was not merely late but **inoperative** — a cold or slow gopls
+  produced a timeout error where the tool's own description promises a tree-sitter answer.
+  Separately, `withLSPDeadline` passes an already-bounded context straight through, so any
+  caller that set its own deadline (an MCP client configured at the `[lsp_query]` timeout)
+  spent the entire budget on the server and never reached the fallback at all — that half
+  also affected `file_outline` and `workspace_symbols`, whose fallbacks already ran on the
+  live parent context but never got time to. New `fallbackDeadlines` splits a tool's time
+  into a tool context carrying **exactly** the `[lsp_query]` bound it always had and a
+  server attempt at half of what remains. **The write path is deliberately NOT unbounded:**
+  bounding the lookup is safe, letting an unbounded write run is not, so every write still
+  finishes inside the same budget as before — it simply now has more of it left, because
+  the lookup gives up earlier. `resolveSymbolOrFallback` takes the attempt context and the
+  live one separately and reports WHY the fallback answered.
+  **Trade-off, disclosed in the tool response as well as here:** the server attempt is now
+  half the `[lsp_query]` budget (15s at the default 30s), so a server that answers between
+  the attempt budget and the full timeout — one that would previously have won — now
+  yields the tree-sitter answer instead. For the symbol-edit tools that means a
+  **line-granular** edit range rather than a byte-precise one, and the response banner
+  says so explicitly: `[topology fallback — LSP did not answer within 15s; symbol located
+  by tree-sitter, range is line-granular]`, replacing the inaccurate "LSP unavailable" for
+  this case. As with PLAN-390, a workspace with `[topology] enabled = false` has no
+  fallback to catch a slow server and now sees the timeout sooner.
+
 - **`read_symbol` now degrades to its tree-sitter fallback when the language server is
   merely SLOW, instead of timing out (PLAN-390).** The fallback exists for a cold
   server — the pool hands back a not-yet-ready entry after a 2s grace precisely "so the

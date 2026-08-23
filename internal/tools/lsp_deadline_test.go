@@ -136,3 +136,71 @@ func TestWithFallbackLSPDeadline_LeavesHeadroom(t *testing.T) {
 		}
 	})
 }
+
+// TestFallbackDeadlines_KeepsToolBudgetAndReservesHeadroom pins the PLAN-403
+// decision that the card turns on, and pins it as a RELATIONSHIP so no literal
+// can drift out from under it: bounding a symbol tool's language-server lookup
+// must not unbound the WRITE that follows it.
+//
+// Two things must therefore hold at once:
+//
+//   - the tool context still carries exactly the deadline withLSPDeadline would
+//     have given it — the [lsp_query] bound the write path has always run under
+//     (asserted against withLSPDeadline's own output, so changing the config
+//     default moves both sides together and this stays honest);
+//   - the server attempt ends STRICTLY inside that, leaving the tree-sitter
+//     parse both headroom and a live context.
+func TestFallbackDeadlines_KeepsToolBudgetAndReservesHeadroom(t *testing.T) {
+	const timeout = time.Hour
+	ref, refCancel := withLSPDeadline(context.Background(), timeout)
+	defer refCancel()
+	refDL, _ := ref.Deadline()
+
+	toolCtx, lspCtx, cancel, waited := fallbackDeadlines(context.Background(), timeout)
+	defer cancel()
+
+	toolDL, ok := toolCtx.Deadline()
+	if !ok {
+		t.Fatal("the tool context lost its deadline — the write path downstream of the " +
+			"lookup would run unbounded, which is exactly what PLAN-403 refused to do")
+	}
+	if d := toolDL.Sub(refDL); d < -time.Second || d > time.Second {
+		t.Errorf("tool budget moved by %v from what withLSPDeadline grants; the write path "+
+			"must keep the bound it always had, neither widened nor narrowed", d)
+	}
+	lspDL, ok := lspCtx.Deadline()
+	if !ok {
+		t.Fatal("the server attempt has no deadline; it would consume the whole tool budget")
+	}
+	if !lspDL.Before(toolDL) {
+		t.Errorf("attempt deadline %v is not strictly before the tool's %v — no headroom is "+
+			"left for the tree-sitter parse", lspDL, toolDL)
+	}
+	if waited <= 0 || waited >= timeout {
+		t.Errorf("quoted attempt budget %v must be a positive share of the tool's %v", waited, timeout)
+	}
+}
+
+// TestFallbackDeadlines_CallerDeadlineIsNotWidened is the other direction: a
+// caller that already bounded the work keeps its own deadline on the tool
+// context (the tool may not outlive its caller), while the attempt still ends
+// inside it. withLSPDeadline passed such a context straight through, which is
+// the no-headroom half of the defect.
+func TestFallbackDeadlines_CallerDeadlineIsNotWidened(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelParent()
+	parentDL, _ := parent.Deadline()
+
+	toolCtx, lspCtx, cancel, _ := fallbackDeadlines(parent, time.Hour)
+	defer cancel()
+
+	toolDL, ok := toolCtx.Deadline()
+	if !ok || toolDL.After(parentDL) {
+		t.Fatalf("tool deadline %v (set=%v) must not outlive the caller's %v", toolDL, ok, parentDL)
+	}
+	lspDL, ok := lspCtx.Deadline()
+	if !ok || !lspDL.Before(parentDL) {
+		t.Errorf("attempt deadline %v (set=%v) must end strictly before the caller's %v, or the "+
+			"fallback is reached only after the caller has already given up", lspDL, ok, parentDL)
+	}
+}
