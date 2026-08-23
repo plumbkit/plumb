@@ -158,7 +158,7 @@ func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topo
 	opts := topology.ExploreOpts{
 		Depth:         a.Depth,
 		MaxNodes:      topology.ClampToolNodes(a.MaxNodes),
-		MaxBytes:      a.MaxBytes,
+		MaxBytes:      topology.ClampToolBytes(a.MaxBytes),
 		IncludeSource: a.IncludeSource,
 		EdgeKinds:     a.EdgeKinds,
 	}
