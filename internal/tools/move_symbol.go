@@ -142,7 +142,9 @@ func (t *MoveSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	// Only the SERVER ATTEMPT is shortened; ctx keeps the tool's own [lsp_query]
+	// bound, so the two-file write below stays bounded exactly as it always was.
+	ctx, lspCtx, cancel, waited := fallbackDeadlines(ctx, t.timeout)
 	defer cancel()
 
 	src := toFileURIAnchored(ctx, a.SourceURI, t.ws)
@@ -158,22 +160,25 @@ func (t *MoveSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if a.IncludeDocComment != nil {
 		includeDoc = *a.IncludeDocComment
 	}
-	return t.moveOrPreview(ctx, a, src, srcPath, dstPath, dryRun, includeDoc)
+	return t.moveOrPreview(ctx, lspCtx, waited, a, src, srcPath, dstPath, dryRun, includeDoc)
 }
 
-func (t *MoveSymbol) moveOrPreview(ctx context.Context, a moveSymbolArgs, src, srcPath, dstPath string, dryRun, includeDoc bool) (string, error) {
+// moveOrPreview drives the move. lspCtx bounds only the symbol lookup; ctx —
+// the tool's own budget — carries the tree-sitter fallback and every write, so
+// the fallback has a LIVE context to parse on (PLAN-403).
+func (t *MoveSymbol) moveOrPreview(ctx, lspCtx context.Context, waited time.Duration, a moveSymbolArgs, src, srcPath, dstPath string, dryRun, includeDoc bool) (string, error) {
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
 	if err := t.preflight(ctx, deps, srcPath, dstPath, dryRun, a.DirtyOK); err != nil {
 		return "", err
 	}
 	if dryRun {
-		plans, name, note, err := t.buildMovePlans(ctx, a, src, srcPath, dstPath, includeDoc)
+		plans, name, note, err := t.buildMovePlans(ctx, lspCtx, waited, a, src, srcPath, dstPath, includeDoc)
 		if err != nil {
 			return "", err
 		}
 		return t.formatMove(plans, name, note, srcPath, dstPath, true, ""), nil
 	}
-	plans, name, note, baselines, err := t.applyMove(ctx, deps, a, src, srcPath, dstPath, includeDoc)
+	plans, name, note, baselines, err := t.applyMove(ctx, lspCtx, waited, deps, a, src, srcPath, dstPath, includeDoc)
 	if err != nil {
 		return "", err
 	}
@@ -231,11 +236,11 @@ func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, ds
 // drift apart and the write/undo trackers record under the held lock. It returns
 // the plans (for reporting), the moved symbol's name, any tree-sitter fallback
 // banner, and the per-path pre-write diagnostics baselines.
-func (t *MoveSymbol) applyMove(ctx context.Context, deps *WriteDeps, a moveSymbolArgs, src, srcPath, dstPath string, includeDoc bool) ([]movePlan, string, string, map[string]*diagBaseline, error) {
+func (t *MoveSymbol) applyMove(ctx, lspCtx context.Context, waited time.Duration, deps *WriteDeps, a moveSymbolArgs, src, srcPath, dstPath string, includeDoc bool) ([]movePlan, string, string, map[string]*diagBaseline, error) {
 	unlocks := lockPaths([]string{srcPath, dstPath})
 	defer unlockAll(unlocks)
 
-	plans, name, note, err := t.buildMovePlans(ctx, a, src, srcPath, dstPath, includeDoc)
+	plans, name, note, err := t.buildMovePlans(ctx, lspCtx, waited, a, src, srcPath, dstPath, includeDoc)
 	if err != nil {
 		return nil, "", "", nil, err
 	}
@@ -289,8 +294,8 @@ func (t *MoveSymbol) postWriteMove(ctx context.Context, deps *WriteDeps, plans [
 // file plans: the source with the declaration removed, and the destination with
 // it appended (creating the destination when allowed). It performs no writes,
 // so it is safe to call for a dry-run preview and again under lock for apply.
-func (t *MoveSymbol) buildMovePlans(ctx context.Context, a moveSymbolArgs, src, srcPath, dstPath string, includeDoc bool) ([]movePlan, string, string, error) {
-	sym, viaFallback, err := t.resolveMoveTarget(ctx, src, a.NamePath)
+func (t *MoveSymbol) buildMovePlans(ctx, lspCtx context.Context, waited time.Duration, a moveSymbolArgs, src, srcPath, dstPath string, includeDoc bool) ([]movePlan, string, string, error) {
+	sym, reason, err := t.resolveMoveTarget(ctx, lspCtx, src, a.NamePath)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -321,7 +326,7 @@ func (t *MoveSymbol) buildMovePlans(ctx context.Context, a moveSymbolArgs, src, 
 	if err != nil {
 		return nil, "", "", err
 	}
-	note := symbolEditFallbackNote(viaFallback, t.warmup, src)
+	note := symbolEditFallbackNote(reason, t.warmup, src, waited)
 	return []movePlan{srcPlan, destPlan}, sym.Name, note, nil
 }
 
@@ -329,21 +334,21 @@ func (t *MoveSymbol) buildMovePlans(ctx context.Context, a moveSymbolArgs, src, 
 // name (two top-level declarations share it — moving "the first" would be a
 // silent guess). It then delegates to the shared LSP → tree-sitter resolver so
 // the move works even when the language server is cold or cannot parse the file.
-func (t *MoveSymbol) resolveMoveTarget(ctx context.Context, uri, namePath string) (*protocol.DocumentSymbol, bool, error) {
+func (t *MoveSymbol) resolveMoveTarget(ctx, lspCtx context.Context, uri, namePath string) (*protocol.DocumentSymbol, symbolFallbackReason, error) {
 	if !strings.Contains(namePath, "/") && t.client != nil {
-		if syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+		if syms, err := t.client.DocumentSymbols(lspCtx, protocol.DocumentSymbolParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		}); err == nil {
 			if m := resolveSymbolsByName(syms, namePath); len(m) > 1 {
-				return nil, false, fmt.Errorf("move_symbol: %d symbols named %q in %s — ambiguous; v1 moves one declaration, disambiguate with a slash-separated name_path", len(m), namePath, paths.URIToPath(uri))
+				return nil, fallbackNotUsed, fmt.Errorf("move_symbol: %d symbols named %q in %s — ambiguous; v1 moves one declaration, disambiguate with a slash-separated name_path", len(m), namePath, paths.URIToPath(uri))
 			}
 		}
 	}
-	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, uri, namePath)
+	sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, uri, namePath)
 	if err != nil {
-		return nil, false, fmt.Errorf("move_symbol: %w", err)
+		return nil, fallbackNotUsed, fmt.Errorf("move_symbol: %w", err)
 	}
-	return sym, viaFallback, nil
+	return sym, reason, nil
 }
 
 // buildDestPlan computes the destination file's after-content: the moved

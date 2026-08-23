@@ -90,13 +90,13 @@ func TestTopologyDefinitionNoteFor(t *testing.T) {
 }
 
 func TestTreeSitterFallbackNote(t *testing.T) {
-	if got := treeSitterFallbackNote(nil, ""); got != treeSitterFallbackLegacyNote {
+	if got := treeSitterFallbackNote(fallbackLSPUnavailable, nil, "", 0); got != treeSitterFallbackLegacyNote {
 		t.Fatalf("nil fn: banner = %q, want the legacy const", got)
 	}
-	if got := treeSitterFallbackNote(warmupFixed(false, 0), ""); got != treeSitterFallbackLegacyNote {
+	if got := treeSitterFallbackNote(fallbackLSPUnavailable, warmupFixed(false, 0), "", 0); got != treeSitterFallbackLegacyNote {
 		t.Fatalf("not warming: banner = %q, want the legacy const", got)
 	}
-	got := treeSitterFallbackNote(warmupFixed(true, 4*time.Second), "file:///x.go")
+	got := treeSitterFallbackNote(fallbackLSPUnavailable, warmupFixed(true, 4*time.Second), "file:///x.go", 0)
 	for _, w := range []string{"still warming", "~4s", "located by tree-sitter", "line-granular"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("warming banner missing %q: %q", w, got)
@@ -108,7 +108,7 @@ func TestTreeSitterFallbackNote(t *testing.T) {
 	if !strings.HasSuffix(got, "\n\n") {
 		t.Errorf("banner must keep the trailing blank line: %q", got)
 	}
-	if got := treeSitterFallbackNote(warmupFixed(true, 0), ""); strings.Contains(got, "elapsed") {
+	if got := treeSitterFallbackNote(fallbackLSPUnavailable, warmupFixed(true, 0), "", 0); strings.Contains(got, "elapsed") {
 		t.Errorf("zero elapsed should omit the duration parenthetical: %q", got)
 	}
 }

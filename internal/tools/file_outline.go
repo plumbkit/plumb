@@ -205,7 +205,15 @@ func (t *FileOutline) entries(ctx context.Context, uri string) ([]outlineEntry, 
 		}
 		// Map empty/unavailable — fall through to the LSP path below.
 	}
-	syms, lspErr := t.lspSymbols(ctx, uri)
+	// lspCtx bounds ONLY the server attempt, and always ends strictly inside the
+	// caller's budget. Every topologyEntries call below deliberately takes ctx:
+	// the Map fallback needs a LIVE context to parse and query on, and it needs
+	// time left in which to do it — withLSPDeadline gave the server the whole
+	// budget whenever the caller had already set a deadline, so a caller whose
+	// patience equalled the tool's could never observe the fallback (PLAN-403).
+	lspCtx, cancel, granted := withFallbackLSPDeadline(ctx, t.timeout)
+	defer cancel()
+	syms, lspErr := t.lspSymbols(lspCtx, uri)
 	if lspErr == nil {
 		var out []outlineEntry
 		flattenLSPSymbols(syms, 0, &out)
@@ -227,9 +235,12 @@ func (t *FileOutline) entries(ctx context.Context, uri string) ([]outlineEntry, 
 	if e, ok := t.topologyEntries(ctx, uri); ok {
 		return e, "topology", nil
 	}
-	return nil, "", lspTimeoutErr("file_outline", t.timeout, lspErr)
+	return nil, "", lspTimeoutErr("file_outline", attemptBudget(granted, t.timeout), lspErr)
 }
 
+// lspSymbols queries the document symbols for uri. ctx is the caller's
+// ALREADY-BOUNDED server-attempt context (see entries) — this function must not
+// impose its own, or the attempt would consume the fallback's headroom.
 func (t *FileOutline) lspSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {
 	key := uri + ":docSymbols"
 	if t.cache != nil {
@@ -237,9 +248,7 @@ func (t *FileOutline) lspSymbols(ctx context.Context, uri string) ([]protocol.Do
 			return v.([]protocol.DocumentSymbol), nil
 		}
 	}
-	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
-	defer cancel()
-	syms, err := t.client.DocumentSymbols(lspCtx, protocol.DocumentSymbolParams{
+	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
