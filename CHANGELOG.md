@@ -8,16 +8,20 @@
   is now recorded in a new `topology_call_sites` table — including the ones no single-file
   pass can resolve, which were previously dropped without a trace — and a resolver turns
   the package-qualified ones into cross-file `calls` edges tagged
-  `source = "call-resolver"`. Measured on plumb's own tree (1,407 indexed files): **2,532**
+  `source = "call-resolver"`. Measured on plumb's own tree (1,414 indexed files): **2,531**
   cross-file call edges across 378 distinct targets, **882** of them from non-`_test.go`
-  callers, out of **89,970** recorded Go call sites — **2.8%**. The remaining 60,821
-  qualified sites break down as **37,650** method calls on a receiver (left permanently
-  unresolved: the Go extractor parses with `SkipObjectResolution`, so no type information
-  exists to turn a receiver *variable* into the type whose method was called, and 20.8% of
-  plumb's callables share a name with another, so textual matching would manufacture wrong
-  edges at scale) and **20,378** qualified calls leaving the indexed tree. Those edges are
-  **absent and counted, never guessed**; `topology_status` prints the whole breakdown for
-  your workspace. Two shapes the old edge walk never saw are captured: package-level
+  callers, out of **89,942** recorded Go call sites — **2.8%**. The **60,803** qualified
+  sites fall into six buckets, every site in exactly one, and they RECONCILE — the six add
+  up to 60,803, which is what makes this a measurement and not an impression: **2,531**
+  resolved; **37,635** method calls on a receiver (left permanently unresolved: the Go
+  extractor parses with `SkipObjectResolution`, so no type information exists to turn a
+  receiver *variable* into the type whose method was called, and 20.8% of plumb's callables
+  share a name with another, so textual matching would manufacture wrong edges at scale);
+  **20,376** qualified calls leaving the indexed tree; **258** repeats of a caller→target
+  edge an earlier site already produced (one edge, two sites — counted, not dropped);
+  **3** naming no exported top-level function in the target package; and **0** with no
+  enclosing declaration to hang an edge on. Those edges are **absent and counted, never
+  guessed**; `topology_status` prints the whole breakdown for your workspace. Two shapes the old edge walk never saw are captured: package-level
   initialiser calls (`var _ = mux.HandleFunc("/x", h)` — the Go extractor descended
   `fn.Body` only) and composite-literal field values (`&cobra.Command{Use: "serve"}` — not
   a call at all, and where a command's name actually lives). Call sites also record the
@@ -42,7 +46,11 @@
   and neither answer includes the other's files. A refused language is offered
   `find_references`/`call_hierarchy` where plumb ships a language server adapter for it,
   and `search_in_files` where it does not — never package-level reachability, which is
-  gated to the same set.
+  gated to the same set. The subject's language is **derived from the index**, never
+  supplied: `Store.CallGraphSubjectForPath` / `CallGraphSubjectForNode` read
+  `topology_files.language` / `topology_nodes.language`, so a caller cannot substitute a
+  workspace-wide "primary language" for the per-subject question and quietly restore the
+  one-boolean answer the per-subject gate exists to remove.
 
 - **`topology_impact mode="reachability"`: package-level reachability from entry points
   (PLAN-371, worth-it W3-17).** The import graph has been real and cross-file since
@@ -87,10 +95,17 @@
 
 ### Changed
 
-- **Nothing reads the new `call-resolver` edges yet, on purpose.** They are derived data
-  rebuilt wholesale on every indexing pass, exactly like the `import-resolver` edges, and
-  their behaviour under an incremental single-file re-index is not yet pinned. No tool
-  consumes them in this release; do not build on them until that lifecycle work lands.
+- **Nothing reads the new `call-resolver` edges yet, and the traversal enforces it.** They
+  are derived data rebuilt wholesale on every indexing pass, exactly like the
+  `import-resolver` edges, and their behaviour under an incremental single-file re-index is
+  not yet pinned. The neighbourhood query now filters them out by **source**:
+  `ExploreOpts.IncludeDerivedCalls` defaults to false, so `call_hierarchy`'s topology
+  fallback, `topology_impact`, `topology_affected` and `minimal_diff_review` all receive
+  the extractor's intra-file `calls` edges exactly as before and none of the derived ones.
+  Filtering by edge *kind* cannot do this — a derived edge is a `calls` edge — which is why
+  the previous "no tool consumes them" was a statement of intent that the code did not
+  keep. Do not build on them until the lifecycle work lands; onboarding a consumer is a
+  deliberate step with a published before/after number, not a side effect.
 - **The topology schema version is bumped to 3, so the index is rebuilt once on upgrade.**
   A row written before this release carries no call sites and nothing about it says so, so
   the table cannot backfill itself. Measured on plumb's own tree, the full cold re-index

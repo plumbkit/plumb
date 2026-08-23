@@ -95,8 +95,17 @@ func TestSchemaVersionBump_DropsCallSites(t *testing.T) {
 }
 
 // TestPersistFile_ReplacesCallSitesOnReindex covers the deletion path that a
-// cascade cannot: a package-level site has a NULL enclosing_id, so deleting the
-// file's NODES would leave it behind and every re-index would add another copy.
+// cascade cannot reach. The fixture's first site carries EnclosingIdx -1, which
+// persists as a NULL enclosing_id: no node deletion cascades to it, so a
+// cascade-only cleanup would leave it behind and every re-index would add
+// another copy.
+//
+// That shape is what the SCHEMA permits and what insertCallSites deliberately
+// writes, not what Go produces — plumb's own tree has zero NULL enclosing_id
+// rows, because every Go top-level call sits inside a ValueSpec that yields a
+// node. The test pins the deletion rule against the schema rather than against
+// today's extractor, which is the point: the rule must not become wrong the
+// first time an extractor emits the shape the column already allows.
 func TestPersistFile_ReplacesCallSitesOnReindex(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "topology.db"))

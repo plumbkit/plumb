@@ -16,8 +16,10 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 		Resolved:           25,
 		ResolvedNonTest:    10,
 		UnresolvedReceiver: 500,
-		ExternalPackage:    70,
+		ExternalPackage:    60,
 		UnmatchedTarget:    5,
+		RepeatOfEdge:       8,
+		NoCallerNode:       2,
 	}}
 	out := FormatStatus(s, "/ws")
 
@@ -29,6 +31,9 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 	for _, want := range []string{
 		"25 cross-file call edges", "10 from non-test callers",
 		"500", "absent, not caller-free", "Go only",
+		// The two buckets a reader would otherwise have to discover by
+		// subtracting and finding the breakdown short.
+		"8 repeat", "2 sit outside any function",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status is missing %q:\n%s", want, out)
@@ -55,5 +60,35 @@ func TestFormatStatus_ReachSharePercentageTracksTheCounts(t *testing.T) {
 	high := FormatStatus(Status{CallGraph: CallGraphStatus{CallSites: 1000, Resolved: 250}}, "/ws")
 	if !strings.Contains(low, "2.5%") || !strings.Contains(high, "25.0%") {
 		t.Errorf("share does not track the counts:\nlow:\n%s\nhigh:\n%s", low, high)
+	}
+}
+
+// TestCallGraphCensus_PublishesEveryBucketAndTheyReconcile is the reconciliation
+// a reader of `topology_status` performs by hand: the buckets printed must add up
+// to the qualified-site count printed beside them. It runs the REAL resolver, so
+// it fails both when a bucket stops summing and when a bucket exists but is never
+// published to topology_meta for the census to read.
+func TestCallGraphCensus_PublishesEveryBucketAndTheyReconcile(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+
+	c := callGraphCensus(f.db)
+	sum := c.Resolved + c.UnresolvedReceiver + c.ExternalPackage +
+		c.UnmatchedTarget + c.RepeatOfEdge + c.NoCallerNode
+	if sum != c.QualifiedSites {
+		t.Errorf("published buckets sum to %d against %d qualified sites (%+v); a reader who subtracts "+
+			"gets a number the resolver never produced", sum, c.QualifiedSites, c)
+	}
+	if c.QualifiedSites == 0 {
+		t.Fatal("the census read no qualified sites; the reconciliation above is vacuous")
+	}
+	if c.RepeatOfEdge == 0 || c.NoCallerNode == 0 {
+		t.Errorf("census did not publish the non-outcome buckets (repeat=%d, no-caller=%d); "+
+			"the fixture exercises both, so a zero means the meta key is not being read",
+			c.RepeatOfEdge, c.NoCallerNode)
+	}
+	if c.Resolved == 0 || c.Resolved >= c.QualifiedSites {
+		t.Errorf("resolved = %d against %d qualified sites; the reconciliation would hold trivially",
+			c.Resolved, c.QualifiedSites)
 	}
 }

@@ -28,6 +28,8 @@ const (
 	metaCallUnresolvedRecv  = "callgraph.unresolved_receiver"
 	metaCallExternal        = "callgraph.external_package"
 	metaCallUnmatched       = "callgraph.unmatched_target"
+	metaCallRepeatOfEdge    = "callgraph.repeat_of_edge"
+	metaCallNoCallerNode    = "callgraph.no_caller_node"
 	metaCallSites           = "callgraph.call_sites"
 	metaCallQualifiedSites  = "callgraph.qualified_sites"
 )
@@ -36,19 +38,37 @@ const (
 // one bucket, so the buckets sum to the qualified-site count — which is what
 // makes "how much of the call graph does this reach" answerable rather than
 // inferable from an edge count alone.
+//
+// The invariant is held by construction rather than by care: collectResolvedEdges
+// calls countBucket exactly once per qualified site, on every path including the
+// resolved one, and there is no `continue` between the two. The two buckets that
+// are not resolution outcomes at all — a site whose edge was already emitted, and
+// a site with no caller node to hang an edge on — exist BECAUSE they were the two
+// ways a site used to leave the accounting: the first was skipped silently, the
+// second was folded into unmatchedTarget, whose printed wording ("names no
+// top-level function") is a different and untrue claim about it.
 type callResolution struct {
 	resolved        int
 	resolvedNonTest int
 	unresolvedRecv  int
 	externalPackage int
 	unmatchedTarget int
+	// repeatOfEdge counts qualified sites that resolved to a caller→target pair
+	// an earlier site already produced an edge for. The edge is emitted once, so
+	// these sites contribute no edge and must not be counted as if they had.
+	repeatOfEdge int
+	// noCallerNode counts qualified sites that resolved to a real target but have
+	// no enclosing declaration to be the edge's tail (or whose tail would be the
+	// target itself). It is a fact about the CALLER, not about the target, which
+	// is why it cannot share unmatchedTarget's sentence.
+	noCallerNode int
 	// callSites is EVERY recorded call site in the language, qualified or not.
 	// It is the denominator the reach percentage is published against: measuring
 	// reach against qualified sites alone flatters the number by excluding the
 	// bare-identifier calls this resolver does not attempt either.
 	callSites int
 	// qualifiedSites is the subset carrying a qualifier, and equals the sum of
-	// the four outcome buckets.
+	// the six buckets above.
 	qualifiedSites int
 }
 
@@ -90,7 +110,7 @@ func (idx *Indexer) resolveCalls(ctx context.Context) error {
 	}
 
 	var total callResolution
-	for lang := range supportedCallGraphLanguages {
+	for _, lang := range supportedCallGraphLanguages() {
 		admitted, err := hasPackageNodeTx(ctx, tx, lang)
 		if err != nil {
 			return err
@@ -119,6 +139,8 @@ func (r *callResolution) add(o callResolution) {
 	r.unresolvedRecv += o.unresolvedRecv
 	r.externalPackage += o.externalPackage
 	r.unmatchedTarget += o.unmatchedTarget
+	r.repeatOfEdge += o.repeatOfEdge
+	r.noCallerNode += o.noCallerNode
 	r.callSites += o.callSites
 	r.qualifiedSites += o.qualifiedSites
 }
@@ -143,7 +165,7 @@ func resolveLanguageCalls(ctx context.Context, tx *sql.Tx, lang string) (callRes
 	if err != nil {
 		return r, err
 	}
-	if err := insertResolvedEdges(tx, edges, &r); err != nil {
+	if err := insertResolvedEdges(tx, edges); err != nil {
 		return r, err
 	}
 	return r, nil
@@ -174,11 +196,9 @@ func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverT
 	return t, err
 }
 
-// resolvedEdge is one cross-file call edge, carrying the caller's file path so
-// the test/non-test split can be tallied without a second query.
+// resolvedEdge is one cross-file call edge to be written.
 type resolvedEdge struct {
-	from, to   int64
-	callerPath string
+	from, to int64
 }
 
 func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution) ([]resolvedEdge, error) {
@@ -202,21 +222,35 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 		}
 		r.qualifiedSites++
 		to, bucket := resolveOne(t.imports[fileID], qualifier, callee, t.pkgDirs, t.targets)
-		// A site with no caller node to hang an edge on, or one whose target is
-		// its own declaration, is counted rather than dropped in silence.
-		if bucket == bucketResolved && (enclosing == 0 || enclosing == to) {
-			bucket = bucketUnmatched
-		}
-		if bucket != bucketResolved {
-			r.countBucket(bucket)
-			continue
-		}
 		key := [2]int64{enclosing, to}
-		if seen[key] {
+		if bucket == bucketResolved {
+			switch {
+			// A site with no caller node to hang an edge on, or one whose target
+			// is its own declaration, has no edge to write. Writing one anyway
+			// would put from_id = 0 into topology_edges, which violates the FK
+			// under `PRAGMA foreign_keys = ON` and aborts the whole resolve
+			// transaction — one such site would cost the workspace its entire
+			// cross-file call graph, not just its own edge.
+			case enclosing == 0 || enclosing == to:
+				bucket = bucketNoCaller
+			// The same caller calling the same target twice is one edge, not two:
+			// a duplicated row double-counts that neighbour in every consumer that
+			// weighs edges.
+			case seen[key]:
+				bucket = bucketRepeat
+			}
+		}
+		// Exactly one bucket per qualified site, on every path — that is what
+		// makes the buckets sum to qualifiedSites rather than nearly sum to it.
+		r.countBucket(bucket)
+		if bucket != bucketResolved {
 			continue
 		}
 		seen[key] = true
-		edges = append(edges, resolvedEdge{from: enclosing, to: to, callerPath: callerPath})
+		edges = append(edges, resolvedEdge{from: enclosing, to: to})
+		if !isGoTestPath(callerPath) {
+			r.resolvedNonTest++
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("topology: resolve calls: rows: %w", err)
@@ -226,16 +260,22 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 
 func (r *callResolution) countBucket(b resolveBucket) {
 	switch b {
+	case bucketResolved:
+		r.resolved++
 	case bucketReceiver:
 		r.unresolvedRecv++
 	case bucketExternal:
 		r.externalPackage++
-	case bucketUnmatched, bucketResolved:
+	case bucketUnmatched:
 		r.unmatchedTarget++
+	case bucketRepeat:
+		r.repeatOfEdge++
+	case bucketNoCaller:
+		r.noCallerNode++
 	}
 }
 
-func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge, r *callResolution) error {
+func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -249,10 +289,6 @@ func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge, r *callResolution) er
 	for _, e := range edges {
 		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), callEdgeConfidence, callResolverSource); err != nil {
 			return fmt.Errorf("topology: resolve calls: insert: %w", err)
-		}
-		r.resolved++
-		if !isGoTestPath(e.callerPath) {
-			r.resolvedNonTest++
 		}
 	}
 	return nil
@@ -272,6 +308,14 @@ const (
 	// no exported top-level function of that name — a type conversion
 	// (`time.Duration(n)`), a package-level variable, or a method on one.
 	bucketUnmatched
+	// bucketRepeat: the target resolved, but this caller→target edge was already
+	// emitted by an earlier site. Not a resolution failure; a second site for one
+	// edge.
+	bucketRepeat
+	// bucketNoCaller: the target resolved, but the site has no enclosing
+	// declaration to be the edge's tail (or the tail would be the target itself).
+	// A fact about the caller, not about the target.
+	bucketNoCaller
 )
 
 // resolveOne maps one qualified call site to a target node id.
@@ -363,6 +407,16 @@ func packageDirsForLanguage(ctx context.Context, tx *sql.Tx, lang string) (map[s
 // importsByFile maps each file to its own import set: local name → import path.
 // The local name is the extractor's import node Name, which already accounts for
 // an explicit alias.
+//
+// Known limitation, measured and left alone: for an UNALIASED import the Go
+// extractor derives the local name from the import path's last element, and Go
+// does not require a package's name to match its directory (`internal/utils`
+// declaring `package util`). A call qualified by such a package misses
+// fileImports and is bucketed — and labelled — as a method call on a receiver,
+// which it is not. It is a missing-edge and mis-label class, never a false edge.
+// plumb's own tree has zero occurrences (two directories mismatch, `cmd/plumb`
+// and an external test package, and neither is reachable as a qualified call),
+// so this is documented rather than chased. Explicit aliases resolve correctly.
 func importsByFile(ctx context.Context, tx *sql.Tx, lang string) (map[int64]map[string]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT n.file_id, n.name, n.qualified FROM topology_nodes n
@@ -424,6 +478,8 @@ func writeCallMeta(tx *sql.Tx, r callResolution) error {
 		{metaCallUnresolvedRecv, r.unresolvedRecv},
 		{metaCallExternal, r.externalPackage},
 		{metaCallUnmatched, r.unmatchedTarget},
+		{metaCallRepeatOfEdge, r.repeatOfEdge},
+		{metaCallNoCallerNode, r.noCallerNode},
 		{metaCallSites, r.callSites},
 		{metaCallQualifiedSites, r.qualifiedSites},
 	}

@@ -241,7 +241,7 @@ func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neigh
 	byteEst := estimateBytes(centre, opts.IncludeSource)
 
 	for depth := 0; depth < opts.Depth && len(queue) > 0; depth++ {
-		next, edges, err := expandFrontier(ctx, db, queue, opts.EdgeKinds, opts.Direction)
+		next, edges, err := expandFrontier(ctx, db, queue, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -286,10 +286,11 @@ func filterEdges(edges []Edge, inOutput map[int64]bool, seen map[int64]bool) []E
 	return result
 }
 
-func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []string, dir Direction) ([]Node, []Edge, error) {
+func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, opts ExploreOpts) ([]Node, []Edge, error) {
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
+	edgeKinds, dir := opts.EdgeKinds, opts.Direction
 	ph := strings.Repeat("?,", len(ids))
 	ph = ph[:len(ph)-1]
 	args := make([]any, len(ids))
@@ -302,7 +303,7 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 	// write into args' spare capacity — harmless today only because args is not read
 	// again, which is not a property worth depending on. Sized for the widest case.
 	var where string
-	allArgs := make([]any, 0, 2*len(args)+len(edgeKinds))
+	allArgs := make([]any, 0, 2*len(args)+len(edgeKinds)+1)
 	switch dir {
 	case DirectionOutward:
 		where = fmt.Sprintf(`from_id IN (%s)`, ph)
@@ -323,6 +324,15 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 		for _, k := range edgeKinds {
 			allArgs = append(allArgs, k)
 		}
+	}
+
+	// Derived cross-file call edges are excluded by SOURCE unless the caller opted
+	// in. Their kind is "calls", identical to the extractor's own, so the kind
+	// filter above cannot tell them apart and every consumer that asks for `calls`
+	// would consume them without asking. See ExploreOpts.IncludeDerivedCalls.
+	if !opts.IncludeDerivedCalls {
+		where += ` AND source <> ?`
+		allArgs = append(allArgs, callResolverSource)
 	}
 
 	//nolint:gosec // G202: where clause built from integer IDs and constant string literals; no user data interpolated

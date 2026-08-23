@@ -89,10 +89,18 @@ func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo
 // node — this runs on the hot write path (every upsert) and per stale file in
 // prune/delete, where a per-node loop costs M FTS5 round-trips for M symbols.
 func deleteFileNodes(tx *sql.Tx, fileID int64) error {
-	// Call sites go first and by file_id, not by cascade. A package-level site has
-	// no enclosing node, so its enclosing_id is NULL and the node cascade would
-	// leave it behind — the rows for exactly the sites this feature was added to
-	// capture would accumulate one stale copy per re-index.
+	// Call sites go first and by file_id, not by cascade. The reason is that
+	// file_id is the key that is always right: a site belongs to the file that was
+	// re-parsed whether or not it has an enclosing node, whereas the cascade
+	// reaches only sites whose enclosing_id points at a node being deleted, so it
+	// is correct only while every site has one.
+	//
+	// Measured on plumb's own tree, every Go site currently does: a top-level call
+	// sits inside a ValueSpec, and extractValueSpec emits a node per declared name
+	// (`_` included), so `var _ = mux.HandleFunc(…)` is attributed to that
+	// variable's node rather than to NULL — zero rows have a NULL enclosing_id.
+	// The schema permits NULL and insertCallSites writes it deliberately, so the
+	// cascade is one extractor away from being wrong; deleting by file_id is not.
 	if _, err := tx.Exec(`DELETE FROM topology_call_sites WHERE file_id = ?`, fileID); err != nil {
 		return fmt.Errorf("topology: delete call sites: %w", err)
 	}
