@@ -8,6 +8,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -25,15 +26,21 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		return tools.TaskCommand{}, errors.New("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
 	}
 	tc := s.view().tasks[lang]
-	steps, err := buildTaskSteps(tc, slot, target)
+	steps, err := buildTaskSteps(tc, lang, slot, target)
 	if err != nil {
+		if errors.Is(err, errNoTargetPlaceholder) {
+			return tools.TaskCommand{}, targetPlaceholderRefusal(ws, tc, lang, slot)
+		}
 		return tools.TaskCommand{}, err
 	}
 	if len(steps) == 0 {
 		// No command for this slot. Hand back the context the tool needs to say
 		// WHICH language it resolved for and what that language does have, rather
 		// than a bare "not configured for this workspace".
-		return tools.TaskCommand{Slot: slot, Language: lang, Configured: configuredSlots(tc)}, nil
+		return tools.TaskCommand{
+			Slot: slot, Language: lang, Configured: configuredSlots(tc, lang),
+			ConfigPath: config.ProjectConfigPath(ws),
+		}, nil
 	}
 	workdir, err := commandWorkdir(ws, tc.WorkingDir)
 	if err != nil {
@@ -54,7 +61,8 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 	}
 	return tools.TaskCommand{
 		Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir,
-		Language: lang, Configured: configuredSlots(tc),
+		Language: lang, Configured: configuredSlots(tc, lang),
+		ConfigPath: config.ProjectConfigPath(ws),
 	}, nil
 }
 
@@ -74,7 +82,7 @@ func (s *connSession) taskState() tools.TaskState {
 	}
 	st := tools.TaskState{Language: lang}
 	if lang != "" {
-		st.Configured = configuredSlots(v.tasks[lang])
+		st.Configured = configuredSlots(v.tasks[lang], lang)
 	}
 	for _, other := range v.discoveredLangs {
 		if other != lang && other != "" && other != "none" {
@@ -129,7 +137,7 @@ func (s *connSession) testScope() tools.TestScope {
 // filter matches test NAMES. typescript, swift and zig ship no placeholder and
 // scope through project-specific flags.
 func testTargetStyle(lang string, tc config.TasksConfig) tools.TargetStyle {
-	if !testSlotTakesPositionalTarget(tc) {
+	if !testSlotTakesPositionalTarget(tc, lang) {
 		return tools.TargetNone
 	}
 	switch lang {
@@ -154,12 +162,18 @@ func testTargetStyle(lang string, tc config.TasksConfig) tools.TargetStyle {
 // has no test command at all.
 //
 // Position is then checked directly, since no existing function answers it.
-func testSlotTakesPositionalTarget(tc config.TasksConfig) bool {
-	steps, err := buildTaskSteps(tc, "test", targetAcceptanceProbe)
+func testSlotTakesPositionalTarget(tc config.TasksConfig, lang string) bool {
+	steps, err := buildTaskSteps(tc, lang, "test", targetAcceptanceProbe)
 	if err != nil || len(steps) == 0 {
 		return false
 	}
-	argv, err := config.ParseTaskCommand(tc.Get("test"))
+	// The RECONCILED template, not the raw parse. Asking the raw command would
+	// split this predicate from run_task's own builder for exactly the configs
+	// reconciliation exists for: `[tasks.go] test = "go test ./..."` builds a
+	// scoped argv above and would report "cannot be narrowed to a directory"
+	// here, so topology_affected would keep emitting bare directories to a
+	// run_task that now accepts targets. Same argv, one question.
+	argv, err := taskArgvTemplate(tc, lang, "test")
 	if err != nil {
 		return false
 	}
@@ -248,10 +262,10 @@ func consumesNextArg(arg string) bool {
 // first, so a whitespace-only command reported as configured for a call that is
 // refused. A session_start section that contradicts the tool it describes is
 // worse than no section, so there is now one source of truth.
-func configuredSlots(tc config.TasksConfig) []string {
+func configuredSlots(tc config.TasksConfig, lang string) []string {
 	var out []string
 	for _, slot := range config.ConfiguredSlotNames(tc) {
-		steps, err := buildTaskSteps(tc, slot, "")
+		steps, err := buildTaskSteps(tc, lang, slot, "")
 		if err != nil || len(steps) == 0 {
 			continue
 		}
@@ -262,11 +276,11 @@ func configuredSlots(tc config.TasksConfig) []string {
 
 // buildTaskSteps turns a slot into the argv steps to run. verify is the
 // composite build-then-test; every other slot is a single command.
-func buildTaskSteps(tc config.TasksConfig, slot, target string) ([][]string, error) {
+func buildTaskSteps(tc config.TasksConfig, lang, slot, target string) ([][]string, error) {
 	if slot == "verify" {
 		var steps [][]string
 		for _, sub := range []string{"build", "test"} {
-			argv, err := taskStep(tc, sub, "")
+			argv, err := taskStep(tc, lang, sub, "")
 			if err != nil {
 				return nil, err
 			}
@@ -276,7 +290,7 @@ func buildTaskSteps(tc config.TasksConfig, slot, target string) ([][]string, err
 		}
 		return steps, nil
 	}
-	argv, err := taskStep(tc, slot, target)
+	argv, err := taskStep(tc, lang, slot, target)
 	if err != nil {
 		return nil, err
 	}
@@ -288,8 +302,8 @@ func buildTaskSteps(tc config.TasksConfig, slot, target string) ([][]string, err
 
 // taskStep parses one slot's command into an argv and applies the {target}
 // substitution. A nil argv means the slot is unset.
-func taskStep(tc config.TasksConfig, slot, target string) ([]string, error) {
-	argv, err := config.ParseTaskCommand(tc.Get(slot))
+func taskStep(tc config.TasksConfig, lang, slot, target string) ([]string, error) {
+	argv, err := taskArgvTemplate(tc, lang, slot)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +311,145 @@ func taskStep(tc config.TasksConfig, slot, target string) ([]string, error) {
 		return nil, nil
 	}
 	return substituteTarget(argv, target)
+}
+
+// taskArgvTemplate parses a slot's stored command into an argv and, when that
+// command is the shipped default with its {target:<D>} placeholder written out
+// as D, restores the placeholder. A nil argv means the slot is unset.
+func taskArgvTemplate(tc config.TasksConfig, lang, slot string) ([]string, error) {
+	argv, err := config.ParseTaskCommand(tc.Get(slot))
+	if err != nil || argv == nil {
+		return nil, err
+	}
+	if reconciled := reconcileTargetPlaceholder(argv, lang, slot); reconciled != nil {
+		return reconciled, nil
+	}
+	return argv, nil
+}
+
+// reconcileTargetPlaceholder restores the shipped default's {target:<D>}
+// placeholder in a stored command that spells that element out as its own
+// default value. It returns nil when the stored command is anything else.
+//
+// This is the fix for the largest non-policy run_task failure family. A user
+// (or a template, or a copied snippet) writes `[tasks.go] test = "go test ./..."`
+// — the command plumb itself shipped before the placeholder existed — and every
+// scoped call is then refused, permanently, because that argv has no slot for a
+// target. The advertised topology_affected -> run_task(target:) handoff is
+// therefore broken for that workspace and stays broken: nothing in the refusal
+// used to say which command was stored or where it lived.
+//
+// The rule is deliberately an EQUIVALENCE, not a heuristic, because the two
+// obvious heuristics are both wrong in the same expensive direction:
+//
+//   - Appending the target to any placeholder-less command turns
+//     `go test ./...` into `go test ./... ./internal/cli`, which runs the WHOLE
+//     suite while reporting a scoped run. A green over the wrong test set is the
+//     failure mode this file already refuses to risk (see testTargetStyle).
+//   - Substituting the LAST element of any command guesses at commands whose
+//     final operand is not a scope at all.
+//
+// Requiring the stored command to be the shipped default with the placeholder
+// expanded makes the outcome provable instead: with no target both forms build a
+// byte-identical argv (TestReconcile_NoTargetArgvIsUnchanged pins that), and with
+// a target the stored command now behaves exactly as the shipped default would
+// have. Nothing is guessed and nothing new can run — the substitution lands in
+// the position plumb itself designated.
+//
+// A command that is NOT that equivalence keeps its refusal, which is the other
+// direction and matters just as much: `golangci-lint run` with a target is
+// meaningless, and `go test -count=1 ./...` is a command plumb never wrote and
+// must not rewrite.
+func reconcileTargetPlaceholder(argv []string, lang, slot string) []string {
+	def, err := config.ParseTaskCommand(config.DefaultTaskCommand(lang, slot))
+	if err != nil || def == nil {
+		return nil
+	}
+	idx, value, ok := soleDefaultedPlaceholder(def)
+	if !ok {
+		return nil
+	}
+	// An empty default means the shipped command spells "everything" as the
+	// ABSENCE of the operand (cargo test, pytest), so the expanded form is one
+	// element SHORTER; every other default expands in place.
+	expanded := slices.Concat(def[:idx:idx], []string{value}, def[idx+1:])
+	if value == "" {
+		expanded = slices.Concat(def[:idx:idx], def[idx+1:])
+	}
+	if !slices.Equal(argv, expanded) {
+		return nil
+	}
+	return slices.Clone(def)
+}
+
+// soleDefaultedPlaceholder returns the index and declared default of argv's
+// single {target:<D>} element. It reports false for an argv with no placeholder,
+// with more than one, or whose placeholder is the BARE {target} — a bare
+// placeholder has no expanded spelling to compare a stored command against, so
+// there is nothing to reconcile.
+func soleDefaultedPlaceholder(argv []string) (idx int, value string, ok bool) {
+	idx = -1
+	for i, a := range argv {
+		d, isPlaceholder := targetPlaceholder(a)
+		if !isPlaceholder {
+			continue
+		}
+		if idx >= 0 || d == nil {
+			return 0, "", false
+		}
+		idx, value = i, *d
+	}
+	return idx, value, idx >= 0
+}
+
+// errNoTargetPlaceholder is the sentinel for "a target was given but this
+// command has no slot for one". It is a sentinel rather than a bare string so
+// the resolver — the only layer that can see the workspace, and therefore the
+// config FILE the command came from — can replace it with a refusal that names
+// the stored command and where to edit it. run_command shares substituteTarget
+// and keeps the plain wording, since it has no shipped default to reconcile
+// against.
+var errNoTargetPlaceholder = errors.New("a target was given but the command has no {target} placeholder")
+
+// targetPlaceholderRefusal explains a refused target in terms the caller can act
+// on: the stored command, the file it came from, and what to change.
+//
+// The bare sentence it replaces named none of those, so a caller hitting it had
+// no way to tell a command that cannot take a target from one that was simply
+// written without the placeholder — and the same call failed the same way
+// forever. Every occurrence of this failure in 90 days of telemetry was the
+// latter.
+func targetPlaceholderRefusal(ws string, tc config.TasksConfig, lang, slot string) error {
+	stored := strings.TrimSpace(tc.Get(slot))
+	shipped := config.DefaultTaskCommand(lang, slot)
+	remedy := fmt.Sprintf("add a {target} placeholder to it under [tasks.%s] %s, or call run_task without a target", lang, slot)
+	if shippedTakesTarget(shipped) {
+		remedy = fmt.Sprintf("restore the placeholder plumb ships for it (%q) under [tasks.%s] %s", shipped, lang, slot)
+	}
+	return fmt.Errorf(
+		"run_task %s: a target was given but the stored %s command for %s has no {target} placeholder. "+
+			"Stored command: %q (from %s). To scope this slot, %s",
+		slot, slot, lang, stored, taskCommandSource(ws, lang, slot, stored, shipped), remedy)
+}
+
+// shippedTakesTarget reports whether a shipped default command carries a
+// {target} placeholder in either spelling.
+func shippedTakesTarget(shipped string) bool {
+	return strings.Contains(shipped, config.TargetToken) ||
+		strings.Contains(shipped, config.TargetTokenPrefix)
+}
+
+// taskCommandSource names the file a slot's command came from, so the refusal
+// above points at something the caller can open. It reads provenance the same
+// way the trust gate does rather than re-deriving it.
+func taskCommandSource(ws, lang, slot, stored, shipped string) string {
+	if _, fromProject := taskProvenance(ws, lang, slot); fromProject {
+		return config.ProjectConfigPath(ws)
+	}
+	if stored != strings.TrimSpace(shipped) {
+		return config.GlobalConfigPath()
+	}
+	return "plumb's shipped defaults"
 }
 
 // substituteTarget replaces a {target} argv element with target. A target with
@@ -344,7 +497,7 @@ func substituteTarget(argv []string, target string) ([]string, error) {
 		out = append(out, value)
 	}
 	if target != "" && !found {
-		return nil, errors.New("a target was given but the command has no {target} placeholder")
+		return nil, errNoTargetPlaceholder
 	}
 	return out, nil
 }

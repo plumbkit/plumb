@@ -92,7 +92,7 @@ func TestEmittedTestTargetIsAcceptedByRunTask(t *testing.T) {
 	}
 
 	// The actual acceptance criterion: run_task's own builder takes it.
-	steps, err := buildTaskSteps(tc, "test", target)
+	steps, err := buildTaskSteps(tc, "go", "test", target)
 	if err != nil {
 		t.Fatalf("run_task refused the target topology_affected emitted (%q): %v", target, err)
 	}
@@ -176,7 +176,7 @@ func TestTargetStyleMatchesShippedDefaults(t *testing.T) {
 	// Found by an adversarial review, which added `npm test {target:}` and a
 	// `ruby: rspec {target:}` default and watched this test stay green.
 	for lang, tc := range defaults {
-		if !testSlotTakesPositionalTarget(tc) {
+		if !testSlotTakesPositionalTarget(tc, lang) {
 			continue
 		}
 		if _, classified := want[lang]; !classified {
@@ -224,7 +224,16 @@ func TestTargetStyleRejectsNonPositionalPlaceholders(t *testing.T) {
 		{"go -run takes a NAME regex", "go", "go test -run {target}", tools.TargetNone},
 		{"pytest -k takes a NAME expression", "python", "pytest -k {target}", tools.TargetNone},
 		{"placeholder is not the last operand", "go", "go test {target:./...} -v", tools.TargetNone},
-		{"no placeholder at all", "go", "go test ./...", tools.TargetNone},
+		// The shipped default with its placeholder spelled out is RECONCILED
+		// (reconcileTargetPlaceholder), so this workspace gets package targets
+		// again — it is the config shape behind every {target} refusal in 90 days
+		// of telemetry, and leaving it TargetNone here would have topology_affected
+		// keep emitting bare directories to a run_task that now accepts targets.
+		{"shipped default with the placeholder spelled out", "go", "go test ./...", tools.TargetGoPackage},
+		{"python shipped default with the operand omitted", "python", "pytest", tools.TargetPath},
+		// Not the shipped default, so not reconciled, so still no target style.
+		{"placeholder-less command plumb never shipped", "go", "go test -count=1 ./...", tools.TargetNone},
+		{"placeholder-less command of another shape", "go", "gotestsum ./...", tools.TargetNone},
 		{"unset test command", "go", "", tools.TargetNone},
 		{"whitespace-only test command", "go", "   ", tools.TargetNone},
 		{"rust is positional but scopes by NAME", "rust", "cargo test {target:}", tools.TargetNone},

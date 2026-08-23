@@ -91,7 +91,7 @@ func writeTaskSlotListing(w io.Writer, root, lang string, tc config.TasksConfig)
 	slots := config.ConfiguredSlotNames(tc)
 	have := make([]string, 0, len(slots))
 	for _, slot := range slots {
-		if steps, err := buildTaskSteps(tc, slot, ""); err == nil && len(steps) > 0 {
+		if steps, err := buildTaskSteps(tc, lang, slot, ""); err == nil && len(steps) > 0 {
 			have = append(have, slot)
 		}
 	}
@@ -143,14 +143,17 @@ func runTaskCLI(slot string, args []string) error {
 	if err != nil {
 		return err
 	}
-	steps, err := buildTaskSteps(projectCfg.Tasks[lang], slot, target)
+	steps, err := buildTaskSteps(projectCfg.Tasks[lang], lang, slot, target)
 	if err != nil {
+		if errors.Is(err, errNoTargetPlaceholder) {
+			return targetPlaceholderRefusal(root, projectCfg.Tasks[lang], lang, slot)
+		}
 		return err
 	}
 	if len(steps) == 0 {
 		return fmt.Errorf("no %s command configured for %s (configured slots: %s); "+
 			"set one under [tasks.%s] in .plumb/config.toml",
-			slot, lang, strings.Join(configuredSlots(projectCfg.Tasks[lang]), ", "), lang)
+			slot, lang, strings.Join(configuredSlots(projectCfg.Tasks[lang], lang), ", "), lang)
 	}
 	if _, fromProject := taskProvenance(root, lang, slot); fromProject {
 		cmds, cerr := config.ProjectTaskCommands(root)

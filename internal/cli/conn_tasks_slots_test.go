@@ -27,11 +27,11 @@ func TestConfiguredSlots_AgreesWithBuildTaskSteps(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			reported := map[string]bool{}
-			for _, s := range configuredSlots(tc.tc) {
+			for _, s := range configuredSlots(tc.tc, "go") {
 				reported[s] = true
 			}
 			for _, slot := range []string{"build", "lint", "test", "e2e", "verify"} {
-				steps, err := buildTaskSteps(tc.tc, slot, "")
+				steps, err := buildTaskSteps(tc.tc, "go", slot, "")
 				runnable := err == nil && len(steps) > 0
 				if reported[slot] != runnable {
 					t.Errorf("slot %q: session_start reports configured=%v but run_task runnable=%v",
@@ -47,11 +47,11 @@ func TestConfiguredSlots_AgreesWithBuildTaskSteps(t *testing.T) {
 // build-only config must NOT be told verify is unconfigured.
 func TestConfiguredSlots_BuildOnlyStillRunsVerify(t *testing.T) {
 	tc := config.TasksConfig{Build: "echo build"}
-	steps, err := buildTaskSteps(tc, "verify", "")
+	steps, err := buildTaskSteps(tc, "go", "verify", "")
 	if err != nil || len(steps) == 0 {
 		t.Skip("verify no longer runs on a build-only config; the disagreement is moot")
 	}
-	got := strings.Join(configuredSlots(tc), ",")
+	got := strings.Join(configuredSlots(tc, "go"), ",")
 	if !strings.Contains(got, "verify") {
 		t.Errorf("verify runs for a build-only config but was reported unconfigured (got %q)", got)
 	}
@@ -61,7 +61,7 @@ func TestConfiguredSlots_BuildOnlyStillRunsVerify(t *testing.T) {
 // ParseTaskCommand trims, so a whitespace-only command is unset and the call is
 // refused — reporting it as configured would send the agent into that refusal.
 func TestConfiguredSlots_WhitespaceCommandIsNotConfigured(t *testing.T) {
-	got := strings.Join(configuredSlots(config.TasksConfig{Test: "   "}), ",")
+	got := strings.Join(configuredSlots(config.TasksConfig{Test: "   "}, "go"), ",")
 	if strings.Contains(got, "test") {
 		t.Errorf("a whitespace-only command must not be reported as configured, got %q", got)
 	}

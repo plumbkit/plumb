@@ -9,7 +9,7 @@ import (
 
 func TestBuildTaskSteps_VerifyIsBuildThenTest(t *testing.T) {
 	tc := config.TasksConfig{Build: "go build ./...", Test: "go test ./..."}
-	steps, err := buildTaskSteps(tc, "verify", "")
+	steps, err := buildTaskSteps(tc, "go", "verify", "")
 	if err != nil {
 		t.Fatalf("buildTaskSteps: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestBuildTaskSteps_VerifyIsBuildThenTest(t *testing.T) {
 
 func TestBuildTaskSteps_TargetSubstitution(t *testing.T) {
 	tc := config.TasksConfig{Test: "go test -run {target} ./..."}
-	steps, err := buildTaskSteps(tc, "test", "TestFoo")
+	steps, err := buildTaskSteps(tc, "go", "test", "TestFoo")
 	if err != nil {
 		t.Fatalf("buildTaskSteps: %v", err)
 	}
@@ -30,8 +30,11 @@ func TestBuildTaskSteps_TargetSubstitution(t *testing.T) {
 }
 
 func TestBuildTaskSteps_TargetWithoutPlaceholder(t *testing.T) {
-	tc := config.TasksConfig{Test: "go test ./..."}
-	if _, err := buildTaskSteps(tc, "test", "TestFoo"); err == nil {
+	// A command plumb never shipped keeps its refusal: `-count=1` is not part of
+	// any default, so there is no equivalence to reconcile against and rewriting
+	// it would be a guess.
+	tc := config.TasksConfig{Test: "go test -count=1 ./..."}
+	if _, err := buildTaskSteps(tc, "go", "test", "TestFoo"); err == nil {
 		t.Error("expected an error: a target was given but the command has no {target}")
 	}
 }
@@ -106,7 +109,7 @@ func TestSubstituteTarget_DefaultedPlaceholder(t *testing.T) {
 func TestBuildTaskSteps_ShippedGoDefaultScopesBothWays(t *testing.T) {
 	tc := config.Defaults().Tasks["go"]
 
-	steps, err := buildTaskSteps(tc, "test", "")
+	steps, err := buildTaskSteps(tc, "go", "test", "")
 	if err != nil {
 		t.Fatalf("a bare run_task on the shipped default was refused: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestBuildTaskSteps_ShippedGoDefaultScopesBothWays(t *testing.T) {
 		t.Errorf("unscoped shipped default = %q, want the whole suite", got)
 	}
 
-	steps, err = buildTaskSteps(tc, "test", "./internal/tools")
+	steps, err = buildTaskSteps(tc, "go", "test", "./internal/tools")
 	if err != nil {
 		t.Fatalf("scoping the shipped default was refused — this is the defect PLAN-326 is about: %v", err)
 	}
@@ -159,7 +162,7 @@ func TestTaskProvenance_ProjectWorkingDirGatesEverySlot(t *testing.T) {
 }
 
 func TestBuildTaskSteps_EmptySlot(t *testing.T) {
-	steps, err := buildTaskSteps(config.TasksConfig{}, "lint", "")
+	steps, err := buildTaskSteps(config.TasksConfig{}, "go", "lint", "")
 	if err != nil {
 		t.Fatalf("buildTaskSteps: %v", err)
 	}
