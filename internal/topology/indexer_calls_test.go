@@ -230,6 +230,39 @@ func TestResolveCalls_MethodCallProducesNoEdge(t *testing.T) {
 	}
 }
 
+// TestResolveCalls_IntraFileCountExcludesResolverEdges pins that the number the
+// refusal offers as "intra-file call edges only" really is only those. It is
+// counted by source, not by whichever edges happen to exist.
+func TestResolveCalls_IntraFileCountExcludesResolverEdges(t *testing.T) {
+	f := newResolverFixture(t)
+	before, err := AdmitCallGraph(context.Background(), f.db, CallGraphSubject{Language: "go", Path: "internal/caller/caller.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.resolve(t)
+	after, err := AdmitCallGraph(context.Background(), f.db, CallGraphSubject{Language: "go", Path: "internal/caller/caller.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolverEdgesFromThisFile int
+	if err := f.db.QueryRow(`
+		SELECT COUNT(*) FROM topology_edges e
+		  JOIN topology_nodes n ON n.id = e.from_id
+		  JOIN topology_files fl ON fl.id = n.file_id
+		 WHERE e.source = ? AND fl.path = ?`,
+		callResolverSource, "internal/caller/caller.go").Scan(&resolverEdgesFromThisFile); err != nil {
+		t.Fatal(err)
+	}
+	if resolverEdgesFromThisFile == 0 {
+		t.Fatal("the resolver produced no edge from this file; the guard would be vacuous")
+	}
+	if after.IntraFileCalls != before.IntraFileCalls {
+		t.Errorf("intra-file count moved from %d to %d when %d resolver edges appeared; "+
+			"the refusal would overstate what the index holds intra-file",
+			before.IntraFileCalls, after.IntraFileCalls, resolverEdgesFromThisFile)
+	}
+}
+
 // TestResolveCalls_RebuildsRatherThanAppends pins the derived-edge contract these
 // edges share with the import resolver: a second pass must not duplicate.
 func TestResolveCalls_RebuildsRatherThanAppends(t *testing.T) {
