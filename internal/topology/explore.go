@@ -29,10 +29,11 @@ const (
 	// hardCapBytes is hardCapNodes × maxNodeBytes, so the NODE ceiling binds first
 	// at any average node size the index has been measured to produce, and the
 	// byte ceiling binds only when the average node costs more than maxNodeBytes —
-	// 3.4× the measured average. Before PLAN-407 the pair was 5000 × 100000, where
-	// the byte ceiling bound at ~660 real nodes and the node ceiling could not fire
-	// at all: an inert cap that read as protective, which is the defect this card
-	// exists to remove. TestTraversalCeilingsBindInThatOrder pins the ordering.
+	// 3.4× the measured average. PLAN-407's first round raised the node ceiling
+	// from 200 to 5000 and left the byte ceiling at 100000, which bound at ~660
+	// real nodes: the node ceiling could then never fire, an inert cap that read
+	// as protective, which is the defect this card exists to remove.
+	// TestTraversalCeilingsBindInThatOrder pins the ordering.
 	hardCapNodes = 5000
 	hardCapBytes = hardCapNodes * maxNodeBytes
 
