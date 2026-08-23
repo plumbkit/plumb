@@ -12,9 +12,38 @@ const (
 	defaultMaxNodes = 50
 	defaultMaxBytes = 30000
 	hardCapDepth    = 4
-	hardCapNodes    = 200
-	hardCapBytes    = 100000
+	// hardCapNodes is the traversal's own ceiling: the most nodes any caller,
+	// including in-process code, may walk in one direction. It is a backstop for a
+	// pathological graph, not a response-size limit — hardCapBytes is what bounds
+	// the answer, and on real Go nodes (~200 estimated bytes each) it binds at
+	// roughly 500 nodes, an order of magnitude below this.
+	hardCapNodes = 5000
+	hardCapBytes = 100000
+
+	// toolCapNodes bounds a max_nodes that arrived as an MCP tool ARGUMENT. It is
+	// the number topology_explore's and topology_impact's schemas advertise, and
+	// exists to stop an agent asking for a neighbourhood larger than it can read.
+	toolCapNodes = 200
 )
+
+// ClampToolNodes bounds a caller-supplied max_nodes to the ceiling the topology
+// tool schemas advertise. Tools apply it to their own arguments; the traversal
+// applies only hardCapNodes.
+//
+// The two are deliberately separate. An in-process caller sizes its budget from
+// what the algorithm needs — topology_affected asks for 2000 nodes so a
+// depth-2 walk cannot run out of room before the imports/contains edges that
+// reach test files are visited — and that is not an untrusted argument to be
+// cut down to a response-size limit. Clamping both with one constant is what
+// silently gave that caller a tenth of the budget it asked for.
+//
+// A non-positive n is returned unchanged so the traversal's own default applies.
+func ClampToolNodes(n int) int {
+	if n > toolCapNodes {
+		return toolCapNodes
+	}
+	return n
+}
 
 // Explore performs a bounded BFS from the named symbol and returns its neighbourhood.
 func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*Neighbourhood, error) {

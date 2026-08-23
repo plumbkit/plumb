@@ -132,6 +132,11 @@ const (
 // stop a pathological graph, not to shape the answer. The answer is shaped by
 // max_results, which bounds PACKAGES — conflating the two is what made a change
 // to a widely-imported file report fewer of its dependents, not more.
+//
+// It reaches the traversal intact. It did not until PLAN-407: the topology layer
+// clamped every caller's MaxNodes with the ceiling its MCP tool schemas
+// advertise (200), so this number documented a budget the BFS never had. The
+// walk is bounded by MaxBytes below, and by topology's own hardCapNodes.
 const graphNodeBudget = 2000
 
 // maxNamedTests caps the individually-named tests in the changed package. Past
