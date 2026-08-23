@@ -147,11 +147,15 @@ func TestColdLanguageServerStillAppliesSymbolEdit(t *testing.T) {
 	// seconds — none of which the [lsp_query] budget governs, before or after this
 	// change. Timing the apply would measure that pipeline and call it a
 	// regression here.
+	// callAllowError, not call: a symbol-edit tool that times out returns a TOOL
+	// ERROR rather than text, and mcpClient.call fatals on isError before any
+	// string check runs — so the timeout assertion below read as a guard while
+	// being unreachable (PLAN-403 review §5).
 	start := time.Now()
-	preview := c.call(t, "replace_symbol_body", args, lspToolTimeout)
+	preview, ok := c.callAllowError("replace_symbol_body", args, lspToolTimeout)
 	elapsed := time.Since(start)
 
-	if strings.Contains(preview, "did not respond in time") {
+	if !ok || strings.Contains(preview, "did not respond in time") {
 		t.Fatalf("a language server that is merely slow must degrade to the tree-sitter "+
 			"fallback, not surface a timeout (after %v):\n%s", elapsed, preview)
 	}
@@ -165,8 +169,8 @@ func TestColdLanguageServerStillAppliesSymbolEdit(t *testing.T) {
 
 	// And the assertion a reached-but-dead fallback cannot satisfy.
 	args["dry_run"] = false
-	applied := c.call(t, "replace_symbol_body", args, lspToolTimeout)
-	if strings.Contains(applied, "did not respond in time") {
+	applied, appliedOK := c.callAllowError("replace_symbol_body", args, lspToolTimeout)
+	if !appliedOK || strings.Contains(applied, "did not respond in time") {
 		t.Fatalf("the apply surfaced a timeout instead of degrading:\n%s", applied)
 	}
 	got, err := os.ReadFile(mainGo)

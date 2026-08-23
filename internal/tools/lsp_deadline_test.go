@@ -204,3 +204,37 @@ func TestFallbackDeadlines_CallerDeadlineIsNotWidened(t *testing.T) {
 			"fallback is reached only after the caller has already given up", lspDL, ok, parentDL)
 	}
 }
+
+// TestAttemptBudget_DistinguishesAnExpiredCallerFromADisabledCap pins the
+// message-accuracy fix: withFallbackLSPDeadline returns "no budget" for two
+// unrelated situations, and mapping both to the configured [lsp_query] timeout
+// told a caller whose deadline had already passed that the server was given 30s
+// when it was given none.
+func TestAttemptBudget_DistinguishesAnExpiredCallerFromADisabledCap(t *testing.T) {
+	const configured = 30 * time.Second
+
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, cancelAttempt, granted := withFallbackLSPDeadline(expired, configured)
+	defer cancelAttempt()
+	if got := attemptBudget(granted, configured); got != 0 {
+		t.Errorf("an already-expired caller waited no time; budget to quote = %v, want 0", got)
+	}
+
+	// The cap genuinely disabled, with nothing else bounding the call, still
+	// reports the configured timeout — the historical behaviour.
+	_, cancelDisabled, grantedDisabled := withFallbackLSPDeadline(context.Background(), 0)
+	defer cancelDisabled()
+	if got := attemptBudget(grantedDisabled, configured); got != configured {
+		t.Errorf("a disabled cap must still quote the configured timeout, got %v", got)
+	}
+
+	// And the error text names no duration when there is none to name.
+	msg := lspTimeoutErr("workspace_symbols", 0, context.DeadlineExceeded).Error()
+	if strings.Contains(msg, "within 0s") {
+		t.Errorf("a zero budget must not be printed as a wait: %q", msg)
+	}
+	if !strings.Contains(msg, "did not respond before the deadline") {
+		t.Errorf("expected the no-duration wording, got: %q", msg)
+	}
+}
