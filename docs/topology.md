@@ -290,18 +290,32 @@ own node slice, so nothing they produced could name a symbol in another file, an
 callee the extractor could not match was dropped without a trace.
 
 **Read the reach number before you read the graph.** Measured on plumb's own tree
-(1,407 indexed files, 1,284 of them Go):
+(1,414 indexed files, 1,283 of them Go):
 
 | | |
 |---|---:|
-| recorded Go call sites | 89,970 |
-| …carrying a qualifier (`x.F()`) | 60,821 |
-| cross-file `call-resolver` edges | **2,532** |
+| recorded Go call sites | 89,942 |
+| …carrying a qualifier (`x.F()`) | 60,803 |
+| cross-file `call-resolver` edges | **2,531** |
 | …with a non-`_test.go` caller | **882** |
 | distinct targets reached | 378 |
 | **share of all call sites resolved** | **2.8%** |
-| method calls on a receiver, left unresolved | 37,650 |
-| qualified calls leaving the indexed tree (stdlib, third party) | 20,378 |
+
+Every qualified site lands in exactly one bucket, and the six add up to the 60,803 above —
+that is what makes this a measurement rather than an impression:
+
+| qualified-site bucket | |
+|---|---:|
+| resolved into an edge | 2,531 |
+| method call on a receiver, left unresolved | 37,635 |
+| qualified call leaving the indexed tree (stdlib, third party) | 20,376 |
+| repeat of a caller→target edge already emitted | 258 |
+| names no exported top-level function in the target package | 3 |
+| no enclosing declaration to hang the edge on | 0 |
+
+The last two buckets are small here and are not decoration: the repeat bucket is where 258
+sites used to vanish from the count, and the no-caller bucket is a fact about the *caller*
+that used to be reported under the target's wording.
 
 `topology_status` prints these for your own workspace. **2.8% is the headline, not a
 caveat.** A package-qualified-functions-only resolver reaches the calls that cross a
@@ -319,6 +333,14 @@ by-name resolver is what the name-collision figure above rules out. An unexporte
 behind a qualifier is treated as a receiver call, because a local variable can shadow an
 import name and that is the only reading which cannot invent an edge.
 
+One shape is invisible to this: Go does not require a package's name to match its
+directory, and for an *unaliased* import the index derives the local name from the import
+path's last element. A call qualified by a package whose name differs from its directory
+(`internal/utils` declaring `package util`) therefore misses the file's import set and is
+counted as a method call on a receiver, which it is not. It is a missing-edge and
+mis-label case, never a false edge, and plumb's own tree has zero of them. Explicit import
+aliases resolve correctly.
+
 **Test callers are included, and the split is published.** A test calling the function it
 exercises is the most useful cross-file call edge there is, so `_test.go` callers are
 resolved and counted; the non-test subset is reported alongside so a consumer that must
@@ -329,9 +351,15 @@ Vendored and generated code follow the index's existing rule and get no special 
 `vendor/`, `node_modules/`, `testdata/`, `dist/` and `build/` are excluded from the walk,
 and everything else that is indexed contributes call sites.
 
-**Nothing consumes these edges yet.** They are derived data, rebuilt wholesale on every
-indexing pass exactly like the `import-resolver` edges, and their behaviour under an
-incremental single-file re-index is not yet pinned. No tool reads them, on purpose.
+**Nothing consumes these edges yet, and that is enforced rather than intended.** They are
+derived data, rebuilt wholesale on every indexing pass exactly like the `import-resolver`
+edges, and their behaviour under an incremental single-file re-index is not yet pinned —
+a consumer can observe the window in which a re-indexed file's edges are gone. So the
+neighbourhood traversal excludes them by **source**: `ExploreOpts.IncludeDerivedCalls`
+defaults to false, and every tool that asks for `calls` edges (`call_hierarchy`'s topology
+fallback, `topology_impact`, `topology_affected`, `minimal_diff_review`) receives the
+extractor's intra-file edges and nothing else. Excluding by edge *kind* would not work:
+the derived edges are `calls` edges, identical in kind to the extractor's own.
 
 **Language admission.** A language is served iff it is in the resolver's compile-time
 supported set (today exactly `{go}`) **and** the index holds a `package` node with that

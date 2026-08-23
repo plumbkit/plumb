@@ -130,6 +130,21 @@ type ExploreOpts struct {
 	IncludeSource string // none | signatures | snippets | full
 	EdgeKinds     []string
 	Direction     Direction // defaults to DirectionBoth
+	// IncludeDerivedCalls admits the cross-file `calls` edges the call resolver
+	// derives (`source = "call-resolver"`). It defaults to FALSE, so a caller
+	// asking for `calls` edges gets the extractor's intra-file edges and nothing
+	// else — which is what the "nothing reads these yet" contract means in code
+	// rather than in prose.
+	//
+	// The exclusion is by SOURCE, not by kind: the derived edges carry
+	// kind = "calls" exactly like the extractor's, so a kind filter cannot
+	// separate them and every consumer asking for `calls` would receive them
+	// silently. They are excluded until their lifecycle across an incremental
+	// re-index is pinned (they are deleted and rebuilt wholesale on every pass,
+	// so a consumer can observe the rebuild window), and until each consumer is
+	// onboarded deliberately with a measured before/after. This flag is the
+	// switch that onboarding flips, one caller at a time.
+	IncludeDerivedCalls bool
 }
 
 // ImpactOpts controls the bidirectional BFS used by topology_impact.
@@ -274,9 +289,16 @@ type CallSite struct {
 }
 
 // CallGraphStatus is what the cross-file call resolver measured on its last
-// pass. Every qualified call site falls into exactly one of the four outcome
-// buckets, so they sum to QualifiedSites — which is what makes "how much of the
-// call graph is this" a number rather than an impression.
+// pass. Every qualified call site falls into exactly one of the six buckets —
+// Resolved, RepeatOfEdge, NoCallerNode, UnresolvedReceiver, ExternalPackage and
+// UnmatchedTarget — so they sum to QualifiedSites, which is what makes "how much
+// of the call graph is this" a number rather than an impression.
+//
+// Two of the six are not resolution outcomes and exist because they were the two
+// ways a site used to leave the count: a repeat of an edge already emitted was
+// skipped in silence, and a site with no caller node was folded into
+// UnmatchedTarget, whose printed wording is a claim about the TARGET and untrue
+// of it.
 //
 // All zeroes mean the pass has not run, never that the workspace has no calls.
 type CallGraphStatus struct {
@@ -285,9 +307,10 @@ type CallGraphStatus struct {
 	// calls this resolver does not attempt are not quietly excluded from it.
 	CallSites int
 	// QualifiedSites is the subset carrying a qualifier, and equals the sum of
-	// Resolved, UnresolvedReceiver, ExternalPackage and UnmatchedTarget.
+	// the six buckets below.
 	QualifiedSites int
-	// Resolved is the number of cross-file `call-resolver` edges written.
+	// Resolved is the number of cross-file `call-resolver` edges written, which
+	// is also the number of qualified sites that produced one.
 	Resolved int
 	// ResolvedNonTest is the subset of Resolved whose caller is not a Go test
 	// file. Test callers are resolved and counted; this is the split, published
@@ -305,4 +328,13 @@ type CallGraphStatus struct {
 	// no exported top-level function of that name — a type conversion, a
 	// package-level variable, or a method on one.
 	UnmatchedTarget int
+	// RepeatOfEdge counts sites whose caller→target edge an earlier site already
+	// produced. One edge is written for the pair, so these sites resolve without
+	// adding one, and counting them as Resolved would make Resolved stop being an
+	// edge count.
+	RepeatOfEdge int
+	// NoCallerNode counts sites that resolved to a real target but have no
+	// enclosing declaration to be the edge's tail. That is a fact about the
+	// caller; it is not UnmatchedTarget, whose wording is about the target.
+	NoCallerNode int
 }

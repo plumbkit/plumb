@@ -67,6 +67,20 @@ func openCallGraphStore(t *testing.T, ws string, wantFiles int) (*topology.Store
 	return nil, nil
 }
 
+// derivedSubject builds a subject the only supported way: by reading the
+// language the extractor recorded for the file. Passing a literal here is what
+// made an earlier version of assertion 4 below circular — it compared two
+// refusal strings both computed from a "csharp" the test itself supplied, so no
+// implementation of the derivation could have changed them.
+func derivedSubject(t *testing.T, s *topology.Store, path string) topology.CallGraphSubject {
+	t.Helper()
+	subject, err := s.CallGraphSubjectForPath(context.Background(), path)
+	if err != nil {
+		t.Fatalf("CallGraphSubjectForPath(%q): %v", path, err)
+	}
+	return subject
+}
+
 func countInt(t *testing.T, db *sql.DB, query string, args ...any) int {
 	t.Helper()
 	var n int
@@ -93,7 +107,11 @@ func greet() { fmt.Println("hi") }
 `)
 	s, db := openCallGraphStore(t, ws, 1)
 
-	a, err := s.AdmitCallGraph(context.Background(), topology.CallGraphSubject{Language: "go", Path: "main.go"})
+	subject := derivedSubject(t, s, "main.go")
+	if subject.Language != "go" {
+		t.Fatalf("main.go was indexed as %q, not go; the rest of this test would be about nothing", subject.Language)
+	}
+	a, err := s.AdmitCallGraph(context.Background(), subject)
 	if err != nil {
 		t.Fatalf("AdmitCallGraph: %v", err)
 	}
@@ -187,7 +205,11 @@ func TestCallGraphGating_PolyglotDoesNotLeakAcrossLanguages(t *testing.T) {
 
 	// 1. The C# subject refuses, with the no-adapter wording, and says nothing
 	//    about any C# symbol being caller-free or unreachable.
-	cs, err := s.AdmitCallGraph(ctx, topology.CallGraphSubject{Language: "csharp", Path: "src/Beta/Runner.cs"})
+	csSubject := derivedSubject(t, s, "src/Beta/Runner.cs")
+	if csSubject.Language != "csharp" {
+		t.Fatalf("src/Beta/Runner.cs derived language %q, want csharp — the subject is not coming from the index", csSubject.Language)
+	}
+	cs, err := s.AdmitCallGraph(ctx, csSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +227,11 @@ func TestCallGraphGating_PolyglotDoesNotLeakAcrossLanguages(t *testing.T) {
 
 	// 2. The Go subject gets a normal answer, scoped, naming C# as out of scope
 	//    with its file count.
-	gos, err := s.AdmitCallGraph(ctx, topology.CallGraphSubject{Language: "go", Path: "scripts/gen.go"})
+	goSubject := derivedSubject(t, s, "scripts/gen.go")
+	if goSubject.Language != "go" {
+		t.Fatalf("scripts/gen.go derived language %q, want go", goSubject.Language)
+	}
+	gos, err := s.AdmitCallGraph(ctx, goSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,9 +262,17 @@ func TestCallGraphGating_PolyglotDoesNotLeakAcrossLanguages(t *testing.T) {
 		t.Fatal("the C# extractor emitted no package node; this fixture cannot test the language term")
 	}
 
-	// 4. Deleting the stray Go file leaves the C# result byte-identical.
+	// 4. Deleting the stray Go file leaves the C# result byte-identical. Both
+	//    subjects are DERIVED from their own index, so this compares two answers
+	//    the implementation produced end-to-end rather than two strings built from
+	//    a literal the test supplied.
 	sNoGo, _ := buildPolyglotFixture(t, false)
-	csNoGo, err := sNoGo.AdmitCallGraph(ctx, topology.CallGraphSubject{Language: "csharp", Path: "src/Beta/Runner.cs"})
+	csNoGoSubject := derivedSubject(t, sNoGo, "src/Beta/Runner.cs")
+	if csNoGoSubject.Language != csSubject.Language {
+		t.Fatalf("removing scripts/gen.go changed the DERIVED language of a C# file from %q to %q",
+			csSubject.Language, csNoGoSubject.Language)
+	}
+	csNoGo, err := sNoGo.AdmitCallGraph(ctx, csNoGoSubject)
 	if err != nil {
 		t.Fatal(err)
 	}

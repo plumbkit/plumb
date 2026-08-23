@@ -56,11 +56,24 @@ func callMeta(t *testing.T, db *sql.DB, key string) int {
 // imported and called, so a resolver that refused everything would lose a real
 // one.
 type resolverFixture struct {
-	db          *sql.DB
-	alphaDo     int64
-	betaDo      int64
-	alphaHidden int64
-	run         int64
+	db      *sql.DB
+	alphaDo int64
+	// alphaMethodDo is a METHOD named Do in the same directory as alphaDo, and it
+	// is inserted first so it holds the LOWER rowid. targetsByDir orders by rowid
+	// and takes the first match, so if its `kind = function` filter were widened
+	// to include methods, every alpha.Do call would repoint here — silently, and
+	// to a node that cannot be the target of a package-qualified call.
+	alphaMethodDo int64
+	betaDo        int64
+	alphaHidden   int64
+	run           int64
+	// helper is a function in the SAME file as run, reached by an
+	// extractor-emitted intra-file `calls` edge.
+	helper int64
+	// runTest is a caller in a _test.go file. It exists so the published
+	// test/non-test split is a difference the tests can see rather than a number
+	// nothing constrains.
+	runTest int64
 }
 
 func newResolverFixture(t *testing.T) *resolverFixture {
@@ -73,6 +86,9 @@ func newResolverFixture(t *testing.T) *resolverFixture {
 
 	alphaFile := insertLangFile(t, db, "internal/alpha/alpha.go", "go")
 	insertTestNode(t, db, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindPackage, Name: "alpha", Language: "go"})
+	// Inserted BEFORE the function of the same name, so it wins a rowid ordering.
+	alphaMethodDo := insertTestNode(t, db, alphaFile, "internal/alpha/alpha.go",
+		Node{Kind: KindMethod, Name: "Do", Qualified: "(*Widget).Do", Language: "go"})
 	alphaDo := insertTestNode(t, db, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindFunction, Name: "Do", Language: "go"})
 	alphaHidden := insertTestNode(t, db, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindFunction, Name: "hidden", Language: "go"})
 
@@ -87,16 +103,44 @@ func newResolverFixture(t *testing.T) *resolverFixture {
 	insertTestNode(t, db, callerFile, "internal/caller/caller.go",
 		Node{Kind: KindImport, Name: "strings", Qualified: "strings", Language: "go"})
 	run := insertTestNode(t, db, callerFile, "internal/caller/caller.go", Node{Kind: KindFunction, Name: "Run", Language: "go"})
+	helper := insertTestNode(t, db, callerFile, "internal/caller/caller.go", Node{Kind: KindFunction, Name: "helper", Language: "go"})
+	// The intra-file call edge an extractor emits, alongside the cross-file one the
+	// resolver derives. Both carry kind = "calls", which is why a consumer cannot
+	// tell them apart by kind and why the exclusion has to be by source.
+	if _, err := db.Exec(
+		`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source) VALUES (?,?,?,?,?)`,
+		run, helper, string(EdgeCalls), 1.0, "extractor"); err != nil {
+		t.Fatalf("insert intra-file call edge: %v", err)
+	}
 
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "alpha", "Do")      // resolves
+	insertSite(t, db, callerFile, run, "go", CallSiteCall, "alpha", "Do")      // SAME caller, SAME target: one edge, two sites
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "c", "Method")      // receiver
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "strings", "Join")  // external
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "alpha", "hidden")  // unexported behind a qualifier
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "alpha", "Missing") // no such target
 	insertSite(t, db, callerFile, run, "go", CallSiteCall, "", "helper")       // bare: not a qualified site
 	insertSite(t, db, callerFile, run, "go", CallSiteField, "cobra.Command", "Use")
+	// A package-level site: it resolves to a real target but has NO enclosing
+	// declaration, so there is no node to be the edge's tail. Writing the edge
+	// anyway means from_id = 0, which the foreign key rejects and which takes the
+	// whole resolve transaction — every cross-file edge in the workspace — with it.
+	insertSite(t, db, callerFile, 0, "go", CallSiteCall, "alpha", "Do")
 
-	return &resolverFixture{db: db, alphaDo: alphaDo, betaDo: betaDo, alphaHidden: alphaHidden, run: run}
+	// A second caller, in a _test.go file, so the published non-test split is a
+	// difference between two numbers rather than a restatement of one.
+	testFile := insertLangFile(t, db, "internal/caller/caller_test.go", "go")
+	insertTestNode(t, db, testFile, "internal/caller/caller_test.go", Node{Kind: KindPackage, Name: "caller", Language: "go"})
+	insertTestNode(t, db, testFile, "internal/caller/caller_test.go",
+		Node{Kind: KindImport, Name: "alpha", Qualified: "example.com/m/internal/alpha", Language: "go"})
+	runTest := insertTestNode(t, db, testFile, "internal/caller/caller_test.go",
+		Node{Kind: KindFunction, Name: "RunTest", Language: "go"})
+	insertSite(t, db, testFile, runTest, "go", CallSiteCall, "alpha", "Do") // resolves, from a test caller
+
+	return &resolverFixture{
+		db: db, alphaDo: alphaDo, alphaMethodDo: alphaMethodDo,
+		betaDo: betaDo, alphaHidden: alphaHidden, run: run, helper: helper, runTest: runTest,
+	}
 }
 
 func (f *resolverFixture) resolve(t *testing.T) {
@@ -136,8 +180,8 @@ func TestResolveCalls_ResolvesPackageQualifiedCallAcrossFiles(t *testing.T) {
 		 WHERE e.source = ? AND a.file_id <> b.file_id`, callResolverSource).Scan(&crossFile); err != nil {
 		t.Fatal(err)
 	}
-	if crossFile != 1 {
-		t.Errorf("cross-file resolver edges = %d, want 1 — an edge that does not cross a file is not what this pass is for", crossFile)
+	if crossFile != 2 {
+		t.Errorf("cross-file resolver edges = %d, want 2 — an edge that does not cross a file is not what this pass is for", crossFile)
 	}
 }
 
@@ -181,12 +225,24 @@ func TestResolveCalls_BucketsAccountForEveryQualifiedSite(t *testing.T) {
 	sum := callMeta(t, f.db, metaCallResolved) +
 		callMeta(t, f.db, metaCallUnresolvedRecv) +
 		callMeta(t, f.db, metaCallExternal) +
-		callMeta(t, f.db, metaCallUnmatched)
+		callMeta(t, f.db, metaCallUnmatched) +
+		callMeta(t, f.db, metaCallRepeatOfEdge) +
+		callMeta(t, f.db, metaCallNoCallerNode)
 	if sum != qualified {
 		t.Errorf("buckets sum to %d but %d qualified sites were examined; a site went unaccounted for", sum, qualified)
 	}
-	if qualified != 5 {
-		t.Errorf("qualified sites = %d, want 5 — the bare call and the field site must not be counted", qualified)
+	if qualified != 8 {
+		t.Errorf("qualified sites = %d, want 8 — the bare call and the field site must not be counted", qualified)
+	}
+	// The two buckets that are not resolution outcomes must be non-zero here, or
+	// the sum above is an invariant over a fixture that cannot exercise them —
+	// which is exactly how it stayed green while the sum was 258 short on a real
+	// workspace.
+	if got := callMeta(t, f.db, metaCallRepeatOfEdge); got != 1 {
+		t.Errorf("repeat-of-edge sites = %d, want 1; without one the sum invariant cannot fail", got)
+	}
+	if got := callMeta(t, f.db, metaCallNoCallerNode); got != 1 {
+		t.Errorf("no-caller-node sites = %d, want 1; without one the sum invariant cannot fail", got)
 	}
 	// The receiver bucket carries BOTH the genuine method call and the shadowed
 	// qualifier, which is the correct reading of each.
@@ -201,8 +257,8 @@ func TestResolveCalls_BucketsAccountForEveryQualifiedSite(t *testing.T) {
 	}
 	// The denominator the reach percentage is published against counts EVERY
 	// call site, including the bare ones this resolver does not attempt.
-	if got := callMeta(t, f.db, metaCallSites); got != 6 {
-		t.Errorf("call sites = %d, want 6 — bare calls belong in the denominator, the field site does not", got)
+	if got := callMeta(t, f.db, metaCallSites); got != 9 {
+		t.Errorf("call sites = %d, want 9 — bare calls belong in the denominator, the field site does not", got)
 	}
 }
 
@@ -217,8 +273,8 @@ func TestResolveCalls_MethodCallProducesNoEdge(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE source=?`, callResolverSource).Scan(&total); err != nil {
 		t.Fatal(err)
 	}
-	if total != 1 {
-		t.Errorf("resolver edges = %d, want exactly 1 — only the package-qualified call may resolve", total)
+	if total != 2 {
+		t.Errorf("resolver edges = %d, want exactly 2 — only the two package-qualified calls to alpha.Do may resolve", total)
 	}
 	var recorded int
 	if err := f.db.QueryRow(
@@ -274,8 +330,8 @@ func TestResolveCalls_RebuildsRatherThanAppends(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE source=?`, callResolverSource).Scan(&total); err != nil {
 		t.Fatal(err)
 	}
-	if total != 1 {
-		t.Errorf("resolver edges after two passes = %d, want 1", total)
+	if total != 2 {
+		t.Errorf("resolver edges after two passes = %d, want 2", total)
 	}
 }
 
@@ -313,10 +369,133 @@ func TestResolveCalls_DoesNotCrossIntoAnotherLanguage(t *testing.T) {
 	if nonGo != 0 {
 		t.Errorf("%d resolver edges touch a non-Go node; an admitted traversal must not leave its language", nonGo)
 	}
-	if got := callMeta(t, f.db, metaCallQualifiedSites); got != 5 {
-		t.Errorf("qualified sites = %d, want 5 — the C# site must not enter the Go tally", got)
+	if got := callMeta(t, f.db, metaCallQualifiedSites); got != 8 {
+		t.Errorf("qualified sites = %d, want 8 — the C# site must not enter the Go tally", got)
 	}
 	if f.edgeCount(t, f.run, f.alphaDo) == 0 {
 		t.Error("the guard passed only because NOTHING resolved; the Go edge must survive alongside the C# files")
+	}
+}
+
+// TestResolveCalls_MethodIsNeverAPackageQualifiedTarget pins targetsByDir's
+// `kind = function` filter, which is the guard against `pkg.Do()` matching an
+// unrelated `(*T).Do` that happens to live in the target package. The fixture's
+// method holds a LOWER rowid than the function, and targetsByDir orders by rowid
+// and takes the first match — so widening the filter to include methods does not
+// merely add a candidate, it silently REPLACES the correct target.
+func TestResolveCalls_MethodIsNeverAPackageQualifiedTarget(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+
+	if got := f.edgeCount(t, f.run, f.alphaMethodDo); got != 0 {
+		t.Errorf("Run→(*Widget).Do edges = %d, want 0 — a package-qualified call cannot name a method", got)
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 1 {
+		t.Errorf("Run→alpha.Do edges = %d, want 1 — the call must still reach the FUNCTION", got)
+	}
+	var toMethods int
+	if err := f.db.QueryRow(`
+		SELECT COUNT(*) FROM topology_edges e
+		  JOIN topology_nodes b ON b.id = e.to_id
+		 WHERE e.source = ? AND b.kind = ?`, callResolverSource, string(KindMethod)).Scan(&toMethods); err != nil {
+		t.Fatal(err)
+	}
+	if toMethods != 0 {
+		t.Errorf("%d resolver edges point at a method node; no package-qualified call can", toMethods)
+	}
+}
+
+// TestResolveCalls_TestCallerResolvesAndIsSplitOut pins the two numbers the card
+// requires be published together. It is a DIFFERENCE, not a value: the fixture
+// has one non-test caller and one _test.go caller, so a resolver that stopped
+// recognising test paths would report the two as equal.
+func TestResolveCalls_TestCallerResolvesAndIsSplitOut(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+
+	if got := f.edgeCount(t, f.runTest, f.alphaDo); got != 1 {
+		t.Errorf("RunTest→alpha.Do edges = %d, want 1 — a test calling what it exercises is the edge this exists for", got)
+	}
+	resolved := callMeta(t, f.db, metaCallResolved)
+	nonTest := callMeta(t, f.db, metaCallResolvedNonTest)
+	if resolved != 2 {
+		t.Errorf("resolved = %d, want 2 — both callers resolve", resolved)
+	}
+	if nonTest != 1 {
+		t.Errorf("non-test resolved = %d, want 1", nonTest)
+	}
+	if nonTest >= resolved {
+		t.Errorf("non-test (%d) is not a strict subset of resolved (%d); the split is not being taken", nonTest, resolved)
+	}
+}
+
+// TestResolveCalls_RepeatedCallIsOneEdgeAndStaysCounted covers the same fixture
+// site from both sides: a caller calling the same target twice must produce ONE
+// edge (a duplicate double-counts that neighbour in every consumer that weighs
+// edges), and the second site must still land in a bucket rather than leaving
+// the accounting.
+func TestResolveCalls_RepeatedCallIsOneEdgeAndStaysCounted(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+
+	var sites int
+	if err := f.db.QueryRow(
+		`SELECT COUNT(*) FROM topology_call_sites WHERE enclosing_id = ? AND qualifier = 'alpha' AND callee = 'Do'`,
+		f.run).Scan(&sites); err != nil {
+		t.Fatal(err)
+	}
+	if sites != 2 {
+		t.Fatalf("the fixture holds %d Run→alpha.Do sites, want 2; this test would be vacuous", sites)
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 1 {
+		t.Errorf("Run→alpha.Do edges = %d, want 1 — two sites, one edge", got)
+	}
+	if got := callMeta(t, f.db, metaCallRepeatOfEdge); got != 1 {
+		t.Errorf("repeat-of-edge = %d, want 1 — the second site must be counted, not dropped", got)
+	}
+}
+
+// TestResolveCalls_PackageLevelSiteDoesNotAbortThePass is the blast-radius test
+// for the orphan guard. A site with no enclosing declaration would be written
+// with from_id = 0; topology_edges' foreign key rejects that, and because the
+// whole pass runs in one transaction the failure costs the workspace EVERY
+// cross-file call edge, not just this one. The guard turns that into a counted
+// bucket.
+func TestResolveCalls_PackageLevelSiteDoesNotAbortThePass(t *testing.T) {
+	f := newResolverFixture(t)
+	var orphans int
+	if err := f.db.QueryRow(
+		`SELECT COUNT(*) FROM topology_call_sites WHERE enclosing_id IS NULL AND qualifier = 'alpha' AND callee = 'Do'`).
+		Scan(&orphans); err != nil {
+		t.Fatal(err)
+	}
+	if orphans != 1 {
+		t.Fatalf("the fixture holds %d enclosing-less resolvable sites, want 1; this test would be vacuous", orphans)
+	}
+
+	// resolve() fails the test if resolveCalls returns an error, which is what an
+	// FK violation here does.
+	f.resolve(t)
+
+	var total int
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE source=?`, callResolverSource).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Errorf("resolver edges = %d, want 2 — the pass must commit its real edges despite the orphan site", total)
+	}
+	var headless int
+	if err := f.db.QueryRow(
+		`SELECT COUNT(*) FROM topology_edges WHERE source=? AND from_id=0`, callResolverSource).Scan(&headless); err != nil {
+		t.Fatal(err)
+	}
+	if headless != 0 {
+		t.Errorf("%d resolver edges have no caller node", headless)
+	}
+	if got := callMeta(t, f.db, metaCallNoCallerNode); got != 1 {
+		t.Errorf("no-caller-node = %d, want 1 — the site must be counted under its own reason", got)
+	}
+	if got := callMeta(t, f.db, metaCallUnmatched); got != 1 {
+		t.Errorf("unmatched-target = %d, want 1 — a caller-less site must not borrow the target's label", got)
 	}
 }

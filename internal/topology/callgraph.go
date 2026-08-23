@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -22,17 +23,26 @@ import (
 // failure is reachable from "is the language in a compile-time set, and does the
 // index hold a package node for it".
 
-// supportedCallGraphLanguages is the compile-time set of languages whose call
-// sites this resolver can follow across a file boundary. It is a constant, NOT
-// something derived from the index: that is what makes it unspoofable — no
-// property of a user's repository can add a language to it.
+// supportedCallGraphLanguages is the compile-time list of languages whose call
+// sites this resolver can follow across a file boundary. It is returned by a
+// function over a literal rather than held in a package-level map so that it is
+// genuinely immutable: a `var m = map[string]struct{}{…}` is writable by any code
+// in this package, test code included, and an addition made in one test persists
+// for the rest of the test binary. Nothing derived from the index appears here —
+// that is what makes the set unspoofable, and the immutability is what keeps
+// "compile-time constant" a true description of it rather than a comment.
 //
 // Go is alone here because Go is the only language whose extractor emits all
 // three ingredients a package-qualified resolver needs: a package node, an
 // import node carrying the full import path, and a call whose qualifier is
 // separable from its callee.
-var supportedCallGraphLanguages = map[string]struct{}{
-	"go": {},
+func supportedCallGraphLanguages() []string { return []string{"go"} }
+
+// callGraphLanguageSupported is the membership test over that list. Both the
+// gate and the resolver read the set through these two functions, so there is
+// one literal and no second copy to drift.
+func callGraphLanguageSupported(lang string) bool {
+	return slices.Contains(supportedCallGraphLanguages(), lang)
 }
 
 // callGraphSupportableWithWork are the languages whose call sites already carry
@@ -49,12 +59,70 @@ var callGraphSupportableWithWork = map[string]struct{}{
 // which admission is consulted — never the workspace's "primary" language, which
 // is a threshold in disguise and is exactly how a repo that is 90% TypeScript
 // with one tools/gen.go ends up being answered as a Go project.
+// Language must be DERIVED from the index — build a subject with
+// CallGraphSubjectForPath or CallGraphSubjectForNode, never by handing this
+// struct a language from somewhere else. A caller that passes the workspace's
+// "primary" language, a config value, or the language of the tool's own request
+// re-creates the one-boolean-decides-the-whole-workspace failure that the
+// per-subject gate exists to remove: the gate itself would still be per-language
+// and still be correct, and the answer would still be wrong for half a polyglot
+// repository.
 type CallGraphSubject struct {
-	// Language is the subject node's (or file's) language.
+	// Language is the subject node's (or file's) language, as recorded in the
+	// index by the extractor that parsed it.
 	Language string
 	// Path is the subject's workspace-relative file, when there is one. It is
 	// used only to count the intra-file call edges the refusal offers instead.
 	Path string
+}
+
+// CallGraphSubjectForPath reads a file subject's language out of the index.
+//
+// This is the derivation half of the admission rule, and it is not a
+// convenience: the gate decides per subject language, so whatever picks that
+// language is as load-bearing as the gate. Reading topology_files.language means
+// the language is whatever the extractor that parsed the file recorded, which no
+// caller can substitute for.
+//
+// A path the index does not hold, or holds with no language (unrecognised, or
+// recognised but uncovered), yields an empty Language. That is deliberately not
+// an error: an empty language is not in the supported set and holds no package
+// node, so AdmitCallGraph refuses it through the ordinary rule rather than
+// through a special case.
+func CallGraphSubjectForPath(ctx context.Context, db *sql.DB, path string) (CallGraphSubject, error) {
+	s := CallGraphSubject{Path: path}
+	err := db.QueryRowContext(ctx,
+		`SELECT language FROM topology_files WHERE path = ?`, path).Scan(&s.Language)
+	switch {
+	case err == sql.ErrNoRows:
+		return CallGraphSubject{Path: path}, nil
+	case err != nil:
+		return s, fmt.Errorf("topology: call-graph subject for %q: %w", path, err)
+	}
+	s.Language = strings.ToLower(strings.TrimSpace(s.Language))
+	return s, nil
+}
+
+// CallGraphSubjectForNode reads a symbol subject's language out of the index,
+// from the node's own language rather than its file's. The two agree today, and
+// reading the node's is what stays correct for an extractor that emits more than
+// one language from one file (a template, an embedded script).
+//
+// An unknown node id yields a zero subject, refused by the ordinary rule.
+func CallGraphSubjectForNode(ctx context.Context, db *sql.DB, nodeID int64) (CallGraphSubject, error) {
+	var s CallGraphSubject
+	err := db.QueryRowContext(ctx,
+		`SELECT n.language, f.path FROM topology_nodes n
+           JOIN topology_files f ON f.id = n.file_id
+          WHERE n.id = ?`, nodeID).Scan(&s.Language, &s.Path)
+	switch {
+	case err == sql.ErrNoRows:
+		return CallGraphSubject{}, nil
+	case err != nil:
+		return s, fmt.Errorf("topology: call-graph subject for node %d: %w", nodeID, err)
+	}
+	s.Language = strings.ToLower(strings.TrimSpace(s.Language))
+	return s, nil
 }
 
 // CallGraphAdmission is the verdict for one subject.
@@ -98,7 +166,7 @@ type CallGraphAdmission struct {
 func AdmitCallGraph(ctx context.Context, db *sql.DB, subject CallGraphSubject) (CallGraphAdmission, error) {
 	lang := strings.ToLower(strings.TrimSpace(subject.Language))
 	a := CallGraphAdmission{Language: lang}
-	_, supported := supportedCallGraphLanguages[lang]
+	supported := callGraphLanguageSupported(lang)
 
 	hasPkg, err := hasPackageNode(ctx, db, lang)
 	if err != nil {

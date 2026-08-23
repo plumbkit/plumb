@@ -285,9 +285,24 @@ func (s *Store) Status() Status {
 // Nothing in the tool layer calls this yet, deliberately: the edges it gates are
 // rebuilt wholesale on every indexing pass and their behaviour under an
 // incremental re-index is not yet pinned, so no user-visible answer may depend
-// on them.
+// on them. That exclusion is enforced, not merely intended —
+// ExploreOpts.IncludeDerivedCalls defaults to false, so a traversal asking for
+// `calls` edges does not receive them.
 func (s *Store) AdmitCallGraph(ctx context.Context, subject CallGraphSubject) (CallGraphAdmission, error) {
 	return AdmitCallGraph(ctx, s.db, subject)
+}
+
+// CallGraphSubjectForPath derives a file subject's language from the index. It
+// is the supported way to build a CallGraphSubject: a caller that supplies the
+// language itself can substitute a workspace-wide answer for a per-subject one.
+func (s *Store) CallGraphSubjectForPath(ctx context.Context, path string) (CallGraphSubject, error) {
+	return CallGraphSubjectForPath(ctx, s.db, s.toRelative(path))
+}
+
+// CallGraphSubjectForNode derives a symbol subject's language from the index,
+// from the node's own recorded language.
+func (s *Store) CallGraphSubjectForNode(ctx context.Context, nodeID int64) (CallGraphSubject, error) {
+	return CallGraphSubjectForNode(ctx, s.db, nodeID)
 }
 
 // toRelative expresses an absolute path the way the index stores it: relative to

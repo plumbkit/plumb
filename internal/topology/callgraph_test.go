@@ -160,3 +160,73 @@ func TestAdmitCallGraph_ScopeNoteNamesOtherLanguagesAsOutOfScope(t *testing.T) {
 		t.Errorf("a single-language workspace carries a scope note: %q", note)
 	}
 }
+
+// TestCallGraphSubject_LanguageComesFromTheIndex pins the derivation half of the
+// admission rule. The gate decides per subject language, so whatever picks that
+// language is as load-bearing as the gate itself: a caller free to supply it can
+// pass the workspace's "primary" language and re-create the one-boolean answer
+// the per-subject gate exists to remove — and no test of the gate can catch that,
+// because the gate would still be behaving correctly on the input it was given.
+func TestCallGraphSubject_LanguageComesFromTheIndex(t *testing.T) {
+	f := newResolverFixture(t)
+	csFile := insertLangFile(t, f.db, "src/Alpha/Alpha.cs", "csharp")
+	csDo := insertTestNode(t, f.db, csFile, "src/Alpha/Alpha.cs",
+		Node{Kind: KindFunction, Name: "Do", Language: "csharp"})
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"internal/caller/caller.go", "go"},
+		{"src/Alpha/Alpha.cs", "csharp"},
+		{"does/not/exist.rb", ""},
+	} {
+		got, err := CallGraphSubjectForPath(ctx, f.db, tc.path)
+		if err != nil {
+			t.Fatalf("CallGraphSubjectForPath(%q): %v", tc.path, err)
+		}
+		if got.Language != tc.want {
+			t.Errorf("subject language for %q = %q, want %q — it must be read from the index, not assumed",
+				tc.path, got.Language, tc.want)
+		}
+		if got.Path != tc.path {
+			t.Errorf("subject path = %q, want %q", got.Path, tc.path)
+		}
+	}
+
+	// A node subject reads the NODE's language, and carries its file.
+	nodeSubject, err := CallGraphSubjectForNode(ctx, f.db, csDo)
+	if err != nil {
+		t.Fatalf("CallGraphSubjectForNode: %v", err)
+	}
+	if nodeSubject.Language != "csharp" || nodeSubject.Path != "src/Alpha/Alpha.cs" {
+		t.Errorf("node subject = %+v, want csharp at src/Alpha/Alpha.cs", nodeSubject)
+	}
+	goSubject, err := CallGraphSubjectForNode(ctx, f.db, f.alphaDo)
+	if err != nil {
+		t.Fatalf("CallGraphSubjectForNode(go): %v", err)
+	}
+	if goSubject.Language != "go" {
+		t.Errorf("node subject language = %q, want go", goSubject.Language)
+	}
+	if nodeSubject.Language == goSubject.Language {
+		t.Error("both node subjects derived the same language; the derivation is not reading the index")
+	}
+
+	// And the derived subjects reach opposite verdicts through the ordinary rule.
+	goAdmission, err := AdmitCallGraph(ctx, f.db, goSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csAdmission, err := AdmitCallGraph(ctx, f.db, nodeSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !goAdmission.Admitted {
+		t.Errorf("the derived Go subject was refused: %q", goAdmission.Refusal)
+	}
+	if csAdmission.Admitted {
+		t.Error("the derived C# subject was admitted")
+	}
+}

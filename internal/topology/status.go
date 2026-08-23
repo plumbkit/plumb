@@ -194,6 +194,8 @@ func callGraphCensus(db *sql.DB) CallGraphStatus {
 		metaCallUnresolvedRecv:  &c.UnresolvedReceiver,
 		metaCallExternal:        &c.ExternalPackage,
 		metaCallUnmatched:       &c.UnmatchedTarget,
+		metaCallRepeatOfEdge:    &c.RepeatOfEdge,
+		metaCallNoCallerNode:    &c.NoCallerNode,
 	}
 	for key, dst := range into {
 		var v string
@@ -224,9 +226,12 @@ func formatCallGraph(c CallGraphStatus) string {
 		c.ResolvedNonTest)
 	fmt.Fprintf(&sb, "                 Of %d qualified sites: %d are method calls on a receiver and\n"+
 		"                  are NOT resolved (syntactic parsing carries no type information),\n"+
-		"                  %d leave the indexed tree, %d name no top-level function. Those are\n"+
-		"                  absent, not caller-free — do not read this graph as complete.\n",
-		c.QualifiedSites, c.UnresolvedReceiver, c.ExternalPackage, c.UnmatchedTarget)
+		"                  %d leave the indexed tree, %d name no top-level function,\n"+
+		"                  %d repeat a call already counted, %d sit outside any function.\n"+
+		"                  Those are absent, not caller-free — do not read this graph as\n"+
+		"                  complete.\n",
+		c.QualifiedSites, c.UnresolvedReceiver, c.ExternalPackage, c.UnmatchedTarget,
+		c.RepeatOfEdge, c.NoCallerNode)
 	return sb.String()
 }
 
