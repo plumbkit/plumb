@@ -221,19 +221,29 @@ func readToolCases() []fallbackToolCase {
 // second is the load-bearing one: withLSPDeadline handed an already-bounded
 // context straight through, so the server spent the caller's whole budget and
 // the fallback — however live its context — had no time left to answer in.
-func parentContexts(t *testing.T) []struct {
+//
+// It returns FACTORIES, not contexts. A shared bounded context is created once
+// in the range header, before any subtest runs, so its clock ticks through
+// every earlier subtest's fixture setup: the "deadline equals the tool budget"
+// case then ran with roughly half the budget it names — the exact-equality
+// scenario was never exercised — and on a loaded runner (each setup polls the
+// indexer for up to 5s) it could be expired before the subtest started, failing
+// a correct build for the wrong reason (review §4).
+func parentContexts() []struct {
 	name string
-	ctx  context.Context
+	ctx  func(t *testing.T) context.Context
 } {
-	t.Helper()
-	bounded, cancel := context.WithTimeout(context.Background(), slowFallbackBudget)
-	t.Cleanup(cancel)
 	return []struct {
 		name string
-		ctx  context.Context
+		ctx  func(t *testing.T) context.Context
 	}{
-		{"unbounded caller", context.Background()},
-		{"caller deadline equals the tool budget", bounded},
+		{"unbounded caller", func(*testing.T) context.Context { return context.Background() }},
+		{"caller deadline equals the tool budget", func(t *testing.T) context.Context {
+			t.Helper()
+			ctx, cancel := context.WithTimeout(context.Background(), slowFallbackBudget)
+			t.Cleanup(cancel)
+			return ctx
+		}},
 	}
 }
 
@@ -242,12 +252,15 @@ func parentContexts(t *testing.T) []struct {
 // still land on disk, from tree-sitter, inside the tool's budget.
 func TestSymbolWriteTools_SlowLSPWritesViaFallback(t *testing.T) {
 	for _, tc := range writeToolCases() {
-		for _, parent := range parentContexts(t) {
+		for _, parent := range parentContexts() {
 			t.Run(tc.name+"/"+parent.name, func(t *testing.T) {
 				exec, checks := tc.setup(t, slowLSP())
+				// The caller's deadline starts AFTER the fixture is built, so
+				// the case runs the budget it names rather than what setup left.
+				parentCtx := parent.ctx(t)
 
 				start := time.Now()
-				out, err := exec(parent.ctx)
+				out, err := exec(parentCtx)
 				elapsed := time.Since(start)
 
 				if err != nil {
@@ -283,12 +296,13 @@ func TestSymbolWriteTools_SlowLSPWritesViaFallback(t *testing.T) {
 // ever reached it after the server had spent the caller's entire budget.
 func TestSymbolReadTools_SlowLSPAnswersInsideBudget(t *testing.T) {
 	for _, tc := range readToolCases() {
-		for _, parent := range parentContexts(t) {
+		for _, parent := range parentContexts() {
 			t.Run(tc.name+"/"+parent.name, func(t *testing.T) {
 				exec, _ := tc.setup(t, slowLSP())
+				parentCtx := parent.ctx(t)
 
 				start := time.Now()
-				out, err := exec(parent.ctx)
+				out, err := exec(parentCtx)
 				elapsed := time.Since(start)
 
 				if err != nil {
@@ -364,7 +378,11 @@ func TestSymbolTools_WarmLSPUnchanged(t *testing.T) {
 		if strings.Contains(out, "topology fallback") {
 			t.Errorf("an answering server must resolve the symbol itself, with no fallback banner:\n%s", out)
 		}
-		if elapsed > slowFallbackBudget/4 {
+		// A twentieth of the budget (100ms at the current 2s) is still ~5x the
+		// observed ~20ms for a mock-backed in-memory apply. The previous quarter
+		// would not have caught a 400ms regression, which is the whole point of
+		// the assertion.
+		if elapsed > slowFallbackBudget/20 {
 			t.Errorf("warm path took %v; bounding the attempt must add no latency when the "+
 				"server answers", elapsed)
 		}
