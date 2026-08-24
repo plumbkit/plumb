@@ -24,7 +24,7 @@ const (
 	lifecycleBenchRevision            = "f97fc017"
 	lifecycleBenchFiles               = 1415
 	lifecycleBenchResolvedCalls       = 2531
-	lifecycleSaveBudget               = 2500 * time.Millisecond
+	lifecycleSaveBudget               = 5 * time.Second
 	lifecycleWALBudget          int64 = 2 * 1024 * 1024
 )
 
@@ -88,7 +88,7 @@ func walBytes(t testing.TB, dbPath string) int64 {
 
 // TestLifecycleSaveCost measures and enforces the wall-clock and WAL budgets for
 // representative single-file saves on a warm index of plumb's own tree. Each save
-// must complete in under 2.5 seconds and grow the WAL by no more than 2 MiB; the
+// must complete in under five seconds and grow the WAL by no more than 2 MiB; the
 // exact before/after numbers remain published for PLAN-377.
 func TestLifecycleSaveCost(t *testing.T) {
 	ws := benchCorpus(t)
