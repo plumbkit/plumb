@@ -35,7 +35,7 @@
 
 ### Added
 
-- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392–822ms** with **0.77–1.97 MiB** WAL growth; the integration guard requires every save to stay **<1s** and **<=2 MiB**. Consumers remain opt-in solely for deliberate step-6 measurement and rollout.
+- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392ms–2.02s** across local and hosted runners with **0.73–1.97 MiB** WAL growth; the portable integration guard requires every save to stay **<2.5s** and **<=2 MiB**. Consumers remain opt-in solely for deliberate step-6 measurement and rollout.
 - **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
   headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
   is now recorded in a new `topology_call_sites` table — including the ones no single-file

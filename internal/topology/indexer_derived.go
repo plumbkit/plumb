@@ -74,7 +74,7 @@ const (
 // metaResolverSurface stores the stable identities that can change a derived
 // target without changing any caller file: resolver-eligible package nodes and
 // exported top-level Go functions. Rowids and bodies are deliberately absent, so
-// an ordinary body-only re-index remains scoped and preserves the <1s lifecycle.
+// an ordinary body-only re-index remains scoped and preserves the bounded lifecycle.
 const metaResolverSurface = "topology.resolver_surface"
 
 // planRebuild decides what this cycle's derived-edge passes must do, and returns
