@@ -8,11 +8,15 @@ package cli
 // recognise the reconnected connection as a continuation of the previous one and
 // rehydrate the state that would otherwise be lost: strict-mode read tracking,
 // (for clients that do not report roots) the pinned workspace, and the session
-// name AND mailbox identity — a note is addressed by name, so a rename on every
-// reconnect would orphan it, and a note to a live peer is bound to that peer's
-// session ID, so the reconnected connection must also inherit its predecessor's
-// ID to collect what was written before the restart (see inheritSessionID, which
-// is where the authorisation for that lives).
+// name AND session identity. The name survives because a note is addressed by
+// name, so a rename on every reconnect would orphan it; the ID survives via
+// adoptSessionID, which re-registers the connection under its predecessor's
+// plumb session ID so stats, memories and collab see one continuous identity
+// (and, when adoption is declined, inheritSessionID still lets it collect mail
+// BOUND to the predecessor's ID). Both grants are authorised by the persisted
+// pairing under the proxy session ID — never by the replayed, client-disclosed
+// plumb session ID alone (see adoptSessionID and inheritSessionID, where the
+// authorisation argument lives).
 //
 // Everything here is gated on [session].persist_state, a non-nil store, and a
 // non-empty proxy session ID (reads and pins additionally need a pinned
@@ -66,15 +70,40 @@ func (s *connSession) onSessionID(id string) {
 // name restoration: the name survives via the persisted mapping, and this makes
 // the ID survive too.
 //
-// The adoption is gated on "the replayed ID is not held by another live
-// session" (session.Adopt's ErrIDTaken): on an overlapping restart the previous
-// daemon may still be running and answering to that ID, so re-registering would
-// overwrite its session file. On a decline the connection keeps its generated
-// ID and the persisted identity is refreshed so the next reconnect — by which
-// time the predecessor has gone — retries with the right ID.
+// The replayed ID is client-supplied and DISCLOSED (session_start echoes the
+// live session ID in its result _meta), so presenting it proves nothing — any
+// client could claim an ended session's ID and inherit its mailbox binding,
+// stats attribution and episodic history. Adoption is therefore authorised ONLY
+// by the persisted session_names row: restoreName captured the plumb session ID
+// recorded under this connection's proxy session ID (the never-disclosed bearer
+// secret — see inheritSessionID for the full argument), and the replayed ID
+// must MATCH it. An empty persisted value — a pre-v4 row, a wiped store,
+// persist_state=false — means "no proof" and refuses; it is never a wildcard.
+// On a refusal with a non-empty persisted value (an authenticated proxy that
+// replayed a stale ID) the row is converged to the ID this session actually
+// holds, so the next reconnect adopts correctly.
+//
+// The adoption is additionally gated on "the replayed ID is not held by another
+// live session" (session.Adopt's ErrIDTaken): on an overlapping restart the
+// previous daemon may still be running and answering to that ID, so
+// re-registering would overwrite its session file. On a decline the connection
+// keeps its generated ID and the persisted identity is refreshed so the next
+// reconnect — by which time the predecessor has gone — retries with the right
+// ID.
 func (s *connSession) adoptSessionID(id string) {
 	oldID := s.sessionID()
 	if oldID == "" || oldID == id {
+		return
+	}
+	expected := s.view().persistedSessionID
+	if expected == "" || expected != id {
+		s.log().Warn("daemon: replayed session ID does not match the persisted identity; refusing adoption",
+			"replayed", id, "expected", expected, "using", oldID)
+		if expected != "" {
+			// An authenticated proxy that replayed a stale ID: converge the
+			// persisted row to the current real ID so the next reconnect adopts.
+			s.persistName(s.sessionName())
+		}
 		return
 	}
 	reg, err := session.Adopt(oldID, id)
@@ -135,6 +164,11 @@ func (s *connSession) restoreName(id string) {
 		s.persistName(v.sessName)
 		return
 	}
+	// Capture the persisted plumb session ID BEFORE attempting the name restore:
+	// adoptSessionID consults it as the adoption authorisation, and the rename
+	// below returns early on ErrNameTaken — a name overlap must not veto a
+	// legitimate ID adoption.
+	s.mutate(func(v *sessionView) { v.persistedSessionID = prev.SessionID })
 	_, err = s.renameSession(prev.Name)
 	if err == nil {
 		s.inheritSessionID(prev.SessionID)
@@ -176,6 +210,13 @@ func (s *connSession) restoreName(id string) {
 // called "alice" is not. Inheriting on the strength of a name would hand any
 // session its predecessor's mailbox for the cost of one rename_session, which is
 // precisely the hole the binding closed.
+//
+// Inheritance is the DEGRADED path now that adoptSessionID exists: adoption
+// (same pairing, same authorisation) is primary, and on an authenticated
+// reconnect the adopted session reads its own mail under its own ID, so the
+// inherit grant is cleared as redundant. What remains here is the case adoption
+// is DECLINED — a live overlap, or an Adopt error — where the session runs
+// under a fresh ID and still needs its predecessor's mail.
 //
 // It is also gated on the rename having SUCCEEDED, so a session only inherits an
 // identity while actually holding the name that identity answered to.

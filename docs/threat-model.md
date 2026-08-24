@@ -474,7 +474,12 @@ its own `initialize` handshake, and never written to a session file, a log, or
 any tool result) — never by answering to a name, which is the distinction the
 whole binding rests on. It is the same bearer token that already restores
 strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
-if it were forgeable, those would have been forgeable first. A same-user process
+if it were forgeable, those would have been forgeable first. The same persisted
+pairing also gates session-ID **adoption** (the reconnect re-registering under
+the predecessor's ID outright): the replayed plumb session ID is
+client-supplied and disclosed in `session_start`'s result `_meta`, so adoption
+refuses unless it matches the ID the row records under the proxy session ID —
+before this gate, the replayed ID alone was enough. A same-user process
 can of course read `session_state.db` directly, which is the standing
 peer-agent-as-same-user boundary above, not a property of this mechanism.
 

@@ -157,6 +157,15 @@ type sessionView struct {
 	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
 	// the live sessID equal to it on reconnect.
 	replayedSessionID string
+	// persistedSessionID is the plumb session ID recorded in the session_names
+	// row under this connection's proxy session ID (captured by restoreName). It
+	// is the sole authorisation for adoptSessionID: the proxy session ID is a
+	// never-disclosed bearer secret — presenting it is evidence of being the same
+	// serve process — whereas the plumb session ID is echoed to clients
+	// (toolResultMeta), so a replayed one is only a CLAIM. The persisted pairing
+	// of the two is what turns the claim into proof; an empty value is "no
+	// proof", never a wildcard.
+	persistedSessionID string
 	// inheritedSessionIDs are predecessor plumb session IDs this connection may
 	// also read mailbox messages for, granted ONLY by the proxy-authenticated
 	// persisted-state path (see inheritSessionID). Nil for every other session.

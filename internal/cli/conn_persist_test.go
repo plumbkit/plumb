@@ -244,6 +244,79 @@ func TestPersist_NameNotRestoredOntoOverlappingSession(t *testing.T) {
 	}
 }
 
+// TestPersist_PersistedSessionIDCapturedDespiteNameOverlap pins the ordering
+// the adoption gate depends on: restoreName must capture the persisted plumb
+// session ID BEFORE it attempts the name restore, because the rename returns
+// early on ErrNameTaken — a name overlap must not veto a legitimate ID
+// adoption. Here the predecessor stays LIVE, so the rename declines; the
+// captured ID is what lets the replay pass the pairing gate and reach the REAL
+// overlap guard (session.Adopt's ErrIDTaken), which keeps the generated ID and
+// leaves the live holder's session file untouched.
+func TestPersist_PersistedSessionIDCapturedDespiteNameOverlap(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	// The predecessor stays LIVE (deliberately not closed): the overlap.
+	before := newPersistSession(t, store, ss, "proxyX")
+	prevID := before.sessionID()
+	if prevID == "" {
+		t.Fatal("predecessor did not register; the test would prove nothing")
+	}
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	if got := after.view().persistedSessionID; got != prevID {
+		t.Fatalf("persistedSessionID = %q, want %q — the capture must survive an ErrNameTaken decline", got, prevID)
+	}
+	// The replay passes the pairing gate (expected == replayed) and is declined
+	// by the live-overlap guard instead: the generated ID is kept and the live
+	// holder's file is not overwritten.
+	after.onSessionID(prevID)
+	if got := after.sessionID(); got == prevID {
+		t.Fatal("adopted an ID a live session still holds")
+	}
+	if got := before.sessionID(); got != prevID {
+		t.Fatalf("the live holder lost its ID: %q, want %q", got, prevID)
+	}
+}
+
+// TestPersist_FirstConnectNoReplayedID is the no-regression pin: a first
+// connect (no persisted row, no replayed ID in the handshake) behaves exactly
+// as before — generated name and ID, nothing adopted, and the identity is
+// recorded so the NEXT reconnect can restore and adopt.
+func TestPersist_FirstConnectNoReplayedID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	id := s.sessionID()
+	if id == "" {
+		t.Fatal("session did not register; the test would prove nothing")
+	}
+	if got := s.view().persistedSessionID; got != "" {
+		t.Fatalf("persistedSessionID = %q on a first connect, want empty", got)
+	}
+	if got := s.view().replayedSessionID; got != "" {
+		t.Fatalf("replayedSessionID = %q on a first connect, want empty", got)
+	}
+	stored, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadIdentity: ok=%v err=%v — a first connect must record its identity for the next reconnect", ok, err)
+	}
+	if stored.SessionID != id || stored.Name != s.sessionName() {
+		t.Errorf("stored identity = (%q, %q), want (%q, %q)", stored.Name, stored.SessionID, s.sessionName(), id)
+	}
+}
+
 func TestPersist_PerSessionIsolation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
