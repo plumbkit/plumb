@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func TestOnSessionIDStoresReplayedID(t *testing.T) {
@@ -73,6 +76,73 @@ func TestOnSessionIDAdoptsReplayedID(t *testing.T) {
 	}
 	if ids[oldID] {
 		t.Fatal("the pre-adoption ID is still live")
+	}
+}
+
+// TestOnSessionIDRestartKeepsExternalIDAndIdentity covers the restart contract
+// end to end: the same proxy session rehydrates its pin/read state, adopts the
+// pre-restart plumb identity, keeps the linked external ID without another
+// session_start, and records both sides' tool calls under that one ID.
+func TestOnSessionIDRestartKeepsExternalIDAndIdentity(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+	statsStore := newStatsStore()
+	defer statsStore.Close()
+
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	path := filepath.Join(root, "a.go")
+	mtime := time.Unix(1_700_000_000, 444)
+	const proxyID = "proxyX"
+	const externalID = "external-agent-id"
+
+	// Before restart: an external-ID-linked session has state and one tool call.
+	before := newPersistSession(t, store, ss, proxyID)
+	before.statsStore = statsStore
+	before.attachWorkspace(context.Background(), "file://"+root)
+	before.readTracker.Record(path, mtime, "sha-a")
+	prevID := before.sessionID()
+	session.SetExternalID(prevID, externalID)
+	statsStore.Record(root, stats.Call{SessionID: prevID, Tool: "read_file", CalledAt: time.Now(), Success: true})
+	before.close()
+
+	// After restart: the proxy reconnects with the same secret and replays its ID.
+	after := newPersistSession(t, store, ss, proxyID)
+	after.statsStore = statsStore
+	after.onSessionID(prevID)
+	after.attachWorkspace(context.Background(), "file://"+root)
+	if got := after.sessionID(); got != prevID {
+		t.Fatalf("sessionID() after restart = %q, want predecessor %q", got, prevID)
+	}
+	if got := after.readTracker.Mtime(path); !got.Equal(mtime) {
+		t.Fatalf("rehydrated mtime = %v, want %v", got, mtime)
+	}
+	resolved, err := resolveMailSessionFor("external-id", externalID)
+	if err != nil {
+		t.Fatalf("resolveMailSessionFor external ID after restart: %v", err)
+	}
+	if resolved.ID != prevID {
+		t.Fatalf("external ID resolved session %q, want adopted %q", resolved.ID, prevID)
+	}
+	statsStore.Record(root, stats.Call{SessionID: after.sessionID(), Tool: "edit_file", CalledAt: time.Now(), Success: true})
+	statsStore.Close()
+
+	db, err := stats.OpenReadOnly()
+	if err != nil {
+		t.Fatalf("stats.OpenReadOnly: %v", err)
+	}
+	defer db.Close()
+	calls, err := db.ToolCallsForSession(root, prevID, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ToolCallsForSession: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("tool calls under adopted session = %d, want 2 from both sides of restart", len(calls))
 	}
 }
 

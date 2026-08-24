@@ -14,8 +14,11 @@ import (
 var ErrIDTaken = errors.New("session ID is already in use by a live session")
 
 // Adopt re-registers the session identified by oldID under newID, preserving
-// every field of its record except the ID and EndedAt, and marks the old record
-// ended. It is the daemon's session-ID adoption path (PLAN-296): a reconnecting
+// every field of the ADOPTER's record except the ID and EndedAt, and marks the
+// old record ended. When the adopter has no ExternalID, it carries that field
+// forward from the predecessor record at newID so external session linkage
+// survives a daemon restart (PLAN-404). It is the daemon's session-ID adoption
+// path (PLAN-296): a reconnecting
 // connection presents the stable session ID the serve proxy replayed, and the
 // daemon adopts it so stats, memories and collab see one continuous identity
 // across the restart.
@@ -57,6 +60,13 @@ func Adopt(oldID, newID string) (Info, error) {
 		}
 		info.ID = newID
 		info.EndedAt = time.Time{}
+		// The predecessor is an ended file at newID. Its ExternalID was linked by
+		// session_start before the restart, while this fresh adopter has not had a
+		// chance to run session_start yet. Failure to read it carries nothing: an
+		// absent or corrupt predecessor is no authority to invent an identity.
+		if predecessor, err := readInfo(newID); err == nil && info.ExternalID == "" {
+			info.ExternalID = predecessor.ExternalID
+		}
 		if err := writeSessionFileAtomic(filepath.Join(dir, newID+".json"), info); err != nil {
 			return fmt.Errorf("writing session file: %w", err)
 		}

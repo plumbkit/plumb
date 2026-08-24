@@ -23,6 +23,16 @@
   actually holds, so the next reconnect adopts correctly; the live-overlap
   guard (`session.Adopt`'s `ErrIDTaken`) is unchanged.
 
+### Fixed
+
+- **A daemon restart no longer drops the external session ID before a client can
+  call `session_start` again (PLAN-404).** When an authenticated reconnect
+  adopts its predecessor's plumb session ID, its fresh record now carries the
+  predecessor's `ExternalID` only when it has none of its own. This keeps
+  `plumb mail --external-id` and name-resume resolution working immediately
+  after the restart; an unreadable predecessor supplies nothing, so no identity
+  is invented.
+
 ### Added
 
 - **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
