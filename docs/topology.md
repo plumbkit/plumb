@@ -209,9 +209,9 @@ rather than adding to the tool count).
 **Granularity, stated plainly.** Every reachability response opens with `package-level
 (import edges, production imports only — Go _test.go importers excluded);
 function-level unavailable` — this is directory granularity, not function-level. The
-import graph is real and cross-file; there is no cross-package call graph yet, so this
-cannot answer "is this *function* dead" — only "is this *package* dead from every entry
-point". Treat a small unreachable package as a strong signal and a genuinely large one
+import graph is real and cross-file; function-level call answers are provided separately
+by the Go call-resolver surface, not by this reachability mode. This mode cannot answer
+"is this *function* dead" — only "is this *package* dead from every entry point". Treat a small unreachable package as a strong signal and a genuinely large one
 as worth a second look before deleting; a symbol re-exported by an otherwise-unreachable
 package could still be imported reflectively.
 
@@ -351,15 +351,15 @@ Vendored and generated code follow the index's existing rule and get no special 
 `vendor/`, `node_modules/`, `testdata/`, `dist/` and `build/` are excluded from the walk,
 and everything else that is indexed contributes call sites.
 
-**Nothing consumes these edges yet, and that is enforced rather than intended.** They are
-derived data, rebuilt wholesale on every indexing pass exactly like the `import-resolver`
-edges, and their behaviour under an incremental single-file re-index is not yet pinned —
-a consumer can observe the window in which a re-indexed file's edges are gone. So the
-neighbourhood traversal excludes them by **source**: `ExploreOpts.IncludeDerivedCalls`
-defaults to false, and every tool that asks for `calls` edges (`call_hierarchy`'s topology
-fallback, `topology_impact`, `topology_affected`, `minimal_diff_review`) receives the
-extractor's intra-file edges and nothing else. Excluding by edge *kind* would not work:
-the derived edges are `calls` edges, identical in kind to the extractor's own.
+**The lifecycle is durable, but consumers remain deliberately excluded for step 6.** Derived
+edges survive incremental re-indexes: callee re-indexes repoint incoming rows by stable
+identity, while caller re-indexes replace only outgoing rows. The neighbourhood traversal
+therefore still excludes them by **source**: `ExploreOpts.IncludeDerivedCalls` defaults to
+false, and every tool that asks for `calls` edges (`call_hierarchy`'s topology fallback,
+`topology_impact`, `topology_affected`, `minimal_diff_review`) receives the extractor's
+intra-file edges and nothing else until that consumer has a measured before/after rollout.
+Excluding by edge *kind* would not work: the derived edges are `calls` edges, identical in
+kind to the extractor's own.
 
 **Language admission.** A language is served iff it is in the resolver's compile-time
 supported set (today exactly `{go}`) **and** the index holds a `package` node with that

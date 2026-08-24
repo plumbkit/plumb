@@ -15,11 +15,11 @@ func edgeSources(nb *Neighbourhood) map[string]int {
 	return out
 }
 
-// TestExplore_ExcludesDerivedCallEdgesUnlessAskedFor is the enforcement behind
-// "nothing reads the call-resolver edges yet". Three places in this release say
-// so in prose; before this filter existed, four shipped tools received them,
-// because the neighbourhood query filtered on edge KIND and the derived edges
-// carry kind = "calls" exactly like the extractor's own.
+// TestExplore_ExcludesDerivedCallEdgesUnlessAskedFor enforces the deliberate
+// step-6 consumer rollout. The derived lifecycle is durable across incremental
+// re-indexes, but the default remains source-filtered until each consumer has a
+// measured before/after; without this filter, four shipped tools would receive
+// resolver edges because they share kind = "calls" with extractor edges.
 //
 // Both directions are asserted against the SAME index in the SAME test, because
 // a filter that also dropped the real intra-file `calls` edges would be a worse
@@ -53,14 +53,14 @@ func TestExplore_ExcludesDerivedCallEdgesUnlessAskedFor(t *testing.T) {
 	}
 	got := edgeSources(nb)
 	if got[callResolverSource] != 0 {
-		t.Errorf("a `calls` traversal served %d %s edges; nothing may consume them until their "+
-			"lifecycle across an incremental re-index is pinned", got[callResolverSource], callResolverSource)
+		t.Errorf("a `calls` traversal served %d %s edges; derived calls require an explicit "+
+			"measured step-6 rollout", got[callResolverSource], callResolverSource)
 	}
 	// The other direction: the extractor's intra-file call edge must survive the
 	// filter untouched.
 	if got["extractor"] != 1 {
 		t.Errorf("extractor-emitted intra-file `calls` edges served = %d, want 1 — the source filter "+
-			"must not cost a consumer the edges it already had; sources served: %v", got["extractor"], got)
+			"must preserve extractor edges while derived consumers remain deliberately excluded; sources served: %v", got["extractor"], got)
 	}
 
 	// Opting in serves them, which is what step 6 flips per consumer.

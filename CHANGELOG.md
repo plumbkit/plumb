@@ -35,6 +35,7 @@
 
 ### Added
 
+- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392–822ms** with **0.77–1.97 MiB** WAL growth; the integration guard requires every save to stay **<1s** and **<=2 MiB**. Consumers remain opt-in solely for deliberate step-6 measurement and rollout.
 - **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
   headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
   is now recorded in a new `topology_call_sites` table — including the ones no single-file
@@ -101,8 +102,8 @@
   per `topology_routes`' own contract), or accepts explicit directories / the literal
   `"main"`. Every response opens with `package-level (import edges, production imports
   only — Go _test.go importers excluded); function-level unavailable` — directory
-  granularity only, a cross-package call graph does not exist yet (tracked separately),
-  and an edge whose importer is a `_test.go` file is excluded: Go forbids real import
+  granularity only; function-level call answers are provided separately by the Go
+  call-resolver surface, not by this reachability mode. An edge whose importer is a `_test.go` file is excluded: Go forbids real import
   cycles, so counting test-only imports produced cycles that were entirely artefacts (64%
   of the folded edges on plumb's own index originated in a test file, and every cycle an
   early build of `layers` reported vanished once they were excluded). Go-only for now:
@@ -128,23 +129,18 @@
 
 ### Changed
 
-- **Nothing reads the new `call-resolver` edges yet, and the traversal enforces it.** They
-  are derived data rebuilt wholesale on every indexing pass, exactly like the
-  `import-resolver` edges, and their behaviour under an incremental single-file re-index is
-  not yet pinned. The neighbourhood query now filters them out by **source**:
-  `ExploreOpts.IncludeDerivedCalls` defaults to false, so `call_hierarchy`'s topology
-  fallback, `topology_impact`, `topology_affected` and `minimal_diff_review` all receive
-  the extractor's intra-file `calls` edges exactly as before and none of the derived ones.
-  Filtering by edge *kind* cannot do this — a derived edge is a `calls` edge — which is why
-  the previous "no tool consumes them" was a statement of intent that the code did not
-  keep. Do not build on them until the lifecycle work lands; onboarding a consumer is a
-  deliberate step with a published before/after number, not a side effect.
-- **The topology schema version is bumped to 3, so the index is rebuilt once on upgrade.**
-  A row written before this release carries no call sites and nothing about it says so, so
-  the table cannot backfill itself. Measured on plumb's own tree, the full cold re-index
-  goes from **4.0s to 5.0s** for 1,407 files (+25%, the cost of the call-site walk and its
-  ~101k rows, measured three times with identical results); the index grows to 31.7 MiB. It runs in the background at
-  first attach.
+- **Derived call edges remain excluded from consumers for deliberate step-6 rollout.** Their
+  lifecycle is now durable across incremental re-indexes: callee saves repoint incoming
+  rows by stable `to_identity`, while caller saves replace only outgoing rows. The
+  neighbourhood query still filters them out by **source** because
+  `ExploreOpts.IncludeDerivedCalls` defaults to false; each consumer needs its own measured
+  before/after before onboarding. Filtering by edge *kind* cannot do this — a derived edge
+  is a `calls` edge — so the exclusion remains explicit and source-based.
+- **The topology schema version is bumped to 4, so the rebuildable index is recreated once on upgrade.**
+  Version 4 adds `topology_edges.to_identity`, the stable target identity used to repoint
+  derived import/call edges after callee node rowids are replaced. Older indexes are
+  rebuilt on attach through the existing schema-version gate; the indexer then repopulates
+  them with durable incremental lifecycle state.
 
 ### Removed
 
@@ -1483,8 +1479,9 @@
   A post-index pass (`linkImports`) now resolves `import` nodes to the package
   they name and links them, producing **51,335 cross-file edges** here. It runs
   per queue drain rather than per file, because an import can only be resolved
-  once its target package is indexed, and it rebuilds its own edges wholesale so
-  re-indexing one file cannot leave a stale half-graph. Matching is by longest
+  once its target package is indexed. Its incremental lifecycle repoints incoming
+  edges by stable identity and replaces only changed callers, so re-indexing one file
+  cannot leave a stale half-graph. Matching is by longest
   path suffix rather than go.mod parsing, so it generalises past Go; a minimum of
   two path segments keeps `import "strings"` from binding to a local `strings/`
   directory, which would recreate the false-dependency bug as real edges.
