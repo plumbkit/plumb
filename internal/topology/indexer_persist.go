@@ -21,10 +21,13 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 	if err != nil {
 		return fmt.Errorf("topology: begin tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded
 
 	newFileID, err := upsertFileRecord(tx, fileID, relPath, info, hash, lang)
 	if err != nil {
+		return err
+	}
+	if err := captureIncomingDerived(tx, newFileID); err != nil {
 		return err
 	}
 	if err := deleteFileNodes(tx, newFileID); err != nil {
@@ -34,6 +37,9 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 	if err != nil {
 		return err
 	}
+	if err := restoreIncomingDerived(tx, newFileID, relPath); err != nil {
+		return err
+	}
 	if err := insertEdges(tx, nodeIDs, out.edges); err != nil {
 		return err
 	}
@@ -41,6 +47,54 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 		return err
 	}
 	return tx.Commit()
+}
+
+const incomingDerivedTable = "temp.reindex_incoming"
+
+func captureIncomingDerived(tx *sql.Tx, fileID int64) error {
+	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS reindex_incoming (
+		from_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		confidence REAL NOT NULL,
+		source TEXT NOT NULL,
+		to_identity TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("topology: preserve incoming: create: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM ` + incomingDerivedTable); err != nil {
+		return fmt.Errorf("topology: preserve incoming: clear: %w", err)
+	}
+	_, err := tx.Exec(`INSERT INTO `+incomingDerivedTable+`(from_id, kind, confidence, source, to_identity)
+		SELECT e.from_id, e.kind, e.confidence, e.source, e.to_identity
+		  FROM topology_edges e
+		  JOIN topology_nodes tn ON tn.id = e.to_id
+		  JOIN topology_nodes fn ON fn.id = e.from_id
+		 WHERE tn.file_id = ? AND fn.file_id <> ?
+		   AND e.source IN (?, ?) AND e.to_identity <> ''`,
+		fileID, fileID, importResolverSource, callResolverSource)
+	if err != nil {
+		return fmt.Errorf("topology: preserve incoming: capture: %w", err)
+	}
+	return nil
+}
+
+func restoreIncomingDerived(tx *sql.Tx, fileID int64, relPath string) error {
+	_, err := tx.Exec(`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+		SELECT p.from_id, tn.id, p.kind, p.confidence, p.source, p.to_identity
+		  FROM `+incomingDerivedTable+` p
+		  JOIN topology_nodes tn ON tn.file_id = ?
+		   AND ? || char(0) ||
+		       CASE WHEN tn.qualified <> '' THEN tn.qualified ELSE tn.name END = p.to_identity
+		 WHERE NOT EXISTS (
+		       SELECT 1 FROM topology_edges e
+		        WHERE e.from_id = p.from_id AND e.to_id = tn.id
+		          AND e.kind = p.kind AND e.source = p.source
+		   )`,
+		fileID, relPath)
+	if err != nil {
+		return fmt.Errorf("topology: preserve incoming: restore: %w", err)
+	}
+	return nil
 }
 
 // recordFileError stores the failure with the file's mtime but no content
@@ -157,8 +211,8 @@ func insertEdges(tx *sql.Tx, nodeIDs []int64, edges []Edge) error {
 			continue
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source)
-             VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+             VALUES (?, ?, ?, ?, ?, '')`,
 			fromID, toID, string(e.Kind), e.Confidence, e.Source); err != nil {
 			return fmt.Errorf("topology: insert edge: %w", err)
 		}

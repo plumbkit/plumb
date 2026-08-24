@@ -133,17 +133,16 @@ type ExploreOpts struct {
 	// IncludeDerivedCalls admits the cross-file `calls` edges the call resolver
 	// derives (`source = "call-resolver"`). It defaults to FALSE, so a caller
 	// asking for `calls` edges gets the extractor's intra-file edges and nothing
-	// else — which is what the "nothing reads these yet" contract means in code
-	// rather than in prose.
+	// else — consumers remain excluded by default for the deliberate step-6
+	// rollout, which is enforced in code rather than left to prose.
 	//
 	// The exclusion is by SOURCE, not by kind: the derived edges carry
 	// kind = "calls" exactly like the extractor's, so a kind filter cannot
 	// separate them and every consumer asking for `calls` would receive them
-	// silently. They are excluded until their lifecycle across an incremental
-	// re-index is pinned (they are deleted and rebuilt wholesale on every pass,
-	// so a consumer can observe the rebuild window), and until each consumer is
-	// onboarded deliberately with a measured before/after. This flag is the
-	// switch that onboarding flips, one caller at a time.
+	// silently. Their lifecycle is durable across incremental re-indexes, but each
+	// consumer remains excluded until it is onboarded deliberately with a measured
+	// before/after in step 6. This flag is the switch that rollout flips, one
+	// consumer at a time.
 	IncludeDerivedCalls bool
 }
 

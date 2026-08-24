@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -131,5 +132,149 @@ func TestLinkImports_CreatesCrossFileEdges(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("resolver edges after second pass = %d, want 2 (edges must be rebuilt, not appended)", total)
+	}
+}
+
+func TestLinkImports_ScopedCalleeReindexRepointsAndPreservesOtherPackage(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "imports.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	statsFile := insertTestFile(t, db, "internal/stats/stats.go")
+	_ = insertTestNode(t, db, statsFile, "internal/stats/stats.go", Node{Kind: KindPackage, Name: "stats", Language: "go"})
+	otherFile := insertTestFile(t, db, "internal/other/other.go")
+	otherPkg := insertTestNode(t, db, otherFile, "internal/other/other.go", Node{Kind: KindPackage, Name: "other", Language: "go"})
+	importer := insertTestFile(t, db, "internal/cli/imports.go")
+	statsImport := insertTestNode(t, db, importer, "internal/cli/imports.go", Node{Kind: KindImport, Name: "stats", Qualified: "example.com/m/internal/stats", Language: "go"})
+	otherImport := insertTestNode(t, db, importer, "internal/cli/imports.go", Node{Kind: KindImport, Name: "other", Qualified: "example.com/m/internal/other", Language: "go"})
+	idx := &Indexer{db: db}
+	if err := idx.linkImports(); err != nil {
+		t.Fatal(err)
+	}
+	var statsFileID int64
+	if err := db.QueryRow(`SELECT id FROM topology_files WHERE path='internal/stats/stats.go'`).Scan(&statsFileID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := captureIncomingDerived(tx, statsFileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`DELETE FROM topology_nodes WHERE file_id=?`, statsFileID); err != nil {
+		t.Fatal(err)
+	}
+	newStats := insertTestNodeTx(t, tx, statsFileID, "internal/stats/stats.go", Node{Kind: KindPackage, Name: "stats", Language: "go"})
+	if err := restoreIncomingDerived(tx, statsFileID, "internal/stats/stats.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	changes := indexChanges{paths: map[string]struct{}{"internal/stats/stats.go": {}}}
+	if err := idx.linkImportsContext(context.Background(), rebuildScoped, changes); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND to_id=? AND source=?`, statsImport, newStats, importResolverSource).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("stats import after reindex = %d, want 1", n)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND to_id=? AND source=?`, otherImport, otherPkg, importResolverSource).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("unrelated other import after stats reindex = %d, want 1", n)
+	}
+	var identity string
+	if err := db.QueryRow(`SELECT to_identity FROM topology_edges WHERE from_id=? AND to_id=? AND source=?`, statsImport, newStats, importResolverSource).Scan(&identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity != "internal/stats/stats.go\x00stats" {
+		t.Fatalf("import identity = %q", identity)
+	}
+}
+
+func TestPlanRebuild_TargetPackageAdditionAndRemovalReconcilesImporter(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "imports.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	importerFile := insertTestFile(t, db, "internal/cli/imports.go")
+	insertTestNode(t, db, importerFile, "internal/cli/imports.go", Node{Kind: KindPackage, Name: "cli", Language: "go"})
+	importNode := insertTestNode(t, db, importerFile, "internal/cli/imports.go",
+		Node{Kind: KindImport, Name: "stats", Qualified: "example.com/m/internal/stats", Language: "go"})
+	idx := &Indexer{db: db}
+	ctx := context.Background()
+	if err := idx.linkImportsContext(ctx, rebuildFull, indexChanges{full: true}); err != nil {
+		t.Fatalf("initial full import link: %v", err)
+	}
+	var edges int
+	if err := db.QueryRow("SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND source=?", importNode, importResolverSource).Scan(&edges); err != nil {
+		t.Fatal(err)
+	}
+	if edges != 0 {
+		t.Fatalf("importer edges before target package exists = %d, want 0", edges)
+	}
+	fp, err := resolverSurfaceFingerprint(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMeta(ctx, db, fp); err != nil {
+		t.Fatal(err)
+	}
+
+	targetFile := insertTestFile(t, db, "internal/stats/stats.go")
+	target := insertTestNode(t, db, targetFile, "internal/stats/stats.go", Node{Kind: KindPackage, Name: "stats", Language: "go"})
+	changes := indexChanges{paths: map[string]struct{}{"internal/stats/stats.go": {}}}
+	mode, _, err := idx.planRebuild(ctx, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != rebuildFull {
+		t.Fatalf("package target addition selected %v, want full reconciliation", mode)
+	}
+	if err := idx.linkImportsContext(ctx, mode, changes); err != nil {
+		t.Fatalf("link after package target addition: %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND to_id=? AND source=?", importNode, target, importResolverSource).Scan(&edges); err != nil {
+		t.Fatal(err)
+	}
+	if edges != 1 {
+		t.Fatalf("importer edge after package target addition = %d, want 1", edges)
+	}
+	fp, err = resolverSurfaceFingerprint(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMeta(ctx, db, fp); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec("DELETE FROM topology_files WHERE id=?", targetFile); err != nil {
+		t.Fatal(err)
+	}
+	mode, _, err = idx.planRebuild(ctx, changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != rebuildFull {
+		t.Fatalf("package target removal selected %v, want full reconciliation", mode)
+	}
+	if err := idx.linkImportsContext(ctx, mode, changes); err != nil {
+		t.Fatalf("link after package target removal: %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND source=?", importNode, importResolverSource).Scan(&edges); err != nil {
+		t.Fatal(err)
+	}
+	if edges != 0 {
+		t.Fatalf("importer edges after package target removal = %d, want 0", edges)
 	}
 }

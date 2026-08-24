@@ -537,3 +537,153 @@ func TestResolveCalls_ImportOfAnotherLanguagesDirectoryIsExternalNotUnmatched(t 
 		t.Errorf("Run→alpha.Do edges = %d, want 1 — the real edge must survive", got)
 	}
 }
+
+func TestResolveCalls_ScopedCalleeReindexRepointsAndPreservesUnrelated(t *testing.T) {
+	f := newResolverFixture(t)
+	otherFile := insertLangFile(t, f.db, "internal/other/other.go", "go")
+	insertTestNode(t, f.db, otherFile, "internal/other/other.go", Node{Kind: KindPackage, Name: "other", Language: "go"})
+	insertTestNode(t, f.db, otherFile, "internal/other/other.go", Node{Kind: KindImport, Name: "beta", Qualified: "example.com/m/internal/beta", Language: "go"})
+	otherRun := insertTestNode(t, f.db, otherFile, "internal/other/other.go", Node{Kind: KindFunction, Name: "OtherRun", Language: "go"})
+	insertSite(t, f.db, otherFile, otherRun, "go", CallSiteCall, "beta", "Do")
+	f.resolve(t)
+	if got := f.edgeCount(t, otherRun, f.betaDo); got != 1 {
+		t.Fatalf("unrelated beta edge before reindex = %d, want 1", got)
+	}
+	// Replace every alpha node, as persistFile does. CASCADE removes the old
+	// incoming edge; the scoped resolver must rebuild it from the stable identity.
+	var alphaFile int64
+	if err := f.db.QueryRow(`SELECT id FROM topology_files WHERE path='internal/alpha/alpha.go'`).Scan(&alphaFile); err != nil {
+		t.Fatal(err)
+	}
+	sameCaller := insertTestNode(t, f.db, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindFunction, Name: "SameCaller", Language: "go"})
+	if _, err := f.db.Exec(`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity) VALUES (?, ?, ?, ?, ?, ?)`, sameCaller, f.alphaDo, string(EdgeCalls), callEdgeConfidence, callResolverSource, "internal/alpha/alpha.go\x00Do"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec(`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity) VALUES (?, ?, ?, ?, ?, ?)`, f.run, f.alphaDo, string(EdgeCalls), callEdgeConfidence, callResolverSource, "internal/alpha/alpha.go\x00Gone"); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := captureIncomingDerived(tx, alphaFile); err != nil {
+		t.Fatal(err)
+	}
+	var preserved int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM temp.reindex_incoming`).Scan(&preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved != 3 {
+		t.Fatalf("preserved incoming edges = %d, want 3 external edges", preserved)
+	}
+	if _, err := tx.Exec(`DELETE FROM topology_nodes WHERE file_id=?`, alphaFile); err != nil {
+		t.Fatal(err)
+	}
+	newPkg := insertTestNodeTx(t, tx, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindPackage, Name: "alpha", Language: "go"})
+	_ = newPkg
+	newDo := insertTestNodeTx(t, tx, alphaFile, "internal/alpha/alpha.go", Node{Kind: KindFunction, Name: "Do", Language: "go"})
+	if err := restoreIncomingDerived(tx, alphaFile, "internal/alpha/alpha.go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	idx := &Indexer{db: f.db}
+	changes := indexChanges{paths: map[string]struct{}{"internal/alpha/alpha.go": {}}}
+	if err := idx.resolveCallsContext(context.Background(), rebuildScoped, changes); err != nil {
+		t.Fatalf("scoped resolve after callee reindex: %v", err)
+	}
+	if got := f.edgeCount(t, f.run, newDo); got != 1 {
+		t.Fatalf("repointed Run→alpha.Do edges = %d, want 1", got)
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 0 {
+		t.Fatalf("stale Run→old alpha.Do edges = %d, want 0", got)
+	}
+	var identity string
+	if err := f.db.QueryRow(`SELECT to_identity FROM topology_edges WHERE from_id=? AND to_id=? AND source=?`, f.run, newDo, callResolverSource).Scan(&identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity != "internal/alpha/alpha.go\x00Do" {
+		t.Fatalf("to_identity = %q, want stable path/name", identity)
+	}
+	var missing int
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM topology_edges WHERE from_id=? AND source=? AND to_identity=?`, f.run, callResolverSource, "internal/alpha/alpha.go\x00Gone").Scan(&missing); err != nil {
+		t.Fatal(err)
+	}
+	if missing != 0 {
+		t.Fatalf("missing target identity restored %d edges, want 0", missing)
+	}
+	if got := f.edgeCount(t, otherRun, f.betaDo); got != 1 {
+		t.Fatalf("unrelated beta edge after alpha reindex = %d, want 1", got)
+	}
+}
+
+func TestResolveCalls_ScopedCancellationLeavesGraphUntouched(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := (&Indexer{db: f.db}).resolveCallsContext(ctx, rebuildScoped, indexChanges{paths: map[string]struct{}{"internal/alpha/alpha.go": {}}})
+	if err == nil {
+		t.Fatal("canceled scoped resolve succeeded")
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 1 {
+		t.Fatalf("edge count after canceled scoped resolve = %d, want 1", got)
+	}
+}
+
+func TestResolveCalls_FullRetryAfterScopedCancellation(t *testing.T) {
+	f := newResolverFixture(t)
+	f.resolve(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	idx := &Indexer{db: f.db}
+	_ = idx.resolveCallsContext(ctx, rebuildScoped, indexChanges{paths: map[string]struct{}{"internal/alpha/alpha.go": {}}})
+	if err := idx.resolveCallsContext(context.Background(), rebuildFull, indexChanges{full: true}); err != nil {
+		t.Fatalf("full retry after canceled scoped pass: %v", err)
+	}
+	if got := f.edgeCount(t, f.run, f.alphaDo); got != 1 {
+		t.Fatalf("edge count after full retry = %d, want 1", got)
+	}
+}
+
+func TestPlanRebuild_TargetSurfaceAdditionForcesFullResolution(t *testing.T) {
+	f := newResolverFixture(t)
+	ctx := context.Background()
+	idx := &Indexer{db: f.db}
+	if err := idx.resolveCallsContext(ctx, rebuildFull, indexChanges{full: true}); err != nil {
+		t.Fatalf("initial full resolve: %v", err)
+	}
+	beforeQualified := callMeta(t, f.db, metaCallQualifiedSites)
+	fp, err := resolverSurfaceFingerprint(ctx, f.db)
+	if err != nil {
+		t.Fatalf("initial resolver surface fingerprint: %v", err)
+	}
+	if err := writeMeta(ctx, f.db, fp); err != nil {
+		t.Fatalf("write resolver surface fingerprint: %v", err)
+	}
+
+	var alphaFile int64
+	if err := f.db.QueryRow("SELECT id FROM topology_files WHERE path='internal/alpha/alpha.go'").Scan(&alphaFile); err != nil {
+		t.Fatal(err)
+	}
+	missing := insertTestNode(t, f.db, alphaFile, "internal/alpha/alpha.go",
+		Node{Kind: KindFunction, Name: "Missing", Language: "go"})
+	changes := indexChanges{paths: map[string]struct{}{"internal/alpha/alpha.go": {}}}
+	mode, _, err := idx.planRebuild(ctx, changes)
+	if err != nil {
+		t.Fatalf("plan after target addition: %v", err)
+	}
+	if mode != rebuildFull {
+		t.Fatalf("target addition selected %v, want full reconciliation", mode)
+	}
+	if err := idx.resolveCallsContext(ctx, mode, changes); err != nil {
+		t.Fatalf("full resolve after target addition: %v", err)
+	}
+	if got := f.edgeCount(t, f.run, missing); got != 1 {
+		t.Fatalf("unchanged caller→new alpha.Missing edges = %d, want 1", got)
+	}
+	if got := callMeta(t, f.db, metaCallQualifiedSites); got != beforeQualified {
+		t.Fatalf("qualified-site census changed from %d to %d after target addition", beforeQualified, got)
+	}
+}

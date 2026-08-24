@@ -31,6 +31,26 @@ func insertTestNode(t *testing.T, db *sql.DB, fileID int64, relPath string, n No
 	return id
 }
 
+func insertTestNodeTx(t *testing.T, tx *sql.Tx, fileID int64, relPath string, n Node) int64 {
+	t.Helper()
+	res, err := tx.Exec(
+		`INSERT INTO topology_nodes(file_id, kind, name, qualified, signature, start_line, end_line, docstring, language)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+		fileID, string(n.Kind), n.Name, n.Qualified, n.Signature, n.StartLine, n.EndLine, n.Docstring, n.Language)
+	if err != nil {
+		t.Fatalf("insert node %q: %v", n.Name, err)
+	}
+	id, _ := res.LastInsertId()
+	tokens := tokenise.SplitIdentifier(n.Name)
+	if _, err := tx.Exec(
+		`INSERT INTO topology_fts(rowid, name, name_tokens, qualified, signature, docstring, path, kind)
+         VALUES (?,?,?,?,?,?,?,?)`,
+		id, n.Name, tokens, n.Qualified, n.Signature, n.Docstring, relPath, string(n.Kind)); err != nil {
+		t.Fatalf("insert fts for node %q: %v", n.Name, err)
+	}
+	return id
+}
+
 func insertTestEdge(t *testing.T, db *sql.DB, fromID, toID int64, kind string) {
 	t.Helper()
 	if _, err := db.Exec(

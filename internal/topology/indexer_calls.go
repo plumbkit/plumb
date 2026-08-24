@@ -9,8 +9,9 @@ import (
 )
 
 // callResolverSource marks the edges this pass owns. Like the import resolver's,
-// they are DERIVED: the pass deletes and rebuilds every edge carrying this
-// source, so no extractor may ever emit it.
+// they are DERIVED: full rebuilds clear source-owned rows, while the incremental
+// lifecycle replaces changed caller rows and repoints incoming callee rows by
+// stable identity. No extractor may ever emit this source.
 const callResolverSource = "call-resolver"
 
 // callEdgeConfidence sits below an extractor's 1.0 for the same reason the
@@ -92,20 +93,39 @@ type callResolution struct {
 //     rounding error — it is most of the call graph, and it is left absent and
 //     labelled rather than present and wrong.
 //
-// Like linkImports, the edges are rebuilt wholesale on every pass rather than
-// patched per file: a cross-file edge is keyed by two node rowids and both
-// endpoints CASCADE, so re-indexing either side silently deletes it. Rebuilding
-// is what makes that harmless today; making these edges survive an incremental
-// re-index without a full pass is a separate piece of work, and until it lands
-// nothing may depend on them persisting between passes.
+// Like linkImports, the lifecycle accounts for both endpoint CASCADEs: a callee
+// re-index captures and repoints incoming rows by stable to_identity, while a
+// caller re-index replaces only its outgoing rows. Full rebuilds still clear and
+// re-derive the source-owned graph, but incremental saves keep unaffected edges
+// durable without exposing a half-graph to consumers.
+// resolveCalls preserves the legacy full-pass API used by focused resolver tests.
 func (idx *Indexer) resolveCalls(ctx context.Context) error {
-	tx, err := idx.db.Begin()
+	return idx.resolveCallsContext(ctx, rebuildFull, indexChanges{full: true})
+}
+
+func (idx *Indexer) resolveCallsContext(ctx context.Context, mode rebuildMode, changed indexChanges) error {
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("topology: resolve calls: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(`DELETE FROM topology_edges WHERE source = ?`, callResolverSource); err != nil {
+	scoped := mode != rebuildFull
+	if scoped {
+		ids, err := fileIDsForPaths(ctx, tx, changed.sortedPaths())
+		if err != nil {
+			return err
+		}
+		if err := fillScope(ctx, tx, ids); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM topology_edges
+			WHERE source = ? AND from_id IN (
+				SELECT n.id FROM topology_nodes n JOIN rebuild_scope s ON s.file_id = n.file_id
+			)`, callResolverSource); err != nil {
+			return fmt.Errorf("topology: resolve calls: scoped clear: %w", err)
+		}
+	} else if _, err := tx.ExecContext(ctx, `DELETE FROM topology_edges WHERE source = ?`, callResolverSource); err != nil {
 		return fmt.Errorf("topology: resolve calls: clear: %w", err)
 	}
 
@@ -116,19 +136,21 @@ func (idx *Indexer) resolveCalls(ctx context.Context) error {
 			return err
 		}
 		if !admitted {
-			// The second half of the gate is missing: the index holds no package
-			// node for this language, so there is nothing to resolve THROUGH. Not
-			// an assertion that the workspace has no calls.
 			continue
 		}
-		r, err := resolveLanguageCalls(ctx, tx, lang)
+		r, err := resolveLanguageCallsScoped(ctx, tx, lang, scoped)
 		if err != nil {
 			return err
 		}
 		total.add(r)
 	}
-	if err := writeCallMeta(tx, total); err != nil {
-		return err
+	// Scoped passes preserve the published whole-index census. A callee re-index
+	// changes rowids, not call-site facts; a caller re-index that changes sites is
+	// followed by the next full reconciliation (resync/failure recovery).
+	if !scoped {
+		if err := writeCallMeta(tx, total); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -145,12 +167,7 @@ func (r *callResolution) add(o callResolution) {
 	r.qualifiedSites += o.qualifiedSites
 }
 
-// resolveLanguageCalls resolves one admitted language's call sites. Every lookup
-// table it builds is filtered to that language, which is what stops a traversal
-// admitted for one language from reaching into another's nodes: a C# namespace
-// node is not a candidate target for a Go call, and a polyglot workspace's Go
-// answer must contain no C# node at all rather than a plausible-looking one.
-func resolveLanguageCalls(ctx context.Context, tx *sql.Tx, lang string) (callResolution, error) {
+func resolveLanguageCallsScoped(ctx context.Context, tx *sql.Tx, lang string, scoped bool) (callResolution, error) {
 	var r callResolution
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM topology_call_sites WHERE language = ? AND site_kind = ?`,
@@ -161,7 +178,7 @@ func resolveLanguageCalls(ctx context.Context, tx *sql.Tx, lang string) (callRes
 	if err != nil {
 		return r, err
 	}
-	edges, err := collectResolvedEdges(ctx, tx, lang, tables, &r)
+	edges, err := collectResolvedEdges(ctx, tx, lang, tables, &r, scoped)
 	if err != nil {
 		return r, err
 	}
@@ -171,17 +188,18 @@ func resolveLanguageCalls(ctx context.Context, tx *sql.Tx, lang string) (callRes
 	return r, nil
 }
 
-// resolverTables are the three language-filtered lookups a resolution pass needs.
-// Filtering every one of them to the admitted language is what stops a
-// traversal admitted for one language from reaching into another's nodes: a C#
-// namespace node is not a candidate target for a Go call, and a polyglot
-// workspace's Go answer must contain no non-Go node at all rather than a
-// plausible-looking one.
+type callTarget struct {
+	id       int64
+	identity string
+}
+
 type resolverTables struct {
 	pkgDirs map[string][]int64
 	imports map[int64]map[string]string
-	targets map[string]map[string][]int64
+	targets map[string]map[string][]callTarget
 }
+
+// resolverTables are the three language-filtered lookups a resolution pass needs.
 
 func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverTables, error) {
 	var t resolverTables
@@ -198,16 +216,19 @@ func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverT
 
 // resolvedEdge is one cross-file call edge to be written.
 type resolvedEdge struct {
-	from, to int64
+	from, to   int64
+	toIdentity string
 }
 
-func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution) ([]resolvedEdge, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path
+func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution, scoped bool) ([]resolvedEdge, error) {
+	query := `SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path
            FROM topology_call_sites cs
            JOIN topology_files f ON f.id = cs.file_id
-          WHERE cs.language = ? AND cs.site_kind = ? AND cs.qualifier IS NOT NULL`,
-		lang, string(CallSiteCall))
+          WHERE cs.language = ? AND cs.site_kind = ? AND cs.qualifier IS NOT NULL`
+	if scoped {
+		query += ` AND cs.file_id IN (SELECT file_id FROM rebuild_scope)`
+	}
+	rows, err := tx.QueryContext(ctx, query, lang, string(CallSiteCall))
 	if err != nil {
 		return nil, fmt.Errorf("topology: resolve calls: scan sites: %w", err)
 	}
@@ -221,33 +242,22 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 			return nil, fmt.Errorf("topology: resolve calls: scan site: %w", err)
 		}
 		r.qualifiedSites++
-		to, bucket := resolveOne(t.imports[fileID], qualifier, callee, t.pkgDirs, t.targets)
-		key := [2]int64{enclosing, to}
+		target, bucket := resolveOne(t.imports[fileID], qualifier, callee, t.pkgDirs, t.targets)
+		key := [2]int64{enclosing, target.id}
 		if bucket == bucketResolved {
 			switch {
-			// A site with no caller node to hang an edge on, or one whose target
-			// is its own declaration, has no edge to write. Writing one anyway
-			// would put from_id = 0 into topology_edges, which violates the FK
-			// under `PRAGMA foreign_keys = ON` and aborts the whole resolve
-			// transaction — one such site would cost the workspace its entire
-			// cross-file call graph, not just its own edge.
-			case enclosing == 0 || enclosing == to:
+			case enclosing == 0 || enclosing == target.id:
 				bucket = bucketNoCaller
-			// The same caller calling the same target twice is one edge, not two:
-			// a duplicated row double-counts that neighbour in every consumer that
-			// weighs edges.
 			case seen[key]:
 				bucket = bucketRepeat
 			}
 		}
-		// Exactly one bucket per qualified site, on every path — that is what
-		// makes the buckets sum to qualifiedSites rather than nearly sum to it.
 		r.countBucket(bucket)
 		if bucket != bucketResolved {
 			continue
 		}
 		seen[key] = true
-		edges = append(edges, resolvedEdge{from: enclosing, to: to})
+		edges = append(edges, resolvedEdge{from: enclosing, to: target.id, toIdentity: target.identity})
 		if !isGoTestPath(callerPath) {
 			r.resolvedNonTest++
 		}
@@ -280,14 +290,14 @@ func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge) error {
 		return nil
 	}
 	stmt, err := tx.Prepare(
-		`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source)
-         VALUES (?, ?, ?, ?, ?)`)
+		`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+         VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("topology: resolve calls: prepare: %w", err)
 	}
 	defer stmt.Close()
 	for _, e := range edges {
-		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), callEdgeConfidence, callResolverSource); err != nil {
+		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), callEdgeConfidence, callResolverSource, e.toIdentity); err != nil {
 			return fmt.Errorf("topology: resolve calls: insert: %w", err)
 		}
 	}
@@ -327,23 +337,20 @@ const (
 // qualifier is never a package-qualified call in valid Go, so treating it as a
 // receiver call is the correct reading, not a fallback.
 func resolveOne(fileImports map[string]string, qualifier, callee string,
-	pkgDirs map[string][]int64, targets map[string]map[string][]int64,
-) (int64, resolveBucket) {
+	pkgDirs map[string][]int64, targets map[string]map[string][]callTarget,
+) (callTarget, resolveBucket) {
 	importPath, ok := fileImports[qualifier]
 	if !ok || !isExportedName(callee) {
-		return 0, bucketReceiver
+		return callTarget{}, bucketReceiver
 	}
 	dir, ok := matchImportDir(importPath, pkgDirs)
 	if !ok {
-		return 0, bucketExternal
+		return callTarget{}, bucketExternal
 	}
 	ids := targets[dir][callee]
 	if len(ids) == 0 {
-		return 0, bucketUnmatched
+		return callTarget{}, bucketUnmatched
 	}
-	// A directory can hold two packages (`foo` and its external `foo_test`), so a
-	// name can appear twice in one directory. targetsByDir orders by rowid, which
-	// makes the choice stable across passes rather than map-iteration random.
 	return ids[0], bucketResolved
 }
 
@@ -449,12 +456,12 @@ func importsByFile(ctx context.Context, tx *sql.Tx, lang string) (map[int64]map[
 }
 
 // targetsByDir indexes callable targets by directory and name. Only top-level
+// targetsByDir indexes callable targets by directory and name. Only top-level
 // functions are candidates: a package-qualified call cannot name a method, and
-// including methods would let `pkg.Do()` match an unrelated `(*T).Do` that
-// happens to live in the target package.
-func targetsByDir(ctx context.Context, tx *sql.Tx, lang string) (map[string]map[string][]int64, error) {
+// including methods would let `pkg.Do()` match an unrelated method.
+func targetsByDir(ctx context.Context, tx *sql.Tx, lang string) (map[string]map[string][]callTarget, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT n.id, n.name, f.path FROM topology_nodes n
+		`SELECT n.id, n.name, n.qualified, f.path FROM topology_nodes n
            JOIN topology_files f ON f.id = n.file_id
           WHERE n.kind = ? AND n.language = ?
           ORDER BY n.id`, string(KindFunction), lang)
@@ -462,18 +469,21 @@ func targetsByDir(ctx context.Context, tx *sql.Tx, lang string) (map[string]map[
 		return nil, fmt.Errorf("topology: resolve calls: targets: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]map[string][]int64{}
+	out := map[string]map[string][]callTarget{}
 	for rows.Next() {
 		var id int64
-		var name, p string
-		if err := rows.Scan(&id, &name, &p); err != nil {
+		var name, qualified, p string
+		if err := rows.Scan(&id, &name, &qualified, &p); err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: target scan: %w", err)
 		}
-		dir := path.Dir(p)
-		if out[dir] == nil {
-			out[dir] = map[string][]int64{}
+		if out[path.Dir(p)] == nil {
+			out[path.Dir(p)] = map[string][]callTarget{}
 		}
-		out[dir][name] = append(out[dir][name], id)
+		identity := p + "\x00" + qualified
+		if qualified == "" {
+			identity = p + "\x00" + name
+		}
+		out[path.Dir(p)][name] = append(out[path.Dir(p)][name], callTarget{id: id, identity: identity})
 	}
 	return out, rows.Err()
 }
