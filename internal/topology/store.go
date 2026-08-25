@@ -304,6 +304,12 @@ func (s *Store) CallGraphSubjectForNode(ctx context.Context, nodeID int64) (Call
 	return CallGraphSubjectForNode(ctx, s.db, nodeID)
 }
 
+// FunctionGraph builds the full callable graph used by function-level
+// reachability. productionOnly excludes callers in Go test files.
+func (s *Store) FunctionGraph(ctx context.Context, language string, productionOnly bool) (*FunctionGraph, error) {
+	return LoadFunctionGraph(ctx, s.db, language, productionOnly)
+}
+
 // toRelative expresses an absolute path the way the index stores it: relative to
 // the workspace root. A path that does not resolve inside the workspace is
 // returned unchanged, which the query then simply fails to match.

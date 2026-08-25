@@ -103,4 +103,21 @@ func TestImpact_DoesNotServeDerivedCallEdges(t *testing.T) {
 	if n := edgeSources(res.DependsOn)["extractor"]; n != 1 {
 		t.Errorf("impact served %d extractor `calls` edges outward, want 1", n)
 	}
+
+	optedIn, err := ImpactFrom(context.Background(), f.db, Node{ID: f.run, Name: "Run"},
+		ImpactOpts{Depth: 2, MaxNodes: 200, MaxBytes: 100000, EdgeKinds: []string{string(EdgeCalls)}, IncludeDerivedCalls: true})
+	if err != nil {
+		t.Fatalf("ImpactFrom (opted in): %v", err)
+	}
+	if n := edgeSources(optedIn.DependsOn)[callResolverSource]; n != 1 {
+		t.Errorf("opted-in impact served %d %s edges outward, want the durable resolver edge", n, callResolverSource)
+	}
+	inward, err := ImpactFrom(context.Background(), f.db, Node{ID: f.alphaDo, Name: "Do"},
+		ImpactOpts{Depth: 1, MaxNodes: 200, MaxBytes: 100000, EdgeKinds: []string{string(EdgeCalls)}, IncludeDerivedCalls: true})
+	if err != nil {
+		t.Fatalf("ImpactFrom (opted-in inward): %v", err)
+	}
+	if n := edgeSources(inward.DependedOnBy)[callResolverSource]; n == 0 {
+		t.Errorf("opted-in impact served no %s edges inward; both directions must carry the flag", callResolverSource)
+	}
 }
