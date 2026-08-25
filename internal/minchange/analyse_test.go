@@ -109,6 +109,27 @@ func TestSingleUse_FlagsExactlyOneCaller(t *testing.T) {
 	}
 }
 
+func TestSingleUse_PathAwareCallerKeepsLowConfidence(t *testing.T) {
+	diff := ParseUnifiedDiff(newFileDiff("internal/new/helper.go",
+		"package helper",
+		"func Helper() {}",
+	))
+	var gotName, gotPath, gotKind string
+	r := Analyse(context.Background(), diff, Deps{
+		CallerCountAt: func(_ context.Context, name, path, kind string) (int, SymbolRef, bool) {
+			gotName, gotPath, gotKind = name, path, kind
+			return 1, SymbolRef{Name: "Caller", Path: "internal/caller/caller.go", Line: 9}, true
+		},
+	}, Options{})
+	f := findingOf(r, KindSingleUse)
+	if f == nil || f.Confidence != Low {
+		t.Fatalf("path-aware single-use finding = %+v, want low-confidence finding", f)
+	}
+	if gotName != "Helper" || gotPath != "internal/new/helper.go" || gotKind != "function" {
+		t.Fatalf("path-aware callback received (%q, %q, %q), want the changed symbol identity", gotName, gotPath, gotKind)
+	}
+}
+
 func TestSingleUse_QuietWhenMultipleOrAbsentCallers(t *testing.T) {
 	diff := ParseUnifiedDiff(newFileDiff("pkg/help.go",
 		"package pkg",

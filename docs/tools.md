@@ -773,20 +773,22 @@ Bidirectional blast-radius: what a symbol depends on and what depends on it.
 `max_nodes` (default 100, max 200), `max_bytes` (default 30000), `edge_kinds` (default
 `["imports","calls"]`).
 
-`mode: "reachability"` switches to a different, package-level question: what does an
-entry point (a `package main` directory, or a `topology_routes` candidate) actually pull
-in, and what is unreachable from every entry point — see
-[Topology → Package-level reachability](topology.md#package-level-reachability) for the
-full shape, its production-imports-only scoping, its Go-only limitation, and its
-correctness note. **Inputs (reachability mode; `roots`/`path_to`/`layers` are rejected
-outside this mode, not silently ignored):** `roots` (array of directories, or `"main"`;
-default every `package main` directory plus `topology_routes` candidates), `path_to` (a
-directory — returns one root→target chain instead of the summary), `layers` (boolean —
-returns a package-SCC condensation instead of the summary). Every response opens with
-`package-level (import edges, production imports only — Go _test.go importers
-excluded); function-level unavailable` and is capped at ~5 KB. Go-only for now: a
-workspace whose extractor doesn't emit the per-file package/import edge shape refuses
-with a clear message rather than reporting every package unreachable.
+`mode: "reachability"` selects full closure from entry points. `granularity` defaults
+to `package` (directory import edges) and accepts `function` (Go callable call edges).
+Package mode asks what a `package main` directory or `topology_routes` candidate pulls in;
+function mode asks what exact callable roots pull in. See
+[Topology → Package-level reachability](topology.md#package-level-reachability) for
+scoping, root rules, shape details, and correctness limits. **Inputs (reachability mode;
+`roots`/`path_to`/`layers` are rejected outside this mode, not silently ignored):**
+`granularity` (`package` default | `function`), `roots` (package directories or
+`file.go#Symbol`, plus `"main"`; defaults to package-main and route candidates), `path_to`
+(a directory in package mode or `file.go#Symbol` in function mode — one root→target
+chain), and `layers` (boolean — SCC condensation instead of the summary). Package
+responses open with `package-level (import edges, production imports only — Go _test.go
+importers excluded)`; function responses open with `function-level (static call edges,
+Go only; production callers; lower bound)`. Both are capped at 4,800 bytes. Package
+mode is Go-only because it needs the Go package/import shape; function mode is admitted
+only for the Go call graph and refuses clearly when that admission is unavailable.
 
 ### `topology_affected`
 Given changed files/symbols, return likely affected files and tests. **Inputs:**

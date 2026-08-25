@@ -404,12 +404,13 @@ type affectedGather struct {
 // Kind, ID and Path off each node and discards the rest. Charging it a
 // response-size limit is the same category error as clamping its node budget
 // with the schema's max_nodes.
-func graphTraversalOpts() topology.ImpactOpts {
+func graphTraversalOpts(includeDerived bool) topology.ImpactOpts {
 	return topology.ImpactOpts{
-		Depth:     2,
-		MaxNodes:  graphNodeBudget,
-		MaxBytes:  topology.MaxTraversalBytes(),
-		EdgeKinds: []string{"calls", "imports", "contains"},
+		Depth:               2,
+		MaxNodes:            graphNodeBudget,
+		MaxBytes:            topology.MaxTraversalBytes(),
+		EdgeKinds:           []string{"calls", "imports", "contains"},
+		IncludeDerivedCalls: includeDerived,
 	}
 }
 
@@ -425,7 +426,13 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 	// internal/stats/savings.go reported cmd/clientsmoke and internal/cli as
 	// affected — 984 false positives — while pushing the one test that covers the
 	// changed function out of the default result window entirely.
-	nb, err := g.store.ImpactFrom(ctx, root, graphTraversalOpts())
+	includeDerived := false
+	if subject, subjectErr := g.store.CallGraphSubjectForNode(ctx, root.ID); subjectErr == nil {
+		if admission, admissionErr := g.store.AdmitCallGraph(ctx, subject); admissionErr == nil {
+			includeDerived = admission.Admitted
+		}
+	}
+	nb, err := g.store.ImpactFrom(ctx, root, graphTraversalOpts(includeDerived))
 	if err != nil {
 		return
 	}

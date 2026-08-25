@@ -148,10 +148,11 @@ type ExploreOpts struct {
 
 // ImpactOpts controls the bidirectional BFS used by topology_impact.
 type ImpactOpts struct {
-	Depth     int
-	MaxNodes  int
-	MaxBytes  int
-	EdgeKinds []string
+	Depth               int
+	MaxNodes            int
+	MaxBytes            int
+	EdgeKinds           []string
+	IncludeDerivedCalls bool
 }
 
 // ImpactResult is the result of a bidirectional BFS around a centre node.
