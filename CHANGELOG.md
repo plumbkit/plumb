@@ -35,7 +35,27 @@
 
 ### Added
 
-- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392ms–2.95s** across local and hosted runners with **0.73–1.97 MiB** WAL growth; the portable CI regression guard requires every save to stay **<5s** and **<=2 MiB**. Consumers remain opt-in solely for deliberate step-6 measurement and rollout.
+- **The admitted Go cross-file call graph now reaches four consumers, each
+  behind its own opt-in (PLAN-372 step 6).** `topology_affected` kept the same
+  5-of-57 package answer on the measured `internal/stats/savings.go` scenario
+  while the branch's added tests moved the selected count from 2,854 to 2,860;
+  its response shrank 4,265 B to 4,186 B and measured 33.85 ms p95 (29.71 ms
+  before). A fixed `minimal_diff_review` fixture moves from zero visible callers
+  to one cross-file caller and suppresses the false single-use hint, while the
+  hint's confidence remains capped at Low. `call_hierarchy`'s topology fallback
+  likewise moves from zero to one cross-file caller without replacing
+  extractor-owned edges or LSP references.
+  `topology_impact({mode:"reachability", granularity:"function"})` is new: on
+  the measured branch corpus, 46 roots reached 267 of 5,495 production
+  callables in the hard-capped 4,800 B response at 48.60 ms p95; the pre-change
+  binary rejects `granularity`. Function reachability excludes `_test.go`
+  callers to match the existing "what ships" contract, even though those edges
+  remain recorded for the other three consumers. It is an explicitly partial
+  static graph: Go only, receiver methods/dynamic dispatch unresolved,
+  third-party targets outside the index, generated source included when
+  indexed, and build tags not evaluated; "not reached" is never presented as
+  proof of dead code.
+- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392ms–2.95s** across local and hosted runners with **0.73–1.97 MiB** WAL growth; the portable CI regression guard requires every save to stay **<5s** and **<=2 MiB**. Derived calls remain excluded by default; the measured step-6 consumers opt in per admitted Go subject.
 - **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
   headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
   is now recorded in a new `topology_call_sites` table — including the ones no single-file
