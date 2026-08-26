@@ -78,6 +78,13 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// subsumes the former applyMu — the lane already serialises config apply across
 	// attach / the 30s poll / the global-config subscription.
 	s.mutate(func(v *sessionView) {
+		// Diff BEFORE the swap: a change in the collaboration capability switches
+		// is surfaced to the agent on its next tool result / session_start, so a
+		// newly granted (or revoked) mailbox / cross-project consent is never
+		// silent (PLAN-414).
+		if notice := collabChangeNotice(v.collab, projectCfg.Collab); notice != "" {
+			v.collabNotice = notice
+		}
 		v.edits = projectCfg.Edits
 		v.walk = projectCfg.Walk
 		v.git = projectCfg.Git
@@ -151,6 +158,12 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	if !unreadable {
 		s.startXcodeForWorkspace(workspace, projectCfg.Xcode, execTrusted)
 	}
+	// Register this workspace with the daemon's per-workspace project-config
+	// watcher (PLAN-414): attach, re-pin and every reload funnel through here,
+	// so this is the one place the watcher set follows the pin. Idempotent on a
+	// same-workspace reload; acquire-before-release on a re-pin.
+	s.trackProjectWatch(workspace)
+
 	// A project config may set [tools] profile = "full" (or per-client) — tell the
 	// client to re-list when the resolved profile changed. Runs after the mutate
 	// above has returned, so it holds no lock when it calls view()/mutate().
@@ -185,6 +198,43 @@ func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
 		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}
 	return out
+}
+
+// isStrict reports whether strict mode is in effect for this session.
+func (s *connSession) isStrict() bool {
+	return s.view().edits.Strict
+}
+
+// editsConfig returns the current resolved edits config.
+func (s *connSession) editsConfig() config.EditsConfig {
+	return s.view().edits
+}
+
+// memoryConfig returns the current resolved [memory] config off the lock-free
+// snapshot (seeded at construction from global config, swapped per project on
+// every attach / re-pin / reload). Lets the hot read_file hint path read the
+// config without re-reading and re-parsing .plumb/config.toml per call.
+func (s *connSession) memoryConfig() config.MemoryConfig {
+	return s.view().memory
+}
+
+// collabConfig returns the connection's snapshotted, project-resolved [collab]
+// config. Like memoryConfig it is captured on every attach / re-pin / reload, so
+// the hot peer-hint path reads it without re-parsing .plumb/config.toml per call.
+func (s *connSession) collabConfig() config.CollabConfig {
+	return s.view().collab
+}
+
+// toolsConfig returns the current resolved [tools] config off the lock-free
+// snapshot. Read on the tools/list filter path so the profile resolves without
+// a per-call disk read; swapped per project like the blocks above.
+func (s *connSession) toolsConfig() config.ToolsConfig {
+	return s.view().tools
+}
+
+// refuseHomeRoots reports whether the session refuses home-directory roots.
+func (s *connSession) refuseHomeRoots() bool {
+	return s.view().walk.RefuseHomeRoots
 }
 
 // gitConfig returns the current resolved git tool config.
@@ -249,27 +299,6 @@ func (s *connSession) maybeNotifyToolProfileChange() {
 	if err := v.notify("notifications/tools/list_changed", nil); err != nil {
 		s.log().Debug("daemon: tools/list_changed notify failed", "err", err)
 	}
-}
-
-// startConfigWatcher launches a background goroutine that polls for config file
-// changes every 30 seconds and reapplies the config when the file is modified.
-// The goroutine runs until s.ctx is cancelled (on session disconnect or daemon shutdown).
-// Invoked exactly once per session via sync.Once.
-func (s *connSession) startConfigWatcher() {
-	s.watcherOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-s.ctx.Done():
-					return
-				case <-ticker.C:
-					s.checkAndReloadConfig()
-				}
-			}
-		}()
-	})
 }
 
 // checkAndReloadConfig reapplies the workspace config when its file mtime

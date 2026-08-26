@@ -3,11 +3,11 @@ package cli
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
@@ -99,15 +99,20 @@ func (r *connRegistry) rekey(oldID, newID string) {
 // immediately for that project and never touches a session in another. The
 // reload hooks are collected under the lock and invoked outside it, since
 // applyProjectConfig may take per-session locks of its own.
+//
+// Both sides are canonicalised (symlinks resolved, not merely Clean'd): the
+// project-config watcher keys on paths.Canonical, and the pinned root is
+// canonical by construction (pool.Detect/SynthesiseRoot, issue #263), so an
+// aliased spelling from the control socket or a watcher must still match.
 func (r *connRegistry) reloadProject(ws string) {
-	target := filepath.Clean(ws)
+	target := paths.Canonical(ws)
 	r.mu.Lock()
 	var hits []func()
 	for _, h := range r.conns {
 		if h.workspace == nil || h.reloadProject == nil {
 			continue
 		}
-		if filepath.Clean(h.workspace()) == target {
+		if paths.Canonical(h.workspace()) == target {
 			hits = append(hits, h.reloadProject)
 		}
 	}

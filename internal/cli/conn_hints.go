@@ -109,6 +109,14 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	// a message still arrives on EVERY tool call rather than only the path-bearing
 	// ones the hints are restricted to.
 	text += s.pathHints(ctx, name, args)
+	// A collaboration-policy change (PLAN-414) reaches the agent on its next
+	// result — including session_start, which the mailbox block below skips.
+	// Read-and-clear is safe here: it sits between the read-only hints (a panic
+	// there never reaches it) and message delivery (whose panic path discards
+	// the whole string, notice included — advisory, so loss there is accepted).
+	if notice := s.collabPolicyNotice(); notice != "" {
+		text += "\n\n" + notice
+	}
 	if !mailboxSilentTools[name] {
 		text += s.messageHint(ctx)
 	}

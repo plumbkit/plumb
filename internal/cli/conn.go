@@ -63,6 +63,14 @@ type sessionView struct {
 	// surfaced by daemon_info. "" when unset.
 	purpose      string
 	lastCfgMtime time.Time
+	// projectWatchRoot: the canonical root this session holds a project-config
+	// watcher reference on (PLAN-414), acquired on every config apply, released
+	// on re-pin / close. fallbackWarned latches the one-time poll-fallback log
+	// line. collabNotice is a pending one-shot [collab] capability-change
+	// notice, surfaced on the next tool result via enrichToolOutput.
+	projectWatchRoot string
+	fallbackWarned   bool
+	collabNotice     string
 	// boundBudgetKey is the (client, workspace) key of the shared write budget
 	// this session currently holds a reference on (see sharedBudgets), or "" when
 	// none is held. Released and re-acquired on re-pin, released on close, so a
@@ -246,6 +254,11 @@ type connSession struct {
 	// onSessionID re-keys it when the stable replayed ID is adopted (PLAN-296).
 	// nil in tests that construct connSession directly rather than via handleConn.
 	registry *connRegistry
+
+	// projectWatches is the daemon-owned per-workspace project-config watcher
+	// manager (PLAN-414); nil in tests — then the 30s poll is the only reload
+	// mechanism, as before.
+	projectWatches *projectConfigWatchManager
 
 	// logicalAgents observes the distinct logical-agent identities this
 	// connection declares (session_start.session_id and per-call _meta), so a
@@ -440,6 +453,7 @@ func (s *connSession) close() {
 		budgetKey = v.boundBudgetKey
 		v.boundBudgetKey = ""
 	})
+	s.releaseProjectWatch()
 	if ref != "" {
 		s.pool.release(ref, refLang)
 	}
@@ -540,43 +554,6 @@ func (s *connSession) markBoundaryViolation(message string) {
 		info.Health = "blocked"
 		info.HealthMessage = message
 	})
-}
-
-// isStrict reports whether strict mode is in effect for this session.
-func (s *connSession) isStrict() bool {
-	return s.view().edits.Strict
-}
-
-// editsConfig returns the current resolved edits config.
-func (s *connSession) editsConfig() config.EditsConfig {
-	return s.view().edits
-}
-
-// memoryConfig returns the current resolved [memory] config off the lock-free
-// snapshot (seeded at construction from global config, swapped per project on
-// every attach / re-pin / reload). Lets the hot read_file hint path read the
-// config without re-reading and re-parsing .plumb/config.toml per call.
-func (s *connSession) memoryConfig() config.MemoryConfig {
-	return s.view().memory
-}
-
-// collabConfig returns the connection's snapshotted, project-resolved [collab]
-// config. Like memoryConfig it is captured on every attach / re-pin / reload, so
-// the hot peer-hint path reads it without re-parsing .plumb/config.toml per call.
-func (s *connSession) collabConfig() config.CollabConfig {
-	return s.view().collab
-}
-
-// toolsConfig returns the current resolved [tools] config off the lock-free
-// snapshot. Read on the tools/list filter path so the profile resolves without
-// a per-call disk read; swapped per project like the blocks above.
-func (s *connSession) toolsConfig() config.ToolsConfig {
-	return s.view().tools
-}
-
-// refuseHomeRoots reports whether the session refuses home-directory roots.
-func (s *connSession) refuseHomeRoots() bool {
-	return s.view().walk.RefuseHomeRoots
 }
 
 // clientNameStr returns the MCP client name for the session.

@@ -27,7 +27,13 @@ everything else is inherited from the layer below.
    `plumb config show` and the `daemon_info` tool.
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
-   file that sets one field inherits the rest.
+   file that sets one field inherits the rest. Hot-reloaded per workspace: the
+   daemon keeps one `fsnotify` watcher per live workspace (create, edit,
+   atomic-save, and deletion of the file are all picked up) and re-applies the
+   merged view to **every** session pinned to that workspace, without a
+   reconnect. Deleting the file or breaking its TOML fails closed to the global
+   policy. If the OS watcher cannot start or errors, the per-session 30-second
+   mtime poll reconciles that workspace and the daemon log says so.
 4. **Environment variables** — highest precedence; useful for one-off overrides
    without editing files.
 
@@ -35,7 +41,10 @@ Most sections are **hot-reloaded** without a reconnect: an `fsnotify` watch on
 the global `config.toml` (plus the `reload-config` control command and
 `plumb config reload`) re-reads the file and re-merges every live session's
 project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
-`[memory]`, `[collab]`, and `[semantics]` apply live. `[xcode]` is evaluated
+`[memory]`, `[collab]`, and `[semantics]` apply live. A change to a `[collab]`
+capability switch (mailbox, cross_project, intents, knowledge_handoff,
+peer_awareness) is also announced to the affected sessions on their next tool
+result or `session_start`. `[xcode]` is evaluated
 once per workspace on the next session, because enabling it may launch trusted
 project-sensitive tooling. The restart-bound exceptions are the `[lsp.*]`
 servers, `[cache]`, and `log_format`; `plumb config show` and `daemon_info` flag

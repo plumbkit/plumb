@@ -25,6 +25,27 @@
 
 ### Fixed
 
+- **A trusted project config edit now hot-reloads to EVERY session attached to
+  that workspace, promptly and without a reconnect (PLAN-414).** Project-config
+  reload used to depend on each connection polling its own
+  `.plumb/config.toml` mtime every 30 s, and a live incident showed two
+  attached sessions sitting stale after a trusted `[collab] cross_project =
+  true` override was written. The daemon now owns one fsnotify watcher per live
+  workspace (reference-counted, canonicalised so symlink/trailing-slash aliases
+  share it, torn down when the last session leaves) which sees writes, atomic
+  editor saves, creates and deletions of `config.toml` — and of `.plumb`
+  itself, so a config created after attach is picked up too — and dispatches
+  through `connRegistry.reloadProject`, re-applying every pinned session
+  exactly once per debounced change. Deletion and invalid TOML still fail
+  closed to global policy; a watcher that cannot start or errors marks itself
+  failed, logs it, and the 30 s poll reconciles only that workspace. Sessions
+  are told on their next tool result or `session_start` when a collaboration
+  capability (mailbox, cross_project, intents, knowledge_handoff,
+  peer_awareness) was enabled or revoked under them. All ten `[collab]` fields
+  are now correctly classified `ReloadLive` in the field registry (they always
+  applied live; the label said next-session), and `plumb config show` lists
+  `collab` under the live-reload groups.
+
 - **A daemon restart no longer drops the external session ID before a client can
   call `session_start` again (PLAN-404).** When an authenticated reconnect
   adopts its predecessor's plumb session ID, its fresh record now carries the
