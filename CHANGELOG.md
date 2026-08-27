@@ -170,11 +170,24 @@
 
 ### Changed
 
-- **`plumb restart` now prints a `Starting...` line before spawning the fresh
-  daemon, and reports its PID on success (`Daemon restarted (PID 1234).`)**
-  instead of a bare "Daemon restarted." — matching `plumb stop`'s existing
-  `Stopping daemon (PID ...)` line, so the two commands read as one
-  stop/start pair rather than a stop with a silent gap.
+- **`plumb restart` now always prints a `Starting...` line and reports the fresh
+  daemon's PID (`Daemon restarted (PID 1234).`)** instead of a bare "Daemon
+  restarted." — matching `plumb stop`'s existing `Stopping daemon (PID ...)`
+  line, so the two commands read as one stop/start pair rather than a stop with
+  a silent gap. v0.17.5 printed the `Starting...` line only on the branch where
+  `restart` itself spawned the daemon, which is the branch that rarely runs: with
+  sessions attached, a resilient `plumb serve` proxy respawns the daemon the
+  instant the old one dies and usually wins that race, so `respawnDaemon`'s first
+  dial succeeded and the line never appeared. The announcement is now the
+  command's, not whichever process happens to call `startDaemonProcess`. The PID
+  is resolved against the PIDs the restart just stopped, too: the outgoing daemon
+  does not erase its PID file, so a read inside the publish window could return
+  the number of the process the restart had just killed and report the corpse as
+  the fresh daemon — and when the file is still stale as the window closes, the
+  owner of the socket is asked instead of dropping the PID from the line. Guards:
+  `TestRespawnDaemon_AnnouncesStartingWhenAnotherProcessWonTheRace`,
+  `TestWaitForDaemonPID_NeverReportsAStoppedPID`,
+  `TestWaitForDaemonPID_PicksUpTheFreshPIDFile`.
 - **Derived call edges remain excluded from consumers for deliberate step-6 rollout.** Their
   lifecycle is now durable across incremental re-indexes: callee saves repoint incoming
   rows by stable `to_identity`, while caller saves replace only outgoing rows. The

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,8 +33,8 @@ func runRestart(_ *cobra.Command, _ []string) error {
 	PrintLogo()
 	pids := findAllDaemonPIDs()
 	if len(pids) == 0 {
-		fmt.Println("Daemon is not running — starting a fresh one.")
-		return respawnDaemon()
+		fmt.Println("Daemon is not running.")
+		return respawnDaemon(nil)
 	}
 
 	prompted := false
@@ -58,18 +59,23 @@ func runRestart(_ *cobra.Command, _ []string) error {
 		}
 		forceKillIfAlive(pid) // a daemon that ignored SIGTERM must still go, so respawn is real
 	}
-	return respawnDaemon()
+	return respawnDaemon(pids)
 }
 
-// respawnDaemon brings a daemon back up after a stop. A resilient client may
-// already have respawned it the instant the old one exited (the dial succeeds);
-// otherwise we spawn one ourselves under the shared spawn lock — the same
+// respawnDaemon brings a daemon back up after a stop. It always announces the
+// starting phase before checking whether one is already there — a resilient
+// client may win the race and respawn it first (the initial dial succeeds),
+// in which case we spawn nothing ourselves, but the command is still the one
+// telling the operator a restart is underway, so the announcement does not
+// depend on which process ends up calling startDaemonProcess. Absent that
+// race we spawn one ourselves under the shared spawn lock — the same
 // dial-or-spawn dance `plumb serve` uses, minus the serve-specific logging and
 // the stale-version warning (irrelevant right after a restart).
-func respawnDaemon() error {
+func respawnDaemon(stopped []int) error {
+	fmt.Println("Starting...")
 	socketPath := daemonSocketPath()
 	if dialDaemonOnce(socketPath) {
-		printDaemonRestarted()
+		printDaemonRestarted(stopped)
 		return nil
 	}
 
@@ -83,10 +89,9 @@ func respawnDaemon() error {
 
 	// Re-check under the lock — a concurrent serve may have spawned it.
 	if dialDaemonOnce(socketPath) {
-		printDaemonRestarted()
+		printDaemonRestarted(stopped)
 		return nil
 	}
-	fmt.Println("Starting...")
 	if err := startDaemonProcess(); err != nil {
 		return fmt.Errorf("starting daemon: %w", err)
 	}
@@ -94,7 +99,7 @@ func respawnDaemon() error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if dialDaemonOnce(socketPath) {
-			printDaemonRestarted()
+			printDaemonRestarted(stopped)
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -102,31 +107,52 @@ func respawnDaemon() error {
 	return daemonStartTimeoutError("come back up", socketPath)
 }
 
-// printDaemonRestarted reports the daemon is back up, including its PID when
-// available. The daemon writes its PID file just after opening the listening
-// socket (runDaemon in daemon.go), so a dial that succeeds in the same instant
-// can briefly race a not-yet-written file — waitForDaemonPID gives that a short
-// grace window instead of silently dropping the PID.
-func printDaemonRestarted() {
-	if pid := waitForDaemonPID(); pid > 0 {
+// printDaemonRestarted reports the daemon is back up, including the PID of the
+// process now serving. stopped lists the PIDs this restart just terminated, and
+// they are excluded deliberately: see waitForDaemonPID.
+func printDaemonRestarted(stopped []int) {
+	if pid := waitForDaemonPID(stopped); pid > 0 {
 		fmt.Printf("Daemon restarted (PID %d).\n", pid)
 		return
 	}
 	fmt.Println("Daemon restarted.")
 }
 
-func waitForDaemonPID() int {
-	deadline := time.Now().Add(2 * time.Second)
+// waitForDaemonPID resolves the PID of the daemon that is serving now, never one
+// of the stopped PIDs this restart just killed.
+//
+// Two races make the naive read wrong. The daemon writes its PID file just after
+// opening the listening socket (runDaemon in daemon.go), so a dial that succeeds
+// in the same instant can find the file not yet written — hence the grace
+// window. And the outgoing daemon does not erase the file on the way out, so
+// within that window a read can return the number of the corpse we just
+// SIGTERM'd, printing "Daemon restarted (PID <the one we killed>)". Excluding
+// stopped is what makes the printed PID mean what it says.
+//
+// If the file is still stale when the window closes, fall back to whoever owns
+// the socket: the dial already proved someone is serving, and that process is
+// the authority on who it is — better than dropping the PID from the line.
+func waitForDaemonPID(stopped []int) int {
+	deadline := time.Now().Add(daemonPIDGrace)
 	for {
-		if pid := readDaemonPID(); pid > 0 {
+		if pid := readDaemonPID(); pid > 0 && !slices.Contains(stopped, pid) {
 			return pid
 		}
 		if time.Now().After(deadline) {
-			return 0
+			break
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	if pid := findPIDViaSocket(daemonSocketPath()); pid > 0 && !slices.Contains(stopped, pid) {
+		return pid
+	}
+	return 0
 }
+
+// daemonPIDGrace is how long waitForDaemonPID waits for the fresh daemon to
+// publish its PID file. A var, not a const, so the tests can shrink it: the
+// stale-file path is only reachable by letting the window close.
+var daemonPIDGrace = 2 * time.Second
 
 // dialDaemonOnce reports whether the daemon socket accepts a connection.
 func dialDaemonOnce(socketPath string) bool {
