@@ -24,6 +24,14 @@ func (s *connSession) trackProjectWatch(workspace string) {
 	if s.projectWatches == nil || workspace == "" {
 		return
 	}
+	// A closing session must not re-acquire: a dispatch that captured this
+	// session's reload hook just before registry removal can fire after close
+	// has run, and an acquire here would leak a watcher reference nobody
+	// releases. Releases stay unguarded — close cancels s.ctx BEFORE
+	// releaseProjectWatch runs.
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return
+	}
 	canonical := paths.Canonical(workspace)
 	var prev string
 	s.mutate(func(v *sessionView) {

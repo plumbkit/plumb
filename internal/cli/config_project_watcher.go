@@ -50,17 +50,21 @@ import (
 const projectConfigDebounce = 250 * time.Millisecond
 
 // projectConfigWatch is one workspace's registration: the refcount of live
-// connections pinned to it, the cancel that stops its goroutine, and the
-// failed latch recording that the OS watcher could not start or errored at
-// runtime (the per-session poll owns that workspace until the next acquire
-// retries). ready is closed by the watch goroutine once the OS watcher is
-// attached (or has failed): acquire waits on it, so a config write can never
-// land in the window between a session pinning the workspace and the watcher
-// being live.
+// connections pinned to it, the cancel that stops its goroutine, and two
+// latches. failed records that the OS watcher could not start or errored at
+// runtime (the per-session poll owns that workspace until a retry); dead
+// records that the run goroutine has EXITED. acquire retries only a watch
+// that is both failed and dead: a live loop that saw a transient fsnotify
+// error keeps its goroutine — respawning over it would orphan the old
+// goroutine's cancel and double-dispatch every change. ready is closed by
+// the watch goroutine once the OS watcher is attached (or has failed):
+// acquire waits on it, so a config write can never land in the window
+// between a session pinning the workspace and the watcher being live.
 type projectConfigWatch struct {
 	refs   int
 	cancel context.CancelFunc
 	failed atomic.Bool
+	dead   atomic.Bool
 	ready  chan struct{}
 }
 
@@ -102,11 +106,14 @@ func (m *projectConfigWatchManager) acquire(workspace string) {
 	if w, ok := m.watches[root]; ok {
 		w.refs++
 		ready := w.ready
-		// A watch whose goroutine died (watcher creation/attach failed) gets a
+		// A watch whose goroutine DIED (watcher creation/attach failed) gets a
 		// fresh attempt here: the poll fallback covered the gap, and a new
-		// attachment is the natural retry point.
-		if w.failed.Load() {
+		// attachment is the natural retry point. A watch that failed but is
+		// still running is left alone — the poll covers it, and a respawn
+		// would orphan the live goroutine's cancel and double-dispatch.
+		if w.failed.Load() && w.dead.Load() {
 			w.failed.Store(false)
+			w.dead.Store(false)
 			ready = make(chan struct{})
 			w.ready = ready
 			ctx, cancel := context.WithCancel(m.ctx)
@@ -184,6 +191,9 @@ func (m *projectConfigWatchManager) refs(workspace string) int {
 // and an fsnotify error is often a dropped-event notice rather than a dead
 // watcher.
 func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWatch, root string, ready chan struct{}) {
+	// dead lets acquire distinguish a loop that EXITED (safe to retry) from
+	// one that merely saw a transient error and is still running.
+	defer w.dead.Store(true)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		w.failed.Store(true)
@@ -204,16 +214,7 @@ func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWat
 		return
 	}
 	plumbDir := filepath.Join(root, ".plumb")
-	plumbWatched := false
-	tryWatchPlumbDir := func() {
-		if plumbWatched {
-			return
-		}
-		if err := watcher.Add(plumbDir); err == nil {
-			plumbWatched = true
-		}
-	}
-	tryWatchPlumbDir()
+	plumbWatched := watchPlumbDir(watcher, plumbDir, false)
 	close(ready)
 	slog.Debug("daemon: watching project config for changes", "workspace", root)
 
@@ -232,10 +233,17 @@ func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWat
 				return
 			}
 			if filepath.Clean(event.Name) == plumbDir {
-				// The .plumb entry itself changed: re-arm the subdir watch (a
-				// rename-swap of the whole directory drops the old watch) and
-				// reload — removing .plumb revokes what its config granted.
-				tryWatchPlumbDir()
+				// The .plumb entry itself changed. A remove/rename of the
+				// directory kills the OS watch on the old inode, so drop the
+				// latch first — otherwise every later config.toml edit stays
+				// silently invisible (and failed is never set, so the poll
+				// fallback never engages either). Then re-arm — a no-op while
+				// the dir is still the watched one — and reload: removing
+				// .plumb revokes what its config granted.
+				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+					plumbWatched = false
+				}
+				plumbWatched = watchPlumbDir(watcher, plumbDir, plumbWatched)
 				rearmProjectTimer(timer, m.debounce)
 				continue
 			}
@@ -252,6 +260,16 @@ func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWat
 			m.dispatch(root)
 		}
 	}
+}
+
+// watchPlumbDir attaches the .plumb subdirectory watch unless the latch says
+// it is already attached, returning the new latch state. A false result means
+// the directory does not exist yet — the root watch will see it appear.
+func watchPlumbDir(watcher *fsnotify.Watcher, plumbDir string, watched bool) bool {
+	if watched {
+		return true
+	}
+	return watcher.Add(plumbDir) == nil
 }
 
 // projectConfigEvent reports whether an event under .plumb refers to

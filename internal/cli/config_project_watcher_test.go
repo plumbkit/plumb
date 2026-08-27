@@ -199,6 +199,101 @@ func TestProjectWatchManager_NoDispatchAfterLastRelease(t *testing.T) {
 	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
 }
 
+// TestProjectWatchManager_DispatchesOnAtomicRenameSave covers the editor
+// atomic-save pattern — write a sibling temp file, rename it over
+// config.toml — which swaps the inode the change lands on. The temp write
+// itself must NOT dispatch (it is not config.toml); the rename must.
+func TestProjectWatchManager_DispatchesOnAtomicRenameSave(t *testing.T) {
+	m, sig := testWatchManager(t, nil)
+	ws := t.TempDir()
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+	m.acquire(ws)
+
+	tmp := filepath.Join(ws, ".plumb", "config.toml.tmp")
+	if err := os.WriteFile(tmp, []byte("[edits]\nstrict = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
+	if err := os.Rename(tmp, filepath.Join(ws, ".plumb", "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+	awaitDispatch(t, sig, paths.Canonical(ws))
+}
+
+// TestProjectWatchManager_PlumbDirSwapKeepsWatching is the review-blocker
+// regression: removing and recreating .plumb wholesale (git clean, an
+// editor's directory sync, re-init) kills the OS watch on the old inode.
+// The watcher must re-arm on the recreated directory — before the fix the
+// latch stayed set and every later config.toml edit was silently invisible,
+// with healthy() still true so the poll fallback never engaged.
+func TestProjectWatchManager_PlumbDirSwapKeepsWatching(t *testing.T) {
+	m, sig := testWatchManager(t, nil)
+	ws := t.TempDir()
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+	m.acquire(ws)
+
+	if err := os.RemoveAll(filepath.Join(ws, ".plumb")); err != nil {
+		t.Fatal(err)
+	}
+	// The removal itself revokes the config and dispatches.
+	awaitDispatch(t, sig, paths.Canonical(ws))
+
+	// Recreate the directory and config; the watcher must re-arm here.
+	writeProjectCfg(t, ws, "[edits]\nstrict = false\n")
+	awaitDispatch(t, sig, paths.Canonical(ws))
+
+	// The decisive edit: a same-path write AFTER the swap is only visible if
+	// the re-armed .plumb watch is live. A blind watcher times out here.
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+	awaitDispatch(t, sig, paths.Canonical(ws))
+}
+
+// TestProjectWatchManager_FailedRetryWaitsForLoopExit pins the retry gate: a
+// watch whose goroutine is STILL RUNNING (failed on a transient fsnotify
+// error) must not be respawned by acquire — that would orphan the live
+// goroutine's cancel and double-dispatch every change. Only a watch whose
+// loop has exited (dead) gets a fresh attempt.
+func TestProjectWatchManager_FailedRetryWaitsForLoopExit(t *testing.T) {
+	m, _ := testWatchManager(t, nil)
+	ws := t.TempDir()
+	writeProjectCfg(t, ws, "")
+	m.acquire(ws)
+
+	root := paths.Canonical(ws)
+	m.mu.Lock()
+	w := m.watches[root]
+	firstReady := w.ready
+	w.failed.Store(true) // transient runtime error; the loop is still live
+	m.mu.Unlock()
+
+	m.acquire(ws)
+	m.mu.Lock()
+	if w.ready != firstReady {
+		t.Error("acquire respawned a watcher whose run loop is still alive — the live goroutine's cancel would be orphaned")
+	}
+	m.mu.Unlock()
+
+	// Once the loop has exited, acquire is the natural retry point: a fresh
+	// goroutine (new ready channel) and a cleared failed latch.
+	m.mu.Lock()
+	w.dead.Store(true)
+	m.mu.Unlock()
+	m.acquire(ws)
+	m.mu.Lock()
+	respawned := w.ready != firstReady
+	failed := w.failed.Load()
+	m.mu.Unlock()
+	if !respawned {
+		t.Error("acquire did not retry a watch whose loop had exited")
+	}
+	if failed {
+		t.Error("failed latch still set after the retry spawned a fresh watcher")
+	}
+	if got := m.refs(ws); got != 3 {
+		t.Fatalf("refs = %d, want 3", got)
+	}
+}
+
 func TestCollabChangeNotice(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -330,6 +425,35 @@ func TestProjectConfigWatcher_TwoSessionsReloadLive(t *testing.T) {
 		if s.collabConfig().CrossProject {
 			t.Fatalf("session %d: cross_project survived deletion of the file that granted it", i)
 		}
+	}
+}
+
+// TestProjectConfigWatcher_InvalidTOMLFailsClosed drives a broken config.toml
+// through the watcher DISPATCH (not just the apply path, which
+// config_failclosed_test.go pins directly): the session must fall back to the
+// global config whole — a half-applied or stale project view is not
+// acceptable.
+func TestProjectConfigWatcher_InvalidTOMLFailsClosed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	root := paths.Canonical(ws)
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store := config.NewStore(config.Defaults()) // global strict = false
+	registry := newConnRegistry()
+	m, sig := testWatchManager(t, registry)
+	s := watchTestSession(t, ctx, store, registry, m, "s1", ws)
+	if !s.isStrict() {
+		t.Fatal("valid project config did not apply strict = true")
+	}
+
+	writeProjectCfg(t, ws, "this is not [valid toml")
+	awaitDispatch(t, sig, root)
+	if s.isStrict() {
+		t.Error("invalid TOML left the previous project config in place — must fail closed to the global config")
 	}
 }
 

@@ -574,8 +574,12 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	})
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.
-	defer func() { registry.remove(s.sessionID()) }()
+	// The remove is deferred AFTER close so LIFO runs it FIRST: once the entry
+	// is gone, a project-config dispatch already in flight can no longer capture
+	// this session's reload hook and re-acquire a watcher reference nobody
+	// would release (PLAN-414).
 	defer s.close()
+	defer func() { registry.remove(s.sessionID()) }()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	writeTimeout := serverWriteTimeout()
 	srv.WriteTimeout = writeTimeout
