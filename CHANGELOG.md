@@ -1,27 +1,5 @@
 # Changelog
-## 0.17.3 (unreleased)
-
-### Security
-
-- **A reconnecting client can no longer claim an ended session's identity by
-  replaying its session ID (affects v0.17.0–v0.17.2).** Since 0.17.0 the
-  `plumb serve` proxy replays the plumb session ID a connection held before a
-  daemon restart, and the fresh daemon ADOPTED it so stats, memories and the
-  mailbox saw one continuous identity across the restart. But that value is
-  client-supplied, and the live session ID is deliberately disclosed to clients
-  (`session_start` echoes it in its result `_meta`), so any MCP client could
-  claim any ended session's ID and inherit its mailbox binding, stats
-  attribution and episodic-memory history. Adoption is now authorised by the
-  persisted `session_names` row keyed by the proxy session ID — the 122-bit
-  secret the serve process generates and which is never written to any file,
-  log, or tool result — and refuses unless the replayed ID matches the
-  persisted one, the same authorisation mailbox-identity inheritance always
-  required. With no persisted row (`persist_state = false`, a wiped store, or a
-  row written before the pairing existed) there is no proof and no adoption:
-  the reconnect forks its identity exactly as it did before 0.17.0. A genuine
-  proxy that replays a stale ID has its row converged to the ID the session
-  actually holds, so the next reconnect adopts correctly; the live-overlap
-  guard (`session.Adopt`'s `ErrIDTaken`) is unchanged.
+## 0.17.7 (unreleased)
 
 ### Fixed
 
@@ -78,6 +56,32 @@
   `TestPin_RestoreDoesNotResolveAfresh` covers a marker appearing above the
   pinned root while the daemon is down, where restoring must replay the stored
   path or refuse, never climb.
+
+## 0.17.6 (2026-08-27)
+
+### Security
+
+- **A reconnecting client can no longer claim an ended session's identity by
+  replaying its session ID (affects v0.17.0–v0.17.2).** Since 0.17.0 the
+  `plumb serve` proxy replays the plumb session ID a connection held before a
+  daemon restart, and the fresh daemon ADOPTED it so stats, memories and the
+  mailbox saw one continuous identity across the restart. But that value is
+  client-supplied, and the live session ID is deliberately disclosed to clients
+  (`session_start` echoes it in its result `_meta`), so any MCP client could
+  claim any ended session's ID and inherit its mailbox binding, stats
+  attribution and episodic-memory history. Adoption is now authorised by the
+  persisted `session_names` row keyed by the proxy session ID — the 122-bit
+  secret the serve process generates and which is never written to any file,
+  log, or tool result — and refuses unless the replayed ID matches the
+  persisted one, the same authorisation mailbox-identity inheritance always
+  required. With no persisted row (`persist_state = false`, a wiped store, or a
+  row written before the pairing existed) there is no proof and no adoption:
+  the reconnect forks its identity exactly as it did before 0.17.0. A genuine
+  proxy that replays a stale ID has its row converged to the ID the session
+  actually holds, so the next reconnect adopts correctly; the live-overlap
+  guard (`session.Adopt`'s `ErrIDTaken`) is unchanged.
+
+### Fixed
 
 - **A trusted project config edit now hot-reloads to EVERY session attached to
   that workspace, promptly and without a reconnect (PLAN-414).** Project-config
