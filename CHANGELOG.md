@@ -170,6 +170,11 @@
 
 ### Changed
 
+- **`plumb restart` now prints a `Starting...` line before spawning the fresh
+  daemon, and reports its PID on success (`Daemon restarted (PID 1234).`)**
+  instead of a bare "Daemon restarted." — matching `plumb stop`'s existing
+  `Stopping daemon (PID ...)` line, so the two commands read as one
+  stop/start pair rather than a stop with a silent gap.
 - **Derived call edges remain excluded from consumers for deliberate step-6 rollout.** Their
   lifecycle is now durable across incremental re-indexes: callee saves repoint incoming
   rows by stable `to_identity`, while caller saves replace only outgoing rows. The

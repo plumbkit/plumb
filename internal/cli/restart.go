@@ -69,7 +69,7 @@ func runRestart(_ *cobra.Command, _ []string) error {
 func respawnDaemon() error {
 	socketPath := daemonSocketPath()
 	if dialDaemonOnce(socketPath) {
-		fmt.Println("Daemon restarted.")
+		printDaemonRestarted()
 		return nil
 	}
 
@@ -83,9 +83,10 @@ func respawnDaemon() error {
 
 	// Re-check under the lock — a concurrent serve may have spawned it.
 	if dialDaemonOnce(socketPath) {
-		fmt.Println("Daemon restarted.")
+		printDaemonRestarted()
 		return nil
 	}
+	fmt.Println("Starting...")
 	if err := startDaemonProcess(); err != nil {
 		return fmt.Errorf("starting daemon: %w", err)
 	}
@@ -93,12 +94,38 @@ func respawnDaemon() error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if dialDaemonOnce(socketPath) {
-			fmt.Println("Daemon restarted.")
+			printDaemonRestarted()
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return daemonStartTimeoutError("come back up", socketPath)
+}
+
+// printDaemonRestarted reports the daemon is back up, including its PID when
+// available. The daemon writes its PID file just after opening the listening
+// socket (runDaemon in daemon.go), so a dial that succeeds in the same instant
+// can briefly race a not-yet-written file — waitForDaemonPID gives that a short
+// grace window instead of silently dropping the PID.
+func printDaemonRestarted() {
+	if pid := waitForDaemonPID(); pid > 0 {
+		fmt.Printf("Daemon restarted (PID %d).\n", pid)
+		return
+	}
+	fmt.Println("Daemon restarted.")
+}
+
+func waitForDaemonPID() int {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if pid := readDaemonPID(); pid > 0 {
+			return pid
+		}
+		if time.Now().After(deadline) {
+			return 0
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // dialDaemonOnce reports whether the daemon socket accepts a connection.
