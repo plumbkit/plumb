@@ -177,6 +177,17 @@ func TestForcedRepin_MarksProvenanceAndContests(t *testing.T) {
 	if !s.pinProvenance().Contested {
 		t.Fatal("two forced alternations between two roots did not make the connection contested")
 	}
+
+	// The operator-facing half, and an ORDERING assertion, not a duplicate of the
+	// line above. attachOrRepinTo resets Health to "" late in the same mutate
+	// closure — a successful re-pin means the session is healthy again — so a
+	// contested mark written before that reset is silently wiped by the very
+	// re-pin that earned it. The signal survives only because
+	// announceContestedPin runs AFTER the reset, and this is what says so: move
+	// the announce earlier and every other assertion in this file still passes.
+	if health, msg := sessionHealth(t, s.sessionID()); health != "contested_pin" {
+		t.Errorf("session health = %q (%q), want contested_pin — the re-pin's own Health reset wiped the mark it just earned", health, msg)
+	}
 }
 
 // TestUnforcedRepin_DoesNotContest: the guard is on force, not on movement. An
