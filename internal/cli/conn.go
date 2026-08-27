@@ -203,6 +203,14 @@ type sessionView struct {
 	pinVia, pinPrev string
 	pinAt           time.Time
 	pinOrigin       sessionstate.PinSource
+	// pinForced records that this pin overrode the sticky-pin guard with
+	// force: true — it did not merely change the workspace, it DISPLACED a pin
+	// another caller on this connection had deliberately set. Stamped in the same
+	// mutate as pinPrev, which names what was displaced; the two are only
+	// meaningful together. Surfaced to the displaced caller through
+	// tools.PinProvenance (see DisplacementNotice), because that caller is
+	// otherwise the only party to the event with no signal at all.
+	pinForced bool
 
 	// pinUnverifiedReplay marks a pin that arrived over the serve proxy's
 	// initialize _meta channel, which the daemon cannot authenticate (issue
@@ -264,6 +272,12 @@ type connSession struct {
 	// connection declares (session_start.session_id and per-call _meta), so a
 	// multiplexing client can be detected before it shares state (PLAN-286).
 	logicalAgents logicalAgentState
+
+	// pinContest is the connection's recent forced-pin-displacement history. It
+	// is how a multiplexing client that declares NO identity is detected —
+	// logicalAgents cannot see one, so the only evidence is the behaviour: a pin
+	// force-taken between projects, repeatedly. See conn_pin_contest.go.
+	pinContest pinContestState
 
 	// shards holds the per-logical-agent copies of the mutable facts, keyed by
 	// logical-agent ID. Populated only once the connection is shared; guarded by

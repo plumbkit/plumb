@@ -134,6 +134,92 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("EveryAgentWriteIsAttributedAndVisible", testEveryAgentWriteVisible)
 	t.Run("AnonymousCallsInheritTheLastAttachedAgent", testAnonymousCallsInheritTheLastAttachedAgent)
 	t.Run("SingleAgentConnectionStillPinsTheConnection", testSingleAgentConnectionStillPinsTheConnection)
+	t.Run("UndeclaredAgentsForcePingPongIsContested", testUndeclaredAgentsForcePingPongIsContested)
+}
+
+// testUndeclaredAgentsForcePingPongIsContested replays the topology this whole
+// file models with ONE detail removed: the agents declare no session_id at all.
+//
+// That is not a hypothetical client. It is the one the incident happened on —
+// its session record carries no external_id — and it is the case every other
+// subtest here is blind to, because each of them passes a session_id and so gets
+// PLAN-286's per-agent shards. With no identity on either channel,
+// logicalAgentState.seen stays EMPTY: sharedWith is false, no shard is created,
+// no shared-connection warning fires, and the anonymous-write ceiling never
+// engages (it needs two observed identities). Every #182 defence is inert, and
+// the two agents fight over the connection-level pin.
+//
+// What plumb can still see is the SHAPE, and this pins that it does: a pin
+// force-taken between two projects twice makes the connection contested, and
+// from then on the displaced agent is TOLD its workspace was taken instead of
+// being handed the force advice that caused the taking.
+func testUndeclaredAgentsForcePingPongIsContested(t *testing.T) {
+	m := newMultiAgentConn(t)
+	wsA, wsB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, wsA)
+	mustGitDir(t, wsB)
+
+	// Agent A takes the connection. No session_id — that is the whole point.
+	if err := m.sessionStart(t, map[string]any{"workspace": wsA}); err != nil {
+		t.Fatalf("agent A session_start: %v", err)
+	}
+	if committedShared(m.s) {
+		t.Fatal("an undeclared agent must not mark the connection shared; if it does, this subtest no longer models the incident")
+	}
+
+	// Agent B is refused — correctly — and the refusal tells it to force.
+	err := m.sessionStart(t, map[string]any{"workspace": wsB})
+	if err == nil {
+		t.Fatal("a second undeclared agent re-pinning across projects must be refused (sticky, issue #182)")
+	}
+	if !strings.Contains(err.Error(), "force: true") {
+		t.Fatalf("the first refusal no longer offers force; the incident's premise has changed: %v", err)
+	}
+
+	// B does as it was told. One displacement is still an ordinary switch.
+	if err := m.sessionStart(t, map[string]any{"workspace": wsB, "force": true}); err != nil {
+		t.Fatalf("agent B forced session_start: %v", err)
+	}
+	if m.s.pinContested() {
+		t.Fatal("a single forced re-pin made the connection contested; that is a project switch")
+	}
+
+	// A takes it back — the alternation. THIS is the signal.
+	if err := m.sessionStart(t, map[string]any{"workspace": wsA, "force": true}); err != nil {
+		t.Fatalf("agent A forced session_start: %v", err)
+	}
+	if !m.s.pinContested() {
+		t.Fatal("two forced alternations between two projects did not make the connection contested")
+	}
+
+	// B, now displaced, reaches for a file in its own project. It must learn
+	// that the workspace was taken — not merely that the connection points
+	// somewhere else, which reads as B's own mistake.
+	bErr := m.s.checkBoundary(filepath.Join(wsB, "main.go"), tools.AccessRead)
+	if bErr == nil {
+		t.Fatal("a file in the displaced project must still be refused; the pin really did move")
+	}
+	if !strings.Contains(bErr.Error(), "force-re-pinned away from "+wsB) {
+		t.Errorf("the displaced agent is not told its workspace was taken: %v", bErr)
+	}
+	if strings.Contains(bErr.Error(), "retry with force: true") {
+		t.Errorf("the displaced agent is still being told to force, which is what produced the ping-pong: %v", bErr)
+	}
+
+	// And the next refusal names the real remedy rather than the escalation.
+	err = m.sessionStart(t, map[string]any{"workspace": wsB})
+	if err == nil {
+		t.Fatal("the sticky guard stopped refusing once contested; this must change advice, never permission")
+	}
+	if !strings.Contains(err.Error(), "Identify each agent instead") {
+		t.Errorf("the contested refusal does not name the real remedy: %v", err)
+	}
+
+	// Forcing still WORKS. plumb cannot know which undeclared agent is entitled
+	// to the workspace, and refusing outright would strand real work.
+	if err := m.sessionStart(t, map[string]any{"workspace": wsB, "force": true}); err != nil {
+		t.Fatalf("force stopped working on a contested connection; that is a behaviour change, not a message change: %v", err)
+	}
 }
 
 // testSubagentSameCallIdentity is the headline regression. A subagent's FIRST

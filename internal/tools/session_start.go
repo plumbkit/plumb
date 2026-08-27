@@ -95,6 +95,7 @@ type SessionStart struct {
 	projectGitFn  func() ProjectGitStatus                                                           // may be nil; this session's captured view of the capability-granting keys its project config sets
 	lspLangFn     func() string                                                                     // may be nil; the LSP language attached to this session ("" when none)
 	lspSkipNoteFn func() string                                                                     // may be nil; names why no LSP is attached when the skip is deliberate (e.g. a home-directory workspace root)
+	pinProvFn     func() PinProvenance                                                              // may be nil; this connection's pin provenance, for the contested-connection note
 	lspLangsFn    func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn   func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
 	externalIDFn  func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
@@ -258,6 +259,21 @@ func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
 // returning "" ⇒ no line. Returns the receiver.
 func (t *SessionStart) WithLSPSkipNote(fn func() string) *SessionStart {
 	t.lspSkipNoteFn = fn
+	return t
+}
+
+// WithPinProvenance wires an accessor for this connection's pin provenance, so
+// the identity block can warn when the connection's workspace is being contended
+// by agents that are not identifying themselves (issue #182).
+//
+// session_start is where this belongs, not only daemon_info: it is the one
+// section every re-orienting agent reads, and the incident that motivated the
+// note went undiagnosed precisely because a session re-oriented, saw its
+// workspace, and had no way to learn that the workspace had been taken from it
+// minutes earlier. Nil-safe: unset or an uncontested pin ⇒ no line. Returns the
+// receiver.
+func (t *SessionStart) WithPinProvenance(fn func() PinProvenance) *SessionStart {
+	t.pinProvFn = fn
 	return t
 }
 
