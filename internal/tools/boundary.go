@@ -23,6 +23,16 @@ type PinProvenance struct {
 	Source   string    // "session_start", "roots", "unknown"; "restore:"-prefixed when replayed on reconnect; "" renders nothing
 	At       time.Time // when the pin was set; zero omits the age
 	Previous string    // previously pinned root; "" on a first attach
+	// Forced marks a pin that overrode the sticky-pin guard with force: true —
+	// i.e. it DISPLACED a pin someone had deliberately set (issue #182). Only
+	// meaningful together with Previous, which names what it displaced.
+	Forced bool
+	// Contested marks a connection whose pin has been force-displaced repeatedly
+	// between different roots in a short window: the signature of several agents
+	// multiplexing one `plumb serve` without declaring an identity. It changes
+	// what plumb RECOMMENDS — advertising force: true to one side of that fight
+	// is what keeps it going — not what plumb allows.
+	Contested bool
 }
 
 // String renders the pin provenance for splicing into a boundary-error
@@ -31,6 +41,11 @@ type PinProvenance struct {
 // without an extra empty-check producing a stray space. A "restore:"-prefixed
 // Source is rendered as prose ("via X, restored on reconnect") — the raw
 // colon-delimited label belongs in log fields, not an agent-facing sentence.
+//
+// A forced pin says so, and says it BEFORE the "(previously …)" clause, so the
+// displaced root reads as something that was taken rather than something that
+// merely changed. Forced without Previous is not rendered: force: true on a
+// first attach overrode nothing, and claiming otherwise would invent a victim.
 func (p PinProvenance) String() string {
 	if p.Source == "" {
 		return ""
@@ -48,6 +63,9 @@ func (p PinProvenance) String() string {
 	if restored {
 		sb.WriteString(", restored on reconnect")
 	}
+	if p.Forced && p.Previous != "" {
+		sb.WriteString(", forced over an explicit pin")
+	}
 	if p.Previous != "" {
 		sb.WriteString(" (previously ")
 		sb.WriteString(p.Previous)
@@ -55,6 +73,42 @@ func (p PinProvenance) String() string {
 	}
 	sb.WriteString(".")
 	return sb.String()
+}
+
+// DisplacementNotice tells a caller that the workspace it is asking about is
+// the one this connection was force-re-pinned AWAY from, and that it therefore
+// lost its pin to something else on this same connection rather than fumbling a
+// path. "" when that is not what happened.
+//
+// This exists because the displaced agent is the one party with no signal. The
+// thief gets a successful call; the operator gets a daemon-log line; the victim
+// gets "this connection is pinned to <a project it never named>", which reads
+// as its own mistake — and was, in the incident this was written for, diagnosed
+// as a daemon-restart bug for exactly that reason. Every input is already on
+// the error, so this costs the caller nothing to receive.
+//
+// The path test is containment, not equality: the caller names a FILE, and what
+// identifies the displacement is that the file belongs to the displaced
+// project. A path in some unrelated third project is an ordinary boundary error
+// and gets nothing added.
+func (p PinProvenance) DisplacementNotice(path string) string {
+	if !p.Forced || p.Previous == "" || path == "" {
+		return ""
+	}
+	if !PathWithinWorkspace(p.Previous, path) {
+		return ""
+	}
+	when := ""
+	if !p.At.IsZero() {
+		when = " " + humaniseAge(time.Since(p.At)) + " ago"
+	}
+	return fmt.Sprintf(
+		"NOTE: this connection was force-re-pinned away from %s%s by a session_start on this same connection. "+
+			"If that was not you, another agent is multiplexing this `plumb serve` without declaring an identity, "+
+			"and re-pinning back would displace it in turn — pass session_start.session_id on every call so plumb "+
+			"can keep each agent's pin separate, or run one `plumb serve` per agent.",
+		p.Previous, when,
+	)
 }
 
 type WorkspaceBoundaryError struct {
@@ -95,14 +149,37 @@ func (e WorkspaceBoundaryError) Error() string {
 	msg := fmt.Sprintf(
 		"workspace boundary violation: this connection is pinned to %s; %s is in a different project. "+
 			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection "+
-			"(if the re-pin is refused because an explicit session_start pin already holds this connection, retry with force: true). "+
+			"(%s). "+
 			"Do not browse other projects on disk.",
-		e.Workspace, e.Path,
+		e.Workspace, e.Path, e.repinAdvice(),
 	)
 	if prov := e.Provenance.String(); prov != "" {
 		msg += " " + prov
 	}
+	if notice := e.Provenance.DisplacementNotice(e.Path); notice != "" {
+		msg += " " + notice
+	}
 	return msg
+}
+
+// repinAdvice is the parenthetical telling the caller what to do when the
+// re-pin it is being sent to do is itself refused by the sticky-pin guard.
+//
+// On an ordinary connection that is "retry with force: true", and it is right:
+// one agent switching its own project should not be stopped by its own earlier
+// pin. On a CONTESTED connection it is exactly wrong. Two agents were observed
+// alternating a forced re-pin fourteen times in thirty-five minutes, each one
+// doing what this sentence told it to; the advice was the engine. There the
+// caller is told what actually separates them instead, and force is demoted to
+// a caveat it must satisfy a condition to use.
+func (e WorkspaceBoundaryError) repinAdvice() string {
+	if e.Provenance.Contested {
+		return "this connection's pin has already been force-taken back and forth between projects, " +
+			"so forcing again would displace whoever holds it now: identify yourself with " +
+			"session_start.session_id, or run one `plumb serve` per agent — use force: true only if " +
+			"you are certain no other agent is using this connection"
+	}
+	return "if the re-pin is refused because an explicit session_start pin already holds this connection, retry with force: true"
 }
 
 func (g BoundaryGuard) check(ctx context.Context, path string) error {

@@ -49,11 +49,16 @@ func pinViaLabel(origin sessionstate.PinSource, t pinTrigger) string {
 
 // recordPinProvenance stamps the provenance fields on the view being built.
 // Call ONLY from inside a mutate closure, beside the v.acquiredRoot write.
-func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTrigger, prevRoot string) {
+//
+// forced is the force flag of the call that set this pin, not a judgement about
+// it: force on a first attach displaced nothing, and the renderers ask for
+// prevRoot alongside before saying anyone was displaced.
+func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTrigger, prevRoot string, forced bool) {
 	v.pinVia = pinViaLabel(origin, t)
 	v.pinAt = time.Now()
 	v.pinPrev = prevRoot
 	v.pinOrigin = origin
+	v.pinForced = forced
 	// Every pin write runs through here, so clearing by default is what keeps
 	// the unauthenticated-replay mark describing the CURRENT pin: rung 1 of the
 	// attach ladder re-sets it immediately after its attach, and any later pin —
@@ -79,18 +84,27 @@ func (s *connSession) pinExplicitlyHeld() bool {
 // pinProvenanceOf reads a view's pin provenance; the zero value while
 // unattached, which renders nothing. Usable inside a mutate closure (on the
 // view under mutation) as well as on a snapshot.
+//
+// It cannot report Contested: that fact lives on the connection's displacement
+// history, not on the view, and this function takes only a view (the mutate
+// lane needs it that way). Callers that have the connSession use
+// s.pinProvenance, which fills it in.
 func pinProvenanceOf(v *sessionView) tools.PinProvenance {
 	if v.pinVia == "" {
 		return tools.PinProvenance{}
 	}
-	return tools.PinProvenance{Source: v.pinVia, At: v.pinAt, Previous: v.pinPrev}
+	return tools.PinProvenance{Source: v.pinVia, At: v.pinAt, Previous: v.pinPrev, Forced: v.pinForced}
 }
 
 // pinProvenance reports the connection's current pin provenance from the
-// latest snapshot.
+// latest snapshot, including whether the connection's pin is contested.
 func (s *connSession) pinProvenance() tools.PinProvenance {
 	v := s.view()
-	return pinProvenanceOf(&v)
+	p := pinProvenanceOf(&v)
+	if p.Source != "" {
+		p.Contested = s.pinContested()
+	}
+	return p
 }
 
 // boundedForLog caps a slice for a log field, appending a "+N more" sentinel

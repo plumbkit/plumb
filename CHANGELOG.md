@@ -25,6 +25,60 @@
 
 ### Fixed
 
+- **An agent whose workspace is taken by a peer on the same connection is now
+  TOLD, and plumb stops recommending the move that takes it (issue #182).** The
+  sticky-pin guard refuses a peer's cross-project re-pin and names `force: true`
+  as the remedy. For one agent switching its own project that is right; for
+  several agents multiplexing one `plumb serve` it is the engine of a fight —
+  both sides read the same sentence and both force. Observed in the field: a
+  connection's pin changed hands **fourteen times in thirty-five minutes**
+  between two projects, and the agent that lost it was told only
+  "this connection is pinned to `<a project it never named>`", which reads as its
+  own fumbled path. It was diagnosed as a daemon-restart bug for a day; the
+  restore had in fact replayed the pin byte-for-byte and a co-tenant took it
+  eight minutes later. Three changes, none of which alter what plumb *allows*:
+  a pin now records that it was FORCED and what it displaced
+  (`PinProvenance.Forced`, rendered as "forced over an explicit pin" in boundary
+  errors and `daemon_info`); a boundary refusal for a path inside the displaced
+  project appends a notice naming that project, when it was taken, and
+  `session_start.session_id` as the fix; and a connection whose pin has been
+  force-taken between **two or more distinct roots at least twice in 30 minutes**
+  is marked contested, after which the re-pin refusal, the boundary error and the
+  `session_start` identity block all lead with identifying the agents instead of
+  with `force: true` (force still works — the daemon cannot know which undeclared
+  agent is entitled to the workspace, and refusing outright would strand real
+  work). The contested mark defers to `blocked` and
+  `shared_connection_detected`, which are made on evidence rather than inferred
+  from behaviour. This is the case PLAN-286's per-agent shards cannot reach at
+  all: the client in the incident sends no `session_id` on either channel, so
+  `logicalAgentState.seen` stays empty, `sharedWith` is always false, and no
+  shard, no shared-connection warning and no anonymous-write ceiling ever
+  engages — behaviour is the only remaining signal. Guarded by
+  `TestContestedRing_VerdictShape`, `TestContestState_LatchesOnce`,
+  `_RingIsBounded`, `TestForcedRepin_MarksProvenanceAndContests`,
+  `TestUnforcedRepin_DoesNotContest`,
+  `TestContestedPin_RemedyStopsLeadingWithForce`, `_DisplacedAgentIsTold`,
+  `_DoesNotClobberSharedConnectionHealth`, `_MarksHealthWhenUnmarked`,
+  `TestDisplacementNotice_OnlyForTheDisplacedProject`,
+  `TestWorkspaceBoundaryError_ContestedSwapsTheAdvice`,
+  `_ReadOnlyRootIgnoresDisplacement`, `TestSessionStart_ContestedNote*`, and the
+  integration replay `TestMultiAgentPin/UndeclaredAgentsForcePingPongIsContested`.
+
+- **The pin-survives-a-restart guarantee is now pinned by tests that assert it
+  directly.** The property was already correct — that is the point — but the only
+  thing separating "the pin came back wrong" from "the pin was taken afterwards"
+  during the incident above was a daemon log line that could have been rotated
+  away, and the two call for opposite fixes. `TestPin_SurvivesDaemonRestartByteIdentical`
+  drives the real `attachOnInit` ladder and asserts the restored root is the
+  stored STRING (not an ancestor or an alias that would pass a containment check
+  while widening the write surface) and that its provenance reads
+  `restore:session_start` and carries no displacement mark;
+  `TestPin_UnsetComesBackUnattachedNotElsewhere` asserts a connection with no pin
+  and no roots comes back attached to NOTHING rather than to something else; and
+  `TestPin_RestoreDoesNotResolveAfresh` covers a marker appearing above the
+  pinned root while the daemon is down, where restoring must replay the stored
+  path or refuse, never climb.
+
 - **A trusted project config edit now hot-reloads to EVERY session attached to
   that workspace, promptly and without a reconnect (PLAN-414).** Project-config
   reload used to depend on each connection polling its own
