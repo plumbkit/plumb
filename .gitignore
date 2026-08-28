@@ -61,9 +61,23 @@ coverage.html
 # GOLANGCI_LINT_CACHE points here in some setups and at .lintcache/ in others;
 # ignore both names anywhere in the tree, because a cache dir that lands inside
 # the repo is thousands of files and tens of megabytes of committed garbage.
+#
+# .golangci-lint-cache/ is the third spelling, and it was the one actually
+# observed in a working tree — 16 MB of it, untracked, one `git add -A` away
+# from the exact outcome the paragraph above was written to prevent. Guessing at
+# names has now missed twice, so all three are listed and any new one belongs
+# here too.
 .golangci-cache/
+.golangci-lint-cache/
+**/.golangci-lint-cache/
 .lintcache/
 **/.lintcache/
+
+# Go build/test cache. GOCACHE is redirected into the tree by the Makefile's
+# hermetic test target and by sandboxed agent runs; at 782 MB observed it is the
+# single largest thing that can accidentally be staged here.
+.gocache/
+**/.gocache/
 
 # Test binary cache (used to satisfy Airlock Digital whitelisting)
 .testcache/
