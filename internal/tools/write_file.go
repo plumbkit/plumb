@@ -123,7 +123,10 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "", err
 	}
 
-	path := t.deps.resolvePath(ctx, a.Path)
+	path, err := t.deps.resolvePath(ctx, a.Path)
+	if err != nil {
+		return "", fmt.Errorf("write_file: %w", err)
+	}
 	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}

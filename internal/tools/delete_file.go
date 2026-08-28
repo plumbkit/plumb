@@ -162,7 +162,10 @@ func (t *DeleteFile) resolveDeletePaths(ctx context.Context, requested []string)
 		if p == "" {
 			return nil, errors.New("delete_file: paths must not contain an empty string")
 		}
-		path := t.deps.resolvePath(ctx, p)
+		path, err := t.deps.resolvePath(ctx, p)
+		if err != nil {
+			return nil, fmt.Errorf("delete_file: %w", err)
+		}
 		if err := t.deps.checkBoundary(ctx, path); err != nil {
 			return nil, fmt.Errorf("delete_file: %w", err)
 		}

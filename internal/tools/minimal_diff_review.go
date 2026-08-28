@@ -55,9 +55,10 @@ var minimalDiffReviewSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type MinimalDiffReview struct {
-	storeFn func() *topology.Store
-	ws      WorkspaceFn
-	guard   BoundaryGuard // rejects a files entry outside the pinned workspace
+	storeFn   func() *topology.Store
+	ws        WorkspaceFn
+	guard     BoundaryGuard // rejects a files entry outside the pinned workspace
+	contested ContestedFn   // refuses a relative files entry once the pin is contested
 }
 
 // NewMinimalDiffReview returns a new MinimalDiffReview tool. storeFn supplies the
@@ -78,6 +79,13 @@ func (t *MinimalDiffReview) WithWorkspace(ws WorkspaceFn) *MinimalDiffReview {
 // outside the pinned workspace is refused. Nil-safe.
 func (t *MinimalDiffReview) WithBoundary(guard BoundaryGuard) *MinimalDiffReview {
 	t.guard = guard
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// files entry is refused once the pin is contested (issue #182). Nil-safe.
+func (t *MinimalDiffReview) WithContested(fn ContestedFn) *MinimalDiffReview {
+	t.contested = fn
 	return t
 }
 
@@ -120,7 +128,10 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	// files entry outside the workspace is rejected before any git invocation.
 	resolvedFiles := make([]string, len(a.Files))
 	for i, f := range a.Files {
-		resolved := resolvePath(ctx, f, t.ws)
+		resolved, rerr := resolvePath(ctx, f, t.ws, t.contested)
+		if rerr != nil {
+			return "", fmt.Errorf("minimal_diff_review: %w", rerr)
+		}
 		if err := t.guard.check(ctx, resolved); err != nil {
 			return "", fmt.Errorf("minimal_diff_review: %w", err)
 		}
