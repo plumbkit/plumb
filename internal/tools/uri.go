@@ -17,19 +17,27 @@ import (
 // os.Getwd(). The daemon is a singleton whose working directory is unrelated to
 // any workspace, so resolving against it would silently touch the wrong file;
 // leaving the path relative lets the boundary check reject it honestly instead.
-func resolvePath(ctx context.Context, path string, ws WorkspaceFn) string {
+//
+// A non-empty relative path is refused outright — before anchoring — when
+// contested reports true: on a connection whose pin is being fought over, a
+// relative path names no project of its own and would be aimed at whichever
+// root currently holds the pin (issue #182). See ContestedRelativePathError.
+func resolvePath(ctx context.Context, path string, ws WorkspaceFn, contested ContestedFn) (string, error) {
 	p := paths.URIToPath(path)
+	if !filepath.IsAbs(p) && p != "" && contested != nil && contested() {
+		return "", classifyContestedRelative(ContestedRelativePathError{Path: p})
+	}
 	if filepath.IsAbs(p) {
-		return p
+		return p, nil
 	}
 	base := ""
 	if ws != nil {
 		base = ws(ctx)
 	}
 	if base == "" {
-		return filepath.Clean(p)
+		return filepath.Clean(p), nil
 	}
-	return filepath.Join(base, p)
+	return filepath.Join(base, p), nil
 }
 
 // toFileURI normalises a filesystem path or file:// URI to a file:// URI, so

@@ -78,6 +78,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspaceFor,
 		Boundary:              s.writeBoundaryGuardFor,
+		Contested:             s.pinContested,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		BlockDirtyFn:          func() bool { return s.editsConfig().BlockDirtyWrites },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
@@ -142,10 +143,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(readBoundaryFor).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithReadsFor(s.readTrackerFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewReadMultipleFiles(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor))
-	srv.Register(tools.NewFileStatus(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
+	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithReadsFor(s.readTrackerFor).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
+	srv.Register(tools.NewReadMultipleFiles(s.readTracker).WithReadsFor(s.readTrackerFor).WithBoundary(readBoundaryFor).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
+	srv.Register(tools.NewFileStatus(s.writeTracker).WithWritesFor(s.writeTrackerFor).WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
 	srv.Register(tools.NewEditFile(wd))
@@ -154,8 +155,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewCopyFile(wd))
 	srv.Register(tools.NewTransactionApply(wd))
 	srv.Register(tools.NewUndoEdit(wd))
-	srv.Register(tools.NewSearchInFiles(s.workspaceFor, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(readBoundaryFor))
-	srv.Register(tools.NewFindFiles(s.workspaceFor).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewSearchInFiles(s.workspaceFor, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
+	srv.Register(tools.NewFindFiles(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
 	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessionID, s.sessionName).
 		WithPeerIntents(func() bool { return s.collabConfig().Intents }, s.collabStoreIfExists,
 			func() int { return s.collabConfig().HintBudgetBytes }))
@@ -164,7 +165,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
-	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
+	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
 	srv.Register(tools.NewFindReplace(wd))
 	prov := Provenance()
 	srv.Register(tools.NewDaemonInfoFunc(s.sessionID, s.sessionName, Version, daemonStartedAt).
@@ -310,7 +311,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTopologyRoutes(topoFn))
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
 	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))
-	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor))
+	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.

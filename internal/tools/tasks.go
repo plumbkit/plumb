@@ -105,6 +105,12 @@ func noCommandError(cmd TaskCommand, slot string) error {
 		slot, subject, have, key, slot, where)
 }
 
+// runTaskContested is the refusal for run_task on a connection whose pin is
+// contested. run_task has no workspace argument of its own — the working
+// directory resolves against the pinned workspace — so on a contested connection
+// it would run against whichever project holds the pin right now.
+const runTaskContested = "run_task: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), and run_task has no workspace argument of its own, so it would run against whichever project holds the pin right now. Refused rather than misroute. Identify the agents — pass session_start.session_id on every call, or run one plumb serve per agent — then run the task on the connection that is pinned to your project"
+
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
 // the session's workspace, applying the per-workspace trust gate. It returns an
 // error when the slot has no command, or when a project-supplied command is not
@@ -171,6 +177,9 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	}
 	if err := a.validate(); err != nil {
 		return "", err
+	}
+	if t.deps.Contested != nil && t.deps.Contested() {
+		return "", errors.New(runTaskContested)
 	}
 	if t.resolve == nil {
 		return "", errors.New("run_task: task commands are not available for this session")

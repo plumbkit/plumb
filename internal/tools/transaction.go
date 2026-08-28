@@ -149,7 +149,11 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	// absolute path (a relative path would otherwise resolve against the daemon
 	// CWD downstream).
 	for i := range a.Operations {
-		a.Operations[i].Path = t.deps.resolvePath(ctx, a.Operations[i].Path)
+		p, err := t.deps.resolvePath(ctx, a.Operations[i].Path)
+		if err != nil {
+			return "", err
+		}
+		a.Operations[i].Path = p
 	}
 
 	paths, err := t.txCanonicalPaths(ctx, a.Operations)

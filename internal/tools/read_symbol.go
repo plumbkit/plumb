@@ -54,6 +54,7 @@ type ReadSymbol struct {
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 	ws           WorkspaceFn         // may be nil; anchors a workspace-relative path/uri to the pinned root
+	contested    ContestedFn         // may be nil; refuses a relative path/uri once the connection's pin is contested
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
@@ -114,6 +115,13 @@ func (t *ReadSymbol) WithWorkspace(ws WorkspaceFn) *ReadSymbol {
 	return t
 }
 
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// path/uri is refused once the pin is contested (issue #182). Nil-safe.
+func (t *ReadSymbol) WithContested(fn ContestedFn) *ReadSymbol {
+	t.contested = fn
+	return t
+}
+
 // WithClient wires the MCP client-name accessor so read_symbol can append the
 // edit-lane hint only for clients whose native Edit tool conflicts with plumb's
 // read-state (see edit_lane.go). read_symbol returns a symbol body the agent is
@@ -161,7 +169,10 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	fpath, uri := resolveReadSymbolPaths(ctx, a.Path, t.ws)
+	fpath, uri, err := resolveReadSymbolPaths(ctx, a.Path, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("read_symbol: %w", err)
+	}
 	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
@@ -247,9 +258,12 @@ func (t *ReadSymbol) noSymbolMessage(name, fpath string, syms []protocol.Documen
 	return msg
 }
 
-func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn) (fpath, uri string) {
-	fpath = resolvePath(ctx, path, ws)
-	return fpath, toFileURI(fpath)
+func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn, contested ContestedFn) (fpath, uri string, err error) {
+	fpath, err = resolvePath(ctx, path, ws, contested)
+	if err != nil {
+		return "", "", err
+	}
+	return fpath, toFileURI(fpath), nil
 }
 
 // fetchReadSymbolSymbols queries the document symbols for uri. waited is the
