@@ -45,6 +45,32 @@
 
 - **BREAKING: `plumb serve` no longer attaches a workspace from its own working directory: with no `--workspace` and no `PLUMB_WORKSPACE` it starts UNATTACHED, and `session_start({workspace})` is the sole workspace-pin authority.** The serve-cwd hint manufactured a wrong pin more often than it prevented one: cwd is not intent (an MCP client spawns `serve` from its own launcher's directory, which says nothing about the project), so the "hint" regularly attached a directory nobody chose — the first `session_start` then became a re-pin (forced, when a peer had already landed there), relative-path calls before it resolved against the wrong project, and several agents multiplexing one `serve` (issue #182) had no per-agent signal except `session_start` while the launch directory kept voting underneath them. The initialize `_meta` key (`dev.plumbkit/workspace`, `MetaWorkspaceKey`) now carries only the explicit `--workspace`/`PLUMB_WORKSPACE` pre-pin (PLAN-349 behaviour unchanged: flag beats env, `$VAR`-expanded, made absolute, Detect-validated, never persisted as the sticky pin) and is omitted entirely otherwise, so the initialize frame stays byte-identical and the daemon has nothing to auto-attach from. On a serve with no pre-pin the attach ladder simply ends earlier: a roots-less client with no explicit value stays unattached, a relative-path call fails closed with the existing "no workspace is pinned" refusal naming `session_start`, and the connection pins on the caller's first `session_start({workspace})`. A serve started unattached logs why at startup (`serve: no --workspace/PLUMB_WORKSPACE — starting unattached …`, the cwd carried as a diagnostic only, never transported). `--allow-dir` on an unattached serve is deliberately inert until a workspace is pinned: `buildPathPolicy` returns nil while no root is pinned, so the boundary keeps failing closed and the grant attaches additively to whatever `session_start` later pins — a grant is never a workspace source. Guarded by `TestResolveWorkspaceHint` (the no-cwd-fallback cases), `TestServeWorkspaceHint_NoFlagNoEnvStartsUnattached`, `TestServeWorkspaceFlag_InjectsFlagPath`, `TestServeWorkspaceHint_EnvFallbackInjected`, `TestAttachOnInit_NoPrepinLeavesUnattached`, `TestSessionStartPin_PinsUnattachedServe`, and `TestAllowDir_UnattachedServeInertUntilPin`; the pre-existing `TestAttachFromHint_*` / `TestRootFromClient_*` / `TestOnInitOrder_PersistedPinBeatsHint` set now covers the explicit pre-pin channel. Migration: launch `plumb serve --workspace <root>` (or set `PLUMB_WORKSPACE`), or call `session_start({workspace})` after connecting — the working directory is never consulted again.
 
+### Fixed
+
+- **Changing one setting in the TUI Settings screen now persists only that
+  setting, never the rest of the config file.** The Settings screen's Global-scope
+  save went through `config.Save`, which re-encodes the whole `Config` struct — so
+  toggling a single row materialised every compiled-in default into `config.toml`
+  as if the user had set it, and an explicitly-written value out-ranks the
+  compiled-in default forever after. Empty slices were written as literal `= []`
+  (`topology.exclude_patterns`, `lsp.*.args`, `lsp.*.root_markers`,
+  `workspace.extra_roots`, …), non-empty defaults were frozen by value
+  (`git.protected_branches`, `quality.analysers`), and any default plumb added
+  later was dead on arrival for everyone who had ever saved a global setting —
+  including `[[command]]` entries, where go-toml/v2 additionally truncates a
+  pre-populated slice on the first decoded entry, so `omitempty` could not reach
+  the problem. The save now routes through the new sparse
+  `config.SaveSparse` (the same raw-map write `config.SetGlobalValue` performs,
+  which `SaveTheme` already used): the mutation is applied to the loaded config,
+  the encoded TOML is diffed before and after, and only the changed keys are
+  written — added, altered, or removed (clearing the `[[command]]` list deletes
+  the key, so "explicitly none" no longer goes stale). Keys the mutation did not
+  touch are preserved as-is, an unparseable file is still refused rather than
+  clobbered, active `PLUMB_*` env overrides still never land in the file, and a
+  change that changes nothing writes nothing. `config.Save` itself is unchanged.
+  Guarded by `TestSettingsGlobalToggle_PersistsOnlyEditedKey`,
+  `TestSettingsGlobalToggle_PreservesExistingKeys`, and the `internal/config`
+  `TestSaveSparse_*` tests.
 ## 0.17.7 (2026-08-28)
 
 ### Fixed
