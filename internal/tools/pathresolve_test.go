@@ -83,7 +83,9 @@ func TestToFileURIAnchored(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := toFileURIAnchored(context.Background(), tc.in, tc.ws); got != tc.want {
+			if got, err := toFileURIAnchored(context.Background(), tc.in, tc.ws, nil); err != nil {
+				t.Errorf("toFileURIAnchored(%q) = error %v", tc.in, err)
+			} else if got != tc.want {
 				t.Errorf("toFileURIAnchored(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})

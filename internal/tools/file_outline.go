@@ -52,13 +52,14 @@ const outlineMaxBytes = 2 << 20
 //
 // Concurrency: Execute is safe for concurrent use.
 type FileOutline struct {
-	client  lsp.Client
-	cache   *cache.Cache
-	ttl     time.Duration
-	timeout time.Duration
-	topo    topologyStoreFn
-	guard   BoundaryGuard
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client    lsp.Client
+	cache     *cache.Cache
+	ttl       time.Duration
+	timeout   time.Duration
+	topo      topologyStoreFn
+	guard     BoundaryGuard
+	ws        WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
 }
 
 // NewFileOutline constructs the tool. It shares the documentSymbol cache key
@@ -85,6 +86,13 @@ func (t *FileOutline) WithBoundary(guard BoundaryGuard) *FileOutline {
 // directory. Nil-safe.
 func (t *FileOutline) WithWorkspace(ws WorkspaceFn) *FileOutline {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *FileOutline) WithContested(fn ContestedFn) *FileOutline {
+	t.contested = fn
 	return t
 }
 
@@ -147,7 +155,11 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 }
 
 func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResult, error) {
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return nil, fmt.Errorf("file_outline: %w", rerr)
+	}
 	path := paths.URIToPath(a.URI)
 	if err := t.guard.check(ctx, path); err != nil {
 		return nil, fmt.Errorf("file_outline: %w", err)

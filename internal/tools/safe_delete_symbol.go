@@ -17,14 +17,15 @@ import (
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
 
 type SafeDeleteSymbol struct {
-	client   lsp.Client
-	timeout  time.Duration
-	warmup   LSPWarmupFn  // optional; rewrites a cold-LSP failure into a still-warming advisory
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
-	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	warmup    LSPWarmupFn  // optional; rewrites a cold-LSP failure into a still-warming advisory
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff  func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
@@ -48,6 +49,13 @@ func (t *SafeDeleteSymbol) WithCache(c *cache.Cache) *SafeDeleteSymbol {
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
 func (t *SafeDeleteSymbol) WithWorkspace(ws WorkspaceFn) *SafeDeleteSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *SafeDeleteSymbol) WithContested(fn ContestedFn) *SafeDeleteSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -75,6 +83,19 @@ func (*SafeDeleteSymbol) InputSchema() json.RawMessage {
 		`},"required":["uri","name_path"],"additionalProperties":false}`)
 }
 
+// resolveDeleteURI validates and anchors the input uri, refusing a relative one
+// on a contested connection. Extracted from Execute to keep it under gocyclo.
+func (t *SafeDeleteSymbol) resolveDeleteURI(ctx context.Context, a symbolEditArgs) (string, error) {
+	if a.URI == "" || a.NamePath == "" {
+		return "", errors.New("`uri` and `name_path` are required")
+	}
+	uri, err := toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("safe_delete_symbol: %w", err)
+	}
+	return uri, nil
+}
+
 func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
@@ -82,10 +103,11 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
-	if a.URI == "" || a.NamePath == "" {
-		return "", errors.New("`uri` and `name_path` are required")
+	uri, err := t.resolveDeleteURI(ctx, a)
+	if err != nil {
+		return "", err
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	a.URI = uri
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
