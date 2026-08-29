@@ -624,13 +624,41 @@ func pollToolCallsAtLeast(t *testing.T, tmpHome string, minimum int, timeout tim
 
 // runPlumbSetup runs `plumb <setupArgs...>` with the isolated env, writing the
 // client's MCP config into the isolated HOME.
+//
+// It also points the plumb process at a working directory inside that isolated
+// HOME. `plumb setup` writes its managed instruction block to the current
+// directory's instruction file (internal/cli/setup_instructions.go resolves
+// the project path from os.Getwd, not workspace detection), so with no
+// explicit dir the process inherits this test binary's cwd — the
+// cmd/clientsmoke source directory in the developer's checkout — and leaves an
+// untracked AGENTS.md/CLAUDE.md/GEMINI.md behind in the repo tree on every
+// run. Every env passed here comes from isolatedEnv/conformanceEnv, which
+// always set HOME to the tmpHome mkTmpHome removes at test end, so the block
+// lands there instead.
 func runPlumbSetup(t *testing.T, env []string, args ...string) {
 	t.Helper()
+	home, ok := envHome(env)
+	if !ok {
+		t.Fatal("runPlumbSetup: env carries no HOME — refusing to inherit the test process cwd, which plumb setup would write instruction files into")
+	}
 	cmd := exec.Command(plumbBin, args...)
 	cmd.Env = env
+	cmd.Dir = home
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("plumb %v: %v\n%s", args, err, out)
 	}
+}
+
+// envHome returns the value of env's HOME entry. Every harness environment is
+// built by isolatedEnv/conformanceEnv, which always set HOME to the isolated
+// tmpHome.
+func envHome(env []string) (string, bool) {
+	for _, entry := range env {
+		if value, found := strings.CutPrefix(entry, "HOME="); found {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // stopDaemon tears down only the daemon recorded in this test's isolated
