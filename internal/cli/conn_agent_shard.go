@@ -48,12 +48,12 @@ type agentShard struct {
 
 // shardFor resolves the per-agent shard for the logical agent carried in ctx.
 // It returns nil — signalling "use the connection's own state" — when the
-// connection is not shared, or when ctx carries no logical-agent identity AND
-// there is no attach-time session_id to fall back on (an anonymous call: reads
-// share state, mutating anonymous calls are refused up front by OnToolRefusal).
-// On a shared connection the shard is created lazily on first use and seeded from
-// the connection's current pin/language, with fresh trackers/limiter/undo so each
-// agent starts isolated from its peers.
+// connection is not shared, or when ctx carries no logical-agent identity on a
+// shared connection: an unattributable call never inherits a peer's shard
+// (PLAN-394), it resolves against the connection, and OnToolRefusal has already
+// refused its state-changing half. On a shared connection the shard is created
+// lazily on first use and seeded from the connection's current pin/language,
+// with fresh trackers/limiter/undo so each agent starts isolated from its peers.
 func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	id := mcp.LogicalAgentFromCtx(ctx)
 	// sharedWith counts the CALLER, not just the identities already committed: an
@@ -64,13 +64,12 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		return nil
 	}
 	if id == "" {
-		// A call with no per-call _meta is attributed to the attach-time
-		// session_id, exactly as the refusal path does — on a shared connection
-		// the only trustworthy attribution for a state-changing call is one of
-		// the two declared channels.
-		id = s.logicalAgents.attachIdentity()
-	}
-	if id == "" {
+		// PLAN-394: on a shared connection an anonymous call has no trustworthy
+		// attribution. The attach-time session_id is whichever agent attached
+		// LAST — inheriting it routed this call onto that peer's shard: the
+		// peer's workspace, its boundary policy, its trackers — so after a
+		// peer's force-pin elsewhere, an unattributable read resolved to the
+		// peer's project. Fail closed to the connection-level state instead.
 		return nil
 	}
 	s.shardsMu.Lock()

@@ -34,13 +34,9 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
-	// attachID is the session_id recorded at attach. It is the fallback identity
-	// for a call that carries no per-call _meta: on a shared connection, such a
-	// call is attributed to the attach-time agent, not refused.
-	attachID string
 }
 
-func (l *logicalAgentState) record(id string, attach bool) bool {
+func (l *logicalAgentState) record(id string) bool {
 	if id == "" {
 		return false
 	}
@@ -50,9 +46,6 @@ func (l *logicalAgentState) record(id string, attach bool) bool {
 		l.seen = make(map[string]struct{})
 	}
 	l.seen[id] = struct{}{}
-	if attach {
-		l.attachID = id
-	}
 	return len(l.seen) > 1
 }
 
@@ -88,36 +81,32 @@ func (l *logicalAgentState) sharedWith(id string) bool {
 	return len(l.seen) == 1
 }
 
-// attachIdentity returns the attach-time session_id fallback identity (last one
-// recorded), or "". It is the attribution for a call carrying no per-call _meta.
-func (l *logicalAgentState) attachIdentity() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.attachID
-}
-
 // refuse reports whether a call declaring callID must be refused on this
 // connection: the connection is shared (two or more distinct IDs observed) and
-// the call is unattributable (no per-call ID, and no attach-time session_id to
-// fall back on). A non-shared connection needs no ID — the connection itself is
-// the identity.
+// the call is unattributable (no per-call ID). A non-shared connection needs no
+// ID — the connection itself is the identity.
+//
+// PLAN-394 removed the attach-time fallback from this decision. Before it, an
+// anonymous call was admitted whenever ANY session_start had attached — and
+// shardFor then attributed the call to the agent that attached LAST, so an
+// unattributable write landed in a peer's trackers and, after that peer's
+// force-pin, in the peer's project. Admitting a call on the strength of an
+// identity it did not present is attribution by guesswork; on a shared
+// connection only a presented ID admits a state-changing call.
 func (l *logicalAgentState) refuse(callID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.seen) <= 1 {
 		return false
 	}
-	if callID != "" {
-		return false
-	}
-	return l.attachID == ""
+	return callID == ""
 }
 
 // recordLogicalAgentAttach records a session_start.session_id identity.
-func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id, true) }
+func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id) }
 
 // recordLogicalAgentCall records a per-call tools/call._meta identity.
-func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id, false) }
+func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id) }
 
 // declaredAgentCtx is the third identity channel: the `session_id` a caller
 // declares INSIDE session_start, promoted to this call's logical-agent identity.
@@ -154,8 +143,8 @@ func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.C
 // (session_id at attach, _meta per call), so the shared-connection detection
 // sees one consistent view regardless of how the ID arrived. The first time the
 // connection becomes shared it is marked for the operator.
-func (s *connSession) recordLogicalAgent(id string, attach bool) {
-	if s.logicalAgents.record(id, attach) {
+func (s *connSession) recordLogicalAgent(id string) {
+	if s.logicalAgents.record(id) {
 		s.markSharedConnectionDetected()
 	}
 }

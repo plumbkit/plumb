@@ -4,6 +4,21 @@
 ### Security
 
 - **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
+### Fixed
+
+- **An anonymous call on a shared connection now fails closed instead of
+  inheriting the last-attached agent's identity.** `shardFor` attributed a call
+  carrying no per-call identity to the agent whose `session_start.session_id`
+  attached LAST, and the refusal ceiling admitted it whenever any attach
+  existed — so after a peer force-pinned itself to another project, the
+  unattributable call resolved to the peer's workspace, the peer's boundary
+  policy admitted the peer's paths, and an admitted write landed in the peer's
+  trackers. It was a fail-open: the guard that refuses cross-workspace drift
+  was bypassed by simply omitting `_meta`. Now an anonymous call on a shared
+  connection resolves against the connection-level state, and a state-changing
+  call that presents no identity is refused with the one-serve-per-agent
+  remedy. Single-agent connections are untouched: with one identity the
+  connection IS the agent, exactly as before.
 
 ### Changed
 

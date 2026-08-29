@@ -18,12 +18,14 @@ package cli
 //     routing for a client that CAN identify each call — a real supported
 //     topology, but not the one the subagents in the story are running.
 //
-// The gap between the two is deliberate and pinned, not overlooked:
-// testAnonymousCallsInheritTheLastAttachedAgent asserts what actually happens
-// today when a later call carries no identity at all. It is a KNOWN, TRACKED
-// defect (the shardFor/attachIdentity fallback, pre-existing to PLAN-286 and
-// filed separately), so the assertion records the broken behaviour on purpose:
-// closing that gap must turn that one subtest red and nothing else.
+// The gap between the two WAS deliberate and pinned, not overlooked:
+// testAnonymousCallsInheritTheLastAttachedAgent recorded what happened when a
+// later call carried no identity at all — attribution to whichever agent
+// attached LAST — as a KNOWN, TRACKED defect (the shardFor/attachIdentity
+// fallback, pre-existing to PLAN-286). PLAN-394 closed it: an anonymous call on
+// a shared connection now fails closed to the connection (reads resolve there,
+// state-changing calls are refused), and the subtests below pin the closed
+// behaviour.
 //
 // PLAN-286 built per-agent state (shards, inverted sticky guard) and PLAN-300
 // closed the restore-path widening. What neither proved is the end-to-end claim
@@ -132,7 +134,8 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("CrossWorkspaceSubagentRefusedWithRemedy", testCrossWorkspaceRefusedWithRemedy)
 	t.Run("AnonymousStateChangeStillRefused", testAnonymousStateChangeStillRefused)
 	t.Run("EveryAgentWriteIsAttributedAndVisible", testEveryAgentWriteVisible)
-	t.Run("AnonymousCallsInheritTheLastAttachedAgent", testAnonymousCallsInheritTheLastAttachedAgent)
+	t.Run("AnonymousCallOnSharedConnectionFailsClosed", testAnonymousCallOnSharedConnectionFailsClosed)
+	t.Run("AnonymousWriteIntoPeerProjectRefused", testAnonymousWriteIntoPeerProjectRefused)
 	t.Run("SingleAgentConnectionStillPinsTheConnection", testSingleAgentConnectionStillPinsTheConnection)
 	t.Run("UndeclaredAgentsForcePingPongIsContested", testUndeclaredAgentsForcePingPongIsContested)
 }
@@ -373,13 +376,14 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 		t.Errorf("a per-agent refusal flagged the whole connection blocked: %s", msg)
 	}
 
-	// A refused agent never ATTACHED, so it must not have become the attach-time
-	// fallback identity — the one every unattributed call on this connection is
-	// resolved against. Declaring an identity inside a call is a per-call claim;
-	// only a call that succeeded commits the stronger one.
-	if got := m.s.logicalAgents.attachIdentity(); got != "coordinator" {
-		t.Errorf("attach-time fallback identity = %q after a REFUSED re-pin, want %q — "+
-			"a refused agent became the identity its peers' anonymous calls inherit", got, "coordinator")
+	// A refused agent never ATTACHED, so its identity was never committed to the
+	// observed set — the set sharedWith and refuse route on. Declaring an
+	// identity inside a call is a per-call claim; only a call that succeeded
+	// commits it. (Before PLAN-394 this was pinned against the attach-time
+	// fallback identity; the fallback is gone, and the commitment rule is the
+	// part that has to keep holding.)
+	if _, committed := m.s.logicalAgents.seen["drifter"]; committed {
+		t.Error("a REFUSED re-pin committed the drifter's identity — the connection would route and refuse on a peer that never attached")
 	}
 	if got := m.s.workspaceFor(context.Background()); got != ws {
 		t.Errorf("an unattributed call resolves to %q after a refused cross-workspace re-pin, want %q", got, ws)
@@ -493,7 +497,13 @@ func testEveryAgentWriteVisible(t *testing.T) {
 // Why it matters to this file: every OTHER write subtest hands write_file a
 // per-call identity, which the target client cannot do. This is what the same
 // scenario actually does over the channel that client really has.
-func testAnonymousCallsInheritTheLastAttachedAgent(t *testing.T) {
+// testAnonymousCallOnSharedConnectionFailsClosed is what the retired
+// testAnonymousCallsInheritTheLastAttachedAgent used to pin in reverse: on a
+// shared connection an anonymous call — the only channel a client that cannot
+// inject _meta has — resolves to the CONNECTION, never to the most recently
+// attached agent's shard, and its state-changing half is refused outright. The
+// old subtest asserted the inheritance as a known gap; PLAN-394 closed the gap.
+func testAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	m := newMultiAgentConn(t)
 	ws := freshTempDir(t)
 	mustGitDir(t, ws)
@@ -505,42 +515,73 @@ func testAnonymousCallsInheritTheLastAttachedAgent(t *testing.T) {
 		t.Fatalf("subagent session_start: %v", err)
 	}
 
-	// The coordinator writes, over the only channel it has: no per-call identity.
-	path := filepath.Join(ws, "coordinator-anonymous.txt")
-	if err := m.writeFile(t, "", path, "coordinator\n"); err != nil {
-		t.Fatalf("anonymous write_file: %v", err)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("the write did not land: %v", err)
-	}
-
-	// KNOWN GAP, asserted as-is: the write is attributed to the agent that
-	// attached LAST, not to the coordinator that made it.
-	//
-	// ONE assertion, deliberately. Any change to the attachIdentity fallback —
-	// closing it, or replacing it with something else — makes this the failing
-	// line, so the reader who broke it gets the instruction below rather than a
-	// second, alarming message about unrecognised behaviour.
-	if !m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(path) {
-		t.Error("the anonymous write is no longer attributed to the last-attached agent. " +
-			"If PLAN-394 closed the shardFor/attachIdentity fallback, this subtest has done its " +
-			"job: DELETE it and fold the anonymous case into testEveryAgentWriteVisible with the " +
-			"attribution you now expect. If PLAN-394 is still open, the behaviour changed some " +
-			"other way — re-derive it before trusting anything else in this file.")
-	}
-	if m.s.writeTrackerFor(agentCtx("coordinator")).Wrote(path) {
-		t.Error("the anonymous write reached the coordinator's tracker as well as the " +
-			"last-attached agent's — attribution is now duplicated, which is neither the known " +
-			"gap nor a fix")
-	}
-
-	// The load-bearing safety property still holds regardless of attribution: an
-	// anonymous call resolves to a workspace, and here every agent shares one, so
-	// no write escapes the coordinator's project. (The fail-open this gap CAN
-	// produce needs a peer to have force-pinned elsewhere first; that is the
-	// separate card's territory, not something to leave undocumented here.)
+	// The anonymous call resolves to the connection's pin — no peer's shard.
 	if got := m.s.workspaceFor(context.Background()); got != ws {
 		t.Errorf("anonymous call resolved to workspace %q, want %q", got, ws)
+	}
+
+	// Its state-changing half is refused, naming the supported topology and the
+	// identity channels that admit it.
+	path := filepath.Join(ws, "coordinator-anonymous.txt")
+	err := m.writeFile(t, "", path, "coordinator\n")
+	if err == nil {
+		t.Fatal("an anonymous write on a shared connection must be refused (PLAN-394 closed the inherit-last-attached gap)")
+	}
+	for _, want := range []string{"one plumb serve per logical agent", mcp.MetaLogicalAgentKey} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal missing %q: %s", want, err)
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("the refused anonymous write landed anyway")
+	}
+	for _, id := range []string{"coordinator", "subagent-last"} {
+		if m.s.writeTrackerFor(agentCtx(id)).Wrote(path) {
+			t.Errorf("the refused anonymous write leaked into %s's tracker", id)
+		}
+	}
+
+	// Reads stay open, and an identified call lands on its own shard.
+	if err := m.s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
+		t.Errorf("a read must never be refused: %v", err)
+	}
+	if err := m.writeFile(t, "coordinator", filepath.Join(ws, "coordinator-identified.txt"), "coordinator\n"); err != nil {
+		t.Errorf("an identified write must land: %v", err)
+	}
+}
+
+// testAnonymousWriteIntoPeerProjectRefused is the incident the old gap produced
+// while it was open: the peer attaches last and force-pins its own shard to a
+// DIFFERENT project, and the anonymous call inherits that shard — so the
+// unattributable call resolves to the peer's project and the peer's boundary
+// admits the peer's paths. Failing closed to the connection is what keeps the
+// write out.
+func testAnonymousWriteIntoPeerProjectRefused(t *testing.T) {
+	m := newMultiAgentConn(t)
+	ws := freshTempDir(t)
+	mustGitDir(t, ws)
+	peer := freshTempDir(t)
+	mustGitDir(t, peer)
+
+	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "coordinator"}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"workspace": peer, "session_id": "subagent-last", "force": true}); err != nil {
+		t.Fatalf("peer forced session_start: %v", err)
+	}
+
+	if got := m.s.workspaceFor(context.Background()); got != ws {
+		t.Errorf("an anonymous call resolves to %q, want the connection pin %q — it inherited the peer's shard", got, ws)
+	}
+	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("an anonymous write into the peer's project must be refused")
+	}
+	victim := filepath.Join(peer, "victim.txt")
+	if _, err := m.s.policyFor(context.Background()).Check(victim, tools.AccessReadWrite); err == nil {
+		t.Error("the anonymous call's boundary admits a path in the peer's project — fail-open")
+	}
+	if m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(victim) {
+		t.Error("the anonymous write was recorded as the peer's work")
 	}
 }
 
