@@ -36,6 +36,16 @@
   call that presents no identity is refused with the one-serve-per-agent
   remedy. Single-agent connections are untouched: with one identity the
   connection IS the agent, exactly as before.
+- **The shared-connection health mark is latched, not re-announced, and no
+  longer clobbers more specific notes.** `record` reported "shared" on every
+  identity declaration after the first two, so `markSharedConnectionDetected`
+  re-fired a Warn and rewrote the session's `Health` on every peer call that
+  carried an identity — on the N-subagent topology this exists for, any other
+  health note's lifetime was "until the next peer call" (a `contested_pin` or
+  `blocked` note was erased by an unrelated `session_start`). The mark now
+  fires once, on the transition into shared, and never overwrites a different,
+  more specific note already on the record; rewriting its own state stays
+  idempotent.
 
 ### Changed
 
