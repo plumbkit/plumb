@@ -57,8 +57,8 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 
 // fireInitParamHooks dispatches the hooks that consume per-connection metadata
 // from the initialize params: the client identity, and the `plumb serve`
-// transport keys (allow-dirs, the stable proxy session ID, the cwd workspace
-// hint). All fire synchronously, before OnInit, and each is skipped when its
+// transport keys (allow-dirs, the stable proxy session ID, the workspace
+// pre-pin). All fire synchronously, before OnInit, and each is skipped when its
 // hook is unset or its value is absent/empty — a client that sends nothing
 // changes nothing.
 func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage) {
@@ -206,10 +206,11 @@ func proxySessionFromParams(params json.RawMessage) string {
 	return stringFromMeta(params, MetaProxySessionKey)
 }
 
-// workspaceHintFromParams extracts the serve proxy's working-directory attach
-// hint from the initialize params' _meta[MetaWorkspaceKey] field. Fail-safe
-// like proxySessionFromParams: any shape mismatch yields "", so a client that
-// sends nothing changes nothing.
+// workspaceHintFromParams extracts the serve proxy's explicit workspace pre-pin
+// (--workspace/PLUMB_WORKSPACE; a serve without one sends no key — it starts
+// unattached) from the initialize params' _meta[MetaWorkspaceKey] field.
+// Fail-safe like proxySessionFromParams: any shape mismatch yields "", so a
+// client that sends nothing changes nothing.
 func workspaceHintFromParams(params json.RawMessage) string {
 	return stringFromMeta(params, MetaWorkspaceKey)
 }

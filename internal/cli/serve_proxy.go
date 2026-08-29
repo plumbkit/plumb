@@ -70,11 +70,11 @@ type proxyDeps struct {
 	// untouched (and the daemon falls back to a fresh, non-rehydrated session).
 	proxySessionID string
 
-	// cwd is the workspace attach hint folded into the captured initialize
-	// frame's _meta for clients that report no roots: --workspace/PLUMB_WORKSPACE
-	// when set, else the serve proxy's working directory (resolveWorkspaceHint).
-	// Empty ⇒ frame untouched. Identical across every handshake replay.
-	cwd string
+	// workspace is the explicit workspace pre-pin (--workspace/PLUMB_WORKSPACE,
+	// resolveWorkspaceHint) folded into the captured initialize frame's _meta.
+	// No serve-cwd fallback: with neither, serve starts unattached and
+	// session_start pins. Empty ⇒ frame untouched; identical across replays.
+	workspace string
 
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
@@ -323,7 +323,7 @@ func (p *reconnectingProxy) out() io.Writer { return p.deps.out }
 
 // captureHandshake records the handshake frames for replay and returns the
 // frame to forward — for initialize the _meta-augmented frame (injectInitMeta:
-// allow-dirs, the stable proxy session ID, and the cwd workspace hint), so
+// allow-dirs, the stable proxy session ID, and the workspace pre-pin), so
 // they reach the daemon on the first connect and on every replay. Runs *before* the write so the handshake stays
 // replayable even if the daemon dies mid-write; in-flight tracking is not done
 // here — see trackOutstanding.
@@ -331,7 +331,7 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	e := parseEnvelope(frame)
 	switch {
 	case e.Method == "initialize" && e.hasID():
-		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.cwd))
+		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace))
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)

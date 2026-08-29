@@ -261,9 +261,10 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		// another project by absolute path can never silently re-pin the connection
 		// away from the workspace the caller actually chose.
 		s.rehydratePin(toolCtx)
-		// Next rung down: the serve-proxy cwd hint — still ahead of seeding from
-		// whatever file this tool happens to touch, and Detect-validated, so it
-		// can only land on a real project boundary.
+		// Next rung down: the serve workspace hint (the explicit
+		// --workspace/PLUMB_WORKSPACE pre-pin; a serve without one stores none) —
+		// still ahead of seeding from whatever file this tool happens to touch,
+		// and Detect-validated, so it can only land on a real project boundary.
 		if s.view().acquiredRoot == "" {
 			s.attachFromHint(toolCtx)
 		}
