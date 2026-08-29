@@ -36,16 +36,17 @@ Recovery options:
 // structural_fallback:true — a best-effort, identifier-boundary text rename via
 // the find_replace engine (dry-run by default; not scope-aware).
 type RenameSymbol struct {
-	client   lsp.Client
-	timeout  time.Duration
-	guard    BoundaryGuard
-	warmup   LSPWarmupFn  // optional; folds warming state into the LSP-failure guidance
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative input uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted per modified file after a successful apply
-	fallback *findReplaceTool
-	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	guard     BoundaryGuard
+	warmup    LSPWarmupFn  // optional; folds warming state into the LSP-failure guidance
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative input uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted per modified file after a successful apply
+	fallback  *findReplaceTool
+	showDiff  func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
@@ -78,6 +79,13 @@ func (t *RenameSymbol) WithBoundary(guard BoundaryGuard) *RenameSymbol {
 // WorkspaceEdit URIs are already absolute and are left untouched.
 func (t *RenameSymbol) WithWorkspace(ws WorkspaceFn) *RenameSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE input uri is
+// refused once the pin is contested (issue #182). Nil-safe.
+func (t *RenameSymbol) WithContested(fn ContestedFn) *RenameSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -242,7 +250,11 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("rename_symbol: %w", rerr)
+	}
 	if err := t.guard.check(ctx, paths.URIToPath(a.URI)); err != nil {
 		return "", fmt.Errorf("rename_symbol: %w", err)
 	}

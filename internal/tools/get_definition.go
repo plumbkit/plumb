@@ -42,15 +42,16 @@ var getDefinitionSchema = json.RawMessage(`{
 // GetDefinition returns the definition location(s) for a symbol at a position
 // or by name.
 type GetDefinition struct {
-	client  lsp.Client
-	cache   *cache.Cache
-	ttl     time.Duration
-	timeout time.Duration
-	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
-	topo    topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
-	warmup  LSPWarmupFn     // may be nil; distinguishes a warming server from an unavailable one in the fallback note
-	xcode   XcodeHintFn
-	proof   XcodeProofFn
+	client    lsp.Client
+	cache     *cache.Cache
+	ttl       time.Duration
+	timeout   time.Duration
+	ws        WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn     // may be nil; refuses a relative uri once the pin is contested
+	topo      topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
+	warmup    LSPWarmupFn     // may be nil; distinguishes a warming server from an unavailable one in the fallback note
+	xcode     XcodeHintFn
+	proof     XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
@@ -73,6 +74,13 @@ func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl, timeout time.Durat
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *GetDefinition) WithWorkspace(ws WorkspaceFn) *GetDefinition {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *GetDefinition) WithContested(fn ContestedFn) *GetDefinition {
+	t.contested = fn
 	return t
 }
 
@@ -130,7 +138,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("get_definition: uri must not be empty")
 	}
-	return executeLSPQuery(ctx, "get_definition", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
+	return executeLSPQuery(ctx, "get_definition", t.ws, t.contested, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
 		func(ctx context.Context, uri string) (string, error) { return t.executeByName(ctx, uri, a.SymbolName) },
 		func(ctx context.Context, uri string, line, character uint32) (string, error) {
 			return t.executeByPosition(ctx, uri, line, character, true, "")

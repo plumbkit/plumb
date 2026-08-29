@@ -30,15 +30,16 @@ import (
 // Concurrency: Execute is safe for concurrent use; the apply path holds both
 // files' per-path write locks across resolve, prepare, write, and bookkeeping.
 type MoveSymbol struct {
-	client   lsp.Client
-	timeout  time.Duration
-	topo     topologyStoreFn
-	warmup   LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
-	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn
+	warmup    LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff  func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewMoveSymbol(client lsp.Client, timeout time.Duration) *MoveSymbol {
@@ -71,6 +72,13 @@ func (t *MoveSymbol) WithLSPWarmup(fn LSPWarmupFn) *MoveSymbol {
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
 func (t *MoveSymbol) WithWorkspace(ws WorkspaceFn) *MoveSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *MoveSymbol) WithContested(fn ContestedFn) *MoveSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -147,8 +155,14 @@ func (t *MoveSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	ctx, lspCtx, cancel, waited := fallbackDeadlines(ctx, t.timeout)
 	defer cancel()
 
-	src := toFileURIAnchored(ctx, a.SourceURI, t.ws)
-	dst := toFileURIAnchored(ctx, a.DestinationURI, t.ws)
+	src, err := toFileURIAnchored(ctx, a.SourceURI, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", t.Name(), err)
+	}
+	dst, err := toFileURIAnchored(ctx, a.DestinationURI, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", t.Name(), err)
+	}
 	srcPath := paths.URIToPath(src)
 	dstPath := paths.URIToPath(dst)
 

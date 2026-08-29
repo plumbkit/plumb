@@ -47,11 +47,12 @@ var callHierarchySchema = json.RawMessage(`{
 
 // CallHierarchy implements the call_hierarchy MCP tool.
 type CallHierarchy struct {
-	client  lsp.Client
-	timeout time.Duration
-	topo    topologyStoreFn // optional; topology call-graph fallback when the server has no call hierarchy
-	warmup  LSPWarmupFn     // optional; distinguishes a still-warming server from a genuine failure
-	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn // optional; topology call-graph fallback when the server has no call hierarchy
+	warmup    LSPWarmupFn     // optional; distinguishes a still-warming server from a genuine failure
+	ws        WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn     // may be nil; refuses a relative uri once the pin is contested
 }
 
 // NewCallHierarchy creates a CallHierarchy tool.
@@ -78,6 +79,13 @@ func (t *CallHierarchy) WithLSPWarmup(fn LSPWarmupFn) *CallHierarchy {
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *CallHierarchy) WithWorkspace(ws WorkspaceFn) *CallHierarchy {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *CallHierarchy) WithContested(fn ContestedFn) *CallHierarchy {
+	t.contested = fn
 	return t
 }
 
@@ -144,7 +152,10 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	uri := toFileURIAnchored(ctx, a.URI, t.ws)
+	uri, rerr := toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("call_hierarchy: %w", rerr)
+	}
 	ctx, lspCtx, cancel, waited := fallbackDeadlines(ctx, t.timeout)
 	defer cancel()
 	if a.SymbolName != "" {

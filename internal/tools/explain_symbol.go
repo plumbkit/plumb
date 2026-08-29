@@ -42,12 +42,13 @@ var explainSymbolSchema = json.RawMessage(`{
 // ExplainSymbol returns hover information (documentation, type signature) for
 // the symbol at a given position, or by name.
 type ExplainSymbol struct {
-	client  lsp.Client
-	cache   *cache.Cache
-	ttl     time.Duration
-	timeout time.Duration
-	warmup  LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client    lsp.Client
+	cache     *cache.Cache
+	ttl       time.Duration
+	timeout   time.Duration
+	warmup    LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
+	ws        WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
 }
 
 // NewExplainSymbol creates an ExplainSymbol tool. Pass a nil cache to disable caching.
@@ -66,6 +67,13 @@ func (t *ExplainSymbol) WithLSPWarmup(fn LSPWarmupFn) *ExplainSymbol {
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *ExplainSymbol) WithWorkspace(ws WorkspaceFn) *ExplainSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *ExplainSymbol) WithContested(fn ContestedFn) *ExplainSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -100,7 +108,7 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("explain_symbol: uri must not be empty")
 	}
-	return executeLSPQuery(ctx, "explain_symbol", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
+	return executeLSPQuery(ctx, "explain_symbol", t.ws, t.contested, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
 		func(ctx context.Context, uri string) (string, error) { return t.executeByName(ctx, uri, a.SymbolName) },
 		func(ctx context.Context, uri string, line, character uint32) (string, error) {
 			return t.executeByPosition(ctx, uri, line, character, true, "")

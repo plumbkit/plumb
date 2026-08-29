@@ -55,6 +55,31 @@ func TestResolvePath_ContestedRefusesRelative(t *testing.T) {
 // TestWriteDeps_ContestedRefusesRelative is the WriteDeps counterpart of
 // TestResolvePath_ContestedRefusesRelative — the write tools resolve through the
 // deps method, so the seam must refuse there too.
+// TestToFileURIAnchored_ContestedRefusesRelative closes the second anchoring
+// seam: the LSP uri tools anchor a relative path through toFileURIAnchored, and
+// on a contested connection that must refuse exactly as resolvePath does.
+func TestToFileURIAnchored_ContestedRefusesRelative(t *testing.T) {
+	ws := "/work/space"
+	if _, err := toFileURIAnchored(context.Background(), "app/x.go", wsFn(ws), contestedTrue); err == nil {
+		t.Fatal("toFileURIAnchored anchored a relative path on a contested connection")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "absolute path") {
+		t.Errorf("refusal is not instructive: %v", err)
+	}
+
+	// Absolute paths and file:// URIs round-trip unchanged on contested.
+	if got, err := toFileURIAnchored(context.Background(), "/abs/x.go", wsFn(ws), contestedTrue); err != nil || got != "file:///abs/x.go" {
+		t.Errorf("absolute on contested = %q, %v", got, err)
+	}
+	if got, err := toFileURIAnchored(context.Background(), "file:///abs/x.go", wsFn(ws), contestedTrue); err != nil || got != "file:///abs/x.go" {
+		t.Errorf("file uri on contested = %q, %v", got, err)
+	}
+
+	// Not contested: still anchors.
+	if got, err := toFileURIAnchored(context.Background(), "app/x.go", wsFn(ws), nil); err != nil || got != "file://"+filepath.Join(ws, "app/x.go") {
+		t.Errorf("relative not contested = %q, %v", got, err)
+	}
+}
+
 func TestWriteDeps_ContestedRefusesRelative(t *testing.T) {
 	ws := "/work/space"
 	deps := WriteDeps{WorkspaceFn: wsFn(ws), Contested: contestedTrue}
