@@ -44,6 +44,75 @@ func TestAdoptMovesIdentity(t *testing.T) {
 	}
 }
 
+// TestAdoptCarriesPredecessorExternalID keeps the external session linkage that
+// session_start wrote before the restart. The fresh adopter has none yet, so the
+// adopted live record must take the predecessor's value without a second
+// session_start call (PLAN-404).
+func TestAdoptCarriesPredecessorExternalID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	predecessor, err := session.Register(session.Info{
+		ID:         "predecessor-id",
+		Name:       "steady-heron",
+		ExternalID: "external-agent-id",
+	})
+	if err != nil {
+		t.Fatalf("Register predecessor: %v", err)
+	}
+	session.Unregister(predecessor.ID)
+	adopter, err := session.Register(session.Info{Name: "fresh-adopter"})
+	if err != nil {
+		t.Fatalf("Register adopter: %v", err)
+	}
+
+	adopted, err := session.Adopt(adopter.ID, predecessor.ID)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if got := adopted.ExternalID; got != predecessor.ExternalID {
+		t.Fatalf("adopted ExternalID = %q, want predecessor %q", got, predecessor.ExternalID)
+	}
+	live, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, info := range live {
+		if info.ID == predecessor.ID && info.ExternalID != predecessor.ExternalID {
+			t.Fatalf("live ExternalID = %q, want %q", info.ExternalID, predecessor.ExternalID)
+		}
+	}
+}
+
+// TestAdoptDoesNotOverwriteAdopterExternalID pins the priority rule: a client
+// that supplied an ExternalID before adoption keeps its own value rather than
+// inheriting the predecessor's unrelated external identity.
+func TestAdoptDoesNotOverwriteAdopterExternalID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	predecessor, err := session.Register(session.Info{
+		ID:         "predecessor-id",
+		Name:       "steady-heron",
+		ExternalID: "predecessor-external-id",
+	})
+	if err != nil {
+		t.Fatalf("Register predecessor: %v", err)
+	}
+	session.Unregister(predecessor.ID)
+	adopter, err := session.Register(session.Info{
+		Name:       "fresh-adopter",
+		ExternalID: "adopter-external-id",
+	})
+	if err != nil {
+		t.Fatalf("Register adopter: %v", err)
+	}
+
+	adopted, err := session.Adopt(adopter.ID, predecessor.ID)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if got := adopted.ExternalID; got != adopter.ExternalID {
+		t.Fatalf("adopted ExternalID = %q, want adopter %q", got, adopter.ExternalID)
+	}
+}
+
 // TestAdoptRefusesHeldID is the overlap guard: when another live session already
 // holds the requested ID (the previous daemon still running), adoption declines
 // with ErrIDTaken rather than overwriting that session's file.

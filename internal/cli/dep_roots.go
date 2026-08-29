@@ -118,7 +118,7 @@ func computeZigDependencyRoots(ctx context.Context) []tools.AllowedRoot {
 // trailing comma and surrounding quotes and ignores every other key. A blank or
 // malformed blob returns empty strings.
 func parseZigEnv(out []byte) (libDir, cacheDir string) {
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		key, val, ok := zigEnvField(line)
 		if !ok {
 			continue
@@ -141,12 +141,12 @@ func zigEnvField(line string) (key, val string, ok bool) {
 	if !strings.HasPrefix(line, ".") {
 		return "", "", false
 	}
-	eq := strings.IndexByte(line, '=')
-	if eq < 0 {
+	before, after, ok := strings.Cut(line, "=")
+	if !ok {
 		return "", "", false
 	}
-	key = strings.TrimSpace(strings.TrimPrefix(line[:eq], "."))
-	rhs := strings.TrimSpace(line[eq+1:])
+	key = strings.TrimSpace(strings.TrimPrefix(before, "."))
+	rhs := strings.TrimSpace(after)
 	rhs = strings.TrimSuffix(rhs, ",")
 	rhs = strings.TrimSpace(rhs)
 	if len(rhs) < 2 || rhs[0] != '"' || rhs[len(rhs)-1] != '"' {

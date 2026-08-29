@@ -11,6 +11,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,9 +39,7 @@ func editFileAs(deps WriteDeps, path, oldStr, newStr string, extra map[string]an
 		"file_path": path,
 		"edits":     []map[string]string{{"old_string": oldStr, "new_string": newStr}},
 	}
-	for k, v := range extra {
-		args[k] = v
-	}
+	maps.Copy(args, extra)
 	return NewEditFile(deps).Execute(context.Background(), mustJSON(args))
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/signal"
@@ -191,9 +192,7 @@ func workspaceDiagnostics(pool *workspacePool, workspace string) string {
 	}
 	merged := entries[0].inv.AllDiagnostics()
 	for _, e := range entries[1:] {
-		for uri, diags := range e.inv.AllDiagnostics() {
-			merged[uri] = diags
-		}
+		maps.Copy(merged, e.inv.AllDiagnostics())
 	}
 	return tools.FormatDiagnostics(merged)
 }
@@ -363,6 +362,13 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// the per-workspace config reload at the sessions on that workspace.
 	registry := newConnRegistry()
 
+	// The per-workspace project-config watchers (PLAN-414) are the hot-reload
+	// correctness mechanism: one fsnotify watch per live workspace, dispatching
+	// through the registry so every pinned session re-applies on a file change.
+	// The per-session 30s poll is the fallback for a failed watcher.
+	projCfgWatches := newProjectConfigWatchManager(ctx, registry.reloadProject)
+	defer projCfgWatches.close()
+
 	daemonStartedAt := daemonStartTime()
 
 	// The web UI server is constructed unbound: it does not listen until a
@@ -433,7 +439,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 	return nil
 }
 
@@ -448,7 +454,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 // match `ps`. Extracted from runDaemon so the strip is pinned by a test.
 func daemonStartTime() time.Time { return time.Now().Round(0) }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
@@ -499,7 +505,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
+			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 		})
 	}
 }
@@ -549,12 +555,13 @@ func serverToolExecTimeout() time.Duration {
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, sessState, budgets)
 	s.memoryPool = memPool
 	s.collabPool = collabPool
 	s.daemonStartedAt = daemonStartedAt
+	s.projectWatches = projCfgWatches
 	// The registry is keyed by session ID, which onSessionID may ADOPT (re-key)
 	// during initialize; give the session the registry so the re-key follows.
 	s.registry = registry
@@ -567,8 +574,12 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	})
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.
-	defer func() { registry.remove(s.sessionID()) }()
+	// The remove is deferred AFTER close so LIFO runs it FIRST: once the entry
+	// is gone, a project-config dispatch already in flight can no longer capture
+	// this session's reload hook and re-acquire a watcher reference nobody
+	// would release (PLAN-414).
 	defer s.close()
+	defer func() { registry.remove(s.sessionID()) }()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	writeTimeout := serverWriteTimeout()
 	srv.WriteTimeout = writeTimeout

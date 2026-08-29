@@ -59,7 +59,7 @@ var debugMemCmd = &cobra.Command{
 // an "error: …" reply), so the caller can fall back to printing it raw.
 func parseMemPairs(resp string) [][2]string {
 	var pairs [][2]string
-	for _, line := range strings.Split(strings.TrimRight(resp, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(resp, "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -142,7 +142,7 @@ func renderLSPStatus(resp string) string {
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG")
-	for _, line := range strings.Split(resp, "\n") {
+	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 7 {
 			continue
@@ -187,7 +187,7 @@ func formatIdleField(s string) string {
 func dialDaemonCtrlFull(command string) (string, error) {
 	conn, err := net.Dial("unix", daemonCtrlSocketPath())
 	if err != nil {
-		return "", fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve\n  (%w)", err)
+		return "", ctrlSocketUnavailable(err)
 	}
 	defer conn.Close()
 	if _, err := fmt.Fprintf(conn, "%s\n", command); err != nil {

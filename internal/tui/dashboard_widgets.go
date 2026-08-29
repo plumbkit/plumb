@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
@@ -152,6 +153,12 @@ func (m Model) dashTokensWidget(inner int) []string {
 	effPart := "eff ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency))
 	rightLabel := capPart + " · " + effPart
 	rightStyled := OkStyle.Render(capPart) + DetailStyle.Render(" · ") + SelectedStyle.Render(effPart)
+	// PLAN-367: these axes are netted to the current savings-model version only
+	// (see refreshDashboard) — label it, so a viewer never reads this as a
+	// blend of an earlier model's scoring and today's.
+	versionSuffix := fmt.Sprintf(" (v%d)", clientcaps.ModelVersion)
+	rightLabel += versionSuffix
+	rightStyled += DetailStyle.Render(versionSuffix)
 	if !m.dashLifetimeFirstAt.IsZero() {
 		suffix := " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
 		rightLabel += suffix
@@ -203,10 +210,7 @@ func splitGroups(capTokens, effTokens int64, groups int) (capGroups, effGroups i
 	if groups <= 0 || total <= 0 {
 		return 0, 0
 	}
-	capGroups = int(math.Round(float64(capTokens) / float64(total) * float64(groups)))
-	if capGroups < 0 {
-		capGroups = 0
-	}
+	capGroups = max(int(math.Round(float64(capTokens)/float64(total)*float64(groups))), 0)
 	if capGroups > groups {
 		capGroups = groups
 	}

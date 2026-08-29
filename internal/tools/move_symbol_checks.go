@@ -25,7 +25,7 @@ func checkSamePackage(srcPath, dstPath string, srcBefore, destBefore []byte) err
 // goPackageClause returns the trimmed `package X` line of a Go source file, or
 // "" when none is present.
 func goPackageClause(b []byte) string {
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		if tl := strings.TrimSpace(line); strings.HasPrefix(tl, "package ") {
 			return tl
 		}
@@ -98,7 +98,7 @@ func describeBuildTags(tags []string) string {
 // package clause, which is where build constraints are required to live.
 func goBuildConstraints(b []byte) []string {
 	var tags []string
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		tl := strings.TrimSpace(line)
 		if strings.HasPrefix(tl, "package ") {
 			break
@@ -236,10 +236,7 @@ func normalizeRemovalSeam(after []byte, seam int) []byte {
 		out[len(prefix)] = '\n'
 		return out
 	}
-	nlCount := j - i
-	if nlCount > 2 {
-		nlCount = 2
-	}
+	nlCount := min(j-i, 2)
 	out := make([]byte, 0, len(prefix)+nlCount+len(suffix))
 	out = append(out, prefix...)
 	for range nlCount {

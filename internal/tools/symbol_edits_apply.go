@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
@@ -36,26 +37,38 @@ const treeSitterFallbackLegacyNote = "[topology fallback — LSP unavailable; sy
 
 // treeSitterFallbackNote picks the symbol-edit fallback banner: the warming
 // variant when the server that would own uri is still completing its handshake
-// (so the agent retries instead of concluding the LSP is broken), else the
-// legacy genuinely-unavailable text, byte-identical to the historical banner.
-// fn is nil-safe.
-func treeSitterFallbackNote(fn LSPWarmupFn, uri string) string {
+// (so the agent retries instead of concluding the LSP is broken), then the
+// timed-out variant when the server is up but missed its attempt budget, else
+// the legacy genuinely-unavailable text, byte-identical to the historical
+// banner. fn is nil-safe.
+func treeSitterFallbackNote(reason symbolFallbackReason, fn LSPWarmupFn, uri string, waited time.Duration) string {
 	warming, elapsed := lspWarmup(fn, uri)
-	if !warming {
+	switch {
+	case warming:
+		return fmt.Sprintf("[topology fallback — LSP still warming%s; symbol located by tree-sitter, range is line-granular]\n\n",
+			warmupElapsedSuffix(elapsed))
+	case reason == fallbackLSPTimedOut && waited > 0:
+		// The trade-off PLAN-403 makes explicit WHERE THE AGENT READS IT: the
+		// server attempt is now bounded well inside the tool's budget so the
+		// parse can still run, which means a server slower than that budget —
+		// one that would previously have answered — now yields a line-granular
+		// tree-sitter range instead of a byte-precise LSP one.
+		return fmt.Sprintf("[topology fallback — LSP did not answer within %s; symbol located by tree-sitter, range is line-granular]\n\n",
+			roundedDuration(waited))
+	default:
 		return treeSitterFallbackLegacyNote
 	}
-	return fmt.Sprintf("[topology fallback — LSP still warming%s; symbol located by tree-sitter, range is line-granular]\n\n",
-		warmupElapsedSuffix(elapsed))
 }
 
 // symbolEditFallbackNote resolves the response banner for a symbol-edit whose
 // target came from the tree-sitter fallback; "" when the language server
-// resolved it (no banner).
-func symbolEditFallbackNote(viaFallback bool, fn LSPWarmupFn, uri string) string {
-	if !viaFallback {
+// resolved it (no banner). waited is the attempt budget the server missed,
+// quoted in the timed-out variant.
+func symbolEditFallbackNote(reason symbolFallbackReason, fn LSPWarmupFn, uri string, waited time.Duration) string {
+	if reason == fallbackNotUsed {
 		return ""
 	}
-	return treeSitterFallbackNote(fn, uri)
+	return treeSitterFallbackNote(reason, fn, uri, waited)
 }
 
 // applySingleEdit runs the standard apply-or-preview flow used by every
@@ -82,8 +95,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	if dryRun {
 		edit, sym, fallbackNote, err := resolve(ctx)
 		if err != nil {
-			var refusal symbolEditRefusal
-			if errors.As(err, &refusal) {
+			if refusal, ok := errors.AsType[symbolEditRefusal](err); ok {
 				return refusal.msg, nil
 			}
 			return "", err
@@ -114,8 +126,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	}
 	edit, sym, fallbackNote, err := resolve(ctx)
 	if err != nil {
-		var refusal symbolEditRefusal
-		if errors.As(err, &refusal) {
+		if refusal, ok := errors.AsType[symbolEditRefusal](err); ok {
 			return refusal.msg, nil
 		}
 		return "", err
@@ -247,7 +258,7 @@ func semanticNotifyWritten(ctx context.Context, deps *WriteDeps, client lsp.Clie
 // modified files must bound how many times it calls this (see
 // maxRenameReportFiles).
 func semanticPostWriteReport(ctx context.Context, deps *WriteDeps, path, uri, before, after string, baseline *diagBaseline) string {
-	return deps.postWriteDiagnostics(uri, before, after, false, baseline) + deps.reportQuality(ctx, path)
+	return deps.postWriteDiagnostics(uri, before, after, postWriteDiagOpts{}, baseline).text + deps.reportQuality(ctx, path)
 }
 
 // notifySymbolEditWritten performs the post-write housekeeping shared by the

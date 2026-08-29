@@ -68,21 +68,27 @@ func TestSetupWriters_PreserveThirdPartyConfigMode(t *testing.T) {
 }
 
 // TestInstallSkill_PreservesExistingMode covers the same hazard for the skill
-// installer, which writes markdown into another tool's skills directory.
+// installer, which writes markdown into another tool's skills directory. The
+// baseline is established through installSkill itself (rather than a raw
+// os.WriteFile of unrelated content) so the manifest recognises the second
+// call as a legitimate plumb-shipped update, not a user edit — otherwise it
+// would correctly refuse to touch the file at all, which is what this test
+// is not about.
 func TestInstallSkill_PreservesExistingMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix permission bits")
 	}
 	skillsDir := t.TempDir()
-	dst := filepath.Join(skillsDir, "demo", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatal(err)
+	manifest := &skillManifest{Skills: map[string]skillManifestEntry{}}
+	if _, err := installSkill(skillsDir, "demo", "old\n", manifest, false); err != nil {
+		t.Fatalf("baseline install: %v", err)
 	}
-	if err := os.WriteFile(dst, []byte("old\n"), 0o644); err != nil {
+	dst := filepath.Join(skillsDir, "demo", "SKILL.md")
+	if err := os.Chmod(dst, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	status, err := installSkill(skillsDir, "demo", "new content\n")
+	status, err := installSkill(skillsDir, "demo", "new content\n", manifest, false)
 	if err != nil {
 		t.Fatalf("installSkill: %v", err)
 	}

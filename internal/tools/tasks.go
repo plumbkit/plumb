@@ -10,7 +10,7 @@ import (
 )
 
 // tasks.go is the run_task MCP tool: it executes a STORED per-language command
-// (build/lint/test/e2e/verify) resolved by the daemon, never an agent-supplied
+// (build/lint/test/e2e/verify, or a project-defined slot) resolved by the daemon, never an agent-supplied
 // command line. The only agent input that reaches the argv is an optional
 // {target} token, shell-escaped by validation. Resolution + the per-workspace
 // trust gate live in the daemon (the resolver closure); this file is the MCP
@@ -18,8 +18,17 @@ import (
 //
 // Concurrency: Execute is safe for concurrent use (no shared mutable state).
 
-// taskSlots are the runnable slot names.
-var taskSlots = map[string]bool{"build": true, "lint": true, "test": true, "e2e": true, "verify": true}
+// taskSlotName bounds the slot argument to a plain lowercase identifier. It is
+// INPUT HYGIENE, not the vocabulary: which slots exist is the config layer's
+// answer, and this file deliberately does not import it (see the file comment)
+// — the resolver bridges it. Keeping a closed set here is what made the slot
+// vocabulary Go-shaped: a project whose toolchain calls its verb `check` could
+// not reach run_task at all, and fell back to raw shell, losing the no-shell
+// argv contract and the trust gate with it.
+//
+// TestTaskSlotNamePattern_MatchesConfig pins this against
+// config.ValidTaskSlotName so the two cannot drift.
+var taskSlotName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // targetPattern bounds the {target} token to a single shell-safe argument.
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
@@ -42,6 +51,24 @@ type TaskCommand struct {
 	// shell for every build and test.
 	Language   string
 	Configured []string // slots that DO have a command, for the empty-slot message
+	// ConfigPath is the absolute path of the project config file a command for
+	// this slot would be written to. It is the difference between a remedy a
+	// caller can act on and one it has to go looking for: ".plumb/config.toml" is
+	// relative to a workspace root the agent may not have in hand, and an agent
+	// that cannot find the file falls back to raw shell instead. Empty when the
+	// resolver could not name one, in which case the relative form is used.
+	ConfigPath string
+	// Notes are things the resolver DID to this call that the caller did not ask
+	// for and cannot see in Steps: a target accepted but not applied (a composite
+	// slot has no single command for one to land in), and a stored command whose
+	// {target} placeholder plumb restored to make the target land at all.
+	//
+	// They are notes and not refusals on purpose. Both cases used to be silent —
+	// run_task(slot:"verify", target:…) ran the WHOLE suite and reported success,
+	// a green over a scope nobody asked for — and the obvious fix, refusing,
+	// would open a new rejection cluster, which is the failure family this whole
+	// change exists to shrink. Saying so costs a line and shrinks nothing.
+	Notes []string
 }
 
 // noCommandError explains an unconfigured slot in terms the caller can act on:
@@ -59,11 +86,23 @@ func noCommandError(cmd TaskCommand, slot string) error {
 	if subject == "" {
 		subject, key = "this workspace", "<lang>"
 	}
+	where := ".plumb/config.toml"
+	if cmd.ConfigPath != "" {
+		where = cmd.ConfigPath
+	}
+	// The trust clause is not optional politeness. Both remedies above write the
+	// PROJECT config, and a project-supplied task command is refused by the trust
+	// gate until `plumb trust` runs in the workspace — so a caller that follows
+	// this message exactly lands in the next-largest refusal family instead of
+	// running its command. Naming the global config as the no-trust alternative
+	// closes the loop rather than moving the caller along it.
 	return fmt.Errorf(
 		"run_task: no %s command configured for %s (%s). "+
-			"Set one with [tasks.%s] %s = \"...\" in .plumb/config.toml, "+
-			"or via agent_config op=set when the user has enabled [agent_config_writes]",
-		slot, subject, have, key, slot)
+			"Set one with [tasks.%s] %s = \"...\" in %s, "+
+			"or via agent_config op=set when the user has enabled [agent_config_writes]; "+
+			"then run `plumb trust` in the workspace, since a command from the project's config "+
+			"is not run until it is trusted. A command in your global config needs no trust",
+		slot, subject, have, key, slot, where)
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -87,12 +126,11 @@ var runTaskSchema = json.RawMessage(`{
   "properties": {
     "slot": {
       "type": "string",
-      "enum": ["build", "lint", "test", "e2e", "verify"],
-      "description": "Which stored task command to run: build, lint, test, e2e (integration), or verify (build then test). The command is configured per language in [tasks.<lang>] and resolved for this workspace's language — you cannot pass an arbitrary command."
+      "description": "Which stored task command to run: build, lint, test, e2e, verify, or a project-defined slot under [tasks.<lang>]. session_start lists what's configured; an unconfigured slot is refused with that list."
     },
     "target": {
       "type": "string",
-      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the stored command has no {target}."
+      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target} slot."
     }
   },
   "required": ["slot"],
@@ -102,7 +140,7 @@ var runTaskSchema = json.RawMessage(`{
 func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
-	return "Run a stored per-language task command — build, lint, test, e2e, or verify (build then test) — configured in [tasks.<lang>]. " +
+	return "Run a stored per-language task command — build, lint, test, e2e, verify, or a project-defined slot — configured in [tasks.<lang>]. " +
 		"It executes only the command the user saved for this workspace's language (no shell, no agent-supplied command line); the optional target fills a {target} placeholder with one shell-safe argument, and the shipped test defaults carry one so scoping needs no config edit. " +
 		"Commands run from the workspace root, or from [tasks.<lang>] working_dir when the module lives in a subdirectory. " +
 		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
@@ -115,8 +153,10 @@ type runTaskArgs struct {
 }
 
 func (a runTaskArgs) validate() error {
-	if !taskSlots[a.Slot] {
-		return fmt.Errorf("run_task: slot must be one of build, lint, test, e2e, verify; got %q", a.Slot)
+	if !taskSlotName.MatchString(a.Slot) {
+		return fmt.Errorf("run_task: slot %q is not a valid slot name "+
+			"(lowercase letter first, then letters, digits, _ or -, max 32 characters); "+
+			"the built-ins are build, lint, test, e2e, verify", a.Slot)
 	}
 	if a.Target != "" && !targetPattern.MatchString(a.Target) {
 		return fmt.Errorf("run_task: target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.Target)
@@ -161,6 +201,9 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run_task %s (source=%s)\n", cmd.Slot, cmd.Provenance)
+	for _, note := range cmd.Notes {
+		fmt.Fprintf(&b, "note: %s\n", note)
+	}
 	for i, argv := range cmd.Steps {
 		res, err := RunArgv(ctx, ws, argv, defaultTaskTimeout)
 		if err != nil {
@@ -184,10 +227,12 @@ func formatStep(argv []string, res ExecResult) string {
 		b.WriteString("(timed out)\n")
 	}
 	if out := strings.TrimSpace(res.Stdout); out != "" {
-		b.WriteString(out + "\n")
+		b.WriteString(out)
+		b.WriteString("\n")
 	}
 	if errOut := strings.TrimSpace(res.Stderr); errOut != "" {
-		b.WriteString(errOut + "\n")
+		b.WriteString(errOut)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

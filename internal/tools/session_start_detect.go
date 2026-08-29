@@ -240,11 +240,11 @@ func gitSubmodules(ws string) []string {
 		return nil
 	}
 	var paths []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		// Each line is "submodule.<name>.path <path>"; the path is everything
 		// after the first space.
-		if i := strings.IndexByte(line, ' '); i >= 0 {
-			if p := strings.TrimSpace(line[i+1:]); p != "" {
+		if _, after, ok := strings.Cut(line, " "); ok {
+			if p := strings.TrimSpace(after); p != "" {
 				paths = append(paths, p)
 			}
 		}

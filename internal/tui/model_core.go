@@ -153,7 +153,7 @@ type Model struct {
 	commandsList         []config.CommandConfig // effective [[command]] entries for the current scope
 	commandPolicy        config.CommandsConfig  // effective [commands] policy for the current scope
 	commandsFocus        commandsFocus          // which sub-area of the tab holds focus
-	commandsToggleCursor int                    // 0..1 index into the policy toggles
+	commandsToggleCursor int                    // 0..commandsToggleCount-1 index into the policy toggles
 	commandsListCursor   int                    // index into commandsList (also the command shown in Detail)
 	commandsDetailCursor int                    // 0..commandDetailFieldCount-1 index into the Detail fields
 

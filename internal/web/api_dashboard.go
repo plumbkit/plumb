@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
@@ -62,6 +63,11 @@ type savingsDTO struct {
 	Capability int64            `json:"capability"`
 	Efficiency int64            `json:"efficiency"`
 	ByTool     []savingsToolDTO `json:"byTool"`
+	// ModelVersion is the savings-model version (clientcaps.ModelVersion) these
+	// totals are netted to — PLAN-367: a consumer of this JSON must never sum
+	// it against a value fetched before a model-version bump and present the
+	// result as one figure.
+	ModelVersion int `json:"modelVersion"`
 }
 
 type savingsToolDTO struct {
@@ -94,13 +100,20 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	db, err := stats.SharedReadOnly()
 	if err == nil && db != nil {
-		// One full-table aggregation feeds both the top-tools list and the
-		// savings breakdown; running Summary twice per request (and per SSE
-		// refresh) doubled the stats-DB scan for no benefit (#64).
+		// Top-tools ranking wants EVERY call regardless of savings-model
+		// version (it's a usage count, not an estimate); the savings breakdown
+		// must NOT blend an earlier model's scoring into today's (PLAN-367
+		// review round 1 — see stats.DB.SummarySinceVersion's doc comment). The
+		// #64 single-scan optimisation this used to share no longer applies:
+		// a version-netted aggregate is a genuinely different query, not the
+		// same rows sliced two ways.
 		rows, sumErr := db.Summary(stats.Filter{})
 		if sumErr == nil {
 			out.TopTools, out.TotalCalls = topTools(rows, 10)
-			out.Savings = savingsBreakdown(db, rows)
+		}
+		versionedRows, vErr := db.SummarySinceVersion(stats.Filter{}, clientcaps.ModelVersion)
+		if vErr == nil {
+			out.Savings = savingsBreakdown(db, versionedRows)
 		}
 		out.Activity = activityWindow(db, 24*time.Hour, 48)
 	}
@@ -192,10 +205,12 @@ func activityWindow(db *stats.DB, window time.Duration, buckets int) activityDTO
 }
 
 // savingsBreakdown splits token savings by axis (a cheap aggregate) and lists
-// per-tool savings from the precomputed Summary slice.
+// per-tool savings from the precomputed, version-netted Summary slice (see
+// handleDashboard). Both the axis total and the per-tool rows are netted to
+// the SAME savings-model version, so they can never contradict each other.
 func savingsBreakdown(db *stats.DB, rows []stats.ToolStat) savingsDTO {
-	axes := db.SavingsAxes(stats.Filter{})
-	out := savingsDTO{Capability: axes.Capability, Efficiency: axes.Efficiency}
+	axes := db.SavingsAxes(stats.Filter{SavingsModelVersion: clientcaps.ModelVersion})
+	out := savingsDTO{Capability: axes.Capability, Efficiency: axes.Efficiency, ModelVersion: clientcaps.ModelVersion}
 	for _, t := range rows {
 		if t.CapabilityTokens == 0 && t.EfficiencyTokens == 0 {
 			continue

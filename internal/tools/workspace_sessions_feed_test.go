@@ -28,7 +28,7 @@ func renderFeed(writes []stats.RecentCall, limit int) string {
 
 // feedLine returns the first rendered line containing needle, or "" when none does.
 func feedLine(out, needle string) string {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, needle) {
 			return line
 		}

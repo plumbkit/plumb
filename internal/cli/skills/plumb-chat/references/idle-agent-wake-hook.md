@@ -3,35 +3,73 @@
 Plumb's mailbox delivers by polling. Every path — the block appended to a tool
 result, `check_messages`, `session_start` — needs the recipient to make a call.
 An agent that has finished its turn and is waiting on its human makes no calls
-at all, so no amount of server-side cleverness reaches it. The daemon cannot
-push over MCP; that is a property of the transport, not a gap in plumb.
+at all, so no amount of server-side cleverness reaches it over MCP.
 
-A Claude Code **Stop hook** narrows that window. It fires when the agent
-finishes responding, and it may keep the turn going, so the shape is: at the
-moment of going quiet, ask whether mail is waiting, and if it is, continue the
-turn instead.
+**Plumb ships the fix as a command:**
 
-**Be precise about what this does not do.** It cannot wake an agent that is
-*already* idle. That agent's Stop hook has already run and allowed the stop, and
-nothing fires again until its human speaks. So a message that arrives one second
-after the turn ends waits for the human exactly as before. The hook closes the
-narrow race where mail is already waiting at end of turn — worth having, and not
-a delivery guarantee.
+    plumb setup claude-code      # if plumb is not registered yet
+    plumb hooks install claude-code
+
+That installs two hooks in `~/.claude/settings.json` — merging with whatever is
+already there, backing the file up first. `plumb hooks` reports what is
+installed; `plumb hooks uninstall claude-code` takes them back out. The rest of
+this note is what they do and why, for anyone who needs to reason about the
+behaviour, tune it, or build the same thing for a client plumb does not cover.
+
+## What the installed hooks do
+
+**`SessionStart`** states this conversation's id, so the agent's first
+`session_start` can pass it as `session_id`. Without that linkage plumb knows a
+working directory and nothing else, and a directory shared by several sessions —
+which is exactly when peers message each other — cannot name one of them.
+
+**`Stop`** is a background watcher, and it genuinely wakes an idle session. With
+`"async": true, "asyncRewake": true` the client queues a task notification when
+the hook exits 2, and that notification reaches a session with **no turn in
+flight** (verified on Claude Code 2.1.233). So the watcher outlives the turn that
+started it: it polls for up to `PLUMB_WAKE_WINDOW` seconds (default 300, every
+`PLUMB_WAKE_INTERVAL`, default 7) and fires the moment mail arrives. If you
+raise the window, re-run `plumb hooks install claude-code` — the handler's own
+timeout is written from the window in effect at install time, and a client that
+cancels the hook early kills the watcher with nothing to see.
+
+What it deliberately does not do:
+
+- **It does not deliver.** The wake carries a count, never a body — a peer's
+  text pasted into hook feedback would be a direct injection channel into the
+  agent. The messages stay unclaimed and arrive through `check_messages`,
+  labelled as the unverified claims they are.
+- **It does not cover the gaps between windows.** Mail that arrives after the
+  watcher's window closes waits for the human, as before.
+- **It does not run everywhere.** `settings.json` is user-wide, so the hook
+  stands down immediately for a session whose working directory is not inside a
+  plumb workspace.
+- **It does not loop.** A woken turn re-arms only when it provably read some of
+  the mail, capped per chain, so an ignored wake cannot chain.
 
 Which means the `plumb-chat` rule stands unchanged: **silence is still not a
-refusal**. Do not read "the wake hook is installed" as "my peer has seen this".
-Most of the time it has not.
+refusal**. Do not read "the wake hook is installed" as "my peer has seen this" —
+and note that a peer on a client with no wake path (Codex's `Stop` hook can only
+check as a turn ends; most clients have nothing) never had one to begin with.
 
 For an [agent team](https://code.claude.com/docs/en/agent-teams), the event that
-genuinely covers the idle case is **`TeammateIdle`** — "when a teammate is about
+covers the idle case natively is **`TeammateIdle`** — "when a teammate is about
 to go idle after finishing its turn" — where exit code 2 prevents the teammate
 going idle so it continues working. It takes no matcher and fires every time.
-That is the right hook for a teammate; this note does not build it.
+That is the right hook for a teammate; plumb does not install it.
 
-Everything about the Claude Code contract below was verified against
+## Building it by hand
+
+Everything below is the hand-rolled version of what `plumb hooks install` now
+does for you — useful for a client plumb has no pack for, or to understand the
+shape. The Claude Code contract was verified against
 <https://code.claude.com/docs/en/hooks> on 2026-08-13. Everything about plumb
 was verified against the source in this repository.
 
+Note that the Stop hook
+sketched below is the **synchronous** form: it keeps a turn alive when mail is
+already waiting, but it cannot wake a session that has already gone quiet — for
+that it needs the `async` + `asyncRewake` pair the installed hook uses.
 ## The two commands this needs
 
 **`plumb mail`** answers the question from outside a session:

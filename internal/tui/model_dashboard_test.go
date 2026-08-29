@@ -273,7 +273,10 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 			t.Fatalf("tokens block row %d = %q, want %q", idx, plain[idx], wantBlock)
 		}
 	}
-	wantLabels := "│   uptime 0 (12m+)           cap ~0 · eff ~518k (9d+)"
+	// PLAN-367: the axes are labelled with the savings-model version (" (v4)")
+	// so a viewer never reads a lifetime total as a blend of scoring models;
+	// the longer label narrows the gap the layout computes before "cap".
+	wantLabels := "│   uptime 0 (12m+)        cap ~0 · eff ~518k (v4) (9d+)"
 	if !strings.HasPrefix(plain[7], wantLabels) {
 		t.Fatalf("tokens label row = %q, want prefix %q", plain[7], wantLabels)
 	}

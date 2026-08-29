@@ -26,6 +26,11 @@ type mockLSP struct {
 	chIncoming []protocol.CallHierarchyIncomingCall
 	chOutgoing []protocol.CallHierarchyOutgoingCall
 
+	// Type-hierarchy responses (nil by default → same as an empty server).
+	thItems  []protocol.TypeHierarchyItem
+	thSupers []protocol.TypeHierarchyItem
+	thSubs   []protocol.TypeHierarchyItem
+
 	// last*Pos records the Position of the most recent semantic query, so tests can
 	// assert the tool queried the identifier (DocumentSymbol SelectionRange) rather
 	// than the declaration start (the keyword).
@@ -83,9 +88,13 @@ func (m *mockLSP) Definition(_ context.Context, p protocol.DefinitionParams) ([]
 	return m.locations, m.err
 }
 
-func (m *mockLSP) References(_ context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
+func (m *mockLSP) References(ctx context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
 	m.lastRefPos = p.Position
 	m.lastRefURI = p.TextDocument.URI
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.locations, m.err
 }
 
@@ -111,7 +120,11 @@ func (m *mockLSP) Rename(_ context.Context, p protocol.RenameParams) (*protocol.
 	return m.renameResult, m.err
 }
 
-func (m *mockLSP) PrepareCallHierarchy(_ context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+func (m *mockLSP) PrepareCallHierarchy(ctx context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.chItems, m.err
 }
 
@@ -124,15 +137,15 @@ func (m *mockLSP) OutgoingCalls(_ context.Context, _ protocol.CallHierarchyOutgo
 }
 
 func (m *mockLSP) PrepareTypeHierarchy(_ context.Context, _ protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thItems, m.err
 }
 
 func (m *mockLSP) Supertypes(_ context.Context, _ protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thSupers, m.err
 }
 
 func (m *mockLSP) Subtypes(_ context.Context, _ protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
-	return nil, m.err
+	return m.thSubs, m.err
 }
 func (m *mockLSP) Capabilities() *protocol.ServerCapabilities       { return m.caps }
 func (m *mockLSP) Subscribe(_ func(string, json.RawMessage)) func() { return func() {} }

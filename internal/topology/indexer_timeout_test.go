@@ -56,11 +56,10 @@ func TestSafeExtract_AbandonsExtractPastTheDeadline(t *testing.T) {
 	defer cancel()
 
 	done := make(chan struct{})
-	var nodes []Node
-	var edges []Edge
+	var out extractOutput
 	var err error
 	go func() {
-		nodes, edges, err = safeExtract(ctx, ex, "stuck.go", []byte("package p"))
+		out, err = safeExtract(ctx, ex, "stuck.go", []byte("package p"))
 		close(done)
 	}()
 
@@ -73,7 +72,7 @@ func TestSafeExtract_AbandonsExtractPastTheDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want a context.DeadlineExceeded wrapper", err)
 	}
-	if nodes != nil || edges != nil {
+	if out.nodes != nil || out.edges != nil {
 		t.Error("expected no nodes/edges from an abandoned extract")
 	}
 	<-ex.entered // the extractor really did start; the timeout is not a no-op path
@@ -83,12 +82,12 @@ func TestSafeExtract_ReturnsWorkThatFitsTheDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	nodes, _, err := safeExtract(ctx, &slowExtractor{delay: 20 * time.Millisecond}, "slow.go", []byte("package p"))
+	out, err := safeExtract(ctx, &slowExtractor{delay: 20 * time.Millisecond}, "slow.go", []byte("package p"))
 	if err != nil {
 		t.Fatalf("safeExtract: %v", err)
 	}
-	if len(nodes) != 1 || nodes[0].Name != "Slow" {
-		t.Errorf("nodes = %+v, want the single Slow node — a deadline that fits must not truncate", nodes)
+	if len(out.nodes) != 1 || out.nodes[0].Name != "Slow" {
+		t.Errorf("nodes = %+v, want the single Slow node — a deadline that fits must not truncate", out.nodes)
 	}
 }
 
@@ -273,13 +272,13 @@ func TestSafeExtract_DeadContextStartsNoExtract(t *testing.T) {
 	entered := make(chan struct{})
 	ctx := armedContext{entered: entered}
 
-	nodes, edges, err := safeExtract(ctx, enteringExtractor{entered: entered}, "dead.go", []byte("package p"))
+	out, err := safeExtract(ctx, enteringExtractor{entered: entered}, "dead.go", []byte("package p"))
 
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want a context.Canceled wrapper", err)
 	}
-	if nodes != nil || edges != nil {
-		t.Errorf("nodes/edges = %v/%v, want none — a dead context must not return a result", nodes, edges)
+	if out.nodes != nil || out.edges != nil {
+		t.Errorf("nodes/edges = %v/%v, want none — a dead context must not return a result", out.nodes, out.edges)
 	}
 	select {
 	case <-entered:
@@ -332,7 +331,7 @@ func TestExtractFile_DeadlineAppliedEvenWhenTimeoutDisabled(t *testing.T) {
 		_, sawDeadline = ctx.Deadline()
 	}}
 	idx := newIndexer(dir, db, []Extractor{probe}, 512*1024, 0) // 0 == "disabled"
-	if _, _, err := idx.extractFile(context.Background(), probe, "a.go", []byte("package main\n")); err != nil {
+	if _, err := idx.extractFile(context.Background(), probe, "a.go", []byte("package main\n")); err != nil {
 		t.Fatalf("extractFile: %v", err)
 	}
 	if !sawDeadline {

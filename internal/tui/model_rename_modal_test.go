@@ -51,7 +51,7 @@ func TestRenameModalCentred(t *testing.T) {
 	modal := newRenameSessionModal("wild-viper")
 	out := modal.renderModal(strings.Join(bgLines, "\n"), w, h)
 
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		plain := ansi.Strip(line)
 		if !strings.Contains(plain, "Rename Session") {
 			continue

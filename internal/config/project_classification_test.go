@@ -28,7 +28,7 @@ func configLeafKeys(t *testing.T) []string {
 	walk = func(rt reflect.Type, prefix string) {
 		for i := range rt.NumField() {
 			f := rt.Field(i)
-			tag := strings.Split(f.Tag.Get("toml"), ",")[0]
+			tag, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
 			if tag == "" || tag == "-" {
 				continue
 			}

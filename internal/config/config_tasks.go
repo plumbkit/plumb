@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -16,8 +19,9 @@ import (
 //
 // Concurrency: TasksConfig values are read-only after Load returns.
 
-// TasksConfig holds the five command slots for one language. An empty slot
-// means "no command for this language" — never a guessed tool that may be
+// TasksConfig holds the command slots for one language: the five built-ins
+// below, plus any extra slot the project names for itself (Extra). An empty
+// slot means "no command for this language" — never a guessed tool that may be
 // absent. The {target} placeholder is honoured only in the Test slot.
 type TasksConfig struct {
 	Build  string `toml:"build"`
@@ -42,13 +46,52 @@ type TasksConfig struct {
 	// (validateCommandWorkingDir), and re-checked against the workspace boundary
 	// after symlink resolution when it is resolved to an absolute path.
 	WorkingDir string `toml:"working_dir"`
+	// Extra holds slots this config named that are not one of the five built-ins
+	// — `check`, `typecheck`, `audit`, whatever the project's toolchain calls
+	// its verbs. The built-in five are Go-shaped, and a project whose verb is not
+	// among them previously had no way to reach run_task at all: the slot
+	// vocabulary was closed, so `pnpm check` had to be run through raw shell,
+	// losing the no-shell argv contract and the trust gate with it.
+	//
+	// Decoded separately from this struct (extraTaskSlots), because go-toml
+	// binds only the declared fields. It is NOT a toml-tagged field: an unknown
+	// key must not round-trip through it on save, or a typo would be preserved
+	// as a slot forever.
+	//
+	// Extras are trust-gated exactly like a built-in — ProjectTaskCommands
+	// already flattens every (lang, slot, command) triple regardless of slot
+	// name — and are NOT agent-writable, since agentWritableKeys is keyed by
+	// registry field and an extra has no registry entry (fail closed).
+	Extra map[string]string `toml:"-"`
 }
 
-// TaskSlots are the valid slot names, in display order.
+// TaskSlots are the built-in slot names, in display order. A project may name
+// further slots of its own (see TasksConfig.Extra); this list stays the
+// built-in set, because it is what "not configured" is reported against — an
+// extra slot is opt-in and is never missing.
 var TaskSlots = []string{"build", "lint", "test", "e2e", "verify"}
 
+// IsBuiltinTaskSlot reports whether name is one of the five built-in slots.
+func IsBuiltinTaskSlot(name string) bool {
+	return slices.Contains(TaskSlots, name)
+}
+
+// taskSlotName bounds an extra slot's NAME (its command is bounded separately,
+// by ParseTaskCommand). A slot name reaches an error message and a TOML key, and
+// is matched against agent input, so it is kept to a plain lowercase identifier
+// rather than left to whatever a config file happens to contain.
+var taskSlotName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// ValidTaskSlotName reports whether name is well formed as a slot name. It does
+// not say the slot exists — an unconfigured-but-well-formed name is resolved,
+// then reported by run_task with the list of slots that DO have a command.
+func ValidTaskSlotName(name string) bool {
+	return taskSlotName.MatchString(name)
+}
+
 // Get returns the command stored in the named slot ("" for verify, which is a
-// composite). An unknown slot returns "".
+// composite). A name that is not a built-in falls through to the project's own
+// extra slots; an unknown slot returns "".
 func (t TasksConfig) Get(slot string) string {
 	switch slot {
 	case "build":
@@ -59,9 +102,27 @@ func (t TasksConfig) Get(slot string) string {
 		return t.Test
 	case "e2e":
 		return t.E2E
+	case "verify":
+		return "" // composite: the runner builds it from build + test
 	default:
-		return ""
+		return t.Extra[slot]
 	}
+}
+
+// ConfiguredSlotNames returns every slot name this config could run, built-ins
+// first in canonical order and the project's own extras after, sorted. It names
+// what EXISTS, not what has a command — callers that need the latter (session
+// orientation, run_task's "configured slots" message) filter it through
+// buildTaskSteps, which is the single source of truth on runnability.
+func ConfiguredSlotNames(t TasksConfig) []string {
+	out := make([]string, 0, len(TaskSlots)+len(t.Extra))
+	out = append(out, TaskSlots...)
+	extras := make([]string, 0, len(t.Extra))
+	for name := range t.Extra {
+		extras = append(extras, name)
+	}
+	sort.Strings(extras)
+	return append(out, extras...)
 }
 
 // defaultTasks returns the shipped per-language command defaults. Where a tool
@@ -112,6 +173,93 @@ func defaultTasks() map[string]TasksConfig {
 			Test:  "zig build test",
 		},
 	}
+}
+
+// DefaultTaskCommand returns the command plumb SHIPS for (lang, slot), or ""
+// when it ships none. It exists so the cli seam can compare a stored command
+// against the default it replaced — the one comparison that makes placeholder
+// reconciliation provable rather than guessed (see reconcileTargetPlaceholder).
+//
+// The language is matched case-insensitively, the same way go-toml binds a
+// table name to a struct field: a config written `[TASKS.Go]` reaches the
+// runner, so it must reach this lookup too or reconciliation would silently
+// decline for exactly the configs that need it most.
+func DefaultTaskCommand(lang, slot string) string {
+	return defaultTasks()[strings.ToLower(lang)].Get(slot)
+}
+
+// builtinTaskKeys are the keys go-toml binds to a declared TasksConfig field.
+// Everything else under [tasks.<lang>] is an extra slot.
+var builtinTaskKeys = map[string]bool{
+	"build": true, "lint": true, "test": true, "e2e": true, "verify": true,
+	"working_dir": true,
+}
+
+// extraTaskSlots reads the project-named slots out of an already-decoded raw
+// TOML document, keyed by language. It is a SECOND decode of the same bytes,
+// the pattern LoadProjectWithPolicy already uses, rather than a custom
+// UnmarshalTOML on TasksConfig: go-toml v2 hands an UnmarshalTOML raw bytes and
+// takes over the whole decode for that value, so it would mean hand-parsing the
+// table and reimplementing the layered merge — the same hand-rolled-parsing
+// class as the gate bypass ProjectTaskCommands documents.
+//
+// Lookup is case-insensitive (rawTables), for exactly that reason: go-toml binds
+// a table name to a struct field case-insensitively, so `[TASKS.go]` reaches the
+// runner. An exact raw["tasks"] lookup here would miss it — the extra would be
+// invisible to validation while remaining runnable, which is the shape of the
+// bug the exact lookup already caused once.
+func extraTaskSlots(raw map[string]any) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, tasks := range rawTables(raw, "tasks") {
+		for lang, v := range tasks {
+			slots, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			for slot, cv := range slots {
+				if builtinTaskKeys[strings.ToLower(slot)] {
+					continue
+				}
+				cmd, ok := cv.(string)
+				if !ok {
+					// A non-string under a slot name is not silently dropped: it is
+					// recorded as an empty command so validateTasks sees the slot and
+					// can reject the name if it is malformed. Dropping it here would
+					// hide a config error rather than report it.
+					cmd = ""
+				}
+				lower := strings.ToLower(lang)
+				if out[lower] == nil {
+					out[lower] = map[string]string{}
+				}
+				out[lower][slot] = cmd
+			}
+		}
+	}
+	return out
+}
+
+// applyExtraTaskSlots merges decoded extras onto cfg.Tasks. Later layers win per
+// slot, matching how go-toml merges the declared fields, so a project may
+// override a global extra without erasing the rest.
+func applyExtraTaskSlots(tasks map[string]TasksConfig, extras map[string]map[string]string) map[string]TasksConfig {
+	if len(extras) == 0 {
+		return tasks
+	}
+	if tasks == nil {
+		tasks = map[string]TasksConfig{}
+	}
+	for lang, slots := range extras {
+		tc := tasks[lang]
+		if tc.Extra == nil {
+			tc.Extra = map[string]string{}
+		} else {
+			tc.Extra = maps.Clone(tc.Extra)
+		}
+		maps.Copy(tc.Extra, slots)
+		tasks[lang] = tc
+	}
+	return tasks
 }
 
 // taskShellMetachars are sequences that imply shell interpretation. The runner
@@ -239,5 +387,15 @@ func cloneTasks(m map[string]TasksConfig) map[string]TasksConfig {
 	}
 	out := make(map[string]TasksConfig, len(m))
 	maps.Copy(out, m)
+	// maps.Copy is shallow, and TasksConfig now carries a map of its own — so
+	// without this the Extra maps stay SHARED with the config being cloned from,
+	// and a project layer adding a slot would reach back into the global config
+	// every later load starts from.
+	for lang, tc := range out {
+		if tc.Extra != nil {
+			tc.Extra = maps.Clone(tc.Extra)
+			out[lang] = tc
+		}
+	}
 	return out
 }

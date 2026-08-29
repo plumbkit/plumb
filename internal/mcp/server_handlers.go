@@ -42,7 +42,7 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 	instructions := s.info.Instructions
 	switch instructions {
 	case "":
-		instructions = DefaultInstructions
+		instructions = InstructionsForClient(clientInfoNameFromParams(req.Params))
 	case "-":
 		instructions = ""
 	}
@@ -158,8 +158,7 @@ func clientProtocolParams(params json.RawMessage) (string, json.RawMessage) {
 		Capabilities    json.RawMessage `json:"capabilities"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if !errors.As(err, &typeErr) {
+		if _, ok := errors.AsType[*json.UnmarshalTypeError](err); !ok {
 			return "", nil
 		}
 	}

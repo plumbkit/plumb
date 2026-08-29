@@ -29,8 +29,8 @@ import (
 // trusted `[lsp.<lang>] command`, after `plumb trust` cannot have the new value
 // take effect without a re-prompt (closes the trust TOCTOU). A coarse Trusted
 // flag serves the non-task surfaces that share this per-root grant (run_command's
-// [[command]] allow-list, execute_shell_command's policy, and the xcode
-// auto-build-server), which are gated on the bare boolean.
+// [[command]] allow-list, its [commands] policy, and the xcode auto-build-server),
+// which are gated on the bare boolean.
 //
 // The coarse flag deliberately does NOT imply either bound grant: the TUI's
 // Commands tab sets it on a workspace-scope edit (trusted-by-authorship), and
@@ -48,7 +48,7 @@ type TrustStore struct {
 // once on the next `plumb trust` (see load).
 type trustRecord struct {
 	// Trusted is the coarse grant covering the project's non-task execution
-	// surfaces (run_command, execute_shell_command, xcode auto-build-server).
+	// surfaces (run_command and its [commands] policy, xcode auto-build-server).
 	Trusted bool `json:"trusted"`
 	// TaskHash binds trust to the exact project-supplied task command set that was
 	// trusted (canonical SHA-256, hex). Empty means the task gate treats the root
@@ -123,7 +123,7 @@ func (s *TrustStore) save(m map[string]trustRecord) error {
 }
 
 // IsTrusted reports whether root has a coarse trust grant. It backs the non-task
-// execution surfaces (run_command, execute_shell_command, xcode) that share this
+// execution surfaces (run_command, its [commands] policy, xcode) that share this
 // per-root grant. A read error fails closed (untrusted). The task gate uses
 // IsTrustedForTasks, not this, so a task-command change never silently re-enables
 // a project command through this coarse boolean.

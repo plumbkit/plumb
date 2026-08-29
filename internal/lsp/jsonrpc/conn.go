@@ -202,8 +202,7 @@ func (e *MethodNotFoundError) Error() string {
 // handlerErrCode maps an error returned by a server-request handler onto its
 // JSON-RPC error code.
 func handlerErrCode(err error) int {
-	var mnf *MethodNotFoundError
-	if errors.As(err, &mnf) {
+	if _, ok := errors.AsType[*MethodNotFoundError](err); ok {
 		return errCodeMethodNotFound
 	}
 	return errCodeInternal
@@ -219,12 +218,10 @@ func IsMethodNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	var mnf *MethodNotFoundError
-	if errors.As(err, &mnf) {
+	if _, ok := errors.AsType[*MethodNotFoundError](err); ok {
 		return true
 	}
-	var we *wireError
-	if errors.As(err, &we) {
+	if we, ok := errors.AsType[*wireError](err); ok {
 		return we.Code == errCodeMethodNotFound
 	}
 	return false

@@ -36,25 +36,63 @@ func autoProfile(client string) (string, string) {
 }
 
 // autoProfileFor is the auto-mode policy given a client's declared
-// capabilities. Lean is opt-in: it requires an explicit, reviewed
-// ReliableDeferredToolDiscovery declaration, never an inference from native
-// file/search/shell possession — a client can have strong native tooling and
-// still be unable to reliably discover or invoke a tool absent from its
-// initial tools/list surface. Order matters: an UNKNOWN client (unproven by
-// definition) and a SchemaDiscoveryOnly client (one that builds its tool set,
-// including any ToolSearch deferred list, purely from tools/list — a
-// lean-hidden tool is unreachable rather than merely undisplayed, e.g. Claude
-// Code) both always get "full" regardless of the deferred-discovery flag.
-// Every other client defaults to "full" until verified true.
+// capabilities — a ladder of reviewed, evidence-based rungs (strategy doc §5
+// W2-15) that each earn MORE than the conservative default, never less.
+// Detection only ever adds; it never demotes a client already being served
+// safely. The conservative default itself stays "full": review of an earlier
+// version of this function found it collapsing that default to "lean" for
+// EVERY client clientcaps does not carry a row for — cursor, opencode, goose,
+// crush, qwen, augment, antigravity(+desktop), hermes, dsh, zed, windsurf, and
+// any future client — with zero evidence any of them can invoke a tool hidden
+// from tools/list. clientcaps documents only 7 rows against the ~20 setup
+// targets docs/cli-reference.md names, so "unrecognised" was overwhelmingly
+// documented clients, not novel ones, and hiding ~37/58 tools from them is
+// exactly the tool-removal the Do-NOT forbids — indistinguishable from the
+// reasoning that keeps Claude Desktop and Junie on "full" below. A genuine
+// zero-detection lean floor needs registry rows with positive deferral
+// evidence for the clients it would apply to, not an absence of a row; that is
+// follow-up work, not something to ship by default-flipping every unlisted
+// client today.
+//
+// Order matters, and each rung is evaluated only once the ones above it have
+// ruled themselves out:
+//
+//  1. SchemaDiscoveryOnly — the client builds its tool set (including any
+//     ToolSearch deferred list) purely from tools/list, so a lean-hidden tool
+//     has no schema to load and is unreachable, not merely undisplayed (e.g.
+//     Claude Code, Kimi Code). Always "full", regardless of every other flag —
+//     this is the one rung a positive ReliableDeferredToolDiscovery cannot
+//     override, because the two facts would be contradictory.
+//  2. ReliableDeferredToolDiscovery — reviewed, evidence-based proof (G8) that
+//     the client's model reliably discovers and invokes a tool absent from its
+//     initial tools/list surface. No shipped client carries this yet; it is
+//     never inferred from native file/search/shell possession.
+//  3. ClientSideAllowlist — `plumb setup <client> --lean` can write a tool
+//     allowlist into the client's OWN config (Kimi Code, Codex, Gemini CLI).
+//     Plumb still SERVES full — the filter, if any, is applied client-side,
+//     invisibly to plumb — but the reason is now distinct from the generic
+//     conservative default so callers can render the client-side-filter
+//     caveat truthfully (see tools.ClientSideAllowlistNote).
+//  4. An actually-unrecognised client (Name == "unknown", i.e. it matched no
+//     registry prefix) still gets "full", with its own reason
+//     (unknown-deferred-discovery) distinct from a registered client's
+//     unverified-deferred-discovery — the two are observably different
+//     situations even though they resolve to the same profile today.
+//  5. Every other client (registered, but none of the above — e.g. Claude
+//     Desktop, Junie) defaults to "full" until one of the flags above is
+//     verified true.
 func autoProfileFor(caps clientcaps.Capabilities) (profile, reason string) {
-	if caps.Name == "unknown" {
-		return "full", "unknown-deferred-discovery"
-	}
 	if caps.SchemaDiscoveryOnly {
 		return "full", "schema-discovery-only-client"
 	}
 	if caps.ReliableDeferredToolDiscovery {
 		return "lean", "verified-deferred-discovery"
+	}
+	if caps.ClientSideAllowlist {
+		return "full", "client-side-allowlist"
+	}
+	if caps.Name == "unknown" {
+		return "full", "unknown-deferred-discovery"
 	}
 	return "full", "unverified-deferred-discovery"
 }

@@ -184,7 +184,7 @@ func checkActiveLSPProcesses() []checkResult {
 		return nil
 	}
 	var results []checkResult
-	for _, line := range strings.Split(resp, "\n") {
+	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 7 {
 			continue

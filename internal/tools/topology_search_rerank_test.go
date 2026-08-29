@@ -132,7 +132,7 @@ func TestTopologySearch_RerankDisabledAndFallback(t *testing.T) {
 
 // firstSymbolIs reports whether name is the first result symbol in the output.
 func firstSymbolIs(out, name string) bool {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		l := strings.TrimSpace(line)
 		if strings.HasPrefix(l, "function ") || strings.HasPrefix(l, "method ") {
 			return strings.Contains(l, name)

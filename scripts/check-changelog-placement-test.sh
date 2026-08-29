@@ -28,6 +28,11 @@
 #
 # Each synthetic pair ships with a control case that MUST fail, so a broken harness
 # cannot make them pass vacuously.
+#
+# A third block covers the shape neither of the first two can express: a base branch
+# that MOVES ON after the fork. Those cases need three commits, and they are where R4
+# lives — an entry written into the open section, which the base then released. Two
+# of them are expectations that used to read the other way round; see the block.
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -70,7 +75,11 @@ while IFS= read -r line; do
 		continue
 	fi
 
-	if out=$("$GUARD" --base "$sha^" --head "$sha" 2>&1); then rc=0; else rc=$?; fi
+	# CHANGELOG_PLACEMENT_ALLOW='' for the same reason synth() clears it: a developer
+	# with the bypass exported would otherwise run every `pass` case vacuously — the
+	# guard skips, prints a green tick, and asserts nothing. The `fail` cases would go
+	# red so the suite is not silently green, but "safe" is not "asserted".
+	if out=$(CHANGELOG_PLACEMENT_ALLOW='' "$GUARD" --base "$sha^" --head "$sha" 2>&1); then rc=0; else rc=$?; fi
 
 	case "$want:$rc" in
 	fail:1 | pass:0)
@@ -370,6 +379,30 @@ synth pass 'heading quoted inside a fenced block' <<'EOF'
 - second released entry
 EOF
 
+# A release commit: it stamps the unreleased heading with a date and opens the next
+# empty '(unreleased)' section above it (that is exactly what 6e15982a did). Both
+# headings are lines this change added, so R1's added-heading clause covers them and
+# no rule may reach for the stamped section. The load-bearing happy path for anything
+# that keys on a date stamp, R4 included.
+synth pass 'release stamps and opens the next' <<'EOF'
+# Changelog
+
+## 0.3.0 (unreleased)
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry
+EOF
+
 # The control. If the harness were broken (guard skipping, base unresolved) the cases
 # above would pass for the wrong reason; this one proves it really runs.
 synth fail 'new entry in old section (control)' <<'EOF'
@@ -486,57 +519,452 @@ synth pass 'CHANGELOG_PLACEMENT_ALLOW bypasses a violation' <<'EOF'
 EOF
 SYNTH_ALLOW=""
 
-# ── The CI shape ─────────────────────────────────────────────────────────────────────
+# ── The CI shape: the base branch moves on after the fork ────────────────────────
 #
-# Everything above replays a linear base→head pair, which is NOT what CI hands the
-# guard: actions/checkout builds refs/pull/N/merge, whose parent is the base SHA, so a
+# Everything above replays a linear base→head pair, where the base ref and the fork
+# point are the same commit. A real PR is not that shape: main keeps moving after a
+# branch is cut, and the guard is handed the base branch TIP plus the branch head.
+#
+# actions/checkout builds refs/pull/N/merge, whose parent is the base SHA, so a
 # merge-base against the checked-out HEAD resolves to the base branch tip rather than
-# the branch's fork point. That difference is invisible until main cuts a release
-# between the two — then the branch's own unreleased heading is a released one at the
-# base, and the "entry under the base unreleased head" carve-out above stops applying.
-# Passing the PR's head SHA restores the fork point, which is why the workflow does.
+# the branch's fork point; passing the PR's head SHA restores the fork point, which is
+# why the workflow does. What the fork point cannot say on its own is whether the
+# section the branch is writing into has SHIPPED on the base since it was cut — that
+# is R4's subject, and the reason these cases need three commits rather than two.
+#
+# The merge commit CI checks out is deliberately not built here: the guard is pointed
+# at the base and head SHAs, never at the merge, so it would be scenery.
+
+# forkcase <pass|fail> <name> <fork-md> <base-tip-md> <branch-md> [expected-substring]
+#
+# The optional sixth argument asserts on the guard's OUTPUT as well as its exit code.
+# Two of the cases below are about what the report SAYS — an advisory note that must
+# appear on a passing run, and a paragraph that must stop contradicting itself — and
+# an exit-code-only assertion cannot see either. Both already held the wrong way round
+# before this argument existed, which is exactly the vacuous-pass the harness header
+# warns about for the synthetic cases.
+forkcase() {
+	want="$1"
+	name="$2"
+	fork_md="$3"
+	base_md="$4"
+	branch_md="$5"
+	expect="${6:-}"
+	total=$((total + 1))
+	d="$(mktemp -d)"
+	mkdir -p "$d/scripts"
+	cp "$GUARD" "$d/scripts/check-changelog-placement.sh"
+	git -C "$d" init -q >/dev/null 2>&1
+	git -C "$d" symbolic-ref HEAD refs/heads/main
+	printf '%s\n' "$fork_md" >"$d/CHANGELOG.md"
+	git -C "$d" add CHANGELOG.md
+	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm fork
+
+	# The branch. code.txt rides along so that a case whose CHANGELOG.md is untouched
+	# still produces a real commit — "a PR that never touches the changelog" is one of
+	# the cases, and it must reach the guard rather than fail to commit.
+	git -C "$d" checkout -q -b feature
+	printf '%s\n' "$branch_md" >"$d/CHANGELOG.md"
+	printf 'branch\n' >"$d/code.txt"
+	git -C "$d" add CHANGELOG.md code.txt
+	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'branch work'
+	fork_head="$(git -C "$d" rev-parse HEAD)"
+
+	# The base branch moves on afterwards — a release, or just another PR landing.
+	git -C "$d" checkout -q main
+	printf '%s\n' "$base_md" >"$d/CHANGELOG.md"
+	printf 'main\n' >"$d/other.txt"
+	git -C "$d" add CHANGELOG.md other.txt
+	git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'base moves on'
+	fork_base="$(git -C "$d" rev-parse HEAD)"
+
+	if out=$(CHANGELOG_PLACEMENT_ALLOW='' "$d/scripts/check-changelog-placement.sh" \
+		--base "$fork_base" --head "$fork_head" 2>&1); then rc=0; else rc=$?; fi
+	rm -rf "$d"
+
+	case "$want:$rc" in
+	fail:1 | pass:0) ;;
+	*)
+		printf '  FAIL  %-38s wanted %s, got exit %d\n' "$name" "$want" "$rc"
+		printf '%s\n' "$out" | sed 's/^/          | /'
+		failed=$((failed + 1))
+		return
+		;;
+	esac
+
+	if [ -n "$expect" ] && ! printf '%s\n' "$out" | grep -qF -- "$expect"; then
+		printf '  FAIL  %-38s exit %d as wanted, but the report never said: %s\n' \
+			"$name" "$rc" "$expect"
+		printf '%s\n' "$out" | sed 's/^/          | /'
+		failed=$((failed + 1))
+		return
+	fi
+
+	printf '  ok    %-38s %s\n' "$name" "$want"
+}
+
+# The base tip after a release: 0.2.0 stamped, 0.3.0 opened above it, and an entry
+# from a PR that landed before the cut. That last line matters — the branch's copy of
+# the 0.2.0 section is NOT byte-identical to the base's, which is why "hash the
+# released sections on both sides and compare" cannot be the check: every branch that
+# is merely behind main would fail it.
+FORK_BASE_RELEASED='# Changelog
+
+## 0.3.0 (unreleased)
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+- an entry from a PR that landed before the release
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The base tip opened a newer section but stamped nothing. 0.2.0 is still open, so an
+# entry under it is still correct — this repo carries 50+ historical '(unreleased)'
+# headings from an era when releases were not dated, and R4 must key on the stamp.
+FORK_BASE_UNSTAMPED='# Changelog
+
+## 0.3.0 (unreleased)
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The base tip merely gained another entry in the same still-unreleased section.
+FORK_BASE_AHEAD='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+- an entry from another PR, still unreleased
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The base tip stamped the top heading and opened nothing above it, so the file has no
+# unreleased section at all. Not what chore(release) does here (6e15982a opens the next
+# one), but the state a stamp-only release would leave, and an entry added into it is
+# still an entry added into shipped history.
+FORK_BASE_STAMPED_TOP='# Changelog
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# A fork with two entries in the open section, so a case can reorder them: a move
+# needs two lines to move between.
+FORK_TWO_ENTRIES='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- alpha entry
+- beta entry
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry'
+
+FORK_TWO_RELEASED='# Changelog
+
+## 0.3.0 (unreleased)
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- alpha entry
+- beta entry
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry'
+
+FORK_TWO_REORDERED='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- beta entry
+- alpha entry
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry'
+
+# A base tip whose still-open section QUOTES a stamped heading inside a fenced block —
+# which is what an entry about this very guard looks like. 0.2.0 has not shipped there;
+# only a fence-aware scan of the tip says so.
+FORK_BASE_FENCED='# Changelog
+
+## 0.3.0 (unreleased)
+
+### Fixed
+
+- a guard that fails when an entry lands under a stamped heading:
+
+```
+## 0.2.0 (2026-02-01)
+```
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The branch rewrites a line that was already in the section, rather than adding one.
+FORK_BRANCH_TYPO='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place, typo fixed
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The branch: one entry appended to the section that was unreleased when it forked.
+FORK_BRANCH_ENTRY='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+- a second entry, added on the branch
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The branch reworded the line that was already in the open section AND appended a
+# genuinely new entry directly below it. Contiguity is the whole point: under
+# --unified=0 git folds the two into ONE hunk with a non-zero minus count, which
+# exempts every added line in it from R4's pure-addition gate. That is how the exact
+# false green this guard exists to kill survives R4 (independent review, finding 4).
+FORK_BRANCH_REWORD_AND_ENTRY='# Changelog
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place, slightly reworded
+- a genuinely new entry, added on the branch, long enough that it runs
+  onto a second line
+  and a third
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# A fork point whose top heading is ALREADY date-stamped, so the file has no open
+# section at all. This is not a hypothetical: 7a75dec0 (release 0.17.2, the most recent
+# one) left CHANGELOG.md in exactly this state.
+FORK_STAMPED_TOP_AHEAD='# Changelog
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+- an entry from another PR that landed after the release
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+FORK_BRANCH_UNDER_STAMPED_TOP='# Changelog
+
+## 0.2.0 (2026-02-01)
+
+### Fixed
+
+- an entry in the right place
+- a second entry, added on the branch
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
+
+# The branch opened its own unreleased section above the one it forked from, which is
+# what a branch caught by the case below is told to do.
+FORK_BRANCH_NEW_SECTION='# Changelog
+
+## 0.3.0 (unreleased)
+
+### Fixed
+
+- a second entry, added on the branch
+
+## 0.2.0 (unreleased)
+
+### Fixed
+
+- an entry in the right place
+
+## 0.1.0 (2026-01-01)
+
+### Added
+
+- first released entry
+- second released entry'
 
 echo ""
-echo "check-changelog-placement-test: the CI invocation shape"
+echo "check-changelog-placement-test: the base branch moving on under a branch"
 echo ""
 
-total=$((total + 1))
-d="$(mktemp -d)"
-mkdir -p "$d/scripts"
-cp "$GUARD" "$d/scripts/check-changelog-placement.sh"
-git -C "$d" init -q >/dev/null 2>&1
-git -C "$d" symbolic-ref HEAD refs/heads/main
-printf '%s\n' "$SYNTH_BASE" >"$d/CHANGELOG.md"
-git -C "$d" add -A
-git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm fork
+# THE DEFECT (PLAN-399, and PR #404 on 2026-08-22). The branch forked while 0.2.0 was
+# the unreleased section and correctly wrote its entry there; 0.2.0 then SHIPPED on the
+# base. Nothing about the branch changed, and a rebase replays the entry into the dated
+# section without conflicting — so merging it puts a line into released history that
+# never shipped with that release. Matching the fork point's heading by version number
+# cannot see this: the branch's own file still says '## 0.2.0 (unreleased)'. Only the
+# base TIP knows 0.2.0 has been stamped.
+#
+# This case used to be asserted here as a PASS ('branch behind a release cut'), on the
+# reading that a branch merely behind main must not be failed. That reading is right
+# about a branch behind main (the three cases below) and wrong about this one.
+forkcase fail 'entry into a section stamped since fork' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$FORK_BRANCH_ENTRY"
 
-git -C "$d" checkout -q -b feature
-printf '%s\n' "$SYNTH_BASE" | sed 's/- an entry in the right place/- an entry in the right place\
-- a second entry, added on the branch/' >"$d/CHANGELOG.md"
-git -C "$d" add -A
-git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'branch entry'
-ci_head_sha="$(git -C "$d" rev-parse HEAD)"
+# The fix for the case above, and the shape a fresh branch has anyway: the entry sits
+# under a heading this change added. R4 must not reach for it.
+forkcase pass 'branch opened its own unreleased head' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$FORK_BRANCH_NEW_SECTION"
 
-git -C "$d" checkout -q main
-printf '%s\n' "$SYNTH_BASE" | sed 's/## 0.2.0 (unreleased)/## 0.3.0 (unreleased)\
-\
-## 0.2.0 (2026-02-01)/' >"$d/CHANGELOG.md"
-git -C "$d" add -A
-git -C "$d" -c user.email=t@example.com -c user.name=Test commit -qm 'chore(release): 0.2.0'
-ci_base_sha="$(git -C "$d" rev-parse HEAD)"
-git -C "$d" -c user.email=t@example.com -c user.name=Test merge -q --no-ff feature -m 'merge pr' >/dev/null 2>&1
+# The tolerance that must survive, direction one: the base opened a newer section but
+# stamped nothing, so the branch's section has NOT shipped. This is the case that fails
+# if R4 ever keys on position ("no longer the topmost heading") instead of the stamp.
+forkcase pass 'base opened a section, stamped none' \
+	"$SYNTH_BASE" "$FORK_BASE_UNSTAMPED" "$FORK_BRANCH_ENTRY"
 
-if out=$("$d/scripts/check-changelog-placement.sh" \
-	--base "$ci_base_sha" --head "$ci_head_sha" 2>&1); then rc=0; else rc=$?; fi
-rm -rf "$d"
+# The tolerance that must survive, direction two, and the commonest PR there is: the
+# base is simply ahead, with another entry in the same still-open section.
+forkcase pass 'branch merely behind the base branch' \
+	"$SYNTH_BASE" "$FORK_BASE_AHEAD" "$FORK_BRANCH_ENTRY"
 
-if [ "$rc" -eq 0 ]; then
-	printf '  ok    %-38s %s\n' 'branch behind a release cut' 'pass'
-else
-	printf '  FAIL  %-38s wanted pass, got exit %d\n' 'branch behind a release cut' "$rc"
-	printf '%s\n' "$out" | sed 's/^/          | /'
-	failed=$((failed + 1))
-fi
+# A PR that never touches CHANGELOG.md, while the base released underneath it. The diff
+# is empty, so the guard has nothing to judge and must stay out of the way.
+forkcase pass 'PR that does not touch the changelog' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$SYNTH_BASE"
+
+# R4 inherits both of R1's carve-outs, and they carry the same weight here as there.
+# A hunk that also DELETES is someone rewriting a line that was already in the section
+# — the commonest honest reason to touch it — and cannot be a rebase replaying an entry.
+forkcase pass 'typo fixed in a stamped section' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$FORK_BRANCH_TYPO"
+
+# The other carve-out: a line whose exact text was also deleted in this diff is a move,
+# not new content. Reordering two entries inside the section reports an advisory note
+# and passes; failing it would red a tidy-up, which is how a guard gets bypassed.
+forkcase pass 'entries reordered in a stamped section' \
+	"$FORK_TWO_ENTRIES" "$FORK_TWO_RELEASED" "$FORK_TWO_REORDERED"
+
+# The tip scan is fence-aware for the same reason the base scan is (finding 5, above):
+# a heading quoted in an example is not a heading. Reading the fenced '## 0.2.0
+# (2026-02-01)' as the real one would fail a branch writing into a section that has not
+# shipped — a false red on an entry describing this guard.
+forkcase pass 'stamped heading quoted at the tip' \
+	"$SYNTH_BASE" "$FORK_BASE_FENCED" "$FORK_BRANCH_ENTRY"
+
+# The stamped top heading. This is the case that fails if R4 exempts the base tip's
+# FIRST heading — a tempting exemption, since the top heading is normally the open one,
+# but a dated top heading means there is no open section and the entry still lands in
+# shipped history.
+forkcase fail 'entry under a stamped top heading' \
+	"$SYNTH_BASE" "$FORK_BASE_STAMPED_TOP" "$FORK_BRANCH_ENTRY"
+
+# Independent review, finding 4. R4 inherits R1's "a hunk that also deletes is a
+# rewrite" carve-out, and --unified=0 folds a reworded pre-existing line together with
+# the new lines CONTIGUOUS below it into one such hunk — so all of them are exempt, and
+# the guard prints the very "OK (N added line(s), all under ## 0.2.0 (unreleased))"
+# message the card was filed about, over lines landing in shipped history.
+#
+# The fix is deliberately ASYMMETRIC: still a pass, because hard-failing every
+# add/delete hunk in a released section would red the honest tidy-ups this guard has to
+# survive and a bypassed guard guards nothing — but no longer SILENT. The expectation
+# is therefore on the report text, not on the exit code; asserting the exit code alone
+# would pass against the guard that has the hole.
+forkcase pass 'new entry folded into a rewrite hunk' \
+	"$SYNTH_BASE" "$FORK_BASE_RELEASED" "$FORK_BRANCH_REWORD_AND_ENTRY" \
+	'in a hunk that also deletes'
+
+# Independent review, finding 5. When the MERGE-BASE's own top heading is already
+# date-stamped — the state 7a75dec0 left this repo in — R4's verdict is right but its
+# explanation used to assert three falsehoods in five lines: it labelled a dated
+# heading "unreleased section", claimed that heading "was still the unreleased section
+# at the merge-base", and then reported that it "now reads" the identical string the
+# reader was already looking at. A correct guard whose report reads like a guard bug is
+# a guard the next author bypasses, so the wording is asserted here.
+forkcase fail 'shipped top heading at the merge-base' \
+	"$FORK_BASE_STAMPED_TOP" "$FORK_STAMPED_TOP_AHEAD" "$FORK_BRANCH_UNDER_STAMPED_TOP" \
+	'the merge-base carried no open section at all'
+
+echo ""
 
 # The invocation itself is load-bearing: without --head the case above fails, and
 # without --require-base an unresolvable base prints a skip and a green tick. Neither

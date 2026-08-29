@@ -165,11 +165,14 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	// The fallback paths below deliberately take ctx, NOT lspCtx: lspCtx is spent
+	// once the server misses its attempt budget, and a fresh tree-sitter parse
+	// cannot start on an expired context. See withFallbackLSPDeadline.
+	lspCtx, cancel, waited := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	syms, err := t.fetchReadSymbolSymbols(ctx, uri)
+	syms, err := t.fetchReadSymbolSymbols(lspCtx, uri, waited)
 	if err != nil {
-		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+		if fb, ok := t.topologyReadFallback(ctx, lspFallbackReason(lspCtx), waited, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
 		return "", err
@@ -179,8 +182,10 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		// The LSP answered but did not resolve the name (commonly a cold server,
 		// or a bare method name it indexes only as a qualified symbol). Try the
 		// structural Map before giving up — the Go extractor names methods by their
-		// bare name, so it resolves what the LSP missed.
-		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+		// bare name, so it resolves what the LSP missed. The server DID answer
+		// here, so no attempt budget was missed and the banner keeps its
+		// historical wording.
+		if fb, ok := t.topologyReadFallback(ctx, fallbackNotUsed, 0, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
 		return t.noSymbolMessage(a.Name, fpath, syms), nil
@@ -192,7 +197,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 // when the language server cannot answer, and reads its source the same way the
 // LSP path does. ok is false when topology is unavailable or has no match, so
 // the caller surfaces the original LSP error.
-func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name string) (string, bool) {
+func (t *ReadSymbol) topologyReadFallback(ctx context.Context, reason symbolFallbackReason, waited time.Duration, fpath, uri, name string) (string, bool) {
 	nodes, ok := freshTopologyNodes(ctx, t.topo, uri)
 	if !ok {
 		return "", false
@@ -210,7 +215,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name 
 	if err != nil {
 		return "", false
 	}
-	return topologyFallbackNoteFor(t.warmup, uri) + "\n" + out, true
+	return topologyFallbackNoteWhen(reason, t.warmup, uri, waited) + "\n" + out, true
 }
 
 func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
@@ -247,7 +252,11 @@ func resolveReadSymbolPaths(ctx context.Context, path string, ws WorkspaceFn) (f
 	return fpath, toFileURI(fpath)
 }
 
-func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {
+// fetchReadSymbolSymbols queries the document symbols for uri. waited is the
+// attempt budget ctx carries, quoted in a timeout message so the operator is
+// told the wait that actually happened rather than the full [lsp_query]
+// timeout; zero means the cap was disabled and t.timeout is quoted instead.
+func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string, waited time.Duration) ([]protocol.DocumentSymbol, error) {
 	key := uri + ":docSymbols"
 	if t.cache != nil {
 		if v, ok := t.cache.Get(key); ok {
@@ -258,7 +267,10 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
-		return nil, lspTimeoutErr("read_symbol", t.timeout, err)
+		if waited <= 0 {
+			waited = t.timeout
+		}
+		return nil, lspTimeoutErr("read_symbol", waited, err)
 	}
 	if t.cache != nil {
 		t.cache.Set(key, syms, t.ttl)

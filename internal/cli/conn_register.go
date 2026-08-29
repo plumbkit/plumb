@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -162,7 +163,6 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
 	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
-	srv.Register(tools.NewExecuteShellCommand(s.shellResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor))
 	srv.Register(tools.NewFindReplace(wd))
@@ -240,6 +240,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessionID).
+		WithSurcharge(func() (int, int, int) {
+			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
+			return r.TotalBytes, r.Tokens, r.ToolCount
+		}).
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
@@ -249,6 +253,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPSkipNote(s.lspHomeSkipNote).
+		WithPinProvenance(s.pinProvenance).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
 		WithLSPWarmup(s.lspWarming).
@@ -257,6 +262,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithTasks(s.taskState).
 		WithProjectPolicy(s.projectGitStatus).
 		WithRepin(s.repinWorkspace).
+		WithDeclaredAgent(s.declaredAgentCtx).
 		WithPinConflict(s.onPinConflict).
 		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {

@@ -3,40 +3,56 @@
 This page records honest, reproducible measurements of Plumb's tools against the standard tools
 a coding agent already has — `grep`/`ripgrep`, whole-file reads, naive find-replace, and "just
 run the whole suite". The aim is not to claim Plumb wins everywhere. It doesn't, and the numbers
-below say so plainly. The aim is to show *where* a structured, language-aware tool layer helps,
-where it is neutral, and where it costs you something, so you can reason about when it earns its
-place.
+below say so plainly.
 
-Four honest results up front:
+Plumb's case rests on three things, in this order of importance: **correctness** (a semantic tool
+returns exactly the right answer where a text tool over- or under-matches — Scenarios 1–3 below),
+**coordination** (test selection that doesn't drop the one test covering your change, and writes
+that stay safe under concurrent or stale edits — Scenarios 4 and 10), and, running through both
+and worth measuring honestly on its own terms, **token economics** — which is real in places,
+neutral in others, and negative in at least one (Scenarios 6–9). Scenario 5 sits outside all three:
+it is a latency measurement, not a correctness, coordination, or token one — included because a
+tool's cost is not just what it returns but how long the agent waits for it, and the honest answer
+there is "not the bottleneck". The token story is not the whole case, and this page leads with the
+two pillars that are.
 
-- **Targeted reads are a real token win** — but the size of the win is a property of *your*
-  question, not of the tool. Reading one function instead of its file ranges from **33.4×** to
-  **2.9×** smaller here, depending on how much of the file that function is.
-- **Raw text search is a wash** — Plumb returns the same matches as `ripgrep` at a comparable
-  size. Its value there is signal and safety, not fewer tokens.
+Five honest results, correctness and coordination first:
+
 - **Semantic navigation is a correctness win, not a size one** — asked "what actually uses this?"
   a text search returned **60% non-references**, and it is the *kind* of over-match that matters:
   prose, a doc comment, a string literal, and a different symbol that merely contains the name.
-- **Batching reads is a turns win, not a token one** — `read_multiple_files` still costs more
-  bytes than reading the same files one at a time (**76 bytes** over, down from a **1.32×** loss
-  before PLAN-357), but the gap is now small and honest, not padded by a decorative separator or
-  a wrong byte count. It buys one round trip instead of three and, as of that same fix,
+- **Write safety is where the over-matching above turns from an annoyance into damage.**
+  Renaming with the same text search that produced that 60% noise would have rewritten a
+  documentation page and a config constant it has no business touching; scoped semantic renames
+  don't.
+- **Test selection is a coordination problem, not a search problem** — `topology_affected` narrows
+  a full suite run to the handful of packages that actually import the changed code, and states
+  its own limits rather than guessing past them.
+- **Raw text search is a wash** — Plumb returns the same matches as `ripgrep` at a comparable
+  size. Its value there is signal and safety, not fewer tokens.
+- **Targeted reads are a real token win** — but the size of the win is a property of *your*
+  question, not of the tool. Reading one function instead of its file ranges from **33.4×** to
+  **2.9×** smaller here, depending on how much of the file that function is. **Batching reads is
+  the other side of that coin: a turns win, not a token one** — `read_multiple_files` still costs
+  more bytes than reading the same files one at a time (**76 bytes** over, down from a **1.32×**
+  loss before PLAN-357), but the gap is now small and honest, not padded by a decorative separator
+  or a wrong byte count. It buys one round trip instead of three and, as of that same fix,
   edit-safety parity with `read_file` under strict mode — it no longer trades a batch read for a
   broken next edit.
 
 Writing this page changed the software it measures. Two scenarios turned up real defects — a
 test-selection bug that dropped the one test covering the change, and 17% of a response spent on
 a decorative line — and the tools were fixed before these numbers were published. Both are
-described where they were found, in Scenario 7 and Scenario 8.
+described where they were found, in Scenario 4 and Scenario 10.
 
 ## How this was measured
 
 | | |
 |---|---|
 | Repository | this repo at commit `b46e233f`, plus this page and its script |
-| Re-measured | scenarios 4, 7 and 10 at `302e9768`, after `topology_affected` became language-aware and `file_outline`'s output grew |
-| Date | 2026-08-21 |
-| Plumb | 0.17.0 (go1.26.7) |
+| Re-measured | scenarios 7 and 10 at `302e9768`; Scenario 4 at `65fcbb5d`, after admitted cross-file callers reached `topology_affected` |
+| Date | 2026-08-25 |
+| Plumb | 0.17.2 (go1.26.7) |
 | Client | a direct MCP session over stdio (`plumb serve`) |
 | Platform | macOS (arm64) |
 
@@ -50,7 +66,8 @@ Run it and you get this table back; there are no hand-copied figures.
 - Token figures use ~4 characters per token, the same rough average Plumb uses internally. They
   are a conversion of the measurement, not a second measurement.
 - These are **measured payload bytes** — distinct from the *estimated* token-efficiency figure
-  shown inside Plumb's own stats, which is a heuristic.
+  shown inside Plumb's own stats, which is a heuristic, netted of the ranged-read arithmetic a
+  native tool can reproduce on its own (`docs/token-efficiency.md`).
 - **Read scenarios carry two baselines, because "raw bytes" is a baseline nobody gets.** `wc -c`
   is the obvious native number, but no agent read tool returns a bare file — Claude Code's own
   `Read` prefixes every line with a line number, exactly as Plumb does. Charging Plumb for that
@@ -69,35 +86,12 @@ Run it and you get this table back; there are no hand-copied figures.
 The sample symbol is `FormatSavings` (`internal/stats/savings.go`) and the sample file is
 `internal/cli/stats.go` (316 lines, 9,856 bytes).
 
-## Scenario 1 — Searching the project for a symbol
+## Scenario 1 — The working checkout is not the repository
 
-Question: *find every occurrence of `FormatSavings`.*
-
-| Tool | Matching lines | Bytes | ~Tokens | Respects `.gitignore`? | Names the enclosing symbol? |
-|---|---|---|---|---|---|
-| `/usr/bin/grep -rn FormatSavings .` | 202 | 25,699 | ~6,425 | no | no |
-| `rg -n FormatSavings` | 30 | 3,100 | ~775 | yes | no |
-| Plumb `search_in_files` | 30 | 2,754 | ~688 | yes | no — **off by default** |
-| … with `include_enclosing_symbol: true` | 30 | 3,288 | ~822 | yes | yes, on 14 hits |
-
-**Takeaway — a wash against `ripgrep`, and that's fine.** All three return the same 30 matches.
-Plain `search_in_files` is 11% *smaller* than `rg`; turn the annotation on and it is 6.1%
-*larger*. Either way it is a wash, and hiding Plumb's search to "save tokens" would save nothing.
-
-The annotation deserves its own row rather than a tick in the plain one, because
-`include_enclosing_symbol` **defaults to false** — the enclosing symbol costs an LSP query per
-matched file, so you opt in. Quoting the cheap call's byte count beside the expensive call's
-feature would describe a call nobody made. Asked for, it labels 14 of the 30 hits with the
-function containing them (the other 16 are prose, config and comments that sit inside no
-function) — something a text search cannot produce at any price.
-
-Against naive `grep`, none of this is a wash: **6.7× the matching lines and 8.3× the bytes of
-`ripgrep`**, all of it noise. Scenario 2 is about where that noise comes from.
-
-## Scenario 2 — The working checkout is not the repository
-
-The gap between `grep` and `ripgrep` above isn't about the tools' cleverness. It is that one of
-them searches the repository and the other searches the directory the repository lives in.
+Question: *find every occurrence of `FormatSavings`.* Scenario 9 below shows the gap between
+`grep` and `ripgrep` on that search; this scenario is about where that gap comes from — it isn't
+about the tools' cleverness, it's that one of them searches the repository and the other searches
+the directory the repository lives in.
 
 | | Bytes |
 |---|---|
@@ -124,52 +118,11 @@ du -sh .                                      # what grep will actually walk
 git status --ignored --porcelain -s | grep '^!!'   # and what the difference is made of
 ```
 
-## Scenario 3 — Reading one function
-
-Question: *I need one function out of `internal/cli/stats.go` (9,856 bytes, ~2,464 tokens).*
-
-| Approach | Function size | Bytes | vs raw file | vs a real read tool |
-|---|---|---|---|---|
-| Whole file, raw (`wc -c`) | — | 9,856 | 1× | — |
-| Whole file, with a line gutter | — | 11,120 | 1.13× | 1× |
-| `read_symbol axisCell` | 6 lines | 333 | 29.6× | **33.4× smaller** |
-| `read_symbol parseAge` | 16 lines | 737 | 13.4× | **15.1× smaller** |
-| `read_symbol runStats` | 117 lines | 3,874 | 2.5× | **2.9× smaller** |
-
-The line counts come from `read_symbol`'s own `# symbol: … lines A–B` header, not from where the
-next declaration starts — that shortcut overcounts, because it swallows the trailing blank line
-and the following function's doc comment.
-
-**Takeaway — the win is real, and it is a ratio you control.** This is the one place the token
-story genuinely lives: addressing code by symbol instead of by file. But quoting a single
-headline multiple would be dishonest, because the multiple is just *how much of the file you
-didn't need*. Fetch a 6-line helper out of a 316-line file and you save 29.6×. Fetch the 117-line
-function that is a third of the file and you save 2.5× — still a win, but a modest one, and if
-you then need its neighbours you have spent more than one whole-file read.
-
-Rule of thumb: `read_symbol` pays when you know the symbol you want. When you only know the
-rough area, `read_file` with a line range is the same idea; when you need most of the file,
-just read the file.
-
-## Scenario 4 — Understanding a file's shape
-
-Question: *what's in `internal/cli/stats.go`?*
-
-| Approach | Bytes | ~Tokens |
-|---|---|---|
-| Whole file, raw | 9,856 | ~2,464 |
-| Whole file, with a line gutter | 11,120 | ~2,780 |
-| Plumb `file_outline` | 1,589 | ~397 |
-
-**Takeaway — 6.2× smaller than the raw file, 7.0× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
-ranges, bodies collapsed — for ~397 tokens instead of ~2,464. Enough to navigate the file and
-decide what to read in full, without reading it all. Unlike Scenario 3 this ratio is fairly
-stable, because it scales with the file's declaration density rather than with your question.
-
-## Scenario 5 — "What actually uses this?"
+## Scenario 2 — "What actually uses this?"
 
 Question: *what are the real call sites of `FormatSavings`?* This is a different question from
-Scenario 1 — not "where does this text appear" but "where is this symbol genuinely referenced".
+Scenario 9 below — not "where does this text appear" but "where is this symbol genuinely
+referenced".
 
 | Tool | Result | Noise |
 |---|---|---|
@@ -194,15 +147,16 @@ over-matches on comments, strings, prose and same-named symbols, and can also *m
 reference its pattern didn't anticipate. `find_references` asks the language server for the
 references to that specific declaration, so it returns those and nothing else — 13 uses plus the
 declaration itself, which it includes by default (`include_declaration`). This is the rebuttal to
-Scenario 1: text search is a wash, but *semantic* search is a correctness win.
+the search-is-a-wash result below (Scenario 9): text search is a wash, but *semantic* search is a
+correctness win.
 
 *Caveat:* `find_references` needs a warm language server. On a cold start, or for a language with
 no server configured, Plumb falls back to its tree-sitter index and labels the result
 approximate.
 
-## Scenario 6 — Renaming a symbol
+## Scenario 3 — Renaming a symbol
 
-Question: *rename `FormatSavings`.* The same over-matching that made Scenario 5 a precision story
+Question: *rename `FormatSavings`.* The same over-matching that made Scenario 2 a precision story
 becomes a *destruction* story the moment you write instead of read.
 
 | Approach | Would change |
@@ -230,27 +184,27 @@ It leaves the string literal, the prose and the config alone.
 your attention. A find-replace that over-matches corrupts your repository, and the corruption
 lands in files (docs, fixtures, strings) that your compiler will not complain about.
 
-## Scenario 7 — Which tests to run after an edit
+## Scenario 4 — Which tests to run after an edit
 
 Question: *I changed `internal/stats/savings.go`. What do I run?*
 
 | Approach | Scope | Response |
 |---|---|---|
-| `go test ./...` | 55 packages, 662 test files, 4,390 test functions | — |
-| Plumb `topology_affected` | **5 packages**, 2,623 tests | 4,142 B |
+| `go test ./...` | 57 packages, 718 test files, 4,784 test functions | — |
+| Plumb `topology_affected` | **5 packages**, 2,860 tests | 4,186 B |
 
 The answer is a list of targets you can run, not a list of test names:
 
 ```
 run these packages (5) — pass each target to run_task(slot:"test", target:…):
-  ./internal/stats/...                          53 tests   changed package
-  ./internal/tools/...                        1339 tests   imports the changed package
-  ./internal/cli/...                           990 tests   imports the changed package
-  ./internal/tui/...                           217 tests   imports the changed package
+  ./internal/stats/...                          68 tests   changed package
+  ./internal/tools/...                        1469 tests   dependency edge
+  ./internal/cli/...                          1080 tests   imports the changed package
+  ./internal/tui/...                           219 tests   imports the changed package
   ./internal/web/...                            24 tests   imports the changed package
 ```
 
-**Takeaway — 5 packages out of 55, and it tells you why each one.** The actionable unit is the
+**Takeaway — 5 packages out of 57, and it tells you why each one.** The actionable unit is the
 package, because that is what a test runner takes. `internal/stats` is where the edit landed; the
 other four are the packages that import it, which is exactly the set you would have had to work
 out by hand.
@@ -289,7 +243,124 @@ the part that does not drift.
 > above; they were previously unreachable. Both are fixed, and the numbers in this table are
 > from after the fix.
 
-## Scenario 8 — Reading several files at once
+## Scenario 5 — Latency, not just bytes
+
+Bytes are only half of what a tool costs; the other half is how long the agent waits. Measured
+against an already-warm daemon, 200 consecutive `read_file` calls over stdio:
+
+| | Milliseconds |
+|---|---|
+| p50 | ~0.45–0.55 |
+| p95 | ~0.5–0.9 |
+| max | ~1–2 |
+
+Deliberately quoted as ranges. Five repeat runs of the same 200 calls on the same machine put p95
+anywhere between 0.53 and 0.87 ms, so publishing two decimal places would be false precision
+about a figure that is really "well under a millisecond".
+
+**Takeaway — sub-millisecond, so it isn't the thing to optimise.** A warm Plumb read is not
+meaningfully slower than a native one; both are lost in the noise next to a model round trip.
+
+The number that is *not* sub-millisecond is the first call against a cold language server, which
+can take seconds while the server indexes — that is the language server booting, not the tool,
+and it is why the semantic tools (Scenario 2, Scenario 3) label their results approximate until
+the server is ready. Warm-path latency is the honest steady-state figure; cold start is a
+one-off you pay per workspace.
+
+## Scenario 6 — Reading one function
+
+Question: *I need one function out of `internal/cli/stats.go` (9,856 bytes, ~2,464 tokens).*
+
+| Approach | Function size | Bytes | vs raw file | vs a real read tool |
+|---|---|---|---|---|
+| Whole file, raw (`wc -c`) | — | 9,856 | 1× | — |
+| Whole file, with a line gutter | — | 11,120 | 1.13× | 1× |
+| `read_symbol axisCell` | 6 lines | 333 | 29.6× | **33.4× smaller** |
+| `read_symbol parseAge` | 16 lines | 737 | 13.4× | **15.1× smaller** |
+| `read_symbol runStats` | 117 lines | 3,874 | 2.5× | **2.9× smaller** |
+
+The line counts come from `read_symbol`'s own `# symbol: … lines A–B` header, not from where the
+next declaration starts — that shortcut overcounts, because it swallows the trailing blank line
+and the following function's doc comment.
+
+**Takeaway — the win is real, and it is a ratio you control.** This is the one place the token
+story genuinely lives: addressing code by symbol instead of by file. But quoting a single
+headline multiple would be dishonest, because the multiple is just *how much of the file you
+didn't need*. Fetch a 6-line helper out of a 316-line file and you save 29.6×. Fetch the 117-line
+function that is a third of the file and you save 2.5× — still a win, but a modest one, and if
+you then need its neighbours you have spent more than one whole-file read.
+
+Rule of thumb: `read_symbol` pays when you know the symbol you want. When you only know the
+rough area, `read_file` with a line range is the same idea; when you need most of the file,
+just read the file.
+
+## Scenario 7 — Understanding a file's shape
+
+Question: *what's in `internal/cli/stats.go`?*
+
+| Approach | Bytes | ~Tokens |
+|---|---|---|
+| Whole file, raw | 9,856 | ~2,464 |
+| Whole file, with a line gutter | 11,120 | ~2,780 |
+| Plumb `file_outline` | 1,589 | ~397 |
+
+**Takeaway — 6.2× smaller than the raw file, 7.0× smaller than a real read of it.** `file_outline` returns every declaration — signatures with line
+ranges, bodies collapsed — for ~397 tokens instead of ~2,464. Enough to navigate the file and
+decide what to read in full, without reading it all. Unlike Scenario 6 this ratio is fairly
+stable, because it scales with the file's declaration density rather than with your question.
+
+## Scenario 8 — The same story in another language
+
+Plumb's structural tools run off a tree-sitter index, so they do not need a configured language
+server to answer "what's in this file" or "show me this function". The same two measurements,
+outside Go:
+
+Ratios below are against a real read tool (gutter included), with the raw-bytes ratio in
+parentheses — the same two baselines as Scenario 6.
+
+| Language | File (raw / gutter) | Symbol read | `file_outline` |
+|---|---|---|---|
+| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,589 B — **7.0×** (6.2×) |
+| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,253 B, **14.6×** (13.5×) | 2,457 B — **7.4×** (6.9×) |
+| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,752 B — **7.2×** (6.5×) |
+
+The three symbols are named, with their sizes, because Scenario 6 showed the ratio is a property
+of the symbol: a cross-language table pitting a 6-line helper against a 117-line function would
+be measuring symbol size, not language. These three span 16–28 lines — close enough to compare,
+but not identical, and the Go sample is the smallest of the three, which is part of why its
+ratio sits slightly below Python's.
+
+**Takeaway — the shape holds across languages.** The ratios land in the same band, which is what
+you'd expect given the win comes from addressing code structurally rather than from anything
+Go-specific. The caveat from Scenario 6 travels too: these are per-symbol ratios, and yours will
+depend on the symbol.
+
+## Scenario 9 — Searching the project for a symbol
+
+Question: *find every occurrence of `FormatSavings`.*
+
+| Tool | Matching lines | Bytes | ~Tokens | Respects `.gitignore`? | Names the enclosing symbol? |
+|---|---|---|---|---|---|
+| `/usr/bin/grep -rn FormatSavings .` | 202 | 25,699 | ~6,425 | no | no |
+| `rg -n FormatSavings` | 30 | 3,100 | ~775 | yes | no |
+| Plumb `search_in_files` | 30 | 2,754 | ~688 | yes | no — **off by default** |
+| … with `include_enclosing_symbol: true` | 30 | 3,288 | ~822 | yes | yes, on 14 hits |
+
+**Takeaway — a wash against `ripgrep`, and that's fine.** All three return the same 30 matches.
+Plain `search_in_files` is 11% *smaller* than `rg`; turn the annotation on and it is 6.1%
+*larger*. Either way it is a wash, and hiding Plumb's search to "save tokens" would save nothing.
+
+The annotation deserves its own row rather than a tick in the plain one, because
+`include_enclosing_symbol` **defaults to false** — the enclosing symbol costs an LSP query per
+matched file, so you opt in. Quoting the cheap call's byte count beside the expensive call's
+feature would describe a call nobody made. Asked for, it labels 14 of the 30 hits with the
+function containing them (the other 16 are prose, config and comments that sit inside no
+function) — something a text search cannot produce at any price.
+
+Against naive `grep`, none of this is a wash: **6.7× the matching lines and 8.3× the bytes of
+`ripgrep`**, all of it noise. Scenario 1 above is about where that noise comes from.
+
+## Scenario 10 — Reading several files at once
 
 Question: *I need these three files.* Published because it went through two real bugs before
 landing at a wash, and the honest number matters more than a flattering one.
@@ -344,79 +415,31 @@ turn instead of three (latency, fewer chances to be interrupted mid-sequence), i
 errors so one unreadable path doesn't abort the batch, and now edit-safety parity with `read_file`
 under strict mode. If your agent budget is turns rather than raw bytes, batch.
 
-## Scenario 9 — Latency, not just bytes
-
-Bytes are only half of what a tool costs; the other half is how long the agent waits. Measured
-against an already-warm daemon, 200 consecutive `read_file` calls over stdio:
-
-| | Milliseconds |
-|---|---|
-| p50 | ~0.45–0.55 |
-| p95 | ~0.5–0.9 |
-| max | ~1–2 |
-
-Deliberately quoted as ranges. Five repeat runs of the same 200 calls on the same machine put p95
-anywhere between 0.53 and 0.87 ms, so publishing two decimal places would be false precision
-about a figure that is really "well under a millisecond".
-
-**Takeaway — sub-millisecond, so it isn't the thing to optimise.** A warm Plumb read is not
-meaningfully slower than a native one; both are lost in the noise next to a model round trip.
-
-The number that is *not* sub-millisecond is the first call against a cold language server, which
-can take seconds while the server indexes — that is the language server booting, not the tool,
-and it is why the semantic tools (Scenario 5, Scenario 6) label their results approximate until
-the server is ready. Warm-path latency is the honest steady-state figure; cold start is a
-one-off you pay per workspace.
-
-## Scenario 10 — The same story in another language
-
-Plumb's structural tools run off a tree-sitter index, so they do not need a configured language
-server to answer "what's in this file" or "show me this function". The same two measurements,
-outside Go:
-
-Ratios below are against a real read tool (gutter included), with the raw-bytes ratio in
-parentheses — the same two baselines as Scenario 3.
-
-| Language | File (raw / gutter) | Symbol read | `file_outline` |
-|---|---|---|---|
-| Go | `internal/cli/stats.go` — 9,856 / 11,120 B | `parseAge`, 16 lines — 737 B, **15.1×** (13.4×) | 1,589 B — **7.0×** (6.2×) |
-| Python | `scripts/build-blog.py` — 16,930 / 18,266 B | `load_posts`, 19 lines — 1,253 B, **14.6×** (13.5×) | 2,457 B — **7.4×** (6.9×) |
-| JavaScript | `charts.js` — 11,371 / 12,599 B | `activityCalendar`, 28 lines — 1,258 B, **10.0×** (9.0×) | 1,752 B — **7.2×** (6.5×) |
-
-The three symbols are named, with their sizes, because Scenario 3 showed the ratio is a property
-of the symbol: a cross-language table pitting a 6-line helper against a 117-line function would
-be measuring symbol size, not language. These three span 16–28 lines — close enough to compare,
-but not identical, and the Go sample is the smallest of the three, which is part of why its
-ratio sits slightly below Python's.
-
-**Takeaway — the shape holds across languages.** The ratios land in the same band, which is what
-you'd expect given the win comes from addressing code structurally rather than from anything
-Go-specific. The caveat from Scenario 3 travels too: these are per-symbol ratios, and yours will
-depend on the symbol.
-
 ## What the numbers say
 
 | Question | Plumb tool | Result |
 |---|---|---|
-| Read one function | `read_symbol` | 2.9×–33.4× fewer tokens, depending on the symbol |
-| Understand a file | `file_outline` | ~7.0× fewer tokens (7.4× Python, 7.2× JS) |
-| Find text | `search_in_files` | a wash vs `ripgrep`; 9.3× smaller than naive `grep` |
 | Find references | `find_references` | exact vs 60% noise — a correctness win |
 | Rename a symbol | `rename_symbol` | 15 scoped edits vs 25–30 blind ones — a safety win |
 | Pick tests to run | `topology_affected` | 5 packages instead of 55, in 4.1 KB — package-granular |
-| Read several files | `read_multiple_files` | 1.31× (76 B over 3× `read_file`); buys turns, not tokens |
 | Any warm call | — | p95 well under 1 ms — not the bottleneck |
+| Read one function | `read_symbol` | 2.9×–33.4× fewer tokens, depending on the symbol |
+| Understand a file | `file_outline` | ~7.0× fewer tokens (7.4× Python, 7.2× JS) |
+| Find text | `search_in_files` | a wash vs `ripgrep`; 9.3× smaller than naive `grep` |
+| Read several files | `read_multiple_files` | 1.31× (76 B over 3× `read_file`); buys turns, not tokens |
 
-The token-efficiency win is concentrated in **targeted reads**, and it scales with how much of
-the file you didn't need. Raw text search is **neutral**. **Semantic** navigation is a
-**correctness** win. Writing tools (`rename_symbol`) are a **safety** win, which is the axis that
-actually matters, because a wrong edit costs more than a large one. And at least one tool costs
-you tokens outright and is kept for other reasons.
+**Semantic** navigation and writes are a **correctness and safety** win — the axis that actually
+matters, because a wrong edit or a missed test costs more than a large response. Test selection is
+a **coordination** win of the same kind: it is the difference between running 55 packages and
+running the 5 that matter, stated honestly rather than guessed. The token-efficiency win, where it
+exists, is concentrated in **targeted reads**, and it scales with how much of the file you didn't
+need. Raw text search is **neutral**. And at least one tool (`read_multiple_files`) costs you
+tokens outright and is kept for other reasons.
 
-That spread — wins, washes, and a loss — is why Plumb keeps its read and search tools
-first-class rather than treating them as redundant with an agent's native ones: "the agent
-already has a search tool" is not the same as "the agent's search answers this question as
-well".
+That spread — correctness and coordination wins, a real but scoped token win, washes, and a small
+loss — is why Plumb keeps its read and search tools first-class rather than treating them as
+redundant with an agent's native ones: "the agent already has a search tool" is not the same as
+"the agent's search answers this question as well".
 
 ## Reproduce it yourself
 
@@ -435,12 +458,12 @@ payload so a surprising number can be checked against the response it came from.
 
 Two things will make your numbers differ, both expected:
 
-- **Scenario 2 is machine-local.** Its multiplier depends on what you have built, installed and
+- **Scenario 1 is machine-local.** Its multiplier depends on what you have built, installed and
   left lying around. The shape — "the checkout is much bigger than the repository" — is the
   claim; the number is an illustration.
 - **This page is itself in the search results.** It names `FormatSavings` many times, so
-  measuring on a later commit — or after editing this page — moves Scenarios 1, 5 and 6. That is
-  Scenario 5's point happening live: text search counts every mention, `find_references` counts
+  measuring on a later commit — or after editing this page — moves Scenarios 2, 3 and 9. That is
+  Scenario 2's point happening live: text search counts every mention, `find_references` counts
   none of them.
 
 Re-run on a later commit and the absolute numbers will drift. The shape should not; if it does,

@@ -85,9 +85,23 @@ jobs:
       # head.sha is passed for a reason worth keeping: this job checks out
       # refs/pull/N/merge, whose parent IS base.sha, so without it the merge-base is
       # the base branch tip rather than the branch's fork point — and a branch that is
-      # merely behind a release cut then fails. --require-base turns an unresolvable
-      # base into an error, because on the one path that gates a merge, a skip is a
-      # green tick for a check that never ran.
+      # merely behind main then fails for lines it added under a heading that was open
+      # when it forked. A branch behind a RELEASE cut is a different matter and is
+      # supposed to fail: rule R4 compares base.sha's own headings against the fork
+      # point's, so it still catches an entry landing in a section stamped since.
+      # --require-base turns an unresolvable base into an error, because on the one
+      # path that gates a merge, a skip is a green tick for a check that never ran.
+      #
+      # R4 DEPENDS ON STRICT STATUS CHECKS, and nothing in the script can enforce it.
+      # base.sha is a snapshot from this PR's last opened/synchronize event; it does
+      # not move when main does. R4's whole subject is "main released after my last
+      # push", so a PR whose last run predates the release would merge on a green,
+      # pre-release run without R4 ever seeing the stamp. What closes that is branch
+      # protection's "require branches to be up to date before merging" (strict: true
+      # on this repo today), which forces a push and so a fresh base.sha first. If
+      # strict checks are ever turned off — to add a merge queue, say — R4 silently
+      # stops firing on that window; resolve its tip from origin/main then, and see
+      # the ENVIRONMENTAL DEPENDENCY paragraph in the script header for why not now.
       - name: CHANGELOG placement guard
         if: github.event_name == 'pull_request'
         run: ./scripts/check-changelog-placement.sh --base ${{ github.event.pull_request.base.sha }} --head ${{ github.event.pull_request.head.sha }} --require-base

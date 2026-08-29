@@ -249,7 +249,7 @@ func isProtectedBranch(arg string, protected []string) bool {
 	if strings.HasPrefix(arg, "-") {
 		return false
 	}
-	for _, part := range strings.Split(arg, ":") {
+	for part := range strings.SplitSeq(arg, ":") {
 		name := strings.TrimPrefix(part, "+")
 		name = strings.TrimPrefix(name, "refs/heads/")
 		for _, pb := range protected {

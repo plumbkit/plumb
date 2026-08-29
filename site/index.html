@@ -310,7 +310,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
   </a>
   <nav class="nav-l">
     <a href="#collision">Fleet-safe</a>
-    <a href="#measured">Efficient</a>
+    <a href="#measured">Measured</a>
     <a href="#tools">Tools</a>
     <a href="#quickstart">Install</a>
     <a href="blog/index.html">Blog</a>
@@ -331,7 +331,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     </div>
     <div class="stats rv">
       <div class="stat"><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
-      <div class="stat"><div class="n" data-count="59">0</div><div class="l">structured tools</div></div>
+      <div class="stat"><div class="n" data-count="58">0</div><div class="l">structured tools</div></div>
       <div class="stat"><div class="n" data-count="21">0</div><div class="l">languages &amp; formats</div></div>
       <div class="stat"><div class="n" data-count="18">0</div><div class="l">AI clients</div></div>
     </div>
@@ -377,7 +377,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
   </section>
 
   <section class="blk wrap center" id="measured">
-    <span class="k rv">Efficiency · measured on plumb itself</span>
+    <span class="k rv">Read footprint · measured on plumb itself</span>
     <h2 class="rv">Read the shape,<br>not the bulk.</h2>
     <p class="intro rv">One file from plumb's own source; <span class="mono" style="font-size:.88em;color:var(--acc)">internal/cli/pool.go</span>, the daemon's language-server pool. The same file, opened three ways.</p>
     <div class="bench rv" id="bench">
@@ -445,7 +445,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
   <section class="blk wrap center" id="tools">
     <span class="k rv">The toolset</span>
     <h2 class="rv">Seven capabilities.</h2>
-    <p class="intro rv">Fifty-nine structured tools, grouped by what they let an agent actually do; and the agent rarely has to name one, because the right tool surfaces when it's needed.</p>
+    <p class="intro rv">Fifty-eight structured tools, grouped by what they let an agent actually do; and the agent rarely has to name one, because the right tool surfaces when it's needed.</p>
     <div class="toolcols">
       <div class="tc rv"><h4><span class="d" style="background:#b35a2e"></span>Orient<span class="tmark">*</span><span class="c">×4</span></h4><div class="dd">Drop into any repo and get the whole picture in one call; branch, diagnostics, recent work, and the project’s own memory.</div><ul><li>session_start</li><li>workspace_sessions<span class="st">*</span></li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#2f6e4f"></span>Understand<span class="c">×8</span></h4><div class="dd">Jump to any definition, list every caller, walk the type tree; answers from the compiler itself, never a text-search guess.</div><ul><li>find_references</li><li>call_hierarchy</li></ul></div>
@@ -673,13 +673,13 @@ cd my-project && plumb init">copy all</button></div>
     <div class="tuiblock rv">
       <span class="k">The dashboard</span>
       <h3>One keystroke. The whole fleet, live.</h3>
-      <p class="tdesc">Run <code>plumb tui</code> for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency, error rates and token efficiency</b>, and the daemon's own <b>CPU, memory, GC and goroutines</b>; the one warm process behind every conversation.</p>
+      <p class="tdesc">Run <code>plumb tui</code> for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency and error rates</b>, the daemon's own <b>CPU, memory, GC and goroutines</b>, and an <b>estimated token-savings readout</b>; the one warm process behind every conversation.</p>
       <div class="qcard tuicard">
         <div class="top"><span>bash · plumb tui</span><span class="live">live</span></div>
         <div class="tuishot" id="tuiPlayer" role="img" aria-label="plumb tui — live daemon and session dashboard"></div>
       </div>
       <div class="tuifeat">
-        <span>live sessions</span><span>per-tool p95 &amp; errors</span><span>token efficiency</span><span>daemon CPU · memory · GC</span><span>health alerts</span><span>per-session drill-down</span>
+        <span>live sessions</span><span>per-tool p95 &amp; errors</span><span>daemon CPU · memory · GC</span><span>health alerts</span><span>per-session drill-down</span><span>estimated token savings</span>
       </div>
     </div>
   </section>

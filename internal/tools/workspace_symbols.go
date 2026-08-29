@@ -99,7 +99,7 @@ type workspaceSymbolsArgs struct {
 // topologyFallback answers a workspace-wide symbol search from the topology
 // index. ok is false when topology is unavailable or returns nothing, so the
 // caller surfaces the original LSP error instead of an empty index result.
-func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, query string) (string, bool) {
+func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, reason symbolFallbackReason, waited time.Duration, query string) (string, bool) {
 	store := activeTopology(t.topo)
 	if store == nil {
 		return "", false
@@ -114,7 +114,7 @@ func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, query string) (
 	}
 	// The workspace-wide search has no single target file, so the warm-up probe
 	// inspects the connection primary (empty uri).
-	note := topologyFallbackNoteFor(t.warmup, "")
+	note := topologyFallbackNoteWhen(reason, t.warmup, "", waited)
 	return formatTopologyMatches(note, fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
@@ -175,14 +175,19 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
+	// The attempt is bounded strictly inside the caller's budget so the Map
+	// fallback below — which runs on the live ctx, not lspCtx — has time left to
+	// answer in. withLSPDeadline handed the server the whole budget whenever the
+	// caller had already set a deadline (PLAN-403).
+	lspCtx, cancel, granted := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
 	syms, err := t.client.WorkspaceSymbols(lspCtx, protocol.WorkspaceSymbolParams{Query: a.Query})
 	if err != nil {
-		if out, ok := t.topologyFallback(ctx, a.Query); ok {
+		waited := attemptBudget(granted, t.timeout)
+		if out, ok := t.topologyFallback(ctx, lspFallbackReason(lspCtx), waited, a.Query); ok {
 			return out, nil
 		}
-		return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
+		return "", lspTimeoutErr("workspace_symbols", waited, err)
 	}
 
 	// Drop dependency-cache and stdlib hits so results stay focused on the
@@ -226,14 +231,15 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 // language server's documentSymbol tree, with the topology index as the
 // fallback when the server errors or times out.
 func (t *WorkspaceSymbols) inFile(ctx context.Context, uri, query string) (string, error) {
-	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
+	lspCtx, cancel, granted := withFallbackLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	out, err := t.inDocument(lspCtx, uri, query)
+	waited := attemptBudget(granted, t.timeout)
+	out, err := t.inDocument(lspCtx, uri, query, waited)
 	if err != nil {
 		if IsWorkspaceBoundaryError(err) {
 			return "", err
 		}
-		if fb, ok := t.topologyFallbackInFile(ctx, uri, query); ok {
+		if fb, ok := t.topologyFallbackInFile(ctx, lspFallbackReason(lspCtx), waited, uri, query); ok {
 			return fb, nil
 		}
 		return "", err
@@ -245,7 +251,7 @@ func (t *WorkspaceSymbols) inFile(ctx context.Context, uri, query string) (strin
 // index. ok is false when topology is unavailable or has not indexed the file,
 // so the caller surfaces the original LSP error instead. It is the file-scoped
 // counterpart of topologyFallback, which searches the whole index.
-func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, uri, query string) (string, bool) {
+func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, reason symbolFallbackReason, waited time.Duration, uri, query string) (string, bool) {
 	store := activeTopology(t.topo)
 	if store == nil {
 		return "", false
@@ -255,11 +261,14 @@ func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, uri, quer
 		return "", false
 	}
 	matches := filterTopologyByName(nodes, query)
-	note := topologyFallbackNoteFor(t.warmup, uri)
+	note := topologyFallbackNoteWhen(reason, t.warmup, uri, waited)
 	return formatTopologyMatches(note, fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
 }
 
-func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (string, error) {
+// inDocument answers an in-file query from the server's documentSymbol tree.
+// ctx is the ALREADY-BOUNDED server-attempt context (see inFile); waited is the
+// budget it carries, quoted when the server misses it.
+func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string, waited time.Duration) (string, error) {
 	// Cache the full symbol list per document; filtering is client-side.
 	key := uri + ":docSymbols"
 	var syms []protocol.DocumentSymbol
@@ -275,7 +284,7 @@ func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (s
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
-			return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
+			return "", lspTimeoutErr("workspace_symbols", waited, err)
 		}
 		if t.cache != nil {
 			t.cache.Set(key, syms, t.ttl)
@@ -284,8 +293,10 @@ func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (s
 
 	if len(syms) == 0 {
 		// Server answered empty — fall back to the structural Map for file types
-		// the workspace LSP does not cover (e.g. .html in a Go repo).
-		if fb, ok := t.topologyFallbackInFile(ctx, uri, query); ok {
+		// the workspace LSP does not cover (e.g. .html in a Go repo). The server
+		// DID answer here, so no attempt budget was missed and the banner keeps
+		// its historical wording.
+		if fb, ok := t.topologyFallbackInFile(ctx, fallbackNotUsed, 0, uri, query); ok {
 			return fb, nil
 		}
 	}

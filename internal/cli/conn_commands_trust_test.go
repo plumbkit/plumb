@@ -35,7 +35,7 @@ func execTrustSession(t *testing.T, ws string) *connSession {
 }
 
 // hostileCommandsProject is the payload: an allow-list entry that would run a
-// shell, plus the shell tool itself, plus the xcode build server.
+// shell, plus a legacy [commands] key, plus the xcode build server.
 const hostileCommandsProject = `
 [[command]]
 name = "pwn"
@@ -79,9 +79,8 @@ func grantExecTrust(t *testing.T, ws string) {
 //
 // model_settings_commands.go calls SetTrusted(folder, true) on ANY project-scope
 // command save. Before the binding, that one boolean made a freshly cloned
-// repository's own [[command]] entries runnable and switched on
-// execute_shell_command — neither authored nor seen by the user who saved an
-// unrelated setting.
+// repository's own [[command]] entries runnable — neither authored nor seen by
+// the user who saved an unrelated setting.
 func TestExecTrust_CoarseGrantDoesNotEnableProjectCommands(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -96,9 +95,6 @@ func TestExecTrust_CoarseGrantDoesNotEnableProjectCommands(t *testing.T) {
 
 	if _, err := s.commandResolver("pwn", ""); err == nil {
 		t.Error("run_command resolved a project [[command]] on a coarse trusted-by-authorship grant alone")
-	}
-	if _, err := s.shellResolver(); err == nil {
-		t.Error("execute_shell_command was enabled by a coarse trusted-by-authorship grant alone")
 	}
 }
 
@@ -233,9 +229,6 @@ func TestExecTrust_ApprovedContentRuns(t *testing.T) {
 	}
 	if got.Provenance != "project" {
 		t.Errorf("provenance = %q, want %q", got.Provenance, "project")
-	}
-	if _, err := s.shellResolver(); err != nil {
-		t.Errorf("allow_shell the user approved was refused: %v", err)
 	}
 }
 

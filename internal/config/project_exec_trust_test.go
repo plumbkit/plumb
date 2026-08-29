@@ -11,7 +11,7 @@ import (
 // the content that was approved, or merely to the fact that the workspace was
 // once trusted for something?
 //
-// [[command]], [commands] allow_shell / deny_network and [xcode]
+// [[command]], any gated [commands] key and [xcode]
 // auto_build_server all decide which process plumb spawns. Before this change
 // they were gated on the coarse per-root Trusted boolean, so a grant made for
 // any reason blessed whatever those sections happened to contain — including
@@ -105,9 +105,16 @@ func TestProjectExecTrust_CommandEditedAfterGrantIsRefused(t *testing.T) {
 	}
 }
 
-// TestProjectExecTrust_AllowShellFlippedAfterGrantIsRefused covers the
-// execute_shell_command gate: arbitrary shell, opened after approval.
-func TestProjectExecTrust_AllowShellFlippedAfterGrantIsRefused(t *testing.T) {
+// TestProjectExecTrust_UnrecognisedCommandsKeyAddedAfterGrantIsRefused covers
+// a [commands] key plumb has no meaning for — here allow_shell, which gated the
+// retired execute_shell_command and is now exactly that: a key some older config
+// or some future plumb might use, appended after approval.
+//
+// It stays gated with no per-key code, because policyCommandsFreeFields is an
+// ALLOW-list: only require_sandbox is free, so an unrecognised key falls into
+// the spec by default rather than escaping it. That is the property this test
+// pins, and removing allow_shell from CommandsConfig must not weaken it.
+func TestProjectExecTrust_UnrecognisedCommandsKeyAddedAfterGrantIsRefused(t *testing.T) {
 	s := tempTrustStore(t)
 	const granted = "[git]\ncommit_trailer = true\n"
 	ws := execTrustWorkspace(t, granted)
@@ -116,15 +123,15 @@ func TestProjectExecTrust_AllowShellFlippedAfterGrantIsRefused(t *testing.T) {
 	rewriteProjectConfig(t, ws, granted+"\n[commands]\nallow_shell = true\n")
 
 	if ProjectExecTrusted(ws) {
-		t.Error("[commands] allow_shell was raised after the grant and inherited it")
+		t.Error("an unrecognised [commands] key was added after the grant and inherited it")
 	}
 }
 
-// TestProjectExecTrust_DenyNetworkLoweredAfterGrantIsRefused covers the egress
-// control. The sandbox is integrity-only, so deny_network is what stops a shell
-// command reading a secret and posting it out; re-opening it after a grant is a
-// capability change, not a preference.
-func TestProjectExecTrust_DenyNetworkLoweredAfterGrantIsRefused(t *testing.T) {
+// TestProjectExecTrust_UnrecognisedCommandsKeyChangedAfterGrantIsRefused is the
+// sharper variant: the key was PRESENT at the grant, so it is in the recorded
+// hash, and only its VALUE changes afterwards. A binding keyed on the set of
+// keys rather than on their values would miss this.
+func TestProjectExecTrust_UnrecognisedCommandsKeyChangedAfterGrantIsRefused(t *testing.T) {
 	s := tempTrustStore(t)
 	const granted = "[commands]\nallow_shell = true\ndeny_network = true\n"
 	ws := execTrustWorkspace(t, granted)
@@ -133,7 +140,51 @@ func TestProjectExecTrust_DenyNetworkLoweredAfterGrantIsRefused(t *testing.T) {
 	rewriteProjectConfig(t, ws, "[commands]\nallow_shell = true\ndeny_network = false\n")
 
 	if ProjectExecTrusted(ws) {
-		t.Error("[commands] deny_network was lowered after the grant and inherited it")
+		t.Error("an unrecognised [commands] key changed value after the grant and inherited it")
+	}
+}
+
+// TestProjectExecTrust_LegacyCommandsKeyDoesNotRevokeAStandingGrant is the other
+// direction, and the one that says retiring allow_shell / deny_network did not
+// quietly break existing users.
+//
+// A config written against an older plumb still carries those keys. Merely
+// carrying them must not cost the workspace its grant: the keys are part of the
+// content that was approved, they have not changed, so `plumb trust` stays
+// satisfied and run_command keeps working. Only an EDIT invalidates it — which is
+// the pair of tests above.
+func TestProjectExecTrust_LegacyCommandsKeyDoesNotRevokeAStandingGrant(t *testing.T) {
+	s := tempTrustStore(t)
+	ws := execTrustWorkspace(t, pwnCommand+"\n[commands]\nallow_shell = true\ndeny_network = true\n")
+	grantCurrentContent(t, s, ws)
+
+	if !ProjectExecTrusted(ws) {
+		t.Error("a legacy [commands] key that has not changed since the grant revoked it; " +
+			"an old config must keep its trust, and so keep its [[command]] entries runnable")
+	}
+}
+
+// TestExecFieldWarning_LegacyCommandsKeyDoesNotNameARetiredTool pins the
+// DISCLOSURE half. `plumb trust` prints these strings immediately above the
+// yes/no prompt, so a warning that explains a gate by naming a tool plumb no
+// longer ships is a lie told at the worst possible moment.
+//
+// The generic fallback is the honest answer and must stay non-empty:
+// TestProjectPolicySpec_DisclosesExecSections requires every gated entry to
+// carry one, so an empty string here would leave a gated key disclosed as a bare
+// name with no reason.
+func TestExecFieldWarning_LegacyCommandsKeyDoesNotNameARetiredTool(t *testing.T) {
+	for _, key := range []string{"commands.allow_shell", "commands.deny_network", "commands.some_future_key"} {
+		w := execFieldWarning(key, true)
+		if w == "" {
+			t.Errorf("execFieldWarning(%q) is empty; a gated key must carry a reason", key)
+		}
+		for _, banned := range []string{"execute_shell_command", "arbitrary shell"} {
+			if strings.Contains(w, banned) {
+				t.Errorf("execFieldWarning(%q) still says %q — it describes a tool plumb no longer registers.\ngot: %s",
+					key, banned, w)
+			}
+		}
 	}
 }
 
@@ -159,9 +210,9 @@ func TestProjectExecTrust_XcodeEnabledAfterGrantIsRefused(t *testing.T) {
 // model_settings_commands.go calls SetTrusted(folder, true) whenever a user saves
 // ANY project-scope command setting in the TUI — "trusted by authorship". Pre-fix
 // that single boolean blessed every [[command]] the cloned repository already
-// shipped, plus allow_shell and the xcode build server, none of which the user
-// authored or was shown. The coarse flag must not, by itself, satisfy the exec
-// gate.
+// shipped, plus its [commands] policy and the xcode build server, none of which
+// the user authored or was shown. The coarse flag must not, by itself, satisfy
+// the exec gate.
 func TestProjectExecTrust_CoarseGrantAloneDoesNotBless(t *testing.T) {
 	s := tempTrustStore(t)
 	ws := execTrustWorkspace(t, pwnCommand+"\n[commands]\nallow_shell = true\n\n[xcode]\nauto_build_server = true\n")
@@ -175,7 +226,7 @@ func TestProjectExecTrust_CoarseGrantAloneDoesNotBless(t *testing.T) {
 
 	if ProjectExecTrusted(ws) {
 		t.Error("a coarse trusted-by-authorship grant blessed the repository's own " +
-			"[[command]] / allow_shell / [xcode]; it must not carry a content grant")
+			"[[command]] / [commands] / [xcode]; it must not carry a content grant")
 	}
 }
 

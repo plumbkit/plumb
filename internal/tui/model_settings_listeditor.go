@@ -180,7 +180,10 @@ func editorModalBox(title string, content []string, status string) string {
 
 	var b strings.Builder
 	dashes := max(innerW-1-lipgloss.Width(titleSeg), 0)
-	b.WriteString(SepStyle.Render("╭─") + PanelHeaderStyle.Render(titleSeg) + SepStyle.Render(strings.Repeat("─", dashes)+"╮") + "\n")
+	b.WriteString(SepStyle.Render("╭─"))
+	b.WriteString(PanelHeaderStyle.Render(titleSeg))
+	b.WriteString(SepStyle.Render(strings.Repeat("─", dashes) + "╮"))
+	b.WriteString("\n")
 	b.WriteString(editorBoxRow("", editorContentPad, innerW)) // blank line above content
 	for _, row := range content {
 		b.WriteString(editorBoxRow(row, editorContentPad, innerW))
@@ -205,7 +208,8 @@ func editorHints(pairs ...[2]string) string {
 		if i > 0 {
 			b.WriteString(StatusStyle.Render("  ·  "))
 		}
-		b.WriteString(MutedStyle.Render(p[0]) + StatusStyle.Render(" "+p[1]))
+		b.WriteString(MutedStyle.Render(p[0]))
+		b.WriteString(StatusStyle.Render(" " + p[1]))
 	}
 	return b.String()
 }

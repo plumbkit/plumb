@@ -39,6 +39,19 @@ const (
 	sessionStartTimeout = 120 * time.Second
 	// toolTimeout is used for all subsequent tool calls once gopls is warm.
 	toolTimeout = 20 * time.Second
+	// lspToolTimeout is the budget for a tool call that may be the FIRST to
+	// touch the language server. session_start deliberately does not wait for
+	// gopls (internal/cli: firstStartGrace), so the whole cold start lands
+	// inside that first LSP-backed call, and sessionStartTimeout's cold-start
+	// allowance protects a call that no longer pays for it.
+	//
+	// It MUST stay above the SERVER-side [lsp_query] deadline. Below it the
+	// client gives up first, so the daemon's own degradation — the tree-sitter
+	// fallback, or its actionable timeout message — can never be observed, and
+	// a slow runner surfaces as a bare "timeout waiting for response" that
+	// looks like a product bug (PLAN-390). TestLSPToolTimeoutOutlastsServer is
+	// the guard.
+	lspToolTimeout = 90 * time.Second
 )
 
 // ─── prerequisites ────────────────────────────────────────────────────────────
@@ -221,7 +234,8 @@ func isolatedEnv(tmpHome string) []string {
 			strings.HasPrefix(e, "XDG_CONFIG_HOME="),
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
-			strings.HasPrefix(e, "XDG_STATE_HOME="):
+			strings.HasPrefix(e, "XDG_STATE_HOME="),
+			strings.HasPrefix(e, "XDG_RUNTIME_DIR="):
 			continue
 		default:
 			out = append(out, e)
@@ -233,6 +247,14 @@ func isolatedEnv(tmpHome string) []string {
 		"XDG_CACHE_HOME="+filepath.Join(tmpHome, ".cache"),
 		"XDG_DATA_HOME="+filepath.Join(tmpHome, ".local", "share"),
 		"XDG_STATE_HOME="+filepath.Join(tmpHome, ".local", "state"),
+		// Cleared, not redirected. The daemon's runtime dir prefers
+		// $XDG_RUNTIME_DIR and that outranks XDG_CACHE_HOME, so leaving the
+		// developer's real /run/user/$UID in the environment would put this
+		// "isolated" daemon on the machine's shared socket — the harness would
+		// then attach to their live daemon and assert against real state. Empty
+		// fails the absolute-path check, so resolution falls back to
+		// XDG_CACHE_HOME above, which is what daemonPIDPath expects.
+		"XDG_RUNTIME_DIR=",
 		// A cold gopls in a fresh workspace needs more than the 300 ms default
 		// to emit the first diagnostics after a write.
 		"PLUMB_POST_WRITE_DIAG_MS=5000",

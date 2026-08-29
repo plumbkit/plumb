@@ -75,9 +75,13 @@ func (m Model) rightTabBar(_ int) string {
 			sb.WriteString("  ")
 		}
 		if i == m.rightTab && rightFocused {
-			sb.WriteString(RightTabActiveBracket.Render("[") + RightTabActiveLabel.Render(" "+name+" ") + RightTabActiveBracket.Render("]"))
+			sb.WriteString(RightTabActiveBracket.Render("["))
+			sb.WriteString(RightTabActiveLabel.Render(" " + name + " "))
+			sb.WriteString(RightTabActiveBracket.Render("]"))
 		} else {
-			sb.WriteString(RightTabMuted.Render("[") + RightTabInactive.Render(" "+name+" ") + RightTabMuted.Render("]"))
+			sb.WriteString(RightTabMuted.Render("["))
+			sb.WriteString(RightTabInactive.Render(" " + name + " "))
+			sb.WriteString(RightTabMuted.Render("]"))
 		}
 	}
 	return sb.String()

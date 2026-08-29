@@ -282,18 +282,16 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// rewriting any entry invalidates the grant. Order is part of the hash because
 	// FindCommand takes the first match by name.
 	"command": ClassTrustGated,
-	// [commands] allow_shell and deny_network are honoured from a project file
-	// only for a trusted workspace (gatedAllowShell / gatedDenyNetwork), and the
-	// gate is now the policy CONTENT hash rather than the coarse per-root boolean
-	// — the same binding [git] and [lsp.<lang>] get. The coarse flag is still
-	// required in addition, since it is what says the user approved execution in
-	// this workspace at all (see config.ExecTrustedFor).
-	"commands.allow_shell":  ClassTrustGated,
-	"commands.deny_network": ClassTrustGated,
-	// require_sandbox is the one [commands] field a project may set untrusted,
-	// because it can only ADD safety: effectiveRequireSandbox already takes the
-	// most restrictive of global and project. Resolved here too so the merged
-	// config — and therefore `config show` — states what is actually in force.
+	// require_sandbox is the only [commands] field left, and the one a project may
+	// set untrusted, because it can only ADD safety: effectiveRequireSandbox
+	// already takes the most restrictive of global and project. Resolved here too
+	// so the merged config — and therefore `config show` — states what is actually
+	// in force.
+	//
+	// It is not a hole in the gate that no OTHER [commands] key is classified
+	// here: policyCommandsFreeFields is an ALLOW-list, so any key this table does
+	// not know — a legacy allow_shell/deny_network, or one added next year —
+	// still enters the trust hash and is still disclosed by `plumb trust`.
 	"commands.require_sandbox": ClassOneWay,
 
 	// --- The enable knob for agent-writable config. A project must never be

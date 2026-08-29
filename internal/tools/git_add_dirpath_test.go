@@ -45,7 +45,7 @@ func stagedDeletions(t *testing.T, dir string) []string {
 		t.Fatalf("git diff --cached: %v", err)
 	}
 	var got []string
-	for _, l := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+	for l := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
 		if l != "" {
 			got = append(got, l)
 		}

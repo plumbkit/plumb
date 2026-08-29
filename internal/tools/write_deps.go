@@ -8,7 +8,6 @@ import (
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
-	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -211,63 +210,6 @@ func (d WriteDeps) postWriteDiagWindow() time.Duration {
 // compile?" answer without shelling out to a build.
 const longPostWriteDiagWindow = 5 * time.Second
 
-// postWriteDiagnostics waits for the language server to re-publish diagnostics
-// for the just-written uri, then renders them as a compact suffix ("" when the
-// source is unset or there is nothing to report). content is the new file
-// content; its line count down-ranks provably-stale, past-EOF diagnostics.
-//
-// Mode-aware: on a pull/hybrid connection the refresh is an on-demand pull of
-// the edited URI (post_write_diag_pull.go) rather than a wait for the next
-// publishDiagnostics push — which, per the Invalidator's waiter contract, a
-// pull would never wake. Push mode (and any client without mode awareness)
-// keeps the wait-based behaviour below unchanged.
-//
-// When awaitFresh is set the wait is extended to longPostWriteDiagWindow so the
-// result is trustworthy, and a clean fresh pass is stated explicitly rather than
-// implied by silence — closing the "I had to shell out to go build to be sure"
-// gap reported in dogfooding. A globally-disabled post-write window
-// (negative) is still honoured (await is a no-op).
-func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh bool, baseline *diagBaseline) string {
-	if d.Diag == nil {
-		return ""
-	}
-	if out, handled := d.pullPostWriteDiagnostics(uri, before, content, awaitFresh, baseline); handled {
-		return out
-	}
-	ceiling := d.postWriteDiagWindow()
-	if awaitFresh && ceiling >= 0 && ceiling < longPostWriteDiagWindow {
-		ceiling = longPostWriteDiagWindow
-	}
-	diags, fresh := awaitDiagnosticsRefresh(d.Diag, uri, ceiling, d.DiagWait)
-	if !fresh {
-		// The server has not re-published since the write, so the snapshot
-		// predates it and a differential would be empty and misleading. Surface a
-		// single honest pending line rather than the pre-edit findings, which read
-		// as fresh breakage (the recurring dogfooding friction).
-		if len(diags) == 0 {
-			return ""
-		}
-		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
-	}
-	var pre []protocol.Diagnostic
-	if baseline != nil {
-		pre = baseline.editedPre
-	}
-	lo, hi, touched := changedLineRange(before, content)
-	freshNew, likelyStale := diffFileDiagnostics(pre, diags, lo, hi, touched)
-	out := formatDifferentialDiagnostics(freshNew, likelyStale, lineCount(content))
-	out += d.crossFileDiagnostics(uri, fresh, baseline)
-	if awaitFresh && out == "" {
-		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
-	}
-	// Standing pre-existing errors are correctly dropped from the delta, but a
-	// clean "no new errors" result would otherwise hide them — an agent could
-	// commit over them. Append a count so the file's full state is not implied
-	// clean by silence.
-	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, diags, lo, hi, touched))
-	return out
-}
-
 func (d WriteDeps) crossFileEnabled() bool {
 	if d.CrossFileDiagFn != nil {
 		return d.CrossFileDiagFn()
@@ -305,57 +247,13 @@ func (d WriteDeps) capturePreWriteBaseline(uri string) *diagBaseline {
 	return b
 }
 
-// crossFileDiagnostics runs the bounded cross-file sweep and renders any NEW
-// errors this write introduced in files other than the one edited. It is a no-op
-// unless the sweep is enabled, a pre-write baseline was captured, and the edited
-// file itself re-published fresh (else the server is lagging and any delta is
-// unreliable). The settle grace lets dependent files re-publish before the
-// comparison; the single-file result is already built and is never delayed or
-// dropped by this step. The grace is a CEILING, not a fixed sleep — see
-// waitForCrossFileSettle.
-func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *diagBaseline) string {
-	if baseline == nil || !fresh || !d.crossFileEnabled() {
+// workspaceRoot resolves this connection's workspace root, or "" when none is
+// wired. Used to relativise paths in responses.
+func (d WriteDeps) workspaceRoot() string {
+	if d.WorkspaceFn == nil {
 		return ""
 	}
-	cf, ok := d.Diag.(crossFileDiagSource)
-	if !ok {
-		return ""
-	}
-	if settle := d.crossFileSettleWindow(); settle > 0 {
-		waitForCrossFileSettle(d.Diag, settle)
-	}
-	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
-	root := ""
-	if d.WorkspaceFn != nil {
-		root = d.WorkspaceFn(context.Background())
-	}
-	return formatCrossFileDiagnostics(breaks, root)
-}
-
-// anyDiagnosticsWaiter is the optional capability that lets the settle grace end
-// as soon as a dependent file actually re-publishes.
-type anyDiagnosticsWaiter interface {
-	WaitForAnyDiagnostics(ctx context.Context) error
-}
-
-// waitForCrossFileSettle waits up to settle for a dependent file to re-publish
-// its diagnostics, returning as soon as one does.
-//
-// This used to be a flat `<-time.After(settle)` — an unconditional 200 ms sleep
-// on every edit whose file re-published fresh, with post_write_cross_file on by
-// default. Together with the adaptive publish wait it put a ~275-500 ms floor
-// under edit_file before any I/O, which is most of the measured ~683 ms average.
-// The ceiling and the default are unchanged; only the common case gets shorter,
-// and a source that cannot signal falls back to the original sleep.
-func waitForCrossFileSettle(src postWriteDiagSource, settle time.Duration) {
-	waiter, ok := src.(anyDiagnosticsWaiter)
-	if !ok {
-		<-time.After(settle)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), settle)
-	defer cancel()
-	_ = waiter.WaitForAnyDiagnostics(ctx)
+	return d.WorkspaceFn(context.Background())
 }
 
 func (d WriteDeps) concurrentWriteSkew() time.Duration {

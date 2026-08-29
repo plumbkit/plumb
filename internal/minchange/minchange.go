@@ -100,10 +100,15 @@ type SymbolRef struct {
 type Deps struct {
 	// CallerCount returns an APPROXIMATE caller count for a defined symbol and,
 	// when the count is exactly one, that single call site. found is false when
-	// the symbol is absent from the index. The count is intra-file only (the
-	// topology call graph does not cross files), so it is a lower bound —
-	// callers use it for a Low-confidence hint, never a claim.
+	// the symbol is absent from the index. It is retained for callers that cannot
+	// provide a subject path; such answers may be intra-file only.
 	CallerCount func(ctx context.Context, name string) (count int, site SymbolRef, found bool)
+
+	// CallerCountAt is the preferred subject-aware query. The path and kind let a
+	// consumer disambiguate duplicate names and admit durable cross-file edges only
+	// for the subject's supported language. Its result remains a Low-confidence
+	// hint: topology is approximate and dynamic dispatch is outside its proof.
+	CallerCountAt func(ctx context.Context, name, path, kind string) (count int, site SymbolRef, found bool)
 
 	// SimilarSymbols returns indexed free functions whose tokenised name closely
 	// matches name, excluding excludeFile (the symbol's own file). Used to flag a
@@ -215,10 +220,10 @@ func sortFindings(f []Finding) {
 // spots are explicit.
 func notCheckedList(diff *Diff, deps Deps, opts Options) []string {
 	var out []string
-	if deps.CallerCount == nil {
+	if deps.CallerCountAt == nil && deps.CallerCount == nil {
 		out = append(out, "single-use-abstraction: topology index unavailable — call-site counts not checked")
 	} else {
-		out = append(out, "single-use-abstraction: uses the topology call graph, which is intra-file and may be a few edits stale — cross-file/cross-package callers and dynamic dispatch are not counted (verify with find_references)")
+		out = append(out, "single-use-abstraction: uses the approximate topology call graph and may be a few edits stale — cross-file edges are included only for admitted subjects; dynamic dispatch is not counted (verify with find_references)")
 	}
 	if deps.SimilarSymbols == nil {
 		out = append(out, "duplicate-helper: topology index unavailable — name-similarity not checked")

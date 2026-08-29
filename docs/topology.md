@@ -182,7 +182,8 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
 - **`topology_explore`** — BFS neighbourhood around a named symbol, with depth,
   node, and byte budgets.
 - **`topology_impact`** — bidirectional blast radius: what a symbol depends on,
-  and what depends on it.
+  and what depends on it. `mode: "reachability"` switches to the reachability
+  contract below; `granularity` selects package (the default) or Go function.
 - **`topology_affected`** — *the headline.* Given changed files/symbols, the
   files and tests most likely affected, by inward dependency edges **and**
   co-location (tests in the same directory as a changed/affected file — catching
@@ -194,6 +195,193 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   registrations or call sites, so it cannot recover a path-to-handler binding (e.g.
   `"/api/x" -> handlerFn`) — only symbol-name/signature candidates, each carrying a
   confidence annotation.
+
+## Package-level reachability
+
+`topology_impact mode="reachability"` answers a different question than the rest of
+this page, at selectable granularity: package mode asks **"what does this *binary*
+(or entry point) pull in, and which packages are unreachable?"**; function mode asks
+**"what does this callable root pull in?"**. Package mode is built entirely on the
+`imports` edges `linkImports` already produces; function mode uses the admitted Go call
+resolver edges. There is no schema change or new tool (`topology_impact` gained a
+`mode` and `granularity` rather than adding to the tool count).
+
+**Granularity, stated plainly.** Reachability defaults to `granularity="package"` and
+opens with `package-level (import edges, production imports only — Go _test.go importers
+excluded)`. This is directory-level closure over production import edges. Opt into
+`granularity="function"` for Go-only outward closure over admitted call-resolver edges;
+its header says `function-level`, test-file callers are excluded, and unresolved
+receiver/dynamic/external calls are disclosed as a lower bound. Function mode answers
+"is this callable reachable from these roots", not proof of dead code. Treat a small
+unreachable package or callable as a lead to verify before deleting; reflective or
+dynamic use can still exist outside the indexed graph.
+
+**Production imports only.** An edge whose importer is a Go `_test.go` file is excluded
+from the graph, on purpose. Go forbids real import cycles, so any cycle a naive version
+of this feature could report was necessarily a `_test.go`-only artefact — measured on
+plumb's own index, 64% of the folded edges originated in a test file, and every cycle an
+early build of `layers` reported vanished once those edges were excluded. The
+consequence for the default shape: a package pulled in only by a sibling package's test
+file (a test helper, a fixture) is reported **unreachable**, which is the intended
+answer to "what does the binary pull in" — it never ships. **This cuts both ways, and
+the destructive direction is undisclosed nowhere else but here without this sentence:**
+on plumb's own index, `internal/lsp/conformance` and `internal/lsp/lsptest` — real,
+in-use test-support packages — show up in the unreachable list precisely because
+nothing but a `_test.go` file imports them. The response's `unreachable` line says so
+directly: *"a package used only by tests appears here by design — confirm before
+deleting."* Treat every unreachable result as a lead to verify, not a deletion list.
+
+**Build-tag-excluded files are still indexed, and still counted.** The extractor is
+syntactic (`go/parser`), not build-aware: a file gated to another OS/arch (e.g.
+`foo_linux.go` on a macOS index) is parsed and its imports folded into the graph
+regardless of whether the current build would ever compile it. A package reachable only
+through such a file may be reported reachable on a platform where it is not actually
+built — check `go list` or the build tags directly before trusting a borderline result.
+
+**Go-only, for now.** Folding edges into this graph needs a package node to carry its
+own outward `imports` edge to an import node in the same file — today only the Go
+extractor (`extractors/golang`) emits that shape. On a workspace whose primary language
+doesn't (C#, PHP, Scala, Elixir, …), `mode="reachability"` detects the case and refuses
+with a clear message rather than reporting every package "unreachable", which is what an
+unguarded version of this feature did. The detection is deliberately not "zero foldable
+edges" alone — a genuinely small Go workspace can have zero too (every cross-package
+import is stdlib-only, or its only cross-package import lives in a `_test.go` file,
+which is excluded per the production-imports-only rule above); the refusal fires only
+when the index ALSO carries no independent evidence of Go — specifically, no `package`
+node with `language=go`. That check is deliberately narrower than "no `import` node at
+all": C#, PHP, Elixir, and Scala — the four non-Go languages whose extractors can
+populate a directory at all — each emit their own `import`-shaped nodes too, so a
+broader "any import node" signal would have made the refusal unreachable for every
+workspace it exists to catch. A Go `package` clause is mandatory and per-file, so a
+`language=go` package node is unambiguous evidence no other extractor produces.
+
+**Roots.** Package granularity starts from every `package main` directory by
+default, plus `topology_routes` entry-point candidates (labelled
+`candidate-seeded`, since route results are name/signature heuristics). Pass `roots`
+to override with package directories or the literal `"main"`. Function granularity
+uses the corresponding `main` functions plus route candidates by default; explicit
+roots are canonical `file.go#Symbol` selectors or `"main"` (a unique bare symbol
+name is accepted as a convenience).
+
+**Three response shapes**, each capped at 4,800 bytes:
+
+- **default** — reachable/unreachable counts and up to 10 deterministic samples per
+  bucket. Package mode sorts unreachable packages by indexed size; function mode lists
+  reachable and not-reached callables and says that the latter are not proof of dead code.
+- **`path_to`** — the single shortest root → target chain. Use a directory for package
+  mode or `file.go#Symbol` for function mode; an honest "no path" is returned when the
+  target is not reached.
+- **`layers: true`** — a Tarjan SCC condensation in topological layers. Multi-package
+  components are import cycles; recursive multi-function components are call cycles,
+  both flagged `[cycle]`.
+
+**Correctness note for the curious.** Computing "unreachable" correctly requires the
+*full* transitive closure from the roots, not a bounded neighbourhood — a depth-capped
+walk would silently misreport a genuinely reachable package as unreachable on any
+dependency chain longer than the cap, which is the false-negative direction this
+feature is built to avoid. The package traversal therefore runs to full closure over a directory-level graph
+folded from the same `imports` edges, and function mode runs to full outward closure over
+its admitted Go call graph. Neither reuses the depth/byte-capped symbol-neighbourhood BFS
+used elsewhere in this page.
+
+## Cross-file call edges (Go only, and small)
+
+The index records **call sites** — every call expression, resolved or not — in
+`topology_call_sites`, and a resolver turns the package-qualified ones into cross-file
+`calls` edges tagged `source = "call-resolver"`. Before this, every call edge in the
+index was intra-file: extractors run per file and emit edges as indices into that file's
+own node slice, so nothing they produced could name a symbol in another file, and a
+callee the extractor could not match was dropped without a trace.
+
+**Read the reach number before you read the graph.** Measured on plumb's own tree
+(1,414 indexed files, 1,283 of them Go):
+
+| | |
+|---|---:|
+| recorded Go call sites | 89,942 |
+| …carrying a qualifier (`x.F()`) | 60,803 |
+| cross-file `call-resolver` edges | **2,531** |
+| …with a non-`_test.go` caller | **882** |
+| distinct targets reached | 378 |
+| **share of all call sites resolved** | **2.8%** |
+
+Every qualified site lands in exactly one bucket, and the six add up to the 60,803 above —
+that is what makes this a measurement rather than an impression:
+
+| qualified-site bucket | |
+|---|---:|
+| resolved into an edge | 2,531 |
+| method call on a receiver, left unresolved | 37,635 |
+| qualified call leaving the indexed tree (stdlib, third party) | 20,376 |
+| repeat of a caller→target edge already emitted | 258 |
+| names no exported top-level function in the target package | 3 |
+| no enclosing declaration to hang the edge on | 0 |
+
+The last two buckets are small here and are not decoration: the repeat bucket is where 258
+sites used to vanish from the count, and the no-caller bucket is a fact about the *caller*
+that used to be reported under the target's wording.
+
+`topology_status` prints these for your own workspace. **2.8% is the headline, not a
+caveat.** A package-qualified-functions-only resolver reaches the calls that cross a
+package boundary and nothing else; the single most common Go call is a method call on a
+receiver variable, and the Go extractor parses with `SkipObjectResolution`, so there is
+no type information anywhere in the index that could turn a receiver *variable* into the
+type whose method was called. Those edges are **absent and counted**, never guessed:
+20.8% of plumb's own callables share a name with another callable, so textual receiver
+matching would manufacture wrong edges at scale.
+
+**What resolves.** A call `pkg.Fn()` whose `pkg` is an import of *that same file*, whose
+import path names a directory the index holds, and whose `Fn` is an exported top-level
+function declared there. Per-file import sets are the whole precision story — a global
+by-name resolver is what the name-collision figure above rules out. An unexported callee
+behind a qualifier is treated as a receiver call, because a local variable can shadow an
+import name and that is the only reading which cannot invent an edge.
+
+One shape is invisible to this: Go does not require a package's name to match its
+directory, and for an *unaliased* import the index derives the local name from the import
+path's last element. A call qualified by a package whose name differs from its directory
+(`internal/utils` declaring `package util`) therefore misses the file's import set and is
+counted as a method call on a receiver, which it is not. It is a missing-edge and
+mis-label case, never a false edge, and plumb's own tree has zero of them. Explicit import
+aliases resolve correctly.
+
+**Test callers are included, and the split is published.** A test calling the function it
+exercises is the most useful cross-file call edge there is, so `_test.go` callers are
+resolved and counted; the non-test subset is reported alongside so a consumer that must
+exclude them (import-cycle reasoning, for one) can filter on the caller's path. This is
+the opposite of `mode="reachability"`'s production-imports-only rule, deliberately: that
+rule exists because Go forbids import cycles, and a call edge implies no such constraint.
+Vendored and generated code follow the index's existing rule and get no special case —
+`vendor/`, `node_modules/`, `testdata/`, `dist/` and `build/` are excluded from the walk,
+and everything else that is indexed contributes call sites.
+
+**The lifecycle is durable, and consumers opt in deliberately.** Derived edges survive
+incremental re-indexes: callee re-indexes repoint incoming rows by stable identity, while
+caller re-indexes replace only outgoing rows. Function reachability is the function-level
+consumer: it opts into admitted Go resolver edges, filters `_test.go` callers, and computes
+full outward closure. The neighbourhood traversal still excludes derived calls by **source**:
+`ExploreOpts.IncludeDerivedCalls` defaults to false, and the remaining consumers
+(`call_hierarchy`'s topology fallback, `topology_impact` package mode,
+`topology_affected`, `minimal_diff_review`) receive extractor intra-file edges only.
+Excluding by edge *kind* would not work: derived edges are `calls` edges, identical in kind
+to the extractor's own.
+
+**Language admission.** A language is served iff it is in the resolver's compile-time
+supported set (today exactly `{go}`) **and** the index holds a `package` node with that
+language. Both terms are positive: no edge count, no coverage ratio, no "primary
+language" heuristic. The *subject* of a query — the symbol or file asked about — selects
+which language's admission is consulted, so a repository that is 90% TypeScript with one
+`tools/gen.go` gives the Go subject a normal Go answer and the TypeScript subject an
+honest refusal, and neither answer silently includes the other language's files. A
+traversal admitted for one language never crosses into another's nodes; those are
+reported *out of scope*, which is a different fact from having no callers.
+
+For a language that is refused, the alternatives offered depend on whether plumb ships a
+language server adapter for it: with one, `find_references` and `call_hierarchy` answer
+the cross-file question properly through the server; without one, `search_in_files` over
+the symbol name is the honest tool and the refusal says so rather than implying a server
+exists. Package-level reachability is **not** offered as the coarser answer, because it
+is gated to the same language set.
 
 ## Configuration
 
@@ -221,6 +409,10 @@ never committed.
 
 - **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
   dispatch. Treat its graph as a strong hint, then confirm with LSP.
+- **Cross-file call edges cover ~3% of call sites, in Go only.** See the section above:
+  method calls on a receiver are the modal Go call and are left unresolved by design, so
+  a caller list from the topology call graph is a lower bound and never a complete one.
+  Confirm with `find_references`.
 - **`topology_routes` is heuristic and name/signature-only.** It pattern-matches
   known entry-point idioms against symbol names and signatures; it does **not** parse
   route registrations or call sites, so it cannot map a path to its handler. Always

@@ -1,5 +1,567 @@
 # Changelog
-## 0.17.1 (unreleased)
+## 0.17.7 (2026-08-28)
+
+### Fixed
+
+- **An agent whose workspace is taken by a peer on the same connection is now
+  TOLD, and plumb stops recommending the move that takes it (issue #182).** The
+  sticky-pin guard refuses a peer's cross-project re-pin and names `force: true`
+  as the remedy. For one agent switching its own project that is right; for
+  several agents multiplexing one `plumb serve` it is the engine of a fight —
+  both sides read the same sentence and both force. Observed in the field: a
+  connection's pin changed hands **fourteen times in thirty-five minutes**
+  between two projects, and the agent that lost it was told only
+  "this connection is pinned to `<a project it never named>`", which reads as its
+  own fumbled path. It was diagnosed as a daemon-restart bug for a day; the
+  restore had in fact replayed the pin byte-for-byte and a co-tenant took it
+  eight minutes later. Three changes, none of which alter what plumb *allows*:
+  a pin now records that it was FORCED and what it displaced
+  (`PinProvenance.Forced`, rendered as "forced over an explicit pin" in boundary
+  errors and `daemon_info`); a boundary refusal for a path inside the displaced
+  project appends a notice naming that project, when it was taken, and
+  `session_start.session_id` as the fix; and a connection whose pin has been
+  force-taken between **two or more distinct roots at least twice in 30 minutes**
+  is marked contested, after which the re-pin refusal, the boundary error and the
+  `session_start` identity block all lead with identifying the agents instead of
+  with `force: true` (force still works — the daemon cannot know which undeclared
+  agent is entitled to the workspace, and refusing outright would strand real
+  work). The contested mark defers to `blocked` and
+  `shared_connection_detected`, which are made on evidence rather than inferred
+  from behaviour. This is the case PLAN-286's per-agent shards cannot reach at
+  all: the client in the incident sends no `session_id` on either channel, so
+  `logicalAgentState.seen` stays empty, `sharedWith` is always false, and no
+  shard, no shared-connection warning and no anonymous-write ceiling ever
+  engages — behaviour is the only remaining signal. Guarded by
+  `TestContestedRing_VerdictShape`, `TestContestState_LatchesOnce`,
+  `_RingIsBounded`, `TestForcedRepin_MarksProvenanceAndContests`,
+  `TestUnforcedRepin_DoesNotContest`,
+  `TestContestedPin_RemedyStopsLeadingWithForce`, `_DisplacedAgentIsTold`,
+  `_DoesNotClobberSharedConnectionHealth`, `_MarksHealthWhenUnmarked`,
+  `TestDisplacementNotice_OnlyForTheDisplacedProject`,
+  `TestWorkspaceBoundaryError_ContestedSwapsTheAdvice`,
+  `_ReadOnlyRootIgnoresDisplacement`, `TestSessionStart_ContestedNote*`, and the
+  integration replay `TestMultiAgentPin/UndeclaredAgentsForcePingPongIsContested`.
+
+- **The pin-survives-a-restart guarantee is now pinned by tests that assert it
+  directly.** The property was already correct — that is the point — but the only
+  thing separating "the pin came back wrong" from "the pin was taken afterwards"
+  during the incident above was a daemon log line that could have been rotated
+  away, and the two call for opposite fixes. `TestPin_SurvivesDaemonRestartByteIdentical`
+  drives the real `attachOnInit` ladder and asserts the restored root is the
+  stored STRING (not an ancestor or an alias that would pass a containment check
+  while widening the write surface) and that its provenance reads
+  `restore:session_start` and carries no displacement mark;
+  `TestPin_UnsetComesBackUnattachedNotElsewhere` asserts a connection with no pin
+  and no roots comes back attached to NOTHING rather than to something else; and
+  `TestPin_RestoreDoesNotResolveAfresh` covers a marker appearing above the
+  pinned root while the daemon is down, where restoring must replay the stored
+  path or refuse, never climb.
+
+## 0.17.6 (2026-08-27)
+
+### Security
+
+- **A reconnecting client can no longer claim an ended session's identity by
+  replaying its session ID (affects v0.17.0–v0.17.2).** Since 0.17.0 the
+  `plumb serve` proxy replays the plumb session ID a connection held before a
+  daemon restart, and the fresh daemon ADOPTED it so stats, memories and the
+  mailbox saw one continuous identity across the restart. But that value is
+  client-supplied, and the live session ID is deliberately disclosed to clients
+  (`session_start` echoes it in its result `_meta`), so any MCP client could
+  claim any ended session's ID and inherit its mailbox binding, stats
+  attribution and episodic-memory history. Adoption is now authorised by the
+  persisted `session_names` row keyed by the proxy session ID — the 122-bit
+  secret the serve process generates and which is never written to any file,
+  log, or tool result — and refuses unless the replayed ID matches the
+  persisted one, the same authorisation mailbox-identity inheritance always
+  required. With no persisted row (`persist_state = false`, a wiped store, or a
+  row written before the pairing existed) there is no proof and no adoption:
+  the reconnect forks its identity exactly as it did before 0.17.0. A genuine
+  proxy that replays a stale ID has its row converged to the ID the session
+  actually holds, so the next reconnect adopts correctly; the live-overlap
+  guard (`session.Adopt`'s `ErrIDTaken`) is unchanged.
+
+### Fixed
+
+- **A trusted project config edit now hot-reloads to EVERY session attached to
+  that workspace, promptly and without a reconnect (PLAN-414).** Project-config
+  reload used to depend on each connection polling its own
+  `.plumb/config.toml` mtime every 30 s, and a live incident showed two
+  attached sessions sitting stale after a trusted `[collab] cross_project =
+  true` override was written. The daemon now owns one fsnotify watcher per live
+  workspace (reference-counted, canonicalised so symlink/trailing-slash aliases
+  share it, torn down when the last session leaves) which sees writes, atomic
+  editor saves, creates and deletions of `config.toml` — and of `.plumb`
+  itself, so a config created after attach is picked up too — and dispatches
+  through `connRegistry.reloadProject`, re-applying every pinned session
+  exactly once per debounced change. Deletion and invalid TOML still fail
+  closed to global policy; a watcher that cannot start or errors marks itself
+  failed, logs it, and the 30 s poll reconciles only that workspace. Sessions
+  are told on their next tool result or `session_start` when a collaboration
+  capability (mailbox, cross_project, intents, knowledge_handoff,
+  peer_awareness) was enabled or revoked under them. All ten `[collab]` fields
+  are now correctly classified `ReloadLive` in the field registry (they always
+  applied live; the label said next-session), and `plumb config show` lists
+  `collab` under the live-reload groups.
+
+- **A daemon restart no longer drops the external session ID before a client can
+  call `session_start` again (PLAN-404).** When an authenticated reconnect
+  adopts its predecessor's plumb session ID, its fresh record now carries the
+  predecessor's `ExternalID` only when it has none of its own. This keeps
+  `plumb mail --external-id` and name-resume resolution working immediately
+  after the restart; an unreadable predecessor supplies nothing, so no identity
+  is invented.
+
+### Added
+
+- **The admitted Go cross-file call graph now reaches four consumers, each
+  behind its own opt-in (PLAN-372 step 6).** `topology_affected` kept the same
+  5-of-57 package answer on the measured `internal/stats/savings.go` scenario
+  while the branch's added tests moved the selected count from 2,854 to 2,860;
+  its response shrank 4,265 B to 4,186 B and measured 33.85 ms p95 (29.71 ms
+  before). A fixed `minimal_diff_review` fixture moves from zero visible callers
+  to one cross-file caller and suppresses the false single-use hint, while the
+  hint's confidence remains capped at Low. `call_hierarchy`'s topology fallback
+  likewise moves from zero to one cross-file caller without replacing
+  extractor-owned edges or LSP references.
+  `topology_impact({mode:"reachability", granularity:"function"})` is new: on
+  the measured branch corpus, 46 roots reached 267 of 5,495 production
+  callables in the hard-capped 4,800 B response at 48.60 ms p95; the pre-change
+  binary rejects `granularity`. Function reachability excludes `_test.go`
+  callers to match the existing "what ships" contract, even though those edges
+  remain recorded for the other three consumers. It is an explicitly partial
+  static graph: Go only, receiver methods/dynamic dispatch unresolved,
+  third-party targets outside the index, generated source included when
+  indexed, and build tags not evaluated; "not reached" is never presented as
+  proof of dead code.
+- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392ms–2.95s** across local and hosted runners with **0.73–1.97 MiB** WAL growth; the portable CI regression guard requires every save to stay **<5s** and **<=2 MiB**. Derived calls remain excluded by default; the measured step-6 consumers opt in per admitted Go subject.
+- **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
+  headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
+  is now recorded in a new `topology_call_sites` table — including the ones no single-file
+  pass can resolve, which were previously dropped without a trace — and a resolver turns
+  the package-qualified ones into cross-file `calls` edges tagged
+  `source = "call-resolver"`. Measured on plumb's own tree at this commit (1,414 indexed
+  files, 1,283 of them Go): **2,531**
+  cross-file call edges across 378 distinct targets, **882** of them from non-`_test.go`
+  callers, out of **89,942** recorded Go call sites — **2.8%**. The **60,803** qualified
+  sites fall into six buckets, every site in exactly one, and they RECONCILE — the six add
+  up to 60,803, which is what makes this a measurement and not an impression: **2,531**
+  resolved; **37,635** method calls on a receiver (left permanently unresolved: the Go
+  extractor parses with `SkipObjectResolution`, so no type information exists to turn a
+  receiver *variable* into the type whose method was called, and 20.8% of plumb's callables
+  share a name with another, so textual matching would manufacture wrong edges at scale);
+  **20,376** qualified calls leaving the indexed tree; **258** repeats of a caller→target
+  edge an earlier site already produced (one edge, two sites — counted, not dropped);
+  **3** naming no exported top-level function in the target package; and **0** with no
+  enclosing declaration to hang an edge on. Those edges are **absent and counted, never
+  guessed**; `topology_status` prints the whole breakdown for your workspace. Two shapes the old edge walk never saw are captured: package-level
+  initialiser calls (`var _ = mux.HandleFunc("/x", h)` — the Go extractor descended
+  `fn.Body` only) and composite-literal field values (`&cobra.Command{Use: "serve"}` — not
+  a call at all, and where a command's name actually lives). Call sites also record the
+  qualifier, byte/line position, first string argument, capped identifier arguments, the
+  true (pre-cap) argument count and whether the call used a spread, so a truncated or
+  spread argument list is detectable rather than silently misread.
+- **`_test.go` callers are resolved and counted, and the split is published.** A test
+  calling the function it exercises is the most useful cross-file call edge there is, so
+  they are included; the non-test subset is reported alongside so a consumer that must
+  exclude them can filter on the caller's path. This is deliberately the opposite of
+  `mode="reachability"`'s production-imports-only rule — that rule exists because Go
+  forbids import cycles, and a call edge implies no such constraint. Vendored and
+  generated code get no special case beyond the walk exclusions the index already applies
+  (`vendor/`, `node_modules/`, `testdata/`, `dist/`, `build/`).
+- **Language admission for function-level call answers is two positive terms and nothing
+  else.** A language is served iff it is in a compile-time supported set (today exactly
+  `{go}`) **and** the index holds a `package` node with that language — no edge count, no
+  coverage ratio, no "primary language" heuristic, since each of those is a threshold and
+  a threshold is what oscillates. The *subject* of a query selects which language's
+  admission is consulted, so a repository that is 90% TypeScript with one `tools/gen.go`
+  gives the Go subject a scoped Go answer and the TypeScript subject an honest refusal,
+  and neither answer includes the other's files. A refused language is offered
+  `find_references`/`call_hierarchy` where plumb ships a language server adapter for it,
+  and `search_in_files` where it does not — never package-level reachability, which is
+  gated to the same set. The subject's language is **derived from the index**, never
+  supplied: `Store.CallGraphSubjectForPath` / `CallGraphSubjectForNode` read
+  `topology_files.language` / `topology_nodes.language`, so a caller cannot substitute a
+  workspace-wide "primary language" for the per-subject question and quietly restore the
+  one-boolean answer the per-subject gate exists to remove.
+
+- **`topology_impact mode="reachability"`: package-level reachability from entry points
+  (PLAN-371, worth-it W3-17).** The import graph has been real and cross-file since
+  `linkImports` (51k+ `imports` edges), but nothing surfaced it at package granularity —
+  "what does this binary actually pull in", "is this package dead from every entry
+  point", "what import cycles exist" had no honest answer. `topology_impact` gains
+  `mode: "reachability"` rather than a new tool (PLAN-323 tool-count pressure), with three
+  capped (≤5 KB) response shapes sharing one traversal: the default reachable/unreachable
+  package summary (counts plus up to 10 samples per bucket, unreachable sorted by size —
+  the actionable ones), `path_to: <dir>` (one root→target directory chain, or an honest
+  "no path"), and `layers: true` (Tarjan package-SCC condensation of the reachable
+  subgraph, topologically layered; a component with more than one package IS a reported
+  import cycle, not filtered out). `roots` defaults to every `package main` directory plus
+  `topology_routes` entry-point candidates (labelled candidate-seeded — lower confidence,
+  per `topology_routes`' own contract), or accepts explicit directories / the literal
+  `"main"`. Every response opens with `package-level (import edges, production imports
+  only — Go _test.go importers excluded); function-level unavailable` — directory
+  granularity only; function-level call answers are provided separately by the Go
+  call-resolver surface, not by this reachability mode. An edge whose importer is a `_test.go` file is excluded: Go forbids real import
+  cycles, so counting test-only imports produced cycles that were entirely artefacts (64%
+  of the folded edges on plumb's own index originated in a test file, and every cycle an
+  early build of `layers` reported vanished once they were excluded). Go-only for now:
+  folding an edge needs a package node's own `imports` edge to an import node in the same
+  file, which today only the Go extractor emits — a workspace whose primary language
+  doesn't produce that shape gets a clear refusal instead of a confident "every package is
+  dead" answer. New `internal/topology/reachability.go` folds the existing
+  `pkg -(imports)-> import -(imports)-> pkg` two-hop node chain (the same edges
+  `linkImports`/`matchImportDir` already validate) into direct directory-level edges via
+  one SQL join, deliberately NOT by re-walking the depth-capped node-level `bfs()` spine
+  `explore.go` uses for a symbol neighbourhood — that cap (`hardCapDepth=4`) would
+  silently truncate real dependency chains and misreport a genuinely reachable package as
+  unreachable, the false-negative direction this feature exists to avoid. Full transitive
+  closure, not a bounded neighbourhood, is what "reachable" has to mean here. Root
+  resolution goes through the package graph's own directory index rather than
+  re-deriving identity from a raw name (the 636-node `strings`-collision class of bug), and
+  is normalised the same way `matchImportDir` normalises an import path (`path.Clean`) so
+  `./cmd/plumb`, `cmd/plumb/`, and `cmd/plumb` all resolve alike. `mode="reachability"`
+  rejects `roots`/`path_to`/`layers` set without it, and rejects an unrecognised `mode`,
+  rather than silently ignoring either. `internal/topology/reachability_scc.go` adds
+  Tarjan SCC plus longest-path layering. `internal/tools/topology_reachability.go` wires
+  the tool-facing response shapes. `docs/topology.md` gains a reachability section.
+
+### Changed
+
+- **`plumb restart` now always prints a `Starting...` line and reports the fresh
+  daemon's PID (`Daemon restarted (PID 1234).`)** instead of a bare "Daemon
+  restarted." — matching `plumb stop`'s existing `Stopping daemon (PID ...)`
+  line, so the two commands read as one stop/start pair rather than a stop with
+  a silent gap. v0.17.5 printed the `Starting...` line only on the branch where
+  `restart` itself spawned the daemon, which is the branch that rarely runs: with
+  sessions attached, a resilient `plumb serve` proxy respawns the daemon the
+  instant the old one dies and usually wins that race, so `respawnDaemon`'s first
+  dial succeeded and the line never appeared. The announcement is now the
+  command's, not whichever process happens to call `startDaemonProcess`. The PID
+  is resolved against the PIDs the restart just stopped, too: the outgoing daemon
+  does not erase its PID file, so a read inside the publish window could return
+  the number of the process the restart had just killed and report the corpse as
+  the fresh daemon — and when the file is still stale as the window closes, the
+  owner of the socket is asked instead of dropping the PID from the line. Guards:
+  `TestRespawnDaemon_AnnouncesStartingWhenAnotherProcessWonTheRace`,
+  `TestWaitForDaemonPID_NeverReportsAStoppedPID`,
+  `TestWaitForDaemonPID_PicksUpTheFreshPIDFile`.
+- **Derived call edges remain excluded from consumers for deliberate step-6 rollout.** Their
+  lifecycle is now durable across incremental re-indexes: callee saves repoint incoming
+  rows by stable `to_identity`, while caller saves replace only outgoing rows. The
+  neighbourhood query still filters them out by **source** because
+  `ExploreOpts.IncludeDerivedCalls` defaults to false; each consumer needs its own measured
+  before/after before onboarding. Filtering by edge *kind* cannot do this — a derived edge
+  is a `calls` edge — so the exclusion remains explicit and source-based.
+- **The topology schema version is bumped to 4, so the rebuildable index is recreated once on upgrade.**
+  Version 4 adds `topology_edges.to_identity`, the stable target identity used to repoint
+  derived import/call edges after callee node rowids are replaced. Older indexes are
+  rebuilt on attach through the existing schema-version gate; the indexer then repopulates
+  them with durable incremental lifecycle state.
+
+### Removed
+
+- **`execute_shell_command` is gone from the registered tool surface, and so are
+  the two config keys that gated it (PLAN-408, PLAN-374 item 3).** The ad-hoc
+  `sh -c` tool is no longer registered, and its implementation
+  (`internal/tools/execute_shell_command.go`) and cli-seam wiring
+  (`shellResolver`, `gatedAllowShell`, `gatedDenyNetwork`) are deleted. Tool
+  count 59 → 58.
+  **If you had it enabled**, use one of the two execution surfaces that stay:
+  `run_command` for anything you run repeatedly — add a `[[command]]` entry (a
+  name plus a *fixed* argv, with at most one `{target}`) to your global config or
+  a trusted project config and call it by name — and `run_task` for an ordinary
+  build/lint/test slot from `[tasks.<lang>]`. Neither builds a command line from
+  agent free text, so neither needs the shell tier's opt-in.
+  **Why:** the tool shipped disabled by default and stayed that way. Every one of
+  its 25 recorded calls over 90 days was the disabled-state refusal — the gate
+  working, and nobody ever enabling it — while its schema and description were
+  paid for on every `tools/list` of every session. Removing it takes **1,177
+  bytes** off the full `tools/list` payload (112,160 → 110,983 B measured, the
+  last few bytes from `run_command`'s description no longer pointing at it). The
+  `tools/list` payload plumb PINS for a lean client is unchanged (44,975 B before
+  and after): `execute_shell_command` was never in the pinned set.
+  **Config — this is the breaking part.** `[commands] allow_shell` and
+  `[commands] deny_network` are **removed**. They existed only to gate the shell
+  tool, so a key left in a config now means nothing, and leaving them half-alive
+  was worse than removing them: they were still hashed into the `plumb trust`
+  grant, so *editing* one could revoke a workspace's trust and thereby refuse
+  every project `[[command]]` — a live malfunction caused by a key that no longer
+  controlled anything.
+  **What to do:** delete both keys from your config. Nothing else is needed —
+  plumb ignores an unknown key, so an existing config keeps loading untouched, and
+  a workspace already granted `plumb trust` keeps its grant. In a *project*
+  `.plumb/config.toml` a leftover key is still gated (the `[commands]` free-list
+  admits only `require_sandbox`, so anything else needs trust) and `plumb trust`
+  now discloses it honestly as a `[commands]` key plumb does not recognise,
+  instead of describing a tool that no longer exists. If you had
+  `deny_network = true` set at the `[commands]` level for `run_command`, note it
+  never applied there: set `deny_network` on the individual `[[command]]` entry.
+  `[commands] require_sandbox`, each `[[command]]` entry's own `deny_network`,
+  `run_command`'s trust gate and the OS sandbox are all unaffected.
+
+### Fixed
+
+- **The symbol WRITE tools, `file_outline`, `workspace_symbols` and `call_hierarchy` now
+  degrade to tree-sitter when the language server is merely SLOW (PLAN-403).** PLAN-390
+  fixed this shape in `read_symbol` only; its independent review found the same defect, in
+  both halves, across the tools deliberately deferred from that card. `insert_before_symbol`,
+  `insert_after_symbol`, `replace_symbol_body` and `move_symbol` each shadowed `ctx` with
+  the LSP-bounded deadline and then handed that **already-expired** context to their
+  tree-sitter fallback; topology's `safeExtract` refuses to start a parse on a dead
+  context, so the fallback was not merely late but **inoperative** — a cold or slow gopls
+  produced a timeout error where the tool's own description promises a tree-sitter answer.
+  Separately, `withLSPDeadline` passes an already-bounded context straight through, so any
+  caller that set its own deadline (an MCP client configured at the `[lsp_query]` timeout)
+  spent the entire budget on the server and never reached the fallback at all — that half
+  also affected `file_outline` and `workspace_symbols`, whose fallbacks already ran on the
+  live parent context but never got time to. New `fallbackDeadlines` splits a tool's time
+  into a tool context carrying **exactly** the `[lsp_query]` bound it always had and a
+  server attempt at half of what remains. **The write path is deliberately NOT unbounded:**
+  bounding the lookup is safe, letting an unbounded write run is not, so every write still
+  finishes inside the same budget as before — it simply now has more of it left, because
+  the lookup gives up earlier. `resolveSymbolOrFallback` takes the attempt context and the
+  live one separately and reports WHY the fallback answered.
+  `call_hierarchy` — an EIGHTH site the card's list did not name, found by this PR's own
+  independent review — had both halves through the `executeLSPQuery` skeleton it shared
+  with `get_definition`/`explain_symbol`/`type_hierarchy`; it is the only one of the four
+  with a topology fallback, so it now takes the two contexts directly and no longer shares
+  that skeleton. A slow server there previously consumed the whole budget and returned a
+  timeout whose text advertised the very index that could have answered; it now returns
+  the reconstructed hierarchy. Once the server HAS resolved an item the follow-up
+  incoming/outgoing calls keep the full tool budget, so the warm path is unchanged.
+  **`move_symbol` also refuses an ambiguous bare `name_path` on whichever tree answered.**
+  The refusal was gated on the language server having answered, so a cold or absent server
+  skipped it and the tree-sitter path's first-name-match silently moved one of two
+  same-named declarations, rewriting two files with no warning.
+  **Trade-off, disclosed in the tool response as well as here:** the server attempt is now
+  half the `[lsp_query]` budget (15s at the default 30s), so a server that answers between
+  the attempt budget and the full timeout — one that would previously have won — now
+  yields the tree-sitter answer instead. For the symbol-edit tools that means a
+  **line-granular** edit range rather than a byte-precise one, and the response banner
+  says so explicitly: `[topology fallback — LSP did not answer within 15s; symbol located
+  by tree-sitter, range is line-granular]`, replacing the inaccurate "LSP unavailable" for
+  this case. `workspace_symbols` (both modes) and `read_symbol` carry the same correction
+  in their own banner — `LSP did not answer within <budget>` in place of the unconditional
+  `LSP unavailable`, which after this change would mislabel a healthy-but-slow server and
+  argue an agent into abandoning semantic tools for the session. `file_outline` is
+  deliberately unchanged: it labels the answer `source=topology` and makes no claim about
+  why, so it has no wording to correct. As with PLAN-390, a workspace with
+  `[topology] enabled = false` has no fallback to catch a slow server and now sees the
+  timeout sooner.
+- **`run_task` accepts a target again when the stored command is a shipped default with
+  its `{target}` placeholder spelled out (PLAN-374, worth-it W3-20).** `a target was given
+  but the command has no {target} placeholder` was the largest NON-policy `run_task`
+  failure family in 90 days of telemetry — 13 of 41 failures, every one of them
+  `slot: "test"` with a Go package path, and still growing. The cause was not the message:
+  a config that sets `[tasks.go] test = "go test ./..."` — the command plumb itself shipped
+  before the placeholder existed — has no slot for a target, so the advertised
+  `topology_affected` → `run_task(target:)` handoff failed permanently for that workspace
+  and no amount of retrying fixed it. `reconcileTargetPlaceholder` (`internal/cli/conn_tasks.go`)
+  now restores the placeholder when a stored command is EXACTLY the shipped default with
+  `{target:<D>}` written out as `D` (or, for `pytest`/`cargo test`, with the operand
+  omitted, since an empty default spells "everything" as the absence of the argument).
+  Deliberately an equivalence, not a heuristic: appending the target to any
+  placeholder-less command would turn `go test ./...` into `go test ./... ./internal/cli`
+  and run the whole suite while reporting a scoped run, and substituting the last element
+  of any command would guess at commands whose final operand is not a scope. Because the
+  stored and shipped spellings build a byte-identical argv when no target is given, the
+  rewrite is provably meaning-preserving — a test asserts that relationship across every
+  shipped default rather than against literal argvs. A command plumb never wrote
+  (`go test -count=1 ./...`, `gotestsum ./...`) keeps its refusal, as does a slot where a
+  target is genuinely meaningless (`golangci-lint run`). `topology_affected` reads the
+  reconciled command through the same function, so it emits package targets for these
+  workspaces instead of bare directories.
+
+- **`run_task`'s two rejections now name the file to edit (PLAN-374).** The `{target}`
+  refusal was a bare sentence naming neither the stored command nor where it lives, so a
+  caller could not tell a slot that cannot take a target from one merely written without
+  the placeholder; it now quotes the stored command, names the config file it came from
+  (project, global, or "plumb's shipped defaults", read through the same provenance the
+  trust gate uses), and hands back **the caller's own command with plumb's placeholder put
+  into it** rather than telling them to adopt plumb's default. That distinction is the
+  whole remedy: because reconciliation now handles the command that IS the expanded
+  default, the only commands that can still reach this refusal are commands that DIFFER
+  from it — so "set the slot to plumb's default" was destructive in every case that could
+  actually reach it, silently costing `go test -race ./...` its race detector,
+  `go test ./... -tags=integration` its build tag, and `gotestsum ./...` its runner. The
+  remedy is derived from the caller's argv (substituted for the default's operand, or
+  appended where the default is empty), so an unscoped run is unchanged by construction,
+  and it declines rather than guesses when the stored command never spells that operand.
+  The no-command-configured refusal — which gained its language and slot list in 0.17.2 —
+  now names the project config file by ABSOLUTE path rather than a bare
+  `.plumb/config.toml` relative to a root the agent may not have in hand, and says that a
+  command written there needs `plumb trust` before it will run (with the global config
+  named as the alternative that needs none) — without that clause, following the remedy
+  exactly landed the caller in the next-largest refusal family.
+
+- **`run_task` no longer discards a target in silence, and `plumb task` lists what will
+  actually run (PLAN-374).** `run_task({slot: "verify", target: …})` accepted the target,
+  dropped it, ran the WHOLE suite and reported success — a green over a scope nobody asked
+  for, and `mutation_test` with `test_task: "verify"` printed `scoped to <target>` in its
+  header for that same full run. A composite slot has no single command for a target to
+  land in, and REFUSING would open a new rejection cluster — the exact failure family this
+  card exists to shrink — so the response now states that the target was not applied, why,
+  and which sub-slot to call instead (asked of the same step builder, so it never
+  recommends a sub-slot that would itself refuse). The same channel discloses placeholder
+  reconciliation, since a rewrite of a user's own command being provably
+  meaning-preserving is a reason to allow it, not a reason to do it quietly. And
+  `plumb task` printed the raw stored string, from which a reader of
+  `test   go test ./...` correctly concludes a scoped call will be refused — the exact
+  wrong belief this change exists to correct, printed by plumb itself — so the listing now
+  renders the reconciled command and names what the config spells.
+
+- **`topology_affected`'s 2000-node traversal budget reaches the traversal, and a
+  traversal that does run out of budget now says so (PLAN-407).**
+  `topology_affected` sizes a deliberate `graphNodeBudget` of 2000 for its depth-2
+  dependent-discovery BFS — the budget exists so the walk cannot run out of room before
+  the `imports`/`contains` edges that reach test files are visited. Two separate ceilings
+  were overruling it. `topology.ImpactFrom` clamped `MaxNodes` to `hardCapNodes` (200),
+  the ceiling the `topology_explore` / `topology_impact` schemas advertise for a
+  caller-supplied `max_nodes`; and `max_bytes` was pinned at the 100000 those same schemas
+  advertise, which at the measured cost of a real node (avg 150 B over this repo's 26,826
+  indexed nodes) stopped the walk at roughly 660 whatever the node budget said. One
+  constant was doing two jobs in each case: bounding an untrusted MCP argument, and
+  overruling a budget the code itself sized. Both are now split. The advertised ceilings
+  (`ClampToolNodes` 200, `ClampToolBytes` 100000) are applied by the tools that advertise
+  them, so **no tool contract changes**; the traversal keeps its own pair, sized together
+  (`hardCapBytes` = `hardCapNodes` × 512 B) so the node ceiling binds first at any
+  realistic node size and the byte ceiling still bounds a graph of pathologically large
+  ones — previously the byte ceiling bound at ~660 nodes and `hardCapNodes` could never
+  fire at all. `topology_affected` asks for the traversal's byte ceiling because it
+  serialises none of what it walks, which makes 2000 nodes the honest effective budget.
+  **And when a ceiling does bind, the cut is now announced** — the BFS's `Truncated` flag
+  was read and discarded, so a shortened tests-to-run list was presented as a complete
+  one, which for a deliberately recall-biased tool is the expensive direction. The notice
+  is distinct from the `max_results` one and says plainly that raising `max_results` will
+  not recover the dropped packages. **No change to which tests `topology_affected` reports
+  on this repo:** measured over the 18,182 declaration nodes of the plumb index, the
+  widest depth-2 inward neighbourhood across `calls`/`imports`/`contains` is 174 nodes and
+  no root exceeds 200, so nothing truncated before and nothing truncates now — the answer
+  is identical either way. What the change buys is headroom against the widest real
+  neighbourhood: 200/174 = 1.1x before, 2000/174 = 11.5x after, with the byte ceiling no
+  longer capping that at ~660. Function-granular `calls` edges (PLAN-372) will cross the
+  old margin. There is no measurable time cost: at either budget the traversal performs
+  identical work on this index, because no walk reaches its budget in either
+  configuration.
+
+- **`read_symbol` now degrades to its tree-sitter fallback when the language server is
+  merely SLOW, instead of timing out (PLAN-390).** The fallback exists for a cold
+  server — the pool hands back a not-yet-ready entry after a 2s grace precisely "so the
+  tool falls back to the tree-sitter index instead of blocking until the MCP client times
+  out" — but two inversions made it unreachable on exactly that path. The
+  language-server attempt was granted the WHOLE `[lsp_query]` budget (30s by default), so
+  the tool could not answer before a client whose patience is that same budget gave up;
+  and when the attempt did expire, the fallback was invoked with that same, now-dead
+  context, which `topology`'s `safeExtract` refuses to start a parse on — so the fallback
+  reported "unavailable" and the tool surfaced the timeout it was meant to replace. Cold
+  gopls on a cold module cache is the case the fallback was written for, and it was the
+  one case the fallback could not serve. New `withFallbackLSPDeadline` bounds the server
+  attempt at half the time available — always strictly inside it, including when the
+  caller imposed the deadline — and hands the fallback the live parent context. The
+  timeout message, when there is no fallback to reach, now quotes the wait that actually
+  happened rather than the full `[lsp_query]` timeout. Behaviour is unchanged for a
+  healthy server, which answers in milliseconds. One narrow trade-off, stated rather
+  than buried: with `[topology] enabled = false` there is no fallback to catch the
+  shortened attempt, so a language server that would have answered between 15s and 30s
+  now errors where it previously succeeded — every language plumb ships an adapter for
+  has topology on by default, and those get a fallback answer sooner instead.
+- **The `integration (macos-latest)` job no longer fails on a cold gopls
+  (PLAN-390).** `TestStrictReadRoundTrip/read_symbol` is the only subtest that touches a
+  `.go` file, so it is the only LSP-backed call, and `session_start` deliberately does not
+  wait for gopls — the whole cold start landed inside it. Its 20s client budget sat BELOW
+  the 30s server-side `[lsp_query]` deadline, so the client abandoned the request before
+  the daemon's own degradation could be observed and the failure surfaced as a bare
+  transport timeout. Eleven occurrences in ~48h, including twice on the same head and
+  twice on `main`. That call now gets a budget that outlasts the server deadline (and a
+  subprocess context derived from it), and `TestLSPToolTimeoutOutlastsServer` asserts the
+  RELATIONSHIP rather than either number, so re-inverting them goes red immediately
+  instead of turning the job flaky again weeks later.
+
+- **A subagent's `session_start` no longer drags every peer agent's workspace with it
+  (issue #182, PLAN-375).** `session_start` resolved the workspace — including the
+  re-pin — *before* it resolved the caller's identity, so the one call a multiplexed
+  subagent actually makes first (`{workspace, session_id}`: identity and workspace
+  together) ran unattributed at the exact moment the daemon decided whose pin to move.
+  PLAN-286's per-agent shards were in place but unreachable on that path: `repinShard`
+  needs a logical-agent identity on the request ctx, a multiplexing client cannot supply
+  one (Claude Code's per-call `_meta` carries a tool-use id and a progress token, nothing
+  agent-scoped), and the attach-time `session_id` was recorded a few statements too late
+  to help. The re-pin therefore landed on the CONNECTION: a subagent switching to a
+  submodule or worktree moved the coordinator and every sibling with it, and a
+  `force: true` retry moved them silently. `session_start` now settles identity first and
+  hands the re-pin a ctx carrying the declared `session_id` (new `WithDeclaredAgent`
+  channel, wired to `connSession.declaredAgentCtx`), so a subagent's **`session_start`**
+  moves its own shard and leaves the connection pin and every peer's pin where they are;
+  a per-call `_meta` identity still outranks the declaration. Scope, stated precisely:
+  this fixes the re-pin, which is the call that carries `session_id`. A LATER tool call
+  from the same client still carries no agent identity, so it is still attributed to
+  whichever agent attached last (the pre-existing `shardFor`/`attachIdentity` fallback) —
+  a separate, tracked defect, pinned as-is by
+  `TestMultiAgentPin/AnonymousCallsInheritTheLastAttachedAgent` so it cannot regress
+  silently. The linkage half of `session_start` (external-ID registration, session-name
+  inheritance, the attach-time fallback identity) now runs only once the call has
+  SUCCEEDED, so a refused re-pin no longer leaves the session answering to an agent that
+  never attached — and neither does it flip the connection into per-agent keying, which
+  would have reset every PEER's read tracking and started failing their edits with "has
+  not been read". The cross-workspace re-pin stays REFUSED with the remedy named; it does
+  not flag the shared connection `blocked` (one agent's scoping question is not the
+  connection being unusable), but it is not silent either — the refusal logs at Warn with
+  the agent id, both roots and the remedy. That log line is the whole trace, deliberately:
+  session health is a single field per session that the next peer's identity declaration
+  rewrites, so a health note here would read as durable and decay to noise within one
+  call. New
+  acceptance harness `TestMultiAgentPin` (`-tags=integration`) runs a coordinator plus
+  five concurrent subagents over one connection — mixed argument shapes, one
+  cross-workspace drifter. `internal/tools/session_start.go`,
+  `internal/tools/session_start_identity.go`, `internal/cli/conn_logical_agent.go`,
+  `internal/cli/conn_agent_shard.go`.
+
+### Fixed
+
+- **`check-changelog-placement.sh` no longer passes an entry that landed in a section
+  released after the branch was cut (PLAN-399).** The guard matched the merge-base's
+  first heading by version number, so the one shape it most exists to catch was
+  invisible to it: fork while `## 0.17.2 (unreleased)` is open, write the entry there
+  correctly, watch 0.17.2 ship on main, rebase — the entry replays into the now-dated
+  section without conflicting and the guard printed `OK (39 added line(s), all under
+  ## 0.17.2 (unreleased))` over it. That is PR #404 on 2026-08-22, caught by a reviewer
+  rather than by CI, and the fourth by-hand relocation of its kind. New rule R4 resolves
+  the target REF'S TIP — not the merge-base, which by construction cannot know what
+  shipped after the fork — and fails an added line under the base's unreleased heading
+  when that same version carries a date stamp there. It keys on the stamp rather than on
+  the heading having moved down the file, because this changelog carries 50+ historical
+  `(unreleased)` headings from an era before releases were dated, and it looks up exactly
+  one heading by version number so those never enter. R4 inherits R1's two carve-outs
+  unchanged — a hunk that also deletes is a rewrite, and a line whose text was deleted
+  elsewhere in the diff is a move — so the branches this guard has to survive (a branch
+  merely behind main, a typo fix in an old section, a changelog tidy-up) stay green; the
+  deliberate case still has `CHANGELOG_PLACEMENT_ALLOW`. Not the whole-file check that
+  was done by hand alongside it: comparing every released section byte-for-byte against
+  main reds every honest behind-main PR, because main accumulated other entries into the
+  section it since stamped. `scripts/check-changelog-placement.sh`, and eleven new
+  three-commit fixtures in `scripts/check-changelog-placement-test.sh` for the shape
+  neither existing block could express: a base branch that moves on under a branch. One
+  of them replaces an expectation that asserted the false green as correct behaviour.
+  Independent review then found the same false green still reachable through R4's
+  inherited pure-addition carve-out: with `--unified=0` git folds a reworded
+  pre-existing line together with the new lines contiguous below it into one hunk with
+  a non-zero minus count, exempting all of them. That is now REPORTED rather than
+  failed — hard-failing every add/delete hunk in a released section would red the
+  honest tidy-ups this guard has to survive, and a bypassed guard guards nothing — so
+  it prints an advisory note naming the count and the heading. The R4 failure paragraph
+  also no longer contradicts itself when the merge-base's own top heading is already
+  date-stamped, which is the state release 0.17.2 left this file in: it used to call a
+  dated heading "the unreleased section", claim it "was still the unreleased section at
+  the merge-base", and report that it "now reads" the identical string. A correct guard
+  whose report reads like a guard bug is one the next author bypasses. Both new
+  expectations assert on the report text, not just the exit code, because neither is
+  visible from the exit code. The guard's header and the `ci.yml` step now also name
+  R4's one environmental dependency: `base.sha` comes from the PR event payload and
+  does not move when main does, so R4's window is closed by branch protection's
+  require-branches-up-to-date setting rather than by anything in the script.
+
+## 0.17.2 (2026-08-22)
 
 <!-- New entries go HERE, under the unreleased heading. Date-stamping a
      release does not conflict with a branch that adds entries under the
@@ -8,6 +570,467 @@
      now: scripts/check-changelog-placement.sh, a step in the verify job. -->
 
 ### Added
+
+- **`plumb stats --health`: three standing health metrics (PLAN-368).** A new,
+  additive `health_daily` table (stats schema v18) and CLI flag compute, idempotently
+  per UTC day, the three metrics the worth-it strategy's W2-14 names so a regression in
+  plumb's own value proposition shows up in days rather than a year later by anecdote:
+  **lane-defection rate** — of sessions that read a file (denominator: `read_file`/
+  `read_symbol`/`read_multiple_files`), the share where a later `write_file` or
+  `transaction_apply` call was refused because the file changed on disk since that read
+  (`toolerror.KindUnreadOrStale` on either of those two tools — both the guarded
+  `expected_mtime`/`expected_sha` path, internal/tools' `verifyExpectedVersion`, and the
+  unguarded auto-detect path, `changedSinceSessionRead`, count; neither tool has a
+  separate "never read at all" refusal to confuse the signal with, unlike `edit_file` and
+  the symbol-edit tools, whose refusals are NOT counted at all for exactly that reason —
+  disclosed, not silently dropped, in the output and `internal/stats/
+  health_lane_defection.go`'s doc comment). An approximation that undercounts a session
+  that never retries the write; **semantic-surface error rate**, a 7-day rolling per-tool
+  rate across the LSP query/edit surface (`stats.SemanticTools`), with an `advertised`
+  flag sourced from the pin set (`tools.PinnedTools`, PLAN-355), a `flagged` verdict when
+  an advertised tool's rate crosses read_file's own rate times a configurable multiplier
+  (`stats.DefaultSemanticBaselineMultiplier`, default 3×), and a minimum-sample floor on
+  BOTH sides of that ratio (`stats.MinSemanticToolCalls`/`MinSemanticBaselineCalls`,
+  default 10) so a handful of calls can never flag on its own; and **net economics per
+  client, trended daily** — two of PLAN-367's three economics lines (estimated read
+  savings netted to the current savings-model version only, and the guard-refusal
+  count), deliberately NOT three: the profile tool-schema surcharge is a live
+  per-connection figure `plumb stats` itself already declines to show for the same
+  reason (`internal/stats/health_economics.go` explains why trending it here would mean
+  fabricating a number for a day nobody measured it on). Read-only over `calls`; no
+  existing column changes. `internal/stats/health*.go`, `internal/cli/stats_health.go`.
+- **Shipped skills content refresh — the fourth instruction channel taught the old story (PLAN-376).**
+  `internal/cli/skills/{plumb-explore,plumb-refactor,plumb-testing,plumb-diagnose,plumb-minimal-change}/SKILL.md`
+  — the skills `plumb skills sync` installs — still taught pre-wave-2 doctrine even after the
+  other three instruction channels (managed blocks, MCP `initialize` instructions,
+  `session_start` guidance) all point agents at them. `plumb-explore` now teaches
+  `session_start({detail:"brief"})` for cheap subagent re-orientation. `plumb-refactor` teaches
+  `read_multiple_files` for batching reads before a multi-file edit and `fail_on_new_errors` as
+  the default verify move on an edit that must keep compiling — including the multi-file
+  `transaction_apply` batch-rollback case. `plumb-testing` teaches the same `fail_on_new_errors`
+  default plus the four-label `await_diagnostics` vocabulary (authoritative/pre-write
+  snapshot/unverified/not analysed, PLAN-362). `plumb-diagnose` spells out what each of those
+  four labels actually means, sourced from `post_write_diag.go`'s own doc comments, and notes
+  that `transaction_apply` (not just `edit_file`/`write_file`) takes both `await_diagnostics`
+  and `fail_on_new_errors` (PLAN-362 PR 2). `plumb-minimal-change` now names `minimal_diff_review`
+  explicitly and states its single-use-abstraction finding's Low-confidence cap (intra-file call
+  graph; `internal/minchange/abstraction_checks.go`) — PLAN-372, which would raise that cap, has
+  not landed, so the "confirm with `find_references`" caveat stays. No mechanism changes
+  (PLAN-365 owns `plumb skills sync`); a version-stamped manifest update happens automatically on
+  the next sync, keyed off each file's content hash.
+- **`run_task` no longer has a closed slot vocabulary — a project can name its
+  own.** The five slots (`build`/`lint`/`test`/`e2e`/`verify`) are Go's verbs, and
+  they were enforced as a JSON-schema `enum` plus a hardcoded set in the tool. A
+  project whose toolchain calls its verb something else — `pnpm check`,
+  `typecheck`, `audit` — could not reach `run_task` at all, and fell back to raw
+  shell for it, losing the no-shell argv contract and the trust gate along with
+  it. Any extra slot named under `[tasks.<lang>]` is now runnable:
+
+  ```toml
+  [tasks.typescript]
+  build = "pnpm build"
+  check = "pnpm check"     # runs via run_task {slot: "check"}
+  ```
+
+  Extras are **trust-gated exactly like a built-in** — the trust hash already
+  bound every `(lang, slot, command)` triple regardless of slot name, so a cloned
+  repository shipping one is still refused until `plumb trust` — and are **not
+  agent-writable**, since the `agent_config` allowlist is keyed by registry field
+  and an extra has no registry entry (fail closed). They are validated on the same
+  terms too: a command carrying a shell metacharacter is rejected at load, as is a
+  malformed slot name or one shadowing a built-in.
+
+  The slot `enum` is gone from the `run_task` and `mutation_test` schemas, because
+  a client enforces an enum on its side and an open vocabulary cannot coexist with
+  one. What replaces it is the refusal: an unconfigured slot now reports the slots
+  that *do* have a command, including the project's own.
+
+### Changed
+
+- **The shipped `typescript` task defaults now name the package manager the
+  workspace declares.** `npm run build` / `npm test` were assumed for every JS/TS
+  workspace, which is itself a guess — and on a pnpm or yarn project a wrong one
+  rather than merely an unhelpful one, since npm cannot resolve pnpm's non-flat
+  `node_modules` or a `workspace:*` dependency. A `pnpm-lock.yaml`, `yarn.lock` or
+  `bun.lock*` now selects that runner, and a corepack `"packageManager"` field in
+  `package.json` beats a lockfile (an explicit statement over a possible
+  leftover); for the same reason a non-npm lockfile beats `package-lock.json`,
+  which is the usual residue of a migration.
+
+  This applies the "never guess a tool that may not be installed" rule rather than
+  relaxing it: a lockfile is the project *stating* its runner, so reading it is
+  evidence. Only a slot still holding the shipped default is rewritten, compared
+  byte for byte — anything you, your global config or the project set is left
+  exactly as written, including a command that names npm deliberately. Note
+  `bun run test` rather than `bun test`: the latter runs bun's own test runner
+  instead of the project's `test` script.
+
+- **`plumb task <slot>` reaches a slot the project defined.** The five built-in
+  verbs (`plumb build`, `plumb test`, …) are registered before any workspace is
+  resolved, so a project-defined slot cannot have a verb of its own. One generic
+  verb avoids dynamic registration entirely and runs through the same resolver and
+  trust gate; it works for the built-ins too. A bare `plumb task` lists the slots
+  configured for the workspace, and an unconfigured slot is now refused with that
+  list rather than a bare "no X command configured".
+
+### Fixed
+
+- **Exact-token antonym suggestions dropped from `closest`; `include` is now
+  aliased straight to `glob`.**
+  `search_in_files` declares both `glob` (the include filter) and `exclude`, and
+  `include` is nearer to `exclude` by edit distance than to anything else — so
+  `search_in_files({include: "*.go"})` was rejected with `did you mean
+  "exclude"?`. An agent taking that advice searches with the inverse filter and
+  gets a confidently wrong answer instead of an error. 12 such calls in the stats
+  DB. The alias table's stated rule — never a semantic flip, `include` ≠
+  `exclude` — was enforced on the two paths that *rewrite* a call and missing on
+  the path that *advises* one. `closest` now skips a candidate whose meaning
+  inverts the key's and offers the next-nearest instead, matching antonyms as
+  whole tokens so `append` is not read as containing `end`; `include` is also now
+  a direct alias to `glob` (see below), so the common case never reaches the
+  suggestion path at all. The guard is exact-token, not fuzzy: a near-miss like
+  `includ` is not recognised as `include` and can still surface `exclude` as the
+  nearest candidate — only the exact antonym-stem tokens are guarded.
+
+- **Seven parameter spellings agents actually send now resolve instead of being
+  rejected**, mined from 296 unknown-parameter rejections in the stats DB:
+  `symbol_name` and `name_path` → `name` (`read_symbol`; 43 calls, the largest
+  single group — `get_definition` and `find_references` call the same thing
+  `symbol_name`, so an agent moving between them sends the other tool's
+  spelling), `memory_name` → `name`, `include` → `glob`, `max_results` → `limit`
+  (the reciprocal of an existing row), `line_end`/`line_start` → `end_line`/
+  `start_line`, and `op` → `subcommand`. Each carries the caller's value to the
+  canonical, so none of them drops anything.
+
+  Deliberately **not** added: `column` → `character`. It is a real spelling (3
+  calls) but `character` is *required* on `explain_symbol` and `type_hierarchy`,
+  and every alias target is dropped from the published `required` list so a
+  pre-validating host cannot reject the alias before it reaches plumb. Three
+  calls does not buy weakening that signal on two other tools.
+
+- **`minimal_diff_review` no longer lets one generated file decide which files
+  get reviewed.** The 1 MiB budget was spent as a byte *prefix* of the whole
+  diff. git emits a diff in path order, so a bundle sorting early (`dist/` before
+  `src/`) consumed all of it: every later file was cut, the cut could land
+  mid-hunk, and the report said only that a byte count had been exceeded — never
+  which files it had therefore not looked at. On a pnpm project with a committed
+  bundle the tool would report `1 file(s) reviewed` and `findings: none` for a
+  change it had never seen, which reads exactly like a clean bill of health.
+
+  The budget is now spent **per file** (128 KiB, the cap the untracked path
+  already used "so one large generated file cannot dominate the review budget"),
+  an over-budget file is dropped **whole** rather than sliced mid-hunk, and the
+  files left out are **named with their sizes**. The 1 MiB total remains as a
+  backstop and is likewise spent in whole files. No path is guessed to be
+  "generated" — the bias is removed without the tool having to decide what a
+  project considers generated.
+
+- **`topology_explore` and `topology_search` now lead with their own narrowing
+  knobs.** Both already accepted them (`include_source`, `depth`, `max_nodes`,
+  `max_bytes`; `kinds`, `limit`, `include_snippets`), but the descriptions
+  buried them under the per-parameter schema text, and the defaults are tuned for
+  Go-sized files — so on a large TypeScript file an agent got a large response
+  and no hint that a smaller one was one argument away. `session_start` guidance
+  says the same thing.
+
+## 0.17.1 (2026-08-22) — tagged, never published
+
+> The `v0.17.1` tag exists but no release was built from it: `release.yml` gates
+> `goreleaser` and `publish-mcp` on client conformance, which was red at the time
+> (a stale Codex profile-reason expectation, fixed in 0.17.2). Nothing below
+> reached a user as 0.17.1 — it all ships in 0.17.2.
+
+### Added
+
+- **MCP `initialize` instructions aligned with the managed brief (PLAN-366).**
+  `internal/mcp`'s `initialize` response `instructions` field previously carried its own,
+  separately authored text (session_start-first orientation) — different substance from what
+  `plumb setup <client>` writes into the managed AGENTS.md/CLAUDE.md/GEMINI.md block
+  (PLAN-364). Two policy sources with different content is how an agent ends up ignoring both,
+  so this aligns them onto one shared source: the per-client bodies (`internal/setup.
+  ClientTemplates`) moved to a new Foundation-layer package, `internal/clienttemplates`
+  (`internal/arch`'s layering rule forbids Transport-layer `internal/mcp` from importing
+  Domain-layer `internal/setup` directly — `internal/setup` now re-exports the same names for
+  API stability). `internal/mcp.InstructionsForClient(clientName)` resolves the client via
+  `clientcaps.Lookup` (the same detection `autoProfileFor` uses) and renders that client's own
+  body — claude-code, codex, and gemini today — falling back to the client-agnostic
+  `DefaultInstructions` (now `clienttemplates.DefaultTemplate` itself, not a separate constant)
+  for every other client. Content: the edit lane, the refuse-to-break-the-build pointer
+  (`fail_on_new_errors`/`await_diagnostics`, PLAN-362), the peer mailbox pointer, and — for
+  claude-code, the only body that carries it — the `session_start({detail:"brief"})` hint for a
+  subagent, which never sees this field itself since it shares its parent's already-negotiated
+  MCP connection. Every known client's render is well inside the ~1.5 KB channel budget
+  (`mcp.MaxInstructionsBytes`). Rendering is independent of `clientcaps.SupportsMCPInstructions`
+  (PLAN-369) — that flag records observed consumption, not eligibility to receive one; an
+  unaware client still just ignores an unrecognised response field, same as before this change.
+  `session_start`'s own Claude Code guidance (`session_start_guidance.go`) drops the
+  "`await_diagnostics` returns the authoritative post-write pass" sentence it used to restate,
+  since the instructions field now states that doctrine in full for every Claude Code
+  connection before session_start ever runs; the edit-lane harness-error warning
+  (`nativeEditLaneWarning`) stays, since the instructions field deliberately does not quote
+  Claude Code's own harness error strings (same reasoning PLAN-364 PR 2 applied to Codex/
+  Gemini's bodies) and remains the only place an agent that has already hit one finds the
+  recognition text (`TestSessionStart_EditLaneWarning_ClaudeCode`).
+  **Review round 1 fixes.** `internal/tools/guidance_alignment_test.go` originally built its
+  `SessionStart` with no topology store wired, so `topologyActive()` was false and the trimmed
+  bullet lived in a branch the test never rendered — restoring the removed sentence still passed
+  both tests. Fixed to wire a real `topology.Store` (mirroring
+  `TestSessionStart_EditLaneWarning_ClaudeCode`'s topology-on case), proven red-then-green.
+  Also, the pre-PLAN-366 `DefaultInstructions` carried a "`.plumb/` marker missing -> ask the
+  user to run `plumb init`" recovery line that PLAN-366's swap to
+  `clienttemplates.DefaultTemplate` dropped, leaving it nowhere agent-facing for an
+  unrecognised/unmeasured client; restored as one lean-safe line in `DefaultTemplate` itself
+  (`TestInstructions_DefaultCarriesPlumbInitRecovery`).
+
+- **Client-awareness — capability probe and honest tool-profile reasons (PLAN-369).**
+  `internal/clientcaps.Capabilities` gains three declared-evidence fields
+  (`SupportsMCPInstructions`, `SupportsAlwaysLoadPin`, `DescriptionCapRunes`, all
+  false/zero until a reviewed measurement says otherwise — same discipline as
+  `ReliableDeferredToolDiscovery`; `SupportsMCPInstructions` is true only for
+  Claude Code, dogfooded first-hand on this codebase, not the claude-desktop/
+  gemini rows a CHANGELOG blurb alone would have justified) and a new registry
+  row for ZCode (native file/search/shell, no client-side allowlist —
+  setup_zcode.go's strict server schema drops an unrecognised key entirely).
+  `autoProfileFor` gains a new `ClientSideAllowlist` → `full` rung (Kimi Code,
+  Codex, Gemini CLI) with its own `client-side-allowlist` reason, distinct from
+  the generic conservative default so callers can render the client-side-filter
+  caveat truthfully — every resolution still lands on `full` except the
+  existing, unchanged `ReliableDeferredToolDiscovery` rung (no shipped client
+  carries it). An earlier draft of this card also flipped the default for an
+  actually-unrecognised client to `lean`; review found `internal/clientcaps`
+  carries only 7 rows against the ~20 documented setup targets, so that default
+  would have demoted `cursor`, `opencode`, `goose`, and other documented,
+  undetected clients with zero evidence they can invoke a hidden tool —
+  reverted; unrecognised clients keep `full`/`unknown-deferred-discovery`.
+  `session_start`'s guidance now also appends a truthful
+  `tools.ClientSideAllowlistNote` sentence for a `ClientSideAllowlist` client,
+  naming the real lean-tool count and pointing at `plumb doctor` (which grades
+  allowlist drift and stays silent when it already matches the lean set) —
+  fixing the gap where such a client was told "full" with no mention that its
+  own config might filter that down. `SupportsMCPInstructions` is declared data
+  only in this PR: it is the seam PLAN-364/PLAN-366's per-client instructions
+  template will read, not something wired into the `initialize` response's
+  content here.
+
+- **Truncation-proof description conformance per client (PLAN-370, test-only).**
+  `internal/clientcaps.Capabilities.DescriptionCapRunes` now carries a reviewed
+  measurement for `claude-code` (2048 runes — the live-truncation evidence
+  already on record in `internal/tools/profile_test.go`'s `maxDescriptionChars`
+  comment); every other registered client stays at 0 (unmeasured), guarded by
+  `TestClientCapsDescriptionCapRunesUnmeasured`. Two new exported accessors,
+  `clientcaps.All()` and `clientcaps.StrictestDescriptionCapRunes()`, let a
+  caller iterate every registered client without duplicating the registry, and
+  fall back to the smallest measured cap for an unmeasured one. A new test,
+  `internal/tools.TestDescriptionConformance`, renders every registered tool's
+  description and checks it against every client's cap this way — an
+  unmeasured client is checked against the strictest known cap rather than
+  skipped, so a future client row is covered automatically with no second
+  constant to remember to update. Verified against the live codebase: as of
+  this PR no tool description exceeds any client's cap (`TestDescriptionConformance`
+  is green), and `internal/mcp/server_handlers.go`'s `snapshotTools` confirms
+  no per-client rendering exists today — `Tool.Description()` is already the
+  exact bytes every client's `tools/list` receives, so there is no separate
+  "rendered form" to diverge from the source constant yet.
+
+- **Managed instruction block — the mechanism, PR 1 of 2 (PLAN-364).** `plumb setup <client>`
+  (codex, gemini, claude-code) now writes a small, versioned, idempotent block into the
+  client's project-level instruction file (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, per client
+  convention), bounded by `<!-- plumb:managed:start vN -->` / `<!-- plumb:managed:end -->`
+  markers — everything outside the markers is the user's and is never touched. Idempotent
+  (running setup again is a byte-for-byte no-op once current) and symlink-aware: a
+  `CLAUDE.md` that symlinks to `AGENTS.md` (this repo's own layout) is followed to its real
+  target, which is rewritten in place — the symlink itself is never replaced with a plain
+  file. `--global` additionally writes the client's global instruction file
+  (`~/.codex/AGENTS.md`, `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`); without it only the
+  project file is touched. `plumb setup --check` reports drift (missing / stale version /
+  hand-edited) across this project's instruction files without writing; `plumb setup --sync`
+  rewrites them to the current template version — the same operation a bare re-register
+  performs. The template is a client-agnostic placeholder (`internal/setup.DefaultTemplate`),
+  size-guarded at 25 lines by `TestManagedBlock_TemplateSizeGuard`; per-client templates
+  (including Codex's apply_patch countermand) are PR 2. Marker scanning is line-anchored and
+  refuses to write on anything it can't trust — an orphan start/end marker, or more than one
+  well-formed block — rather than guessing: an earlier version latched onto the first textual
+  occurrence of the marker text, which both let an orphan start marker pair with an unrelated
+  block's end marker on a later run (silently deleting everything between, including prose
+  never inside any block) and let a file that merely quoted the marker string grow a fresh
+  block on every run. `--check`/`--sync` also dedupe by real file (`paths.Canonical`) before
+  reporting, so a symlinked layout like this repo's own (`CLAUDE.md`/`GEMINI.md` -> `AGENTS.md`)
+  shows one row, not three.
+
+- **Managed instruction block — per-client templates, PR 2 of 2 (PLAN-364).** `internal/setup/templates/{claude-code,codex,gemini}.md`
+  replace the single client-agnostic placeholder with one body per client, embedded as data
+  files (`internal/setup.ClientTemplates`/`TemplateForClient`) rather than string constants,
+  each size-guarded at 25 lines (`TestManagedBlock_ClientTemplateSizeGuard`). Codex's carries
+  the promised `apply_patch` countermand — "off-limits for a file plumb has read... bypasses
+  plumb's per-path concurrency guard and diagnostics gate" — pointing at `edit_file`/
+  `write_file`/`transaction_apply` instead. Codex and Gemini's bodies name only tools that
+  survive `plumb setup <client> --lean`'s client-side allowlist (`tools.LeanToolNames`), which
+  strips the peer mailbox and every symbol-scoped edit tool — so the claim holds whether or
+  not `--lean` was actually passed, since a template is fixed once written. Claude Code has no
+  `--lean` flag, so its body keeps the mailbox and subagent pointers `DefaultTemplate` used to
+  carry.
+  **The shared-file problem** (flagged in PR 1's review): on a symlinked layout — this repo's
+  own `CLAUDE.md`/`GEMINI.md` -> `AGENTS.md` — differing per-client templates would fight over
+  one span, each client's `setup` overwriting the last one's content. Fixed by making the body
+  depend on the FILE's topology, not on which client or command ran: `groupInstructionFiles`
+  (already used by `--check`/`--sync` to dedupe rows) is now also consulted by a bare
+  `plumb setup <client>`, and `templateForGroup` writes a client's own template only when it is
+  the SOLE client naming that real file — a file shared by more than one collapses to the
+  shared, lean-safe `DefaultTemplate` instead. Since the choice is a deterministic function of
+  the file's (stable) symlink structure, `plumb setup <client>` in any order, and `--sync`,
+  converge on identical content rather than oscillating.
+  **Review round 1 fix: a DANGLING symlink no longer loses its symlink-ness.** On a project's
+  very first `plumb setup <client>` against a symlinked layout, the target (`AGENTS.md`) does
+  not exist yet, so `CLAUDE.md`/`GEMINI.md` are dangling. `paths.Canonical`'s own missing-path
+  fallback does not read a symlink's target in that case, so it answered with the LINK's own
+  path — and `Apply`'s atomic rename onto that answer REPLACED THE SYMLINK ITSELF with a
+  regular file, silently turning a shared instruction file into an independent one and
+  falsifying the convergence property above whenever the first client to run happened to reach
+  the file through a link rather than by its real name. `resolveTarget` now walks a dangling
+  chain by hand (`resolveDanglingSymlinkChain`, one `os.Readlink` hop at a time, bounded against
+  a loop) to the real path it names, and `Apply` creates THAT — the symlink itself is never
+  touched, on the first call or any later one (`TestManagedBlock_DanglingSymlinkStaysASymlink`).
+  **Review round 1 fix: Codex/Gemini/the shared template no longer quote Claude Code's OWN
+  harness error strings.** "has not been read" / "modified since read" are strings Claude
+  Code's native Read/Edit tracker produces (`internal/tools/edit_lane.go`'s `isClaudeCode`
+  gate) — a Codex agent using `apply_patch` after a plumb read sees no such error, so quoting
+  them there taught a false consequence. The Codex, Gemini, and shared (`DefaultTemplate`)
+  bodies now describe the real, client-agnostic mechanic instead: a native edit bypasses
+  plumb's own read-tracking, so the *next* plumb edit call against that file is refused as
+  modified since read (`internal/tools/write_guards.go`'s `verifyExpectedVersion`) —
+  `claude-code.md` keeps the harness-specific quote, since Claude Code is the one confirmed
+  case. Also corrected: `claude-code.md` no longer claims skills live "alongside this file" —
+  a bare `plumb setup` never installs them; the body now points at
+  `plumb skills sync claude-code`.
+  **`--uninstall` now removes the managed block** (deferred from PR 1): `setup.Remove` reverses
+  `Apply` — deletes the block, absorbing the blank-line separator `Apply`'s append path
+  inserts, deletes the file outright if the block was its only content, follows a symlink to
+  its real target, and refuses (matching `Apply`'s rigor) on a malformed file rather than
+  guessing. Wired into `plumb setup <client> --uninstall` alongside the existing config-entry
+  and skill removal, gated the same way (only when something was actually unregistered).
+  Documented trade-off: on a shared/symlinked file the block is client-agnostic, so uninstalling
+  one client removes the whole file's block even if another client sharing it is still
+  registered — v1 has no per-client scoping within one shared span.
+
+- **`fail_on_new_errors`: a plumb edit can now REFUSE to break the build — PR 2
+  of 2 (PLAN-362).** `edit_file`, `write_file` and `transaction_apply` take
+  `fail_on_new_errors: true` (implies `await_diagnostics`). When the language
+  server CONFIRMS the write introduced new **errors** in the file it wrote, the
+  write is **rolled back** — the file ends the call byte-for-byte as it began —
+  and the call returns the structured delta as a refusal. `transaction_apply`
+  applies the gate to the whole batch: one file gaining a new error restores
+  every file in the transaction, matching its existing all-or-nothing contract.
+  The rollback goes through `safeWrite`, so the revert is as atomic and as
+  crash-durable as the write it undoes, and it runs inside the same per-path
+  locked region as the write and the analysis, so no other plumb writer can land
+  in between (`TestFailOnNewErrors_DecisionHappensUnderThePathLock` probes the
+  lock from inside the analysis callback rather than racing a sleep).
+  **Deliberately narrow, because a safety feature that reverts good work is
+  worse than none:** only a confirmed-fresh result can roll back, so a timed-out
+  wait, a disabled post-write window, a cold or absent language server, a failed
+  `didChangeWatchedFiles`, or a failed pull all let the write LAND with
+  `fresh:false`; warnings never block; errors that were already present never
+  block (the delta is against a pre-write baseline); the known re-index-lag
+  class (`undefined:` / `imported and not used` / `declared and not used` on a
+  touched line) never blocks; and new errors in OTHER files are reported but
+  never roll back, since that sweep is heuristic, off by default, and a
+  mid-refactor edit breaks dependents on purpose. A file whose on-disk content
+  no longer matches what plumb wrote — an external process landed during the
+  call — is **reported, not reverted**, so a rollback never discards a peer's
+  change (the rule `undo_edit` already follows). `edit_file`/`write_file` refuse
+  `fail_on_new_errors` **up-front** on a file over the 1 MiB snapshot cap, and
+  `edit_file` refuses it with `apply_partial`, whose per-edit semantics are the
+  opposite of all-or-nothing. A rolled-back write clears the undo snapshot it
+  armed, so `undo_edit` never points at content that is no longer on disk.
+  New `internal/tools/fail_on_new_errors.go` + `transaction_diag.go`; guarded by
+  `TestFailOnNewErrors_*` and `TestTransactionApplyAwait_*`, which assert the
+  BYTES on disk, not just the message.
+- **`await_diagnostics` now returns a STRUCTURED delta, not just prose
+  (PLAN-362 PR 2).** Every `await_diagnostics` (and therefore every
+  `fail_on_new_errors`) response appends one fixed-prefix line —
+  `diagnostics delta: {"fresh":…,"scopes":{…},"new_errors":[…],"resolved":[…],"pre_existing":N}`
+  — so an agent can branch on the answer without parsing English. It is computed
+  from the SAME classification the prose block renders (`splitDifferential`), so
+  the two can never disagree, and it carries the other half of the picture too:
+  what the edit RESOLVED. Freshness is reported **per scope**
+  (`scopes.edited_file`, `scopes.cross_file`), because the two are confirmed by
+  different mechanisms and routinely disagree — the edited file by a publish or
+  pull that followed this write, the cross-file sweep by a bounded settle grace
+  that is non-exhaustive in pull mode. The default write path (no
+  `await_diagnostics`) is byte-for-byte unchanged.
+- **Post-write freshness is now derived from what actually happened, not from
+  what was asked (PLAN-362 PR 2, PR 1 review follow-ups).** A failed
+  `didChangeWatchedFiles` means the server does not know the file changed, so
+  anything it publishes during the wait describes the PREVIOUS content: that
+  failure is now threaded into the freshness verdict instead of only being
+  logged, and the pass reports `not analysed` rather than waiting for a publish
+  that could only mislead. `postWriteDiagnostics` returns a `postWriteDiagResult`
+  (rendered text + delta) rather than a bare string, so the freshness bool
+  reaches its call sites. A fourth fixed label,
+  `[diagnostics: not analysed — no post-write check ran]`, covers the two cases
+  that previously printed nothing at all — no diagnostics source for the file,
+  and the failed-notification case — qualifying the "always labelled" claim:
+  the default path's silence is unchanged, but a caller who explicitly asks is
+  told that silence means "not analysed", not "clean". The timeout wording no
+  longer blames "the wait" when the post-write window is disabled
+  (`post_write_diagnostics_ms = 0`), where no wait ran at all.
+- **Post-write diagnostics on `edit_file`/`write_file` now carry a fixed,
+  machine-parseable freshness label — trust fix, PR 1 of 2 (PLAN-362).** A
+  stale diagnostics block (the language server had not re-published since the
+  write) used to print with the same confidence as a genuinely fresh result —
+  the "#1 recurring complaint" in dogfooding, because "agents learned to
+  ignore the block, which defeats its purpose." Every non-empty post-write
+  diagnostics block is now prefixed with one of exactly three fixed labels:
+  `[diagnostics: authoritative post-write pass]` when the language server
+  confirmed re-analysis after this write (an explicit `await_diagnostics:true`
+  wait, an incidentally fast default-window publish, or — always — a
+  successful pull/hybrid-mode pull, which is synchronous with the write);
+  `[diagnostics: pre-write snapshot — not yet re-analysed]` when no publish
+  arrived within the fast adaptive window, so the data may predate the edit —
+  including the `await_diagnostics:true` timeout case where nothing was
+  cached either, which now says so explicitly instead of returning silence to
+  a caller who asked "did my change compile?"; or
+  `[diagnostics: unverified — post-write pull failed]` when a pull/hybrid-mode
+  post-write pull errors outright, so there is neither a fresh nor a
+  pre-write answer to give. A block with nothing to report at all still
+  renders nothing (no behaviour change beyond labelling). The existing
+  `INCOMPLETE` warm-up labelling on the standalone `diagnostics()` tool is
+  untouched — a separate concern. `postWriteDiagLabel` and the three label
+  constants (`internal/tools/post_write_diag.go`) are the one place the
+  vocabulary is defined; `TestPostWriteDiagLabel_*`
+  (`internal/tools/post_write_diag_label_test.go`) pins the push-mode
+  fresh/stale split (including the timeout-with-nothing-cached case), the
+  pull-mode always-authoritative behaviour, and the pull-failure label as its
+  own third state. The `await_diagnostics` parameter description on
+  `edit_file`/`write_file` now states the label contract instead of promising
+  an unconditional "authoritative post-write result". `transaction_apply` has
+  no post-write diagnostics yet, so it is out of scope here; PR 2 (rollback
+  semantics, `fail_on_new_errors`) adds that support and inherits the same
+  labelling.
+- **`plumb skills sync` is now versioned and self-cleaning, ending the
+  `.bak` litter a naive overwrite policy left behind (PLAN-365).** Each
+  skills directory now carries `.plumb/skills-manifest.json`, a hash+version
+  ledger sync uses to tell "plumb's own content changed between versions"
+  from "the user edited this file": a skill whose disk content still matches
+  the hash the manifest recorded is replaced in place with no backup at all;
+  anything else is left completely untouched, with the proposed content
+  written instead to a `<name>.plumb-new` file (never a directory, so it
+  can't be mistaken for another skill bundle) for manual review — rewritten
+  only when the proposal itself changes, so a re-run never clobbers a user's
+  in-progress merge inside it. **A skills directory with no manifest entry
+  yet is always the untouched/review case, never a legitimate update:** it
+  cannot be proven to be plumb's own (there is no historical shipped content
+  to check a differing file against for any version but the one currently
+  running, and that version's content is, by definition, the "new" side of
+  the very comparison), so the manifest is the only source of truth sync
+  ever treats as authoritative for "what plumb shipped last time" — a
+  provenance marker alone is never enough. Sync also cleans up the
+  directory-level `<name>.<timestamp>.bak` backups a prior overwrite-and-
+  backup policy left beside the skill directories, deleting only the ones
+  whose content hashes to a shipped hash actually on record in the manifest
+  and listing any others for manual review rather than guessing. New
+  `plumb skills sync --check` lists every action (including which backups
+  would be cleaned up) without writing anything.
 
 - **Registration-parity and wiring tests make the `read_multiple_files`
   tracker defect (PLAN-357) structurally unrepeatable (PLAN-361).** Nothing
@@ -99,6 +1122,128 @@
   either default).
 
 - **`edit_file` rejections now carry enough information for a one-call retry (worth-it W1-4).** Three targeted improvements, all suggestion-only — nothing is ever auto-applied, and the exactly-once `old_string` contract is unchanged. **(1) Multi-line `old_string` not found:** when `old_string` is 3+ lines, the rejection now runs a bounded fuzzy locate (whitespace-normalised line-window scoring, capped candidate scan — never O(n²) over a large file) and, when a sufficiently similar region exists, names the exact `lines N–M` and similarity plus a ready-to-use RANGE-mode suggestion: `{"start_line": N, "end_line": M, "new_string": ...}` — no old_string re-escaping needed. When nothing is similar enough it falls back to a generic RANGE-mode pointer instead of computed numbers. **(2) `expected_mtime`/`expected_sha` mismatch ("modified since you read it"):** the rejection now always inlines the CURRENT mtime **and** sha256, regardless of which guard was supplied, so a caller that only sent `expected_mtime` no longer needs a follow-up `read_file` just to learn the current hash; the existing `reconcile: true` escape hatch for an all-anchor-based batch is unchanged. **(3) Schema-shape rejections:** an unknown parameter that IS declared, just nested at the wrong level (e.g. `replace_all` sent at the top level instead of inside each `edits[]` item), now names the correct placement with a minimal valid JSON example instead of a bare "unknown parameter". An exact nested-name match outranks a fuzzy top-level "did you mean" suggestion, and the generated example pairs `old_string`+`new_string` whenever the child schema declares both, not just its `required` fields — otherwise the example for `replace_all` would itself be a shape `edit_file` rejects. New: `unknownDetail`/`placementHint`/`minimalNestedExample`/`nestedExampleFields` (`internal/mcp/argplacement.go`), `currentShaLine` (`internal/tools/write_guards.go`), `rangeModeHint`/`genericRangeModeHint` (`internal/tools/edit_file_closest.go`). Guarded by `TestEditFileRejection` (`internal/tools/edit_file_rejection_test.go`), new `TestResolveArgs` cases (ordering + valid-example round-trip), and `TestToolsCall_RealSchema_PlacementHintExampleRoundTrips` (`internal/mcp/argalias_realschema_test.go`), which replays the emitted example's own field list back through the real `edit_file` tool.
+### Changed
+
+- **Honest math + docs repositioning — correctness-first, net-of-surcharge (PLAN-367, worth-it W2-13).**
+  Today's savings model measured mostly the agent's own restraint: `read_file`'s
+  ranged-read arithmetic credited a capable client (native `Read`) for a saving
+  its own tool could reproduce unassisted, and the per-request tool-schema
+  surcharge was never netted against it. Fixed on both sides.
+  **(1) Savings model v3 → v4** (`internal/clientcaps/score.go`): a plain
+  ranged read (`read_file`, `find_files`) now scores ZERO efficiency for a
+  client with native file read — that saving is reproducible with the
+  client's own tools. Credit stays where the mechanism is plumb-only:
+  `read_symbol`'s name-addressed access (new `catReadNamed`) and every
+  `catSemantic` tool (reconstruction-cost model, unaffected). Historical rows
+  keep the version they were scored under; nothing is rescored.
+  **(2) A real profile-surcharge estimate** (`clientcaps.ProfileSurcharge`,
+  `mcp.Server.ToolSchemaBytes`): the per-request cost of the tool schemas
+  actually advertised to a client, computed from the live registry. `TotalBytes`
+  is the exact, measured wire figure — the primary number; `Tokens` is a
+  clearly-labelled ESTIMATE on top of it. The chars/token ratio is the
+  measured cl100k figure on a real 59-tool payload (106,401 chars / 23,276
+  tokens = 4.57), not PLAN-323's original 3.7 assumption, which overstated
+  the surcharge by ~24% (review round 1). Reported as a rate, never
+  multiplied into a fake aggregate.
+  **(3) A real guard-refusals count** (`stats.DB.PreventedIncidents`): the
+  count of write-guard refusals (`unread_or_stale`, `dirty_file`,
+  `concurrent_ref_move`) — a direct count of refusals the daemon actually
+  issued, not an estimate. Counts CALLS, not distinct incidents (a retried
+  call counts once per refusal) — the banner label says "guard refusals",
+  not "incidents", to match.
+  **(4) The banner** (`session_start`, `plumb stats`, TUI, web dashboard) now
+  shows netted, honest numbers throughout: `session_start`/`plumb stats` show
+  three lines — measured surcharge bytes + estimated tokens, netted read
+  savings (current model version only, labelled "since v4"), and guard
+  refusals; the CLI's per-tool table (`stats.DB.SummarySinceVersion`) nets
+  its Capability/Efficiency columns the same way its header does, so the two
+  can never contradict each other. TUI (lifetime/uptime/project axes and
+  top-tools tables) and the web dashboard's `/api/dashboard` savings
+  breakdown (now carrying an explicit `modelVersion` field) get the same
+  since-v4 netting (review round 1 — these were flagged as still showing the
+  un-netted cross-version number). `stats.Filter.SavingsModelVersion`
+  prevents silently summing rows scored under different models throughout.
+  **(5) docs/use-cases.md** reordered: correctness/coordination scenarios
+  (working-checkout scoping, semantic references, safe rename, test
+  selection, latency) lead; the two real token wins (`read_symbol`,
+  `file_outline`) and their cross-language repeat follow; the search wash and
+  the `read_multiple_files` loss close it out. Scenario numbers renumbered to
+  match physical order; every cross-reference updated. Framing paragraph
+  rewritten to the three-pillar thesis (correctness, coordination, token
+  economics — in that order), with the latency scenario explicitly named as
+  sitting outside all three rather than silently unassigned (review round 1).
+  README's own lede was left untouched — it already led with reliability/
+  write-safety, coordination, and semantic intelligence ahead of a demoted
+  "context efficiency" pillar (a prior positioning pass), so PLAN-367 only
+  fixed its one stale `docs/use-cases.md` Scenario cross-reference.
+  **(6) Corrections:** `docs/token-efficiency.md`'s `session_start` row
+  corrected from a stale "~1-2 KB" to the measured reality (full ~7.5 KB
+  baseline, workspace-dependent — up to ~9.6 KB measured on a heavier
+  workspace; `detail: "brief"` ≤1.5 KB, per CHANGELOG's own brief-mode
+  entry). `docs/topology.md`'s `topology_affected` description was checked
+  against the current package-aggregated contract and found already
+  accurate — no drift remained to fix there.
+  **(7) The public site** (`site/index.html`) no longer leads with "token
+  efficiency": the nav label and the read-footprint section's kicker are
+  reframed ("Measured" / "Read footprint · measured on plumb itself"), and
+  the TUI blurb + feature chips move the token-savings mention out of the
+  headline position. The correctness/coordination sections (`#collision`,
+  `#coordination`, `#guardrails`) already led the page physically; unchanged.
+  **(8) `read_multiple_files` exposure decision, recorded** (`internal/tools/profile.go`
+  `PinnedTools` doc comment): it stays out of both `LeanTools` and
+  `PinnedTools`. It is a real turns win but a measured byte loss (76 B over
+  three individual `read_file` calls — `docs/use-cases.md` Scenario 10, after
+  PLAN-357's re-measurement); the standing rule is not to pin a tool while its
+  published number is a loss.
+  **Wording sign-off pending** on the public-facing docs and site copy — see
+  the PR description.
+
+- **All nine LSP adapters are now validated on Linux as well as macOS (#9).**
+  `kotlin-lsp` was the last one outstanding; it passes all three of its
+  integration tests on Linux/x86_64 against a resolvable Gradle project
+  (Gradle 9.7, JDK 26). `README.md` and `docs/adding-an-lsp.md` no longer carry
+  a per-platform exception.
+
+- **The daemon's runtime files move to `$XDG_RUNTIME_DIR` on Linux (#9).** The
+  socket, control socket, pid, version file and both flocks now live in
+  `$XDG_RUNTIME_DIR/plumb` — what the XDG base directory spec designates for
+  sockets: a per-user tmpfs, mode 0700, owned and cleaned up by the login
+  session. `~/.cache/plumb` was never the right home for a socket, and the move
+  also shortens the path to roughly 30 bytes, putting the `sun_path` ceiling out
+  of reach on Linux. macOS is unchanged — it has no `XDG_RUNTIME_DIR`, and
+  `os.UserCacheDir()` remains the stable choice there because `$TMPDIR` differs
+  between GUI-app and terminal launches.
+
+  plumb applies the checks the spec puts on the consumer rather than trusting
+  the variable — absolute, exists, is a directory, mode 0700, owned by the
+  caller — and falls back to the cache dir if any fails, because a
+  world-readable runtime dir would expose the daemon socket.
+
+  **Migration:** a daemon started before the move keeps running at the old
+  path, and `$XDG_RUNTIME_DIR` is also absent under cron, systemd system units,
+  `docker exec` and ssh without `pam_systemd` — so a plumb launched there still
+  uses the cache dir. In either case `plumb serve` says so before starting a
+  second daemon, and `plumb doctor` names the other directory instead of just
+  reporting "cannot dial". One `plumb stop` consolidates. Nothing is killed
+  automatically, since that daemon may still be serving other live sessions.
+
+  The runtime directory determines the socket, the control socket, the pid and
+  the version file **as a set**, and every command resolves all of them from the
+  one directory. Connecting to one directory's socket while reading another's
+  files was tried and reverted — it left `plumb web` and `plumb log-level`
+  dialling a control socket that was not there, doctor calling a version file
+  missing when it existed one directory over, and `plumb restart` spawning the
+  duplicate the change was meant to prevent.
+
+  This also collapses **five independent copies** of the runtime-path rule — in
+  the CLI, `plumb config show`, the TUI's daemon-liveness check, and the macOS
+  and Linux command sandboxes — into one `paths.RuntimeDir()`. That was a latent
+  bug of its own: the sandboxes deny writes to the daemon's runtime directory,
+  and a copy that drifted would have gone on protecting an empty directory while
+  the real socket sat somewhere else. `plumb config show` had in fact already
+  drifted, reporting the cache dir as the runtime dir.
+
+- **Position-argument failures killed: `symbol_name` primary everywhere, snap never errors (worth-it W2-9, PLAN-363).** Informed by a 90-day DB autopsy of real tool-call failures (PLAN-359): `explain_symbol` and `type_hierarchy` were the two remaining position-only LSP query tools — every other query/edit tool already preferred `symbol_name` (PR #160). Both now accept `symbol_name` (PREFERRED — resolves via the document-symbol tree, avoiding hand-computed off-by-one coordinates), and a raw `line`/`character` that misses an identifier snaps once to the enclosing symbol instead of terminally erroring "no identifier found" — the same snap contract `get_definition`/`find_references`/`call_hierarchy` already had. A `symbol_name` matching several symbols renders every match in turn rather than guessing or bare-erroring (never auto-pick among ambiguous candidates). `rename_symbol`'s ambiguous-name error — previously "N symbols named X; use line/character to disambiguate," with no way to act on it without falling back to raw coordinates — now returns copy-pasteable `symbol_name` candidates (`Recv.Method` for gopls' flat method form, `Parent.Child` for nested symbols) — but only when a live `resolveSymbolsByName` call PROVES the candidate resolves back to exactly that one symbol; a match with no such proven name gets an explicit `line`/`character` retry hint instead, never a fabricated name (review round 1 caught two ways a plausible-looking candidate could fail to round-trip): `disambiguatedNames`/`provenSymbolName` (`internal/tools/symbol_resolve.go`). New cross-tool adapter hardening: `get_definition`, `find_references`, `rename_symbol`, `explain_symbol`, and `type_hierarchy` (five tools — the last two picked it up incidentally, wired into the same `Hover`/`PrepareTypeHierarchy` call sites touched for item 1/2 above) now retry once, after a short bounded delay, on the specific sourcekit-lsp "No language service for" / "Failed to find snapshot for" rejections the autopsy found behind 83%/36%/50% of `get_definition`/`find_references`/`rename_symbol`'s respective failures — a narrow build-graph-indexing race distinct from the daemon-level "still warming" signal, which reports the LSP connection ready while sourcekit-lsp's own per-document state has not caught up with a just-sent `didOpen`. `call_hierarchy` deliberately does NOT have it yet — it was not touched for this retry (its `PrepareCallHierarchy` call site is unchanged); a follow-up could add it for consistency. New: `retryOnServerNotReady`/`isServerNotReadyErr` (`internal/tools/lsp_retry.go`); the four query tools' `Execute` (`get_definition`, `explain_symbol`, `call_hierarchy`, `type_hierarchy`) now share one `executeLSPQuery` dispatch skeleton (`internal/tools/lsp_snap.go`) instead of reimplementing the symbol_name/position branch. **Deviation from the autopsy:** its "confirmed `replace_symbol_body` range-computation bug" (item 4) — re-verified against a scratch, read-only copy of `stats.db` — turned out to be already fixed: all 12 all-time `edit end position out of range` failures date to 2026-05-17, and commit `878c960e` (2026-07-07, "notify+invalidate on semantic edits, clamp end-past-EOF") already fixes exactly this defect, well before this branch's base. No code change was needed for item 4; the existing `TestApplyTextEdits_ClampEndPastEOF`/`TestReplaceSymbolBody_NotifiesLSPAndInvalidatesCache` coverage stands. Guarded by `TestExplainSymbol_ByName*`/`TestExplainSymbol_Snap*` (`internal/tools/explain_symbol_snap_test.go`), `TestTypeHierarchy_ByName*`/`TestTypeHierarchy_Snap*` (`internal/tools/type_hierarchy_snap_test.go`), `TestDisambiguatedNames_*` (`internal/tools/symbol_resolve_disambiguate_test.go`), and `TestRetryOnServerNotReady_*`/`TestIsServerNotReadyErr_*`/`TestGetDefinition_RetriesOnceOnServerNotReady`/`TestFindReferences_RetriesOnceOnServerNotReady`/`TestRenameSymbol_RetriesOnceOnServerNotReady` (`internal/tools/lsp_retry_test.go`, `internal/tools/lsp_retry_wiring_test.go`). The rename_symbol re-pin into `PinnedTools` (PLAN-355) is deliberately NOT included here — the card's closing criterion needs 2 weeks of `plumb stats --failures` dogfood data first.
 
 ### Fixed
 
@@ -387,7 +1532,56 @@
   whether `kotlin-lsp` existed**, so a machine without the server paid the full
   build to reach a skip. The cheap check now comes first: 86s → 0.01s.
 
+### Fixed
+
+- **An error printed plumb's banner in the wrong palette.** The theme is applied
+  in the root command's `PersistentPreRun`, which an unknown command never
+  reaches — cobra fails during command resolution — so `plumb sync help` drew
+  its banner and diagnostic in the default colours while every other command
+  drew the user's. One `applyConfiguredTheme()` on the error path; the whole CLI
+  now renders as one program.
+
+- **`plumb hooks` output now follows the house patterns instead of inventing
+  its own.** Bare `plumb hooks` lists its writers in the same
+  `Available Commands:` shape `--help` uses, with the names and descriptions
+  taken from the cobra commands themselves so the two cannot drift — and walked
+  from the real command tree, so a verb added later needs no second list. The
+  post-install notes get the `● Notes` heading the `┊` gutter implies elsewhere
+  in the CLI, and each line names the client it belongs to.
+
 ### Added
+- **`plumb hooks` — lifecycle hooks for Claude Code and Codex, installable and
+  removable from the CLI.** Bare `plumb hooks` is a read-only per-client,
+  per-hook status table (installed / missing / stale, `unregistered` for a
+  client whose config lacks plumb); `plumb hooks install [client]` installs or
+  refreshes; `plumb hooks uninstall [client]` takes them back out. Two hooks per
+  client: `SessionStart` states the conversation ID that `session_start` records
+  as `session_id`, and `Stop` reports unread peer mail.
+
+  **Claude Code's `Stop` hook is a real wake.** It installs as an `async` +
+  `asyncRewake` background watcher, so a peer's `leave_note` reaches a session
+  that has already gone idle — the shell recipe `plumb-chat` documented, now
+  built in, with no `jq` dependency and no `plumb mail` subprocess per poll. It
+  self-limits to plumb workspaces (a user-scoped install must not change every
+  repository on the machine), takes a single-instance lock per session, and
+  re-arms after a woken turn only when that turn provably consumed mail, capped
+  per chain. **Codex has no equivalent**, so its `Stop` hook performs one
+  read-only check as a turn ends: that narrows the end-of-turn race, it is not
+  push delivery, and it is described that way everywhere it appears.
+
+  Every writer merges rather than replaces: hooks the user wrote on the same
+  events survive an install, a refresh and an uninstall, the file is backed up
+  first, and re-running is a no-op once it matches. The hand-installed shell
+  hooks plumb's own recipe told users to write are recognised as plumb's, so an
+  install migrates them in place instead of adding a second pair that both fire.
+  Both hooks fail open throughout — no linkage, no session, a dead daemon and an
+  ambiguous workspace all let the turn end — and neither ever carries a message
+  body: the count is the whole disclosure, and `check_messages` remains the only
+  path that reads a peer's text, labelled as the unverified claim it is.
+
+  `plumb setup <client> --uninstall` now removes that client's hooks as well as
+  its skills. Installation stays explicit in the other direction: no setup flow,
+  no project config and no cloned repository can install a hook.
 
 - **The topology index now has cross-file edges — it had none at all.** Extractors
   run per file and emit edges as indices into that file's own node slice, so
@@ -402,8 +1596,9 @@
   A post-index pass (`linkImports`) now resolves `import` nodes to the package
   they name and links them, producing **51,335 cross-file edges** here. It runs
   per queue drain rather than per file, because an import can only be resolved
-  once its target package is indexed, and it rebuilds its own edges wholesale so
-  re-indexing one file cannot leave a stale half-graph. Matching is by longest
+  once its target package is indexed. Its incremental lifecycle repoints incoming
+  edges by stable identity and replaces only changed callers, so re-indexing one file
+  cannot leave a stale half-graph. Matching is by longest
   path suffix rather than go.mod parsing, so it generalises past Go; a minimum of
   two path segments keeps `import "strings"` from binding to a local `strings/`
   directory, which would recreate the false-dependency bug as real edges.
@@ -608,6 +1803,18 @@
   1,037 — it does mark the cut on its last line, but the list above reads as
   complete, and since every co-located hit shares confidence 0.5 the cut falls in
   path order, dropping the one test that exercised the changed function.
+
+- **`plumb setup codex` now defers Plumb tools from Codex's direct model surface
+  without hiding their MCP schemas.** Its entry writes `omit_tools_from = ["direct"]`;
+  Plumb still advertises its full catalogue, which lets Codex's own `tool_search`
+  retrieve a needed schema. This is intentionally separate from server-side
+  `[tools] profile = "lean"`, which removes schemas before Codex can search them.
+
+- **Codex's deterministic client-conformance run now records why server-side lean
+  remains disabled.** With `PLUMB_TOOLS_PROFILE=lean`, Codex 0.149.0 sees the
+  21-tool lean surface but cannot discover hidden `search_in_files`. The guard
+  protects that distinction: no `ReliableDeferredToolDiscovery` flip is valid
+  unless Codex gains a way to retrieve schemas omitted from MCP `tools/list`.
 
 - **gotreesitter bumped v0.48.1 → v0.51.0, and the C enum recovery workaround is
   deleted — upstream fixed the defect plumb filed.** v0.48.1 arrived in a blanket

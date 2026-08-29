@@ -84,7 +84,9 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = folder
 		v.acquiredLanguage = language
-		recordPinProvenance(v, origin, trigger, "")
+		// forced=false: both attach paths are first-attach (they return early when a
+		// root is already held), so there is nothing here to have overridden.
+		recordPinProvenance(v, origin, trigger, "", false)
 		// Rehydrate strict-mode reads for this root (after a daemon restart) and
 		// persist the pin, both scoped to the proxy session ID. No-ops when
 		// persistence is off or this is not a serve-proxy connection.
@@ -134,7 +136,9 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 			return
 		}
 		v.acquiredRoot = root
-		recordPinProvenance(v, origin, trigger, "")
+		// forced=false: both attach paths are first-attach (they return early when a
+		// root is already held), so there is nothing here to have overridden.
+		recordPinProvenance(v, origin, trigger, "", false)
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
 		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, origin)
 		s.startQualityRunner(v, root)

@@ -102,6 +102,12 @@ var (
 	}
 )
 
+// codexDeferredToolSurfaces omits Plumb tools from Codex's model-facing direct
+// surface only. Codex retains their schemas from Plumb's full tools/list response
+// and restores a needed tool through tool_search; this must not imply that Codex
+// can discover a tool Plumb omitted from tools/list.
+var codexDeferredToolSurfaces = []string{"direct"}
+
 // leanAllowlistClients is the set `plumb doctor` grades, in display order.
 func leanAllowlistClients() []leanClient {
 	return []leanClient{kimiLeanClient, codexLeanClient, geminiLeanClient}
@@ -282,14 +288,25 @@ func kimiLeanChoice(lean bool) leanChoice {
 	return leanKeep
 }
 
-// codexLeanInto registers plumb in Codex's TOML config, managing the per-server
-// enabled_tools allowlist per choice. Codex merges rather than replaces, so a
-// user's [mcp_servers.plumb.tools.*] approval tables survive both paths.
+// codexLeanInto registers plumb in Codex's TOML config, preserving Plumb's full
+// MCP catalogue while deferring its schemas from Codex's direct model surface.
+// The defer setting is part of idempotence, so an older registration is upgraded
+// rather than silently retaining the expensive direct presentation. Codex merges
+// rather than replaces, so a user's [mcp_servers.plumb.tools.*] approval tables
+// survive both paths.
 func codexLeanInto(cfgPath, plumbBin string, choice leanChoice) (added bool, preserved []string, err error) {
-	return mergeLeanEntry(codexLeanClient, cfgPath,
-		map[string]any{"command": plumbBin, "args": []string{"serve"}}, choice,
+	entry := map[string]any{
+		"command":         plumbBin,
+		"args":            []string{"serve"},
+		"omit_tools_from": codexDeferredToolSurfaces,
+	}
+	want := applyLeanChoice(entry, codexLeanClient.key, choice)
+	return mergeServerEntry(cfgPath, codexLeanClient.serversKey, codexLeanClient.read, codexLeanClient.write, entry,
 		func(existing map[string]any) bool {
-			return existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"})
+			return existing["command"] == plumbBin &&
+				stringSliceEqual(existing["args"], []string{"serve"}) &&
+				stringSliceEqual(existing["omit_tools_from"], codexDeferredToolSurfaces) &&
+				leanAllowlistCurrent(existing, codexLeanClient.key, choice, want)
 		},
 	)
 }

@@ -203,7 +203,7 @@ func sessionLanguages(s session.Info) []string {
 	// monorepo root (e.g. "swift, zig"); split it so each language is one entry
 	// and dedup against the secondary-adapter languages — otherwise a child whose
 	// adapter is also listed (zls → zig) appears twice ("swift, zig, zig").
-	for _, lang := range strings.Split(primary, ", ") {
+	for lang := range strings.SplitSeq(primary, ", ") {
 		add(lang)
 	}
 	for _, a := range secondaryAdapters(s.Adapters) {

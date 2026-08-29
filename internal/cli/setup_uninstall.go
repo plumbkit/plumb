@@ -16,10 +16,12 @@ import (
 )
 
 // This file is the inverse of the registration writers: `plumb setup <client>
-// --uninstall` removes plumb's server entry from that client's config — and,
-// for a skill-capable client, the skill files plumb itself installed. Every
-// removal backs up before writing, preserves sibling entries, and is a no-op
-// when plumb is not registered: an uninstall must be as safe to repeat as a
+// --uninstall` removes plumb's server entry from that client's config —
+// and, for a skill-capable client, the skill files plumb itself installed,
+// and, for an instructions-capable client, plumb's managed instruction block
+// (see removeInstructionsBlock in setup_instructions.go). Every removal
+// backs up before writing, preserves sibling entries, and is a no-op when
+// plumb is not registered: an uninstall must be as safe to repeat as a
 // registration.
 
 var setupUninstallFlag bool
@@ -50,12 +52,17 @@ func runSetupUninstall(t setupTarget) error {
 	return uninstallTargetAt(t, paths, true)
 }
 
-// uninstallTargetAt removes plumb's registration from each path, then — for a
-// skill-capable client, when asked and when a registration was actually
-// removed — the skill files plumb itself installed. removeSkills is false only
-// for a project-scoped Claude Code uninstall: skills live in the user scope,
-// so removing a project registration must not touch them.
-func uninstallTargetAt(t setupTarget, paths []string, removeSkills bool) error {
+// uninstallTargetAt removes plumb's registration from each path, then — when a
+// registration was actually removed and the user scope is in play — everything
+// else plumb installed for that client: the skill files its sync wrote, and the
+// lifecycle hooks `plumb hooks install` wrote. userScoped is false only for a
+// project-scoped Claude Code uninstall: both skills and hooks live in the user
+// scope, so removing a project registration must not touch them.
+//
+// Hooks are removed here but never installed here. Consent runs one way: a user
+// asks for hooks explicitly, and an uninstall that left them behind would leave
+// commands firing on every turn for a client that no longer has plumb.
+func uninstallTargetAt(t setupTarget, paths []string, userScoped bool) error {
 	PrintLogo()
 	if t.outFn == nil {
 		return fmt.Errorf("uninstall is not supported for %s", t.name)
@@ -75,16 +82,8 @@ func uninstallTargetAt(t setupTarget, paths []string, removeSkills bool) error {
 		}
 	}
 
-	if removedAny && removeSkills && t.skillsDirFn != nil {
-		if dir, err := t.skillsDirFn(); err == nil {
-			removed, kept := removePlumbSkills(dir)
-			if len(removed) > 0 {
-				lines = append(lines, fmt.Sprintf("skills removed: %d from %s", len(removed), render.ContractPath(dir)))
-			}
-			if len(kept) > 0 {
-				lines = append(lines, "skills left in place (not plumb's): "+strings.Join(kept, ", "))
-			}
-		}
+	if removedAny {
+		lines = uninstallSideEffectLines(t, userScoped, lines)
 	}
 
 	if !removedAny {
@@ -99,6 +98,69 @@ func uninstallTargetAt(t setupTarget, paths []string, removeSkills bool) error {
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render("Unregistered from "+t.name+"\n"+strings.Join(lines, "\n")), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	return nil
+}
+
+// uninstallSideEffectLines appends the skill-removal and instructions-block-
+// removal report lines onto lines, returning the extended slice — factored
+// out of uninstallTargetAt to keep that function under the project's
+// cyclomatic-complexity budget. Only called once something was actually
+// unregistered (see uninstallTargetAt), so the removals here are
+// unconditional on that account.
+//
+// userScoped gates the removals that live in the USER scope — the skills and
+// the lifecycle hooks — so a project-scoped Claude Code uninstall leaves both
+// alone. The instructions block is not gated: it is written into the project
+// plumb was registered in, so it goes with that registration either way.
+func uninstallSideEffectLines(t setupTarget, userScoped bool, lines []string) []string {
+	if userScoped && t.skillsDirFn != nil {
+		if dir, err := t.skillsDirFn(); err == nil {
+			removed, kept := removePlumbSkills(dir)
+			if len(removed) > 0 {
+				lines = append(lines, fmt.Sprintf("skills removed: %d from %s", len(removed), render.ContractPath(dir)))
+			}
+			if len(kept) > 0 {
+				lines = append(lines, "skills left in place (not plumb's): "+strings.Join(kept, ", "))
+			}
+		}
+	}
+
+	if userScoped {
+		lines = append(lines, removePlumbHooksFor(t)...)
+	}
+
+	if t.instructionsFn != nil {
+		instrLines, err := removeInstructionsBlock(t)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("instructions: error: %v", err))
+		} else {
+			lines = append(lines, instrLines...)
+		}
+	}
+	return lines
+}
+
+// removePlumbHooksFor takes plumb's lifecycle hooks back out of a client whose
+// registration has just been removed, returning the report lines for the
+// uninstall box. A client with no hooks pack, an unreadable hooks config, or no
+// plumb hooks in it contributes nothing: an uninstall reports what it did, and
+// a hook that was never there is not news.
+func removePlumbHooksFor(t setupTarget) []string {
+	h, ok := findHooksTarget(t.use)
+	if !ok {
+		return nil
+	}
+	path, err := h.pathFn()
+	if err != nil {
+		return nil
+	}
+	removed, err := removeHooksAt(path, h.ours)
+	if err != nil {
+		return []string{fmt.Sprintf("hooks: error: %v", err)}
+	}
+	if removed == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("hooks removed: %d from %s", removed, render.ContractPath(path))}
 }
 
 // removeServerEntry is mergeServerEntry's inverse: it deletes the "plumb" key

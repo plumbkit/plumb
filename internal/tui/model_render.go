@@ -55,7 +55,9 @@ func (m Model) render() string {
 	menu := m.renderTopMenu(tabSpaceW, isOverlay)
 
 	for i := range 3 {
-		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+		sb.WriteString(menu[i])
+		sb.WriteString(sepStyle.Render(logoLines[i]))
+		sb.WriteString("\n")
 	}
 	sb.WriteString(m.renderMainBody(bodyHeight, rightWidth, isOverlay))
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
@@ -95,11 +97,13 @@ func (m Model) renderMainBody(bodyHeight, rightWidth int, isOverlay bool) string
 		return m.renderMemoryPanels(bodyHeight, isOverlay)
 	}
 	var sb strings.Builder
-	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
+	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay))
+	sb.WriteString("\n")
 	allLeftLines := m.leftLines()
 	allRightLines := (&m).rightLines(rightWidth)
 	sb.WriteString(m.renderBodySection(allLeftLines, allRightLines, bodyHeight, rightWidth, isOverlay))
-	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
+	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay))
+	sb.WriteString("\n")
 	return sb.String()
 }
 
@@ -135,7 +139,8 @@ func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeigh
 	for i := range bodyHeight {
 		l, lBar := bodyColumn(leftLines, leftScrollbar, i)
 		r, rBar := rightBodyColumn(rightLines, rightFooter, rightScrollbar, i, rightViewH)
-		sb.WriteString(assembleBodyRow(l, r, lBar, rBar, m.leftWidth, rightWidth, isOverlay) + "\n")
+		sb.WriteString(assembleBodyRow(l, r, lBar, rBar, m.leftWidth, rightWidth, isOverlay))
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

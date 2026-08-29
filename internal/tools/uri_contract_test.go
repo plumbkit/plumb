@@ -22,6 +22,13 @@ var uriSchemaProp = regexp.MustCompile(`"uri"\s*:\s*\{`)
 // handling lives in the tool (the mcp alias layer is key-rename-only), so the
 // normalisation call belongs in the same source file as the schema. If a future
 // refactor centralises uri parsing, update this test to match the new seam.
+//
+// PLAN-363 centralised one such seam: get_definition, explain_symbol, and
+// type_hierarchy route their Execute through the shared executeLSPQuery
+// (lsp_snap.go), which itself calls toFileURIAnchored — so a same-file call to
+// executeLSPQuery( also satisfies the contract for those three. call_hierarchy
+// left that skeleton in PLAN-403 (it needs two contexts, not one) and calls
+// toFileURIAnchored directly again.
 func TestURITools_NormalisePlainPaths(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -41,7 +48,8 @@ func TestURITools_NormalisePlainPaths(t *testing.T) {
 		if !uriSchemaProp.Match(src) {
 			continue
 		}
-		if !strings.Contains(string(src), "toFileURI(") && !strings.Contains(string(src), "toFileURIAnchored(") {
+		if !strings.Contains(string(src), "toFileURI(") && !strings.Contains(string(src), "toFileURIAnchored(") &&
+			!strings.Contains(string(src), "executeLSPQuery(") {
 			t.Errorf("%s declares a \"uri\" schema property but never calls toFileURI/toFileURIAnchored — "+
 				"a plain absolute path would reach the LSP unnormalised. Normalise it at parse time.", name)
 		}

@@ -27,11 +27,19 @@ func (e *Extractor) Language() string     { return "go" }
 func (e *Extractor) Extensions() []string { return []string{".go"} }
 
 // Extract parses src as a Go source file and returns nodes and edges.
-func (e *Extractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *Extractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	nodes, edges, _, err := e.ExtractWithCallSites(ctx, relPath, src)
+	return nodes, edges, err
+}
+
+// ExtractWithCallSites is Extract plus the file's raw call sites, from the same
+// parse. See callsites.go for what a site is and why the unresolvable ones are
+// kept.
+func (e *Extractor) ExtractWithCallSites(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, relPath, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil && f == nil {
-		return nil, nil, nil // unrecoverable parse failure — skip file
+		return nil, nil, nil, nil // unrecoverable parse failure — skip file
 	}
 	return extractFile(fset, f, relPath)
 }
@@ -42,10 +50,11 @@ type funcEntry struct {
 	idx  int
 }
 
-func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.Node, []topology.Edge, error) {
+func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	var nodes []topology.Node
 	var edges []topology.Edge
 	var funcEntries []funcEntry
+	sc := &siteCollector{fset: fset}
 
 	pkgName := f.Name.Name
 	pkgNode := topology.Node{
@@ -78,14 +87,15 @@ func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.N
 			funcEntries = append(funcEntries, funcEntry{decl: d, idx: nodeIdx})
 			nodes = append(nodes, ns...)
 			edges = append(edges, es...)
+			sc.collectBody(d.Body, nodeIdx)
 		case *ast.GenDecl:
-			ns, es := extractGenDecl(fset, d, relPath, len(nodes), pkgIdx)
+			ns, es := extractGenDecl(fset, d, relPath, len(nodes), pkgIdx, sc)
 			nodes = append(nodes, ns...)
 			edges = append(edges, es...)
 		}
 	}
 	edges = append(edges, fileCallEdges(funcEntries, nodes)...)
-	return nodes, edges, nil
+	return nodes, edges, sc.sites, nil
 }
 
 // fileCallEdges emits EdgeCalls for intra-file calls only (confidence 1.0).
@@ -208,7 +218,7 @@ func extractFunc(fset *token.FileSet, d *ast.FuncDecl, relPath string, nodeCount
 	return []topology.Node{n}, []topology.Edge{e}
 }
 
-func extractGenDecl(fset *token.FileSet, d *ast.GenDecl, relPath string, nodeCount, pkgIdx int) ([]topology.Node, []topology.Edge) {
+func extractGenDecl(fset *token.FileSet, d *ast.GenDecl, relPath string, nodeCount, pkgIdx int, sc *siteCollector) ([]topology.Node, []topology.Edge) {
 	var nodes []topology.Node
 	var edges []topology.Edge
 	for _, spec := range d.Specs {
@@ -218,8 +228,10 @@ func extractGenDecl(fset *token.FileSet, d *ast.GenDecl, relPath string, nodeCou
 			nodes = append(nodes, ns...)
 			edges = append(edges, es...)
 		case *ast.ValueSpec:
+			base := nodeCount + len(nodes)
 			ns := extractValueSpec(fset, s, d, relPath)
 			nodes = append(nodes, ns...)
+			sc.collectValueSpec(s, base, len(ns))
 		}
 	}
 	return nodes, edges

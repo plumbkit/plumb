@@ -152,6 +152,17 @@ func IsMailbox(name string) bool { return MailboxTools[name] }
 // them), topology_explore (reachable from topology_search output), and
 // rename_symbol (17.2% advertisement-gate error rate in practice — re-pin once
 // PLAN-363 improves that).
+//
+// NEVER PINNED (PLAN-367): read_multiple_files. It is a real turns win (one
+// round trip instead of N, inline per-file errors), but a measured BYTE loss
+// vs the same reads done individually — 76 bytes over three read_file calls
+// on the docs/use-cases.md Scenario 10 sample, after two rounds of fixing a
+// padded separator and a wrong byte count (PLAN-13, PLAN-357). Pinning it
+// would put a tool that costs more tokens than the alternative into every
+// Claude Code session's up-front context for free, which is the opposite of
+// what pinning is for. Standing rule: don't pin a tool while its published
+// number is a loss. Re-litigate only if a future measurement moves it to
+// parity or a win — see docs/use-cases.md Scenario 10.
 var PinnedTools = map[string]bool{
 	"session_start":     true,
 	"read_file":         true,
@@ -226,10 +237,10 @@ func LeanToolNames() []string {
 func IsLean(name string) bool { return LeanTools[name] }
 
 // ProfileNote is the terse session_start/orientation line reporting the
-// resolved tool profile and the reason it was chosen (see resolveToolProfile's
+// resolved tool profile and the reason it was chosen (see autoProfileFor's
 // stable kebab-case reasons: client-override, explicit-config,
-// unknown-deferred-discovery, schema-discovery-only-client,
-// verified-deferred-discovery, unverified-deferred-discovery).
+// schema-discovery-only-client, verified-deferred-discovery,
+// client-side-allowlist, unknown-deferred-discovery, unverified-deferred-discovery).
 //
 // Under "lean" it deliberately does NOT enumerate the hidden tools (they stay
 // callable by name); hidden is the count suppressed from tools/list, folded in
@@ -242,15 +253,14 @@ func IsLean(name string) bool { return LeanTools[name] }
 // caller that never wires a profile accessor sees no behaviour change.
 //
 // IT REPORTS ADVERTISEMENT, NOT AVAILABILITY, and deliberately says nothing
-// about a client-side allowlist. A --lean Codex user is told "full", which is
-// exactly true — plumb is advertising all 57 tools — while their own config
-// filters the list down to 21 afterwards. plumb cannot observe that filter
-// (clientcaps.ClientSideAllowlist), so the alternative is a hedge printed on
-// every Codex and Gemini session, most of which have no allowlist at all:
-// trading a precise statement about what plumb did for a vague one about what
-// the client might have done. The place that has to be right in both states is
-// the guidance, which never names a tool the allowlist could have removed
-// (nameLeanToolsOnly), and that is where the correctness lives.
+// itself about a client-side allowlist — a --lean Codex user is told "full",
+// which is exactly true (plumb advertised every tool) while their own config
+// may have filtered the list afterwards, and plumb cannot observe that filter
+// (clientcaps.ClientSideAllowlist) to say more here without guessing. The
+// truthful caveat for THAT case is a separate, conditional sentence —
+// ClientSideAllowlistNote, appended by writeSessionGuidance only for a client
+// whose entry declares ClientSideAllowlist — rather than folded into this
+// function, so a client with no such config keeps a clean profile line.
 func ProfileNote(profile string, hidden int, reason string) string {
 	if profile == "lean" {
 		return fmt.Sprintf("Tool profile: lean — %d commodity tools hidden from "+
@@ -261,4 +271,30 @@ func ProfileNote(profile string, hidden int, reason string) string {
 		return ""
 	}
 	return fmt.Sprintf("Tool profile: full (reason: %s).\n\n", reason)
+}
+
+// ClientSideAllowlistNote is the honest caveat for a client whose clientcaps
+// entry declares ClientSideAllowlist (Kimi Code, Codex, Gemini CLI): plumb
+// SERVES the full advertised surface (ProfileNote's line is accurate on its
+// own), but `plumb setup <client> --lean` can write a tool allowlist into the
+// client's OWN config, which plumb cannot observe — tools/call arrives
+// identically whether or not it is in force. The sentence therefore states
+// the conditional truthfully instead of guessing which state this session is
+// in.
+//
+// It does NOT claim `plumb doctor` will affirmatively report "what your
+// config actually allows" — it doesn't: per docs/cli-reference.md's `--lean`
+// row, doctor grades the allowlist's CONTENT (a stale snapshot, an empty or
+// malformed list) and stays SILENT when the allowlist already matches today's
+// lean set, so a clean run proves nothing was found wrong, not that a filter
+// is or isn't in force. The sentence is worded to match that: it points at
+// doctor as the place to check for drift, not as an oracle for the filter's
+// current state. The lean count is read live off LeanToolNames so a future
+// lean-set change cannot make this sentence stale.
+func ClientSideAllowlistNote() string {
+	return fmt.Sprintf("Your client config may filter this further: if you ran "+
+		"`plumb setup <client> --lean`, only the %d lean tools are actually loaded "+
+		"regardless of what tools/list advertises above — run `plumb doctor`, which "+
+		"flags a stale, empty, or malformed allowlist and stays quiet when yours "+
+		"already matches today's lean set.\n\n", len(LeanToolNames()))
 }

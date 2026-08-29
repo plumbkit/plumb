@@ -586,7 +586,8 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 			path := filepath.Join(t.TempDir(), filepath.Base(mustPath(t, tc.client.pathFn)))
 			target := shippedTarget(t, tc.use)
 			target.pathFn = func() (string, error) { return path, nil }
-			target.skillsDirFn = nil // the skills hint is a separate concern
+			target.skillsDirFn = nil    // the skills hint is a separate concern
+			target.instructionsFn = nil // the instructions block is a separate concern; it defaults to os.Getwd()/os.UserHomeDir(), which under `go test` resolve inside the checkout
 
 			*tc.flag = true
 			if out := captureStdout(t, func() {
@@ -623,6 +624,7 @@ func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
 		target := shippedTarget(t, "codex")
 		target.pathFn = func() (string, error) { return path, nil }
 		target.skillsDirFn = nil
+		target.instructionsFn = nil // same reason as above: it must not write into the checkout
 		setupCodexLeanFlag = false
 
 		first := captureStdout(t, func() {
@@ -678,5 +680,40 @@ func TestLeanClientsDeclareTheirCapability(t *testing.T) {
 				"ClientSideAllowlist=false (entry %q) — session_start will steer that client at tools "+
 				"its own config filtered out", c.setupCmd, c.key, c.setupCmd, caps.Name)
 		}
+	}
+}
+
+// TestCodexSetupDefersItsDirectToolPresentation keeps the workable Codex
+// optimisation distinct from server-side lean: Codex receives Plumb's complete
+// MCP catalogue, but keeps those schemas out of the initial model request.
+func TestCodexSetupDefersItsDirectToolPresentation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const bin = "/usr/local/bin/plumb"
+
+	if err := writeTOML(path, map[string]any{
+		"mcp_servers": map[string]any{
+			"plumb": map[string]any{"command": bin, "args": []string{"serve"}},
+		},
+	}); err != nil {
+		t.Fatal("write legacy Codex registration:", err)
+	}
+
+	added, _, err := codexLeanInto(path, bin, leanClear)
+	if err != nil {
+		t.Fatal("upgrade Codex:", err)
+	}
+	if !added {
+		t.Fatal("legacy Codex registration reported no change")
+	}
+	if got := readLeanPlumbEntry(t, codexLeanClient, path)["omit_tools_from"]; !stringSliceEqual(got, codexDeferredToolSurfaces) {
+		t.Errorf("omit_tools_from = %v, want %v", got, codexDeferredToolSurfaces)
+	}
+
+	added, _, err = codexLeanInto(path, bin, leanClear)
+	if err != nil {
+		t.Fatal("re-register Codex:", err)
+	}
+	if added {
+		t.Error("unchanged deferred Codex registration should be idempotent")
 	}
 }

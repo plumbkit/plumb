@@ -15,7 +15,7 @@ var topologyImpactSchema = json.RawMessage(`{
   "properties": {
     "name": {
       "type": "string",
-      "description": "Symbol name or qualified name to analyse. Must exist in the topology index."
+      "description": "Symbol name or qualified name to analyse. Must exist in the topology index. Required unless mode=\"reachability\"."
     },
     "depth": {
       "type": "integer",
@@ -45,9 +45,32 @@ var topologyImpactSchema = json.RawMessage(`{
     "kind": {
       "type": "string",
       "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
+    },
+    "mode": {
+      "type": "string",
+      "description": "Optional. \"reachability\" switches from the default single-symbol blast-radius analysis to entry-point reachability. Go-only for now; roots/path_to/layers require this mode."
+    },
+    "granularity": {
+      "type": "string",
+      "enum": ["package", "function"],
+      "default": "package",
+      "description": "Requires mode=\"reachability\". Default package follows production import edges. function follows the admitted Go call graph outward from exact callable roots; test-file callers are excluded and unresolved/dynamic calls are disclosed."
+    },
+    "roots": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Requires mode=\"reachability\". package granularity accepts package directories or \"main\". function granularity accepts exact file.go#Symbol selectors or \"main\"; omit for defaults (package main roots plus candidate-seeded topology_routes roots)."
+    },
+    "path_to": {
+      "type": "string",
+      "description": "Requires mode=\"reachability\". When set, the response is the single shortest root -> target chain; use a package directory for package granularity or file.go#Symbol for function granularity."
+    },
+    "layers": {
+      "type": "boolean",
+      "description": "Requires mode=\"reachability\". When true, the response is an SCC condensation of the reachable subgraph — package import cycles or function recursion depending on granularity — instead of the summary."
     }
   },
-  "required": ["name"],
+  "required": [],
   "additionalProperties": false
 }`)
 
@@ -85,18 +108,39 @@ func (*TopologyImpact) Description() string {
 		"the topology call graph is intra-file, so for a function/method the inward section is " +
 		"augmented with a 'cross-file callers' block resolved via the language server (source=lsp) " +
 		"when one is available. " +
+		"mode=\"reachability\" switches to entry-point reachability. The default package " +
+		"granularity follows production import edges from package-main roots plus candidate-seeded " +
+		"topology_routes roots; Go _test.go importers are excluded, and unsupported/polyglot " +
+		"workspaces are refused rather than reported as falsely unreachable. " +
+		"Set granularity=\"function\" for the additive Go-only admitted partial static call graph: " +
+		"it uses exact callable roots, production callers, durable derived cross-file edges, and " +
+		"the full reachable closure. Unresolved receiver/dynamic calls, test callers, unsupported " +
+		"languages, and unindexed roots remain outside that lower-bound answer. " +
+		"Each granularity supports the default summary, path_to (one shortest root-to-target chain), " +
+		"and layers (SCC condensation; import cycles for package or recursion cycles for function). " +
+		"All outputs disclose their scope and known limitations, and responses are byte-capped. " +
 		"Returns a clear message when topology is disabled or the symbol is not in the index."
 }
 
 type topologyImpactArgs struct {
-	Name      string   `json:"name"`
-	Depth     int      `json:"depth"`
-	MaxNodes  int      `json:"max_nodes"`
-	MaxBytes  int      `json:"max_bytes"`
-	EdgeKinds []string `json:"edge_kinds"`
-	Path      string   `json:"path"`
-	Kind      string   `json:"kind"`
+	Name        string   `json:"name"`
+	Depth       int      `json:"depth"`
+	MaxNodes    int      `json:"max_nodes"`
+	MaxBytes    int      `json:"max_bytes"`
+	EdgeKinds   []string `json:"edge_kinds"`
+	Path        string   `json:"path"`
+	Kind        string   `json:"kind"`
+	Mode        string   `json:"mode"`
+	Granularity string   `json:"granularity"`
+	Roots       []string `json:"roots"`
+	PathTo      string   `json:"path_to"`
+	Layers      bool     `json:"layers"`
 }
+
+// modeReachability selects package-level reachability from entry points
+// instead of the default single-symbol blast-radius analysis. See
+// topology_reachability.go.
+const modeReachability = "reachability"
 
 func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	a, err := parseTopologyImpactArgs(raw)
@@ -109,6 +153,12 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 	store := t.storeFn()
 	if store == nil {
 		return topologyDisabledMessage(), nil
+	}
+	if a.Mode == modeReachability {
+		if a.Granularity == "function" {
+			return t.executeFunctionReachability(ctx, store, a)
+		}
+		return t.executeReachability(ctx, store, a)
 	}
 	result, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
@@ -135,10 +185,32 @@ func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
 	if len(a.EdgeKinds) == 0 {
 		a.EdgeKinds = []string{"imports", "calls"}
 	}
+	if a.Granularity == "" {
+		a.Granularity = "package"
+	}
 	return a, nil
 }
 
 func (a *topologyImpactArgs) validate() error {
+	if a.Mode != "" && a.Mode != modeReachability {
+		return fmt.Errorf("topology_impact: unknown mode %q (expected \"reachability\", or omit for the default blast-radius mode)", a.Mode)
+	}
+	if a.Mode == modeReachability {
+		if a.Granularity != "package" && a.Granularity != "function" {
+			return fmt.Errorf("topology_impact: unknown reachability granularity %q (expected \"package\" or \"function\")", a.Granularity)
+		}
+		return nil // name is not used in reachability mode; roots/path_to/layers stand alone
+	}
+	if a.Granularity != "" && a.Granularity != "package" {
+		return errors.New("topology_impact: granularity requires mode=\"reachability\"")
+	}
+	// reachability-only fields silently doing nothing outside reachability mode
+	// is exactly the failure this guards against: a caller who sets roots/
+	// path_to/layers without mode="reachability" almost certainly meant to be
+	// in reachability mode, and the classic path ignores all three.
+	if len(a.Roots) > 0 || a.PathTo != "" || a.Layers {
+		return errors.New(`topology_impact: roots/path_to/layers require mode="reachability" — they are ignored otherwise`)
+	}
 	if a.Name == "" {
 		return errors.New("topology_impact: name is required")
 	}
@@ -158,8 +230,8 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 	}
 	opts := topology.ImpactOpts{
 		Depth:     a.Depth,
-		MaxNodes:  a.MaxNodes,
-		MaxBytes:  a.MaxBytes,
+		MaxNodes:  topology.ClampToolNodes(a.MaxNodes),
+		MaxBytes:  topology.ClampToolBytes(a.MaxBytes),
 		EdgeKinds: a.EdgeKinds,
 	}
 	result, err := store.ImpactFrom(ctx, cands[0], opts)

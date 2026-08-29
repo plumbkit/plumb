@@ -56,13 +56,36 @@ func (l *logicalAgentState) record(id string, attach bool) bool {
 	return len(l.seen) > 1
 }
 
-// isShared reports whether two or more distinct logical-agent IDs have been
-// observed on this connection. It is the gate for per-agent keying: below it the
-// connection itself is the identity and no shard is ever created.
-func (l *logicalAgentState) isShared() bool {
+// sharedWith reports whether the connection is shared once the caller of THIS
+// request is counted — the observed set plus id. It is THE gate for per-agent
+// keying: below it the connection itself is the identity and no shard is created.
+//
+// It counts the caller because a routing decision must not require a commitment.
+//
+// A subagent's first session_start declares an identity the connection has never
+// seen. Recording it up front would make the plain "len(seen) > 1" reading true,
+// but `seen` only grows, so a call that is then REFUSED would have flipped the
+// connection into per-agent keying for every peer — each peer's next call landing
+// on a fresh shard with an empty read tracker, and strict mode rejecting its edits
+// with "has not been read". Asking the question hypothetically instead lets the
+// refusal leave no trace in the identity set: the commitment happens on the
+// success path, through session_start's external-ID linker.
+//
+// An anonymous call (id == "") has no caller to count, so it asks the plain
+// question: are two or more identities already committed.
+func (l *logicalAgentState) sharedWith(id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.seen) > 1
+	if len(l.seen) > 1 {
+		return true
+	}
+	if id == "" {
+		return false
+	}
+	if _, ok := l.seen[id]; ok {
+		return false
+	}
+	return len(l.seen) == 1
 }
 
 // attachIdentity returns the attach-time session_id fallback identity (last one
@@ -95,6 +118,37 @@ func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent
 
 // recordLogicalAgentCall records a per-call tools/call._meta identity.
 func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id, false) }
+
+// declaredAgentCtx is the third identity channel: the `session_id` a caller
+// declares INSIDE session_start, promoted to this call's logical-agent identity.
+//
+// The two channels above arrive before the tool runs — _meta is parsed at
+// dispatch, and an attach-time session_id from a PREVIOUS call is already
+// recorded. Neither covers the case the field actually produces: a subagent
+// whose first contact declares its identity and names its workspace in one call,
+// over a client that cannot inject a per-call _meta. Without an identity on that
+// call's ctx, repinShard declines it and the re-pin runs on the CONNECTION,
+// moving every peer agent's workspace with it (issue #182). Attributing it to
+// the id the caller just declared keeps the move on that agent's own shard.
+//
+// A per-call _meta identity, being the stronger channel (it is asserted per
+// call rather than per attach), always wins.
+//
+// Nothing is RECORDED here. Putting the id on the ctx is enough for shardFor and
+// repinShard to route this call to its own agent (they ask sharedWith, which
+// counts the caller hypothetically), and it leaves the identity set untouched if
+// the call is then refused. The commitment — the observed set, the attach-time
+// fallback identity, the external-ID registration — happens on session_start's
+// success path through externalIDFn. An agent whose re-pin was refused never
+// attached, and must leave nothing behind: not an identity its peers' anonymous
+// calls could inherit, and not a shared-connection flag that resets every peer's
+// read tracking.
+func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.Context {
+	if id == "" || mcp.LogicalAgentFromCtx(ctx) != "" {
+		return ctx
+	}
+	return mcp.WithLogicalAgent(ctx, id)
+}
 
 // recordLogicalAgent is the single choke point every identity channel feeds
 // (session_id at attach, _meta per call), so the shared-connection detection

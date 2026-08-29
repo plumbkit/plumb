@@ -96,8 +96,8 @@ func TestClientProfileContractMatrix(t *testing.T) {
 	t.Run("auto + codex", func(t *testing.T) {
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "codex")
 		profile, reason := s.resolveToolProfile()
-		if profile != "full" || reason != "unverified-deferred-discovery" {
-			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"unverified-deferred-discovery\")", profile, reason)
+		if profile != "full" || reason != "client-side-allowlist" {
+			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"client-side-allowlist\")", profile, reason)
 		}
 		assertBootstrapAlwaysVisible(t, s)
 		assertFullAdmitsEverything(t, s)
@@ -117,8 +117,10 @@ func TestClientProfileContractMatrix(t *testing.T) {
 		// Kimi Code has strong native file/search/shell tooling but is
 		// schema-discovery-only, so auto must resolve to full for the SAME reason
 		// Claude Code does — not the weaker "unverified-deferred-discovery" a
-		// registry entry without SchemaDiscoveryOnly would produce, and not the
-		// "unknown-deferred-discovery" of an unregistered client.
+		// registry entry without SchemaDiscoveryOnly would produce, not
+		// "client-side-allowlist" (Kimi Code also carries that flag, but
+		// SchemaDiscoveryOnly is checked first), and not the "unknown-deferred-discovery"
+		// an unregistered client gets.
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi-code")
 		profile, reason := s.resolveToolProfile()
 		if profile != "full" || reason != "schema-discovery-only-client" {

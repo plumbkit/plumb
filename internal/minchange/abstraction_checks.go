@@ -98,10 +98,11 @@ func baseName(callee string) string {
 // singleUseFindings flags a newly-added function or method that the topology
 // index shows with exactly one caller. Such a symbol may be an abstraction the
 // change did not need — the logic could live at its single call site. The
-// signal is Low confidence: the topology call graph is intra-file, so a symbol
-// with cross-file callers can still appear single-use here.
+// signal is permanently Low confidence: admitted subjects can include durable
+// cross-file edges, but topology remains approximate and dynamic dispatch is not
+// represented.
 func singleUseFindings(ctx context.Context, added []addedSymbol, deps Deps, opts Options) []Finding {
-	if deps.CallerCount == nil {
+	if deps.CallerCountAt == nil && deps.CallerCount == nil {
 		return nil
 	}
 	var out []Finding
@@ -111,7 +112,14 @@ func singleUseFindings(ctx context.Context, added []addedSymbol, deps Deps, opts
 			continue
 		}
 		seen[s.Name] = true
-		count, site, found := deps.CallerCount(ctx, s.Name)
+		var count int
+		var site SymbolRef
+		var found bool
+		if deps.CallerCountAt != nil {
+			count, site, found = deps.CallerCountAt(ctx, s.Name, s.File, s.Kind)
+		} else {
+			count, site, found = deps.CallerCount(ctx, s.Name)
+		}
 		if !found || count != 1 {
 			continue
 		}
@@ -122,7 +130,7 @@ func singleUseFindings(ctx context.Context, added []addedSymbol, deps Deps, opts
 			File:       s.File,
 			Line:       s.Line,
 			Rationale:  fmt.Sprintf("%s appears to have a single call site — it may not need to be a separate %s", s.Name, s.Kind),
-			Evidence:   fmt.Sprintf("topology found one intra-file call site: %s:%d (cross-file callers are not counted — confirm with find_references before acting)", site.Path, site.Line),
+			Evidence:   fmt.Sprintf("topology found one call site: %s:%d (cross-file edges are included only for admitted subjects; dynamic dispatch is not counted — confirm with find_references before acting)", site.Path, site.Line),
 		}
 		if opts.IncludeSuggestions {
 			f.Alternative = fmt.Sprintf("if %s truly has one caller, consider inlining its body there; keep it if you expect reuse or it aids readability", s.Name)

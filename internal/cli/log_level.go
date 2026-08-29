@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
@@ -59,13 +60,32 @@ func runLogLevel(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+// ctrlSocketUnavailable is the shared error for a control socket that will not
+// dial.
+//
+// It names the other runtime directory when a daemon is running there, because
+// "is plumb daemon running?" is actively misleading in that case — one is,
+// just not in the directory this process resolved. That happens after the
+// $XDG_RUNTIME_DIR move, and whenever plumb is launched somewhere the variable
+// is unset (cron, a systemd unit, docker exec, ssh). Without the hint the user
+// sees a flat contradiction: `plumb doctor` finds a daemon and `plumb
+// log-level` says there is none.
+func ctrlSocketUnavailable(err error) error {
+	hint := ""
+	if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) {
+		hint = fmt.Sprintf("\n  a daemon IS running at %s, but this plumb uses %s"+
+			"\n  run `plumb stop`, then reconnect", legacy, paths.RuntimeDir())
+	}
+	return fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve%s\n  (%w)", hint, err)
+}
+
 // dialDaemonCtrl dials the daemon control socket, sends a single-line command,
 // and returns the trimmed first response line. Shared by `plumb log-level` and
 // `plumb config reload`.
 func dialDaemonCtrl(command string) (string, error) {
 	conn, err := net.Dial("unix", daemonCtrlSocketPath())
 	if err != nil {
-		return "", fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve\n  (%w)", err)
+		return "", ctrlSocketUnavailable(err)
 	}
 	defer conn.Close()
 	if _, err := fmt.Fprintf(conn, "%s\n", command); err != nil {
@@ -122,6 +142,9 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			slog.Debug("daemon: control socket read failed", "error", err)
+		}
 		return
 	}
 	line := strings.TrimSpace(scanner.Text())

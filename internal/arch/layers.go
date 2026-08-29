@@ -97,6 +97,7 @@ var Layers = map[string]Layer{
 	"internal/quality":              LayerFoundation, // post-write analyser interface
 	"internal/quality/golangcilint": LayerFoundation,
 	"internal/clientcaps":           LayerFoundation, // static client capability data
+	"internal/clienttemplates":      LayerFoundation, // shared per-client instruction template bodies (embedded)
 
 	// ── Transport ──
 	"internal/mcp":                     LayerTransport,
@@ -131,6 +132,7 @@ var Layers = map[string]Layer{
 	"internal/semantics":    LayerDomain,
 	"internal/monitor":      LayerDomain,
 	"internal/xcodebsp":     LayerDomain,
+	"internal/setup":        LayerDomain, // managed instruction block mechanism (markers, idempotent write, drift check)
 
 	// ── Intelligence ──
 	"internal/topology":                       LayerIntelligence,

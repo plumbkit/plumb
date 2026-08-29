@@ -171,7 +171,7 @@ func TestGit_ConcurrentCommitsSerialise(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			fname := fmt.Sprintf("f%d.txt", i)
-			if err := os.WriteFile(filepath.Join(dir, fname), []byte(fmt.Sprintf("content %d\n", i)), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, fname), fmt.Appendf(nil, "content %d\n", i), 0o644); err != nil {
 				errs <- err
 				return
 			}

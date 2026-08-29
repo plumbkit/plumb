@@ -8,15 +8,15 @@ import (
 
 // config_commands.go defines the safe command-execution config: the [[command]]
 // allow-list (fixed-argv named commands the run_command tool may run) and the
-// [commands] policy table (the execute_shell_command gate + sandbox policy).
+// [commands] policy table (run_command's sandbox-enforcement policy).
 //
 // The allow-list is a capability table, not a template engine: an entry's exec
 // is a fixed argv the runner execs WITHOUT a shell, so no agent free-text ever
 // reaches the command line (the single {target} token is the one exception, and
 // it is bounded to one shell-safe argument by the run_command tool). A project's
-// .plumb/config.toml is an untrusted surface, so a project-supplied command — and
-// a project raising [commands] allow_shell — is honoured only after `plumb trust`
-// (gated at the cli resolution seam, mirroring [tasks]).
+// .plumb/config.toml is an untrusted surface, so a project-supplied command is
+// honoured only after `plumb trust` (gated at the cli resolution seam, mirroring
+// [tasks]).
 //
 // Concurrency: CommandConfig / CommandsConfig values are read-only after Load.
 
@@ -42,23 +42,24 @@ type CommandConfig struct {
 	DenyNetwork bool `toml:"deny_network"`
 }
 
-// CommandsConfig is the [commands] policy table: the execute_shell_command gate
-// and the sandbox-enforcement knob. Both are safety-sensitive, so a project's
-// value is honoured only when the workspace is trusted (applied at the seam).
+// CommandsConfig is the [commands] policy table: the sandbox-enforcement knob
+// run_command honours. It held two more keys — allow_shell and deny_network —
+// which existed only to gate execute_shell_command, and were removed with that
+// tool in 0.17.3.
+//
+// An older config still carrying either key keeps loading: plumb decodes with a
+// plain go-toml/v2 Unmarshal and nothing sets DisallowUnknownFields, so an
+// unknown key is ignored. It is NOT silently blessed, though — policyCommandsFreeFields
+// is an allow-list, so a leftover key in a PROJECT config still enters the trust
+// hash and is disclosed by `plumb trust` as a [commands] key plumb does not
+// recognise. That is the honest answer: plumb cannot vouch for a key it has no
+// meaning for.
 type CommandsConfig struct {
-	// AllowShell gates the execute_shell_command tool. Default false (off). A
-	// project raising it to true is honoured only after `plumb trust`.
-	AllowShell bool `toml:"allow_shell"`
-	// RequireSandbox, when true, refuses to run a command (either tool) when no
-	// OS sandbox is active, rather than running unsandboxed with a warning.
+	// RequireSandbox, when true, refuses to run a command when no OS sandbox is
+	// active, rather than running unsandboxed with a warning. It is the one
+	// [commands] key a project may set untrusted, because it can only ADD safety
+	// (ClassOneWay; effectiveRequireSandbox takes the most restrictive value).
 	RequireSandbox bool `toml:"require_sandbox"`
-	// DenyNetwork cuts network access for execute_shell_command. Default TRUE: the
-	// sandbox is integrity-only (reads stay permissive and the command inherits the
-	// daemon environment), so a shell command could otherwise read secrets and
-	// exfiltrate over the network — so the network is off unless you opt in with
-	// deny_network = false. It does not apply to run_command (each [[command]] sets
-	// its own deny_network, default false).
-	DenyNetwork bool `toml:"deny_network"`
 }
 
 // No [[command]] allow-list ships by default, and one nearly did.
@@ -66,10 +67,10 @@ type CommandsConfig struct {
 // The motivation was real: [tasks] ships working per-language commands —
 // including `go test ./...`, which runs arbitrary code out of the repository —
 // while the [[command]] tier, fixed argv with no shell and no free text, shipped
-// EMPTY and refused `wc -l`. The only documented way forward was then
-// [commands] allow_shell, the broad read-everything tier, so callers enabled
-// that or left plumb for their own shell — the outcome the safe tier exists to
-// prevent.
+// EMPTY and refused `wc -l`. The only documented way forward was then the
+// broad read-everything shell tier (execute_shell_command, retired in 0.17.3),
+// so callers enabled that or left plumb for their own shell — the outcome the
+// safe tier exists to prevent.
 //
 // Three read-only entries (wc, file-type, disk-usage) were shipped against that
 // reasoning and reverted, because run_command bounds {target} to one SHELL-safe

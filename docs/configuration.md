@@ -27,7 +27,13 @@ everything else is inherited from the layer below.
    `plumb config show` and the `daemon_info` tool.
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
-   file that sets one field inherits the rest.
+   file that sets one field inherits the rest. Hot-reloaded per workspace: the
+   daemon keeps one `fsnotify` watcher per live workspace (create, edit,
+   atomic-save, and deletion of the file are all picked up) and re-applies the
+   merged view to **every** session pinned to that workspace, without a
+   reconnect. Deleting the file or breaking its TOML fails closed to the global
+   policy. If the OS watcher cannot start or errors, the per-session 30-second
+   mtime poll reconciles that workspace and the daemon log says so.
 4. **Environment variables** — highest precedence; useful for one-off overrides
    without editing files.
 
@@ -35,7 +41,10 @@ Most sections are **hot-reloaded** without a reconnect: an `fsnotify` watch on
 the global `config.toml` (plus the `reload-config` control command and
 `plumb config reload`) re-reads the file and re-merges every live session's
 project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
-`[memory]`, `[collab]`, and `[semantics]` apply live. `[xcode]` is evaluated
+`[memory]`, `[collab]`, and `[semantics]` apply live. A change to a `[collab]`
+capability switch (mailbox, cross_project, intents, knowledge_handoff,
+peer_awareness) is also announced to the affected sessions on their next tool
+result or `session_start`. `[xcode]` is evaluated
 once per workspace on the next session, because enabling it may launch trusted
 project-sensitive tooling. The restart-bound exceptions are the `[lsp.*]`
 servers, `[cache]`, and `log_format`; `plumb config show` and `daemon_info` flag
@@ -404,12 +413,12 @@ paced; write-triggered upserts are never delayed.
 |---|---|---|---|---|
 | `idle_threshold_minutes` | int | `30` | — | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
 | `eviction_ttl_minutes` | int | `60` | — | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
-| `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking, session name) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. |
+| `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking, session name, session identity) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. Session-ID adoption on reconnect requires it: with no persisted row there is no proof the replayed ID was yours, so the identity forks. |
 | `persist_state_ttl_minutes` | int | `1440` | — | How long persisted session state is honoured on restart before it's treated as stale and discarded. |
 
 Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
 
-`persist_state` (default on; env `PLUMB_PERSIST_SESSION_STATE`) makes a **daemon restart transparent to a connected agent**: strict-mode read-tracking, the pinned workspace, and the session name are written to `session_state.db` (in the data dir, beside `stats.db`), keyed by a stable proxy session ID that `plumb serve` injects into the `initialize` handshake `_meta` and replays on every reconnect. On reconnect the fresh daemon rehydrates that state, so a strict-mode `edit_file` of a file read before the restart is not refused, a client that reports no roots (e.g. Claude Desktop) comes back pinned without an explicit `session_start`, and the connection keeps its session name and its **mailbox identity**. Both matter for messages: a note is addressed by name, so a fresh random name on every reconnect would orphan it, and a note to a peer that was live when it was sent is *bound* to that peer's session ID, so the reconnected connection — which registers under a new ID — also inherits its predecessor's ID in order to collect mail written before the restart. That inheritance is granted **only** by presenting the proxy session ID, never by answering to a name; a session that merely takes a free name inherits nothing, which is what keeps `addressee_id` a real boundary. The chain is bounded at one predecessor: each reconnect records its own ID, so a message unread across two restarts expires rather than being inherited indefinitely. Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads. `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers; it is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate).
+`persist_state` (default on; env `PLUMB_PERSIST_SESSION_STATE`) makes a **daemon restart transparent to a connected agent**: strict-mode read-tracking, the pinned workspace, and the session name are written to `session_state.db` (in the data dir, beside `stats.db`), keyed by a stable proxy session ID that `plumb serve` injects into the `initialize` handshake `_meta` and replays on every reconnect. On reconnect the fresh daemon rehydrates that state, so a strict-mode `edit_file` of a file read before the restart is not refused, a client that reports no roots (e.g. Claude Desktop) comes back pinned without an explicit `session_start`, and the connection keeps its session name and its **session identity**: the reconnect ADOPTS the plumb session ID it held before the restart, so stats, memories and collab see one continuous identity rather than forking a new one. That adoption is authorised **only** by the persisted row — the replayed plumb session ID is client-supplied and disclosed to clients, so it is a claim, and the row's pairing of it with the proxy session ID is the sole proof; with `persist_state` off (or the row absent or pruned) there is no adoption and the identity forks as it did before adoption existed. The identity also matters for messages: a note is addressed by name, so a fresh random name on every reconnect would orphan it, and a note to a peer that was live when it was sent is *bound* to that peer's session ID, so when adoption is declined (a live overlap) the reconnected connection — which registers under a new ID — instead inherits its predecessor's ID as a second mailbox identity in order to collect mail written before the restart. That inheritance is granted **only** by presenting the proxy session ID, never by answering to a name; a session that merely takes a free name inherits nothing, which is what keeps `addressee_id` a real boundary. The chain is bounded at one predecessor: each reconnect records its own ID, so a message unread across two restarts expires rather than being inherited indefinitely. Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads. `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers; it is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate).
 
 ## `[memory]` — per-workspace memory engine
 
@@ -645,17 +654,32 @@ The timeout is applied at the tool layer (`withLSPDeadline`) and is a no-op when
 the context already carries a deadline, so the cold-start handshake is never
 shortened.
 
-**LSP → topology fallback:** on LSP error/timeout, `workspace_symbols` and
-`file_outline` fall back to the topology index (when enabled), annotated
-`source=topology, mode=indexed-approximate`; a no-op when topology is disabled
-or has no match. `get_definition` **by name** (`symbol_name`) also falls back to
-the index when the server is unavailable — approximate (the declaration line
+**Except for the fallback-capable tools.** Every tool that can answer from the
+tree-sitter index instead — `read_symbol`, `file_outline`, `workspace_symbols`
+(both modes), `call_hierarchy`, `insert_before_symbol`, `insert_after_symbol`,
+`replace_symbol_body`, `move_symbol` — goes through `withFallbackLSPDeadline`
+and deliberately bounds its **server attempt** at half the time available, even
+when the caller already carries a deadline. The remainder is reserved for the
+local parse, which needs both headroom and a live context to run on. The tool's
+own budget is unchanged; only the lookup gives up sooner. The trade-off is that
+a server slower than that half-budget — one that would previously have answered
+— now yields an approximate index result, and the response says so
+(`LSP did not answer within <budget>`) rather than claiming the server is
+unavailable.
+
+**LSP → topology fallback:** on LSP error/timeout, `workspace_symbols`,
+`file_outline`, `read_symbol` and `call_hierarchy` fall back to the topology
+index (when enabled), annotated `source=topology, mode=indexed-approximate`
+(`call_hierarchy` reconstructs the hierarchy: callers via LSP references,
+callees via the topology call graph); a no-op when topology is disabled or has
+no match. `get_definition` **by name** (`symbol_name`) also falls back to the
+index when the server is unavailable — approximate (the declaration line
 resolved by name, annotated `source=topology, mode=indexed-approximate`), since
 the index has no position-level go-to-definition. The raw-position form of
-`get_definition` and the other position/semantic tools (`find_references`, the
-call/type hierarchies, `rename_symbol`) have no equivalent and surface the error
-unchanged — they need a precise position or a whole-workspace reference graph
-the index does not hold. **Empty-result fill:** `workspace_symbols` additionally
+`get_definition` and the other position/semantic tools (`find_references`,
+`explain_symbol`, `type_hierarchy`, `rename_symbol`) have no equivalent and
+surface the error unchanged — they need a precise position or a whole-workspace
+reference graph the index does not hold. **Empty-result fill:** `workspace_symbols` additionally
 supplements an *empty-but-no-error* LSP answer from the index for **tree-sitter**
 languages (annotated `topology fill … source=topology, mode=indexed-approximate`)
 — lazy servers like zls only answer for files they have already analysed, so a
@@ -668,7 +692,7 @@ excluded so an authoritative empty answer is never supplanted.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (38 tools today). Project-overridable.
+the non-lean remainder (37 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability
@@ -683,6 +707,14 @@ on `[mcp_servers.plumb]` in Codex's `config.toml`, `includeTools` on
 cannot be rescued by plumb's server-side bootstrap guarantee), and `plumb doctor`
 grades it. See [CLI reference → `plumb setup`](cli-reference.md#plumb-setup).
 
+Codex also has a separate client-side **deferred presentation** mode: `plumb setup codex`
+writes `omit_tools_from = ["direct"]` on its plumb entry. Plumb still advertises
+the full MCP catalogue, so Codex retains every schema and uses its own
+`tool_search` when a tool is needed; only the initial model-facing direct surface is
+trimmed. This is the appropriate context saving for Codex. Setting Plumb's
+server-side profile to `lean` instead withholds the schemas before Codex can search them,
+so it is deliberately not enabled by auto mode.
+
 plumb **cannot see** whether such an allowlist is in force: the client applies it
 before a call is ever made, and the daemon is shared and long-lived, so its
 environment is not reliably the connecting client's. `session_start` therefore
@@ -690,22 +722,55 @@ writes guidance for these three clients that is correct either way — it names
 only lean-set tools, and its no-language-server fallbacks point at the client's
 own file search rather than at `search_in_files`/`find_files`, which an allowlist
 would have removed. The profile line still reports `full` for them, because that
-is what plumb *advertised*; the filtering happens after.
+is what plumb *advertised*; the filtering happens after — but a second, conditional
+sentence (`tools.ClientSideAllowlistNote`) now follows it for exactly these three
+clients, naming the real lean-tool count and pointing at `plumb doctor` — which
+grades the allowlist's content (flags a stale, empty, or malformed one) and stays
+silent when it already matches today's lean set, so a clean run is not proof a
+filter is or isn't in force, only that doctor found nothing wrong with it.
 
-**Auto resolution is capability-gated, not a config setting.** `auto` resolves
-to **lean** only when the connecting client's entry in `internal/clientcaps`
-declares `ReliableDeferredToolDiscovery = true` — reviewed, evidence-based proof
-that its model reliably discovers and invokes a tool absent from its initial
-`tools/list` (a ToolSearch-style deferred mechanism). That flag is compiled-in
-registry data, not one of the config keys below and not something a project or
-env var can flip; no shipped client (including Codex and Gemini CLI, despite
-their strong native file/search/shell access) carries it yet, so `auto`
-resolves to **full** for every client today. `session_start` and `daemon_info`
-report which rule decided, via a stable reason string: `client-override`,
-`explicit-config`, `unknown-deferred-discovery`, `schema-discovery-only-client`,
-`verified-deferred-discovery`, or `unverified-deferred-discovery`. A fixed
-four-tool bootstrap set (`session_start`, `git`, `read_file`, `edit_file`) is
-always advertised regardless of the resolved profile.
+**Auto resolution is capability-gated (PLAN-369, strategy §5 W2-15), not a
+single config setting.** `auto` resolves to **lean** only when the connecting
+client's entry in `internal/clientcaps` declares `ReliableDeferredToolDiscovery
+= true` — reviewed, evidence-based proof that its model reliably discovers and
+invokes a tool absent from its initial `tools/list` (a ToolSearch-style
+deferred mechanism). That flag is compiled-in registry data, not a config key,
+and no shipped client carries it yet, so `auto` resolves to **full** for every
+client today, including an actually-unrecognised one (`Name == "unknown"`,
+matched no registry prefix). An earlier version of this card flipped that
+unrecognised-client default to `lean` on the theory that a session_start
+pointer keeps every tool reachable regardless of tools/list advertisement —
+review found `internal/clientcaps` carries only 7 registry rows against the
+~20 setup targets `docs/cli-reference.md` documents, so "unrecognised" meant
+overwhelmingly *documented* clients (cursor, opencode, goose, crush, qwen,
+augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~37/58 tools with
+zero evidence any of them can invoke a hidden one — exactly the tool-removal
+the card's Do-NOT forbids. That idea needs registry rows with positive
+deferral evidence before it can ship, not an absence of a row; the four
+resolution rungs below are what this PR actually carries:
+
+1. `SchemaDiscoveryOnly` (Claude Code, Kimi Code) → always `full`: the client
+   builds even its ToolSearch deferred list purely from `tools/list`, so a
+   lean-hidden tool has no schema to load.
+2. `ReliableDeferredToolDiscovery = true` → `lean` (`verified-deferred-discovery`)
+   — reviewed, evidence-based proof the client's model reliably discovers and
+   invokes a tool absent from its initial `tools/list`. No shipped client
+   carries it yet.
+3. `ClientSideAllowlist` (Kimi Code, Codex, Gemini CLI) → `full`
+   (`client-side-allowlist`) — plumb still serves everything; the reason is
+   distinct from the generic default purely so the banner can carry the caveat
+   above.
+4. Everyone else — a registered client with none of the above (Claude
+   Desktop, Junie), or an actually-unrecognised one — stays `full`
+   (`unverified-deferred-discovery` or `unknown-deferred-discovery`
+   respectively), unchanged from before this card.
+
+`session_start` and `daemon_info` report which rule decided, via a stable
+reason string: `client-override`, `explicit-config`, `unknown-deferred-discovery`,
+`schema-discovery-only-client`, `verified-deferred-discovery`,
+`client-side-allowlist`, or `unverified-deferred-discovery`. A fixed four-tool
+bootstrap set (`session_start`, `git`, `read_file`, `edit_file`) is always
+advertised regardless of the resolved profile.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
@@ -803,7 +868,7 @@ rather than granting, so nothing acquires the grant as a side effect of running
 in a script.
 
 One `plumb trust` records **one grant per workspace**, covering the project's
-task commands, its `[[command]]` allow-list, its `[commands]` shell policy, its
+task commands, its `[[command]]` allow-list, its `[commands]` execution policy, its
 LSP config, and its git policy. The record lives in `DataDir/trust.json`, never
 in the project, so a repository cannot mark itself trusted.
 
@@ -1023,8 +1088,9 @@ results; the call/type hierarchies are URI-bearing and route per-file.
 
 ## `[tasks.<language>]` — per-language build/test commands
 
-Five optional command slots per language, keyed by the `[lsp.<lang>]` id, run by
-the `run_task` tool and the `plumb build|lint|test|e2e|verify` CLI.
+Five built-in command slots per language, keyed by the `[lsp.<lang>]` id, plus
+any slot the project names for itself — run by the `run_task` tool and the
+`plumb build|lint|test|e2e|verify` and `plumb task <slot>` CLI.
 
 ```toml
 [tasks.go]
@@ -1064,6 +1130,81 @@ is the *absence* of an argument (`cargo test`, `swift test`).
 `typescript`, `swift` and `zig` ship without a placeholder: they scope through
 runner-specific flags whose spelling depends on the project, and a wrong guess is
 worse than none. Add your own `{target}` to those slots.
+
+#### A stored command with the placeholder spelled out
+
+If your config sets a slot to the shipped default **with the placeholder written
+out** — `[tasks.go] test = "go test ./..."`, the command plumb shipped before the
+placeholder existed — plumb restores the placeholder rather than refusing every
+scoped call. The rewrite is an exact equivalence, never a guess: the two
+spellings build the same argv when no target is given, so nothing about an
+unscoped run changes, and a target lands in the position plumb's own default
+designates.
+
+It fires **only** for that exact match. `go test -count=1 ./...` and
+`gotestsum ./...` are commands plumb never wrote, so they keep their refusal —
+which now quotes the stored command and names the config file holding it, so you
+can add a `{target}` where it belongs.
+
+### Project-defined slots
+
+`build`, `lint`, `test`, `e2e` and `verify` are Go's verbs, and they are not
+every toolchain's. A slot named under `[tasks.<lang>]` that is not one of those
+is a **project-defined slot**, run exactly like a built-in:
+
+```toml
+[tasks.typescript]
+check = "pnpm run check"       # run_task {slot: "check"}  /  plumb task check
+audit = "pnpm audit --prod"
+```
+
+A slot name is a lowercase identifier (`^[a-z][a-z0-9_-]{0,31}$`); a malformed
+name, or one shadowing a built-in, is rejected at load rather than ignored, since
+an ignored slot is a command you wrote and believe is configured. Project-defined
+slots are trust-gated and validated identically to built-ins — the trust hash
+binds every `(language, slot, command)` triple regardless of slot name.
+
+They are deliberately **not agent-writable**: `agent_config op=set` works from a
+registry of known keys, and a project-defined slot has no registry entry, so the
+allowlist fails closed. Add one by editing `.plumb/config.toml` and running
+`plumb trust`.
+
+Because the vocabulary belongs to the workspace, `run_task`'s `slot` carries no
+JSON-schema `enum` — a client would enforce one on its side and close the
+vocabulary again. A slot with no command is refused with the list of slots that
+have one, and `plumb task` with no arguments prints the same list.
+
+The five built-in verbs are registered before any workspace is known, so a
+project-defined slot cannot have a verb of its own; `plumb task <slot>` is the
+CLI path to it, and works for the built-ins too.
+
+### JavaScript package manager detection
+
+The shipped `typescript` defaults name the package manager the workspace
+declares, rather than assuming npm:
+
+| the workspace has | build | test |
+|---|---|---|
+| `pnpm-lock.yaml` | `pnpm run build` | `pnpm run test` |
+| `yarn.lock` | `yarn run build` | `yarn run test` |
+| `bun.lockb` / `bun.lock` | `bun run build` | `bun run test` |
+| `package-lock.json`, or nothing | `npm run build` | `npm test` |
+
+A corepack `"packageManager"` field in `package.json` wins over a lockfile — it
+is an explicit statement, whereas a lockfile can be a leftover. For the same
+reason a non-npm lockfile wins over `package-lock.json` when both are present: an
+abandoned npm lockfile is the usual residue of a migration.
+
+This is not the "never guess an uninstalled tool" rule being relaxed — it is that
+rule being applied. `npm run build` was *already* a guess for every JS/TS
+workspace, and on a pnpm or yarn project it is frequently wrong rather than
+merely unhelpful. A lockfile is the project stating its runner; reading it is
+evidence. Note `bun run test`, not `bun test`: the latter invokes bun's own test
+runner instead of the project's `test` script.
+
+Only a slot still holding the shipped default is rewritten, compared byte for
+byte. Anything you, your global config or the project set is left exactly as
+written — including a command that names npm deliberately.
 
 ### `working_dir` — when the module is not at the root
 
@@ -1121,20 +1262,30 @@ allow_writes = true         # sandbox: may write inside the workspace (default: 
 deny_network = false        # sandbox: cut network for this command (default: allowed)
 ```
 
-**`execute_shell_command` — the opt-in escape hatch.** Runs an arbitrary command
-through `sh -c` (pipes/redirects/globs work). It is the one place agent free-text
-reaches a command line, so it is **disabled by default**.
+**`[commands]` — the execution policy table.**
 
 ```toml
 [commands]
-allow_shell     = false     # gate for execute_shell_command
-require_sandbox = false     # if true, refuse to run (either tool) when no OS sandbox is active
-deny_network    = true      # execute_shell_command network egress; default ON — false to allow (a [[command]] sets its own, default false)
+require_sandbox = false     # if true, refuse to run a command when no OS sandbox is active
 ```
 
-**Trust gate.** A `[[command]]` entry — and a project raising `[commands]`
-`allow_shell` — supplied by a *project* `.plumb/config.toml` is honoured only
-after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
+> **Removed in 0.17.3: the `execute_shell_command` tool, and the two keys that
+> gated it.** plumb no longer registers an ad-hoc `sh -c` tool. Use `run_command`
+> with a `[[command]]` allow-list entry (a fixed argv, no free text on the command
+> line), or `run_task` for an ordinary build/lint/test slot.
+>
+> `[commands] allow_shell` and `[commands] deny_network` went with it, so
+> `require_sandbox` above is the whole table. Delete both keys from your config;
+> nothing else is needed. An existing config keeps loading either way — plumb
+> ignores an unknown key — and a workspace already granted `plumb trust` keeps its
+> grant, since the key has not changed. A leftover key in a *project*
+> `.plumb/config.toml` is still trust-gated (only `require_sandbox` is on the
+> `[commands]` free-list) and `plumb trust` discloses it as a `[commands]` key
+> plumb does not recognise. Table-level `deny_network` never applied to
+> `run_command`: set `deny_network` on the individual `[[command]]` entry.
+
+**Trust gate.** A `[[command]]` entry supplied by a *project* `.plumb/config.toml`
+is honoured only after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
 the project — a cloned repo cannot self-enable execution). Commands and policy in
 your *global* config are user-authored and always honoured. Editing a command in
 the TUI Settings **Commands** tab auto-trusts that workspace. A project that
@@ -1142,7 +1293,7 @@ declares its own `[[command]]` block **replaces** the global allow-list entirely
 (global entries are shadowed while the project defines any) — to keep a global
 command in a project, redefine it there.
 
-**OS sandbox.** Both tools run under a best-effort write jail: reads and process
+**OS sandbox.** `run_command` runs under a best-effort write jail: reads and process
 execution stay permissive (toolchains need them), writes are confined to a
 temp/cache set plus the workspace (when `allow_writes`), and the network is cut
 only when `deny_network`. macOS uses `sandbox-exec`, Linux uses `bwrap`; when the
@@ -1154,15 +1305,13 @@ timeout).
 
 **Two limits to understand.** (1) The sandbox is **integrity-only, not
 confidentiality**: reads stay permissive and a command inherits the daemon's
-environment, so an enabled+trusted `execute_shell_command` can *read* any file or
-secret your user can (`~/.ssh`, API keys in the daemon env). To bound the damage,
-the shell tier **denies the network by default** (`[commands] deny_network =
-true`) so a read secret cannot be exfiltrated over the wire; set `deny_network =
-false` (in global config, or a trusted project) only when a command genuinely
-needs the network. When a command runs with the network off, the tool's reply
-says `network=off` with a note, so the agent can tell you to flip it. Still: only
-enable the shell tier for repositories you trust. (A `[[command]]` entry sets its
-own per-command `deny_network`, default false, since those are deliberate.) (2) The writable set is tuned for **Go** (build
+environment, so a trusted `[[command]]` entry can *read* any file or secret your
+user can (`~/.ssh`, API keys in the daemon env). Set that entry's `deny_network =
+true` (default false, since an allow-list argv is deliberate) when it has no
+business reaching the network — a read secret then cannot be exfiltrated over the
+wire. When a command runs with the network off, the tool's reply says
+`network=off` with a note, so the agent can tell you to flip it. Still: only
+trust a project's own commands for repositories you trust. (2) The writable set is tuned for **Go** (build
 cache, module cache, `$TMPDIR`, the workspace). Other toolchains that write
 outside those (e.g. `cargo`'s `~/.cargo/registry`, `npm`'s cache) may need
 `allow_writes` and may fail under `require_sandbox = true`; only Go is validated.

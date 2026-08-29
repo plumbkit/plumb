@@ -255,11 +255,11 @@ func (t *StructuralQuery) queryUnusedContext(ctx context.Context, store *topolog
 // → "ctx". Returns "" when it cannot be determined unambiguously (grouped
 // params like "a, b context.Context", or no identifier before the type).
 func ctxParamName(sig string) string {
-	idx := strings.Index(sig, "context.Context")
-	if idx < 0 {
+	before0, _, ok := strings.Cut(sig, "context.Context")
+	if !ok {
 		return ""
 	}
-	before := strings.TrimRight(sig[:idx], " \t")
+	before := strings.TrimRight(before0, " \t")
 	// The token just before the type is the parameter name; bail on a grouped
 	// list (trailing comma) since the name no longer adjoins the type.
 	if strings.HasSuffix(before, ",") {

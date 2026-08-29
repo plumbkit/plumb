@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
@@ -44,19 +45,19 @@ type postWriteWorkspacePuller interface {
 // machinery: the client is not mode-aware, the mode is not pull/hybrid, the
 // post-write window is disabled, or the connection was downgraded (-32601)
 // mid-call.
-func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFresh bool, baseline *diagBaseline) (out string, handled bool) {
+func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline) (out postWriteDiagResult, handled bool) {
 	pp, ok := d.Client.(postWritePuller)
 	if !ok || !pullModeActive(pp.DiagnosticsMode(uri)) {
-		return "", false
+		return postWriteDiagResult{}, false
 	}
 	ceiling := d.postWriteDiagWindow()
 	if ceiling < 0 {
-		return "", false // post-write diagnostics disabled: the push body's honest handling applies
+		return postWriteDiagResult{}, false // post-write diagnostics disabled: the push body's honest handling applies
 	}
 	if ceiling == 0 {
 		ceiling = defaultPostWriteDiagWindow
 	}
-	if awaitFresh && ceiling < longPostWriteDiagWindow {
+	if opt.awaitFresh && ceiling < longPostWriteDiagWindow {
 		ceiling = longPostWriteDiagWindow
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ceiling)
@@ -67,29 +68,74 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 		if !pullModeActive(pp.DiagnosticsMode(uri)) {
 			// Downgraded (-32601 on a negotiated pull): this is a push
 			// connection now — let the push machinery finish this call.
-			return "", false
+			return postWriteDiagResult{}, false
 		}
-		// SAFETY INVARIANT: an explicit unverified note, never an empty
-		// (implicitly clean) suffix and never the ✓ line.
-		return fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err), true
+		return pullFailureResult(opt, err), true
 	}
+	return d.pullDifferentialResult(ctx, uri, before, content, opt, baseline, pulled, unresolved), true
+}
 
+// pullFailureResult renders a failed post-write pull.
+//
+// SAFETY INVARIANT: an explicit unverified note, never an empty (implicitly
+// clean) suffix and never the ✓ line. Its own fixed label — neither
+// authoritative nor a pre-write snapshot: the pull failed outright, so there is
+// no diagnostics data of any age to report. The delta says the same thing
+// structurally, so fail_on_new_errors reads "not confirmed" and leaves the write
+// alone.
+func pullFailureResult(opt postWriteDiagOpts, err error) postWriteDiagResult {
+	r := postWriteDiagResult{delta: unconfirmedDelta(diagScopeUnverified)}
+	r.text = postWriteDiagLabel(postWriteDiagLabelUnverified) +
+		fmt.Sprintf("\ndiagnostics: pull after write failed (%v) — state unverified; call diagnostics() to confirm", err)
+	if opt.structured {
+		r.text += r.delta.line()
+	}
+	return r
+}
+
+// pullDifferentialResult differences a successful pull against the pre-write
+// baseline and renders the block plus the structured delta — the pull-mode twin
+// of freshDiagResult.
+func (d WriteDeps) pullDifferentialResult(ctx context.Context, uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline, pulled []protocol.Diagnostic, unresolved []string) postWriteDiagResult {
 	var pre []protocol.Diagnostic
 	if baseline != nil {
 		pre = baseline.editedPre
 	}
 	lo, hi, touched := changedLineRange(before, content)
 	freshNew, likelyStale := diffFileDiagnostics(pre, pulled, lo, hi, touched)
-	out = formatDifferentialDiagnostics(freshNew, likelyStale, lineCount(content))
-	out += d.pullCrossFileDiagnostics(ctx, uri, baseline)
+	errs, warns, stale := splitDifferential(freshNew, likelyStale, lineCount(content))
+	text := renderDifferential(errs, warns, stale)
+	crossText, breaks, crossScope := d.pullCrossFileDiagnostics(ctx, uri, baseline)
+	text += crossText
 	if len(unresolved) > 0 {
-		out += "\n" + unverifiedPullNote(unresolved)
+		text += "\n" + unverifiedPullNote(unresolved)
 	}
-	if awaitFresh && out == "" {
-		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
+	if opt.awaitFresh && text == "" {
+		text = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
 	}
-	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, pulled, lo, hi, touched))
-	return out, true
+	preExisting := standingPreExistingErrors(pre, pulled, lo, hi, touched)
+	text += formatStandingPreExistingNote(preExisting)
+
+	delta := buildDelta(uri, errs, pre, pulled, breaks, crossScope, preExisting)
+	if slices.Contains(unresolved, uri) {
+		// The edited file's own report came back unresolved: what the cache holds
+		// for it was NOT validated by this pull, so the delta above describes an
+		// unconfirmed set. Say so structurally — the prose already hedges — so
+		// fail_on_new_errors cannot roll a write back on it.
+		delta = unconfirmedDelta(diagScopeUnverified)
+	}
+	r := postWriteDiagResult{delta: delta}
+	if opt.structured {
+		text += r.delta.line()
+	}
+	if text == "" {
+		return r
+	}
+	// A successful pull is synchronous with this write (the change
+	// notification is processed before the pull on the same connection), so
+	// the result is always authoritative — never a stale snapshot.
+	r.text = postWriteDiagLabel(postWriteDiagLabelAuthoritative) + text
+	return r
 }
 
 // pullEdited pulls the edited URI (previousResultId from the cache, unknown-ID
@@ -115,13 +161,13 @@ func (d WriteDeps) pullEdited(ctx context.Context, pp postWritePuller, uri strin
 // nothing to report, so the non-exhaustive caveat would be pure noise (and
 // would wrongly make the caller's out non-empty, suppressing the
 // awaitFresh ✓ clean-pass line for every gopls-class server).
-func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI string, baseline *diagBaseline) string {
+func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI string, baseline *diagBaseline) (string, []crossFileBreak, string) {
 	if baseline == nil || !d.crossFileEnabled() {
-		return ""
+		return "", nil, diagScopeNotChecked
 	}
 	cf, ok := d.Diag.(crossFileDiagSource)
 	if !ok {
-		return ""
+		return "", nil, diagScopeNotChecked
 	}
 	exhaustive := false
 	failNote := ""
@@ -134,18 +180,19 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 			}
 		}
 	}
-	root := ""
-	if d.WorkspaceFn != nil {
-		root = d.WorkspaceFn(context.Background())
+	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
+	out := formatCrossFileDiagnostics(breaks, d.workspaceRoot())
+	scope := diagScopeIncomplete
+	if exhaustive {
+		scope = diagScopeFresh
 	}
-	out := formatCrossFileDiagnostics(computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI), root)
 	if failNote != "" {
-		return out + failNote
+		return out + failNote, breaks, diagScopeIncomplete
 	}
 	if !exhaustive && out != "" {
 		out += "\n(cross-file check limited to files this pull reported on — not exhaustive in pull mode)"
 	}
-	return out
+	return out, breaks, scope
 }
 
 // workspacePullInto issues one bounded workspace/diagnostic request (previous

@@ -50,13 +50,24 @@ type skillCounts struct {
 }
 
 var skillContentCounts = map[string]skillCounts{
-	"plumb-chat":           {calls: 5, bullets: 3},
-	"plumb-diagnose":       {calls: 6, bullets: 2},
-	"plumb-explore":        {calls: 0, bullets: 14},
-	"plumb-git":            {calls: 10, bullets: 3},
-	"plumb-memory":         {calls: 8, bullets: 0},
-	"plumb-minimal-change": {calls: 0, bullets: 0},
-	"plumb-refactor":       {calls: 5, bullets: 0},
+	"plumb-chat": {calls: 5, bullets: 3},
+	// 7, not 6: PLAN-376 added a `diagnostics()` call-form example teaching the
+	// plain diagnostics() tool's separate INCOMPLETE label, alongside the
+	// existing await_diagnostics pair.
+	"plumb-diagnose": {calls: 7, bullets: 2},
+	// 1, not 0: PLAN-376 added a session_start({detail:"brief"}) worked example
+	// for cheap subagent re-orientation, on top of the existing 14 discovery-
+	// ladder roster bullets.
+	"plumb-explore": {calls: 1, bullets: 14},
+	"plumb-git":     {calls: 10, bullets: 3},
+	"plumb-memory":  {calls: 8, bullets: 0},
+	// 1, not 0: PLAN-376 added a minimal_diff_review(mode="changed") worked
+	// example alongside the Low-confidence-cap doctrine it now teaches.
+	"plumb-minimal-change": {calls: 1, bullets: 0},
+	// 7, not 5: PLAN-376 added a quick-reference row for read_multiple_files
+	// (batch reads before a multi-file edit) and one for edit_file's
+	// fail_on_new_errors (the refuse-to-break-the-build default verify move).
+	"plumb-refactor": {calls: 7, bullets: 0},
 	// 6, not 4: the skill gained two worked examples when the shipped test
 	// defaults grew {target} placeholders and topology_affected started emitting
 	// a target run_task can take (PLAN-378) — the very composition this file's

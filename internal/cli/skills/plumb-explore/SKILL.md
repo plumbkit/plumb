@@ -56,3 +56,7 @@ Drop down when matching lines are not enough and you need the surrounding code.
 ## 4. Read whole files only when about to edit
 
 Use `file_outline` and `read_symbol` to understand; save `read_file` for when you need to make changes. When you do read, copy the `mtime=` value from the response header and pass it as `expected_mtime` to `edit_file`.
+
+## Re-orienting cheaply
+
+A subagent that needs to re-establish workspace, language, branch, and diagnostics — without spending the full packet's memory descriptions and recent-commit prose — should call `session_start({detail: "brief"})` rather than the default. It returns workspace path, language, branch, a one-line git policy, diagnostics and active-peer COUNTS, memory NAMES only, and the edit-lane rule, all in ≤1.5 KB. Pass `detail: "full"` explicitly when the task needs the complete packet — full memory descriptions, recent commits, client-specific guidance. Omitting `detail` is not a reliable way to get it: the default is `full` on first contact but flips to `brief` automatically when this same `session_id` was already seen within the last 24h (a resumed conversation), so a resumed session that wants the full packet must ask for it by name.

@@ -2,10 +2,16 @@
 // (https://github.com/Kotlin/kotlin-lsp, Apache 2.0), which is built on the
 // IntelliJ platform and the Kotlin plugin.
 //
-// Validation status: validated (pull) — kotlin-lsp 262.9593.0, 2026-08-11,
-// macOS/arm64, against a resolvable Gradle project (Gradle 8.13, Kotlin 2.1.0).
-// Both gated integration tests run green against the real binary:
-// TestIntegration_DocumentSymbols and TestIntegration_PullDiagnostics.
+// Validation status: validated (pull), on both supported platforms — kotlin-lsp
+// 262.9593.0 on macOS/arm64 (2026-08-11, Gradle 8.13) and on Linux/x86_64
+// (2026-08-21, Gradle 9.7, JDK 26), each against a resolvable Gradle project.
+// The gated integration tests run green against the real binary:
+// TestIntegration_DocumentSymbols, TestIntegration_PullDiagnostics and
+// TestIntegration_AdvertisesPullUnderBothCapabilityShapes.
+//
+// The fixture pins Kotlin 2.2.20 with jvmToolchain(21), and both halves are
+// load-bearing on a modern JDK — see the comment on gradleFixture in
+// integration_test.go for the measurements.
 //
 // # Diagnostics are pull-only
 //

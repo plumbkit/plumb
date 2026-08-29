@@ -287,3 +287,25 @@ func TestFailureSummaryHonoursSince(t *testing.T) {
 		t.Errorf("totals ignored the filter: %d unclassified of %d calls", report.UnclassifiedCalls, report.TotalCalls)
 	}
 }
+
+// TestPreventedIncidentsCountsOnlyGuardKinds proves the PLAN-367 banner count
+// sums exactly the write-guard classifications (dirty-file here, via the
+// shared failureFixture), and excludes both an unrelated classified failure
+// (workspace boundary) and the unclassified row — a loose sum over "all
+// failures" would silently inflate this into a number nothing guarded.
+func TestPreventedIncidentsCountsOnlyGuardKinds(t *testing.T) {
+	db := failureFixture(t)
+	got := db.PreventedIncidents(Filter{Workspace: "/w"})
+	if got != 3 {
+		t.Errorf("PreventedIncidents = %d, want 3 (the three dirty-file rows only)", got)
+	}
+}
+
+// TestPreventedIncidentsNilDBIsZero mirrors the other stats readers' nil-safe
+// contract (SharedReadOnly can return a nil *DB before first use).
+func TestPreventedIncidentsNilDBIsZero(t *testing.T) {
+	var db *DB
+	if got := db.PreventedIncidents(Filter{}); got != 0 {
+		t.Errorf("nil DB PreventedIncidents = %d, want 0", got)
+	}
+}

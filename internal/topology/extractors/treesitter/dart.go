@@ -259,7 +259,7 @@ func (w *dartWalk) addDeclaration(n *tsg.Node, parent int64, prefix string) {
 // so there is no excuse for keying off position: `final` and `const` are the
 // immutable case at any scope, everything else is mutable.
 func dartBindingKind(decl string) topology.NodeKind {
-	for _, f := range strings.Fields(decl) {
+	for f := range strings.FieldsSeq(decl) {
 		switch f {
 		case "final", "const":
 			return topology.KindConstant

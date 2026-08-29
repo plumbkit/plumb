@@ -252,8 +252,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 
 	we, note, err := t.renameWorkspaceEdit(dctx, a)
 	if err != nil {
-		var pre preLSPErr
-		if errors.As(err, &pre) {
+		if pre, ok := errors.AsType[preLSPErr](err); ok {
 			return "", pre.err
 		}
 		return t.onRenameUnavailable(ctx, a, "the language server returned an error", err)
@@ -286,7 +285,9 @@ func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*p
 		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: no symbol named %q in %s", a.SymbolName, a.URI)}
 	}
 	if len(matches) > 1 {
-		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; use line/character to disambiguate", len(matches), a.SymbolName, a.URI)}
+		cands := disambiguatedNames(syms, matches)
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; disambiguate using one of: %s",
+			len(matches), a.SymbolName, a.URI, formatDisambiguation(cands))}
 	}
 	sym := matches[0]
 	return t.renameByPosition(ctx, a, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
@@ -314,10 +315,12 @@ func (e preLSPErr) Error() string { return e.err.Error() }
 func (e preLSPErr) Unwrap() error { return e.err }
 
 func (t *RenameSymbol) renameByPosition(ctx context.Context, a renameSymbolArgs, line, character uint32, allowSnap bool) (*protocol.WorkspaceEdit, string, error) {
-	we, err := t.client.Rename(ctx, protocol.RenameParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
-		Position:     protocol.Position{Line: line, Character: character},
-		NewName:      a.NewName,
+	we, err := retryOnServerNotReady(ctx, func() (*protocol.WorkspaceEdit, error) {
+		return t.client.Rename(ctx, protocol.RenameParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+			Position:     protocol.Position{Line: line, Character: character},
+			NewName:      a.NewName,
+		})
 	})
 	if err == nil {
 		return we, "", nil
@@ -535,10 +538,7 @@ const maxRenameDiffFiles = 20
 // or reconstructed is skipped (the rename itself is unaffected).
 func renameFileDiffs(we *protocol.WorkspaceEdit, files []string) string {
 	byPath := groupEditsByPath(we)
-	limit := len(files)
-	if limit > maxRenameDiffFiles {
-		limit = maxRenameDiffFiles
-	}
+	limit := min(len(files), maxRenameDiffFiles)
 	var sb strings.Builder
 	for _, path := range files[:limit] {
 		d := symbolEditsDiff(path, byPath[path])

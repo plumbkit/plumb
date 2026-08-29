@@ -115,7 +115,7 @@ type ServerInfo struct {
 	Name    string
 	Version string
 	// Instructions is included in the MCP initialize response. When non-empty
-	// it overrides DefaultInstructions; set to "-" to send no instructions.
+	// it overrides InstructionsForClient's render; set to "-" for none.
 	Instructions string
 }
 

@@ -16,27 +16,38 @@ import (
 // vanished files). See indexer.go for the worker loop, indexer_extract.go for
 // per-file extraction, and indexer_persist.go for the DB writes.
 
+// processDelete removes one file's rows and reports whether there was anything
+// to remove. A path the index never held changes nothing, so it reports false
+// and the derived-edge passes need not run for it.
 func (idx *Indexer) processDelete(ctx context.Context, relPath string) error {
+	_, err := idx.processDeleteChanged(ctx, relPath)
+	return err
+}
+
+func (idx *Indexer) processDeleteChanged(ctx context.Context, relPath string) (bool, error) {
 	_ = ctx
 	var fileID int64
 	row := idx.db.QueryRow(`SELECT id FROM topology_files WHERE path = ?`, relPath)
 	if err := row.Scan(&fileID); err == sql.ErrNoRows {
-		return nil
+		return false, nil
 	} else if err != nil {
-		return err
+		return false, err
 	}
 	tx, err := idx.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
 	if err := deleteFileNodes(tx, fileID); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.Exec(`DELETE FROM topology_files WHERE id = ?`, fileID); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // errResyncAborted is returned through filepath.Walk when the indexer is
@@ -44,9 +55,19 @@ func (idx *Indexer) processDelete(ctx context.Context, relPath string) error {
 // pruning — a partial walk must not delete files it simply hasn't visited yet.
 var errResyncAborted = errors.New("topology: resync aborted")
 
+// processResync walks the whole tree and reports whether anything changed.
+// A periodic resync over an untouched tree is the common case on a live daemon,
+// and reporting false for it is what keeps the derived-edge passes from
+// rebuilding a graph nothing has disturbed.
 func (idx *Indexer) processResync(ctx context.Context) error {
+	_, err := idx.processResyncChanged(ctx)
+	return err
+}
+
+func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 	present := make(map[string]bool)
 	processed := 0
+	changed := false
 	err := filepath.Walk(idx.workspace, func(path string, info os.FileInfo, walkErr error) error {
 		// Abort promptly on shutdown or context cancellation, independent of
 		// pacing. pace() is the only other place the walk observes idx.done/ctx,
@@ -78,28 +99,32 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 			return nil
 		}
 		present[rel] = true
-		if upErr := idx.processUpsert(ctx, rel); upErr != nil {
+		fileChanged, upErr := idx.processUpsertChanged(ctx, rel)
+		if upErr != nil {
 			return upErr
 		}
+		changed = changed || fileChanged
 		processed++
 		return idx.pace(ctx, processed)
 	})
 	if errors.Is(err, errResyncAborted) {
 		// Shutting down: skip prune so a partial walk cannot delete live files.
-		return nil
+		return changed, nil
 	}
 	if err != nil {
-		return fmt.Errorf("topology: resync walk: %w", err)
+		return changed, fmt.Errorf("topology: resync walk: %w", err)
 	}
-	if err := idx.pruneDeleted(present); err != nil {
-		return err
+	pruned, err := idx.pruneDeletedChanged(present)
+	if err != nil {
+		return changed || pruned, err
 	}
+	changed = changed || pruned
 	// A full resync builds a large transient working set (file reads, parse
 	// trees, node/edge slices). Release the pooled parse arena to the GC, then
 	// hand the freed pages back to the OS so RSS and HeapSys settle to steady
 	// state instead of lingering at the walk's peak.
 	idx.reclaimFn()
-	return nil
+	return changed, nil
 }
 
 // pace throttles the full resync walk: after every resyncBatch files it pauses
@@ -120,10 +145,17 @@ func (idx *Indexer) pace(ctx context.Context, processed int) error {
 	}
 }
 
+// pruneDeleted removes rows for files that have vanished from the tree and
+// reports whether it removed any.
 func (idx *Indexer) pruneDeleted(present map[string]bool) error {
+	_, err := idx.pruneDeletedChanged(present)
+	return err
+}
+
+func (idx *Indexer) pruneDeletedChanged(present map[string]bool) (bool, error) {
 	rows, err := idx.db.Query(`SELECT id, path FROM topology_files`)
 	if err != nil {
-		return err
+		return false, err
 	}
 	type entry struct {
 		id   int64
@@ -136,8 +168,13 @@ func (idx *Indexer) pruneDeleted(present map[string]bool) error {
 			stale = append(stale, e)
 		}
 	}
+	scanErr := rows.Err()
 	rows.Close()
+	if scanErr != nil {
+		return false, fmt.Errorf("topology: prune scan: %w", scanErr)
+	}
 	var firstErr error
+	removed := false
 	for _, e := range stale {
 		tx, txErr := idx.db.Begin()
 		if txErr != nil {
@@ -160,11 +197,15 @@ func (idx *Indexer) pruneDeleted(present map[string]bool) error {
 			}
 			continue
 		}
-		if err := tx.Commit(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("topology: prune commit for %q: %w", e.path, err)
+		if err := tx.Commit(); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("topology: prune commit for %q: %w", e.path, err)
+			}
+			continue
 		}
+		removed = true
 	}
-	return firstErr
+	return removed, firstErr
 }
 
 // shouldSkipDir returns true for directories that should never be indexed.

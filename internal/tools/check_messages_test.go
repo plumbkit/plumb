@@ -560,7 +560,7 @@ func TestCheckMessages_ReceiptMergesStoresOldestFirst(t *testing.T) {
 	}
 
 	lines := []string{}
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(l), "to ") {
 			lines = append(lines, strings.TrimSpace(l))
 		}

@@ -24,6 +24,14 @@ var transactionApplySchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Allow editing files that have uncommitted changes in their git repository. Default false — the transaction is refused if any target file is dirty. Pass true to proceed anyway."
     },
+    "await_diagnostics": {
+      "type": "boolean",
+      "description": "When true, wait for the language server to re-analyse each written file and append a labelled per-file diagnostics block with a machine-readable 'diagnostics delta' line. Default false."
+    },
+    "fail_on_new_errors": {
+      "type": "boolean",
+      "description": "When true (implies await_diagnostics), roll the WHOLE transaction back if any written file is CONFIRMED to have gained new errors — all-or-nothing. An unconfirmed check never rolls back; nor do warnings or pre-existing errors. Default false."
+    },
     "operations": {
       "type": "array",
       "description": "Ordered list of per-file edit groups. Every file is validated first; only if all validate do any writes happen.",
@@ -97,12 +105,9 @@ func (*TransactionApply) Description() string {
 		"validated against the on-disk content first; if any old_string is missing or " +
 		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
 		"the already-written files are rolled back to their pre-transaction content. " +
-		"Writes are crash-durable: each temp file is fsynced before its rename and every " +
-		"touched parent directory is fsynced before the call returns. " +
 		"Per-path locks prevent interleaving with other write tools. Use for refactors " +
-		"that must land as one unit (cross-file rename of a string, coordinated config + " +
-		"caller updates, etc.). Up to 50 operations per call. The response lists each " +
-		"file with a per-file unified diff (unless show_write_diff is disabled)."
+		"that must land as one unit. Up to 50 operations per call; the response lists " +
+		"each file with a unified diff unless show_write_diff is off."
 }
 
 type txOperation struct {
@@ -113,8 +118,10 @@ type txOperation struct {
 }
 
 type transactionApplyArgs struct {
-	DirtyOk    bool          `json:"dirty_ok"`
-	Operations []txOperation `json:"operations"`
+	DirtyOk          bool          `json:"dirty_ok"`
+	AwaitDiagnostics bool          `json:"await_diagnostics"`
+	FailOnNewErrors  bool          `json:"fail_on_new_errors"`
+	Operations       []txOperation `json:"operations"`
 }
 
 // txPrepared is the in-memory result of validating one operation: the
@@ -171,18 +178,46 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 
-	written, err := t.txPhase2Write(ctx, prepared)
+	// Baselines must predate the writes, so the per-file differential can tell an
+	// error this transaction introduced from one already there.
+	baselines := t.txCaptureBaselines(a, prepared)
+
+	written, txl, err := t.txPhase2Write(ctx, prepared)
 	if err != nil {
 		return "", err
 	}
+	if !a.FailOnNewErrors {
+		// Ungated: the transaction is ACCEPTED the moment its writes land, so the
+		// durable log closes here — before the notify pass, exactly as it did
+		// before the gate existed. Holding it open any longer would mean a daemon
+		// restart during, say, an await_diagnostics wait REVERTED a transaction
+		// that had already succeeded: a behaviour change for a call that never
+		// asked for the gate.
+		txl.Commit()
+	}
 
-	t.txPhase3Notify(ctx, written)
+	notifyFailed := t.txPhase3Notify(ctx, written)
+	diag := t.txPostWriteDiagnostics(a, written, baselines, notifyFailed)
+	if a.FailOnNewErrors {
+		if diag.anyNewErrors() {
+			// Still holding every per-path lock: write, analysis and rollback are
+			// one critical section for the whole batch.
+			return "", t.txRollbackNewErrors(ctx, written, txl, diag)
+		}
+		// Gated and accepted: only NOW is the transaction final. The log stayed
+		// open across the gate on purpose — a crash mid-gate replays back to the
+		// pre-transaction state, which is the same answer the gate would have
+		// given.
+		txl.Commit()
+	}
+
 	var result strings.Builder
 	result.WriteString(formatTransactionResult(written, t.deps.showWriteDiff()))
 	for _, w := range written {
 		t.deps.notifyTopology(w.path)
 		result.WriteString(t.deps.reportQuality(ctx, w.path))
 	}
+	result.WriteString(diag.text())
 	return result.String(), nil
 }
 
@@ -366,7 +401,12 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 
 // txPhase2Write writes all prepared operations with an in-memory mtime guard
 // and a durable rollback log. Rolls back already-written files on failure.
-func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepared) ([]txPrepared, error) {
+//
+// On success it returns the log UNCOMMITTED: the caller owns the decision that
+// the transaction is accepted (the fail_on_new_errors gate runs after this), and
+// commits it then. The returned log is never nil on the success path, so the
+// caller can call Commit unconditionally.
+func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepared) ([]txPrepared, *txlog.Log, error) {
 	workspace := ""
 	if t.deps.WorkspaceFn != nil {
 		workspace = t.deps.WorkspaceFn(ctx)
@@ -383,7 +423,7 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 			if !info.ModTime().Equal(p.preMtime) {
 				rollback(written)
 				txl.Rollback()
-				return nil, fmt.Errorf(
+				return nil, nil, fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written),
 				)
@@ -396,35 +436,41 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 		if _, err := safeWrite(p.path, []byte(p.after), p.perm); err != nil {
 			rollback(written)
 			txl.Rollback()
-			return nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
+			return nil, nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
 				p.path, err, len(written))
 		}
 		written = append(written, p)
 	}
-	txl.Commit()
 	// No extra directory fsync here: every write above went through safeWrite,
 	// which fsyncs the staged temp file before its rename and the file's parent
 	// directory after it. That covers the rollback path too, since rollback()
 	// restores content through the same safeWrite.
-	return written, nil
+	return written, txl, nil
 }
 
 // txPhase3Notify sends LSP notifications and invalidates the symbol cache for
-// every successfully written file.
-func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepared) {
+// every successfully written file. It reports, per path, whether a notification
+// FAILED: a server that was not told a file changed cannot produce diagnostics
+// that reflect this transaction, and the post-write pass must not read a
+// coincidental publish as confirmation.
+func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepared) map[string]bool {
+	failed := make(map[string]bool, len(written))
 	for _, p := range written {
 		uri := "file://" + p.path
 		if err := notifyLSP(ctx, t.deps.Client, p.path, protocol.FileChanged); err != nil {
+			failed[p.path] = true
 			slog.Warn("transaction_apply: LSP notification failed", "path", p.path, "err", err)
 		}
 		if t.deps.PostWriteNotifyFn != nil {
 			if err := t.deps.PostWriteNotifyFn(ctx, p.path); err != nil {
+				failed[p.path] = true
 				slog.Warn("transaction_apply: post-write adapter notification failed", "path", p.path, "err", err)
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
 		t.deps.recordWritten(ctx, p.path)
 	}
+	return failed
 }
 
 func formatTransactionResult(written []txPrepared, showDiff bool) string {

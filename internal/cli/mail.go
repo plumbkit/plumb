@@ -135,25 +135,39 @@ type mailReport struct {
 }
 
 func runMail(_ *cobra.Command, _ []string) error {
-	info, err := resolveMailSession()
+	selector, value, err := mailSelector()
 	if err != nil {
 		return err
 	}
-	ages, err := mailWaiting(collab.Claimant{Name: info.Name, ID: info.ID, Workspace: info.Folder})
+	report, err := mailReportFor(selector, value)
 	if err != nil {
 		return err
-	}
-	report := mailReport{
-		Session:     info.Name,
-		Workspace:   info.Folder,
-		Count:       len(ages),
-		AgesSeconds: ages,
 	}
 	if mailFlagJSON {
 		return json.NewEncoder(os.Stdout).Encode(report)
 	}
 	fmt.Println(mailSentence(report))
 	return nil
+}
+
+// mailReportFor is the common read-only probe for the CLI and lifecycle hooks.
+// The selector must already have been validated by the caller when it comes from
+// flags; hook callers use fixed selectors and never accept a user-controlled name.
+func mailReportFor(selector, value string) (mailReport, error) {
+	info, err := resolveMailSessionFor(selector, value)
+	if err != nil {
+		return mailReport{}, err
+	}
+	ages, err := mailWaiting(collab.Claimant{Name: info.Name, ID: info.ID, Workspace: info.Folder})
+	if err != nil {
+		return mailReport{}, err
+	}
+	return mailReport{
+		Session:     info.Name,
+		Workspace:   info.Folder,
+		Count:       len(ages),
+		AgesSeconds: ages,
+	}, nil
 }
 
 // resolveMailSession finds the one live session the selector names. Ambiguity is
@@ -164,6 +178,10 @@ func resolveMailSession() (session.Info, error) {
 	if err != nil {
 		return session.Info{}, err
 	}
+	return resolveMailSessionFor(selector, value)
+}
+
+func resolveMailSessionFor(selector, value string) (session.Info, error) {
 	all, err := session.List()
 	if err != nil {
 		return session.Info{}, fmt.Errorf("listing sessions: %w", err)

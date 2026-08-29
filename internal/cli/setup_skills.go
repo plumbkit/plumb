@@ -112,22 +112,59 @@ type skillResult struct {
 // A target with no skills directory yields no results at all — distinct from
 // "results that all say unchanged", which is what a no-op refresh of a
 // skill-capable client looks like.
-func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
+//
+// dryRun computes and reports every action — including the cleanup pass —
+// without writing SKILL.md, the manifest, a ".plumb-new" conflict file, or
+// deleting a backup; it is `plumb skills sync --check`'s whole implementation.
+// A skill whose SKILL.md is in conflict (see installSkill) has its reference
+// notes left untouched too, rather than rewriting material next to a file the
+// user is meant to review.
+func installSkillsFor(t setupTarget, dryRun bool) (dir string, results []skillResult, cleanup skillCleanupReport) {
 	if t.skillsDirFn == nil {
-		return "", nil
+		return "", nil, skillCleanupReport{}
 	}
 	dir, err := t.skillsDirFn()
 	if err != nil {
-		return "", []skillResult{{name: t.name, err: fmt.Errorf("resolving skills directory: %w", err)}}
+		return "", []skillResult{{name: t.name, err: fmt.Errorf("resolving skills directory: %w", err)}}, skillCleanupReport{}
 	}
+
+	manifest, err := loadSkillManifest(dir)
+	if err != nil {
+		return dir, []skillResult{{name: t.name, err: err}}, skillCleanupReport{}
+	}
+	before := cloneSkillManifest(manifest)
+
 	for _, skill := range embeddedSkills() {
-		action, err := installSkill(dir, skill.Name, skill.Content)
-		if err == nil {
-			action, err = installSkillReferences(dir, skill, action)
+		action, err := installSkill(dir, skill.Name, skill.Content, manifest, dryRun)
+		if err == nil && !strings.HasPrefix(action, skillActionConflict) {
+			action, err = installSkillReferences(dir, skill, action, dryRun)
 		}
 		results = append(results, skillResult{name: skill.Name, action: action, err: err})
 	}
-	return dir, results
+
+	if !dryRun && !manifestsEqual(before, manifest) {
+		if err := saveSkillManifest(dir, manifest); err != nil {
+			results = append(results, skillResult{name: "manifest", err: fmt.Errorf("saving skills manifest: %w", err)})
+		}
+	}
+
+	cleanup = cleanupSkillBackups(dir, before, manifest, dryRun)
+	return dir, results, cleanup
+}
+
+// manifestsEqual reports whether a and b record the same entries — used to
+// skip rewriting the manifest file when a sync changed nothing, so a no-op
+// sync is a no-op on disk too, not just in its report.
+func manifestsEqual(a, b *skillManifest) bool {
+	if len(a.Skills) != len(b.Skills) {
+		return false
+	}
+	for k, v := range a.Skills {
+		if b.Skills[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // installSkillReferences writes the skill's reference notes into
@@ -146,13 +183,18 @@ func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
 // plain material a user may open in any viewer, and stamping it would buy
 // nothing: staleness is already decided per skill by skillStateAt, which reads
 // the references too.
-func installSkillReferences(skillsDir string, skill embeddedSkill, action string) (string, error) {
+//
+// dryRun computes and reports the action without writing or backing up
+// anything — `plumb skills sync --check`'s reference leg.
+func installSkillReferences(skillsDir string, skill embeddedSkill, action string, dryRun bool) (string, error) {
 	if len(skill.References) == 0 {
 		return action, nil
 	}
 	dir := filepath.Join(skillsDir, skill.Name, "references")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return action, fmt.Errorf("creating references directory: %w", err)
+	if !dryRun {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return action, fmt.Errorf("creating references directory: %w", err)
+		}
 	}
 	for _, ref := range skill.References {
 		dst := filepath.Join(dir, ref.Name)
@@ -161,14 +203,19 @@ func installSkillReferences(skillsDir string, skill embeddedSkill, action string
 		case readErr == nil && string(existing) == ref.Content:
 			continue
 		case readErr == nil:
-			if err := backupFile(dst); err != nil {
-				return action, fmt.Errorf("backing up %s: %w", dst, err)
+			if !dryRun {
+				if err := backupFile(dst); err != nil {
+					return action, fmt.Errorf("backing up %s: %w", dst, err)
+				}
 			}
 			action = strongerSkillAction(action, "updated")
 		case os.IsNotExist(readErr):
 			action = strongerSkillAction(action, "installed")
 		default:
 			return action, fmt.Errorf("reading %s: %w", dst, readErr)
+		}
+		if dryRun {
+			continue
 		}
 		if err := fsync.AtomicWrite(dst, []byte(ref.Content), setupWriteOptions(".plumb_skill_ref_*.md")); err != nil {
 			return action, fmt.Errorf("installing skill reference: %w", err)
@@ -189,53 +236,101 @@ func strongerSkillAction(a, b string) string {
 	return a
 }
 
-// installSkill writes content to <skillsDir>/<name>/SKILL.md, creating
-// the directory if needed. Returns "installed", "updated", or "unchanged".
-// The written copy carries plumb's provenance marker (see stampSkillContent);
-// a re-run over identical content reports "unchanged" regardless of the
-// marker's age, refreshing only the stamp when it is missing or outdated.
-// If the file already exists with different content it is backed up first.
-// Atomic write via temp-file + rename.
-func installSkill(skillsDir, name, content string) (string, error) {
-	dir := filepath.Join(skillsDir, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("creating skill directory: %w", err)
-	}
+// skillActionConflict marks a skill whose on-disk SKILL.md cannot be proven
+// to be plumb's own: either the manifest has no entry for it and content
+// differs from what is being shipped now (a manifest-less directory can
+// never prove ownership — see lastShippedHash), or the manifest's recorded
+// hash does not match. Their file is left completely untouched; the
+// proposed content is written instead to a "<name>.plumb-new" sibling FILE
+// (not a directory, so it can never be mistaken for another skill bundle by
+// a client that scans the skills directory for one) — UNLESS that file
+// already holds this exact proposal, in which case nothing is rewritten, so
+// re-running sync never clobbers a user's in-progress merge inside it. The
+// action string carries which case applies: exactly skillActionConflict
+// when the proposal was written or changed this run, or
+// skillActionConflict+conflictUnchangedSuffix when it already matched.
+const (
+	skillActionConflict     = "conflict"
+	conflictUnchangedSuffix = " (proposal unchanged)"
+)
 
+// installSkill writes content to <skillsDir>/<name>/SKILL.md, creating the
+// directory if needed. Returns "installed", "updated", "unchanged", or
+// skillActionConflict.
+//
+// manifest is the sync's hash ledger (see skillManifest): it is how
+// installSkill tells "plumb's own content changed between versions" (a
+// legitimate update — replaced in place, no backup) from "the file matches
+// neither what plumb shipped last time nor what it is shipping now" (the
+// user edited it — see skillActionConflict). manifest is updated in memory
+// for the caller to persist; this function never writes it to disk.
+//
+// dryRun computes and reports the action without writing SKILL.md, the
+// manifest, or a ".plumb-new" file — `plumb skills sync --check`'s per-skill
+// leg.
+func installSkill(skillsDir, name, content string, manifest *skillManifest, dryRun bool) (string, error) {
+	dir := filepath.Join(skillsDir, name)
 	dst := filepath.Join(dir, "SKILL.md")
 	stamped := stampSkillContent(content)
+	newHash := hashSkillContent(content)
 	existing, readErr := os.ReadFile(dst)
+
+	write := func(action string) (string, error) {
+		manifest.Skills[name] = skillManifestEntry{Hash: newHash, Version: Version}
+		if dryRun {
+			return action, nil
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("creating skill directory: %w", err)
+		}
+		if err := fsync.AtomicWrite(dst, []byte(stamped), setupWriteOptions(".plumb_skill_*.md")); err != nil {
+			return "", fmt.Errorf("installing skill: %w", err)
+		}
+		return action, nil
+	}
 
 	switch {
 	case readErr == nil && string(existing) == stamped:
+		manifest.Skills[name] = skillManifestEntry{Hash: newHash, Version: Version}
 		return "unchanged", nil
 	case readErr == nil && stripSkillMarker(string(existing)) == content:
 		// Same skill with a stale or missing stamp — refresh the marker in
 		// place. The content is untouched, so this is not an "update" and
-		// needs no backup.
-		if err := fsync.AtomicWrite(dst, []byte(stamped), setupWriteOptions(".plumb_skill_*.md")); err != nil {
-			return "", fmt.Errorf("restamping skill: %w", err)
-		}
-		return "unchanged", nil
+		// carries no conflict risk.
+		return write("unchanged")
 	case readErr == nil:
-		// File exists but content differs — back up before overwriting.
-		if err := backupFile(dst); err != nil {
-			return "", fmt.Errorf("backing up %s: %w", dst, err)
+		diskHash := hashSkillContent(stripSkillMarker(string(existing)))
+		if oldHash, known := lastShippedHash(manifest, name); known && diskHash == oldHash {
+			return write("updated")
 		}
+		return writeConflictProposal(skillsDir, name, stamped, dryRun)
 	case os.IsNotExist(readErr):
-		// File does not exist — fresh install, no backup needed.
+		return write("installed")
 	default:
 		return "", fmt.Errorf("reading %s: %w", dst, readErr)
 	}
+}
 
-	if err := fsync.AtomicWrite(dst, []byte(stamped), setupWriteOptions(".plumb_skill_*.md")); err != nil {
-		return "", fmt.Errorf("installing skill: %w", err)
+// writeConflictProposal reports name as a conflict and, unless dryRun,
+// writes stamped to "<name>.plumb-new" — but only when that differs from
+// what is already there, so a re-run leaves the file alone when the
+// proposal itself has not changed. This does NOT protect against a
+// modified ".plumb-new": if the user has edited that file themselves (or
+// left notes inside it), a differing proposal still replaces it outright —
+// the guard only skips the write when content is already identical. See
+// skillActionConflict for the two action strings this can return.
+func writeConflictProposal(skillsDir, name, stamped string, dryRun bool) (string, error) {
+	newFile := filepath.Join(skillsDir, name+".plumb-new")
+	if existing, err := os.ReadFile(newFile); err == nil && string(existing) == stamped {
+		return skillActionConflict + conflictUnchangedSuffix, nil
 	}
-
-	if os.IsNotExist(readErr) {
-		return "installed", nil
+	if dryRun {
+		return skillActionConflict, nil
 	}
-	return "updated", nil
+	if err := fsync.AtomicWrite(newFile, []byte(stamped), setupWriteOptions(".plumb_skill_new_*.md")); err != nil {
+		return "", fmt.Errorf("writing %s: %w", newFile, err)
+	}
+	return skillActionConflict, nil
 }
 
 // skillMarkerPrefix opens plumb's provenance marker — one HTML comment line,
@@ -299,7 +394,7 @@ func parseSkillMarker(line string) (string, bool) {
 // skillMarkerVersion returns the version recorded by the first provenance
 // marker in data, if one is present.
 func skillMarkerVersion(data string) (string, bool) {
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		if v, ok := parseSkillMarker(line); ok {
 			return v, true
 		}

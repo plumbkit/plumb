@@ -1,13 +1,12 @@
 package cli
 
-// conn_commands.go wires run_command and execute_shell_command to the session:
-// it resolves a [[command]] allow-list entry (or the shell policy) for the
-// workspace and applies the per-workspace trust gate. Mirrors conn_tasks.go: a
-// project-supplied command — and a project raising [commands] allow_shell — runs
-// only after `plumb trust`; global-config commands and policy are user-authored
-// and always honoured. The untrusted project's config is never forced back in
-// LoadProject (that is reserved for fields with no per-call gate); the gate lives
-// here, where the resolver can distinguish a project entry from a global one.
+// conn_commands.go wires run_command to the session: it resolves a [[command]]
+// allow-list entry for the workspace and applies the per-workspace trust gate.
+// Mirrors conn_tasks.go: a project-supplied command runs only after
+// `plumb trust`; global-config commands are user-authored and always honoured.
+// The untrusted project's config is never forced back in LoadProject (that is
+// reserved for fields with no per-call gate); the gate lives here, where the
+// resolver can distinguish a project entry from a global one.
 //
 // The gate reads v.execTrusted, which config apply resolved from the same bytes
 // that produced v.commands / v.commandPolicy. It is NOT a trust-store lookup at
@@ -79,79 +78,6 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 		RequireSandbox: s.effectiveRequireSandbox(),
 		Provenance:     provenance,
 	}, nil
-}
-
-// shellResolver resolves the execute_shell_command policy for this workspace,
-// applying the trust gate to a project that enables shell execution.
-func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
-	ws := s.workspace()
-	if ws == "" {
-		return tools.ResolvedShell{}, errors.New("execute_shell_command: no workspace is attached")
-	}
-	base := s.store.Current()
-	v := s.view()
-	trusted := v.execTrusted
-	allowShell := gatedAllowShell(base.CommandPolicy, v.commandPolicy, trusted)
-	if !allowShell {
-		if !trusted && v.commandPolicy.AllowShell {
-			return tools.ResolvedShell{}, fmt.Errorf(
-				"execute_shell_command: this project's .plumb/config.toml enables shell execution, but its current content is not trusted. "+
-					"review it, then run `plumb trust` in %s", ws)
-		}
-		// Lead with run_command, not allow_shell. The refusal used to name only the
-		// blanket switch, so the one visible way forward was the broadest one — and a
-		// caller that just wants `wc -l` on a file has no reason to enable an
-		// unrestricted shell that inherits the daemon environment. A [[command]] entry
-		// is a fixed argv with no free text, needs no trust when it lives in the global
-		// config, and is what most refusals here actually want.
-		return tools.ResolvedShell{}, errors.New("execute_shell_command is disabled. " +
-			"For a command you run repeatedly, prefer run_command: add a [[command]] entry " +
-			"(name + fixed exec argv) to your global config and call it by name — no shell, " +
-			"no free text on the command line, and no trust prompt. " +
-			"Only for genuinely ad-hoc commands, enable this tool with [commands] allow_shell = true " +
-			"in your global config, or in this project's .plumb/config.toml plus `plumb trust` — " +
-			"note its sandbox confines writes, not reads, so the command can read any file and " +
-			"secret you can")
-	}
-	return tools.ResolvedShell{
-		WorkingDir: ws,
-		Sandbox: tools.SandboxOpts{
-			WorkspaceRoot: ws,
-			// The shell tier is trusted and opt-in, so workspace writes are expected
-			// (formatters, code generators). The sandbox still confines writes away
-			// from the rest of the filesystem.
-			AllowWrites: true,
-			// The jail is integrity-only (reads stay permissive), so [commands]
-			// deny_network is the egress control against a shell command that reads a
-			// secret and exfiltrates it. On by default; trusted config may re-open it.
-			DenyNetwork: gatedDenyNetwork(base.CommandPolicy, v.commandPolicy, trusted),
-		},
-		RequireSandbox: s.effectiveRequireSandbox(),
-	}, nil
-}
-
-// gatedAllowShell applies the trust rule to execute_shell_command: an untrusted
-// project's .plumb/config.toml cannot widen shell access, so the merged (project)
-// value is honoured only when the workspace is trusted; otherwise the global base
-// value wins. A project narrowing shell to false while untrusted is likewise not
-// honoured (base wins) — an untrusted project can neither raise nor lower it.
-func gatedAllowShell(base, merged config.CommandsConfig, trusted bool) bool {
-	if trusted {
-		return merged.AllowShell
-	}
-	return base.AllowShell
-}
-
-// gatedDenyNetwork applies the trust rule to the shell tier's deny_network
-// (default true): the merged (project) value is honoured only when the workspace
-// is trusted, otherwise the global base value wins. So an untrusted project can
-// neither re-open the network (deny_network=false ignored) nor is its extra
-// caution meaningful — a trusted user/project is the only way to allow egress.
-func gatedDenyNetwork(base, merged config.CommandsConfig, trusted bool) bool {
-	if trusted {
-		return merged.DenyNetwork
-	}
-	return base.DenyNetwork
 }
 
 // effectiveRequireSandbox is the most-restrictive require_sandbox across the

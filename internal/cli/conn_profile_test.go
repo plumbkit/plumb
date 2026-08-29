@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,12 +85,15 @@ func TestMaybeNotifyToolProfileChange_NoNotifierIsNoOp(t *testing.T) {
 // via an explicit, verified clientcaps.ReliableDeferredToolDiscovery
 // declaration, never inferred from native file/search possession — codex has
 // NativeFileRead/NativeSearch but no verified deferred-discovery capability,
-// so auto mode must resolve it to full.
+// so auto mode must resolve it to full. The reason is now "client-side-allowlist"
+// (PLAN-369): codex's ClientSideAllowlist flag earns it a distinct rung in the
+// ladder from the generic conservative default, so the banner can render the
+// client-side-filter caveat truthfully — the served profile is unchanged.
 func TestResolveToolProfile_CodexAutoResolvesFull(t *testing.T) {
 	s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "codex")
 	profile, reason := s.resolveToolProfile()
-	if profile != "full" || reason != "unverified-deferred-discovery" {
-		t.Errorf("resolveToolProfile() = (%q, %q), want (\"full\", \"unverified-deferred-discovery\")", profile, reason)
+	if profile != "full" || reason != "client-side-allowlist" {
+		t.Errorf("resolveToolProfile() = (%q, %q), want (\"full\", \"client-side-allowlist\")", profile, reason)
 	}
 }
 
@@ -104,7 +108,7 @@ func TestAutoProfileFor(t *testing.T) {
 		wantReason  string
 	}{
 		{
-			"unknown client",
+			"unrecognised client (unknown-deferred-discovery)",
 			clientcaps.Capabilities{Name: "unknown"},
 			"full", "unknown-deferred-discovery",
 		},
@@ -119,7 +123,12 @@ func TestAutoProfileFor(t *testing.T) {
 			"lean", "verified-deferred-discovery",
 		},
 		{
-			"unverified deferred discovery (conservative default)",
+			"client-side allowlist",
+			clientcaps.Capabilities{Name: "some-client", ClientSideAllowlist: true},
+			"full", "client-side-allowlist",
+		},
+		{
+			"unverified deferred discovery (registered client, conservative default)",
 			clientcaps.Capabilities{Name: "some-client"},
 			"full", "unverified-deferred-discovery",
 		},
@@ -143,13 +152,13 @@ func TestResolveToolProfile(t *testing.T) {
 		wantReason string
 	}{
 		{"auto + claude-code => full (schema-discovery only)", config.ToolsConfig{Profile: "auto"}, "claude-code", "full", "schema-discovery-only-client"},
-		{"auto + codex => full (unverified deferred discovery)", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "full", "unverified-deferred-discovery"},
-		{"auto + gemini => full (unverified deferred discovery)", config.ToolsConfig{Profile: "auto"}, "gemini-cli/1.0.0", "full", "unverified-deferred-discovery"},
+		{"auto + codex => full (client-side allowlist)", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "full", "client-side-allowlist"},
+		{"auto + gemini => full (client-side allowlist)", config.ToolsConfig{Profile: "auto"}, "gemini-cli/1.0.0", "full", "client-side-allowlist"},
 		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full", "unverified-deferred-discovery"},
-		{"auto + unknown => full", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full", "unknown-deferred-discovery"},
+		{"auto + unrecognised client => full (unknown-deferred-discovery)", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full", "unknown-deferred-discovery"},
 		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean", "explicit-config"},
 		{"explicit full wins over claude-code", config.ToolsConfig{Profile: "full"}, "claude-code", "full", "explicit-config"},
-		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "full", "unverified-deferred-discovery"},
+		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "full", "client-side-allowlist"},
 		{
 			"per-client override beats profile",
 			config.ToolsConfig{Profile: "full", ClientProfiles: map[string]string{"claude-code": "lean"}},
@@ -218,9 +227,7 @@ func TestToolVisible_BootstrapAlwaysVisible(t *testing.T) {
 		delete(tools.LeanTools, name)
 	}
 	defer func() {
-		for name, v := range saved {
-			tools.LeanTools[name] = v
-		}
+		maps.Copy(tools.LeanTools, saved)
 	}()
 	for _, name := range bootstrapNames {
 		if !s.toolVisible(name) {
@@ -282,7 +289,7 @@ func TestToolProfileClassification(t *testing.T) {
 		t.Fatal("could not locate registerAllTools in conn_register.go")
 	}
 	registered := map[string]bool{}
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "srv.Register(tools.New") {
 			continue

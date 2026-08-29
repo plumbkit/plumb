@@ -95,9 +95,11 @@ type SessionStart struct {
 	projectGitFn  func() ProjectGitStatus                                                           // may be nil; this session's captured view of the capability-granting keys its project config sets
 	lspLangFn     func() string                                                                     // may be nil; the LSP language attached to this session ("" when none)
 	lspSkipNoteFn func() string                                                                     // may be nil; names why no LSP is attached when the skip is deliberate (e.g. a home-directory workspace root)
+	pinProvFn     func() PinProvenance                                                              // may be nil; this connection's pin provenance, for the contested-connection note
 	lspLangsFn    func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn   func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
 	externalIDFn  func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
+	declaredAgent func(ctx context.Context, id string) context.Context                              // may be nil; derives the per-call ctx carrying the logical-agent identity declared by session_id
 	pinConflict   func(requested string)                                                            // may be nil; records a same-connection workspace switch attempt
 	repin         func(ctx context.Context, workspace, language string, force bool) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language; force overrides the sticky-pin guard
 	episodicFn    func(ws string) (string, bool)                                                    // may be nil; returns the last episodic summary for the workspace
@@ -110,6 +112,7 @@ type SessionStart struct {
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
 	tasksFn       func() TaskState                                                                  // may be nil; the resolved run_task/run_command state for this workspace
+	surchargeFn   func() (bytes int, tokens int, toolCount int)                                     // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
 }
 
 // WithProjectPolicy wires the accessor for this session's capability-granting
@@ -186,6 +189,22 @@ func (t *SessionStart) resolvedToolProfile() (string, int, string) {
 	return t.toolProfile()
 }
 
+// WithSurcharge wires the per-request tool-schema surcharge estimate for the
+// tools this connection actually advertises (see
+// clientcaps.ProfileSurcharge / mcp.Server.ToolSchemaBytes) — a client-side
+// cost the daemon cannot observe directly, so it is computed fresh from the
+// live registry and the resolved profile rather than read back from stats.
+// bytes is the exact, MEASURED wire byte total (the primary figure — PLAN-367
+// review round 1: a token count must never be shown without the measured
+// figure it was estimated from); tokens is the derived ESTIMATE
+// (clientcaps.surchargeCharsPerToken, a measured-but-still-approximate
+// chars/token ratio). Nil-safe: unwired ⇒ the surcharge line is omitted from
+// the banner.
+func (t *SessionStart) WithSurcharge(fn func() (bytes int, tokens int, toolCount int)) *SessionStart {
+	t.surchargeFn = fn
+	return t
+}
+
 // WithEpisodic wires an accessor for the most recent episodic summary, surfaced
 // as a "Last session" block. Nil-safe: unset or returning ok=false omits it.
 func (t *SessionStart) WithEpisodic(fn func(ws string) (string, bool)) *SessionStart {
@@ -243,6 +262,21 @@ func (t *SessionStart) WithLSPSkipNote(fn func() string) *SessionStart {
 	return t
 }
 
+// WithPinProvenance wires an accessor for this connection's pin provenance, so
+// the identity block can warn when the connection's workspace is being contended
+// by agents that are not identifying themselves (issue #182).
+//
+// session_start is where this belongs, not only daemon_info: it is the one
+// section every re-orienting agent reads, and the incident that motivated the
+// note went undiagnosed precisely because a session re-oriented, saw its
+// workspace, and had no way to learn that the workspace had been taken from it
+// minutes earlier. Nil-safe: unset or an uncontested pin ⇒ no line. Returns the
+// receiver.
+func (t *SessionStart) WithPinProvenance(fn func() PinProvenance) *SessionStart {
+	t.pinProvFn = fn
+	return t
+}
+
 // WithLSPLanguages wires an accessor for the distinct child languages attached
 // to a monorepo workspace root (e.g. zig + swift discovered under one .plumb/
 // root). When it returns more than one, session_start renders them as a combined
@@ -250,15 +284,6 @@ func (t *SessionStart) WithLSPSkipNote(fn func() string) *SessionStart {
 // still drives the recommended-step guidance. Nil-safe. Returns the receiver.
 func (t *SessionStart) WithLSPLanguages(fn func() []string) *SessionStart {
 	t.lspLangsFn = fn
-	return t
-}
-
-// WithExternalID wires the external-ID linker: fn receives the session_id
-// argument, persists it on the session file, and may return an inherited
-// session name (non-empty when a matching ended session was found). Nil-safe.
-// Returns the receiver for chaining.
-func (t *SessionStart) WithExternalID(fn func(id string) string) *SessionStart {
-	t.externalIDFn = fn
 	return t
 }
 
@@ -320,6 +345,22 @@ func (*SessionStart) Description() string {
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	// ATTRIBUTION before the workspace, LINKAGE after it — the split matters.
+	//
+	// A subagent multiplexed over a shared connection declares itself with
+	// `session_id` in the SAME call that names its workspace, so resolving the
+	// workspace first left the caller unattributable at the exact moment the
+	// sticky-pin guard and the per-agent re-pin ran: the re-pin moved the
+	// CONNECTION's pin, dragging every peer agent (issue #182). withDeclaredAgent
+	// therefore runs first, putting the declared identity on the ctx the re-pin
+	// below inherits, so the re-pin lands on this agent's own shard.
+	//
+	// resolveLinkage stays BELOW the error returns because its effects are
+	// commitments, not observations: it makes the session answerable to this
+	// external id, may rename it to inherit an ended session's name, and records
+	// the attach-time fallback identity for unattributed calls. A REFUSED call
+	// must commit none of that — an agent whose pin was refused never attached.
+	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
 	if err != nil {
 		return "", err
@@ -381,7 +422,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionPeers(&sb, ws)
 	t.writeSessionCollabPolicy(&sb, ws)
 	t.writeSessionMessages(&sb, ws)
-	writeSessionStats(&sb, ws)
+	t.writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)
 	return sb.String(), nil
@@ -407,25 +448,6 @@ func (t *SessionStart) applyPurpose(raw json.RawMessage) error {
 		t.purposeFn(purpose)
 	}
 	return nil
-}
-
-// resolveLinkage reports whether the caller passed a non-empty session_id
-// (linked) — the external id that makes this session addressable by name from
-// plumb mail and the peer wake hook — and, when so, the name inherited from a
-// previous session with the same external id (see WithExternalID). linked is
-// derived from the raw input regardless of whether an externalIDFn is wired;
-// the accessor is consulted only when it is non-nil.
-func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string, linked bool) {
-	var a struct {
-		SessionID string `json:"session_id"`
-	}
-	if err := json.Unmarshal(raw, &a); err != nil || a.SessionID == "" {
-		return "", false
-	}
-	if t.externalIDFn != nil {
-		inheritedName = t.externalIDFn(a.SessionID)
-	}
-	return inheritedName, true
 }
 
 // resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is

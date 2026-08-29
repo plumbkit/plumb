@@ -31,6 +31,16 @@ func clientHasNativeEditConflict(fn func() string) bool {
 // of the Claude Code tool-guidance block. The two harness error strings stay
 // verbatim — they are the recognition hook for an agent that has already hit
 // one. Everything else is deliberately terse and defers to the skill.
+//
+// PLAN-366 kept this call site, even though Claude Code's MCP initialize
+// `instructions` field (internal/mcp.InstructionsForClient) now ALSO states an
+// edit-lane doctrine: that field's version never quotes these two harness
+// error strings (see clienttemplates.DefaultTemplate's doc comment for why —
+// a shared body must not claim a Claude-Code-specific error verbatim), so it
+// is not the recognition hook an agent that has already hit one needs.
+// TestSessionStart_EditLaneWarning_ClaudeCode pins this warning as load-bearing
+// for that reason; only the doctrine session_start_guidance.go restates in
+// full elsewhere (the "Compile truth on write" pointer) was trimmed.
 const nativeEditLaneWarning = "> **Edit lane — read this before editing.** " +
 	"Every in-workspace file change goes `read_file` → `edit_file` (reuse the mtime header as " +
 	"`expected_mtime`), never Claude Code's native Read / Edit / Write. Mixing the two toolsets " +

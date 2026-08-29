@@ -466,3 +466,52 @@ func TestToolsCall_RealSchema_PlacementHintExampleRoundTrips(t *testing.T) {
 		t.Fatalf("expected the round-tripped example to actually succeed, got: %s\nargs: %s", out, args)
 	}
 }
+
+// TestToolsCall_RealSchema_MinedAliases pins the aliases added from the stats
+// DB against the REAL schemas, in the direction that matters: the call must no
+// longer be rejected as an unknown parameter.
+//
+// Every entry is a spelling agents actually sent, with its observed count.
+// Counts are what justify the row — the table's rule is that entries are
+// empirically driven, not imagined.
+func TestToolsCall_RealSchema_MinedAliases(t *testing.T) {
+	cases := []struct {
+		name, tool, args, was string
+	}{
+		{
+			"read_symbol symbol_name (40 calls)", "read_symbol",
+			`{"path":"/nonexistent/x.go","symbol_name":"Foo"}`, "symbol_name",
+		},
+		{
+			"read_symbol name_path (3 calls)", "read_symbol",
+			`{"path":"/nonexistent/x.go","name_path":"Foo"}`, "name_path",
+		},
+		{
+			"search_in_files include (12 calls)", "search_in_files",
+			`{"pattern":"x","path":"/nonexistent","include":"*.go"}`, "include",
+		},
+		{
+			"read_file line_end (4 calls)", "read_file",
+			`{"file_path":"/nonexistent/x","line_end":10}`, "line_end",
+		},
+		{
+			"workspace_search max_results (11 calls)", "workspace_search",
+			`{"query":"x","max_results":5}`, "max_results",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			text := callTool(t, minedAliasServer(), c.tool, c.args)
+			if strings.Contains(text, "unknown parameter") {
+				t.Errorf("%q is still rejected as unknown:\n%s", c.was, text)
+			}
+		})
+	}
+}
+
+func minedAliasServer() *mcp.Server {
+	s := realToolServer()
+	s.Register(tools.NewReadSymbol(nil, nil, 0, 0, nil))
+	s.Register(tools.NewWorkspaceSearch(nil, nil))
+	return s
+}

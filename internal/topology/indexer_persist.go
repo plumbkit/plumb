@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/tokenise"
@@ -15,28 +16,85 @@ import (
 // extraction concerns — see indexer.go for the worker loop, indexer_extract.go
 // for extraction, and indexer_resync.go for the full-tree walk.
 
-func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash, lang string, nodes []Node, edges []Edge) error {
+func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash, lang string, out extractOutput) error {
 	tx, err := idx.db.Begin()
 	if err != nil {
 		return fmt.Errorf("topology: begin tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded
 
 	newFileID, err := upsertFileRecord(tx, fileID, relPath, info, hash, lang)
 	if err != nil {
 		return err
 	}
+	if err := captureIncomingDerived(tx, newFileID); err != nil {
+		return err
+	}
 	if err := deleteFileNodes(tx, newFileID); err != nil {
 		return err
 	}
-	nodeIDs, err := insertNodes(tx, newFileID, relPath, nodes)
+	nodeIDs, err := insertNodes(tx, newFileID, relPath, out.nodes)
 	if err != nil {
 		return err
 	}
-	if err := insertEdges(tx, nodeIDs, edges); err != nil {
+	if err := restoreIncomingDerived(tx, newFileID, relPath); err != nil {
+		return err
+	}
+	if err := insertEdges(tx, nodeIDs, out.edges); err != nil {
+		return err
+	}
+	if err := insertCallSites(tx, newFileID, lang, nodeIDs, out.sites); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+const incomingDerivedTable = "temp.reindex_incoming"
+
+func captureIncomingDerived(tx *sql.Tx, fileID int64) error {
+	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS reindex_incoming (
+		from_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		confidence REAL NOT NULL,
+		source TEXT NOT NULL,
+		to_identity TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("topology: preserve incoming: create: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM ` + incomingDerivedTable); err != nil {
+		return fmt.Errorf("topology: preserve incoming: clear: %w", err)
+	}
+	_, err := tx.Exec(`INSERT INTO `+incomingDerivedTable+`(from_id, kind, confidence, source, to_identity)
+		SELECT e.from_id, e.kind, e.confidence, e.source, e.to_identity
+		  FROM topology_edges e
+		  JOIN topology_nodes tn ON tn.id = e.to_id
+		  JOIN topology_nodes fn ON fn.id = e.from_id
+		 WHERE tn.file_id = ? AND fn.file_id <> ?
+		   AND e.source IN (?, ?) AND e.to_identity <> ''`,
+		fileID, fileID, importResolverSource, callResolverSource)
+	if err != nil {
+		return fmt.Errorf("topology: preserve incoming: capture: %w", err)
+	}
+	return nil
+}
+
+func restoreIncomingDerived(tx *sql.Tx, fileID int64, relPath string) error {
+	_, err := tx.Exec(`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+		SELECT p.from_id, tn.id, p.kind, p.confidence, p.source, p.to_identity
+		  FROM `+incomingDerivedTable+` p
+		  JOIN topology_nodes tn ON tn.file_id = ?
+		   AND ? || char(0) ||
+		       CASE WHEN tn.qualified <> '' THEN tn.qualified ELSE tn.name END = p.to_identity
+		 WHERE NOT EXISTS (
+		       SELECT 1 FROM topology_edges e
+		        WHERE e.from_id = p.from_id AND e.to_id = tn.id
+		          AND e.kind = p.kind AND e.source = p.source
+		   )`,
+		fileID, relPath)
+	if err != nil {
+		return fmt.Errorf("topology: preserve incoming: restore: %w", err)
+	}
+	return nil
 }
 
 // recordFileError stores the failure with the file's mtime but no content
@@ -85,6 +143,21 @@ func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo
 // node — this runs on the hot write path (every upsert) and per stale file in
 // prune/delete, where a per-node loop costs M FTS5 round-trips for M symbols.
 func deleteFileNodes(tx *sql.Tx, fileID int64) error {
+	// Call sites go first and by file_id, not by cascade. The reason is that
+	// file_id is the key that is always right: a site belongs to the file that was
+	// re-parsed whether or not it has an enclosing node, whereas the cascade
+	// reaches only sites whose enclosing_id points at a node being deleted, so it
+	// is correct only while every site has one.
+	//
+	// Measured on plumb's own tree, every Go site currently does: a top-level call
+	// sits inside a ValueSpec, and extractValueSpec emits a node per declared name
+	// (`_` included), so `var _ = mux.HandleFunc(…)` is attributed to that
+	// variable's node rather than to NULL — zero rows have a NULL enclosing_id.
+	// The schema permits NULL and insertCallSites writes it deliberately, so the
+	// cascade is one extractor away from being wrong; deleting by file_id is not.
+	if _, err := tx.Exec(`DELETE FROM topology_call_sites WHERE file_id = ?`, fileID); err != nil {
+		return fmt.Errorf("topology: delete call sites: %w", err)
+	}
 	if _, err := tx.Exec(
 		`DELETE FROM topology_fts WHERE rowid IN (SELECT id FROM topology_nodes WHERE file_id = ?)`,
 		fileID); err != nil {
@@ -138,10 +211,49 @@ func insertEdges(tx *sql.Tx, nodeIDs []int64, edges []Edge) error {
 			continue
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source)
-             VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+             VALUES (?, ?, ?, ?, ?, '')`,
 			fromID, toID, string(e.Kind), e.Confidence, e.Source); err != nil {
 			return fmt.Errorf("topology: insert edge: %w", err)
+		}
+	}
+	return nil
+}
+
+// insertCallSites persists a file's raw call sites. The enclosing declaration is
+// remapped from an extractor-local node index to a rowid the same way edges are;
+// a site with no enclosing declaration is stored with a NULL enclosing_id rather
+// than dropped, because a package-level registration call is one of the two
+// shapes this table exists to capture.
+func insertCallSites(tx *sql.Tx, fileID int64, lang string, nodeIDs []int64, sites []CallSite) error {
+	if len(sites) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO topology_call_sites(file_id, enclosing_id, language, site_kind, callee, qualifier,
+            start_byte, start_line, first_string_arg, arg_idents, arg_count, arg_spread)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("topology: prepare call site: %w", err)
+	}
+	defer stmt.Close()
+	for _, s := range sites {
+		var enclosing any
+		if id := remapNodeID(int64(s.EnclosingIdx), nodeIDs); id != 0 {
+			enclosing = id
+		}
+		var qualifier any
+		if s.Qualifier != "" {
+			qualifier = s.Qualifier
+		}
+		var firstString any
+		if s.HasStringArg {
+			firstString = s.FirstStringArg
+		}
+		if _, err := stmt.Exec(fileID, enclosing, lang, string(s.Kind), s.Callee, qualifier,
+			s.StartByte, s.StartLine, firstString, strings.Join(s.ArgIdents, ","),
+			s.ArgCount, boolToInt(s.ArgSpread)); err != nil {
+			return fmt.Errorf("topology: insert call site: %w", err)
 		}
 	}
 	return nil

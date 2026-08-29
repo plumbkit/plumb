@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -192,9 +193,7 @@ func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
 		if e.inv == p {
 			continue
 		}
-		for uri, diags := range e.inv.AllDiagnostics() {
-			merged[uri] = diags
-		}
+		maps.Copy(merged, e.inv.AllDiagnostics())
 	}
 	if root == "" {
 		return merged
@@ -271,9 +270,7 @@ func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
 		if e.inv == p {
 			continue
 		}
-		for uri, t := range e.inv.AllDiagnosticTimes() {
-			merged[uri] = t
-		}
+		maps.Copy(merged, e.inv.AllDiagnosticTimes())
 	}
 	if root == "" {
 		return merged

@@ -2,11 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -34,18 +35,16 @@ func daemonVersionPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.version")
 }
 
-// plumbRuntimeDir returns the directory used for daemon runtime files
-// (socket, PID). It uses os.UserCacheDir so the path is stable and consistent
-// regardless of how the process was launched — critical on macOS where
-// os.TempDir() follows $TMPDIR, which differs between GUI apps and terminals.
+// plumbRuntimeDir returns the directory used for daemon runtime files (sockets,
+// pid, version, locks). The resolution itself lives in internal/paths, which is
+// also what the TUI and the two command sandboxes consult — four copies of this
+// rule used to exist, and a sandbox whose copy disagreed would stop protecting
+// the socket it was written to protect.
+// It creates the directory as a side effect, which paths.RuntimeDir
+// deliberately does not: the socket bind and the flocks both need it present,
+// and every caller here is on that path.
 func plumbRuntimeDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		// os.UserCacheDir only fails if $HOME is unset; fall back to os.TempDir
-		// which is the best we can do in that degenerate case.
-		base = os.TempDir()
-	}
-	dir := filepath.Join(base, "plumb")
+	dir := paths.RuntimeDir()
 	_ = os.MkdirAll(dir, 0o700)
 	return dir
 }
@@ -60,21 +59,40 @@ func plumbRuntimeDir() string {
 // socketPathShortenLever exists to get right.
 const maxUnixSocketPath = 103
 
-// socketPathShortenLever names the environment variable that actually moves
-// the runtime directory on this platform.
+// socketPathShortenLever names the environment variable that actually moves the
+// runtime directory on this host. It delegates rather than deciding, because
+// the answer depends on which base RuntimeDir resolved — $XDG_RUNTIME_DIR,
+// $HOME on macOS, or XDG_CACHE_HOME — and naming the wrong one points the user
+// at a setting that cannot move the socket.
+func socketPathShortenLever() string { return paths.RuntimeDirLever() }
+
+// legacyDaemonSocketPath is the socket under the cache-dir runtime location,
+// or "" when that is the same directory in use now.
 //
-// It is not XDG_CACHE_HOME everywhere. The socket lives under
-// os.UserCacheDir(), and Go reads XDG_CACHE_HOME only in that function's Unix
-// branch — the darwin branch returns $HOME/Library/Caches unconditionally. So
-// on macOS the only lever is $HOME, and telling a macOS user to set
-// XDG_CACHE_HOME is advice that provably does nothing. That matters precisely
-// here, because the 103-byte bound above is the macOS ceiling: the overflow
-// this hint fires on soonest is the one whose fix it would have got wrong.
-func socketPathShortenLever(goos string) string {
-	if goos == "darwin" {
-		return "$HOME"
+// It exists for DIAGNOSIS only — telling the user a daemon is running in the
+// other directory — and never for connecting. RuntimeDir determines the
+// socket, the control socket, the pid and the version file as a set, so a
+// process that connected to one directory's socket while resolving the rest in
+// the other would be half-migrated: `plumb web` and `plumb log-level` dial a
+// control socket that is not there, doctor reads a version file one directory
+// over and calls it missing, and `plumb restart` spawns a duplicate. One
+// directory per process.
+func legacyDaemonSocketPath() string {
+	dir := paths.LegacyRuntimeDir()
+	if dir == "" {
+		return ""
 	}
-	return "XDG_CACHE_HOME"
+	return filepath.Join(dir, "plumb.sock")
+}
+
+// socketAlive reports whether something is listening on a unix socket path.
+func socketAlive(path string) bool {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // socketPathLengthHint explains an over-long socket path, or returns "" when
@@ -94,7 +112,7 @@ func socketPathLengthHint(path string) string {
 	}
 	return fmt.Sprintf(
 		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — point %s at a shorter directory)",
-		len(path), maxUnixSocketPath, socketPathShortenLever(runtime.GOOS))
+		len(path), maxUnixSocketPath, socketPathShortenLever())
 }
 
 // daemonStartTimeoutError is what the caller sees when the socket never

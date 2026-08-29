@@ -38,11 +38,20 @@ func mutationHeader(args mutationTestArgs, plan mutationPlan, n int) string {
 	fmt.Fprintf(&b, "  compile gate: %s (%s, source=%s)\n",
 		renderSteps(plan.compile), args.CompileTask, plan.compile.Provenance)
 	fmt.Fprintf(&b, "  test command: %s (%s, source=%s)%s\n",
-		renderSteps(plan.test), args.TestTask, plan.test.Provenance, targetNote(plan.target))
+		renderSteps(plan.test), args.TestTask, plan.test.Provenance, targetNote(plan.target, plan.test))
 	return b.String()
 }
 
-func targetNote(target string) string {
+// targetNote says the scope the test command will ACTUALLY run at, never the
+// one that was merely requested. A resolver note means the target did not land —
+// a composite slot such as verify has no single command for one to fall into, so
+// test_task:"verify" + test_target ran the whole suite while the header claimed
+// a scope. In a report whose entire value is knowing which tests ran, a false
+// scope line is worse than none.
+func targetNote(target string, cmd TaskCommand) string {
+	if len(cmd.Notes) > 0 {
+		return " — " + strings.Join(cmd.Notes, " ")
+	}
 	if target == "" {
 		return " — WHOLE suite; pass test_target to scope it (topology_affected says to what)"
 	}

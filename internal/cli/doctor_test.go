@@ -61,6 +61,11 @@ func TestCheckDaemon_ReportsVersionMismatch(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
+	// XDG_RUNTIME_DIR outranks both of the below, so clear it FIRST. Without
+	// this the test resolves the developer's real /run/user/$UID: it rewrites
+	// the live daemon's plumb.version, and once a daemon is actually listening
+	// there the net.Listen below fails with "address already in use".
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	// On Linux os.UserCacheDir prefers XDG_CACHE_HOME over $HOME/.cache, so
 	// redirect it too — otherwise a CI environment that sets it would point
 	// the test at the developer's real runtime dir.
@@ -185,11 +190,11 @@ func TestPrintChecksBranchesSubChecksUnderParent(t *testing.T) {
 	// Column, not byte offset: the markers and branch glyphs are multi-byte
 	// runes, and the layout arithmetic is in visible columns.
 	col := func(line, sub string) int {
-		i := strings.Index(line, sub)
-		if i < 0 {
+		before, _, ok := strings.Cut(line, sub)
+		if !ok {
 			return -1
 		}
-		return len([]rune(line[:i]))
+		return len([]rune(before))
 	}
 
 	t.Run("a clean branch aligns with the parent's columns", func(t *testing.T) {

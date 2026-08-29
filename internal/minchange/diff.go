@@ -190,6 +190,54 @@ func appendHunkLine(h *Hunk, line string, newLineNo *int) {
 	}
 }
 
+// FileChunk is one file's slice of a unified diff, kept as raw text. It exists
+// so a caller can budget a diff PER FILE before parsing it — see
+// minimal_diff_review's per-file cap.
+type FileChunk struct {
+	// Path is the b-side path from the "diff --git" header, or "" when the
+	// header is absent (leading preamble) or in a form parseDiffGitHeader does
+	// not decode (quoted or space-bearing paths).
+	Path string
+	Text string
+}
+
+// SplitByFile splits raw unified diff text into one chunk per file, on the same
+// "diff --git " boundary the parser uses — deliberately the same rule, and in
+// the same file, so a caller budgeting by file and the parser reading it can
+// never disagree about where a file starts. Text before the first header (git
+// emits none, but a caller may concatenate) becomes a leading chunk with an
+// empty Path, so splitting and rejoining is lossless.
+func SplitByFile(raw string) []FileChunk {
+	if raw == "" {
+		return nil
+	}
+	var out []FileChunk
+	start, path := 0, ""
+	for off := 0; off < len(raw); {
+		nl := strings.IndexByte(raw[off:], '\n')
+		lineEnd := len(raw)
+		if nl >= 0 {
+			lineEnd = off + nl + 1
+		}
+		line := strings.TrimSuffix(raw[off:lineEnd], "\n")
+		if strings.HasPrefix(line, "diff --git ") && off > start {
+			out = append(out, FileChunk{Path: path, Text: raw[start:off]})
+			start = off
+		}
+		if strings.HasPrefix(line, "diff --git ") {
+			path = ""
+			if _, b, ok := parseDiffGitHeader(line); ok {
+				path = b
+			}
+		}
+		off = lineEnd
+	}
+	if start < len(raw) {
+		out = append(out, FileChunk{Path: path, Text: raw[start:]})
+	}
+	return out
+}
+
 // parseDiffGitHeader extracts the a/ and b/ paths from a "diff --git a/x b/y"
 // line. It handles unquoted paths without spaces (the common case); quoted or
 // space-bearing paths fall through to the ---/+++ lines, which are parsed
@@ -240,11 +288,11 @@ func stripABPrefix(p string) string {
 // parseHunkNewStart reads the new-side start line from a hunk header
 // "@@ -l,s +l,s @@". Returns 1 on any parse failure (a safe lower bound).
 func parseHunkNewStart(line string) int {
-	plus := strings.IndexByte(line, '+')
-	if plus < 0 {
+	_, after, ok := strings.Cut(line, "+")
+	if !ok {
 		return 1
 	}
-	rest := line[plus+1:]
+	rest := after
 	// rest is like "l,s @@ heading" or "l @@ heading".
 	end := len(rest)
 	for i, r := range rest {

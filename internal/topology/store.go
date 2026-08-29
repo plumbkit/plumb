@@ -236,8 +236,8 @@ func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes, _, err := s.idx.extractFile(ctx, ex, rel, src)
-	return nodes, err
+	out, err := s.idx.extractFile(ctx, ex, rel, src)
+	return out.nodes, err
 }
 
 // Explore performs a bounded BFS neighbourhood from the named symbol.
@@ -267,9 +267,47 @@ func (s *Store) ImpactFrom(ctx context.Context, centre Node, opts ImpactOpts) (*
 	return ImpactFrom(ctx, s.db, centre, opts)
 }
 
+// PackageGraph builds the directory-granularity import graph backing
+// package-level reachability (topology_impact mode="reachability").
+func (s *Store) PackageGraph(ctx context.Context) (*PackageGraph, error) {
+	return LoadPackageGraph(ctx, s.db)
+}
+
 // Status returns a snapshot of the index health.
 func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)
+}
+
+// AdmitCallGraph reports whether function-level, cross-file call answers are
+// available for a subject in this workspace, and carries the wording to show
+// when they are not. See callgraph.go for the rule.
+//
+// Nothing in the tool layer calls this yet, deliberately: the lifecycle is now
+// durable across incremental re-indexes, but each consumer still needs a measured
+// before/after before it opts in. That exclusion is enforced, not merely intended —
+// ExploreOpts.IncludeDerivedCalls defaults to false, so a traversal asking for
+// `calls` edges does not receive them until the deliberate step-6 rollout.
+func (s *Store) AdmitCallGraph(ctx context.Context, subject CallGraphSubject) (CallGraphAdmission, error) {
+	return AdmitCallGraph(ctx, s.db, subject)
+}
+
+// CallGraphSubjectForPath derives a file subject's language from the index. It
+// is the supported way to build a CallGraphSubject: a caller that supplies the
+// language itself can substitute a workspace-wide answer for a per-subject one.
+func (s *Store) CallGraphSubjectForPath(ctx context.Context, path string) (CallGraphSubject, error) {
+	return CallGraphSubjectForPath(ctx, s.db, s.toRelative(path))
+}
+
+// CallGraphSubjectForNode derives a symbol subject's language from the index,
+// from the node's own recorded language.
+func (s *Store) CallGraphSubjectForNode(ctx context.Context, nodeID int64) (CallGraphSubject, error) {
+	return CallGraphSubjectForNode(ctx, s.db, nodeID)
+}
+
+// FunctionGraph builds the full callable graph used by function-level
+// reachability. productionOnly excludes callers in Go test files.
+func (s *Store) FunctionGraph(ctx context.Context, language string, productionOnly bool) (*FunctionGraph, error) {
+	return LoadFunctionGraph(ctx, s.db, language, productionOnly)
 }
 
 // toRelative expresses an absolute path the way the index stores it: relative to

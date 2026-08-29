@@ -142,7 +142,7 @@ func memorySnippet(desc, body string) string {
 }
 
 func firstNonBlankLine(s string) string {
-	for _, ln := range strings.Split(s, "\n") {
+	for ln := range strings.SplitSeq(s, "\n") {
 		if t := strings.TrimSpace(ln); t != "" {
 			return t
 		}

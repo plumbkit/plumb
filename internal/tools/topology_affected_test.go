@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -130,5 +131,57 @@ func TestTopologyAffected_FormatAggregatesRatherThanEnumerates(t *testing.T) {
 	}
 	if len(out) > 2000 {
 		t.Errorf("aggregated output should stay small; got %d bytes", len(out))
+	}
+}
+
+// TestGraphBudgetSurvivesTheTraversalCeilings is the cross-package guard the
+// first round of PLAN-407 was missing.
+//
+// The budget lives here and the ceilings that can overrule it live in
+// internal/topology, so nothing at either edit site shows that raising one past
+// the other silently reinstates the clamping this card removed — which is not
+// hypothetical: `graphNodeBudget = 6000` passed both packages' suites while the
+// traversal quietly ran with 5000.
+//
+// It asks the clamp what the walk will actually run with, rather than reading
+// the constants, so it follows a change to the clamp instead of drifting from it.
+func TestGraphBudgetSurvivesTheTraversalCeilings(t *testing.T) {
+	asked := graphTraversalOpts(false)
+	if graphTraversalOpts(false).IncludeDerivedCalls || !graphTraversalOpts(true).IncludeDerivedCalls {
+		t.Fatalf("derived calls must be opt-in for the traversal")
+	}
+	// Vacuity guard: the point of the split is that this budget sits ABOVE the
+	// ceiling the MCP schemas advertise. Below it, every assertion here would
+	// hold for the broken code too.
+	if asked.MaxNodes <= topology.ClampToolNodes(math.MaxInt32) {
+		t.Fatalf("test is vacuous: the budget (%d) must exceed the tool-argument ceiling (%d)",
+			asked.MaxNodes, topology.ClampToolNodes(math.MaxInt32))
+	}
+
+	got := topology.ClampTraversalOpts(asked)
+	if got.MaxNodes != asked.MaxNodes {
+		t.Errorf("the traversal runs with MaxNodes=%d, not the %d this package sized: an "+
+			"in-process budget is being clamped by a ceiling again", got.MaxNodes, asked.MaxNodes)
+	}
+	if got.MaxBytes != asked.MaxBytes {
+		t.Errorf("the traversal runs with MaxBytes=%d, not the %d this package sized",
+			got.MaxBytes, asked.MaxBytes)
+	}
+	if got.Depth != asked.Depth {
+		t.Errorf("the traversal runs at depth %d, not the %d this package sized", got.Depth, asked.Depth)
+	}
+
+	// Surviving the node ceiling is not enough: the byte allowance has to admit
+	// the node budget at a realistic node size, or the budget is a number the walk
+	// can never deliver. That is the shape the first round of this fix left in
+	// place — 2000 nodes requested, ~660 granted by max_bytes.
+	//
+	// 512 B is above the 99.9th percentile of estimateBytes over this repo's own
+	// 26,826-node index (avg 150, median 142, p90 223, p99.9 332).
+	const realisticNodeBytes = 512
+	if fits := got.MaxBytes / realisticNodeBytes; fits < asked.MaxNodes {
+		t.Errorf("the byte allowance (%d) admits only %d nodes of %d B, so the %d-node budget "+
+			"is unreachable: the byte ceiling is overruling the node budget",
+			got.MaxBytes, fits, realisticNodeBytes, asked.MaxNodes)
 	}
 }

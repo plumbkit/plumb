@@ -223,44 +223,47 @@ var registryData = []Field{
 	},
 
 	// --- Collab ---
+	// All [collab] fields are ReloadLive: applyProjectConfig swaps the whole
+	// block into the session view on every attach / re-pin / reload, and every
+	// consumer reads it through collabConfig() per call (PLAN-414).
 	{
-		Key: "collab.peer_awareness", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Key: "collab.peer_awareness", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Tier-1 passive peer awareness: topology-annotated recent writes, peer-activity hints, and the session_start peer digest. Default on.",
 	},
 	{
-		Key: "collab.hint_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Key: "collab.hint_budget_bytes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Byte cap on any injected peer-signal block (peer-activity hint, session_start peer digest).",
 	},
 	{
-		Key: "collab.intents", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Key: "collab.intents", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Tier-2 opt-in: the share_intent tool and intent-aware write hints (agent-authored claims).",
 	},
 	{
-		Key: "collab.mailbox", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Key: "collab.mailbox", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Agent-to-agent messaging between sessions on THIS workspace: leave_note, check_messages, and delivery on tool results. Default on.",
 	},
 	{
-		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means a cross-project send to you is refused up front, not silently dropped.",
 	},
 	{
-		Key: "collab.max_exchanges", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Key: "collab.max_exchanges", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Messages allowed in one conversation before replies are refused — the backstop against two agents talking indefinitely.",
 	},
 	{
-		Key: "collab.chat_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Key: "collab.chat_budget_bytes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Byte cap on a single delivered message body.",
 	},
 	{
-		Key: "collab.max_wait_seconds", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Key: "collab.max_wait_seconds", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Ceiling on how long check_messages will block waiting for a message.",
 	},
 	{
-		Key: "collab.knowledge_handoff", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Key: "collab.knowledge_handoff", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Tier-3 opt-in: the share_findings tool, flushing findings to the episodic memory pipeline on demand.",
 	},
 	{
-		Key: "collab.intent_ttl_minutes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Key: "collab.intent_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Expiry, in minutes, for a new intent or note before it is pruned.",
 	},
 

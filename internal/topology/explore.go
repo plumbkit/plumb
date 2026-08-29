@@ -12,9 +12,78 @@ const (
 	defaultMaxNodes = 50
 	defaultMaxBytes = 30000
 	hardCapDepth    = 4
-	hardCapNodes    = 200
-	hardCapBytes    = 100000
+
+	// maxNodeBytes is the per-node cost the traversal's two ceilings are sized
+	// against. estimateBytes over this repo's own index (26,826 nodes, the
+	// IncludeSource mode impactBFS uses) measures avg 150 B, median 142, p90 223,
+	// p99.9 332; three nodes exceed 512 and the largest is 1,831.
+	maxNodeBytes = 512
+
+	// hardCapNodes and hardCapBytes are the traversal's own ceilings: the most any
+	// caller, in-process code included, may walk in one direction. They are
+	// backstops against a pathological graph, not response-size limits — a
+	// response is bounded by toolCapNodes/toolCapBytes, which the tools apply to
+	// their own arguments.
+	//
+	// They are sized as a pair so that BOTH can fire and neither is decoration.
+	// hardCapBytes is hardCapNodes × maxNodeBytes, so the NODE ceiling binds first
+	// at any average node size the index has been measured to produce, and the
+	// byte ceiling binds only when the average node costs more than maxNodeBytes —
+	// 3.4× the measured average. PLAN-407's first round raised the node ceiling
+	// from 200 to 5000 and left the byte ceiling at 100000, which bound at ~660
+	// real nodes: the node ceiling could then never fire, an inert cap that read
+	// as protective, which is the defect this card exists to remove.
+	// TestTraversalCeilingsBindInThatOrder pins the ordering.
+	hardCapNodes = 5000
+	hardCapBytes = hardCapNodes * maxNodeBytes
+
+	// toolCapNodes and toolCapBytes bound a max_nodes / max_bytes that arrived as
+	// an MCP tool ARGUMENT. They are the numbers topology_explore's and
+	// topology_impact's schemas advertise, and exist to stop an agent asking for a
+	// neighbourhood larger than it can read.
+	toolCapNodes = 200
+	toolCapBytes = 100000
 )
+
+// ClampToolNodes bounds a caller-supplied max_nodes to the ceiling the topology
+// tool schemas advertise. Tools apply it to their own arguments; the traversal
+// applies only hardCapNodes.
+//
+// The two are deliberately separate. An in-process caller sizes its budget from
+// what the algorithm needs — topology_affected asks for 2000 nodes so a
+// depth-2 walk cannot run out of room before the imports/contains edges that
+// reach test files are visited — and that is not an untrusted argument to be
+// cut down to a response-size limit. Clamping both with one constant is what
+// silently gave that caller a tenth of the budget it asked for.
+//
+// A non-positive n is returned unchanged so the traversal's own default applies.
+func ClampToolNodes(n int) int {
+	if n > toolCapNodes {
+		return toolCapNodes
+	}
+	return n
+}
+
+// ClampToolBytes bounds a caller-supplied max_bytes the same way, and for the
+// same reason: a response-size limit belongs to the tool that serialises the
+// answer, not to the traversal. An in-process caller that reads a handful of
+// fields off each node and discards the rest — topology_affected reads Kind, ID
+// and Path — is not producing a response, so bounding it at the schema's number
+// is the node clamp's bug in the other ceiling: it cut a requested 2000-node
+// budget to about 660 whatever ClampToolNodes did.
+//
+// A non-positive n is returned unchanged so the traversal's own default applies.
+func ClampToolBytes(n int) int {
+	if n > toolCapBytes {
+		return toolCapBytes
+	}
+	return n
+}
+
+// MaxTraversalBytes is the byte ceiling the traversal itself enforces. An
+// in-process caller that does not serialise the nodes it walks asks for this,
+// so its node budget is what bounds the walk.
+func MaxTraversalBytes() int { return hardCapBytes }
 
 // Explore performs a bounded BFS from the named symbol and returns its neighbourhood.
 func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*Neighbourhood, error) {
@@ -172,7 +241,7 @@ func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neigh
 	byteEst := estimateBytes(centre, opts.IncludeSource)
 
 	for depth := 0; depth < opts.Depth && len(queue) > 0; depth++ {
-		next, edges, err := expandFrontier(ctx, db, queue, opts.EdgeKinds, opts.Direction)
+		next, edges, err := expandFrontier(ctx, db, queue, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -217,10 +286,11 @@ func filterEdges(edges []Edge, inOutput map[int64]bool, seen map[int64]bool) []E
 	return result
 }
 
-func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []string, dir Direction) ([]Node, []Edge, error) {
+func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, opts ExploreOpts) ([]Node, []Edge, error) {
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
+	edgeKinds, dir := opts.EdgeKinds, opts.Direction
 	ph := strings.Repeat("?,", len(ids))
 	ph = ph[:len(ph)-1]
 	args := make([]any, len(ids))
@@ -233,7 +303,7 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 	// write into args' spare capacity — harmless today only because args is not read
 	// again, which is not a property worth depending on. Sized for the widest case.
 	var where string
-	allArgs := make([]any, 0, 2*len(args)+len(edgeKinds))
+	allArgs := make([]any, 0, 2*len(args)+len(edgeKinds)+1)
 	switch dir {
 	case DirectionOutward:
 		where = fmt.Sprintf(`from_id IN (%s)`, ph)
@@ -254,6 +324,15 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 		for _, k := range edgeKinds {
 			allArgs = append(allArgs, k)
 		}
+	}
+
+	// Derived cross-file call edges are excluded by SOURCE unless the caller opted
+	// in. Their kind is "calls", identical to the extractor's own, so the kind
+	// filter above cannot tell them apart and every consumer that asks for `calls`
+	// would consume them without asking. See ExploreOpts.IncludeDerivedCalls.
+	if !opts.IncludeDerivedCalls {
+		where += ` AND source <> ?`
+		allArgs = append(allArgs, callResolverSource)
 	}
 
 	//nolint:gosec // G202: where clause built from integer IDs and constant string literals; no user data interpolated

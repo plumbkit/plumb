@@ -586,7 +586,7 @@ type Config struct {
 	// config.SetGlobalValue, as SaveTheme already does, so only the edited key is
 	// touched. One caller, and all of the above stop freezing.
 	Commands []CommandConfig `toml:"command,omitempty"`
-	// CommandPolicy is the [commands] table: the execute_shell_command gate
-	// (allow_shell) and the sandbox-enforcement knob (require_sandbox).
+	// CommandPolicy is the [commands] table: the sandbox-enforcement knob
+	// (require_sandbox) run_command honours.
 	CommandPolicy CommandsConfig `toml:"commands"`
 }

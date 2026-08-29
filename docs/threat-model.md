@@ -204,10 +204,11 @@ invocation are unreachable by construction rather than by filtering.
 
 **B5 — daemon → configured commands.** The sharpest boundary, because it is the
 one that executes. `run_command` runs a **fixed argv** from an allow-list with at
-most one `{target}` substitution restricted to `[A-Za-z0-9._/:@-]`.
-`execute_shell_command` runs an arbitrary `sh -c` line and is **disabled by
-default**. A command supplied by a *project's* config requires `plumb trust`
-before it will run; a command in the user's global config always runs.
+most one `{target}` substitution restricted to `[A-Za-z0-9._/:@-]`; `run_task`
+runs a stored `[tasks.<lang>]` slot. There is no ad-hoc-shell tool — plumb never
+builds a command line from agent free text. A command supplied by a *project's*
+config requires `plumb trust` before it will run; a command in the user's global
+config always runs.
 
 **B6 — daemon → language servers.** LSP servers are separate processes that read
 the workspace and return structured data plumb parses. A malicious workspace can
@@ -473,7 +474,12 @@ its own `initialize` handshake, and never written to a session file, a log, or
 any tool result) — never by answering to a name, which is the distinction the
 whole binding rests on. It is the same bearer token that already restores
 strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
-if it were forgeable, those would have been forgeable first. A same-user process
+if it were forgeable, those would have been forgeable first. The same persisted
+pairing also gates session-ID **adoption** (the reconnect re-registering under
+the predecessor's ID outright): the replayed plumb session ID is
+client-supplied and disclosed in `session_start`'s result `_meta`, so adoption
+refuses unless it matches the ID the row records under the proxy session ID —
+before this gate, the replayed ID alone was enough. A same-user process
 can of course read `session_state.db` directly, which is the standing
 peer-agent-as-same-user boundary above, not a property of this mechanism.
 
@@ -527,11 +533,10 @@ Stated plainly, because an unclaimed property is not a guarantee:
   with a status line saying so, because `require_sandbox` defaults to false. The
   default posture is therefore "run unsandboxed and report it", not "refuse".
 
-  Network egress differs by tool and the default is not uniform:
-  `execute_shell_command` denies egress by default (`[commands] deny_network`),
-  precisely because an integrity-only sandbox would otherwise let a shell command
-  read a secret and post it; a `[[command]]` entry defaults to **allowing**
-  egress unless its own `deny_network` is set.
+  Network egress is per-command and **allowed** by default: a `[[command]]` entry
+  cuts it only when its own `deny_network` is set. Because the sandbox is
+  integrity-only, an entry that has no business reaching the network should set
+  it — otherwise a command that reads a secret can post it.
 - **A malicious language server.** An LSP binary named in the *global* config is
   the user's own choice and runs with their privileges; plumb does not sandbox
   it or inspect what it does.
@@ -666,7 +671,7 @@ Tracked, not hidden. Each is real today.
 
 8. ~~**Trust binding is uneven.**~~ **CLOSED.** Every project-supplied surface
    that decides which process plumb spawns is now bound to a content hash. The
-   `[[command]]` allow-list, `[commands] allow_shell`/`deny_network` and the
+   `[[command]]` allow-list, the `[commands]` policy table and the
    whole `[xcode]` table join `[tasks.*]`, `[git]`, `[lsp.<lang>]` and
    `[collab]` in `ProjectPolicySpec`, so they are disclosed by `plumb trust`
    with their values and invalidated by any edit.
@@ -680,8 +685,8 @@ Tracked, not hidden. Each is real today.
    - The coarse flag is set by the TUI's Commands tab on **any** project-scope
      save ("trusted by authorship"). Saving one unrelated setting in a freshly
      cloned repository therefore blessed every `[[command]]` that repository
-     already shipped, plus `allow_shell`, plus `auto_build_server` — none of
-     which the user authored or was shown.
+     already shipped, plus its `[commands]` policy, plus `auto_build_server` —
+     none of which the user authored or was shown.
 
    The gate is now the conjunction of both grants (`config.ExecTrustedFor`): the
    coarse flag still answers "has the user approved execution in this workspace

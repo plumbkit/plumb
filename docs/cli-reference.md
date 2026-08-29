@@ -26,6 +26,7 @@ language `none`.
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
 | [`plumb skills`](#plumb-skills) | Show or sync plumb's embedded skills per client |
+| [`plumb hooks`](#plumb-hooks) | Status of the opt-in lifecycle hooks, per client (`install` / `uninstall` write them) |
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
@@ -220,7 +221,7 @@ changing anything. Without a terminal, bare `plumb setup` prints help.
 | `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`); also heuristically repoints any sibling `Claude*/claude_desktop_config.json` profile that already exists (e.g. `Claude-Personal`) |
 | `plumb setup claude-code` | `~/.claude.json` (user scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
 | `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
-| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (skills via `plumb skills sync`) |
+| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (skills via `plumb skills sync`); writes `omit_tools_from = ["direct"]` so Codex defers Plumb schemas from its initial model surface while retaining the full MCP catalogue |
 | `plumb setup codex --lean` | Same, plus an `enabled_tools` allowlist pinning plumb's lean tool set |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
 | `plumb setup gemini --lean` | Same, plus an `includeTools` allowlist pinning plumb's lean tool set |
@@ -249,11 +250,123 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
-| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 59. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
+| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 58. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
 | `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
-| `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. For a skill-capable client it also removes the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
+| `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. It also removes that client's lifecycle hooks (`plumb hooks uninstall`'s writer, so only plumb's own handlers go and the user's survive), and for a skill-capable client the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
+
+---
+
+## `plumb hooks`
+
+```
+plumb hooks                      # read-only status, per client, per hook
+plumb hooks install [client]     # install or refresh
+plumb hooks uninstall [client]   # remove plumb's handlers, and only those
+```
+
+Lifecycle hooks are the one place plumb can reach an agent between tool calls:
+at the start of a session, and at the end of a turn. Bare `plumb hooks` is
+**read-only** — a per-client, per-hook table showing `installed`, `missing`, or
+`stale` (present, but written by a different binary path or an older entry
+shape), with `unregistered` for a client whose config does not register plumb.
+The two writers are `install` and `uninstall`; with no client argument each
+sweeps every client, and `install` skips an unregistered one with the
+`plumb setup <client>` fix rather than writing hooks for a plumb the client
+cannot reach.
+
+| Client | Config | Hooks installed |
+|---|---|---|
+| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s) and `Stop` (`async` + `asyncRewake`, timeout 330s) |
+| `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
+
+Both clients get the same pair. **`SessionStart`** states the client's own
+conversation ID as a fact, so the agent's first `session_start` can pass it as
+`session_id` — the linkage that lets `plumb mail`, `leave_note` and the wake
+path address that exact session rather than guessing from a shared directory.
+**`Stop`** reports unread peer mail as a turn ends.
+
+What `Stop` can do differs by client, and the difference is not cosmetic:
+
+- **Claude Code wakes.** The handler installs as a background watcher (`async` +
+  `asyncRewake`), which is the pair that lets a hook reach a session with **no
+  turn in flight**. It polls `plumb mail` for up to `PLUMB_WAKE_WINDOW` seconds
+  (default 300, every `PLUMB_WAKE_INTERVAL`, default 7 and never longer than the
+  window) and exits 2 with one line on stderr the moment mail is waiting — that
+  pair is the wake payload. The installed handler's `timeout` sits above the
+  window on purpose: a shorter one kills the watcher mid-watch, and nothing in
+  any output would say so. Because that timeout is written at install time from
+  the window in effect *then*, **re-tune and re-install together** — exporting a
+  larger `PLUMB_WAKE_WINDOW` without re-running `plumb hooks install` leaves the
+  client cancelling the watcher early. `plumb hooks` reports the mismatch as
+  `stale`. `PLUMB_WAKE_DIR` (default `~/.claude/plumb-wake`) is where the watcher
+  keeps its per-session stamp, lock and re-arm records.
+- **Codex checks.** Codex has no background-wake mechanism, so its handler makes
+  one read-only probe as the turn ends and keeps the turn going only when mail
+  is pending. That narrows the end-of-turn race; it is **not** push delivery.
+  Codex also requires an interactive trust review for non-managed command hooks
+  — run `/hooks` in Codex after installing.
+
+Properties both hooks hold, and that the tests pin:
+
+- **Fail open, always.** No linkage, no matching session, an ambiguous
+  workspace, an unreadable mailbox, a daemon that is down — every one of them
+  lets the turn end silently. A hook that failed closed would strand turns on an
+  unrelated fault.
+- **A count, never a body.** `plumb mail` does not claim and does not disclose
+  message text. Pasting a peer's words into hook feedback would be a direct
+  injection channel into the agent; the body stays unclaimed and arrives through
+  `check_messages`, labelled as the unverified claim it is.
+- **Silent when there is nothing to say.** The Claude Code watcher emits nothing
+  and costs nothing unless mail is actually waiting; a hook that woke an agent
+  on a timer would burn paid turns for no reason.
+- **Scoped to plumb workspaces.** `settings.json` is user-wide, so the Claude
+  Code hook checks for a `.plumb` marker at or above the session's working
+  directory and stands down before touching anything when there is none.
+- **One watcher per session.** A lock keyed by the resolved session name, and
+  recording the conversation that owns it, stops repeated turns from stacking
+  watcher processes — and lets a session that reuses a name take the lock over
+  from a previous tenant instead of being silently unwakeable.
+- **Bounded continuation.** A woken turn re-arms only when it provably consumed
+  mail (the pending count dropped), capped at `PLUMB_WAKE_CHAIN_MAX` (default
+  10) wakes per chain; any ambiguity stands the chain down.
+
+Writing is conservative in both directions. An install **merges**: hooks the
+user wrote on the same events keep their place, the file is backed up before it
+changes, re-running is a no-op once it matches, and plumb's own entry on an
+event is refreshed after the binary moves — with any duplicate of it on the same
+event removed, so an install always converges on exactly one handler per event
+rather than leaving two that both fire. An uninstall removes
+**only** plumb's handlers, and drops surrounding structure **only where it
+emptied it and only where that structure was plumb's own** — a bare
+`{"hooks": [...]}` group it took the last handler from, then an event key with
+no group left, then the file itself if the whole config was plumb's hooks and
+nothing else. A group carrying anything more — a `matcher`, a note of your own —
+is yours even when plumb's handler is the only thing inside it, so it stays with
+its keys intact and an emptied `hooks` array. A group you left empty (Claude
+Code's own `/hooks` editor leaves those) is structure plumb never wrote and is
+untouched. An uninstall with nothing of plumb's to remove writes nothing at all
+— not even a backup.
+
+The hand-installed shell hooks plumb's own recipe documented
+(`plumb-session-link.sh`, `plumb-mail-wake.sh`) count as plumb's: an install
+replaces those entries in place, so the migration leaves one pair of hooks
+rather than two that both fire, and the `.sh` files themselves are left on disk.
+That match is narrow on purpose, because it also decides what an uninstall
+deletes: the command's own executable must **be** one of those two scripts, and
+it must sit on an event the recipe used. A wrapper called
+`wrap-plumb-mail-wake.sh`, a command that merely names the script in an
+argument, or anything at all on an event plumb does not install on, is the
+user's and is never removed.
+
+Installation is always explicit. Hooks execute commands with the user's
+credentials, so nothing installs them as a side effect — not `plumb setup`, not
+project config, not a repository someone cloned. Removal is the one direction
+that also happens elsewhere: `plumb setup <client> --uninstall` removes that
+client's hooks along with its registration and skills, because hooks left
+pointing at a deregistered plumb are dead weight.
+
 ---
 
 ## `plumb skills`
@@ -476,6 +589,7 @@ Claude Code Stop-hook recipe built on this command.
 
 ```
 plumb stats [--workspace <dir>] [--limit <n>] [--since <age>] [--failures]
+plumb stats --health [--workspace <dir>]
 ```
 
 Aliases: **`plumb status`**.
@@ -487,9 +601,32 @@ of the most recent calls.
 | Flag | Default | Effect |
 |---|---|---|
 | `--workspace <dir>` | current dir | Workspace to inspect. |
-| `--limit <n>` | `20` | Number of recent calls to show. |
-| `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. |
-| `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. |
+| `--limit <n>` | `20` | Number of recent calls to show. Rejected together with `--health`. |
+| `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. Rejected together with `--health`. |
+| `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. Rejected together with `--health`. |
+| `--health` | `false` | Replace the default view with the three standing health metrics (PLAN-368), computed for today (UTC) and upserted into `stats.db`'s `health_daily` table. |
+
+`--health` renders and persists three metrics, idempotently per UTC day (safe to
+run more than once — a re-run overwrites that day's rows rather than duplicating
+them, so it doubles as a nightly cron job): **lane-defection rate** (share of
+sessions that read a file where a later `write_file` or `transaction_apply` call
+was refused because the file had changed on disk since — both the guarded
+`expected_mtime`/`expected_sha` path and the unguarded auto-detect path count,
+since neither tool has a separate "never read at all" refusal to confuse it
+with; known undercounts, not an exhaustive list: a session that never tries the
+write again is invisible, and `edit_file`/the symbol-edit tools' refusals aren't
+counted at all, because `calls` can't tell their "changed since read" apart from
+their own "never read" refusal), **semantic-surface
+error rate** (a 7-day rolling per-tool error rate over the LSP query/edit surface,
+flagged only when the tool is advertised — pinned into a Claude Code connection's
+context, PLAN-355 — AND both its own sample and the `read_file` baseline sample
+are large enough to trust), and **net economics per client** (the estimated read
+savings and guard-refusal count, trended per day per client; the third PLAN-367
+line, the tool-schema surcharge, is a live per-connection figure this offline
+view has no access to, the same reason the default view above omits it too).
+`--health` always covers today and has no recent-calls list or failure breakdown
+to filter or limit, so it is rejected in combination with `--limit`, `--since`,
+or `--failures` rather than silently ignoring them.
 
 `--failures` is the triage view. It groups failed calls by their machine-readable
 kind (`dirty_file`, `lsp_timeout`, …), the tool, and the client build, and reports

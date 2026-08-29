@@ -5,7 +5,11 @@ import (
 	"strings"
 )
 
-// allTaskSlots is the full slot set, in report order.
+// allTaskSlots is the BUILT-IN slot set, in report order — the set "not
+// configured" is reported against. A project-defined extra slot is deliberately
+// absent: it is opt-in, so it can never be missing, and listing every slot a
+// project did not define would turn the orientation line into noise. Extras
+// still appear in TaskState.Configured when they have a command.
 var allTaskSlots = []string{"build", "lint", "test", "e2e", "verify"}
 
 // TaskState is the resolved task/command surface for this session, reported at
@@ -96,8 +100,9 @@ func writeCommandAllowList(sb *strings.Builder, st TaskState) {
 	fmt.Fprintf(sb, "\n`run_command`: %s.\n", strings.Join(st.Commands, ", "))
 }
 
-// missingTaskSlots returns the slots absent from configured, preserving the
-// canonical order.
+// missingTaskSlots returns the BUILT-IN slots absent from configured,
+// preserving the canonical order. configured may contain project-defined extras;
+// they are simply not looked for here.
 func missingTaskSlots(configured []string) []string {
 	have := make(map[string]bool, len(configured))
 	for _, s := range configured {

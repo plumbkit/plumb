@@ -564,14 +564,6 @@ func TestMutationTest_ArgValidation(t *testing.T) {
 			},
 			"shell-safe",
 		},
-		{
-			"bad slot",
-			map[string]any{
-				"mutants":   []map[string]any{{"file_path": "f", "old_string": "a", "new_string": "b"}},
-				"test_task": "deploy",
-			},
-			"test_task must be one of",
-		},
 	}
 	tool := NewMutationTest(WriteDeps{}, nil)
 	for _, tc := range cases {
@@ -856,11 +848,18 @@ func TestFormatMutationReport_Shape(t *testing.T) {
 }
 
 func TestTargetNote(t *testing.T) {
-	if got := targetNote(""); !strings.Contains(got, "WHOLE suite") {
+	if got := targetNote("", TaskCommand{}); !strings.Contains(got, "WHOLE suite") {
 		t.Errorf("an unscoped run must warn it runs the whole suite; got %q", got)
 	}
-	if got := targetNote("./internal/tools"); !strings.Contains(got, "./internal/tools") {
+	if got := targetNote("./internal/tools", TaskCommand{}); !strings.Contains(got, "./internal/tools") {
 		t.Errorf("a scoped run must name the target; got %q", got)
+	}
+	// A resolver saying the target was NOT applied (test_task:"verify") must win
+	// over a header claiming the scope landed.
+	const dropped = `the target "./internal/tools" was NOT applied: verify is a composite`
+	got := targetNote("./internal/tools", TaskCommand{Notes: []string{dropped}})
+	if !strings.Contains(got, dropped) || strings.Contains(got, "scoped to") {
+		t.Errorf("the header must carry the resolver's note and claim no scope; got %q", got)
 	}
 }
 

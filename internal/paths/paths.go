@@ -134,8 +134,123 @@ func LogDir() string {
 	return StateDir()
 }
 
-// CacheDir returns plumb's cache directory (socket, pid, locks, heap profiles).
+// CacheDir returns plumb's cache directory (heap profiles, and the runtime
+// files on any platform where RuntimeDir falls back to it).
 func CacheDir() string { return appPath("XDG_CACHE_HOME", func() string { return xdg.CacheHome }) }
+
+// RuntimeDir returns the directory for the daemon's runtime files: the MCP and
+// control sockets, the pid and version files, and the two flocks. It is the
+// single definition of that location — the CLI, the TUI's daemon-liveness
+// check, and the macOS/Linux command sandboxes all resolve through it, and
+// before it existed each carried its own copy that could drift.
+//
+// On Linux it prefers $XDG_RUNTIME_DIR, which is what the XDG base directory
+// spec designates for "non-essential runtime files and other file objects such
+// as sockets, named pipes, ...": a per-user tmpfs, mode 0700, that the login
+// session owns and cleans up. That is a better home for a socket than ~/.cache,
+// and on a typical box it also shortens the socket path to about 30 bytes,
+// which puts the sun_path ceiling (104-108 bytes) comfortably out of reach.
+//
+// Elsewhere — and on Linux when the variable is unusable — it falls back to
+// os.UserCacheDir, deliberately, NOT os.TempDir: on macOS $TMPDIR differs
+// between a GUI-app launch and a terminal launch, so a socket there would move
+// depending on how the client started plumb.
+// RuntimeDir only resolves; it creates nothing. The TUI's liveness check and
+// the sandboxes ask for this path without wanting to bring it into existence,
+// so the one caller that needs the directory (the CLI, before binding the
+// socket or taking a lock) does the MkdirAll itself.
+func RuntimeDir() string {
+	return filepath.Join(runtimeBase(), appDir)
+}
+
+func runtimeBase() string {
+	if dir, ok := xdgRuntimeDir(); ok {
+		return dir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		// os.UserCacheDir only fails when $HOME is unset; TempDir is the best
+		// available answer in that degenerate case.
+		return os.TempDir()
+	}
+	return base
+}
+
+// xdgRuntimeDir returns $XDG_RUNTIME_DIR when it is usable, applying the checks
+// the spec requires of the consumer rather than trusting the variable.
+//
+// The spec is unusually strict here because the directory is a security
+// boundary: it must be an absolute path, owned by the user, with 0700
+// permissions, and it must already exist — a consumer is told to fall back
+// "with a warning" if any of that does not hold. A world-readable runtime dir
+// would expose the daemon socket, so failing these checks has to mean fall
+// back, never create-and-hope.
+//
+// macOS has no equivalent: launchd sets no XDG_RUNTIME_DIR, and a stray one in
+// the environment should not move the socket off the stable cache location, so
+// this is Linux/BSD only.
+func xdgRuntimeDir() (string, bool) {
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		return "", false
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if !filepath.IsAbs(dir) {
+		return "", false
+	}
+	info, err := os.Stat(dir) //nolint:gosec // G703: statting $XDG_RUNTIME_DIR is the point — this is the spec's own ownership/permission check on a path the invoking user controls for their own process, and its result only ever decides between that directory and the cache fallback. Nothing is read or written here.
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	if info.Mode().Perm() != 0o700 {
+		return "", false
+	}
+	if !ownedByCurrentUser(info) {
+		return "", false
+	}
+	return dir, true
+}
+
+// RuntimeDirLever names the environment variable that actually moves
+// RuntimeDir on this host, for error messages that tell the user what to
+// change.
+//
+// It is not one answer: the socket follows $XDG_RUNTIME_DIR when that is in
+// use, $HOME on macOS (os.UserCacheDir ignores XDG_CACHE_HOME there), and
+// XDG_CACHE_HOME on a Linux box without a runtime dir. Naming the wrong one
+// sends the user to a setting that cannot move the socket — the whole reason
+// this is computed rather than hardcoded.
+func RuntimeDirLever() string {
+	if _, ok := xdgRuntimeDir(); ok {
+		return "XDG_RUNTIME_DIR"
+	}
+	// $HOME covers two cases: macOS, where os.UserCacheDir ignores
+	// XDG_CACHE_HOME outright, and the degenerate branch where UserCacheDir
+	// failed and runtimeBase fell through to os.TempDir — which only happens
+	// when $HOME is unset, making $HOME the thing to fix either way.
+	if runtime.GOOS == "darwin" {
+		return "$HOME"
+	}
+	if _, err := os.UserCacheDir(); err != nil {
+		return "$HOME"
+	}
+	return "XDG_CACHE_HOME"
+}
+
+// LegacyRuntimeDir returns the pre-XDG_RUNTIME_DIR location, so a caller can
+// notice a daemon left behind there by an older build. It returns "" when it is
+// the same directory RuntimeDir already resolves to — i.e. whenever there is
+// nothing legacy about it.
+func LegacyRuntimeDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	legacy := filepath.Join(base, appDir)
+	if legacy == RuntimeDir() {
+		return ""
+	}
+	return legacy
+}
 
 // unhijack detects a shell session manager having rewritten envVar to a
 // throwaway temp directory and, if so, temporarily restores the pre-hijack value

@@ -44,7 +44,7 @@ func TestGuidanceNamesPinnedToolsOnly(t *testing.T) {
 	for _, profile := range []string{"full", "lean"} {
 		for _, topologyOn := range []bool{true, false} {
 			out := render(profile, topologyOn)
-			for _, line := range strings.Split(out, "\n") {
+			for line := range strings.SplitSeq(out, "\n") {
 				if strings.TrimSpace(line) == "" {
 					continue
 				}

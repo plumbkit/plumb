@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os/exec"
 	"strings"
 
@@ -146,9 +147,7 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	// the store's map. The store's LSP block stays restart-tier by design — this
 	// live change is deliberately pool-local (see the CLI command's help).
 	newLSP := make(map[string]config.LSPConfig, len(p.baseConfig.LSP))
-	for k, v := range p.baseConfig.LSP {
-		newLSP[k] = v
-	}
+	maps.Copy(newLSP, p.baseConfig.LSP)
 	newLSP[name] = cfg
 	p.baseConfig.LSP = newLSP
 

@@ -115,7 +115,7 @@ func gitArgVector(sel []byte, raw string) []string {
 	if raw == "" {
 		return args
 	}
-	for _, tok := range strings.Split(raw, "\x00") {
+	for tok := range strings.SplitSeq(raw, "\x00") {
 		if len(args) == gitArgVectorMax {
 			break
 		}

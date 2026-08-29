@@ -108,10 +108,18 @@ func (r renameSessionModal) box() string {
 	var b strings.Builder
 	title := " Rename Session "
 	dashes := max(innerW-1-lipgloss.Width(title), 0)
-	b.WriteString(SepStyle.Render("╭─") + PanelHeaderStyle.Render(title) + SepStyle.Render(strings.Repeat("─", dashes)+"╮") + "\n")
+	b.WriteString(SepStyle.Render("╭─"))
+	b.WriteString(PanelHeaderStyle.Render(title))
+	b.WriteString(SepStyle.Render(strings.Repeat("─", dashes) + "╮"))
+	b.WriteString("\n")
 	for _, row := range rows {
 		rpad := max(innerW-pad-lipgloss.Width(row), 0)
-		b.WriteString(SepStyle.Render("│") + strings.Repeat(" ", pad) + row + strings.Repeat(" ", rpad) + SepStyle.Render("│") + "\n")
+		b.WriteString(SepStyle.Render("│"))
+		b.WriteString(strings.Repeat(" ", pad))
+		b.WriteString(row)
+		b.WriteString(strings.Repeat(" ", rpad))
+		b.WriteString(SepStyle.Render("│"))
+		b.WriteString("\n")
 	}
 	b.WriteString(SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
 	return b.String()

@@ -88,16 +88,8 @@ func dataPath() string {
 func Load() (Config, error) {
 	cfg := cloneConfig(defaults)
 
-	path := configPath()
-	if path != "" {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			if err := toml.Unmarshal(data, &cfg); err != nil {
-				return Config{}, fmt.Errorf("parsing config %s: %w", path, err)
-			}
-		} else if !os.IsNotExist(err) {
-			return Config{}, fmt.Errorf("reading config %s: %w", path, err)
-		}
+	if err := mergeGlobalFile(&cfg, configPath()); err != nil {
+		return Config{}, err
 	}
 
 	applyEnv(&cfg)
@@ -107,6 +99,36 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 	return cfg, nil
+}
+
+// mergeGlobalFile decodes the global config file onto cfg. A missing file (or an
+// empty path) is not an error — the caller keeps the defaults.
+//
+// It is a function rather than an inline block because it decodes the bytes
+// TWICE, and the nesting that produced pushed Load past the nesting-complexity
+// limit. The second decode is for the [tasks.<lang>] slots go-toml cannot bind,
+// because TasksConfig does not declare them; extraTaskSlots explains why that is
+// a re-decode and not a custom unmarshaler.
+func mergeGlobalFile(cfg *Config, path string) error {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading config %s: %w", path, err)
+	}
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	raw := map[string]any{}
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	cfg.Tasks = applyExtraTaskSlots(cfg.Tasks, extraTaskSlots(raw))
+	return nil
 }
 
 // applyEnv overlays environment variables onto cfg.
@@ -320,6 +342,9 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 			return base, ProjectPolicyStatus{}, fmt.Errorf("parsing project config %s: %w", path, err)
 		}
 		merged.Git.Env = composeGitEnv(base.Git.Env, merged.Git.Env)
+		// Extras merge per slot onto whatever the global layer supplied, so a
+		// project naming one extra does not erase the others.
+		merged.Tasks = applyExtraTaskSlots(cloneTasks(merged.Tasks), extraTaskSlots(raw))
 	}
 	// The spec is computed from the same bytes that were just merged, so the
 	// content trust is checked against is exactly the content in play — a second
@@ -331,6 +356,9 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 	if !st.InEffect() {
 		forceCapabilityFieldsToBase(base, &merged)
 	}
+	// After the project layer has had its say, so a command the project set is
+	// never rewritten — only a slot still holding the shipped npm default is.
+	merged.Tasks = applyJSPackageManagerDefaults(cloneTasks(merged.Tasks), workspace)
 	merged.LSP = dropUnknownLSPLanguages(base.LSP, merged.LSP)
 	forceGlobalOnlyToBase(base, &merged)
 	applyOneWayBools(base, &merged)

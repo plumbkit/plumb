@@ -5,6 +5,12 @@ import "strings"
 func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 	profile, hidden, reason := t.resolvedToolProfile()
 	sb.WriteString(ProfileNote(profile, hidden, reason))
+	// Truthful even though plumb cannot observe the client-side filter itself
+	// (see ClientSideAllowlistNote): appended whenever the client's clientcaps
+	// entry declares ClientSideAllowlist, independent of which profile rule fired.
+	if clientSideAllowlistCapable(t.clientNameFn) {
+		sb.WriteString(ClientSideAllowlistNote())
+	}
 	switch {
 	case isClaudeCode(t.clientNameFn):
 		t.writeClaudeCodeGuidance(sb)
@@ -130,11 +136,21 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			sb.WriteString("- Discovery: start with **workspace_search**, then the Map and **get_definition** / " +
 				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")
 		}
+		sb.WriteString("- Narrow the Map before widening it (both load via ToolSearch if not already in context): " +
+			"**topology_explore** with `include_source: \"none\"` and `depth: 1` answers \"what touches this?\" " +
+			"for a fraction of the default response; **topology_search** takes `kinds` and `limit`. " +
+			"The defaults are tuned for Go-sized files.\n")
 		sb.WriteString("- Refactors: **rename_symbol** (load via ToolSearch if not already in context) for " +
 			"identifiers, **transaction_apply** for one atomic multi-file change — the plumb-refactor skill " +
 			"has the rest.\n")
-		sb.WriteString("- **diagnostics** — live errors and warnings without running a build; await_diagnostics " +
-			"on edit_file/write_file returns the authoritative post-write pass.\n\n")
+		// The "await_diagnostics on edit_file/write_file returns the authoritative
+		// post-write pass" doctrine is deliberately NOT restated here: Claude Code's
+		// MCP initialize `instructions` field (internal/mcp.InstructionsForClient,
+		// PLAN-366) already carries it verbatim in its "Compile truth on write"
+		// paragraph, delivered once per connection before session_start ever runs.
+		// This decision-point pointer stays: it is the live fact that diagnostics
+		// exists and is free, not a restatement of the write-time doctrine.
+		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
 		// Lean hides these tools from tools/list, so the orientation packet does
 		// not advertise them. Error messages DO name them (ColdLSPToolsHint) even
 		// under lean: that is reactive — the agent has already hit a cold server

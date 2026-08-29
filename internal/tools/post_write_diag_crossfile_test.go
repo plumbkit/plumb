@@ -132,20 +132,20 @@ func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 	f.all["file:///ws/b.go"] = []protocol.Diagnostic{errAt("broke", 9)}
 	f.times["file:///ws/b.go"] = time.Now()
 
-	out := d.crossFileDiagnostics("file:///ws/edited.go", true, baseline)
+	out, _, _ := d.crossFileDiagnostics("file:///ws/edited.go", true, baseline)
 	if !strings.Contains(out, "b.go") || !strings.Contains(out, "introduced new errors") {
 		t.Fatalf("expected cross-file heads-up, got %q", out)
 	}
 
-	if got := d.crossFileDiagnostics("file:///ws/edited.go", false, baseline); got != "" {
+	if got, _, _ := d.crossFileDiagnostics("file:///ws/edited.go", false, baseline); got != "" {
 		t.Errorf("fresh=false must suppress the sweep, got %q", got)
 	}
-	if got := d.crossFileDiagnostics("file:///ws/edited.go", true, nil); got != "" {
+	if got, _, _ := d.crossFileDiagnostics("file:///ws/edited.go", true, nil); got != "" {
 		t.Errorf("nil baseline must suppress the sweep, got %q", got)
 	}
 
 	disabled := WriteDeps{Diag: f, CrossFileDiag: false, WorkspaceFn: func(context.Context) string { return "/ws" }}
-	if got := disabled.crossFileDiagnostics("file:///ws/edited.go", true, baseline); got != "" {
+	if got, _, _ := disabled.crossFileDiagnostics("file:///ws/edited.go", true, baseline); got != "" {
 		t.Errorf("disabled sweep must be silent, got %q", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote(t *testing.T) {
 		// The edit touches the last line only; the pre-existing error is elsewhere,
 		// so it is carried over (dropped from the delta) and the edit is otherwise
 		// clean.
-		out := d.postWriteDiagnostics(edited, "a\nb\nc\nd", "a\nb\nc\nD", false, baseline)
+		out := d.postWriteDiagnostics(edited, "a\nb\nc\nd", "a\nb\nc\nD", postWriteDiagOpts{}, baseline).text
 		if !strings.Contains(out, "1 pre-existing issue in this file not shown") {
 			t.Fatalf("expected the standing pre-existing note, got:\n%q", out)
 		}
@@ -183,7 +183,7 @@ func TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote(t *testing.T) {
 		d := WriteDeps{Diag: f, WorkspaceFn: func(context.Context) string { return "/ws" }}
 		baseline := d.capturePreWriteBaseline(edited)
 
-		out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", false, baseline)
+		out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 		if strings.Contains(out, "pre-existing") {
 			t.Fatalf("a clean baseline must not mention pre-existing issues, got:\n%q", out)
 		}
@@ -211,7 +211,7 @@ func TestWriteDeps_capturePreWriteBaseline_NarrowSource(t *testing.T) {
 	if b.errCount != nil || b.messages != nil {
 		t.Errorf("a narrow source must not populate the cross-file maps, got errCount=%v messages=%v", b.errCount, b.messages)
 	}
-	if got := d.crossFileDiagnostics("file:///ws/edited.go", true, b); got != "" {
+	if got, _, _ := d.crossFileDiagnostics("file:///ws/edited.go", true, b); got != "" {
 		t.Errorf("a narrow source must make the cross-file sweep a no-op, got %q", got)
 	}
 }

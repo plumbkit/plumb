@@ -81,6 +81,10 @@ func (*TopologyExplore) Name() string                 { return "topology_explore
 func (*TopologyExplore) InputSchema() json.RawMessage { return topologyExploreSchema }
 func (*TopologyExplore) Description() string {
 	return "Bounded BFS neighbourhood around a named symbol in the topology index. " +
+		"NARROW IT FIRST on a large file or an unfamiliar language: include_source=\"none\" returns names only " +
+		"(the default, \"signatures\", is several times larger), and depth=1 with max_nodes=15 answers " +
+		"\"what touches this?\" in a fraction of the default budget (depth 2, 50 nodes, 30000 bytes) — " +
+		"raise them once you know what you are looking for. " +
 		"Returns the centre node, neighbour nodes, and connecting edges up to depth/max_nodes/max_bytes. " +
 		"Reports truncation when limits are hit. Source is 'topology' (approximate — use LSP semantic " +
 		"tools for authoritative reference and definition lookups). Returns an error when topology is " +
@@ -153,8 +157,8 @@ func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topo
 	}
 	opts := topology.ExploreOpts{
 		Depth:         a.Depth,
-		MaxNodes:      a.MaxNodes,
-		MaxBytes:      a.MaxBytes,
+		MaxNodes:      topology.ClampToolNodes(a.MaxNodes),
+		MaxBytes:      topology.ClampToolBytes(a.MaxBytes),
 		IncludeSource: a.IncludeSource,
 		EdgeKinds:     a.EdgeKinds,
 	}
@@ -255,7 +259,7 @@ func wantsDocstring(includeSource string) bool {
 // firstLine returns the first non-empty line of s, trimmed and length-capped,
 // so a multi-line docstring contributes one compact line to the output.
 func firstLine(s string) string {
-	for _, ln := range strings.Split(s, "\n") {
+	for ln := range strings.SplitSeq(s, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln != "" {
 			// Byte budget, rune-safe: this is an arbitrary source line, so a

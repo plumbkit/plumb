@@ -358,7 +358,7 @@ func TestFindFiles_SortOrders(t *testing.T) {
 	}
 
 	firstLine := func(out string) string {
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			if line != "" && line != dir {
 				return line
 			}

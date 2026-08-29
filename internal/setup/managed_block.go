@@ -1,0 +1,455 @@
+// Package setup implements the mechanics of plumb's managed instruction
+// block: a small, versioned, idempotent span that plumb owns inside a
+// client's instruction file (AGENTS.md, CLAUDE.md, GEMINI.md, ...), bounded
+// by a pair of HTML-comment markers. Everything outside the markers belongs
+// to the user — plumb never reads it, never reasons about it, and never
+// rewrites it.
+//
+// The mechanism is client-agnostic by design: WHICH file a client reads and
+// WHAT the block says are internal/cli's questions (setup wiring, per-client
+// templates), not this package's. This package only knows how to find,
+// render, compare, and write one block inside an arbitrary text file.
+package setup
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/plumbkit/plumb/internal/fsync"
+	"github.com/plumbkit/plumb/internal/paths"
+)
+
+const (
+	startMarkerPrefix = "<!-- plumb:managed:start "
+	startMarkerSuffix = " -->"
+	// EndMarker closes a managed block. It carries no version because only
+	// one block is ever open at a time — the start marker is the single
+	// source of truth for which template version produced it.
+	EndMarker = "<!-- plumb:managed:end -->"
+)
+
+// startMarker renders the opening marker line for version.
+func startMarker(version string) string {
+	return startMarkerPrefix + version + startMarkerSuffix
+}
+
+// RenderBlock wraps body between the versioned start marker and EndMarker.
+// body's trailing newlines are trimmed first so the rendered block always
+// ends the same way regardless of whether the caller's template has one —
+// which is what makes Apply's idempotency check a plain string comparison.
+func RenderBlock(body, version string) string {
+	return startMarker(version) + "\n" + strings.TrimRight(body, "\n") + "\n" + EndMarker
+}
+
+// blockSpan describes one well-formed managed block found by scanBlocks: byte
+// offsets [start, end) covering its start-marker line through its end-marker
+// line (both inclusive of their own text, exclusive of a following newline),
+// and the version recorded on its start marker.
+type blockSpan struct {
+	start, end int
+	version    string
+}
+
+// scanBlocks walks content line by line and reports every well-formed managed
+// block, plus whether the markers in content are malformed in any way: an
+// orphan start (no matching end before EOF or before another start), an end
+// with no preceding start, or more than one well-formed block.
+//
+// Malformed content is reported rather than guessed at, on purpose. An
+// earlier version of this scanner located just the FIRST textual occurrence
+// of the start-marker prefix and searched forward for the next end marker,
+// which fails open in two dangerous ways: (1) if the user deletes just the
+// end marker, the orphan start survives and the NEXT Apply pairs it with a
+// different block's end marker, silently deleting every byte between —
+// including user prose that was never inside any block; (2) a file that
+// merely quotes the marker text inline (documenting the mechanism, say) grows
+// a fresh block on every Apply, since the malformed candidate is invisible to
+// the scanner and "no block found" means append. A malformed or duplicated
+// block must stop Apply from writing at all, not make its best guess.
+//
+// A line only counts as a marker if it is EXACTLY the marker text with
+// nothing else on the line — this is what keeps a marker quoted mid-sentence
+// (“ `<!-- plumb:managed:start v1 -->` “ in a doc, say) from being mistaken
+// for a real one: such a line never starts at column zero with the marker
+// prefix.
+func scanBlocks(content string) (blocks []blockSpan, malformed bool) {
+	pos := 0
+	pendingStart := -1
+	pendingVersion := ""
+	for pos <= len(content) {
+		lineEnd := strings.IndexByte(content[pos:], '\n')
+		var line string
+		var nextPos int
+		last := lineEnd == -1
+		if last {
+			line = content[pos:]
+		} else {
+			line = content[pos : pos+lineEnd]
+			nextPos = pos + lineEnd + 1
+		}
+		trimmed := strings.TrimSuffix(line, "\r") // tolerate CRLF without treating it as content
+
+		switch trimmed {
+		case EndMarker:
+			if pendingStart == -1 {
+				malformed = true // end marker with no matching start
+			} else {
+				blocks = append(blocks, blockSpan{start: pendingStart, end: pos + len(trimmed), version: pendingVersion})
+				pendingStart = -1
+				pendingVersion = ""
+			}
+		default:
+			if version, ok := parseStartMarkerLine(trimmed); ok {
+				if pendingStart != -1 {
+					malformed = true // a second start before the first was closed
+				}
+				pendingStart = pos
+				pendingVersion = version
+			}
+		}
+
+		if last {
+			break
+		}
+		pos = nextPos
+	}
+	if pendingStart != -1 {
+		malformed = true // unterminated start at EOF
+	}
+	if len(blocks) > 1 {
+		malformed = true // more than one managed block — flagged rather than guessed at
+	}
+	return blocks, malformed
+}
+
+// parseStartMarkerLine reports whether line is EXACTLY a start marker line
+// — startMarkerPrefix, a version token, then startMarkerSuffix, and nothing
+// else — and returns the version. A version containing anything other than
+// letters, digits, '.', '_', or '-' fails the parse rather than being
+// accepted: it is either not a marker at all, or a hand-mangled one, and
+// either way scanBlocks must not treat it as a well-formed boundary.
+func parseStartMarkerLine(line string) (version string, ok bool) {
+	if !strings.HasPrefix(line, startMarkerPrefix) || !strings.HasSuffix(line, startMarkerSuffix) {
+		return "", false
+	}
+	version = line[len(startMarkerPrefix) : len(line)-len(startMarkerSuffix)]
+	if !isVersionToken(version) {
+		return "", false
+	}
+	return version, true
+}
+
+// isVersionToken reports whether v is a plausible version string: non-empty,
+// and built only from letters, digits, '.', '_', and '-'. It exists so a
+// version field can never smuggle marker-like syntax (a stray "-->", a space,
+// a newline) into what scanBlocks treats as a clean line match.
+func isVersionToken(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// maxDanglingSymlinkHops bounds resolveDanglingSymlinkChain's manual walk —
+// a conventional loop guard, well above any real instruction-file symlink
+// depth (one hop, in every case this package ships for).
+const maxDanglingSymlinkHops = 40
+
+// resolveTarget follows path if it is a symlink (or a chain of them) and
+// returns the real file it names. Two cases:
+//
+//   - The chain resolves cleanly (the target exists, or path is not a
+//     symlink at all): delegates to paths.Canonical, the tree's one "same
+//     place?" answer. A path that does not exist and is not a symlink
+//     resolves to itself, unchanged — the caller creates it directly.
+//   - path is ITSELF a symlink whose target does not exist yet — a
+//     DANGLING symlink, the exact state of this repo's own CLAUDE.md ->
+//     AGENTS.md / GEMINI.md -> AGENTS.md on a project's very first
+//     `plumb setup <client>`, before AGENTS.md has ever been created.
+//     paths.Canonical's own missing-path fallback does not read symlink
+//     targets in this case (it walks up to the nearest EXISTING ancestor
+//     directory and reappends path's own tail literally), so it answers
+//     with the LINK's own path — and Apply writing through that answer
+//     would have AtomicWrite's rename REPLACE THE SYMLINK ITSELF with a
+//     regular file, which this package promises never to do. So a dangling
+//     chain is instead walked by hand (resolveDanglingSymlinkChain) to the
+//     real path it names, and Apply creates THAT — the symlink is never
+//     touched.
+func resolveTarget(path string) string {
+	if target, ok := resolveDanglingSymlinkChain(path); ok {
+		return target
+	}
+	return paths.Canonical(path)
+}
+
+// resolveDanglingSymlinkChain walks path's symlink chain by hand — one
+// os.Readlink hop at a time, resolving a relative target against the link's
+// own directory — for the one case paths.Canonical cannot answer: path
+// itself is a symlink, but the chain is DANGLING (its target, or some link
+// further down the chain, does not exist). ok is true only in that case,
+// with target set to the real path the chain names (which Apply should
+// create); ok is false when path is not a symlink at all (nothing to
+// resolve by hand — paths.Canonical already handles that), when the chain
+// is NOT dangling (resolves to an existing, non-symlink file — again
+// paths.Canonical's job), or when it loops or runs deeper than
+// maxDanglingSymlinkHops.
+func resolveDanglingSymlinkChain(path string) (target string, ok bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+
+	current := path
+	for range maxDanglingSymlinkHops {
+		linkTarget, err := os.Readlink(current)
+		if err != nil {
+			return "", false
+		}
+		if !filepath.IsAbs(linkTarget) {
+			linkTarget = filepath.Join(filepath.Dir(current), linkTarget)
+		}
+		linkTarget = filepath.Clean(linkTarget)
+
+		nextInfo, err := os.Lstat(linkTarget)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return linkTarget, true // the chain bottoms out at a name that does not exist yet: the real target
+			}
+			return "", false
+		}
+		if nextInfo.Mode()&os.ModeSymlink == 0 {
+			return "", false // resolves to a real, existing file — not dangling; paths.Canonical handles this
+		}
+		current = linkTarget
+	}
+	return "", false // a chain this deep is a loop, not a real instruction-file symlink
+}
+
+// Status reports how a file's on-disk managed block compares to the current
+// template.
+type Status int
+
+const (
+	// StatusMissing means the file doesn't exist, or exists without a
+	// well-formed managed block.
+	StatusMissing Status = iota
+	// StatusStale means a block is present whose recorded version differs
+	// from the version Check was asked about.
+	StatusStale
+	// StatusModified means the block's version matches, but its content was
+	// hand-edited since plumb last wrote it.
+	StatusModified
+	// StatusCurrent means the block matches the current template exactly.
+	StatusCurrent
+	// StatusMalformed means the file's markers cannot be trusted — an orphan
+	// start or end marker, or more than one well-formed block. Check reports
+	// it rather than guessing at Missing/Stale/Modified; Apply refuses to
+	// write at all (see scanBlocks).
+	StatusMalformed
+)
+
+// String names the status for CLI/log output.
+func (s Status) String() string {
+	switch s {
+	case StatusMissing:
+		return "missing"
+	case StatusStale:
+		return "stale"
+	case StatusModified:
+		return "modified"
+	case StatusCurrent:
+		return "current"
+	case StatusMalformed:
+		return "malformed"
+	default:
+		return "unknown"
+	}
+}
+
+// Check inspects path — following a symlink to its real target first — and
+// reports how its managed block compares to RenderBlock(body, version). It
+// never writes.
+func Check(path, body, version string) (Status, error) {
+	target := resolveTarget(path)
+	data, err := os.ReadFile(target) //nolint:gosec // G304: target is caller-supplied by design (a client's own instruction file), same trust boundary as every other setup writer in this codebase
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return StatusMissing, nil
+		}
+		return StatusMissing, fmt.Errorf("reading %s: %w", target, err)
+	}
+	content := string(data)
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return StatusMalformed, nil
+	}
+	if len(blocks) == 0 {
+		return StatusMissing, nil
+	}
+	b := blocks[0]
+	if b.version != version {
+		return StatusStale, nil
+	}
+	if content[b.start:b.end] != RenderBlock(body, version) {
+		return StatusModified, nil
+	}
+	return StatusCurrent, nil
+}
+
+// Apply writes the managed block into the file at path, following a symlink
+// to its real target first (the target is rewritten in place; the symlink
+// itself is never replaced with a regular file). Behaviour:
+//
+//   - File absent: created containing just the rendered block.
+//   - File present with a managed block (any version): that span is replaced
+//     with the current one; content outside the markers is preserved
+//     byte-for-byte, whatever it is.
+//   - File present without a managed block: the block is appended, separated
+//     from existing content by one blank line.
+//
+// Apply is how `--sync` and a bare `plumb setup <client>` are the same
+// operation: both call Apply with the current template, so a stale or
+// hand-edited block is unconditionally restored to it. Returns changed=false
+// when the file already matches (a plain no-op, not a rewrite) — verified by
+// TestManagedBlock_Idempotent to be byte-identical across repeated calls.
+func Apply(path, body, version string) (changed bool, err error) {
+	target := resolveTarget(path)
+	block := RenderBlock(body, version)
+
+	data, readErr := os.ReadFile(target) //nolint:gosec // G304: target is caller-supplied by design, same trust boundary as every other setup writer in this codebase
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return false, fmt.Errorf("reading %s: %w", target, readErr)
+	}
+	if errors.Is(readErr, os.ErrNotExist) {
+		// A GLOBAL instruction file's parent directory (~/.codex, ~/.claude,
+		// ~/.gemini) may not exist yet on a machine that has never run the
+		// client — fsync.AtomicWrite deliberately never creates directories,
+		// so a fresh managed block does it here.
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return false, fmt.Errorf("creating directory for %s: %w", target, err)
+		}
+		if err := writeBlock(target, block+"\n"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	content := string(data)
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return false, fmt.Errorf("%s: managed block markers are malformed or duplicated (an orphan start/end marker, or more than one block) — refusing to write; repair the file by hand and re-run", target)
+	}
+
+	next := mergeBlock(content, blocks, block)
+	if next == content {
+		return false, nil
+	}
+	if err := writeBlock(target, next); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Remove deletes the managed block from the file at path, following a
+// symlink to its real target first (mirrors Apply/Check). Behaviour:
+//
+//   - File absent: no-op, removed=false.
+//   - File present without a well-formed managed block (what Check reports
+//     as StatusMissing): no-op, removed=false.
+//   - File present with malformed markers: refuses with an error, matching
+//     Apply's own malformed-safe rigor — a caller cannot trust which bytes
+//     to erase from a file whose markers do not parse (see scanBlocks).
+//   - File present with exactly one well-formed block: the block is deleted
+//     via removeBlockSpan, which also absorbs the one blank-line separator
+//     mergeBlock's own append path would have inserted — so Remove is
+//     Apply's append case run backwards, not just a byte-range deletion.
+//
+// If deleting the block leaves nothing but whitespace, the file itself is
+// removed too, mirroring Apply's "absent file means no managed content"
+// symmetry — a bare uninstall of a plumb-created, otherwise-empty
+// instructions file should not leave a zero-byte file behind.
+func Remove(path string) (removed bool, err error) {
+	target := resolveTarget(path)
+	data, readErr := os.ReadFile(target) //nolint:gosec // G304: target is caller-supplied by design, same trust boundary as every other setup writer in this codebase
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading %s: %w", target, readErr)
+	}
+
+	content := string(data)
+	blocks, malformed := scanBlocks(content)
+	if malformed {
+		return false, fmt.Errorf("%s: managed block markers are malformed or duplicated (an orphan start/end marker, or more than one block) — refusing to remove; repair the file by hand and re-run", target)
+	}
+	if len(blocks) == 0 {
+		return false, nil
+	}
+
+	next := removeBlockSpan(content, blocks[0])
+	if strings.TrimSpace(next) == "" {
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("removing %s: %w", target, err)
+		}
+		return true, nil
+	}
+	if err := writeBlock(target, next); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// removeBlockSpan deletes b (and its own line terminator) from content, and
+// — when the block was preceded by the blank-line separator mergeBlock's
+// append path inserts ("\n\n" between prior content and a fresh block) —
+// absorbs that one blank line too, so removing a block Apply appended
+// reconstructs the pre-Apply content exactly rather than leaving a widowed
+// blank line behind. A block that instead sits mid-file surrounded by other
+// content (the common case after a version bump replaced it in place) is
+// left with whatever surrounded it untouched.
+func removeBlockSpan(content string, b blockSpan) string {
+	start, end := b.start, b.end
+	if end < len(content) && content[end] == '\n' {
+		end++
+	}
+	before := content[:start]
+	after := content[end:]
+	if strings.HasSuffix(before, "\n\n") {
+		before = before[:len(before)-1]
+	}
+	return before + after
+}
+
+// mergeBlock returns content with its single well-formed managed block (if
+// any — blocks has at most one entry whenever scanBlocks reports
+// malformed=false) replaced by block, or block appended — separated from any
+// existing content by one blank line — when content has none.
+func mergeBlock(content string, blocks []blockSpan, block string) string {
+	if len(blocks) == 1 {
+		b := blocks[0]
+		return content[:b.start] + block + content[b.end:]
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	if trimmed == "" {
+		return block + "\n"
+	}
+	return trimmed + "\n\n" + block + "\n"
+}
+
+func writeBlock(target, content string) error {
+	if err := fsync.AtomicWrite(target, []byte(content), fsync.Options{Mode: 0o644, Label: "setup-managed-block"}); err != nil {
+		return fmt.Errorf("writing %s: %w", target, err)
+	}
+	return nil
+}

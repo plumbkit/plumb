@@ -1,83 +1,75 @@
 package topology
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path"
 	"strings"
 )
 
-// importResolverSource marks edges this pass owns. They are DERIVED data: the
-// pass deletes and rebuilds every edge carrying this source, so it must never be
-// used by an extractor.
-const importResolverSource = "import-resolver"
+const (
+	importResolverSource = "import-resolver"
+	importEdgeConfidence = 0.9
+	minImportSegments    = 2
+)
 
-// importEdgeConfidence is below an extractor's 1.0 because the link is inferred
-// from a path suffix rather than read from a parsed reference.
-const importEdgeConfidence = 0.9
-
-// minImportSegments is the shortest suffix an import path may match on.
-//
-// Requiring two segments is what keeps stdlib and third-party imports out. A Go
-// file importing "strings" must not be linked to a local directory that happens
-// to be called strings/ — and single-segment names are exactly where collisions
-// live: this workspace holds 636 nodes named "strings". Two segments
-// ("internal/stats") is specific enough that a false match needs a genuinely
-// coincidental layout, and module-internal imports always have at least that
-// much once the module prefix is stripped.
-const minImportSegments = 2
-
-// linkImports creates the index's only cross-file edges.
-//
-// Extractors run per file and emit edges as indices into that file's own node
-// slice (see insertEdges), so nothing they produce can leave the file. The
-// consequence was measurable and severe: before this pass the index held ~31k
-// edges and NOT ONE of them crossed a file boundary. Since a Go test never lives
-// in the file it exercises, "affected by a dependency edge" could not fire for
-// test selection at all, and topology_affected was in practice a same-directory
-// test finder wearing a dependency-graph description.
-//
-// The link is import node -> package node, and the direction matters: callers
-// ask "who depends on the thing I changed?", which is an inward traversal, so
-// the edge must point AT the package being imported.
-//
-// An import is linked to every package node in the target directory, not one:
-// package nodes are per-file, and importing a package depends on all of it, so a
-// change to any file in it should reach the importer.
 func (idx *Indexer) linkImports() error {
-	tx, err := idx.db.Begin()
+	return idx.linkImportsContext(context.Background(), rebuildFull, indexChanges{full: true})
+}
+
+func prepareImportRebuild(ctx context.Context, tx *sql.Tx, mode rebuildMode, changed indexChanges) (string, error) {
+	if mode == rebuildFull {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM topology_edges WHERE source = ?`, importResolverSource); err != nil {
+			return "", fmt.Errorf("topology: link imports: clear: %w", err)
+		}
+		return "", nil
+	}
+	ids, err := fileIDsForPaths(ctx, tx, changed.sortedPaths())
+	if err != nil {
+		return "", err
+	}
+	if err := fillScope(ctx, tx, ids); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM topology_edges
+		WHERE source = ? AND from_id IN (
+			SELECT n.id FROM topology_nodes n JOIN rebuild_scope s ON s.file_id = n.file_id
+		)`, importResolverSource); err != nil {
+		return "", fmt.Errorf("topology: link imports: scoped clear: %w", err)
+	}
+	return ` AND n.file_id IN (SELECT file_id FROM rebuild_scope)`, nil
+}
+
+func (idx *Indexer) linkImportsContext(ctx context.Context, mode rebuildMode, changed indexChanges) error {
+	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("topology: link imports: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Derived edges are rebuilt wholesale. Incremental correctness is why: when a
-	// file is re-indexed its nodes are deleted, and ON DELETE CASCADE takes with
-	// them both the edges out of its imports AND the edges other files' imports
-	// pointed at its package node. Patching just the changed file would leave the
-	// second kind missing until something else touched the importer.
-	if _, err := tx.Exec(`DELETE FROM topology_edges WHERE source = ?`, importResolverSource); err != nil {
-		return fmt.Errorf("topology: link imports: clear: %w", err)
+	where, err := prepareImportRebuild(ctx, tx, mode, changed)
+	if err != nil {
+		return err
 	}
-
-	pkgsByDir, err := packageNodesByDir(tx)
+	pkgsByDir, err := packageNodesByDir(ctx, tx)
 	if err != nil {
 		return err
 	}
 	if len(pkgsByDir) == 0 {
 		return tx.Commit()
 	}
-
-	rows, err := tx.Query(
-		`SELECT n.id, n.qualified
-           FROM topology_nodes n
-          WHERE n.kind = ? AND n.qualified <> ''`, string(KindImport))
+	pkgIDs := packageIDsByDir(pkgsByDir)
+	//nolint:gosec // G202: where is an internal fixed SQL fragment
+	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified
+		FROM topology_nodes n
+		WHERE n.kind = ? AND n.qualified <> ''`+where, string(KindImport))
 	if err != nil {
 		return fmt.Errorf("topology: link imports: scan imports: %w", err)
 	}
 	type link struct {
-		from int64
-		to   int64
+		from, to int64
+		identity string
 	}
 	var links []link
 	for rows.Next() {
@@ -87,12 +79,12 @@ func (idx *Indexer) linkImports() error {
 			rows.Close()
 			return fmt.Errorf("topology: link imports: scan: %w", err)
 		}
-		dir, ok := matchImportDir(qualified, pkgsByDir)
+		dir, ok := matchImportDir(qualified, pkgIDs)
 		if !ok {
 			continue
 		}
-		for _, pkgID := range pkgsByDir[dir] {
-			links = append(links, link{from: id, to: pkgID})
+		for _, pkg := range pkgsByDir[dir] {
+			links = append(links, link{from: id, to: pkg.id, identity: pkg.identity})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -100,43 +92,45 @@ func (idx *Indexer) linkImports() error {
 		return fmt.Errorf("topology: link imports: rows: %w", err)
 	}
 	rows.Close()
-
-	stmt, err := tx.Prepare(
-		`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source)
-         VALUES (?, ?, ?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
+		VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("topology: link imports: prepare: %w", err)
 	}
 	defer stmt.Close()
 	for _, l := range links {
-		if _, err := stmt.Exec(l.from, l.to, string(EdgeImports), importEdgeConfidence, importResolverSource); err != nil {
+		if _, err := stmt.ExecContext(ctx, l.from, l.to, string(EdgeImports), importEdgeConfidence, importResolverSource, l.identity); err != nil {
 			return fmt.Errorf("topology: link imports: insert: %w", err)
 		}
 	}
 	return tx.Commit()
 }
 
-// packageNodesByDir groups every package node by the directory of its file.
-// Package nodes are per-file, so a directory maps to as many ids as it has
-// indexed source files.
-func packageNodesByDir(tx *sql.Tx) (map[string][]int64, error) {
-	rows, err := tx.Query(
-		`SELECT n.id, f.path
-           FROM topology_nodes n
-           JOIN topology_files f ON f.id = n.file_id
-          WHERE n.kind = ?`, string(KindPackage))
+type packageNode struct {
+	id       int64
+	identity string
+}
+
+func packageNodesByDir(ctx context.Context, tx *sql.Tx) (map[string][]packageNode, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified, n.name, f.path
+		FROM topology_nodes n JOIN topology_files f ON f.id = n.file_id
+		WHERE n.kind = ?`, string(KindPackage))
 	if err != nil {
 		return nil, fmt.Errorf("topology: link imports: scan packages: %w", err)
 	}
 	defer rows.Close()
-	out := map[string][]int64{}
+	out := map[string][]packageNode{}
 	for rows.Next() {
 		var id int64
-		var p string
-		if err := rows.Scan(&id, &p); err != nil {
+		var qualified, name, p string
+		if err := rows.Scan(&id, &qualified, &name, &p); err != nil {
 			return nil, fmt.Errorf("topology: link imports: scan package: %w", err)
 		}
-		out[path.Dir(p)] = append(out[path.Dir(p)], id)
+		identity := p + "\x00" + qualified
+		if qualified == "" {
+			identity = p + "\x00" + name
+		}
+		out[path.Dir(p)] = append(out[path.Dir(p)], packageNode{id: id, identity: identity})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("topology: link imports: package rows: %w", err)
@@ -144,22 +138,22 @@ func packageNodesByDir(tx *sql.Tx) (map[string][]int64, error) {
 	return out, nil
 }
 
-// matchImportDir maps an import path to an indexed directory by longest suffix.
-//
-// Deliberately not go.mod-aware. The module prefix is exactly the part that
-// differs per language and per project, while the tail is the repository-relative
-// path in Go, Python and TypeScript alike, so matching the longest suffix that
-// names a real indexed directory generalises without teaching this pass any one
-// build system. "github.com/plumbkit/plumb/internal/stats" and "internal/stats"
-// both land on internal/stats; "strings" and "github.com/spf13/cobra" match
-// nothing and are skipped.
+func packageIDsByDir(in map[string][]packageNode) map[string][]int64 {
+	out := make(map[string][]int64, len(in))
+	for dir, nodes := range in {
+		for _, n := range nodes {
+			out[dir] = append(out[dir], n.id)
+		}
+	}
+	return out
+}
+
 func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, bool) {
 	cleaned := strings.Trim(path.Clean(strings.TrimSpace(qualified)), "/")
 	if cleaned == "" || cleaned == "." {
 		return "", false
 	}
 	segs := strings.Split(cleaned, "/")
-	// Longest suffix first: a deeper match is the more specific one.
 	for start := 0; start+minImportSegments <= len(segs); start++ {
 		cand := strings.Join(segs[start:], "/")
 		if _, ok := pkgsByDir[cand]; ok {
