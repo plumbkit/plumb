@@ -62,13 +62,15 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// exemption and deletes pin rows older than [session]
 	// persist_state_ttl_minutes (default 1440), so a session whose declared wide
 	// pin was written more than a day before the restart loses the row too. In
-	// that case every lower rung refuses the wide root as well (roots and the cwd
-	// hint are weaker origins), so the caller must declare the workspace again.
-	// Never WIDER — but not necessarily unattached: the last rung is the serve
-	// cwd hint, which can resolve an unrelated project, so a relative path could
-	// then anchor somewhere the caller did not name. It is pinned by
+	// that case every lower rung refuses the wide root as well (roots and the
+	// workspace pre-pin are weaker origins), so the caller must declare the
+	// workspace again. Never WIDER — and, with serve now starting unattached
+	// unless --workspace/PLUMB_WORKSPACE is given, the only rung left below the
+	// pre-pin is first-tool-call path seeding, which needs an ABSOLUTE tool path:
+	// a relative path is refused and the connection stays unattached until
+	// session_start pins it. It is pinned by
 	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached (no hint set) and by
-	// the cwd-hint tests beside it.
+	// the workspace-hint tests beside it.
 	var refusedReplay string
 	if replayed := s.view().replayedPin; replayed != "" {
 		if err := undeclaredWideRootErr(replayed, sessionstate.PinSourceUnknown); err != nil {
@@ -113,8 +115,11 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 		s.attachReplayedPin(ctx, pinRoot, pinSource)
 	}
 	if s.workspace() == "" {
-		// Last resort: the serve proxy's cwd hint (Detect-validated, never
-		// persisted as the sticky pin), then first-tool-call path seeding.
+		// Last resort: the explicit serve workspace pre-pin
+		// (--workspace/PLUMB_WORKSPACE; Detect-validated, never persisted as the
+		// sticky pin). A serve started without one stores no hint and stays
+		// unattached here — session_start pins it — before first-tool-call path
+		// seeding, which needs an absolute tool path.
 		s.attachFromHint(ctx)
 	}
 	s.reportUnbackedReplay(refusedReplay)

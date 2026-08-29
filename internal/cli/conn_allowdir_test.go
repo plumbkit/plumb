@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -80,5 +81,44 @@ func TestAllowDir_PreservedAcrossRepin(t *testing.T) {
 
 	if _, err := s.boundaryPolicy().Check(target, tools.AccessReadWrite); err != nil {
 		t.Fatalf("allow-dir grant should persist across re-pin, got: %v", err)
+	}
+}
+
+// TestAllowDir_UnattachedServeInertUntilPin pins the --allow-dir contract on an
+// unattached serve (PLAN-350): the grant is stored but inert — buildPathPolicy
+// has no workspace to be additive to while none is pinned, so the boundary keeps
+// failing closed and the grant can never act as a workspace source — and once
+// session_start pins a workspace the grant becomes additive to THAT pin, exactly
+// as it already is for a --workspace pre-pin.
+func TestAllowDir_UnattachedServeInertUntilPin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+
+	allowDir := freshTempDir(t)
+	target := filepath.Join(allowDir, "file.txt")
+
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	defer s.close()
+	// The grant arrives during initialize, before any attach (as serve
+	// transports it) — on a serve started with no --workspace and no
+	// PLUMB_WORKSPACE, so nothing is pinned yet.
+	s.onAllowDirs([]string{allowDir})
+
+	if got := s.workspace(); got != "" {
+		t.Fatalf("an allow-dir grant attached %q by itself; a grant is never a workspace source", got)
+	}
+	if err := s.checkBoundary(target, tools.AccessReadWrite); err == nil {
+		t.Fatal("allow-dir root allowed while the serve is unattached; the grant must stay inert until a pin exists")
+	}
+
+	// The caller pins with session_start; the grant is additive to that pin.
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	s.attachWorkspacePin(context.Background(), "file://"+root, sessionstate.PinSourceSessionStart)
+	if got := s.workspace(); got != root {
+		t.Fatalf("workspace = %q, want the session_start pin %q", got, root)
+	}
+	if _, err := s.boundaryPolicy().Check(target, tools.AccessReadWrite); err != nil {
+		t.Fatalf("allow-dir grant not honoured after the session_start pin: %v", err)
 	}
 }

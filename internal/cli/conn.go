@@ -150,8 +150,13 @@ type sessionView struct {
 	// initialize params' _meta (see onAllowDirs). They are per-connection — never
 	// shared with another session — and folded into the PathPolicy by
 	// buildPathPolicy as read-write roots, additive to the workspace and config
-	// extra_roots. Set once during the initialize exchange, before attach, and
-	// preserved across re-pins (a re-pin keeps the client's grant).
+	// extra_roots. On an unattached serve (no --workspace/PLUMB_WORKSPACE and no
+	// session_start yet) the grant is inert: buildPathPolicy returns nil while no
+	// workspace is pinned, so the boundary keeps failing closed, and the roots
+	// attach additively to whatever workspace session_start later pins — a grant
+	// is never the source of a workspace. Set once during the initialize
+	// exchange, before attach, and preserved across re-pins (a re-pin keeps the
+	// client's grant).
 	allowDirs []string
 
 	// proxySessionID is the stable per-proxy session ID `plumb serve` transported
@@ -179,13 +184,16 @@ type sessionView struct {
 	// persisted-state path (see inheritSessionID). Nil for every other session.
 	inheritedSessionIDs []string
 
-	// workspaceHint is the serve proxy's advisory working directory, transported
-	// in the initialize params' _meta (see onWorkspaceHint). Consulted only as
-	// the last attach fallback before tool-path seeding, always validated through
-	// pool.Detect, and never persisted as the sticky pin — so it can inform an
-	// attach but never overwrite a workspace the caller deliberately chose. Set
-	// once during the initialize exchange and preserved across re-pins. "" when
-	// the client is not a cwd-injecting serve proxy.
+	// workspaceHint is the workspace pre-pin the serve proxy transported in the
+	// initialize params' _meta — the explicit --workspace/PLUMB_WORKSPACE value
+	// (see onWorkspaceHint); the serve's working directory is never transported,
+	// so a serve started without one leaves this empty and the connection
+	// unattached until session_start pins it. Consulted only as the last attach
+	// fallback before tool-path seeding, always validated through pool.Detect,
+	// and never persisted as the sticky pin — so it can inform an attach but
+	// never overwrite a workspace the caller deliberately chose. Set once during
+	// the initialize exchange and preserved across re-pins. "" when the client
+	// sent no workspace pre-pin.
 	workspaceHint string
 
 	// replayedPin is the workspace the caller chose with an explicit session_start,
