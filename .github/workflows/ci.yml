@@ -5,8 +5,23 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Required for a merge queue, and required BEFORE one is enabled. A queued PR
+  # is tested on a temporary gh-readonly-queue/ ref via a merge_group event, not
+  # a pull_request one — so without this trigger none of the five required
+  # checks below ever report for a queue entry, every entry sits until it times
+  # out and is ejected, and the queue looks broken rather than unconfigured.
+  #
+  # Only this workflow needs it: all five required checks are jobs in this file.
+  # client-conformance.yml is deliberately NOT queued — it is not a required
+  # check, and its pull_request trigger is paths-filtered to cmd/clientsmoke/**,
+  # which merge_group cannot express (the event supports branches, not paths).
+  # Adding it there would run a ~3.5-minute client matrix on every single merge
+  # while gating nothing.
+  merge_group:
 
-# Cancel superseded runs on the same ref to save minutes.
+# Cancel superseded runs on the same ref to save minutes. Safe for the queue:
+# each entry gets its own gh-readonly-queue/ ref, so entries never cancel each
+# other.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
