@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func TestLogicalAgentStateRefuse(t *testing.T) {
@@ -77,6 +80,77 @@ func TestRefuseSharedStateChange(t *testing.T) {
 	}
 	if err := s3.refuseSharedStateChange(context.Background(), "write_file", "coordinator"); err != nil {
 		t.Fatalf("an identified write must not refuse: %v", err)
+	}
+}
+
+// TestRecordLatchesSharedTransition pins PLAN-396's first half: record reports
+// the TRANSITION to shared, not the state. Before it, record returned
+// len(seen) > 1 — true on every declaration after the first two — so
+// markSharedConnectionDetected re-fired (Warn + Health rewrite) on every peer
+// call that carried an identity.
+func TestRecordLatchesSharedTransition(t *testing.T) {
+	var l logicalAgentState
+	if l.record("A") {
+		t.Fatal("the first identity must not report shared")
+	}
+	if !l.record("B") {
+		t.Fatal("the second distinct identity is the transition and must report shared")
+	}
+	if l.record("C") {
+		t.Error("a third identity re-reported shared — the mark would re-fire on every declaration")
+	}
+	if l.record("B") {
+		t.Error("a repeated identity re-reported shared")
+	}
+}
+
+// TestSharedMarkDoesNotClobberASpecificNote pins the damaging half of
+// PLAN-396: shared_connection_detected is a STATE, not an event, and it must
+// never overwrite a more specific, more actionable note (contested_pin,
+// blocked) that another code path has already written. Rewriting its own state
+// stays idempotent, so a latched mark is never mistaken for a new one.
+func TestSharedMarkDoesNotClobberASpecificNote(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxy-plan396")
+	t.Cleanup(s.close)
+
+	// A specific note lands BEFORE the connection becomes shared — the
+	// ordering a pin fight produces ahead of the peers declaring themselves.
+	session.Patch(s.sessionID(), func(info *session.Info) {
+		info.Health = "contested_pin"
+		info.HealthMessage = "the pin was forced between two projects"
+	})
+
+	s.recordLogicalAgent("A")
+	s.recordLogicalAgent("B") // the transition; the mark fires here
+
+	if health, msg := sessionHealth(t, s.sessID); health != "contested_pin" {
+		t.Errorf("the shared-connection transition overwrote a more specific note: health=%q (%s)", health, msg)
+	}
+}
+
+// TestSharedMarkIsAnnouncedOnce pins the announce rate through the real logger:
+// exactly one Warn for the whole connection lifetime, however many identities
+// declare themselves afterwards.
+func TestSharedMarkIsAnnouncedOnce(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxy-plan396")
+	t.Cleanup(s.close)
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	s.recordLogicalAgent("A")
+	s.recordLogicalAgent("B") // the transition — one Warn
+	for _, id := range []string{"C", "D", "B", "A"} {
+		s.recordLogicalAgent(id) // every one of these re-fired before PLAN-396
+	}
+	if n := strings.Count(logs.String(), "shared connection detected"); n != 1 {
+		t.Errorf("the shared-connection mark announced %d times, want exactly once:\n%s", n, logs.String())
+	}
+	if health, _ := sessionHealth(t, s.sessID); health != "shared_connection_detected" {
+		t.Errorf("health = %q, want the latched shared-connection state", health)
 	}
 }
 

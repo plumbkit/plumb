@@ -36,17 +36,23 @@ type logicalAgentState struct {
 	seen map[string]struct{}
 }
 
+// record commits an identity and reports whether THIS record made the
+// connection shared — the transition from fewer than two committed identities
+// to two. The bool is an event, not a state: a third identity, or a repeated
+// one, reports false, so markSharedConnectionDetected latches once instead of
+// re-announcing (Warn + Health rewrite) on every declaration (PLAN-396).
 func (l *logicalAgentState) record(id string) bool {
 	if id == "" {
 		return false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	wasShared := len(l.seen) > 1
 	if l.seen == nil {
 		l.seen = make(map[string]struct{})
 	}
 	l.seen[id] = struct{}{}
-	return len(l.seen) > 1
+	return !wasShared && len(l.seen) > 1
 }
 
 // sharedWith reports whether the connection is shared once the caller of THIS
@@ -155,12 +161,22 @@ func (s *connSession) recordLogicalAgent(id string) {
 // anonymous call path below. Per-agent keying (step 2) is in effect, so
 // distinct-ID agents no longer share pin/trackers; anonymous state-changing
 // calls are still refused because they cannot be attributed.
+//
+// It fires only on the transition into shared (record reports the event, not
+// the state), and it never downgrades a more specific, more actionable note
+// another path has written (contested_pin, blocked): Health is a single field
+// per session, and before PLAN-396 this mark rewrote it on every identity
+// declaration, making any other note's lifetime "until the next peer call".
+// Rewriting this mark's own state stays idempotent.
 func (s *connSession) markSharedConnectionDetected() {
 	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
 	if s.sessionID() == "" {
 		return
 	}
 	session.Patch(s.sessionID(), func(info *session.Info) {
+		if info.Health != "" && info.Health != "shared_connection_detected" {
+			return
+		}
 		info.Health = "shared_connection_detected"
 		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, anonymous state-changing calls are refused — run one plumb serve per logical agent"
 	})

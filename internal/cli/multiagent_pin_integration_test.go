@@ -136,6 +136,7 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("EveryAgentWriteIsAttributedAndVisible", testEveryAgentWriteVisible)
 	t.Run("AnonymousCallOnSharedConnectionFailsClosed", testAnonymousCallOnSharedConnectionFailsClosed)
 	t.Run("AnonymousWriteIntoPeerProjectRefused", testAnonymousWriteIntoPeerProjectRefused)
+	t.Run("HealthNoteSurvivesPeerDeclarations", testHealthNoteSurvivesPeerDeclarations)
 	t.Run("SingleAgentConnectionStillPinsTheConnection", testSingleAgentConnectionStillPinsTheConnection)
 	t.Run("UndeclaredAgentsForcePingPongIsContested", testUndeclaredAgentsForcePingPongIsContested)
 	t.Run("DeclaredFirstContactDefersToExecute", testDeclaredFirstContactDefersToExecute)
@@ -761,5 +762,35 @@ func testDeclaredFirstContactPairsRefusePerAgent(t *testing.T) {
 		if !strings.Contains(failures[0].err.Error(), "force: true") {
 			t.Errorf("pair %d: the refused agent's first-contact refusal lost its remedy: %v", i, failures[0].err)
 		}
+	}
+}
+
+// testHealthNoteSurvivesPeerDeclarations is PLAN-396's acceptance probe: a
+// specific health note must survive unrelated peers declaring themselves.
+// Before the latch, EVERY identity declaration rewrote Health through
+// markSharedConnectionDetected, so on the N-subagent topology this file models,
+// any note's lifetime was "until the next peer call" — last-writer-wins across
+// all agents on the connection.
+func testHealthNoteSurvivesPeerDeclarations(t *testing.T) {
+	m := newMultiAgentConn(t)
+	ws := freshTempDir(t)
+	mustGitDir(t, ws)
+
+	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "coordinator"}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+
+	// A contested-pin note lands mid-connection — the ordering a force fight
+	// produces — and then an unrelated peer re-orients itself, the exact call
+	// that used to erase the note.
+	session.Patch(m.s.sessionID(), func(info *session.Info) {
+		info.Health = "contested_pin"
+		info.HealthMessage = "the pin was forced between two projects"
+	})
+	if err := m.sessionStart(t, map[string]any{"session_id": "subagent-9"}); err != nil {
+		t.Fatalf("peer re-orientation: %v", err)
+	}
+	if health, msg := sessionHealth(t, m.s.sessID); health != "contested_pin" {
+		t.Errorf("an unrelated peer's session_start rewrote the note: health=%q (%s)", health, msg)
 	}
 }
