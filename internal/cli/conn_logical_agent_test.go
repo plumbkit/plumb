@@ -14,26 +14,29 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 	if l.refuse("") {
 		t.Fatal("a single-agent connection must never refuse")
 	}
-	l.record("A", true) // attach-time session_id
+	l.record("A") // attach-time session_id channel
 	if l.refuse("") {
 		t.Fatal("an anonymous call attributable to the attach ID must not refuse")
 	}
 	if l.refuse("A") {
 		t.Fatal("an explicit call ID must not refuse")
 	}
-	l.record("B", false) // a second agent arrives per-call
+	l.record("B") // a second agent arrives per-call
 	if l.refuse("B") {
 		t.Fatal("an explicit ID on a shared connection must not refuse")
 	}
-	if l.refuse("") {
-		t.Fatal("an anonymous call with an attach-time fallback must not refuse")
+	// PLAN-394: once the connection is shared the attach-time id is whichever
+	// peer attached LAST, not the caller — attributing on its strength was the
+	// fail-open, so an anonymous call must refuse no matter how many attached.
+	if !l.refuse("") {
+		t.Fatal("an anonymous call on a shared connection must refuse; the attach-time id is a peer's, not the caller's")
 	}
 }
 
 func TestLogicalAgentStateRefuseNoAttach(t *testing.T) {
 	var l logicalAgentState
-	l.record("A", false)
-	l.record("B", false) // shared, no attach-time identity
+	l.record("A")
+	l.record("B") // shared, via per-call identities
 	if !l.refuse("") {
 		t.Fatal("an anonymous call on a shared, no-attach connection must refuse")
 	}
@@ -61,6 +64,19 @@ func TestRefuseSharedStateChange(t *testing.T) {
 	s2.recordLogicalAgentCall("only")
 	if err := s2.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
 		t.Fatalf("a single-agent connection must not refuse an anonymous write: %v", err)
+	}
+
+	// PLAN-394: an attach-time session_id does not rescue an anonymous call on a
+	// shared connection — that id belongs to whichever agent attached last, so
+	// admitting the call on its strength wrote the work into a peer's trackers.
+	var s3 connSession
+	s3.recordLogicalAgentAttach("coordinator")
+	s3.recordLogicalAgentAttach("subagent-last")
+	if err := s3.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("an anonymous write on a shared connection must refuse even with an attach-time id")
+	}
+	if err := s3.refuseSharedStateChange(context.Background(), "write_file", "coordinator"); err != nil {
+		t.Fatalf("an identified write must not refuse: %v", err)
 	}
 }
 
