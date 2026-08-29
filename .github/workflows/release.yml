@@ -64,6 +64,41 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/client-conformance.yml
 
+  # A SKIPPED conformance run must fail the release, not glide past it. Both
+  # jobs below are gated on client-conformance — goreleaser needs it directly,
+  # publish-mcp needs goreleaser — so a skipped conformance skips both, and a
+  # workflow whose every job is skipped reports GREEN while publishing
+  # nothing. That is exactly how v0.17.1 shipped: the tag existed, the run
+  # read green, and no artifact ever reached the release, the tap, or the MCP
+  # registry. This gate turns that silent skip into a loud, explicit failure:
+  # on a tag push, anything short of a completed conformance run fails here.
+  # (A workflow_dispatch keeps running tap-preflight alone — a credential
+  # check is not a release — so the gate is tag-gated like the jobs it
+  # fronts. A failed TAP token keeps its own existing semantics: the preflight
+  # fails the run itself, and this gate passes because conformance ran.)
+  conformance-gate:
+    needs: [client-conformance]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a completed client-conformance run
+        env:
+          CONFORMANCE_RESULT: ${{ needs.client-conformance.result }}
+        run: |
+          case "${CONFORMANCE_RESULT}" in
+            success)
+              echo "client-conformance passed — release gate open"
+              ;;
+            skipped)
+              echo "::error title=Conformance gate skipped::client-conformance did not run on this release tag, so goreleaser and publish-mcp were skipped with it and nothing would be published. Inspect the workflow_call trigger and the job conditions in .github/workflows/client-conformance.yml before re-tagging."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Conformance gate blocked::client-conformance ended with result '${CONFORMANCE_RESULT}' — a release may not proceed without a completed conformance run."
+              exit 1
+              ;;
+          esac
+
   goreleaser:
     # tap-preflight is a hard dependency, not advisory: building four platforms
     # to fail at the last step is exactly the waste it exists to prevent. A
