@@ -77,8 +77,14 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	from := t.deps.resolvePath(ctx, a.From)
-	to := t.deps.resolvePath(ctx, a.To)
+	from, err := t.deps.resolvePath(ctx, a.From)
+	if err != nil {
+		return "", fmt.Errorf("copy_file: %w", err)
+	}
+	to, err := t.deps.resolvePath(ctx, a.To)
+	if err != nil {
+		return "", fmt.Errorf("copy_file: %w", err)
+	}
 	// Same-place by canonical IDENTITY, not raw spelling: two spellings of one
 	// file (a symlinked parent, a platform alias) are a no-op request that must
 	// be refused — left alone, lockPaths collapses both spellings into one lock

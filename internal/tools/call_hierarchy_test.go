@@ -49,6 +49,52 @@ func newCallGraphStore(t *testing.T) (store *topology.Store, uri string) {
 	return nil, ""
 }
 
+func newCrossFileCallGraphStore(t *testing.T) (store *topology.Store, targetURI string) {
+	t.Helper()
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, "internal", "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "internal", "caller"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(rel, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(ws, rel), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/target/target.go", "package target\n\nfunc Mid() {}\n")
+	write("internal/caller/caller.go", "package caller\n\nimport \"example.com/project/internal/target\"\n\nfunc Top() { target.Mid() }\n")
+	var err error
+	store, err = topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, []topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	targetURI = "file://" + filepath.Join(ws, "internal/target/target.go")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		nodes, _ := store.SymbolsInFile(context.Background(), targetURI)
+		for _, n := range nodes {
+			if n.Name != "Mid" || n.Kind != topology.KindFunction {
+				continue
+			}
+			res, rerr := store.ExploreFrom(context.Background(), n, topology.ExploreOpts{Depth: 1, MaxNodes: 20, MaxBytes: 50000, EdgeKinds: []string{"calls"}, Direction: topology.DirectionInward, IncludeDerivedCalls: true})
+			if rerr == nil {
+				for _, e := range res.Edges {
+					if e.Source == "call-resolver" {
+						return store, targetURI
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("cross-file resolver edge did not settle")
+	return nil, ""
+}
+
 // TestCallHierarchy_TopologyFallback covers Bug C: when the language server
 // returns no call-hierarchy item (zls has no prepareCallHierarchy), the tool
 // reconstructs the hierarchy. With no LSP references available the callers fall
@@ -73,6 +119,20 @@ func TestCallHierarchy_TopologyFallback(t *testing.T) {
 	}
 	if !strings.Contains(out, "Bottom") {
 		t.Errorf("expected callee Bottom in outgoing section, got:\n%s", out)
+	}
+}
+
+func TestCallHierarchy_TopologyFallback_IncludesAdmittedCrossFileCaller(t *testing.T) {
+	store, uri := newCrossFileCallGraphStore(t)
+	tool := tools.NewCallHierarchy(&mockLSP{}, 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{"uri": uri, "line": 2, "character": 5, "direction": "incoming"})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("fallback should succeed: %v", err)
+	}
+	if !strings.Contains(out, "Top") {
+		t.Errorf("admitted cross-file caller Top missing from fallback:\n%s", out)
 	}
 }
 

@@ -21,23 +21,34 @@ import (
 // worker loop, indexer_persist.go for the DB writes, and indexer_resync.go for
 // the full-tree walk.
 
+// processUpsert indexes one file and reports whether it changed any indexed
+// rows. An unchanged file, an oversized one, and a file whose extraction failed
+// all report false: none of them alters a node, so none of them can invalidate a
+// derived cross-file edge. A recorded extraction error updates only
+// topology_files, deliberately leaving the file's previously extracted nodes in
+// place, so it is a false too.
 func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
+	_, err := idx.processUpsertChanged(ctx, relPath)
+	return err
+}
+
+func (idx *Indexer) processUpsertChanged(ctx context.Context, relPath string) (bool, error) {
 	absPath := filepath.Join(idx.workspace, relPath)
 	if symlinkEscapesWorkspace(idx.workspace, absPath) {
 		// Drop anything a previous (unguarded) index recorded for this path, so a
 		// database poisoned before this guard existed heals on the next resync
 		// rather than keeping the outside file's symbols searchable forever.
-		return idx.processDelete(ctx, relPath)
+		return idx.processDeleteChanged(ctx, relPath)
 	}
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return idx.processDelete(ctx, relPath)
+			return idx.processDeleteChanged(ctx, relPath)
 		}
-		return err
+		return false, err
 	}
 	if info.IsDir() || info.Size() > idx.maxSize {
-		return nil
+		return false, nil
 	}
 	// Read and hash before the staleness check so a backup-restore that
 	// resets mtime but changes content is still re-indexed; the content hash
@@ -45,20 +56,23 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	// parse is deferred to extractFile and runs only once the file is stale.
 	src, ex, lang, hash, err := idx.readAndHash(absPath, relPath)
 	if err != nil {
-		return idx.recordFileError(relPath, info, err)
+		return false, idx.recordFileError(relPath, info, err)
 	}
 	stale, fileID, err := idx.isStale(relPath, info, hash)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !stale {
-		return nil
+		return false, nil
 	}
 	out, err := idx.extractFile(ctx, ex, relPath, src)
 	if err != nil {
-		return idx.recordFileError(relPath, info, err)
+		return false, idx.recordFileError(relPath, info, err)
 	}
-	return idx.persistFile(fileID, relPath, info, hash, lang, out)
+	if err := idx.persistFile(fileID, relPath, info, hash, lang, out); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // symlinkEscapesWorkspace reports whether absPath is a symlink whose target

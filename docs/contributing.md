@@ -1,8 +1,9 @@
 # Contributing
 
-Thanks for working on plumb. This page is the short version; the canonical
-architecture and code-style brief is **[`AGENTS.md`](../AGENTS.md)** at the repo
-root — read it before making non-trivial changes.
+Thanks for working on plumb. [`AGENTS.md`](../AGENTS.md) is the compact,
+always-loaded contract; this page owns the detailed build, code-style, testing,
+and delivery guidance. Read the brief first, then use this page while changing
+the public source.
 
 ## Set up
 
@@ -17,6 +18,19 @@ make build
 `golangci-lint run --fix ./...`, so formatting and lint issues are caught before
 they reach the tree.
 
+> **Keep your golangci-lint on the pinned version.** `GOLANGCI_LINT_VERSION` in
+> `.github/workflows/ci.yml` is the single source of truth, and the pre-commit
+> hook reads it to warn when your binary differs. The warning matters because the
+> hook runs `--fix`: a newer binary brings newer gofumpt rules, so it can reformat
+> files your commit never touched, and they sit as unstaged modifications until
+> someone's `git add -A` sweeps them into an unrelated PR. Stage files by name
+> rather than with `-A` whenever the warning fires. To match the pin:
+> `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v<pinned>`
+> — note that a Homebrew-installed `golangci-lint` drifts on its own schedule and
+> will re-break the match on the next `brew upgrade`. When the newer version is
+> the one we want instead, bump the pin and commit any reformatting as its own
+> commit.
+
 ## Build & verify
 
 | Command | Does |
@@ -25,7 +39,10 @@ they reach the tree.
 | `make test` | `go test ./...` |
 | `make test-race` | `go test -race ./...` |
 | `make lint` | `golangci-lint run` via `scripts/lint-with-retry.sh` — retries with bounded backoff on the shared-cache lock ("parallel golangci-lint is running"), so a peer agent's lint does not read as a failure of this one. |
-| `make verify` | build + test + lint — the **definition of "ready to commit"**. |
+| `make verify` | Build, test, lint, compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the **definition of "ready to commit"**. |
+| `make lint-cross` | Statically lint and vet the other supported OS; required after platform-constrained or linter-config changes. |
+| `make cover` | Enforce the whole-tree statement floor from `scripts/check-coverage.sh`. |
+| `make vuln` | Run `govulncheck`; requires network access. |
 | `make tidy` | `go mod tidy` |
 | `make clean` | Remove build artefacts. |
 | `make install-clients` | Install every supported client CLI, for local client-integration testing. |
@@ -55,9 +72,20 @@ hypothetical: the widened linter set was trialled on Linux only and passed clean
 then failed CI's macOS leg on the one `usetesting` hit hiding behind a build tag.
 CI's two-OS matrix is the backstop, not the first line.
 
+**Test temporary directories are inside the checkout.** `make test` sets
+`GOTMPDIR=$(CURDIR)/.testcache`, so `t.TempDir()` is repository-descended. Tests
+must not assume their temporary path lives outside the repository. Reproduce
+the CI shape with `GOTMPDIR=$PWD/.testcache go test ./...`.
+
+**Coverage and vulnerability checks are deliberately separate from `verify`.**
+Coverage re-runs the whole suite instrumented and vulnerability scanning needs
+the network. CI runs both, plus `test-race` and integration jobs. Treat the
+coverage floor as a ratchet: raise it when sustainable; never lower it to make a
+red build green.
+
 ## Code style (essentials)
 
-The full rules are in [`AGENTS.md`](../AGENTS.md); the ones people trip on:
+These are the detailed rules behind the compact contract in `AGENTS.md`:
 
 - **Australian English** in all prose, comments, logs, and error strings
   (initialise, behaviour, colour…). Exception: identifiers from external specs
@@ -65,8 +93,17 @@ The full rules are in [`AGENTS.md`](../AGENTS.md); the ones people trip on:
 - `log/slog` only — never `log` or `fmt.Println` for logging.
 - Wrap errors with context: `fmt.Errorf("loading config: %w", err)`.
 - `context.Context` first parameter on every blocking/I/O function.
+- State the concurrency contract in every type's doc comment.
+- Do no real work in `init()`; wire dependencies through constructors.
+- Add no globals except the documented TUI style variables and the intentional
+  `pathLocks` / `mutationRunLock` process-wide tool locks.
 - Comments explain *why*, not *what*. No what-comments.
-- Max ~600 lines per file; cyclomatic complexity ≤ 15 (CI enforces both).
+- Max ~600 lines per production file and ~900 per `_test.go`; additions to
+  `scripts/.filesize-baseline` need a justification. Cyclomatic complexity is
+  capped at 15 for first-party non-test functions.
+- Every `//nolint` directive carries an inline justification. `.golangci.yml`'s
+  rejected-linter list is deliberate; re-review and document the hits before
+  enabling one.
 - Every `Tool.Execute()` is a thin orchestrator over parse → run → format steps.
 
 ## Commit conventions
@@ -99,10 +136,31 @@ history over squashed PRs.
 - Tests live next to the code (`_test.go`, same package); table-driven where it
   fits.
 - `internal/lsp`, `internal/cache`, and `internal/tools` need meaningful
-  coverage. Use `WriteDeps{}` as the zero-value setup for write tools.
+  coverage. Use `WriteDeps{}` as the zero-value setup for write tools, and keep
+  per-session isolation tests in the package whose state they protect.
+- Internal tool-to-tool `Execute` calls use the target's canonical parameter
+  names. Aliases resolve only at the MCP dispatch boundary; the in-process call
+  guard test enforces this.
 - Integration tests requiring external binaries (gopls, pyright) are gated with
   `//go:build integration`.
 - Don't chase TUI coverage.
+- `make cover` instruments every package with `-coverpkg=./...`; an untested
+  package therefore counts against the whole-tree floor. The canonical floor is
+  in `scripts/check-coverage.sh`; use `make cover-report` to find gaps.
+
+## Version, daemon, and risk
+
+The Makefile resolves the build version from an exact Git tag, then `VERSION`,
+then the short commit hash, and stamps the source revision alongside it. Change
+`VERSION` during development; do not create a tag for each iteration. Full
+output contracts live in [`docs/cli-reference.md`](cli-reference.md#plumb-version).
+
+After rebuilding or reinstalling, run `plumb restart`: a source change never
+activates inside the old daemon process. The resilient proxy reconnects clients.
+
+Concurrency, the rate limiter, read tracking, and the stats schema carry subtle
+cross-session invariants. Inspect the architecture and existing tests before
+changing them, keep each change discrete, and add its `CHANGELOG.md` entry.
 
 ## TUI conventions (Bubble Tea v2)
 

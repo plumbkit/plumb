@@ -55,9 +55,10 @@ var minimalDiffReviewSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type MinimalDiffReview struct {
-	storeFn func() *topology.Store
-	ws      WorkspaceFn
-	guard   BoundaryGuard // rejects a files entry outside the pinned workspace
+	storeFn   func() *topology.Store
+	ws        WorkspaceFn
+	guard     BoundaryGuard // rejects a files entry outside the pinned workspace
+	contested ContestedFn   // refuses a relative files entry once the pin is contested
 }
 
 // NewMinimalDiffReview returns a new MinimalDiffReview tool. storeFn supplies the
@@ -78,6 +79,13 @@ func (t *MinimalDiffReview) WithWorkspace(ws WorkspaceFn) *MinimalDiffReview {
 // outside the pinned workspace is refused. Nil-safe.
 func (t *MinimalDiffReview) WithBoundary(guard BoundaryGuard) *MinimalDiffReview {
 	t.guard = guard
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// files entry is refused once the pin is contested (issue #182). Nil-safe.
+func (t *MinimalDiffReview) WithContested(fn ContestedFn) *MinimalDiffReview {
+	t.contested = fn
 	return t
 }
 
@@ -120,7 +128,10 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	// files entry outside the workspace is rejected before any git invocation.
 	resolvedFiles := make([]string, len(a.Files))
 	for i, f := range a.Files {
-		resolved := resolvePath(ctx, f, t.ws)
+		resolved, rerr := resolvePath(ctx, f, t.ws, t.contested)
+		if rerr != nil {
+			return "", fmt.Errorf("minimal_diff_review: %w", rerr)
+		}
 		if err := t.guard.check(ctx, resolved); err != nil {
 			return "", fmt.Errorf("minimal_diff_review: %w", err)
 		}
@@ -365,7 +376,7 @@ func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minim
 	}
 	deps := minchange.Deps{}
 	if t.storeFn != nil && t.storeFn() != nil {
-		deps.CallerCount = t.callerCount
+		deps.CallerCountAt = t.callerCountAt
 		deps.SimilarSymbols = t.similarSymbols
 	}
 	return minchange.Analyse(ctx, diff, deps, minchange.Options{
@@ -376,19 +387,32 @@ func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minim
 	})
 }
 
-// callerCount returns an approximate intra-file caller count for name via the
-// topology call graph, plus the single call site when the count is one. found is
-// false when the symbol is not in the index.
-func (t *MinimalDiffReview) callerCount(ctx context.Context, name string) (int, minchange.SymbolRef, bool) {
+// callerCountAt returns an approximate caller count for one indexed symbol. The
+// path and kind are part of the lookup so a common name cannot select a different
+// package; derived edges are admitted only for this subject when the call-graph
+// gate accepts it.
+func (t *MinimalDiffReview) callerCountAt(ctx context.Context, name, path, kind string) (int, minchange.SymbolRef, bool) {
 	store := t.storeFn()
 	if store == nil {
 		return 0, minchange.SymbolRef{}, false
 	}
-	res, err := store.Impact(ctx, name, topology.ImpactOpts{
-		Depth:     1,
-		MaxNodes:  64,
-		MaxBytes:  100000,
-		EdgeKinds: []string{"calls"},
+	cands, err := store.ResolveNodes(ctx, name, topology.NodeHint{PathSubstr: path, Kind: kind})
+	if err != nil || len(cands) == 0 {
+		return 0, minchange.SymbolRef{}, false
+	}
+	centre := cands[0]
+	includeDerived := false
+	if subject, subjectErr := store.CallGraphSubjectForNode(ctx, centre.ID); subjectErr == nil {
+		if admission, admissionErr := store.AdmitCallGraph(ctx, subject); admissionErr == nil {
+			includeDerived = admission.Admitted
+		}
+	}
+	res, err := store.ImpactFrom(ctx, centre, topology.ImpactOpts{
+		Depth:               1,
+		MaxNodes:            64,
+		MaxBytes:            100000,
+		EdgeKinds:           []string{"calls"},
+		IncludeDerivedCalls: includeDerived,
 	})
 	if err != nil || res == nil || res.DependedOnBy == nil {
 		return 0, minchange.SymbolRef{}, false

@@ -75,6 +75,13 @@ type WriteDeps struct {
 	// Boundary rejects paths outside the workspace pinned to this MCP
 	// connection. nil disables boundary checks (tests / unattached sessions).
 	Boundary BoundaryGuard
+	// Contested, when non-nil, reports whether the connection's workspace pin is
+	// contested (several agents multiplexing one serve without an identity —
+	// issue #182). When it reports true, a RELATIVE path argument is refused at
+	// resolvePath (see ContestedRelativePathError); an absolute path still
+	// resolves and is then checked by Boundary as usual. nil means never
+	// contested.
+	Contested ContestedFn
 	// PostWriteDiagWindow is how long write/edit tools wait for the LSP
 	// server to re-publish diagnostics after a successful write. Zero means
 	// "use the 300 ms default" (back-compat for test setups that use
@@ -330,19 +337,25 @@ func (d WriteDeps) checkBoundary(ctx context.Context, path string) error {
 // touching a daemon-CWD-relative file. nil/empty WorkspaceFn is a no-op,
 // preserving WriteDeps{} test setups. The resolved path must feed BOTH the
 // boundary check and the filesystem operation.
-func (d WriteDeps) resolvePath(ctx context.Context, path string) string {
+//
+// A non-empty relative path is refused outright when d.Contested reports true
+// (see ContestedRelativePathError); an absolute path is unaffected.
+func (d WriteDeps) resolvePath(ctx context.Context, path string) (string, error) {
 	p := paths.URIToPath(path)
+	if !filepath.IsAbs(p) && p != "" && d.Contested != nil && d.Contested() {
+		return "", classifyContestedRelative(ContestedRelativePathError{Path: p})
+	}
 	if filepath.IsAbs(p) {
-		return p
+		return p, nil
 	}
 	var base string
 	if d.WorkspaceFn != nil {
 		base = d.WorkspaceFn(ctx)
 	}
 	if base == "" {
-		return filepath.Clean(p)
+		return filepath.Clean(p), nil
 	}
-	return filepath.Join(base, p)
+	return filepath.Join(base, p), nil
 }
 
 // recordWritten marks path as written by plumb this session in BOTH per-session

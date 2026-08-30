@@ -43,11 +43,12 @@ type WorkspaceSymbols struct {
 	// (dropping dependency-cache and stdlib hits), while a uri-scoped call
 	// anchors a workspace-relative uri against it. Nil-safe — no filtering, no
 	// anchoring.
-	ws     WorkspaceFn
-	topo   topologyStoreFn
-	warmup LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
-	xcode  XcodeHintFn
-	proof  XcodeProofFn
+	ws        WorkspaceFn
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
+	topo      topologyStoreFn
+	warmup    LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
+	xcode     XcodeHintFn
+	proof     XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
@@ -74,6 +75,13 @@ func (t *WorkspaceSymbols) WithTopologyFallback(fn topologyStoreFn) *WorkspaceSy
 // primary server's handshake completes. Nil-safe; returns the tool for chaining.
 func (t *WorkspaceSymbols) WithLSPWarmup(fn LSPWarmupFn) *WorkspaceSymbols {
 	t.warmup = fn
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *WorkspaceSymbols) WithContested(fn ContestedFn) *WorkspaceSymbols {
+	t.contested = fn
 	return t
 }
 
@@ -156,6 +164,16 @@ func hasSwiftWorkspaceSymbol(symbols []protocol.SymbolInformation) bool {
 	return false
 }
 
+// uriScoped anchors the uri and answers the one-file query; on a contested
+// connection a relative uri is refused before anchoring.
+func (t *WorkspaceSymbols) uriScoped(ctx context.Context, uri, query string) (string, error) {
+	anchored, err := toFileURIAnchored(ctx, uri, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("workspace_symbols: %w", err)
+	}
+	return t.inFile(ctx, anchored, query)
+}
+
 func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a workspaceSymbolsArgs
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -165,7 +183,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", errors.New("workspace_symbols: query must not be empty")
 	}
 	if a.URI != "" {
-		return t.inFile(ctx, toFileURIAnchored(ctx, a.URI, t.ws), a.Query)
+		return t.uriScoped(ctx, a.URI, a.Query)
 	}
 
 	key := "wsSymbols:" + a.Query

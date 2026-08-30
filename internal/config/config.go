@@ -582,9 +582,10 @@ type Config struct {
 	// workspace.extra_roots) and, worse, to non-empty values it pins by VALUE
 	// (git.protected_branches, quality.analysers), which omitempty cannot reach.
 	//
-	// The real fix is in the writer: route the TUI's global save through the sparse
-	// config.SetGlobalValue, as SaveTheme already does, so only the edited key is
-	// touched. One caller, and all of the above stop freezing.
+	// The real fix has landed in the writer: the TUI's global save now routes
+	// through the sparse config.SaveSparse, as SaveTheme already does via
+	// SetGlobalValue, so only the edited key is touched — all of the above stop
+	// freezing.
 	Commands []CommandConfig `toml:"command,omitempty"`
 	// CommandPolicy is the [commands] table: the sandbox-enforcement knob
 	// (require_sandbox) run_command honours.

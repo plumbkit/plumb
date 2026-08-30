@@ -167,10 +167,12 @@ func sameEnvelope(before, after []byte) bool {
 
 // buildInitMeta assembles the _meta key/values the proxy injects into the
 // initialize frame: the client-granted allow-dirs (when any), the stable
-// proxy session ID (when set), and the proxy's working directory as an
-// advisory workspace attach hint (when known). Returns nil when there is
-// nothing to inject, so the frame is left byte-identical.
-func buildInitMeta(dirs []string, proxySessionID, cwd string) map[string]json.RawMessage {
+// proxy session ID (when set), and the explicit workspace pre-pin
+// (--workspace/PLUMB_WORKSPACE, when given). There is no serve-cwd fallback: a
+// serve started without one sends no workspace key at all, so the frame stays
+// byte-identical (nil return) and the daemon has nothing to auto-attach from —
+// session_start is then the sole workspace-pin authority.
+func buildInitMeta(dirs []string, proxySessionID, workspace string) map[string]json.RawMessage {
 	meta := map[string]json.RawMessage{}
 	if len(dirs) > 0 {
 		if raw, err := json.Marshal(dirs); err == nil {
@@ -182,8 +184,8 @@ func buildInitMeta(dirs []string, proxySessionID, cwd string) map[string]json.Ra
 			meta[mcp.MetaProxySessionKey] = raw
 		}
 	}
-	if cwd != "" {
-		if raw, err := json.Marshal(cwd); err == nil {
+	if workspace != "" {
+		if raw, err := json.Marshal(workspace); err == nil {
 			meta[mcp.MetaWorkspaceKey] = raw
 		}
 	}

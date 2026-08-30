@@ -67,11 +67,12 @@ func clampImpactOpts(opts ImpactOpts) ImpactOpts {
 
 func impactBFS(ctx context.Context, db *sql.DB, centre Node, opts ImpactOpts) (*ImpactResult, error) {
 	outOpts := ExploreOpts{
-		Depth:     opts.Depth,
-		MaxNodes:  opts.MaxNodes,
-		MaxBytes:  opts.MaxBytes,
-		EdgeKinds: opts.EdgeKinds,
-		Direction: DirectionOutward,
+		Depth:               opts.Depth,
+		MaxNodes:            opts.MaxNodes,
+		MaxBytes:            opts.MaxBytes,
+		EdgeKinds:           opts.EdgeKinds,
+		Direction:           DirectionOutward,
+		IncludeDerivedCalls: opts.IncludeDerivedCalls,
 	}
 	dependsOn, err := bfs(ctx, db, centre, outOpts)
 	if err != nil {
@@ -79,11 +80,12 @@ func impactBFS(ctx context.Context, db *sql.DB, centre Node, opts ImpactOpts) (*
 	}
 
 	inOpts := ExploreOpts{
-		Depth:     opts.Depth,
-		MaxNodes:  opts.MaxNodes,
-		MaxBytes:  opts.MaxBytes,
-		EdgeKinds: opts.EdgeKinds,
-		Direction: DirectionInward,
+		Depth:               opts.Depth,
+		MaxNodes:            opts.MaxNodes,
+		MaxBytes:            opts.MaxBytes,
+		EdgeKinds:           opts.EdgeKinds,
+		Direction:           DirectionInward,
+		IncludeDerivedCalls: opts.IncludeDerivedCalls,
 	}
 	dependedOnBy, err := bfs(ctx, db, centre, inOpts)
 	if err != nil {

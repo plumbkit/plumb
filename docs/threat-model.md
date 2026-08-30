@@ -168,13 +168,15 @@ it first looks. The row is absent with `[session] persist_state` off, on a
 first connect, and — the case that bites in the DEFAULT configuration — once
 the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
 startup prune, which runs with no live exemption, deletes it. When the row is
-gone, every lower rung refuses the wide root too, because `roots` and the cwd
-hint are weaker origins than the declaration that is now missing, so the caller
-must declare the workspace again. The boundary is never **wider** — but the
-connection is not necessarily unattached either: the ladder's last rung is the
-serve proxy's cwd hint, which can resolve an unrelated project, and a relative
-path would then anchor somewhere the caller never named (the #182 failure
-class). A dotfiles session pinned at `$HOME` feels this.
+gone, every lower rung refuses the wide root too, because `roots` and the
+workspace pre-pin are weaker origins than the declaration that is now missing,
+so the caller must declare the workspace again. The boundary is never
+**wider** — and with `serve` no longer attaching from its launch directory
+(no `--workspace`/`PLUMB_WORKSPACE` ⇒ unattached), the rungs below the
+pre-pin cannot anchor an unrelated project either: path seeding needs an
+**absolute** tool path, a relative path fails closed, and the connection stays
+unattached until `session_start` pins it. A dotfiles session pinned at `$HOME`
+feels this.
 
 One stale-data caveat, and it is not self-healing. A database written before
 0.16.7 may already hold a wide root stamped `session_start` that was minted from
@@ -474,7 +476,12 @@ its own `initialize` handshake, and never written to a session file, a log, or
 any tool result) — never by answering to a name, which is the distinction the
 whole binding rests on. It is the same bearer token that already restores
 strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
-if it were forgeable, those would have been forgeable first. A same-user process
+if it were forgeable, those would have been forgeable first. The same persisted
+pairing also gates session-ID **adoption** (the reconnect re-registering under
+the predecessor's ID outright): the replayed plumb session ID is
+client-supplied and disclosed in `session_start`'s result `_meta`, so adoption
+refuses unless it matches the ID the row records under the proxy session ID —
+before this gate, the replayed ID alone was enough. A same-user process
 can of course read `session_state.db` directly, which is the standing
 peer-agent-as-same-user boundary above, not a property of this mechanism.
 

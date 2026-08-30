@@ -296,10 +296,14 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	// 4. Reload behaviour — which groups the running daemon applies live versus
 	// those that need a restart. Mirrors config.RestartSensitiveEqual; the daemon
-	// reports a concrete restart-pending state via the daemon_info tool.
+	// reports a concrete restart-pending state via the daemon_info tool. Project
+	// (<workspace>/.plumb/config.toml) edits to the live groups propagate to every
+	// attached session via the daemon's per-workspace fsnotify watcher (PLAN-414),
+	// with the 30s per-session poll as the fallback for a failed watcher.
 	fmt.Printf("\nReload behaviour\n")
 	reloadTable := tableBase().Headers("Config group", "Applies")
 	reloadTable.Row("edits, git, walk", configShowOkStyle().Render("live"))
+	reloadTable.Row("collab", configShowOkStyle().Render("live"))
 	reloadTable.Row("log_level", configShowOkStyle().Render("live (set-level)"))
 	reloadTable.Row("ui.theme", configShowOkStyle().Render("live (TUI)"))
 	reloadTable.Row("topology", configShowOkStyle().Render("live (reconciled)"))

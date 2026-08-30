@@ -34,20 +34,25 @@ const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 const MetaSessionIDKey = "dev.plumbkit/session-id"
 
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
-// `plumb serve` transports its own working directory as an ADVISORY workspace
-// attach hint. Unlike a client-reported root it is not authoritative: the
-// daemon consults it only after every stronger signal (a session_start-origin
-// pin, client roots, a roots-origin pin) has failed, and always validates it through
-// workspace detection before attaching. Identical across every handshake
-// replay. Reverse-DNS namespaced per the MCP `_meta` convention.
+// `plumb serve` transports its explicit workspace pre-pin — the --workspace
+// flag or PLUMB_WORKSPACE env var. There is deliberately no serve-cwd fallback:
+// cwd is not intent (an MCP client spawns serve from its own launcher's
+// directory), so a serve started with neither sends no key at all and starts
+// unattached, with session_start as the sole workspace-pin authority. Unlike a
+// client-reported root the key is not authoritative: the daemon consults it only
+// after every stronger signal (a session_start-origin pin, client roots, a
+// roots-origin pin) has failed, and always validates it through workspace
+// detection before attaching. Identical across every handshake replay.
+// Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaWorkspaceKey = "dev.plumbkit/workspace"
 
 // MetaPinnedWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` replays the workspace the caller last chose with an explicit
 // `session_start(workspace=…)` call.
 //
-// Unlike MetaWorkspaceKey — the proxy's launch directory, a mere hint — this is
-// AUTHORITATIVE: it is the same declaration of intent as the live tool call that
+// Unlike MetaWorkspaceKey — the --workspace/PLUMB_WORKSPACE pre-pin, which still
+// never overrode a session_start declaration — this is AUTHORITATIVE: it is the
+// same declaration of intent as the live tool call that
 // produced it, merely re-delivered to a daemon that restarted underneath the
 // connection. It therefore outranks a client-reported root, which only says
 // where the client happened to start. The proxy injects it at replay time (the

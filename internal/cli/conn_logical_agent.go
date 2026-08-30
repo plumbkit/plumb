@@ -34,26 +34,35 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
-	// attachID is the session_id recorded at attach. It is the fallback identity
-	// for a call that carries no per-call _meta: on a shared connection, such a
-	// call is attributed to the attach-time agent, not refused.
-	attachID string
 }
 
-func (l *logicalAgentState) record(id string, attach bool) bool {
+// record commits an identity and reports the connection's shared STATE and,
+// separately, whether THIS record produced it — the transition from fewer than
+// two committed identities to two.
+//
+// Two returns, not one, because the two consumers need different questions
+// answered (PLAN-396). The announcement is an EVENT: the operator needs telling
+// once, so re-announcing on every declaration was the noise this card set out to
+// remove. The health note is a STATE: it describes a condition that stays true
+// for the connection's life, and conn_repin clears Health on ordinary successes
+// (the same-root promotion at :279 and the re-pin at :348), so a note that can
+// only be written on the transition is gone for good after the first re-pin —
+// while the connection is still shared and still refusing anonymous
+// state-changing calls with no diagnostic left to explain why. Collapsing both
+// onto the transition bool made "announce once" eat "keep the state true".
+func (l *logicalAgentState) record(id string) (shared, transition bool) {
 	if id == "" {
-		return false
+		return false, false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	wasShared := len(l.seen) > 1
 	if l.seen == nil {
 		l.seen = make(map[string]struct{})
 	}
 	l.seen[id] = struct{}{}
-	if attach {
-		l.attachID = id
-	}
-	return len(l.seen) > 1
+	shared = len(l.seen) > 1
+	return shared, shared && !wasShared
 }
 
 // sharedWith reports whether the connection is shared once the caller of THIS
@@ -88,36 +97,32 @@ func (l *logicalAgentState) sharedWith(id string) bool {
 	return len(l.seen) == 1
 }
 
-// attachIdentity returns the attach-time session_id fallback identity (last one
-// recorded), or "". It is the attribution for a call carrying no per-call _meta.
-func (l *logicalAgentState) attachIdentity() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.attachID
-}
-
 // refuse reports whether a call declaring callID must be refused on this
 // connection: the connection is shared (two or more distinct IDs observed) and
-// the call is unattributable (no per-call ID, and no attach-time session_id to
-// fall back on). A non-shared connection needs no ID — the connection itself is
-// the identity.
+// the call is unattributable (no per-call ID). A non-shared connection needs no
+// ID — the connection itself is the identity.
+//
+// PLAN-394 removed the attach-time fallback from this decision. Before it, an
+// anonymous call was admitted whenever ANY session_start had attached — and
+// shardFor then attributed the call to the agent that attached LAST, so an
+// unattributable write landed in a peer's trackers and, after that peer's
+// force-pin, in the peer's project. Admitting a call on the strength of an
+// identity it did not present is attribution by guesswork; on a shared
+// connection only a presented ID admits a state-changing call.
 func (l *logicalAgentState) refuse(callID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.seen) <= 1 {
 		return false
 	}
-	if callID != "" {
-		return false
-	}
-	return l.attachID == ""
+	return callID == ""
 }
 
 // recordLogicalAgentAttach records a session_start.session_id identity.
-func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id, true) }
+func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id) }
 
 // recordLogicalAgentCall records a per-call tools/call._meta identity.
-func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id, false) }
+func (s *connSession) recordLogicalAgentCall(id string) { s.recordLogicalAgent(id) }
 
 // declaredAgentCtx is the third identity channel: the `session_id` a caller
 // declares INSIDE session_start, promoted to this call's logical-agent identity.
@@ -152,12 +157,26 @@ func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.C
 
 // recordLogicalAgent is the single choke point every identity channel feeds
 // (session_id at attach, _meta per call), so the shared-connection detection
-// sees one consistent view regardless of how the ID arrived. The first time the
-// connection becomes shared it is marked for the operator.
-func (s *connSession) recordLogicalAgent(id string, attach bool) {
-	if s.logicalAgents.record(id, attach) {
-		s.markSharedConnectionDetected()
+// sees one consistent view regardless of how the ID arrived.
+//
+// The announcement and the health note are driven by different halves of
+// record's answer, because they answer different questions (PLAN-396). The Warn
+// fires on the TRANSITION — once per connection, so peers declaring themselves
+// do not re-announce a condition the operator has already been told about. The
+// health note is re-asserted on every declaration while the connection is
+// SHARED, because conn_repin clears Health on ordinary successes and a note
+// written only on the transition could never come back — leaving a connection
+// that is still shared, and still refusing anonymous state-changing calls, with
+// nothing on the session record to explain the refusal.
+func (s *connSession) recordLogicalAgent(id string) {
+	shared, transition := s.logicalAgents.record(id)
+	if !shared {
+		return
 	}
+	if transition {
+		s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
+	}
+	s.markSharedConnectionDetected()
 }
 
 // markSharedConnectionDetected records the shared-connection condition on the
@@ -166,12 +185,23 @@ func (s *connSession) recordLogicalAgent(id string, attach bool) {
 // anonymous call path below. Per-agent keying (step 2) is in effect, so
 // distinct-ID agents no longer share pin/trackers; anonymous state-changing
 // calls are still refused because they cannot be attributed.
+//
+// It never downgrades a more specific, more actionable note another path has
+// written (contested_pin, blocked): Health is a single field per session, and
+// before PLAN-396 this mark rewrote it on every identity declaration, making any
+// other note's lifetime "until the next peer call". Writing is therefore
+// conditional and idempotent — the note lands when Health is empty or already
+// this same mark, and re-asserting it is a no-op — which is what lets the caller
+// call this on EVERY declaration while shared without the clobbering returning.
+// The announcement is separate, and stays on the transition.
 func (s *connSession) markSharedConnectionDetected() {
-	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
 	if s.sessionID() == "" {
 		return
 	}
 	session.Patch(s.sessionID(), func(info *session.Info) {
+		if info.Health != "" && info.Health != "shared_connection_detected" {
+			return
+		}
 		info.Health = "shared_connection_detected"
 		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, anonymous state-changing calls are refused — run one plumb serve per logical agent"
 	})

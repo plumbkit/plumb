@@ -46,6 +46,7 @@ type FileStatus struct {
 	writesFor func(ctx context.Context) *WriteTracker // PLAN-286: per-agent resolver; overrides writes
 	guard     BoundaryGuard
 	ws        WorkspaceFn
+	contested ContestedFn // may be nil; refuses a relative path once the connection's pin is contested
 }
 
 // NewFileStatus constructs the tool. The WriteTracker is the per-connection
@@ -83,6 +84,13 @@ func (t *FileStatus) WithBoundary(guard BoundaryGuard) *FileStatus {
 // path resolves against the workspace root. Nil-safe.
 func (t *FileStatus) WithWorkspace(ws WorkspaceFn) *FileStatus {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// path is refused once the pin is contested (issue #182). Nil-safe.
+func (t *FileStatus) WithContested(fn ContestedFn) *FileStatus {
+	t.contested = fn
 	return t
 }
 
@@ -169,8 +177,12 @@ func (t *FileStatus) inspect(ctx context.Context, raw string) fileStatusResult {
 	// alone would answer about a different file than the caller named — silently,
 	// as exists=false with no error. That is the outcome ParentTraversalError
 	// exists to refuse; file_status must not be the one exception to it.
-	resolved := resolvePath(ctx, raw, t.ws)
+	resolved, rerr := resolvePath(ctx, raw, t.ws, t.contested)
 	res := fileStatusResult{path: resolved}
+	if rerr != nil {
+		res.err = rerr.Error()
+		return res
+	}
 	if err := t.guard.check(ctx, resolved); err != nil {
 		res.err = err.Error()
 		return res

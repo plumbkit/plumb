@@ -63,6 +63,14 @@ type sessionView struct {
 	// surfaced by daemon_info. "" when unset.
 	purpose      string
 	lastCfgMtime time.Time
+	// projectWatchRoot: the canonical root this session holds a project-config
+	// watcher reference on (PLAN-414), acquired on every config apply, released
+	// on re-pin / close. fallbackWarned latches the one-time poll-fallback log
+	// line. collabNotice is a pending one-shot [collab] capability-change
+	// notice, surfaced on the next tool result via enrichToolOutput.
+	projectWatchRoot string
+	fallbackWarned   bool
+	collabNotice     string
 	// boundBudgetKey is the (client, workspace) key of the shared write budget
 	// this session currently holds a reference on (see sharedBudgets), or "" when
 	// none is held. Released and re-acquired on re-pin, released on close, so a
@@ -142,8 +150,13 @@ type sessionView struct {
 	// initialize params' _meta (see onAllowDirs). They are per-connection — never
 	// shared with another session — and folded into the PathPolicy by
 	// buildPathPolicy as read-write roots, additive to the workspace and config
-	// extra_roots. Set once during the initialize exchange, before attach, and
-	// preserved across re-pins (a re-pin keeps the client's grant).
+	// extra_roots. On an unattached serve (no --workspace/PLUMB_WORKSPACE and no
+	// session_start yet) the grant is inert: buildPathPolicy returns nil while no
+	// workspace is pinned, so the boundary keeps failing closed, and the roots
+	// attach additively to whatever workspace session_start later pins — a grant
+	// is never the source of a workspace. Set once during the initialize
+	// exchange, before attach, and preserved across re-pins (a re-pin keeps the
+	// client's grant).
 	allowDirs []string
 
 	// proxySessionID is the stable per-proxy session ID `plumb serve` transported
@@ -157,18 +170,30 @@ type sessionView struct {
 	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
 	// the live sessID equal to it on reconnect.
 	replayedSessionID string
+	// persistedSessionID is the plumb session ID recorded in the session_names
+	// row under this connection's proxy session ID (captured by restoreName). It
+	// is the sole authorisation for adoptSessionID: the proxy session ID is a
+	// never-disclosed bearer secret — presenting it is evidence of being the same
+	// serve process — whereas the plumb session ID is echoed to clients
+	// (toolResultMeta), so a replayed one is only a CLAIM. The persisted pairing
+	// of the two is what turns the claim into proof; an empty value is "no
+	// proof", never a wildcard.
+	persistedSessionID string
 	// inheritedSessionIDs are predecessor plumb session IDs this connection may
 	// also read mailbox messages for, granted ONLY by the proxy-authenticated
 	// persisted-state path (see inheritSessionID). Nil for every other session.
 	inheritedSessionIDs []string
 
-	// workspaceHint is the serve proxy's advisory working directory, transported
-	// in the initialize params' _meta (see onWorkspaceHint). Consulted only as
-	// the last attach fallback before tool-path seeding, always validated through
-	// pool.Detect, and never persisted as the sticky pin — so it can inform an
-	// attach but never overwrite a workspace the caller deliberately chose. Set
-	// once during the initialize exchange and preserved across re-pins. "" when
-	// the client is not a cwd-injecting serve proxy.
+	// workspaceHint is the workspace pre-pin the serve proxy transported in the
+	// initialize params' _meta — the explicit --workspace/PLUMB_WORKSPACE value
+	// (see onWorkspaceHint); the serve's working directory is never transported,
+	// so a serve started without one leaves this empty and the connection
+	// unattached until session_start pins it. Consulted only as the last attach
+	// fallback before tool-path seeding, always validated through pool.Detect,
+	// and never persisted as the sticky pin — so it can inform an attach but
+	// never overwrite a workspace the caller deliberately chose. Set once during
+	// the initialize exchange and preserved across re-pins. "" when the client
+	// sent no workspace pre-pin.
 	workspaceHint string
 
 	// replayedPin is the workspace the caller chose with an explicit session_start,
@@ -186,6 +211,14 @@ type sessionView struct {
 	pinVia, pinPrev string
 	pinAt           time.Time
 	pinOrigin       sessionstate.PinSource
+	// pinForced records that this pin overrode the sticky-pin guard with
+	// force: true — it did not merely change the workspace, it DISPLACED a pin
+	// another caller on this connection had deliberately set. Stamped in the same
+	// mutate as pinPrev, which names what was displaced; the two are only
+	// meaningful together. Surfaced to the displaced caller through
+	// tools.PinProvenance (see DisplacementNotice), because that caller is
+	// otherwise the only party to the event with no signal at all.
+	pinForced bool
 
 	// pinUnverifiedReplay marks a pin that arrived over the serve proxy's
 	// initialize _meta channel, which the daemon cannot authenticate (issue
@@ -238,10 +271,21 @@ type connSession struct {
 	// nil in tests that construct connSession directly rather than via handleConn.
 	registry *connRegistry
 
+	// projectWatches is the daemon-owned per-workspace project-config watcher
+	// manager (PLAN-414); nil in tests — then the 30s poll is the only reload
+	// mechanism, as before.
+	projectWatches *projectConfigWatchManager
+
 	// logicalAgents observes the distinct logical-agent identities this
 	// connection declares (session_start.session_id and per-call _meta), so a
 	// multiplexing client can be detected before it shares state (PLAN-286).
 	logicalAgents logicalAgentState
+
+	// pinContest is the connection's recent forced-pin-displacement history. It
+	// is how a multiplexing client that declares NO identity is detected —
+	// logicalAgents cannot see one, so the only evidence is the behaviour: a pin
+	// force-taken between projects, repeatedly. See conn_pin_contest.go.
+	pinContest pinContestState
 
 	// shards holds the per-logical-agent copies of the mutable facts, keyed by
 	// logical-agent ID. Populated only once the connection is shared; guarded by
@@ -431,6 +475,7 @@ func (s *connSession) close() {
 		budgetKey = v.boundBudgetKey
 		v.boundBudgetKey = ""
 	})
+	s.releaseProjectWatch()
 	if ref != "" {
 		s.pool.release(ref, refLang)
 	}
@@ -531,43 +576,6 @@ func (s *connSession) markBoundaryViolation(message string) {
 		info.Health = "blocked"
 		info.HealthMessage = message
 	})
-}
-
-// isStrict reports whether strict mode is in effect for this session.
-func (s *connSession) isStrict() bool {
-	return s.view().edits.Strict
-}
-
-// editsConfig returns the current resolved edits config.
-func (s *connSession) editsConfig() config.EditsConfig {
-	return s.view().edits
-}
-
-// memoryConfig returns the current resolved [memory] config off the lock-free
-// snapshot (seeded at construction from global config, swapped per project on
-// every attach / re-pin / reload). Lets the hot read_file hint path read the
-// config without re-reading and re-parsing .plumb/config.toml per call.
-func (s *connSession) memoryConfig() config.MemoryConfig {
-	return s.view().memory
-}
-
-// collabConfig returns the connection's snapshotted, project-resolved [collab]
-// config. Like memoryConfig it is captured on every attach / re-pin / reload, so
-// the hot peer-hint path reads it without re-parsing .plumb/config.toml per call.
-func (s *connSession) collabConfig() config.CollabConfig {
-	return s.view().collab
-}
-
-// toolsConfig returns the current resolved [tools] config off the lock-free
-// snapshot. Read on the tools/list filter path so the profile resolves without
-// a per-call disk read; swapped per project like the blocks above.
-func (s *connSession) toolsConfig() config.ToolsConfig {
-	return s.view().tools
-}
-
-// refuseHomeRoots reports whether the session refuses home-directory roots.
-func (s *connSession) refuseHomeRoots() bool {
-	return s.view().walk.RefuseHomeRoots
 }
 
 // clientNameStr returns the MCP client name for the session.

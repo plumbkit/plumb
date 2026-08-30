@@ -154,10 +154,9 @@ func TestReachabilitySummaryFormat_UnreachableSortedBySize(t *testing.T) {
 }
 
 // TestReachabilityBytesCap_ShortUnchangedLongTruncated mutation-covers the
-// hard byte-cap backstop in both directions: a response under the cap must be
-// returned verbatim (no spurious truncation note), and one over the cap must
-// be cut at a line boundary with the note appended and end up at or under the
-// cap plus the note's own length.
+// hard total byte-cap backstop in both directions: a response under the cap must
+// be returned verbatim (no spurious truncation note), and one over the cap must
+// be cut at a line boundary with the truncation note included within the cap.
 func TestReachabilityBytesCap_ShortUnchangedLongTruncated(t *testing.T) {
 	short := "line one\nline two"
 	if got := capReachabilityBytes(short); got != short {
@@ -170,7 +169,7 @@ func TestReachabilityBytesCap_ShortUnchangedLongTruncated(t *testing.T) {
 	}
 	long := sb.String()
 	got := capReachabilityBytes(long)
-	if len(got) > reachabilityMaxBytes+64 {
+	if len(got) > reachabilityMaxBytes {
 		t.Errorf("truncated output too long: %d bytes (cap %d)", len(got), reachabilityMaxBytes)
 	}
 	if !strings.Contains(got, "[response truncated to fit the byte cap]") {
