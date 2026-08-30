@@ -35,7 +35,7 @@ env:
   # the hook runs `golangci-lint run --fix` off PATH: a local binary NEWER than
   # this pin silently reformats files to a standard CI does not ask for, and
   # they ride along in whoever next runs `git add -A`.
-  GOLANGCI_LINT_VERSION: v2.13.0
+  GOLANGCI_LINT_VERSION: v2.13.1
 
 jobs:
   # ── The gate: build + test + lint on both supported OSes. ──
