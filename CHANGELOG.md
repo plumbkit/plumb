@@ -5,6 +5,22 @@
 
 - **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
 
+### Added
+
+- **A site-claims drift guard (`make check-site-claims`, part of `verify`).**
+  The same three site drifts — the footer stamp, the tool and language
+  counts, and adapter tier claims — were fixed twice (the June production
+  review, then again in PR #429) without anything catching them, because the
+  web ui freshness check only sees stale files, not claims that no longer
+  match the code. `scripts/check-site-claims.sh` greps the five claim pairs
+  that recurred or sit one careless edit away: footer stamp vs `VERSION`, the
+  hero languages count vs the `allExtractorCases` table, the tool-grid ×N
+  sums against both `docs/tools.md` and the page's own tool stat, Validated
+  adapters never described as experimental, and every code-context
+  `plumb <cmd>` mention against the subcommands the binary actually
+  registers. Deliberately in `verify` and not the pre-commit hook: the
+  subcommand check builds the module once, and the hook must stay fast.
+
 ### Fixed
 
 - **The deterministic client-conformance gate is green again on an unattached serve, and a `roots/list` probe can no longer stall a tool call.** `f4de91ab` made `plumb serve` start unattached — `session_start` is the sole workspace-pin authority — but the raw MCP conformance scenario still sent a purpose-only `session_start`, which now has no workspace signal and refuses by design; the scenario had simply not run against main since that change (the workflow is path-filtered and nightly), so `TestRawMCPDeterministicScenario` failed on the first PR to touch it after the merge wave. The scenario now names the fixture as `workspace`, matching what every real client does (Codex via its config, Claude via the argument). Separately, the workspace-attach ladder's `roots/list` round-trip had no timeout of its own — the code comment admitted it — so a client that never answers a server→client request (the raw harness deliberately doesn't) stalled the attaching call for the caller's entire context: on CI the refusal above arrived only at the 30 s deadline after a full hang, and a probe callback registered mid-race made the same defect flip between a 30 s hang and a fast error across runs. `rootsFromClient` now bounds the probe at 5 s (`rootsListProbeTimeout`), so a silent client degrades to the documented defer-to-OnBeforeTool path instead of consuming the tool-call budget. Guarded by the scenario itself (`-count=3` green at ~1.5 s per run) and the internal/cli roots/attach suites.

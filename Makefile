@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -235,6 +235,14 @@ check-brief:
 check-changelog:
 	./scripts/check-changelog-headings.sh
 
+# check-site-claims fails when site copy's claims drift from the code they
+# describe — footer stamp vs VERSION, hero counts vs the extractor table,
+# tool-grid sums vs docs, adapter tiers vs the status table, and phantom
+# subcommands. The same three drifts were fixed twice (June review, PR #429)
+# before a guard existed. See scripts/check-site-claims.sh.
+check-site-claims:
+	./scripts/check-site-claims.sh
+
 # check-changelog-placement is check-changelog's diff-shape complement: it fails when
 # a change ADDS lines under any heading other than the one that was unreleased at the
 # merge-base. Deliberately NOT in `verify` and not in the pre-commit hook — unlike
@@ -356,11 +364,11 @@ blog:
 	python3 scripts/build-blog.py
 
 # verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) + the file-size, brief and
-# changelog guards + go.mod tidiness. Coverage (`make cover`) and
+# integration-tag compile pass (build-integration) + the file-size, brief,
+# changelog and site-claims guards + go.mod tidiness. Coverage (`make cover`) and
 # vulnerabilities (`make vuln`) are deliberately NOT here — the first doubles
 # the suite runtime, the second needs the network; CI runs both on every push.
-verify: build test lint build-integration build-clients check-size check-brief check-changelog tidy-check
+verify: build test lint build-integration build-clients check-size check-brief check-changelog check-site-claims tidy-check
 
 # hooks is an alias for install-hooks — the ops-root Makefile uses `hooks-ops`
 # for its own hook, and the asymmetry is a recurring stumble.
