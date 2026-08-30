@@ -332,7 +332,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     <div class="stats rv">
       <div class="stat"><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
       <div class="stat"><div class="n" data-count="58">0</div><div class="l">structured tools</div></div>
-      <div class="stat"><div class="n" data-count="21">0</div><div class="l">languages &amp; formats</div></div>
+      <div class="stat"><div class="n" data-count="31">0</div><div class="l">languages &amp; formats</div></div>
       <div class="stat"><div class="n" data-count="18">0</div><div class="l">AI clients</div></div>
     </div>
   </section>
@@ -410,7 +410,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
         <div class="ck">The GPS · LSP</div>
         <h3>Precise. Type-aware.</h3>
         <p>The same language servers your editor trusts: real go-to-definition, every reference, scope- and type-aware rename. Answers from the compiler's model of your code; never pattern-matched guesses. Warm in one shared daemon, across every conversation.</p>
-        <div class="cov">Go · Python first-class <span>· Java/Rust/Swift/TypeScript/Zig validated; Kotlin/HTML experimental</span></div>
+        <div class="cov">Go · Python first-class <span>· Java/Rust/Swift/TypeScript/Zig/Kotlin/HTML validated</span></div>
       </div>
     </div>
   </section>
@@ -434,7 +434,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
             <tr><td class="lng">TS/JS</td><td>typescript-language-server</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
             <tr><td class="lng">Zig</td><td>zls</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
             <tr><td class="lng">Kotlin</td><td>kotlin-lsp</td><td class="t2">validated</td><td class="gat">install-gated</td></tr>
-            <tr><td class="lng">HTML</td><td>vscode-html-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+            <tr><td class="lng">HTML</td><td>vscode-html-language-server</td><td class="t2">validated</td><td class="gat">install-gated</td></tr>
           </tbody>
         </table>
       </div>
@@ -444,18 +444,18 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center" id="tools">
     <span class="k rv">The toolset</span>
-    <h2 class="rv">Seven capabilities.</h2>
+    <h2 class="rv">Eight capabilities.</h2>
     <p class="intro rv">Fifty-eight structured tools, grouped by what they let an agent actually do; and the agent rarely has to name one, because the right tool surfaces when it's needed.</p>
     <div class="toolcols">
       <div class="tc rv"><h4><span class="d" style="background:#b35a2e"></span>Orient<span class="tmark">*</span><span class="c">×4</span></h4><div class="dd">Drop into any repo and get the whole picture in one call; branch, diagnostics, recent work, and the project’s own memory.</div><ul><li>session_start</li><li>workspace_sessions<span class="st">*</span></li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#2f6e4f"></span>Understand<span class="c">×8</span></h4><div class="dd">Jump to any definition, list every caller, walk the type tree; answers from the compiler itself, never a text-search guess.</div><ul><li>find_references</li><li>call_hierarchy</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#a14a26"></span>Edit<span class="tmark">*</span><span class="c">×13</span></h4><div class="dd">Rename across the whole codebase, apply multi-file changes in one atomic step, delete safely. It all lands, or nothing does.</div><ul><li>rename_symbol</li><li>transaction_apply<span class="st">*</span></li></ul></div>
-      <div class="tc rv"><h4><span class="d" style="background:#6b6535"></span>Read<span class="c">×6</span></h4><div class="dd">Pull exactly what you need: a single symbol, a line range, a glob, instead of dragging a whole file into context.</div><ul><li>read_symbol</li><li>file_outline</li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#6b6535"></span>Read<span class="c">×8</span></h4><div class="dd">Pull exactly what you need: a single symbol, a line range, a glob, or a diff, instead of dragging a whole file into context.</div><ul><li>read_symbol</li><li>file_outline</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#46606c"></span>Map<span class="tmark">*</span><span class="c">×8</span></h4><div class="dd">Search the repo, trace what a change touches, and get the precise tests to run; in milliseconds, even while the code won’t compile.</div><ul><li>topology_impact<span class="st">*</span></li><li>topology_affected</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#8a5e2c"></span>Recall<span class="c">×9</span></h4><div class="dd">Durable per-repo memory the agent can write to, plus a typed, shell-free git that keeps every commit clean.</div><ul><li>write_memory</li><li>git</li></ul></div>
-      <div class="tc rv"><h4><span class="d" style="background:#6e5a7a"></span>Tasks &amp; config<span class="c">×2</span></h4><div class="dd">Run the repo’s own build, test and lint commands; no shell, bounded; and let the agent set task and config keys within a user-controlled allowlist.</div><ul><li>run_task</li><li>agent_config</li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#3d5a80"></span>Coordinate<span class="tmark">*</span><span class="c">×4</span></h4><div class="dd">The layer above the locks: an agent-to-agent mailbox, peer awareness and durable findings, so a fleet hands off work instead of duplicating it.</div><ul><li>leave_note</li><li>share_findings<span class="st">*</span></li></ul></div><div class="tc rv"><h4><span class="d" style="background:#6e5a7a"></span>Tasks &amp; config<span class="c">×4</span></h4><div class="dd">Run the repo’s own build, test, lint and mutation-test commands; no shell, bounded; and let the agent set task and config keys within a user-controlled allowlist.</div><ul><li>run_task</li><li>mutation_test</li></ul></div>
     </div>
-    <p class="starnote rv"><span class="tmark">*</span> Plumb’s own additions; session awareness, atomic transactions, blast-radius mapping; drawn out below.</p>
+    <p class="starnote rv"><span class="tmark">*</span> Plumb’s own additions; session awareness, coordination, atomic transactions, blast-radius mapping; drawn out below.</p>
     <div class="gfx" id="additions">
       <article class="gp rv">
         <div class="gcopy">
@@ -673,10 +673,10 @@ cd my-project && plumb init">copy all</button></div>
     <div class="tuiblock rv">
       <span class="k">The dashboard</span>
       <h3>One keystroke. The whole fleet, live.</h3>
-      <p class="tdesc">Run <code>plumb tui</code> for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency and error rates</b>, the daemon's own <b>CPU, memory, GC and goroutines</b>, and an <b>estimated token-savings readout</b>; the one warm process behind every conversation.</p>
+      <p class="tdesc">Run <code>plumb</code> with no arguments for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency and error rates</b>, the daemon's own <b>CPU, memory, GC and goroutines</b>, and an <b>estimated token-savings readout</b>; the one warm process behind every conversation.</p>
       <div class="qcard tuicard">
-        <div class="top"><span>bash · plumb tui</span><span class="live">live</span></div>
-        <div class="tuishot" id="tuiPlayer" role="img" aria-label="plumb tui — live daemon and session dashboard"></div>
+        <div class="top"><span>bash · plumb</span><span class="live">live</span></div>
+        <div class="tuishot" id="tuiPlayer" role="img" aria-label="plumb — live daemon and session dashboard"></div>
       </div>
       <div class="tuifeat">
         <span>live sessions</span><span>per-tool p95 &amp; errors</span><span>daemon CPU · memory · GC</span><span>health alerts</span><span>per-session drill-down</span><span>estimated token savings</span>
@@ -697,7 +697,7 @@ cd my-project && plumb init">copy all</button></div>
 <footer>
   <div class="wrap foot">
     <!-- version: bump on each release -->
-    <span>© 2026 plumb · MIT · set in Australian English · v0.15.1</span>
+    <span>© 2026 plumb · MIT · set in Australian English · v0.17.8</span>
     <div class="lk">
       <a href="blog/index.html">blog</a>
       <a href="https://github.com/plumbkit/plumb">github</a>
