@@ -42,10 +42,18 @@
   re-fired a Warn and rewrote the session's `Health` on every peer call that
   carried an identity — on the N-subagent topology this exists for, any other
   health note's lifetime was "until the next peer call" (a `contested_pin` or
-  `blocked` note was erased by an unrelated `session_start`). The mark now
-  fires once, on the transition into shared, and never overwrites a different,
-  more specific note already on the record; rewriting its own state stays
-  idempotent.
+  `blocked` note was erased by an unrelated `session_start`). The ANNOUNCEMENT
+  now fires once, on the transition into shared, and never overwrites a
+  different, more specific note already on the record; rewriting its own state
+  stays idempotent. The health NOTE is a separate question and is re-asserted on
+  every declaration while the connection is shared, because `conn_repin` clears
+  `Health` on ordinary successes (the same-root promotion and the re-pin that
+  moves the root) — a note written only on the transition was gone for good from
+  the first re-pin onwards, leaving a connection that was still shared, and
+  still refusing anonymous state-changing calls, with nothing on the record to
+  explain the refusal. Guarded by `TestRecordLatchesSharedTransition`,
+  `TestSharedMarkIsAnnouncedOnce`, `TestSharedMarkDoesNotClobberASpecificNote`
+  and `TestSharedMarkSurvivesAHealthClearingRepin`.
 
 ### Changed
 
