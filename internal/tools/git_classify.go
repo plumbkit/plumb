@@ -55,7 +55,10 @@ func checkGitGlobalFlags(args []string) error {
 // sees — silently hands git a remote named after the verb and gets back the
 // cryptic "fatal: '<verb>' does not appear to be a git repository". The guard
 // is limited to this set because elsewhere the first argument can legitimately
-// repeat the verb (`git stash push`).
+// repeat the verb (`git stash push`). Accepted trade: a remote deliberately
+// named after the verb (`git remote add push ...`) becomes unreachable through
+// the tool — perverse naming, and the caller who does it gets a refusal whose
+// remedy does not fit; judged not worth complicating the ordinary-slip path for.
 var gitRemoteLeadingSubcommands = map[string]bool{
 	"push":  true,
 	"fetch": true,
@@ -76,7 +79,7 @@ func rejectDuplicatedLeadingSubcommand(sub string, args []string) error {
 		"git %s: args must not repeat the subcommand — the verb goes only in the subcommand field, "+
 			"and args carries its arguments (e.g. subcommand %q, args [\"origin\", \"main\"]). "+
 			"As passed, git treats %q as the remote name and fails with %q",
-		sub, sub, sub, "'"+sub+"' does not appear to be a git repository'",
+		sub, sub, sub, "'"+sub+"' does not appear to be a git repository",
 	)
 }
 
