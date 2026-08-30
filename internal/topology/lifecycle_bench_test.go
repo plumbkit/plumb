@@ -21,11 +21,34 @@ import (
 )
 
 const (
-	lifecycleBenchRevision            = "f97fc017"
-	lifecycleBenchFiles               = 1415
-	lifecycleBenchResolvedCalls       = 2531
-	lifecycleSaveBudget               = 5 * time.Second
-	lifecycleWALBudget          int64 = 2 * 1024 * 1024
+	lifecycleBenchRevision      = "f97fc017"
+	lifecycleBenchFiles         = 1415
+	lifecycleBenchResolvedCalls = 2531
+
+	// lifecycleSaveBudget is a REGRESSION bound, not a performance target. The
+	// per-save numbers stay logged for PLAN-377; this only has to catch a save
+	// that stopped being incremental.
+	//
+	// It was 5s, which is roughly what a slow runner actually takes: on
+	// macos-latest the same three files measured 1.3s–5.03s, and CI run
+	// 33288975634 went red at 5033.84ms — over by 34ms, 0.7%. A bound that a
+	// green machine lands within one percent of is a coin toss, and every merge
+	// paid for it in re-runs (PLAN-419). 15s keeps roughly 3× headroom over the
+	// worst observed CI save while still catching the regression that matters:
+	// a save that re-indexes the corpus takes tens of seconds, not single-digit
+	// ones, so the failure this guards against is an order of magnitude away
+	// rather than a rounding error away.
+	lifecycleSaveBudget = 15 * time.Second
+
+	// lifecycleWALBudget bounds the bytes ONE save appends to the WAL. Unlike
+	// the wall-clock bound this is deterministic — CI and local runs report
+	// byte-identical growth — so it has never flaked. It was still too tight to
+	// leave alone: the worst observed save (internal/cli/root.go pass 0) writes
+	// 1,965,240 bytes against a 2 MiB cap, 6% of headroom, so the next corpus
+	// bump or SQLite change reddens main for no behavioural reason. 8 MiB keeps
+	// the guard meaningful — a save that rewrote the whole index would add on
+	// the order of the 45 MB database — with room the measurement can move in.
+	lifecycleWALBudget int64 = 8 * 1024 * 1024
 )
 
 // The corpus is pinned to plumb revision f97fc017, materialised with
