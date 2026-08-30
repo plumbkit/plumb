@@ -4,6 +4,7 @@
 ### Security
 
 - **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
+
 ### Fixed
 
 - **A declared agent's `session_start` no longer pins the CONNECTION from the
@@ -21,7 +22,25 @@
   the re-pin callback whenever it is wired (previously only for a language
   override). Undeclared calls keep the pre-pin byte for byte, and the
   concurrent first-contact probe stays fail-closed: exactly one of a racing
-  pair lands, and the refusal always carries its remedy.
+  pair lands, and the refusal always carries its remedy. A `session_start({workspace})` on an
+  unattached connection now routes through the re-pin machinery whenever it is
+  wired, so an unusable path — relative, drifting, wide — is refused with an
+  error where the argument was previously returned as-is and the call could not
+  fail.
+
+- **A seeded shard now follows the connection it was seeded from, instead of
+  refusing its agent's next legitimate call off a stale sticky root.**
+  `shardFor` caches a shard (seeded from the connection pin) BEFORE
+  `repinAgent` can refuse a call, so one refused ask left the agent cached at a
+  root the connection had then moved away from — and the shard's sticky seed
+  refused the agent's next, entirely legitimate request for the root the
+  connection was actually on, while a fresh agent's identical request
+  succeeded (PLAN-398). When the connection moves, every shard that never
+  chose a workspace of its own follows (`followConnectionShards`); a shard
+  whose agent deliberately pinned its own root — including through a
+  connection that later passes through that root — is untouched, so
+  per-agent isolation loses nothing. Fail-closed is unchanged: after
+  following, a genuine cross-workspace ask is still refused with the remedy.
 
 - **An anonymous call on a shared connection now fails closed instead of
   inheriting the last-attached agent's identity.** `shardFor` attributed a call
