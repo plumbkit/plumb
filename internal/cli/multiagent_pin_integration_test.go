@@ -138,6 +138,8 @@ func TestMultiAgentPin(t *testing.T) {
 	t.Run("AnonymousWriteIntoPeerProjectRefused", testAnonymousWriteIntoPeerProjectRefused)
 	t.Run("SingleAgentConnectionStillPinsTheConnection", testSingleAgentConnectionStillPinsTheConnection)
 	t.Run("UndeclaredAgentsForcePingPongIsContested", testUndeclaredAgentsForcePingPongIsContested)
+	t.Run("DeclaredFirstContactDefersToExecute", testDeclaredFirstContactDefersToExecute)
+	t.Run("DeclaredFirstContactPairsRefusePerAgent", testDeclaredFirstContactPairsRefusePerAgent)
 }
 
 // testUndeclaredAgentsForcePingPongIsContested replays the topology this whole
@@ -629,5 +631,135 @@ func testSingleAgentConnectionStillPinsTheConnection(t *testing.T) {
 	}
 	if got := m.s.workspaceFor(context.Background()); got != second {
 		t.Errorf("unattributed calls resolve to %q, want %q", got, second)
+	}
+}
+
+// testDeclaredFirstContactDefersToExecute is PLAN-395's deterministic probe.
+// Two declared agents' FIRST session_start calls on an unpinned connection,
+// with the interleaving the concurrent race actually produces whenever both
+// pre-Execute hooks beat both Executes. The hooks must leave the connection
+// untouched (they run before either identity is committed, so a pin there is
+// attributed to nobody and sticky besides); the FIRST committing agent's
+// Execute then attaches the connection, and the second is refused with the
+// PER-AGENT diagnosis instead of the connection-level one.
+func testDeclaredFirstContactDefersToExecute(t *testing.T) {
+	m := newMultiAgentConn(t)
+	wsA, wsB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, wsA)
+	mustGitDir(t, wsB)
+
+	for _, args := range []map[string]any{
+		{"workspace": wsA, "session_id": "agent-a"},
+		{"workspace": wsB, "session_id": "agent-b"},
+	} {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		m.s.onBeforeTool(context.Background(), "session_start", raw)
+	}
+	if got := m.s.workspace(); got != "" {
+		t.Fatalf("a pre-Execute hook pinned the CONNECTION to %q before either identity was committed (PLAN-395)", got)
+	}
+
+	// The first committing agent's Execute: identity settles first, so its pin
+	// resolves to the connection level — one known agent IS the connection.
+	if err := m.call(t, "", "session_start", map[string]any{"workspace": wsA, "session_id": "agent-a"}, m.start.Execute); err != nil {
+		t.Fatalf("the first committing agent's session_start must land: %v", err)
+	}
+	if got := m.s.workspace(); got != wsA {
+		t.Fatalf("connection pin = %q, want the first committer's %q", got, wsA)
+	}
+
+	// The second agent: committed second, so its pin is per-agent — a shard
+	// seeded from the connection root, whose sticky guard refuses the
+	// cross-workspace first contact with the per-agent diagnosis and remedy.
+	err := m.call(t, "", "session_start", map[string]any{"workspace": wsB, "session_id": "agent-b"}, m.start.Execute)
+	if err == nil {
+		t.Fatal("the second agent's cross-workspace first contact must still be refused (fail-closed, PLAN-395)")
+	}
+	if !strings.Contains(err.Error(), "logical agent") {
+		t.Errorf("a DECLARED agent's first-contact refusal carries the connection-level diagnosis, not the per-agent one: %v", err)
+	}
+	if !strings.Contains(err.Error(), "force: true") {
+		t.Errorf("the per-agent refusal lost its remedy: %v", err)
+	}
+}
+
+// testDeclaredFirstContactPairsRefusePerAgent re-runs the concurrent
+// first-contact probe the card requires to keep its fail-closed result, at the
+// scale the review ran it (40 pairs; 5 under -short). Each pair races two
+// DECLARED agents' first session_start on a fresh unpinned connection with
+// different workspaces.
+//
+// Exactly one must be refused, and the refusal must carry a remedy. The
+// diagnosis is timing-dependent and honestly so: if one Execute commits before
+// the other resolves its workspace, the loser is refused per-agent (its shard
+// seeded from the winner's root, sticky) — that ordering is pinned
+// deterministically by testDeclaredFirstContactDefersToExecute. If both
+// resolve before either commits, the loser is genuinely unattributable at
+// refusal time (its identity is still only on the ctx; the commitment is
+// deliberately after the workspace so a refused call commits nothing), and the
+// connection-level refusal is the true one. What may never happen: two
+// winners, two refusals, or a refusal without a next step.
+func testDeclaredFirstContactPairsRefusePerAgent(t *testing.T) {
+	pairs := 40
+	if testing.Short() {
+		pairs = 5
+	}
+	for i := 0; i < pairs; i++ {
+		m := newMultiAgentConn(t)
+		wsA, wsB := freshTempDir(t), freshTempDir(t)
+		mustGitDir(t, wsA)
+		mustGitDir(t, wsB)
+
+		type outcome struct {
+			agent string
+			err   error
+		}
+		out := make([]outcome, 2)
+		var wg sync.WaitGroup
+		kick := make(chan struct{})
+		for j, o := range []outcome{{agent: "agent-a"}, {agent: "agent-b"}} {
+			wg.Add(1)
+			go func(j int, o outcome) {
+				defer wg.Done()
+				<-kick
+				ws := wsA
+				if j == 1 {
+					ws = wsB
+				}
+				raw, err := json.Marshal(map[string]any{"workspace": ws, "session_id": o.agent})
+				if err != nil {
+					o.err = err
+					out[j] = o
+					return
+				}
+				ctx := context.Background()
+				if err := m.s.refuseSharedStateChange(ctx, "session_start", ""); err != nil {
+					o.err = err
+					out[j] = o
+					return
+				}
+				m.s.onBeforeTool(ctx, "session_start", raw)
+				_, o.err = m.start.Execute(ctx, raw)
+				out[j] = o
+			}(j, o)
+		}
+		close(kick)
+		wg.Wait()
+
+		var failures []outcome
+		for _, o := range out {
+			if o.err != nil {
+				failures = append(failures, o)
+			}
+		}
+		if len(failures) != 1 {
+			t.Fatalf("pair %d: want exactly one refusal, got %d (%v)", i, len(failures), failures)
+		}
+		if !strings.Contains(failures[0].err.Error(), "force: true") {
+			t.Errorf("pair %d: the refused agent's first-contact refusal lost its remedy: %v", i, failures[0].err)
+		}
 	}
 }
