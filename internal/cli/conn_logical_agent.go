@@ -36,14 +36,23 @@ type logicalAgentState struct {
 	seen map[string]struct{}
 }
 
-// record commits an identity and reports whether THIS record made the
-// connection shared — the transition from fewer than two committed identities
-// to two. The bool is an event, not a state: a third identity, or a repeated
-// one, reports false, so markSharedConnectionDetected latches once instead of
-// re-announcing (Warn + Health rewrite) on every declaration (PLAN-396).
-func (l *logicalAgentState) record(id string) bool {
+// record commits an identity and reports the connection's shared STATE and,
+// separately, whether THIS record produced it — the transition from fewer than
+// two committed identities to two.
+//
+// Two returns, not one, because the two consumers need different questions
+// answered (PLAN-396). The announcement is an EVENT: the operator needs telling
+// once, so re-announcing on every declaration was the noise this card set out to
+// remove. The health note is a STATE: it describes a condition that stays true
+// for the connection's life, and conn_repin clears Health on ordinary successes
+// (the same-root promotion at :279 and the re-pin at :348), so a note that can
+// only be written on the transition is gone for good after the first re-pin —
+// while the connection is still shared and still refusing anonymous
+// state-changing calls with no diagnostic left to explain why. Collapsing both
+// onto the transition bool made "announce once" eat "keep the state true".
+func (l *logicalAgentState) record(id string) (shared, transition bool) {
 	if id == "" {
-		return false
+		return false, false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -52,7 +61,8 @@ func (l *logicalAgentState) record(id string) bool {
 		l.seen = make(map[string]struct{})
 	}
 	l.seen[id] = struct{}{}
-	return !wasShared && len(l.seen) > 1
+	shared = len(l.seen) > 1
+	return shared, shared && !wasShared
 }
 
 // sharedWith reports whether the connection is shared once the caller of THIS
@@ -147,12 +157,26 @@ func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.C
 
 // recordLogicalAgent is the single choke point every identity channel feeds
 // (session_id at attach, _meta per call), so the shared-connection detection
-// sees one consistent view regardless of how the ID arrived. The first time the
-// connection becomes shared it is marked for the operator.
+// sees one consistent view regardless of how the ID arrived.
+//
+// The announcement and the health note are driven by different halves of
+// record's answer, because they answer different questions (PLAN-396). The Warn
+// fires on the TRANSITION — once per connection, so peers declaring themselves
+// do not re-announce a condition the operator has already been told about. The
+// health note is re-asserted on every declaration while the connection is
+// SHARED, because conn_repin clears Health on ordinary successes and a note
+// written only on the transition could never come back — leaving a connection
+// that is still shared, and still refusing anonymous state-changing calls, with
+// nothing on the session record to explain the refusal.
 func (s *connSession) recordLogicalAgent(id string) {
-	if s.logicalAgents.record(id) {
-		s.markSharedConnectionDetected()
+	shared, transition := s.logicalAgents.record(id)
+	if !shared {
+		return
 	}
+	if transition {
+		s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
+	}
+	s.markSharedConnectionDetected()
 }
 
 // markSharedConnectionDetected records the shared-connection condition on the
@@ -162,14 +186,15 @@ func (s *connSession) recordLogicalAgent(id string) {
 // distinct-ID agents no longer share pin/trackers; anonymous state-changing
 // calls are still refused because they cannot be attributed.
 //
-// It fires only on the transition into shared (record reports the event, not
-// the state), and it never downgrades a more specific, more actionable note
-// another path has written (contested_pin, blocked): Health is a single field
-// per session, and before PLAN-396 this mark rewrote it on every identity
-// declaration, making any other note's lifetime "until the next peer call".
-// Rewriting this mark's own state stays idempotent.
+// It never downgrades a more specific, more actionable note another path has
+// written (contested_pin, blocked): Health is a single field per session, and
+// before PLAN-396 this mark rewrote it on every identity declaration, making any
+// other note's lifetime "until the next peer call". Writing is therefore
+// conditional and idempotent — the note lands when Health is empty or already
+// this same mark, and re-asserting it is a no-op — which is what lets the caller
+// call this on EVERY declaration while shared without the clobbering returning.
+// The announcement is separate, and stays on the transition.
 func (s *connSession) markSharedConnectionDetected() {
-	s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
 	if s.sessionID() == "" {
 		return
 	}

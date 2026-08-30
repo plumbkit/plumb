@@ -18,8 +18,12 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 		t.Fatal("a single-agent connection must never refuse")
 	}
 	l.record("A") // attach-time session_id channel
+	// One committed identity: the connection IS the agent, so nothing is
+	// refused. Note what does NOT explain this — there is no attach-time
+	// fallback identity any more (PLAN-394 deleted it); the call is admitted
+	// purely because len(seen) <= 1.
 	if l.refuse("") {
-		t.Fatal("an anonymous call attributable to the attach ID must not refuse")
+		t.Fatal("a single-identity connection must not refuse an anonymous call")
 	}
 	if l.refuse("A") {
 		t.Fatal("an explicit call ID must not refuse")
@@ -84,23 +88,79 @@ func TestRefuseSharedStateChange(t *testing.T) {
 }
 
 // TestRecordLatchesSharedTransition pins PLAN-396's first half: record reports
-// the TRANSITION to shared, not the state. Before it, record returned
-// len(seen) > 1 — true on every declaration after the first two — so
-// markSharedConnectionDetected re-fired (Warn + Health rewrite) on every peer
-// call that carried an identity.
+// the TRANSITION to shared separately from the shared STATE. The transition
+// drives the announcement, which the operator needs once; the state drives the
+// health note, which must stay true for as long as the condition holds. Before
+// the split, record returned only len(seen) > 1 and the announcement re-fired
+// on every peer call carrying an identity.
 func TestRecordLatchesSharedTransition(t *testing.T) {
 	var l logicalAgentState
-	if l.record("A") {
-		t.Fatal("the first identity must not report shared")
+	if shared, transition := l.record("A"); shared || transition {
+		t.Fatalf("the first identity must be neither shared nor a transition: shared=%v transition=%v", shared, transition)
 	}
-	if !l.record("B") {
-		t.Fatal("the second distinct identity is the transition and must report shared")
+	if shared, transition := l.record("B"); !shared || !transition {
+		t.Fatalf("the second distinct identity is the transition into shared: shared=%v transition=%v", shared, transition)
 	}
-	if l.record("C") {
-		t.Error("a third identity re-reported shared — the mark would re-fire on every declaration")
+	// Every later declaration still reports SHARED — that is what keeps the
+	// health note re-assertable — but never again a transition, which is what
+	// keeps the announcement to one.
+	if shared, transition := l.record("C"); !shared || transition {
+		t.Errorf("a third identity: shared=%v transition=%v, want shared with no transition", shared, transition)
 	}
-	if l.record("B") {
-		t.Error("a repeated identity re-reported shared")
+	if shared, transition := l.record("B"); !shared || transition {
+		t.Errorf("a repeated identity: shared=%v transition=%v, want shared with no transition", shared, transition)
+	}
+}
+
+// TestSharedMarkSurvivesAHealthClearingRepin is the regression this file was
+// missing. conn_repin clears Health on ordinary successes — the same-root
+// promotion (conn_repin.go:279) and the re-pin that moves the root
+// (conn_repin.go:348) — so a mark written ONLY on the transition into shared is
+// gone for good from the first re-pin onwards, while the connection is still
+// shared and still refusing anonymous state-changing calls with no diagnostic
+// left to explain why. Found by independent review of PLAN-396: the latch that
+// stopped the mark re-announcing also stopped it re-asserting.
+func TestSharedMarkSurvivesAHealthClearingRepin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	s := newPersistSession(t, store, ss, "proxy-plan396-repin")
+	t.Cleanup(s.close)
+
+	s.recordLogicalAgent("A")
+	s.recordLogicalAgent("B") // the transition; the mark lands here
+	if health, _ := sessionHealth(t, s.sessID); health != "shared_connection_detected" {
+		t.Fatalf("precondition: health = %q, want the shared-connection mark", health)
+	}
+
+	// Exactly what a successful re-pin does to the session record.
+	session.Patch(s.sessionID(), func(info *session.Info) {
+		info.Health = ""
+		info.HealthMessage = ""
+	})
+
+	// The connection has not stopped being shared, and its peers keep
+	// declaring themselves.
+	s.recordLogicalAgent("C")
+	if !s.logicalAgents.refuse("") {
+		t.Fatal("sanity: the connection must still be shared, so anonymous state-changing calls are still refused")
+	}
+	health, msg := sessionHealth(t, s.sessID)
+	if health != "shared_connection_detected" {
+		t.Errorf("health = %q after a re-pin cleared it, want the mark re-asserted — the connection is still shared and still refusing anonymous writes", health)
+	}
+	if msg == "" {
+		t.Error("the health message carrying the one-serve-per-agent remedy was not restored with the mark")
+	}
+
+	// The re-assert must not have cost the non-clobber guard: a more specific
+	// note written afterwards still wins, and later declarations leave it alone.
+	session.Patch(s.sessionID(), func(info *session.Info) {
+		info.Health = "contested_pin"
+		info.HealthMessage = "the pin was forced between two projects"
+	})
+	s.recordLogicalAgent("D")
+	if health, _ := sessionHealth(t, s.sessID); health != "contested_pin" {
+		t.Errorf("health = %q, want contested_pin — re-asserting on every declaration must not clobber a more specific note", health)
 	}
 }
 
