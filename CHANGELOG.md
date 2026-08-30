@@ -5,6 +5,22 @@
 
 - **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
 
+### Added
+
+- **A site-claims drift guard (`make check-site-claims`, part of `verify`).**
+  The same three site drifts — the footer stamp, the tool and language
+  counts, and adapter tier claims — were fixed twice (the June production
+  review, then again in PR #429) without anything catching them, because the
+  web ui freshness check only sees stale files, not claims that no longer
+  match the code. `scripts/check-site-claims.sh` greps the five claim pairs
+  that recurred or sit one careless edit away: footer stamp vs `VERSION`, the
+  hero languages count vs the `allExtractorCases` table, the tool-grid ×N
+  sums against both `docs/tools.md` and the page's own tool stat, Validated
+  adapters never described as experimental, and every code-context
+  `plumb <cmd>` mention against the subcommands the binary actually
+  registers. Deliberately in `verify` and not the pre-commit hook: the
+  subcommand check builds the module once, and the hook must stay fast.
+
 ### Fixed
 
 - **The git tool refuses a call whose args repeat the subcommand instead of letting git fail cryptically.** A caller that passed the verb twice — `subcommand: "push"` with `args` beginning `"push"`, the most common arg-shape slip the tool sees — got git's `fatal: 'push' does not appear to be a git repository` back with no hint of the cause, because git resolves the stray verb as the remote name. The remote-leading network verbs (`push`, `fetch`, `pull`) are now refused before execution with an error naming the correct call shape; refusing rather than silently stripping the duplicate keeps a caller that meant something else in control. The guard is limited to those three verbs because elsewhere the first argument can legitimately repeat the verb (`git stash push`). Guarded by `TestGit_RepeatedSubcommandInArgsRefused` and `TestGit_RepeatedSubcommandGuardDoesNotOverTrigger`.
