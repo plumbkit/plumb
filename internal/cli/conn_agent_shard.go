@@ -302,9 +302,15 @@ func (s *connSession) followConnectionShards(prevRoot string) {
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()
 		sh.undoStore.Reset()
+		// Copy what the calls below need while the lock is still held.
+		// shardsMu does not exclude repinAgent — that takes sh.mu alone — so
+		// reading sh.root/sh.language after the unlock would race a concurrent
+		// per-agent re-pin and could persist a root this shard no longer has.
+		// Same rule persistReadShard states: the shard's root is read under sh.mu.
+		root, language := sh.root, sh.language
 		sh.mu.Unlock()
-		s.rehydrateReadsForAgent(sh, sh.root)
-		s.persistPinForAgent(sh, sh.root, sh.language, v.pinOrigin)
+		s.rehydrateReadsForAgent(sh, root)
+		s.persistPinForAgent(sh, root, language, v.pinOrigin)
 	}
 }
 
