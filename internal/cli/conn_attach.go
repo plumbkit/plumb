@@ -13,9 +13,11 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -225,6 +227,34 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	if explicit {
 		origin = sessionstate.PinSourceSessionStart
 	}
+	// PLAN-395 — identity before workspace, completed end to end. A call that
+	// DECLARES an identity (per-call _meta, or session_start's own session_id
+	// argument) must not have its workspace argument pin the CONNECTION here:
+	// this hook runs before Execute commits the identity, so a pin taken now
+	// can neither be attributed to the declaring agent nor routed to its shard
+	// — it stamped the connection sticky with PinSourceSessionStart on behalf
+	// of an agent that did not exist in `seen` yet, and whichever declared
+	// agent's argument arrived first owned the connection. Execute resolves
+	// identity FIRST (#404) and its repin callback (repinWorkspaceFrom) routes
+	// to the right layer from the committed identity: the agent's shard on a
+	// shared connection, the connection itself when exactly one agent is known.
+	// Deferring abandons nothing: the config watcher starts at initialize
+	// (sync.Once), and a landed repin applies the project config
+	// (repinWorkspaceFrom). Fail-closed is preserved in the same measure — an
+	// undeclared call takes the pre-pin below byte for byte, and a declared
+	// cross-workspace re-pin is still refused, now by repinAgent with the
+	// per-agent diagnosis instead of attachOrRepinTo with the
+	// connection-level one.
+	if explicit {
+		agent := mcp.LogicalAgentFromCtx(toolCtx)
+		if agent == "" {
+			agent = tools.SessionIDArg(args)
+		}
+		if agent != "" {
+			s.log().Debug("daemon: deferring the workspace-arg pin to Execute — the call declares a logical agent", "agent", agent)
+			return
+		}
+	}
 	if !explicit {
 		// On an unpinned connection, prefer restoring the last EXPLICIT pin over
 		// seeding from whatever file a tool happens to touch — so reading a file in
@@ -259,48 +289,53 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	if info, err := os.Stat(seedPath); err != nil || !info.IsDir() {
 		startDir = filepath.Dir(seedPath)
 	}
-	root, _, err := s.pool.Detect(startDir)
-	if err != nil {
-		// A deliberate session_start workspace arg always pins — even a markerless
-		// directory — mirroring repinWorkspaceFrom's SynthesiseRoot fallback, so the
-		// sticky contract is unconditional. auto_attach stays the opt-in that lets an
-		// incidental tool path (file_path/path/uri) synthesise a root.
-		if !explicitOrAutoAttach(explicit, s.store.Current().Workspace.AutoAttach) {
-			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
-			return
-		}
-		// Explicit only when the SEED IS the workspace argument — not merely when a
-		// workspace key is present somewhere in the call.
-		//
-		// seedPathFromArgs prefers uri/file_path/path/root OVER workspace, so the
-		// two routinely name different directories: relevant_memories and
-		// write_memory both take a path AND a workspace. Keying on presence let
-		// `{path: "~/.zshrc", workspace: "/some/project"}` seed $HOME while counting
-		// as a deliberate declaration — laundering an incidental path into an
-		// explicit $HOME pin that then PERSISTS as session_start and rehydrates on
-		// every later reconnect, in the default configuration. Found by review, and
-		// it is the same class this guard exists to close, one level up: the
-		// declaration has to be about the directory being named.
-		synthRoot := s.pool.SynthesiseRoot(startDir, explicit)
-		if synthRoot == "" {
-			s.log().Warn("daemon: refusing to synthesise a workspace at or above the home directory from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
-			return
-		}
-		s.attachSynthetic(toolCtx, synthRoot, origin, pinTriggerLive)
-		if s.store.Current().Workspace.AutoAttachPersist {
-			go func() {
-				if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
-					s.log().Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
-					return
-				}
-				s.log().Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
-			}()
-		}
-		s.applyProjectConfig(s.workspace())
-		s.startConfigWatcher()
+	root, _, detectErr := s.pool.Detect(startDir)
+	if detectErr != nil {
+		s.attachSyntheticSeed(toolCtx, seedPath, startDir, origin, explicit, detectErr)
 		return
 	}
 	s.attachWorkspacePin(toolCtx, "file://"+root, origin)
+	s.applyProjectConfig(s.workspace())
+	s.startConfigWatcher()
+}
+
+// attachSyntheticSeed pins a workspace for a seed the detector could not place.
+// A deliberate session_start workspace arg always pins — even a markerless
+// directory — mirroring repinWorkspaceFrom's SynthesiseRoot fallback, so the
+// sticky contract is unconditional. auto_attach stays the opt-in that lets an
+// incidental tool path (file_path/path/uri) synthesise a root.
+func (s *connSession) attachSyntheticSeed(toolCtx context.Context, seedPath, startDir string, origin sessionstate.PinSource, explicit bool, detectErr error) {
+	if !explicitOrAutoAttach(explicit, s.store.Current().Workspace.AutoAttach) {
+		s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", detectErr)
+		return
+	}
+	// Explicit only when the SEED IS the workspace argument — not merely when a
+	// workspace key is present somewhere in the call.
+	//
+	// seedPathFromArgs prefers uri/file_path/path/root OVER workspace, so the
+	// two routinely name different directories: relevant_memories and
+	// write_memory both take a path AND a workspace. Keying on presence let
+	// `{path: "~/.zshrc", workspace: "/some/project"}` seed $HOME while counting
+	// as a deliberate declaration — laundering an incidental path into an
+	// explicit $HOME pin that then PERSISTS as session_start and rehydrates on
+	// every later reconnect, in the default configuration. Found by review, and
+	// it is the same class this guard exists to close, one level up: the
+	// declaration has to be about the directory being named.
+	synthRoot := s.pool.SynthesiseRoot(startDir, explicit)
+	if synthRoot == "" {
+		s.log().Warn("daemon: refusing to synthesise a workspace at or above the home directory from an incidental tool path — call session_start({workspace}) to pin it deliberately", "seed", startDir)
+		return
+	}
+	s.attachSynthetic(toolCtx, synthRoot, origin, pinTriggerLive)
+	if s.store.Current().Workspace.AutoAttachPersist {
+		go func() {
+			if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
+				s.log().Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
+				return
+			}
+			s.log().Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
+		}()
+	}
 	s.applyProjectConfig(s.workspace())
 	s.startConfigWatcher()
 }

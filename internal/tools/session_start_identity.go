@@ -51,7 +51,7 @@ func (t *SessionStart) WithDeclaredAgent(fn func(ctx context.Context, id string)
 // derived from the raw input regardless of whether an externalIDFn is wired;
 // the accessor is consulted only when it is non-nil.
 func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string, linked bool) {
-	id := sessionIDArg(raw)
+	id := SessionIDArg(raw)
 	if id == "" {
 		return "", false
 	}
@@ -61,11 +61,13 @@ func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string
 	return inheritedName, true
 }
 
-// sessionIDArg extracts the `session_id` argument, or "" when absent or the
-// input does not parse. Shared by resolveLinkage and withDeclaredAgent so the
-// identity the session record is linked to and the identity the re-pin is
-// attributed to can never be read from the argument differently.
-func sessionIDArg(raw json.RawMessage) string {
+// SessionIDArg extracts the `session_id` argument, or "" when absent or the
+// input does not parse. This is THE reader of the argument: resolveLinkage and
+// withDeclaredAgent use it for Execute's own identity resolution, and cli's
+// onBeforeTool uses it to decide which calls the pre-Execute pin must defer
+// for (PLAN-395) — deferring exactly the calls Execute will attribute is only
+// correct if both sides read the argument identically, so there is one reader.
+func SessionIDArg(raw json.RawMessage) string {
 	var a struct {
 		SessionID string `json:"session_id"`
 	}
@@ -82,7 +84,7 @@ func (t *SessionStart) withDeclaredAgent(ctx context.Context, raw json.RawMessag
 	if t.declaredAgent == nil {
 		return ctx
 	}
-	id := sessionIDArg(raw)
+	id := SessionIDArg(raw)
 	if id == "" {
 		return ctx
 	}
