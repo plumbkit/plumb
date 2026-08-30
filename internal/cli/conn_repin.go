@@ -180,12 +180,17 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// to the current root is never falsely refused, and on the view under
 	// mutation, so a concurrent re-pin can never land between the refusal
 	// decision and the pin move.
+	prevConnRoot := s.workspace()
 	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
 	if err != nil {
 		return "", err
 	}
 	if changed {
 		s.applyProjectConfig(root)
+		// PLAN-398: shards seeded from the old connection pin follow the move,
+		// so a seeded agent is not left refusing its next legitimate call off a
+		// stale sticky root.
+		s.followConnectionShards(prevConnRoot)
 	}
 	return root, nil
 }

@@ -39,6 +39,14 @@ type agentShard struct {
 	// pinOrigin mirrors sessionView.pinOrigin so the per-agent sticky-pin guard
 	// (repinAgent) can apply the same session_start-vs-roots distinction.
 	pinOrigin sessionstate.PinSource
+	// selfPinned records that THIS agent successfully re-pinned its shard to a
+	// root of its own choosing (repinAgent, changed=true). A shard that has
+	// never done so is where the CONNECTION seeded it, and follows the
+	// connection when it moves (followConnectionShards, PLAN-398): the stale
+	// sticky seed otherwise refused the agent's next legitimate call — the one
+	// defect where a fresh agent's identical request succeeded. Set only under
+	// sh.mu; never cleared.
+	selfPinned bool
 
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
@@ -240,6 +248,10 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		return false, nil
 	}
 	changed = true
+	// The agent has CHOSEN this root (even back to the seeded one, via a
+	// deliberate re-pin): from here the shard no longer follows the connection
+	// (PLAN-398).
+	sh.selfPinned = true
 	sh.root = root
 	sh.language = language
 	sh.pinOrigin = origin
@@ -250,6 +262,50 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
+}
+
+// followConnectionShards re-seeds every shard that never chose a workspace of
+// its own (!selfPinned) from the connection's NEW pin, after the connection
+// itself moved away from prevRoot. A shard is seeded from the connection pin at
+// first use — shardFor caches it BEFORE repinAgent can refuse, so one refused
+// ask left the agent cached at a root whose sticky seed then refused the
+// agent's next, entirely legitimate call (the exact PLAN-398 reproduction),
+// while a fresh agent asking the same thing succeeded: the fresh shard seeded
+// from the CURRENT pin, the stale one had not followed. Re-seeding here restores
+// the invariant "a seeded shard sits where the connection sits" without
+// touching shards whose agent deliberately pinned elsewhere — per-agent
+// isolation means the connection's move cannot drag an agent that chose its own
+// root. Runs OUTSIDE the connection mutate lane, in the documented lock order
+// (shardsMu before sh.mu, s.mu innermost), so the per-tool-call hot path's lock
+// pattern is unchanged; the writes mirror repinAgent's success path, held under
+// one sh.mu acquisition each.
+func (s *connSession) followConnectionShards(prevRoot string) {
+	if prevRoot == "" {
+		return
+	}
+	v := s.view()
+	if v.acquiredRoot == "" || v.acquiredRoot == prevRoot {
+		return
+	}
+	s.shardsMu.Lock()
+	defer s.shardsMu.Unlock()
+	for _, sh := range s.shards {
+		sh.mu.Lock()
+		if sh.selfPinned || sh.root != prevRoot {
+			sh.mu.Unlock()
+			continue
+		}
+		sh.root = v.acquiredRoot
+		sh.language = v.acquiredLanguage
+		sh.pinOrigin = v.pinOrigin
+		sh.policy = s.buildAgentPolicy(sh.root, sh.language)
+		sh.readTracker.Reset()
+		sh.writeTracker.Reset()
+		sh.undoStore.Reset()
+		sh.mu.Unlock()
+		s.rehydrateReadsForAgent(sh, sh.root)
+		s.persistPinForAgent(sh, sh.root, sh.language, v.pinOrigin)
+	}
 }
 
 // persistReadShard mirrors a per-agent recorded read to the durable store, keyed
