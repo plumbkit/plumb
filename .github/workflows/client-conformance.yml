@@ -5,6 +5,14 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "23 15 * * *"
+  # Every push to main runs the gate (ubuntu tier — see the matrix below): the
+  # paths filter gates only the pull_request trigger, so without this a
+  # main-breaking regression in the asserted paths could sit undetected until
+  # the next PR that happens to touch a filtered path. That is exactly how the
+  # unattached-serve wave left TestRawMCPDeterministicScenario red on main for
+  # a day, found only by an unrelated PR (PLAN-424, PRs #434/#435).
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     # The paths gate must carry every path this tier ASSERTS on, not only the
@@ -29,8 +37,8 @@ env:
   OPENCODE_VERSION: 1.18.0
 
 jobs:
-  # On a pull_request (path-filtered above) this is a fast PR-time signal, not
-  # the full release/nightly gate: one OS (ubuntu-latest) only. The 2-OS matrix
+  # On a pull_request or a push to main this is a fast signal, not the full
+  # release/nightly gate: one OS (ubuntu-latest) only. The 2-OS matrix
   # stays intact for workflow_call (release.yml) and the nightly schedule —
   # macOS-only client behaviour differences are exactly what the nightly run
   # and the release gate exist to catch, and a PR should not pay 2x the cost
@@ -44,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
+        os: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Worst-case legitimate run per OS: 3 attempts x the internal 10m go test
     # timeout (30m), plus npm installing the two pinned client CLIs and the Go
