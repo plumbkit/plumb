@@ -4,16 +4,109 @@ on:
   push:
     tags:
       - "v*"
+  # Run the tap-token preflight on demand, without cutting a release. Every
+  # other job is gated on a tag ref below, so a dispatch runs the credential
+  # check ALONE — it can never publish anything.
+  workflow_dispatch: {}
 
 permissions:
   contents: write # create the GitHub release and upload artifacts
 
 jobs:
+  # Fail fast on a lapsed Homebrew tap credential.
+  #
+  # This exists because the tap push is the LAST thing goreleaser does, so an
+  # expired HOMEBREW_TAP_TOKEN goes red only after a full cross-platform build,
+  # long after the release, the binaries and the MCP registry entry have all
+  # published successfully. That is a failure mode nobody reads: it ate v0.17.5,
+  # v0.17.6 and v0.17.7 unnoticed, each time with the formula then hand-committed
+  # after the fact. Ten seconds of API call up front turns a silent post-release
+  # discovery into a loud pre-build one.
+  #
+  # Read-only by construction: it asks whether the token COULD push and prints
+  # only the resulting boolean. The token is never echoed — gh reads it from the
+  # environment and never renders it, and no command here interpolates it.
+  tap-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify HOMEBREW_TAP_TOKEN can push to the tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP: plumbkit/homebrew-plumb
+        run: |
+          set -uo pipefail
+          remedy="Mint a PAT with push access to $TAP, then: gh secret set HOMEBREW_TAP_TOKEN --repo ${{ github.repository }}"
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error title=Tap token missing::HOMEBREW_TAP_TOKEN is not set on ${{ github.repository }}. $remedy"
+            exit 1
+          fi
+          # Capture stderr so a 401 can be told from a 404 without printing a body
+          # that might echo request context.
+          if ! err=$(gh api "repos/$TAP" --jq .permissions.push 2>&1 >/tmp/push); then
+            case "$err" in
+              *401*|*"Bad credentials"*)
+                echo "::error title=Tap token invalid::HOMEBREW_TAP_TOKEN was rejected with 401 Bad credentials — the PAT has expired or been revoked. $remedy" ;;
+              *404*)
+                echo "::error title=Tap not visible::HOMEBREW_TAP_TOKEN cannot see $TAP (404). A fine-grained PAT must select that repository and may need org approval. $remedy" ;;
+              *)
+                echo "::error title=Tap preflight failed::$err" ;;
+            esac
+            exit 1
+          fi
+          if [ "$(cat /tmp/push)" != "true" ]; then
+            echo "::error title=Tap token lacks write::HOMEBREW_TAP_TOKEN reaches $TAP but cannot push (needs classic 'repo' scope, or fine-grained Contents: read and write). $remedy"
+            exit 1
+          fi
+          echo "tap token OK — can push to $TAP"
+
   client-conformance:
+    # Tag pushes only: a workflow_dispatch is a credential check, not a release.
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/client-conformance.yml
 
+  # A SKIPPED conformance run must fail the release, not glide past it. Both
+  # jobs below are gated on client-conformance — goreleaser needs it directly,
+  # publish-mcp needs goreleaser — so a skipped conformance skips both, and a
+  # workflow whose every job is skipped reports GREEN while publishing
+  # nothing. That is exactly how v0.17.1 shipped: the tag existed, the run
+  # read green, and no artifact ever reached the release, the tap, or the MCP
+  # registry. This gate turns that silent skip into a loud, explicit failure:
+  # on a tag push, anything short of a completed conformance run fails here.
+  # (A workflow_dispatch keeps running tap-preflight alone — a credential
+  # check is not a release — so the gate is tag-gated like the jobs it
+  # fronts. A failed TAP token keeps its own existing semantics: the preflight
+  # fails the run itself, and this gate passes because conformance ran.)
+  conformance-gate:
+    needs: [client-conformance]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a completed client-conformance run
+        env:
+          CONFORMANCE_RESULT: ${{ needs.client-conformance.result }}
+        run: |
+          case "${CONFORMANCE_RESULT}" in
+            success)
+              echo "client-conformance passed — release gate open"
+              ;;
+            skipped)
+              echo "::error title=Conformance gate skipped::client-conformance did not run on this release tag, so goreleaser and publish-mcp were skipped with it and nothing would be published. Inspect the workflow_call trigger and the job conditions in .github/workflows/client-conformance.yml before re-tagging."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Conformance gate blocked::client-conformance ended with result '${CONFORMANCE_RESULT}' — a release may not proceed without a completed conformance run."
+              exit 1
+              ;;
+          esac
+
   goreleaser:
-    needs: client-conformance
+    # tap-preflight is a hard dependency, not advisory: building four platforms
+    # to fail at the last step is exactly the waste it exists to prevent. A
+    # failed preflight skips this job, which also skips publish-mcp below — so a
+    # bad token stops the release cleanly BEFORE anything is published, rather
+    # than half-way through.
+    needs: [client-conformance, tap-preflight]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -34,8 +127,9 @@ jobs:
         env:
           # Default token creates the release in THIS repo.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # PAT with `repo` scope on plumbkit/homebrew-plumb, so the formula can be
-          # pushed cross-repo. Create the tap repo and this secret before tagging.
+          # PAT with push access to plumbkit/homebrew-plumb, so the formula can be
+          # pushed cross-repo. Validated by tap-preflight above before any build
+          # runs; `gh workflow run release.yml` checks it without cutting a release.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   publish-mcp:

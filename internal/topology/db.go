@@ -64,10 +64,15 @@ CREATE TABLE IF NOT EXISTS topology_edges (
     to_id      INTEGER NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
     kind       TEXT    NOT NULL,
     confidence REAL    NOT NULL DEFAULT 1.0,
-    source     TEXT    NOT NULL DEFAULT 'extractor'
+    source     TEXT    NOT NULL DEFAULT 'extractor',
+    -- Stable identity of the target for derived edges; never a node rowid.
+    -- Format is target file path + NUL + qualified/name.
+    to_identity TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_te_from ON topology_edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_te_to   ON topology_edges(to_id);
+CREATE INDEX IF NOT EXISTS idx_te_identity ON topology_edges(source, to_identity);
+CREATE INDEX IF NOT EXISTS idx_te_source_from ON topology_edges(source, from_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS topology_fts USING fts5(
     name,
@@ -150,7 +155,9 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	    this version has no sites at all, and nothing about it says so — the
 //	    absence of a call site is indistinguishable from a file with no calls — so
 //	    the table cannot backfill itself either. Same reasoning as 2.
-const SchemaVersion = 3
+//	4 — derived edge target identity: the to_identity column lets scoped lifecycle
+//	    passes repoint edges after the target file's node rowids are replaced.
+const SchemaVersion = 4
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The

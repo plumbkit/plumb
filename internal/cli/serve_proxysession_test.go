@@ -48,14 +48,14 @@ func TestInjectInitMetaBothKeys(t *testing.T) {
 func TestBuildInitMetaIncludesWorkspace(t *testing.T) {
 	meta := buildInitMeta(nil, "", "/Users/dev/proj")
 	if len(meta) != 1 {
-		t.Fatalf("cwd-only meta has %d keys (%v), want exactly 1", len(meta), meta)
+		t.Fatalf("workspace-only meta has %d keys (%v), want exactly 1", len(meta), meta)
 	}
-	var cwd string
-	if err := json.Unmarshal(meta[mcp.MetaWorkspaceKey], &cwd); err != nil {
-		t.Fatalf("workspace hint: %v", err)
+	var ws string
+	if err := json.Unmarshal(meta[mcp.MetaWorkspaceKey], &ws); err != nil {
+		t.Fatalf("workspace pre-pin: %v", err)
 	}
-	if cwd != "/Users/dev/proj" {
-		t.Fatalf("workspace hint = %q, want /Users/dev/proj", cwd)
+	if ws != "/Users/dev/proj" {
+		t.Fatalf("workspace pre-pin = %q, want /Users/dev/proj", ws)
 	}
 }
 

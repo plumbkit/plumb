@@ -11,6 +11,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // TestAgentRepinIsolation is the headline acceptance for PLAN-286: two logical
@@ -271,3 +272,56 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 // route a lone declaring agent to the connection and a refused one to a shard,
 // which is the bug this file exists to keep closed.
 func committedShared(s *connSession) bool { return s.logicalAgents.sharedWith("") }
+
+// TestAnonymousCallOnSharedConnectionFailsClosed pins PLAN-394: once two
+// identities have committed, a call carrying no per-call identity resolves
+// against the CONNECTION's state — its pin, its boundary policy. It must never
+// inherit the most recently attached agent's shard: after that agent force-pins
+// itself to another project, the inherited root IS the peer's project, the
+// inherited boundary admits the peer's paths, and the inherited trackers record
+// the call as the peer's work. That was the measured fail-open.
+func TestAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	rootConn := freshTempDir(t)
+	mustGitDir(t, rootConn)
+	rootPeer := freshTempDir(t)
+	mustGitDir(t, rootPeer)
+
+	// The coordinator attaches and pins the connection's project; the peer
+	// attaches LAST and force-pins its own shard elsewhere — the incident's
+	// exact shape.
+	s.recordLogicalAgentAttach("coordinator")
+	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "coordinator"), "file://"+rootConn, "", false); err != nil {
+		t.Fatalf("coordinator pin: %v", err)
+	}
+	s.recordLogicalAgentAttach("peer")
+	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "peer"), "file://"+rootPeer, "", true); err != nil {
+		t.Fatalf("peer forced re-pin: %v", err)
+	}
+	if !committedShared(s) {
+		t.Fatal("precondition: two attached agents must make the connection shared")
+	}
+
+	anonymous := context.Background()
+	if got := s.workspaceFor(anonymous); got != rootConn {
+		t.Errorf("an anonymous call resolves to %q, want the connection pin %q — it inherited the peer's shard", got, rootConn)
+	}
+	if _, err := s.policyFor(anonymous).Check(filepath.Join(rootPeer, "x.go"), tools.AccessReadWrite); err == nil {
+		t.Error("the boundary admits a path in the peer's project for an anonymous call — the inherited shard's policy is the fail-open")
+	}
+	if err := s.refuseSharedStateChange(anonymous, "write_file", ""); err == nil {
+		t.Error("an anonymous state-changing call on a shared connection must be refused")
+	}
+
+	// The identified paths are untouched: the peer's shard is still its own.
+	if got := s.workspaceFor(mcp.WithLogicalAgent(context.Background(), "peer")); got != rootPeer {
+		t.Errorf("peer workspace = %q after its forced re-pin, want %q", got, rootPeer)
+	}
+	if err := s.refuseSharedStateChange(anonymous, "write_file", "peer"); err != nil {
+		t.Errorf("an identified state-changing call must not refuse: %v", err)
+	}
+}

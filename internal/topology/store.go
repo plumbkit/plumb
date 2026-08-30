@@ -282,12 +282,11 @@ func (s *Store) Status() Status {
 // available for a subject in this workspace, and carries the wording to show
 // when they are not. See callgraph.go for the rule.
 //
-// Nothing in the tool layer calls this yet, deliberately: the edges it gates are
-// rebuilt wholesale on every indexing pass and their behaviour under an
-// incremental re-index is not yet pinned, so no user-visible answer may depend
-// on them. That exclusion is enforced, not merely intended —
+// Nothing in the tool layer calls this yet, deliberately: the lifecycle is now
+// durable across incremental re-indexes, but each consumer still needs a measured
+// before/after before it opts in. That exclusion is enforced, not merely intended —
 // ExploreOpts.IncludeDerivedCalls defaults to false, so a traversal asking for
-// `calls` edges does not receive them.
+// `calls` edges does not receive them until the deliberate step-6 rollout.
 func (s *Store) AdmitCallGraph(ctx context.Context, subject CallGraphSubject) (CallGraphAdmission, error) {
 	return AdmitCallGraph(ctx, s.db, subject)
 }
@@ -303,6 +302,12 @@ func (s *Store) CallGraphSubjectForPath(ctx context.Context, path string) (CallG
 // from the node's own recorded language.
 func (s *Store) CallGraphSubjectForNode(ctx context.Context, nodeID int64) (CallGraphSubject, error) {
 	return CallGraphSubjectForNode(ctx, s.db, nodeID)
+}
+
+// FunctionGraph builds the full callable graph used by function-level
+// reachability. productionOnly excludes callers in Go test files.
+func (s *Store) FunctionGraph(ctx context.Context, language string, productionOnly bool) (*FunctionGraph, error) {
+	return LoadFunctionGraph(ctx, s.db, language, productionOnly)
 }
 
 // toRelative expresses an absolute path the way the index stores it: relative to

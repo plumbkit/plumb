@@ -32,7 +32,9 @@ func TestResolvePath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolvePath(context.Background(), tc.in, tc.ws); got != tc.want {
+			if got, err := resolvePath(context.Background(), tc.in, tc.ws, nil); err != nil {
+				t.Errorf("resolvePath(%q) = error %v", tc.in, err)
+			} else if got != tc.want {
 				t.Errorf("resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -55,7 +57,9 @@ func TestWriteDepsResolvePath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.deps.resolvePath(context.Background(), tc.in); got != tc.want {
+			if got, err := tc.deps.resolvePath(context.Background(), tc.in); err != nil {
+				t.Errorf("WriteDeps.resolvePath(%q) = error %v", tc.in, err)
+			} else if got != tc.want {
 				t.Errorf("WriteDeps.resolvePath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -79,7 +83,9 @@ func TestToFileURIAnchored(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := toFileURIAnchored(context.Background(), tc.in, tc.ws); got != tc.want {
+			if got, err := toFileURIAnchored(context.Background(), tc.in, tc.ws, nil); err != nil {
+				t.Errorf("toFileURIAnchored(%q) = error %v", tc.in, err)
+			} else if got != tc.want {
 				t.Errorf("toFileURIAnchored(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})

@@ -49,10 +49,35 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	if !linked {
 		sb.WriteString("NOTE: this session has no external id — plumb mail and the peer wake hook cannot address it by name; pass session_id to session_start to link it.\n")
 	}
+	sb.WriteString(t.contestedPinNote())
 	if note := uncoveredPrimaryLanguageNote(lang); note != "" {
 		sb.WriteString(note)
 	}
 	sb.WriteString("\n")
+}
+
+// contestedPinNote warns that this connection's workspace pin is being taken
+// back and forth between projects by agents that are not identifying
+// themselves, and returns "" otherwise. Rendered as its own identity-block
+// line, ending in a newline so callers can append it unconditionally.
+//
+// Deliberately NOT gated on this session being unlinked. A contested connection
+// is a property of the connection, not of the caller: the agent that DID pass a
+// session_id is the one best placed to notice its peers have not, and the agent
+// whose workspace was taken needs to know regardless. Gating on `linked` would
+// hide it from exactly the session most able to act on it.
+func (t *SessionStart) contestedPinNote() string {
+	if t.pinProvFn == nil {
+		return ""
+	}
+	prov := t.pinProvFn()
+	if !prov.Contested {
+		return ""
+	}
+	return "NOTE: this connection's workspace pin has been force-taken between projects more than once — several agents are " +
+		"multiplexing one `plumb serve` without declaring an identity, so plumb cannot keep their pins, read-tracking or " +
+		"undo state apart. Pass session_start.session_id on every call, or run one `plumb serve` per agent. Confirm the " +
+		"workspace above is yours before a relative-path write.\n"
 }
 
 // uncoveredPrimaryLanguageNote warns when the workspace's detected primary

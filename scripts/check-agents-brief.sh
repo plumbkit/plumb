@@ -6,15 +6,14 @@
 # reference detail belongs in docs/. This guard fails when the file grows
 # past the budget, forcing detail back into the docs pages the brief links to.
 #
-# Budget: 200 lines AND 32 KiB. Both caps are deliberate: the line cap keeps
-# the file scannable, and the byte cap stops very long single-line paragraphs
-# from smuggling the detail back in (the pre-slim brief averaged ~180
-# chars/line). Raise the budget only by editing this file, in the same commit
-# that needs the headroom.
+# Budget: 150 lines AND 20 KiB. Both caps are deliberate: the line cap keeps the
+# file scannable, while the byte cap leaves room for an outer workspace brief in
+# clients that concatenate nested project instructions. Raise either only in the
+# same commit that explains why the always-loaded context needs the headroom.
 set -eu
 
-MAX_LINES=200
-MAX_BYTES=32768
+MAX_LINES=150
+MAX_BYTES=20480
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BRIEF="$ROOT/AGENTS.md"
 

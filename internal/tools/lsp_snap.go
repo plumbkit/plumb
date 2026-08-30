@@ -26,12 +26,16 @@ import (
 // made it inoperative rather than merely late (PLAN-403). A future query tool
 // that gains a fallback must take fallbackDeadlines' two contexts instead of
 // being added here.
-func executeLSPQuery(ctx context.Context, tool string, ws WorkspaceFn, timeout time.Duration,
+func executeLSPQuery(ctx context.Context, tool string, ws WorkspaceFn, contested ContestedFn, timeout time.Duration,
 	uri, symbolName string, line, character *uint32,
 	byName func(ctx context.Context, uri string) (string, error),
 	byPosition func(ctx context.Context, uri string, line, character uint32) (string, error),
 ) (string, error) {
-	uri = toFileURIAnchored(ctx, uri, ws)
+	var err error
+	uri, err = toFileURIAnchored(ctx, uri, ws, contested)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", tool, err)
+	}
 	ctx, cancel := withLSPDeadline(ctx, timeout)
 	defer cancel()
 	if symbolName != "" {

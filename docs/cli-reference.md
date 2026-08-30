@@ -87,8 +87,8 @@ prints a warning to stderr suggesting `plumb restart` to refresh.
 | Flag | Default | Effect |
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
-| `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the detected workspace and config `extra_roots`; never replaces them. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
-| `--workspace <path>` | — | Pin this connection's **workspace attach hint** to `<path>` instead of the serve process's working directory — for MCP clients that spawn `serve` without setting its cwd. Also read from `PLUMB_WORKSPACE`; the flag wins over the env var. The value is `$VAR`-expanded and made absolute, then validated (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+| `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the pinned workspace and config `extra_roots`; never replaces them. On a serve with no workspace pinned yet (no `--workspace`/`PLUMB_WORKSPACE`, no `session_start` yet) the grant is **inert** until the first pin, then additive to it — a grant never supplies a workspace. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+| `--workspace <path>` | — | Pre-pin this connection's **workspace** to `<path>` — for MCP clients that spawn `serve` without controlling its directory and report no roots. Also read from `PLUMB_WORKSPACE`; the flag wins over the env var. Without either, `serve` starts **unattached** and `session_start` pins the workspace. The value is `$VAR`-expanded and made absolute, then validated (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
 
 The `--allow-dir` grant is transported to the daemon inside the captured
 `initialize` frame's `params._meta` (`dev.plumbkit/allow-dirs`), so it rides the
@@ -96,15 +96,16 @@ handshake replay automatically — a reconnected daemon re-applies it with no
 separate message. The grant is per-connection: it never leaks into another
 client's session, and it survives a workspace re-pin.
 
-`serve` also transports its own working directory the same way
-(`dev.plumbkit/workspace`) as an **advisory workspace attach hint** for clients
-that report no MCP roots (e.g. Claude Desktop): if nothing stronger resolves
-the workspace — no explicit `session_start` pin, no client root, no persisted
-pin from an earlier reconnect — the daemon attaches from the serve cwd,
-validated against project markers. `--workspace`/`PLUMB_WORKSPACE` replace the
-cwd as that hint, so a client that spawns `serve` without controlling its
-directory can still land on the right project. The hint never overrides an
-explicit choice and is never persisted as the sticky pin.
+`serve` also transports an explicit workspace pre-pin the same way
+(`dev.plumbkit/workspace`) for clients that report no MCP roots (e.g. Claude
+Desktop): `--workspace`/`PLUMB_WORKSPACE`, when given. There is deliberately no
+serve-cwd fallback — the proxy's working directory is wherever the MCP client's
+launcher happened to run it, so it is not treated as a declaration of intent. A
+`serve` started with neither starts **unattached**: no workspace, no pin, and
+relative-path calls fail closed until the caller pins with
+`session_start({"workspace": …})`. The pre-pin is validated against project
+markers, never overrides an explicit choice, and is never persisted as the
+sticky pin.
 
 ---
 

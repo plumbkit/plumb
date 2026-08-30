@@ -308,6 +308,56 @@ func TestMinimalDiffReview_SingleUseFinding_RealTopologyStore(t *testing.T) {
 	}
 }
 
+func TestMinimalDiffReview_CallerCountAtIncludesAdmittedCrossFileEdge(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "caller"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, dir, "internal/target/target.go", "package target\n\nfunc Helper() {}\n")
+	writeFileT(t, dir, "internal/caller/caller.go", "package caller\n\nimport \"example.com/project/internal/target\"\n\nfunc Use() { target.Helper() }\n")
+	store, err := topology.Open(dir, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, []topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	var helper topology.Node
+	for time.Now().Before(deadline) {
+		nodes, _ := store.SymbolsInFile(ctx, "file://"+filepath.Join(dir, "internal/target/target.go"))
+		for _, n := range nodes {
+			if n.Name != "Helper" || n.Kind != topology.KindFunction {
+				continue
+			}
+			helper = n
+			res, rerr := store.ImpactFrom(ctx, n, topology.ImpactOpts{Depth: 1, MaxNodes: 20, MaxBytes: 50000, EdgeKinds: []string{"calls"}, IncludeDerivedCalls: true})
+			if rerr == nil && len(res.DependedOnBy.Edges) > 0 {
+				goto settled
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+settled:
+	if helper.ID == 0 {
+		t.Fatal("target helper was not indexed")
+	}
+	tool := NewMinimalDiffReview(func() *topology.Store { return store })
+	count, site, found := tool.callerCountAt(ctx, "Helper", "internal/target/target.go", "function")
+	if !found || count != 1 || site.Name != "Use" {
+		t.Fatalf("callerCountAt = (%d, %+v, %v), want one derived caller Use", count, site, found)
+	}
+	defaultRes, err := store.ImpactFrom(ctx, helper, topology.ImpactOpts{Depth: 1, MaxNodes: 20, MaxBytes: 50000, EdgeKinds: []string{"calls"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defaultRes.DependedOnBy.Edges) != 0 {
+		t.Fatalf("default impact exposed derived callers: %+v", defaultRes.DependedOnBy.Edges)
+	}
+}
+
 // --- B14b: untracked binary file alongside a real change ---
 
 func TestMinimalDiffReview_UntrackedBinaryFile_SkippedNoCrash(t *testing.T) {

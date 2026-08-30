@@ -77,8 +77,14 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	from := t.deps.resolvePath(ctx, a.From)
-	to := t.deps.resolvePath(ctx, a.To)
+	from, err := t.deps.resolvePath(ctx, a.From)
+	if err != nil {
+		return "", fmt.Errorf("rename_file: %w", err)
+	}
+	to, err := t.deps.resolvePath(ctx, a.To)
+	if err != nil {
+		return "", fmt.Errorf("rename_file: %w", err)
+	}
 	// Same-place by canonical PATH, not raw spelling: renaming a file onto
 	// itself under a second spelling is a no-op request that must be refused —
 	// left alone, lockPaths collapses both spellings into one lock and the call

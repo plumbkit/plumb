@@ -106,11 +106,12 @@ var searchInFilesSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type SearchInFiles struct {
-	ws       WorkspaceFn
-	client   lsp.Client
-	symCache *cache.Cache
-	cacheTTL time.Duration
-	guard    BoundaryGuard
+	ws        WorkspaceFn
+	client    lsp.Client
+	symCache  *cache.Cache
+	cacheTTL  time.Duration
+	guard     BoundaryGuard
+	contested ContestedFn
 }
 
 func NewSearchInFiles(ws WorkspaceFn, client lsp.Client, c *cache.Cache, ttl time.Duration) *SearchInFiles {
@@ -119,6 +120,13 @@ func NewSearchInFiles(ws WorkspaceFn, client lsp.Client, c *cache.Cache, ttl tim
 
 func (t *SearchInFiles) WithBoundary(guard BoundaryGuard) *SearchInFiles {
 	t.guard = guard
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// path is refused once the pin is contested (issue #182). Nil-safe.
+func (t *SearchInFiles) WithContested(fn ContestedFn) *SearchInFiles {
+	t.contested = fn
 	return t
 }
 
@@ -170,7 +178,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	ctx, cancel := applySearchDeadline(ctx)
 	defer cancel()
 
-	root, onlyFile, pathNote, err := resolveSearchRoot(ctx, a, t.ws, t.guard)
+	root, onlyFile, pathNote, err := resolveSearchRoot(ctx, a, t.ws, t.guard, t.contested)
 	if err != nil {
 		return "", err
 	}
@@ -258,8 +266,12 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 // the absolute path; root is its parent so relative paths still resolve) — a
 // file path is more specific than its directory, so scoping to it is what the
 // caller almost always meant (from dogfooding feedback).
-func resolveSearchRoot(ctx context.Context, a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, onlyFile, note string, err error) {
-	root = resolvePath(ctx, a.Path, ws)
+func resolveSearchRoot(ctx context.Context, a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard, contested ContestedFn) (root, onlyFile, note string, err error) {
+	var rerr error
+	root, rerr = resolvePath(ctx, a.Path, ws, contested)
+	if rerr != nil {
+		return "", "", "", fmt.Errorf("search_in_files: %w", rerr)
+	}
 	if checkErr := guard.check(ctx, root); checkErr != nil {
 		return "", "", "", fmt.Errorf("search_in_files: %w", checkErr)
 	}

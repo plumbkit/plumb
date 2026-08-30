@@ -213,8 +213,8 @@ type Server struct {
 	OnProxySession func(ctx context.Context, id string)
 
 	// OnWorkspaceHint is called once during initialize with the serve proxy's
-	// working directory (_meta[MetaWorkspaceKey]) — an advisory attach hint, not
-	// an authoritative root. Absent/empty ⇒ never called.
+	// explicit workspace pre-pin (_meta[MetaWorkspaceKey] — --workspace or
+	// PLUMB_WORKSPACE; without either, no key is sent and serve starts unattached) — advisory, not an authoritative root. Absent/empty ⇒ never called.
 	OnWorkspaceHint func(ctx context.Context, dir string)
 
 	// OnPinnedWorkspace is called once during initialize with the workspace the

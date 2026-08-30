@@ -14,10 +14,15 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
-// persist writes a change to the global config, recording a failure in the
-// status line. Returns true on success.
+// persist writes a change to the global config SPARSELY (config.SaveSparse):
+// only the keys the mutation actually touched are persisted, so a
+// single-settings edit never materialises compiled-in defaults into
+// config.toml as if the user had chosen them — an explicitly-written value
+// out-ranks the compiled-in default forever after, which would freeze any
+// default plumb adds later. Records a failure in the status line. Returns true
+// on success.
 func (m *Model) persist(apply func(*config.Config)) bool {
-	if err := config.Save(apply); err != nil {
+	if err := config.SaveSparse(apply); err != nil {
 		m.settingsStatus = "save failed: " + err.Error()
 		return false
 	}

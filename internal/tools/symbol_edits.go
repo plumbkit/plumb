@@ -219,15 +219,16 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 // ─── insert_before_symbol ──────────────────────────────────────────────────
 
 type InsertBeforeSymbol struct {
-	client   lsp.Client
-	timeout  time.Duration
-	topo     topologyStoreFn
-	warmup   LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
-	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn
+	warmup    LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff  func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
@@ -260,6 +261,13 @@ func (t *InsertBeforeSymbol) WithLSPWarmup(fn LSPWarmupFn) *InsertBeforeSymbol {
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
 func (t *InsertBeforeSymbol) WithWorkspace(ws WorkspaceFn) *InsertBeforeSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *InsertBeforeSymbol) WithContested(fn ContestedFn) *InsertBeforeSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -302,7 +310,11 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("%s: %w", t.Name(), rerr)
+	}
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -326,15 +338,16 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
 
 type InsertAfterSymbol struct {
-	client   lsp.Client
-	timeout  time.Duration
-	topo     topologyStoreFn
-	warmup   LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
-	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn
+	warmup    LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff  func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
@@ -366,6 +379,13 @@ func (t *InsertAfterSymbol) WithLSPWarmup(fn LSPWarmupFn) *InsertAfterSymbol {
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
 func (t *InsertAfterSymbol) WithWorkspace(ws WorkspaceFn) *InsertAfterSymbol {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *InsertAfterSymbol) WithContested(fn ContestedFn) *InsertAfterSymbol {
+	t.contested = fn
 	return t
 }
 
@@ -405,7 +425,11 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("%s: %w", t.Name(), rerr)
+	}
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -425,15 +449,16 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 // ─── replace_symbol_body ───────────────────────────────────────────────────
 
 type ReplaceSymbolBody struct {
-	client   lsp.Client
-	timeout  time.Duration
-	topo     topologyStoreFn
-	warmup   LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
-	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
-	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
-	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
-	deps     WriteDeps
-	hasDeps  bool
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn
+	warmup    LSPWarmupFn  // may be nil; distinguishes a warming server from an unavailable one in the fallback banner
+	ws        WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn  // may be nil; refuses a relative uri once the pin is contested
+	cache     *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff  func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps      WriteDeps
+	hasDeps   bool
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
@@ -465,6 +490,13 @@ func (t *ReplaceSymbolBody) WithLSPWarmup(fn LSPWarmupFn) *ReplaceSymbolBody {
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
 func (t *ReplaceSymbolBody) WithWorkspace(ws WorkspaceFn) *ReplaceSymbolBody {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *ReplaceSymbolBody) WithContested(fn ContestedFn) *ReplaceSymbolBody {
+	t.contested = fn
 	return t
 }
 
@@ -509,7 +541,11 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", errors.New("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("%s: %w", t.Name(), rerr)
+	}
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun

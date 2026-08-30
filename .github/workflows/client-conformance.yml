@@ -7,8 +7,17 @@ on:
     - cron: "23 15 * * *"
   pull_request:
     branches: [main]
+    # The paths gate must carry every path this tier ASSERTS on, not only the
+    # harness itself: the deterministic tests pin profile behaviour resolved
+    # from internal/clientcaps/, internal/cli/conn_profile.go and
+    # internal/tools/profile.go (session_start's profile reason is asserted
+    # verbatim), and a PR that changed autoProfileFor without touching any
+    # trigger path once landed red on main undetected.
     paths:
       - cmd/clientsmoke/**
+      - internal/clientcaps/**
+      - internal/cli/conn_profile.go
+      - internal/tools/profile.go
       - .github/workflows/client-conformance.yml
       - Makefile
 

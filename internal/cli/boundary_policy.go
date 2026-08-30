@@ -240,11 +240,29 @@ func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 	if v.ws.AllowDependencyReads && v.depRootsLang == v.acquiredLanguage {
 		roots = append(roots, v.depRoots...)
 	}
-	return tools.NewPathPolicy(ws, roots).WithProvenance(tools.PinProvenance{
-		Source:   v.pinVia,
-		At:       v.pinAt,
-		Previous: v.pinPrev,
-	})
+	return tools.NewPathPolicy(ws, roots).WithProvenance(s.policyProvenance(v))
+}
+
+// policyProvenance is the pin provenance a freshly built PathPolicy carries, and
+// therefore what a boundary refusal will quote.
+//
+// It goes through pinProvenanceOf rather than a hand-rolled literal: a field
+// added to the provenance must reach the boundary error, and a second
+// construction site is how one of them silently keeps reporting the old shape.
+// Contested is the one field pinProvenanceOf cannot answer — it lives on the
+// connection's displacement history, not on the view — so it is filled in here.
+//
+// Safe to call from inside a mutate closure: reading that history takes its own
+// mutex, never the mutation lane's. The displacement is recorded before the
+// policy is rebuilt, so a re-pin's own policy already knows it made the pin
+// contested — which is what lets the displaced agent's very next call carry the
+// corrected advice rather than the one after it.
+func (s *connSession) policyProvenance(v *sessionView) tools.PinProvenance {
+	prov := pinProvenanceOf(v)
+	if prov.Source != "" {
+		prov.Contested = s.pinContested()
+	}
+	return prov
 }
 
 // warmDepRoots computes the session language's read-only toolchain dependency

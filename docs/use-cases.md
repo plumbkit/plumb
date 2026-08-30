@@ -50,9 +50,9 @@ described where they were found, in Scenario 4 and Scenario 10.
 | | |
 |---|---|
 | Repository | this repo at commit `b46e233f`, plus this page and its script |
-| Re-measured | scenarios 4, 7 and 10 at `302e9768`, after `topology_affected` became language-aware and `file_outline`'s output grew |
-| Date | 2026-08-21 |
-| Plumb | 0.17.0 (go1.26.7) |
+| Re-measured | scenarios 7 and 10 at `302e9768`; Scenario 4 at `65fcbb5d`, after admitted cross-file callers reached `topology_affected` |
+| Date | 2026-08-25 |
+| Plumb | 0.17.2 (go1.26.7) |
 | Client | a direct MCP session over stdio (`plumb serve`) |
 | Platform | macOS (arm64) |
 
@@ -190,21 +190,21 @@ Question: *I changed `internal/stats/savings.go`. What do I run?*
 
 | Approach | Scope | Response |
 |---|---|---|
-| `go test ./...` | 55 packages, 662 test files, 4,390 test functions | — |
-| Plumb `topology_affected` | **5 packages**, 2,623 tests | 4,142 B |
+| `go test ./...` | 57 packages, 718 test files, 4,784 test functions | — |
+| Plumb `topology_affected` | **5 packages**, 2,860 tests | 4,186 B |
 
 The answer is a list of targets you can run, not a list of test names:
 
 ```
 run these packages (5) — pass each target to run_task(slot:"test", target:…):
-  ./internal/stats/...                          53 tests   changed package
-  ./internal/tools/...                        1339 tests   imports the changed package
-  ./internal/cli/...                           990 tests   imports the changed package
-  ./internal/tui/...                           217 tests   imports the changed package
+  ./internal/stats/...                          68 tests   changed package
+  ./internal/tools/...                        1469 tests   dependency edge
+  ./internal/cli/...                          1080 tests   imports the changed package
+  ./internal/tui/...                           219 tests   imports the changed package
   ./internal/web/...                            24 tests   imports the changed package
 ```
 
-**Takeaway — 5 packages out of 55, and it tells you why each one.** The actionable unit is the
+**Takeaway — 5 packages out of 57, and it tells you why each one.** The actionable unit is the
 package, because that is what a test runner takes. `internal/stats` is where the edit landed; the
 other four are the packages that import it, which is exactly the set you would have had to work
 out by hand.

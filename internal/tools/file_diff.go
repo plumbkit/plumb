@@ -40,8 +40,9 @@ const maxFileDiffBytes = 100 * 1024 // 100 KiB
 //
 // Concurrency: Execute is safe for concurrent use.
 type FileDiff struct {
-	guard BoundaryGuard
-	ws    WorkspaceFn // may be nil; anchors workspace-relative file_a/file_b to the pinned root
+	guard     BoundaryGuard
+	ws        WorkspaceFn // may be nil; anchors workspace-relative file_a/file_b to the pinned root
+	contested ContestedFn // may be nil; refuses a relative file_a/file_b once the pin is contested
 }
 
 func NewFileDiff() *FileDiff { return &FileDiff{} }
@@ -57,6 +58,39 @@ func (t *FileDiff) WithBoundary(guard BoundaryGuard) *FileDiff {
 func (t *FileDiff) WithWorkspace(ws WorkspaceFn) *FileDiff {
 	t.ws = ws
 	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// file_a/file_b is refused once the pin is contested (issue #182). Nil-safe.
+func (t *FileDiff) WithContested(fn ContestedFn) *FileDiff {
+	t.contested = fn
+	return t
+}
+
+// resolveFileDiffPaths resolves both file_diff path arguments and boundary-checks
+// them. Extracted from Execute so that function stays under the gocyclo limit.
+func (t *FileDiff) resolveFileDiffPaths(ctx context.Context, a fileDiffArgs) (fileDiffArgs, error) {
+	var err error
+	a.FileA, err = t.resolveFileDiffPath(ctx, a.FileA)
+	if err != nil {
+		return a, err
+	}
+	a.FileB, err = t.resolveFileDiffPath(ctx, a.FileB)
+	if err != nil {
+		return a, err
+	}
+	return a, nil
+}
+
+func (t *FileDiff) resolveFileDiffPath(ctx context.Context, path string) (string, error) {
+	resolved, err := resolvePath(ctx, path, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("file_diff: %w", err)
+	}
+	if err := t.guard.check(ctx, resolved); err != nil {
+		return "", fmt.Errorf("file_diff: %w", err)
+	}
+	return resolved, nil
 }
 
 func (t *FileDiff) Name() string                 { return "file_diff" }
@@ -81,13 +115,9 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if a.FileA == "" || a.FileB == "" {
 		return "", errors.New("file_diff: file_a and file_b are required")
 	}
-	a.FileA = resolvePath(ctx, a.FileA, t.ws)
-	a.FileB = resolvePath(ctx, a.FileB, t.ws)
-	if err := t.guard.check(ctx, a.FileA); err != nil {
-		return "", fmt.Errorf("file_diff: %w", err)
-	}
-	if err := t.guard.check(ctx, a.FileB); err != nil {
-		return "", fmt.Errorf("file_diff: %w", err)
+	a, err := t.resolveFileDiffPaths(ctx, a)
+	if err != nil {
+		return "", err
 	}
 
 	contextLines := 3

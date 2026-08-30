@@ -494,7 +494,10 @@ func (t *MutationTest) preflight(ctx context.Context, specs []mutantSpec) ([]mut
 }
 
 func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutationTarget, error) {
-	path := t.deps.resolvePath(ctx, spec.Path)
+	path, err := t.deps.resolvePath(ctx, spec.Path)
+	if err != nil {
+		return mutationTarget{}, err
+	}
 	if err := t.deps.checkBoundary(ctx, path); err != nil {
 		return mutationTarget{}, err
 	}

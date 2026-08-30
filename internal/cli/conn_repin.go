@@ -24,6 +24,29 @@ import (
 // cannot silently leave the other stale.
 const repinStickyRemedy = "If you are a new conversation deliberately switching this connection to a different project, call session_start again with force: true; if several agents share this connection, run a dedicated plumb serve process per agent instead."
 
+// repinContestedRemedy replaces repinStickyRemedy once this connection's pin has
+// been force-taken between projects repeatedly (see conn_pin_contest.go).
+//
+// The ordinary remedy leads with force: true, and on a contested connection that
+// sentence is the engine of the problem it is answering — both sides read it and
+// both sides force, which is how a pin came to change hands fourteen times in
+// thirty-five minutes. Here the caller is told what actually separates agents,
+// and force is kept (the daemon cannot know which undeclared agent is entitled to
+// the workspace, so refusing outright would strand real work) but demoted to a
+// last resort with a condition on it.
+const repinContestedRemedy = "This connection's pin has already been force-taken back and forth between projects, so forcing again would displace whichever agent holds it now. Identify each agent instead — pass session_start.session_id on every call so plumb can keep their pins, read-tracking and undo state separate, or run a dedicated plumb serve process per agent. Use force: true only if you are certain no other agent is using this connection."
+
+// repinRemedy picks the next step a refused re-pin is given. One chooser, used
+// by BOTH surfaces of the refusal — the error the caller reads and the health
+// message the operator reads — so the two cannot drift into recommending
+// different things (issue #358).
+func (s *connSession) repinRemedy() string {
+	if s.pinContested() {
+		return repinContestedRemedy
+	}
+	return repinStickyRemedy
+}
+
 // repinWorkspace deliberately switches the connection to a different workspace.
 // Unlike attachWorkspace (idempotent, first-wins — the safe default for
 // auto-resolution), this is driven only by an explicit session_start workspace
@@ -157,12 +180,17 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// to the current root is never falsely refused, and on the view under
 	// mutation, so a concurrent re-pin can never land between the refusal
 	// decision and the pin move.
+	prevConnRoot := s.workspace()
 	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
 	if err != nil {
 		return "", err
 	}
 	if changed {
 		s.applyProjectConfig(root)
+		// PLAN-398: shards seeded from the old connection pin follow the move,
+		// so a seeded agent is not left refusing its next legitimate call off a
+		// stale sticky root.
+		s.followConnectionShards(prevConnRoot)
 	}
 	return root, nil
 }
@@ -201,14 +229,15 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		if !force && trigger == pinTriggerLive && prev != "" && root != prev &&
 			v.pinOrigin == sessionstate.PinSourceSessionStart {
 			if origin == sessionstate.PinSourceSessionStart {
-				s.log().Warn("daemon: session_start re-pin refused — explicit pin held (sticky, issue #182)", "pinned", prev, "requested", root)
+				remedy := s.repinRemedy()
+				s.log().Warn("daemon: session_start re-pin refused — explicit pin held (sticky, issue #182)", "pinned", prev, "requested", root, "contested", s.pinContested())
 				// Surface the refused steal attempt to the operator (TUI /
 				// dashboard); a later successful re-pin clears Health below. The
 				// remedy is appended here too (issue #358) — the dashboard alert
 				// renders HealthMessage directly, so a message with no next step
 				// left the operator with nothing actionable but a loop.
-				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182). %s", prev, root, repinStickyRemedy))
-				refused = fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), repinStickyRemedy)
+				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182). %s", prev, root, remedy))
+				refused = fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), remedy)
 				return
 			}
 			// A roots-driven re-pin (the client dropped our root from its
@@ -259,6 +288,16 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			return
 		}
 		changed = true
+		// A forced move off a root someone deliberately pinned is a DISPLACEMENT,
+		// not a switch. Recorded HERE, before the policy is rebuilt below, so this
+		// very re-pin's policy already carries the contested verdict it may have
+		// just produced — otherwise the displaced agent's next boundary error would
+		// still quote the advice that caused the displacement. Announced at the END
+		// of this closure, after the session.Patch that clears Health, which would
+		// otherwise wipe the mark the displacement just earned. The "is this a
+		// displacement at all?" question lives inside the helper, on the view it is
+		// judging.
+		justContested := s.recordForcedDisplacement(v, prev, root, force)
 		s.logLanguageOverrideBreadcrumb(v, prev, root, language, langForced)
 		// The pinned LS reference (if any) for the workspace we are leaving;
 		// released at the end once the new root is acquired, so the pool can reclaim
@@ -291,7 +330,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = root
 		v.acquiredLanguage = language
-		recordPinProvenance(v, origin, trigger, prev)
+		recordPinProvenance(v, origin, trigger, prev, force)
 		v.lastCfgMtime = time.Time{}
 		// Rehydrate AFTER the Reset() above, keyed by the NEW root, so a re-pin to a
 		// different workspace can never restore the old project's reads. Re-persist
@@ -320,6 +359,11 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		})
 		s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter,
 			"source", pinSourceLabel(origin), "trigger", string(trigger))
+		// After the Patch above, which resets Health on a successful re-pin: this
+		// re-pin succeeded AND revealed the connection is being fought over, and
+		// the second fact outlives the first. A no-op unless this re-pin is the one
+		// that flipped the signal.
+		s.announceContestedPin(justContested)
 	})
 	return changed, refused
 }

@@ -43,10 +43,11 @@ var typeHierarchySchema = json.RawMessage(`{
 
 // TypeHierarchy implements the type_hierarchy MCP tool.
 type TypeHierarchy struct {
-	client  lsp.Client
-	timeout time.Duration
-	warmup  LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client    lsp.Client
+	timeout   time.Duration
+	warmup    LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
+	ws        WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
 }
 
 // NewTypeHierarchy creates a TypeHierarchy tool.
@@ -65,6 +66,13 @@ func (t *TypeHierarchy) WithLSPWarmup(fn LSPWarmupFn) *TypeHierarchy {
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *TypeHierarchy) WithWorkspace(ws WorkspaceFn) *TypeHierarchy {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *TypeHierarchy) WithContested(fn ContestedFn) *TypeHierarchy {
+	t.contested = fn
 	return t
 }
 
@@ -124,7 +132,7 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	return executeLSPQuery(ctx, "type_hierarchy", t.ws, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
+	return executeLSPQuery(ctx, "type_hierarchy", t.ws, t.contested, t.timeout, a.URI, a.SymbolName, a.Line, a.Character,
 		func(ctx context.Context, uri string) (string, error) {
 			return t.executeByName(ctx, uri, a.SymbolName, a.Direction)
 		},
