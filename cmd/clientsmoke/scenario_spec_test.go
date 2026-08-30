@@ -48,17 +48,19 @@ type conformanceAction struct {
 }
 
 type conformanceScenario struct {
-	step     int
-	tmpHome  string
-	readPath string
-	editPath string
+	step      int
+	tmpHome   string
+	workspace string
+	readPath  string
+	editPath  string
 }
 
 func newConformanceScenario(tmpHome, fixture string) *conformanceScenario {
 	return &conformanceScenario{
-		tmpHome:  tmpHome,
-		readPath: filepath.Join(fixture, "read.txt"),
-		editPath: filepath.Join(fixture, "edit.txt"),
+		tmpHome:   tmpHome,
+		workspace: fixture,
+		readPath:  filepath.Join(fixture, "read.txt"),
+		editPath:  filepath.Join(fixture, "edit.txt"),
 	}
 }
 
@@ -66,10 +68,16 @@ func (s *conformanceScenario) next(body string) (conformanceAction, error) {
 	var action conformanceAction
 	switch s.step {
 	case 0:
+		// session_start is the sole workspace-pin authority since serve started
+		// unattached (f4de91ab): cwd is not intent, so a bare session_start has
+		// nothing to pin from and refuses. Real clients name the workspace —
+		// Codex via its config, Claude via the argument — so the scenario does
+		// too, naming the fixture explicitly.
 		action = conformanceAction{
 			stage: deterministicConformanceScenario[stageSessionStart],
 			arguments: map[string]any{
-				"purpose": "client-conformance",
+				"workspace": s.workspace,
+				"purpose":   "client-conformance",
 			},
 		}
 

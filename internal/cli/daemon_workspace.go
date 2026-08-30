@@ -6,10 +6,19 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 )
+
+// rootsListProbeTimeout bounds the roots/list round-trip. The request has no
+// timeout of its own and would otherwise inherit the caller's whole context —
+// for a tool call, its entire budget. A client that never answers (minimal or
+// half-implemented MCP clients do exist) must degrade to the documented
+// defer-to-OnBeforeTool path, not stall the call; every roots/list caller
+// goes through rootsFromClient, so the bound lives here.
+const rootsListProbeTimeout = 5 * time.Second
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root
 // URI, or "" if the client does not support roots/list or returns no roots.
@@ -39,7 +48,9 @@ func loggerOr(l *slog.Logger) *slog.Logger {
 // pinned root is still present) from a genuine workspace removal.
 func rootsFromClient(ctx context.Context, request mcp.RequestFn, logger *slog.Logger) []string {
 	logger = loggerOr(logger)
-	raw, err := request(ctx, "roots/list", nil)
+	probeCtx, cancel := context.WithTimeout(ctx, rootsListProbeTimeout)
+	defer cancel()
+	raw, err := request(probeCtx, "roots/list", nil)
 	if err != nil {
 		logger.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
 		return nil

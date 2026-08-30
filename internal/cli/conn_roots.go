@@ -20,9 +20,10 @@ import (
 // evidence issue #182 needed and did not have), then apply them.
 //
 // The "roots changed" line is emitted BEFORE the roots/list round-trip: that
-// request has no timeout of its own, so logging after it would make the
-// protected grep line vanish for exactly the hung-client case an operator is
-// diagnosing. The received list follows on its own "roots received" line.
+// request is bounded (rootsListProbeTimeout) but still stalls the handler for
+// up to the bound, so logging after it could make the protected grep line hard
+// to find for exactly the hung-client case an operator is diagnosing. The
+// received list follows on its own "roots received" line.
 func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
 	s.setClientRequest(request)
 	s.log().Info("daemon: roots changed — re-fetching workspace root")
