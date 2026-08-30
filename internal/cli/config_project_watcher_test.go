@@ -20,7 +20,25 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
-// testWatchManager builds a manager with a fast debounce and a dispatch that
+// testDebounce is the debounce window every manager test runs with. It is
+// deliberately LONGER than production's 250ms, not shorter (PLAN-419).
+//
+// The debouncer re-arms on each event, so a burst collapses into one dispatch
+// only if consecutive events arrive less than one window apart. That makes the
+// window a race against the test's own writes: at the original 30ms, five
+// sequential os.WriteFile calls plus fsnotify delivery could straddle the
+// boundary on a loaded CI runner, the timer fired mid-burst, and the burst
+// legitimately produced two dispatches — a red "the burst did not collapse"
+// that said nothing about the debouncer. Sizing the window three orders of
+// magnitude above the burst removes the race instead of narrowing it: five
+// small writes cannot plausibly span 750ms on any machine that can run the
+// suite at all.
+//
+// It costs wall-clock in the negative assertions, which is why those wait
+// 2× the window rather than the 5× they used to.
+const testDebounce = 750 * time.Millisecond
+
+// testWatchManager builds a manager with a test debounce and a dispatch that
 // forwards to registry.reloadProject AND signals the returned channel once per
 // dispatch — the deterministic "watcher fired" signal the tests wait on.
 func testWatchManager(t *testing.T, registry *connRegistry) (*projectConfigWatchManager, chan string) {
@@ -34,7 +52,7 @@ func testWatchManager(t *testing.T, registry *connRegistry) (*projectConfigWatch
 		}
 		sig <- ws
 	})
-	m.debounce = 30 * time.Millisecond
+	m.debounce = testDebounce
 	t.Cleanup(m.close)
 	return m, sig
 }
@@ -166,13 +184,32 @@ func TestProjectWatchManager_DebounceBurstCollapsesToOneDispatch(t *testing.T) {
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
 
+	start := time.Now()
 	for range 5 {
 		writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	}
+	// The burst must finish well inside one debounce window, or the rest of
+	// this test is asserting against a race rather than against the debouncer
+	// (PLAN-419: at a 30ms window it was the race that failed on CI, not the
+	// code). Five small writes take microseconds; failing here means the
+	// window is too small for the machine, which is a test bug worth saying
+	// out loud rather than a coalescing bug.
+	if burst := time.Since(start); burst >= m.debounce {
+		t.Fatalf("the write burst took %s, which is not inside the %s debounce window — raise testDebounce; this says nothing about coalescing", burst, m.debounce)
+	}
+	// Nothing may have dispatched yet: every event landed inside one window,
+	// so the debouncer must still be deferring. This is the half that actually
+	// proves coalescing, and it is deterministic — the writes are three orders
+	// of magnitude faster than the window.
+	select {
+	case ws := <-sig:
+		t.Fatalf("dispatched for %s before the debounce window elapsed — the burst was not coalesced", ws)
+	default:
+	}
 	awaitDispatch(t, sig, paths.Canonical(ws))
-	// The burst must collapse; a second dispatch within several debounce
-	// windows means events are not being coalesced.
-	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
+	// And exactly one: a second dispatch a full window later means the burst
+	// produced more than one reload.
+	noDispatchWithin(t, sig, 2*m.debounce)
 }
 
 func TestProjectWatchManager_NeverReloadsAnotherWorkspace(t *testing.T) {
@@ -185,7 +222,7 @@ func TestProjectWatchManager_NeverReloadsAnotherWorkspace(t *testing.T) {
 	writeProjectCfg(t, wsA, "[edits]\nstrict = true\n")
 	awaitDispatch(t, sig, paths.Canonical(wsA))
 	// B has no config and was never touched: any further dispatch is a leak.
-	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
+	noDispatchWithin(t, sig, 2*m.debounce)
 }
 
 func TestProjectWatchManager_NoDispatchAfterLastRelease(t *testing.T) {
@@ -196,7 +233,7 @@ func TestProjectWatchManager_NoDispatchAfterLastRelease(t *testing.T) {
 	m.release(ws)
 
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
-	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
+	noDispatchWithin(t, sig, 2*m.debounce)
 }
 
 // TestProjectWatchManager_DispatchesOnAtomicRenameSave covers the editor
@@ -213,7 +250,7 @@ func TestProjectWatchManager_DispatchesOnAtomicRenameSave(t *testing.T) {
 	if err := os.WriteFile(tmp, []byte("[edits]\nstrict = false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	noDispatchWithin(t, sig, 5*m.debounce+100*time.Millisecond)
+	noDispatchWithin(t, sig, 2*m.debounce)
 	if err := os.Rename(tmp, filepath.Join(ws, ".plumb", "config.toml")); err != nil {
 		t.Fatal(err)
 	}
