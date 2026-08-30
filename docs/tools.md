@@ -946,6 +946,29 @@ in, so a target passed to one is accepted, **not applied**, and the response say
 so and names the sub-slot to call instead — it runs the full suite, and never
 reports that as a scoped run.
 
+### `run_command`
+Run a named entry from the workspace's `[[command]]` allow-list under an OS
+sandbox. **Inputs:** `name` (the allow-list entry), `target` (optional, fills the
+entry's single `{target}` token with one shell-safe argument
+(`[A-Za-z0-9._/:@-]`); refused if the entry has no `{target}`). It runs only the
+exact fixed argv the user configured — no shell, no agent-supplied command line.
+An entry from a project's `.plumb/config.toml` must be trusted first (`plumb
+trust`); a global-config entry always runs. Output and runtime are bounded. For
+an ordinary build/lint/test, prefer `run_task` — its `[tasks.<lang>]` slots ship
+with defaults.
+
+The sandbox is **integrity-only**: it confines writes, not reads or environment.
+Each entry sets its own `deny_network`, so the response reports `network=on/off`;
+an entry with `require_sandbox` is refused outright rather than run unsandboxed
+when no OS sandbox is available.
+
+**There is no ad-hoc-shell tool.** `run_command` and `run_task` are plumb's only
+two execution surfaces — plumb registers no `sh -c` equivalent, so anything an
+agent can run is something a human first wrote into config. See the
+`[[command]]` / `[commands]` section of
+[`configuration.md`](configuration.md) and
+[`threat-model.md`](threat-model.md).
+
 ### `mutation_test`
 Verify that tests actually assert what they appear to: apply an explicit mutant,
 prove it still **compiles**, run a scoped test set, classify the result, and

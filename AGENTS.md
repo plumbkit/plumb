@@ -34,7 +34,7 @@ Foundation (paths, durable writes, tokenisation, redaction, colour data)
 
 The package map, daemon/persistence layout, extractor choices, and concurrency model live in [`docs/architecture.md`](docs/architecture.md). Hard seams worth keeping in context:
 
-- `internal/mcp` and `internal/lsp` are transport; `internal/topology` is intelligence; `internal/tools`, `internal/cache`, and `internal/quality` are application; `internal/cli` and `internal/tui` are presentation.
+- `internal/quality` is foundation; `internal/mcp` and `internal/lsp` are transport; `internal/cache` is domain; `internal/topology` is intelligence; `internal/tools` is application; `internal/cli` and `internal/tui` are presentation. `internal/arch/layers.go` holds the full list — read it rather than guessing, because its tests reject a wrong, missing, or stale entry.
 - `internal/lsp/adapters/base.Adapter` exports exactly `lsp.Client`. Put escape hatches in package functions, not methods, or every embedded adapter gains a false capability.
 - Every durable write goes through `internal/fsync.AtomicWrite`; every SQLite DSN goes through `internal/sqlitex`.
 - `internal/langsupport` is the source of truth for each language's structural engine and LSP adapter.

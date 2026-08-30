@@ -8,6 +8,7 @@
 ### Changed
 
 - **The public agent brief is now a compact engineering contract with an enforced 20 KiB ceiling.** Detailed build, style, testing, and delivery rationale lives in `docs/contributing.md`; architecture, configuration, CLI, and tool catalogues stay in their existing reference pages. The always-loaded brief retains its safety rules and test-pinned capability claims without paying to repeat the reference manuals in every agent session.
+- **`run_command` now has an entry on the tool reference page.** The safe command-execution tool was documented only in `configuration.md` and `threat-model.md`, so `docs/tools.md` — the page the brief points agents at — covered 57 of the 58 tools and silently omitted the one that runs commands. Its inputs, the trust gate, the integrity-only sandbox (writes confined, reads and environment not; `deny_network` per entry), and the rule that `run_command` and `run_task` are plumb's **only** two execution surfaces are now stated there.
 
 ## 0.17.7 (2026-08-28)
 
