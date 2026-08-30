@@ -7,6 +7,8 @@
 
 ### Fixed
 
+- **The git tool refuses a call whose args repeat the subcommand instead of letting git fail cryptically.** A caller that passed the verb twice — `subcommand: "push"` with `args` beginning `"push"`, the most common arg-shape slip the tool sees — got git's `fatal: 'push' does not appear to be a git repository` back with no hint of the cause, because git resolves the stray verb as the remote name. The remote-leading network verbs (`push`, `fetch`, `pull`) are now refused before execution with an error naming the correct call shape; refusing rather than silently stripping the duplicate keeps a caller that meant something else in control. The guard is limited to those three verbs because elsewhere the first argument can legitimately repeat the verb (`git stash push`). Guarded by `TestGit_RepeatedSubcommandInArgsRefused` and `TestGit_RepeatedSubcommandGuardDoesNotOverTrigger`.
+
 - **A declared agent's `session_start` no longer pins the CONNECTION from the
   pre-Execute hook — identity now precedes workspace end to end.** `onBeforeTool`
   attached the connection straight from the `workspace` argument (sticky,
