@@ -39,7 +39,8 @@ func Print(cfg Config, w io.Writer) error {
 // Known limitation: re-encoding rewrites the whole file, so any comments the
 // user added by hand are lost on the first save, and compiled defaults are
 // materialised into it (a single touched key is better written with the sparse
-// SetGlobalValue).
+// SetGlobalValue — or SaveSparse for an apply-style mutation, which is what the
+// TUI settings screen now uses).
 func Save(apply func(*Config)) error {
 	cfg, err := loadForSave()
 	if err != nil {

@@ -106,6 +106,7 @@ type ReadFile struct {
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 	outlineFn    func(string) bool   // may be nil; reports whether the path has a structural engine (file_outline is worthwhile)
 	ws           WorkspaceFn         // may be nil; anchors a workspace-relative file_path to the pinned root
+	contested    ContestedFn         // may be nil; refuses a relative file_path once the connection's pin is contested
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
@@ -270,7 +271,10 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	// Accept absolute paths, file:// URIs, and workspace-relative paths.
-	fpath := resolvePath(ctx, a.Path, t.ws)
+	fpath, err := resolvePath(ctx, a.Path, t.ws, t.contested)
+	if err != nil {
+		return "", fmt.Errorf("read_file: %w", err)
+	}
 	if err := t.guard.check(ctx, fpath); err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}

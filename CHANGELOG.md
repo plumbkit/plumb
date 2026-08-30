@@ -1,8 +1,249 @@
 # Changelog
-## 0.17.3 (unreleased)
+## 0.17.8 (unreleased)
+
+### Security
+
+- **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
+
+### Fixed
+
+- **The git tool refuses a call whose args repeat the subcommand instead of letting git fail cryptically.** A caller that passed the verb twice — `subcommand: "push"` with `args` beginning `"push"`, the most common arg-shape slip the tool sees — got git's `fatal: 'push' does not appear to be a git repository` back with no hint of the cause, because git resolves the stray verb as the remote name. The remote-leading network verbs (`push`, `fetch`, `pull`) are now refused before execution with an error naming the correct call shape; refusing rather than silently stripping the duplicate keeps a caller that meant something else in control. The guard is limited to those three verbs because elsewhere the first argument can legitimately repeat the verb (`git stash push`). Guarded by `TestGit_RepeatedSubcommandInArgsRefused` and `TestGit_RepeatedSubcommandGuardDoesNotOverTrigger`.
+
+- **A declared agent's `session_start` no longer pins the CONNECTION from the
+  pre-Execute hook — identity now precedes workspace end to end.** `onBeforeTool`
+  attached the connection straight from the `workspace` argument (sticky,
+  `PinSourceSessionStart`) before `session_start`'s Execute committed the
+  caller's identity, so on an unpinned connection whichever declared agent's
+  call arrived first owned the connection, and every later first-contact agent
+  inherited that root as its seeded shard pin and was refused off it with the
+  connection-level diagnosis. A call that declares an identity (per-call `_meta`
+  or `session_id`) now defers the pre-pin to Execute, which resolves identity
+  first and routes the attach through `repinWorkspaceFrom` — the agent's shard
+  on a shared connection, the connection itself when the caller is the only
+  known agent; the unattached branch of `resolveSessionWorkspace` routes through
+  the re-pin callback whenever it is wired (previously only for a language
+  override). Undeclared calls keep the pre-pin byte for byte, and the
+  concurrent first-contact probe stays fail-closed: exactly one of a racing
+  pair lands, and the refusal always carries its remedy. A `session_start({workspace})` on an
+  unattached connection now routes through the re-pin machinery whenever it is
+  wired, so an unusable path — relative, drifting, wide — is refused with an
+  error where the argument was previously returned as-is and the call could not
+  fail.
+
+- **A seeded shard now follows the connection it was seeded from, instead of
+  refusing its agent's next legitimate call off a stale sticky root.**
+  `shardFor` caches a shard (seeded from the connection pin) BEFORE
+  `repinAgent` can refuse a call, so one refused ask left the agent cached at a
+  root the connection had then moved away from — and the shard's sticky seed
+  refused the agent's next, entirely legitimate request for the root the
+  connection was actually on, while a fresh agent's identical request
+  succeeded (PLAN-398). When the connection moves, every shard that never
+  chose a workspace of its own follows (`followConnectionShards`); a shard
+  whose agent deliberately pinned its own root — including through a
+  connection that later passes through that root — is untouched, so
+  per-agent isolation loses nothing. Fail-closed is unchanged: after
+  following, a genuine cross-workspace ask is still refused with the remedy.
+
+- **An anonymous call on a shared connection now fails closed instead of
+  inheriting the last-attached agent's identity.** `shardFor` attributed a call
+  carrying no per-call identity to the agent whose `session_start.session_id`
+  attached LAST, and the refusal ceiling admitted it whenever any attach
+  existed — so after a peer force-pinned itself to another project, the
+  unattributable call resolved to the peer's workspace, the peer's boundary
+  policy admitted the peer's paths, and an admitted write landed in the peer's
+  trackers. It was a fail-open: the guard that refuses cross-workspace drift
+  was bypassed by simply omitting `_meta`. Now an anonymous call on a shared
+  connection resolves against the connection-level state, and a state-changing
+  call that presents no identity is refused with the one-serve-per-agent
+  remedy. Single-agent connections are untouched: with one identity the
+  connection IS the agent, exactly as before.
+- **The shared-connection health mark is latched, not re-announced, and no
+  longer clobbers more specific notes.** `record` reported "shared" on every
+  identity declaration after the first two, so `markSharedConnectionDetected`
+  re-fired a Warn and rewrote the session's `Health` on every peer call that
+  carried an identity — on the N-subagent topology this exists for, any other
+  health note's lifetime was "until the next peer call" (a `contested_pin` or
+  `blocked` note was erased by an unrelated `session_start`). The ANNOUNCEMENT
+  now fires once, on the transition into shared, and never overwrites a
+  different, more specific note already on the record; rewriting its own state
+  stays idempotent. The health NOTE is a separate question and is re-asserted on
+  every declaration while the connection is shared, because `conn_repin` clears
+  `Health` on ordinary successes (the same-root promotion and the re-pin that
+  moves the root) — a note written only on the transition was gone for good from
+  the first re-pin onwards, leaving a connection that was still shared, and
+  still refusing anonymous state-changing calls, with nothing on the record to
+  explain the refusal. Guarded by `TestRecordLatchesSharedTransition`,
+  `TestSharedMarkIsAnnouncedOnce`, `TestSharedMarkDoesNotClobberASpecificNote`
+  and `TestSharedMarkSurvivesAHealthClearingRepin`.
+
+- **Changing one setting in the TUI Settings screen now persists only that
+  setting, never the rest of the config file.** The Settings screen's Global-scope
+  save went through `config.Save`, which re-encodes the whole `Config` struct — so
+  toggling a single row materialised every compiled-in default into `config.toml`
+  as if the user had set it, and an explicitly-written value out-ranks the
+  compiled-in default forever after. Empty slices were written as literal `= []`
+  (`topology.exclude_patterns`, `lsp.*.args`, `lsp.*.root_markers`,
+  `workspace.extra_roots`, …), non-empty defaults were frozen by value
+  (`git.protected_branches`, `quality.analysers`), and any default plumb added
+  later was dead on arrival for everyone who had ever saved a global setting —
+  including `[[command]]` entries, where go-toml/v2 additionally truncates a
+  pre-populated slice on the first decoded entry, so `omitempty` could not reach
+  the problem. The save now routes through the new sparse
+  `config.SaveSparse` (the same raw-map write `config.SetGlobalValue` performs,
+  which `SaveTheme` already used): the mutation is applied to the loaded config,
+  the encoded TOML is diffed before and after, and only the changed keys are
+  written — added, altered, or removed (clearing the `[[command]]` list deletes
+  the key, so "explicitly none" no longer goes stale). Keys the mutation did not
+  touch are preserved as-is, an unparseable file is still refused rather than
+  clobbered, active `PLUMB_*` env overrides still never land in the file, and a
+  change that changes nothing writes nothing. `config.Save` itself is unchanged.
+  Guarded by `TestSettingsGlobalToggle_PersistsOnlyEditedKey`,
+  `TestSettingsGlobalToggle_PreservesExistingKeys`, and the `internal/config`
+  `TestSaveSparse_*` tests.
+
+### Changed
+
+- **The public agent brief is now a compact engineering contract with an enforced 20 KiB ceiling.** Detailed build, style, testing, and delivery rationale lives in `docs/contributing.md`; architecture, configuration, CLI, and tool catalogues stay in their existing reference pages. The always-loaded brief retains its safety rules and test-pinned capability claims without paying to repeat the reference manuals in every agent session.
+- **`run_command` now has an entry on the tool reference page.** The safe command-execution tool was documented only in `configuration.md` and `threat-model.md`, so `docs/tools.md` — the page the brief points agents at — covered 57 of the 58 tools and silently omitted the one that runs commands. Its inputs, the trust gate, the integrity-only sandbox (writes confined, reads and environment not; `deny_network` per entry), and the rule that `run_command` and `run_task` are plumb's **only** two execution surfaces are now stated there.
+
+- **BREAKING: `plumb serve` no longer attaches a workspace from its own working directory: with no `--workspace` and no `PLUMB_WORKSPACE` it starts UNATTACHED, and `session_start({workspace})` is the sole workspace-pin authority.** The serve-cwd hint manufactured a wrong pin more often than it prevented one: cwd is not intent (an MCP client spawns `serve` from its own launcher's directory, which says nothing about the project), so the "hint" regularly attached a directory nobody chose — the first `session_start` then became a re-pin (forced, when a peer had already landed there), relative-path calls before it resolved against the wrong project, and several agents multiplexing one `serve` (issue #182) had no per-agent signal except `session_start` while the launch directory kept voting underneath them. The initialize `_meta` key (`dev.plumbkit/workspace`, `MetaWorkspaceKey`) now carries only the explicit `--workspace`/`PLUMB_WORKSPACE` pre-pin (PLAN-349 behaviour unchanged: flag beats env, `$VAR`-expanded, made absolute, Detect-validated, never persisted as the sticky pin) and is omitted entirely otherwise, so the initialize frame stays byte-identical and the daemon has nothing to auto-attach from. On a serve with no pre-pin the attach ladder simply ends earlier: a roots-less client with no explicit value stays unattached, a relative-path call fails closed with the existing "no workspace is pinned" refusal naming `session_start`, and the connection pins on the caller's first `session_start({workspace})`. A serve started unattached logs why at startup (`serve: no --workspace/PLUMB_WORKSPACE — starting unattached …`, the cwd carried as a diagnostic only, never transported). `--allow-dir` on an unattached serve is deliberately inert until a workspace is pinned: `buildPathPolicy` returns nil while no root is pinned, so the boundary keeps failing closed and the grant attaches additively to whatever `session_start` later pins — a grant is never a workspace source. Guarded by `TestResolveWorkspaceHint` (the no-cwd-fallback cases), `TestServeWorkspaceHint_NoFlagNoEnvStartsUnattached`, `TestServeWorkspaceFlag_InjectsFlagPath`, `TestServeWorkspaceHint_EnvFallbackInjected`, `TestAttachOnInit_NoPrepinLeavesUnattached`, `TestSessionStartPin_PinsUnattachedServe`, and `TestAllowDir_UnattachedServeInertUntilPin`; the pre-existing `TestAttachFromHint_*` / `TestRootFromClient_*` / `TestOnInitOrder_PersistedPinBeatsHint` set now covers the explicit pre-pin channel. Migration: launch `plumb serve --workspace <root>` (or set `PLUMB_WORKSPACE`), or call `session_start({workspace})` after connecting — the working directory is never consulted again.
+
+## 0.17.7 (2026-08-28)
+
+### Fixed
+
+- **An agent whose workspace is taken by a peer on the same connection is now
+  TOLD, and plumb stops recommending the move that takes it (issue #182).** The
+  sticky-pin guard refuses a peer's cross-project re-pin and names `force: true`
+  as the remedy. For one agent switching its own project that is right; for
+  several agents multiplexing one `plumb serve` it is the engine of a fight —
+  both sides read the same sentence and both force. Observed in the field: a
+  connection's pin changed hands **fourteen times in thirty-five minutes**
+  between two projects, and the agent that lost it was told only
+  "this connection is pinned to `<a project it never named>`", which reads as its
+  own fumbled path. It was diagnosed as a daemon-restart bug for a day; the
+  restore had in fact replayed the pin byte-for-byte and a co-tenant took it
+  eight minutes later. Three changes, none of which alter what plumb *allows*:
+  a pin now records that it was FORCED and what it displaced
+  (`PinProvenance.Forced`, rendered as "forced over an explicit pin" in boundary
+  errors and `daemon_info`); a boundary refusal for a path inside the displaced
+  project appends a notice naming that project, when it was taken, and
+  `session_start.session_id` as the fix; and a connection whose pin has been
+  force-taken between **two or more distinct roots at least twice in 30 minutes**
+  is marked contested, after which the re-pin refusal, the boundary error and the
+  `session_start` identity block all lead with identifying the agents instead of
+  with `force: true` (force still works — the daemon cannot know which undeclared
+  agent is entitled to the workspace, and refusing outright would strand real
+  work). The contested mark defers to `blocked` and
+  `shared_connection_detected`, which are made on evidence rather than inferred
+  from behaviour. This is the case PLAN-286's per-agent shards cannot reach at
+  all: the client in the incident sends no `session_id` on either channel, so
+  `logicalAgentState.seen` stays empty, `sharedWith` is always false, and no
+  shard, no shared-connection warning and no anonymous-write ceiling ever
+  engages — behaviour is the only remaining signal. Guarded by
+  `TestContestedRing_VerdictShape`, `TestContestState_LatchesOnce`,
+  `_RingIsBounded`, `TestForcedRepin_MarksProvenanceAndContests`,
+  `TestUnforcedRepin_DoesNotContest`,
+  `TestContestedPin_RemedyStopsLeadingWithForce`, `_DisplacedAgentIsTold`,
+  `_DoesNotClobberSharedConnectionHealth`, `_MarksHealthWhenUnmarked`,
+  `TestDisplacementNotice_OnlyForTheDisplacedProject`,
+  `TestWorkspaceBoundaryError_ContestedSwapsTheAdvice`,
+  `_ReadOnlyRootIgnoresDisplacement`, `TestSessionStart_ContestedNote*`, and the
+  integration replay `TestMultiAgentPin/UndeclaredAgentsForcePingPongIsContested`.
+
+- **The pin-survives-a-restart guarantee is now pinned by tests that assert it
+  directly.** The property was already correct — that is the point — but the only
+  thing separating "the pin came back wrong" from "the pin was taken afterwards"
+  during the incident above was a daemon log line that could have been rotated
+  away, and the two call for opposite fixes. `TestPin_SurvivesDaemonRestartByteIdentical`
+  drives the real `attachOnInit` ladder and asserts the restored root is the
+  stored STRING (not an ancestor or an alias that would pass a containment check
+  while widening the write surface) and that its provenance reads
+  `restore:session_start` and carries no displacement mark;
+  `TestPin_UnsetComesBackUnattachedNotElsewhere` asserts a connection with no pin
+  and no roots comes back attached to NOTHING rather than to something else; and
+  `TestPin_RestoreDoesNotResolveAfresh` covers a marker appearing above the
+  pinned root while the daemon is down, where restoring must replay the stored
+  path or refuse, never climb.
+
+## 0.17.6 (2026-08-27)
+
+### Security
+
+- **A reconnecting client can no longer claim an ended session's identity by
+  replaying its session ID (affects v0.17.0–v0.17.2).** Since 0.17.0 the
+  `plumb serve` proxy replays the plumb session ID a connection held before a
+  daemon restart, and the fresh daemon ADOPTED it so stats, memories and the
+  mailbox saw one continuous identity across the restart. But that value is
+  client-supplied, and the live session ID is deliberately disclosed to clients
+  (`session_start` echoes it in its result `_meta`), so any MCP client could
+  claim any ended session's ID and inherit its mailbox binding, stats
+  attribution and episodic-memory history. Adoption is now authorised by the
+  persisted `session_names` row keyed by the proxy session ID — the 122-bit
+  secret the serve process generates and which is never written to any file,
+  log, or tool result — and refuses unless the replayed ID matches the
+  persisted one, the same authorisation mailbox-identity inheritance always
+  required. With no persisted row (`persist_state = false`, a wiped store, or a
+  row written before the pairing existed) there is no proof and no adoption:
+  the reconnect forks its identity exactly as it did before 0.17.0. A genuine
+  proxy that replays a stale ID has its row converged to the ID the session
+  actually holds, so the next reconnect adopts correctly; the live-overlap
+  guard (`session.Adopt`'s `ErrIDTaken`) is unchanged.
+
+### Fixed
+
+- **A trusted project config edit now hot-reloads to EVERY session attached to
+  that workspace, promptly and without a reconnect (PLAN-414).** Project-config
+  reload used to depend on each connection polling its own
+  `.plumb/config.toml` mtime every 30 s, and a live incident showed two
+  attached sessions sitting stale after a trusted `[collab] cross_project =
+  true` override was written. The daemon now owns one fsnotify watcher per live
+  workspace (reference-counted, canonicalised so symlink/trailing-slash aliases
+  share it, torn down when the last session leaves) which sees writes, atomic
+  editor saves, creates and deletions of `config.toml` — and of `.plumb`
+  itself, so a config created after attach is picked up too — and dispatches
+  through `connRegistry.reloadProject`, re-applying every pinned session
+  exactly once per debounced change. Deletion and invalid TOML still fail
+  closed to global policy; a watcher that cannot start or errors marks itself
+  failed, logs it, and the 30 s poll reconciles only that workspace. Sessions
+  are told on their next tool result or `session_start` when a collaboration
+  capability (mailbox, cross_project, intents, knowledge_handoff,
+  peer_awareness) was enabled or revoked under them. All ten `[collab]` fields
+  are now correctly classified `ReloadLive` in the field registry (they always
+  applied live; the label said next-session), and `plumb config show` lists
+  `collab` under the live-reload groups.
+
+- **A daemon restart no longer drops the external session ID before a client can
+  call `session_start` again (PLAN-404).** When an authenticated reconnect
+  adopts its predecessor's plumb session ID, its fresh record now carries the
+  predecessor's `ExternalID` only when it has none of its own. This keeps
+  `plumb mail --external-id` and name-resume resolution working immediately
+  after the restart; an unreadable predecessor supplies nothing, so no identity
+  is invented.
 
 ### Added
 
+- **The admitted Go cross-file call graph now reaches four consumers, each
+  behind its own opt-in (PLAN-372 step 6).** `topology_affected` kept the same
+  5-of-57 package answer on the measured `internal/stats/savings.go` scenario
+  while the branch's added tests moved the selected count from 2,854 to 2,860;
+  its response shrank 4,265 B to 4,186 B and measured 33.85 ms p95 (29.71 ms
+  before). A fixed `minimal_diff_review` fixture moves from zero visible callers
+  to one cross-file caller and suppresses the false single-use hint, while the
+  hint's confidence remains capped at Low. `call_hierarchy`'s topology fallback
+  likewise moves from zero to one cross-file caller without replacing
+  extractor-owned edges or LSP references.
+  `topology_impact({mode:"reachability", granularity:"function"})` is new: on
+  the measured branch corpus, 46 roots reached 267 of 5,495 production
+  callables in the hard-capped 4,800 B response at 48.60 ms p95; the pre-change
+  binary rejects `granularity`. Function reachability excludes `_test.go`
+  callers to match the existing "what ships" contract, even though those edges
+  remain recorded for the other three consumers. It is an explicitly partial
+  static graph: Go only, receiver methods/dynamic dispatch unresolved,
+  third-party targets outside the index, generated source included when
+  indexed, and build tags not evaluated; "not reached" is never presented as
+  proof of dead code.
+- **Derived-edge lifecycle is incremental and durable (PLAN-372 step 5 / PLAN-377).** Import and call resolver edges carry stable `to_identity` targets and scoped rebuilds repoint callee re-indexes without wholesale deletion. On the 1,415-file/2,531-call corpus, representative saves measured **392ms–2.95s** across local and hosted runners with **0.73–1.97 MiB** WAL growth; the portable CI regression guard requires every save to stay **<5s** and **<=2 MiB**. Derived calls remain excluded by default; the measured step-6 consumers opt in per admitted Go subject.
 - **Cross-file call edges, Go only — and they resolve 2.8% of call sites, which is the
   headline and not a caveat (PLAN-372 steps 3+4, worth-it W3-18).** Every call expression
   is now recorded in a new `topology_call_sites` table — including the ones no single-file
@@ -69,8 +310,8 @@
   per `topology_routes`' own contract), or accepts explicit directories / the literal
   `"main"`. Every response opens with `package-level (import edges, production imports
   only — Go _test.go importers excluded); function-level unavailable` — directory
-  granularity only, a cross-package call graph does not exist yet (tracked separately),
-  and an edge whose importer is a `_test.go` file is excluded: Go forbids real import
+  granularity only; function-level call answers are provided separately by the Go
+  call-resolver surface, not by this reachability mode. An edge whose importer is a `_test.go` file is excluded: Go forbids real import
   cycles, so counting test-only imports produced cycles that were entirely artefacts (64%
   of the folded edges on plumb's own index originated in a test file, and every cycle an
   early build of `layers` reported vanished once they were excluded). Go-only for now:
@@ -96,23 +337,36 @@
 
 ### Changed
 
-- **Nothing reads the new `call-resolver` edges yet, and the traversal enforces it.** They
-  are derived data rebuilt wholesale on every indexing pass, exactly like the
-  `import-resolver` edges, and their behaviour under an incremental single-file re-index is
-  not yet pinned. The neighbourhood query now filters them out by **source**:
-  `ExploreOpts.IncludeDerivedCalls` defaults to false, so `call_hierarchy`'s topology
-  fallback, `topology_impact`, `topology_affected` and `minimal_diff_review` all receive
-  the extractor's intra-file `calls` edges exactly as before and none of the derived ones.
-  Filtering by edge *kind* cannot do this — a derived edge is a `calls` edge — which is why
-  the previous "no tool consumes them" was a statement of intent that the code did not
-  keep. Do not build on them until the lifecycle work lands; onboarding a consumer is a
-  deliberate step with a published before/after number, not a side effect.
-- **The topology schema version is bumped to 3, so the index is rebuilt once on upgrade.**
-  A row written before this release carries no call sites and nothing about it says so, so
-  the table cannot backfill itself. Measured on plumb's own tree, the full cold re-index
-  goes from **4.0s to 5.0s** for 1,407 files (+25%, the cost of the call-site walk and its
-  ~101k rows, measured three times with identical results); the index grows to 31.7 MiB. It runs in the background at
-  first attach.
+- **`plumb restart` now always prints a `Starting...` line and reports the fresh
+  daemon's PID (`Daemon restarted (PID 1234).`)** instead of a bare "Daemon
+  restarted." — matching `plumb stop`'s existing `Stopping daemon (PID ...)`
+  line, so the two commands read as one stop/start pair rather than a stop with
+  a silent gap. v0.17.5 printed the `Starting...` line only on the branch where
+  `restart` itself spawned the daemon, which is the branch that rarely runs: with
+  sessions attached, a resilient `plumb serve` proxy respawns the daemon the
+  instant the old one dies and usually wins that race, so `respawnDaemon`'s first
+  dial succeeded and the line never appeared. The announcement is now the
+  command's, not whichever process happens to call `startDaemonProcess`. The PID
+  is resolved against the PIDs the restart just stopped, too: the outgoing daemon
+  does not erase its PID file, so a read inside the publish window could return
+  the number of the process the restart had just killed and report the corpse as
+  the fresh daemon — and when the file is still stale as the window closes, the
+  owner of the socket is asked instead of dropping the PID from the line. Guards:
+  `TestRespawnDaemon_AnnouncesStartingWhenAnotherProcessWonTheRace`,
+  `TestWaitForDaemonPID_NeverReportsAStoppedPID`,
+  `TestWaitForDaemonPID_PicksUpTheFreshPIDFile`.
+- **Derived call edges remain excluded from consumers for deliberate step-6 rollout.** Their
+  lifecycle is now durable across incremental re-indexes: callee saves repoint incoming
+  rows by stable `to_identity`, while caller saves replace only outgoing rows. The
+  neighbourhood query still filters them out by **source** because
+  `ExploreOpts.IncludeDerivedCalls` defaults to false; each consumer needs its own measured
+  before/after before onboarding. Filtering by edge *kind* cannot do this — a derived edge
+  is a `calls` edge — so the exclusion remains explicit and source-based.
+- **The topology schema version is bumped to 4, so the rebuildable index is recreated once on upgrade.**
+  Version 4 adds `topology_edges.to_identity`, the stable target identity used to repoint
+  derived import/call edges after callee node rowids are replaced. Older indexes are
+  rebuilt on attach through the existing schema-version gate; the indexer then repopulates
+  them with durable incremental lifecycle state.
 
 ### Removed
 
@@ -1451,8 +1705,9 @@
   A post-index pass (`linkImports`) now resolves `import` nodes to the package
   they name and links them, producing **51,335 cross-file edges** here. It runs
   per queue drain rather than per file, because an import can only be resolved
-  once its target package is indexed, and it rebuilds its own edges wholesale so
-  re-indexing one file cannot leave a stale half-graph. Matching is by longest
+  once its target package is indexed. Its incremental lifecycle repoints incoming
+  edges by stable identity and replaces only changed callers, so re-indexing one file
+  cannot leave a stale half-graph. Matching is by longest
   path suffix rather than go.mod parsing, so it generalises past Go; a minimum of
   two path segments keeps `import "strings"` from binding to a local `strings/`
   directory, which would recreate the false-dependency bug as real edges.

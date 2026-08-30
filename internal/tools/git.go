@@ -163,6 +163,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := checkGitGlobalFlags(a.Args); err != nil {
 		return "", err
 	}
+	if err := rejectDuplicatedLeadingSubcommand(a.Subcommand, a.Args); err != nil {
+		return "", err
+	}
 	tier := classifyGit(a.Subcommand, a.Args)
 	if tier == tierReject {
 		if a.Subcommand == "stash" && len(a.Args) > 0 {
@@ -183,7 +186,10 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if tier != tierRead && !t.deps.limiter(ctx).Allow() {
 		return "", rateLimitError("git", t.deps.limiter(ctx))
 	}
-	a.Repo = t.defaultRepo(ctx, a.Repo)
+	a.Repo, err = t.defaultRepo(ctx, a.Repo)
+	if err != nil {
+		return "", err
+	}
 	if err := t.checkBoundary(ctx, a); err != nil {
 		return "", err
 	}
@@ -339,15 +345,24 @@ func (t *Git) resolveAddArgv(ctx context.Context, a gitToolArgs, argv []string) 
 // connection has no pinned workspace (WorkspaceFn nil or returning ""), an empty
 // repo stays empty and checkBoundary refuses — fail closed, never fall through to
 // the daemon cwd, which would run git against an unrelated repository.
-func (t *Git) defaultRepo(ctx context.Context, repo string) string {
+func (t *Git) defaultRepo(ctx context.Context, repo string) (string, error) {
 	if repo == "" {
-		if t.deps.WorkspaceFn == nil {
-			return ""
+		if t.deps.Contested != nil && t.deps.Contested() {
+			return "", errors.New(gitContestedNoRepo)
 		}
-		return t.deps.WorkspaceFn(ctx)
+		if t.deps.WorkspaceFn == nil {
+			return "", nil
+		}
+		return t.deps.WorkspaceFn(ctx), nil
 	}
 	return t.deps.resolvePath(ctx, repo)
 }
+
+// gitContestedNoRepo is the refusal for a git call with no explicit `repo` on a
+// connection whose pin is contested. An empty repo would fall back to the pinned
+// workspace, which is exactly the root being fought over, so the call is refused
+// rather than aimed at whichever project holds the pin right now.
+const gitContestedNoRepo = "git: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), so a git call without an explicit `repo` cannot be attributed to a project and is refused rather than aimed at whichever project holds the pin right now. Pass an absolute `repo` path to name the repository, or identify the agents — pass session_start.session_id on every call, or run one plumb serve per agent"
 
 func (t *Git) checkBoundary(ctx context.Context, a gitToolArgs) error {
 	// A resolved repo is mandatory. An empty repo here means neither an explicit

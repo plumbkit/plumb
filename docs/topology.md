@@ -182,8 +182,8 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
 - **`topology_explore`** — BFS neighbourhood around a named symbol, with depth,
   node, and byte budgets.
 - **`topology_impact`** — bidirectional blast radius: what a symbol depends on,
-  and what depends on it. `mode: "reachability"` switches to a different, package-level
-  question — see [Package-level reachability](#package-level-reachability) below.
+  and what depends on it. `mode: "reachability"` switches to the reachability
+  contract below; `granularity` selects package (the default) or Go function.
 - **`topology_affected`** — *the headline.* Given changed files/symbols, the
   files and tests most likely affected, by inward dependency edges **and**
   co-location (tests in the same directory as a changed/affected file — catching
@@ -199,21 +199,22 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
 ## Package-level reachability
 
 `topology_impact mode="reachability"` answers a different question than the rest of
-the tools above, at a different granularity: not "what does this *symbol* touch" but
-**"what does this *binary* (or entry point) actually pull in"** — and its mirror,
-"which packages are unreachable from every entry point". This is honest, available
-today, package-level reachability, built entirely on the `imports` edges `linkImports`
-already produces — no schema change, no new tool (`topology_impact` gained a `mode`
-rather than adding to the tool count).
+this page, at selectable granularity: package mode asks **"what does this *binary*
+(or entry point) pull in, and which packages are unreachable?"**; function mode asks
+**"what does this callable root pull in?"**. Package mode is built entirely on the
+`imports` edges `linkImports` already produces; function mode uses the admitted Go call
+resolver edges. There is no schema change or new tool (`topology_impact` gained a
+`mode` and `granularity` rather than adding to the tool count).
 
-**Granularity, stated plainly.** Every reachability response opens with `package-level
-(import edges, production imports only — Go _test.go importers excluded);
-function-level unavailable` — this is directory granularity, not function-level. The
-import graph is real and cross-file; there is no cross-package call graph yet, so this
-cannot answer "is this *function* dead" — only "is this *package* dead from every entry
-point". Treat a small unreachable package as a strong signal and a genuinely large one
-as worth a second look before deleting; a symbol re-exported by an otherwise-unreachable
-package could still be imported reflectively.
+**Granularity, stated plainly.** Reachability defaults to `granularity="package"` and
+opens with `package-level (import edges, production imports only — Go _test.go importers
+excluded)`. This is directory-level closure over production import edges. Opt into
+`granularity="function"` for Go-only outward closure over admitted call-resolver edges;
+its header says `function-level`, test-file callers are excluded, and unresolved
+receiver/dynamic/external calls are disclosed as a lower bound. Function mode answers
+"is this callable reachable from these roots", not proof of dead code. Treat a small
+unreachable package or callable as a lead to verify before deleting; reflective or
+dynamic use can still exist outside the indexed graph.
 
 **Production imports only.** An edge whose importer is a Go `_test.go` file is excluded
 from the graph, on purpose. Go forbids real import cycles, so any cycle a naive version
@@ -254,31 +255,34 @@ broader "any import node" signal would have made the refusal unreachable for eve
 workspace it exists to catch. A Go `package` clause is mandatory and per-file, so a
 `language=go` package node is unambiguous evidence no other extractor produces.
 
-**Roots.** Every `package main` directory by default, plus `topology_routes`
-entry-point candidates (an HTTP handler, a Cobra command — labelled
-`candidate-seeded` in the response, since `topology_routes` results are themselves
-name/signature heuristics, not confirmed bindings). Pass `roots` explicitly to override:
-an array of directories, or the literal `"main"`.
+**Roots.** Package granularity starts from every `package main` directory by
+default, plus `topology_routes` entry-point candidates (labelled
+`candidate-seeded`, since route results are name/signature heuristics). Pass `roots`
+to override with package directories or the literal `"main"`. Function granularity
+uses the corresponding `main` functions plus route candidates by default; explicit
+roots are canonical `file.go#Symbol` selectors or `"main"` (a unique bare symbol
+name is accepted as a convenience).
 
-**Three response shapes**, each capped at ~5 KB:
+**Three response shapes**, each capped at 4,800 bytes:
 
-- **default** — reachable/unreachable package counts, with up to 10 samples per
-  bucket. Unreachable is sorted by size (indexed node count) descending — the biggest
-  dead package is the most actionable one to notice.
-- **`path_to: "<dir>"`** — the single shortest root → target directory chain, or an
-  honest "no path" when the target is not reachable from the given roots.
-- **`layers: true`** — a Tarjan strongly-connected-components condensation of the
-  reachable subgraph, laid out as topological layers. A component holding more than one
-  package **is** a reported import cycle (flagged `[cycle]`), not filtered out — that is
-  the finding this shape exists to surface.
+- **default** — reachable/unreachable counts and up to 10 deterministic samples per
+  bucket. Package mode sorts unreachable packages by indexed size; function mode lists
+  reachable and not-reached callables and says that the latter are not proof of dead code.
+- **`path_to`** — the single shortest root → target chain. Use a directory for package
+  mode or `file.go#Symbol` for function mode; an honest "no path" is returned when the
+  target is not reached.
+- **`layers: true`** — a Tarjan SCC condensation in topological layers. Multi-package
+  components are import cycles; recursive multi-function components are call cycles,
+  both flagged `[cycle]`.
 
 **Correctness note for the curious.** Computing "unreachable" correctly requires the
 *full* transitive closure from the roots, not a bounded neighbourhood — a depth-capped
 walk would silently misreport a genuinely reachable package as unreachable on any
 dependency chain longer than the cap, which is the false-negative direction this
-feature is built to avoid. The traversal therefore runs to full closure over a
-directory-level graph folded from the same `imports` edges, rather than reusing the
-depth/byte-capped symbol-neighbourhood BFS used elsewhere in this page.
+feature is built to avoid. The package traversal therefore runs to full closure over a directory-level graph
+folded from the same `imports` edges, and function mode runs to full outward closure over
+its admitted Go call graph. Neither reuses the depth/byte-capped symbol-neighbourhood BFS
+used elsewhere in this page.
 
 ## Cross-file call edges (Go only, and small)
 
@@ -351,15 +355,16 @@ Vendored and generated code follow the index's existing rule and get no special 
 `vendor/`, `node_modules/`, `testdata/`, `dist/` and `build/` are excluded from the walk,
 and everything else that is indexed contributes call sites.
 
-**Nothing consumes these edges yet, and that is enforced rather than intended.** They are
-derived data, rebuilt wholesale on every indexing pass exactly like the `import-resolver`
-edges, and their behaviour under an incremental single-file re-index is not yet pinned —
-a consumer can observe the window in which a re-indexed file's edges are gone. So the
-neighbourhood traversal excludes them by **source**: `ExploreOpts.IncludeDerivedCalls`
-defaults to false, and every tool that asks for `calls` edges (`call_hierarchy`'s topology
-fallback, `topology_impact`, `topology_affected`, `minimal_diff_review`) receives the
-extractor's intra-file edges and nothing else. Excluding by edge *kind* would not work:
-the derived edges are `calls` edges, identical in kind to the extractor's own.
+**The lifecycle is durable, and consumers opt in deliberately.** Derived edges survive
+incremental re-indexes: callee re-indexes repoint incoming rows by stable identity, while
+caller re-indexes replace only outgoing rows. Function reachability is the function-level
+consumer: it opts into admitted Go resolver edges, filters `_test.go` callers, and computes
+full outward closure. The neighbourhood traversal still excludes derived calls by **source**:
+`ExploreOpts.IncludeDerivedCalls` defaults to false, and the remaining consumers
+(`call_hierarchy`'s topology fallback, `topology_impact` package mode,
+`topology_affected`, `minimal_diff_review`) receive extractor intra-file edges only.
+Excluding by edge *kind* would not work: derived edges are `calls` edges, identical in kind
+to the extractor's own.
 
 **Language admission.** A language is served iff it is in the resolver's compile-time
 supported set (today exactly `{go}`) **and** the index holds a `package` node with that

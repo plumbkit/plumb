@@ -94,14 +94,22 @@ var findFilesSchema = json.RawMessage(`{
 // plumb's one directory listing tool — list_files and list_directory were
 // folded into it.
 type FindFiles struct {
-	ws    WorkspaceFn
-	guard BoundaryGuard
+	ws        WorkspaceFn
+	guard     BoundaryGuard
+	contested ContestedFn
 }
 
 func NewFindFiles(ws WorkspaceFn) *FindFiles { return &FindFiles{ws: ws} }
 
 func (t *FindFiles) WithBoundary(guard BoundaryGuard) *FindFiles {
 	t.guard = guard
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// path is refused once the pin is contested (issue #182). Nil-safe.
+func (t *FindFiles) WithContested(fn ContestedFn) *FindFiles {
+	t.contested = fn
 	return t
 }
 
@@ -166,7 +174,7 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	ctx, cancel := applyFindFilesDeadline(ctx)
 	defer cancel()
 
-	cfg, err := buildFindFilesConfig(ctx, a, t.ws, t.guard)
+	cfg, err := buildFindFilesConfig(ctx, a, t.ws, t.guard, t.contested)
 	if err != nil {
 		return "", err
 	}
@@ -236,8 +244,11 @@ func applyFindFilesDeadline(ctx context.Context) (context.Context, context.Cance
 	return ctx, func() {}
 }
 
-func buildFindFilesConfig(ctx context.Context, a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (findFilesConfig, error) {
-	root := resolvePath(ctx, a.Path, ws)
+func buildFindFilesConfig(ctx context.Context, a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard, contested ContestedFn) (findFilesConfig, error) {
+	root, rerr := resolvePath(ctx, a.Path, ws, contested)
+	if rerr != nil {
+		return findFilesConfig{}, fmt.Errorf("find_files: %w", rerr)
+	}
 	if err := guard.check(ctx, root); err != nil {
 		return findFilesConfig{}, fmt.Errorf("find_files: %w", err)
 	}

@@ -47,11 +47,12 @@ var callHierarchySchema = json.RawMessage(`{
 
 // CallHierarchy implements the call_hierarchy MCP tool.
 type CallHierarchy struct {
-	client  lsp.Client
-	timeout time.Duration
-	topo    topologyStoreFn // optional; topology call-graph fallback when the server has no call hierarchy
-	warmup  LSPWarmupFn     // optional; distinguishes a still-warming server from a genuine failure
-	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	client    lsp.Client
+	timeout   time.Duration
+	topo      topologyStoreFn // optional; topology call-graph fallback when the server has no call hierarchy
+	warmup    LSPWarmupFn     // optional; distinguishes a still-warming server from a genuine failure
+	ws        WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn     // may be nil; refuses a relative uri once the pin is contested
 }
 
 // NewCallHierarchy creates a CallHierarchy tool.
@@ -78,6 +79,13 @@ func (t *CallHierarchy) WithLSPWarmup(fn LSPWarmupFn) *CallHierarchy {
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *CallHierarchy) WithWorkspace(ws WorkspaceFn) *CallHierarchy {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *CallHierarchy) WithContested(fn ContestedFn) *CallHierarchy {
+	t.contested = fn
 	return t
 }
 
@@ -144,7 +152,10 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	uri := toFileURIAnchored(ctx, a.URI, t.ws)
+	uri, rerr := toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("call_hierarchy: %w", rerr)
+	}
 	ctx, lspCtx, cancel, waited := fallbackDeadlines(ctx, t.timeout)
 	defer cancel()
 	if a.SymbolName != "" {
@@ -347,6 +358,12 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx, lspCtx context.Context, q cal
 	if !ok {
 		return "", false
 	}
+	includeDerived := false
+	if subject, subjectErr := store.CallGraphSubjectForNode(ctx, centre.ID); subjectErr == nil {
+		if admission, admissionErr := store.AdmitCallGraph(ctx, subject); admissionErr == nil {
+			includeDerived = admission.Admitted
+		}
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Call hierarchy for %s (%s) at %s:%d "+
 		"(reconstructed — this language server provides no call hierarchy; "+
@@ -359,13 +376,13 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx, lspCtx context.Context, q cal
 		// rest of the budget and leave nothing for the graph query below.
 		callers := t.lspCallers(lspCtx, q)
 		if callers == nil {
-			callers = topologyCallRefs(ctx, store, centre, topology.DirectionInward)
+			callers = topologyCallRefs(ctx, store, centre, topology.DirectionInward, includeDerived)
 		}
 		writeCallHierarchySection(&sb, "Callers (incoming)", callers)
 	}
 	if q.direction == "outgoing" || q.direction == "both" {
 		writeCallHierarchySection(&sb, "Callees (outgoing)",
-			topologyCallRefs(ctx, store, centre, topology.DirectionOutward))
+			topologyCallRefs(ctx, store, centre, topology.DirectionOutward, includeDerived))
 	}
 	return strings.TrimRight(sb.String(), "\n") + "\n", true
 }
@@ -455,14 +472,15 @@ func enclosingNode(nodes []topology.Node, line uint32) topology.Node {
 
 // topologyCallRefs follows "calls" edges one hop from centre in dir (inward =
 // callers, outward = callees) and returns the neighbour nodes as call entries.
-func topologyCallRefs(ctx context.Context, store *topology.Store, centre topology.Node, dir topology.Direction) []callRef {
+func topologyCallRefs(ctx context.Context, store *topology.Store, centre topology.Node, dir topology.Direction, includeDerived bool) []callRef {
 	nb, err := store.ExploreFrom(ctx, centre, topology.ExploreOpts{
-		Depth:         1,
-		MaxNodes:      200,
-		MaxBytes:      50000,
-		IncludeSource: "none",
-		EdgeKinds:     []string{string(topology.EdgeCalls)},
-		Direction:     dir,
+		Depth:               1,
+		MaxNodes:            200,
+		MaxBytes:            50000,
+		IncludeSource:       "none",
+		EdgeKinds:           []string{string(topology.EdgeCalls)},
+		Direction:           dir,
+		IncludeDerivedCalls: includeDerived,
 	})
 	if err != nil || nb == nil {
 		return nil

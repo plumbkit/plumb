@@ -738,3 +738,70 @@ func TestTopologyAffected_WideFanOutReportsEveryImporter(t *testing.T) {
 		t.Errorf("a complete answer must not carry a truncation banner:\n%s", out)
 	}
 }
+
+func TestTopologyAffected_IncludesAdmittedCrossFileCallers(t *testing.T) {
+	ws := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		path := filepath.Join(ws, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/target/target.go", "package target\n\nfunc Target() {}\n")
+	write("internal/caller/caller.go", "package caller\n\nimport \"example.com/project/internal/target\"\n\nfunc Use() { target.Target() }\n")
+	write("internal/caller/caller_test.go", "package caller\n\nimport \"testing\"\n\nfunc TestCaller(t *testing.T) {}\n")
+
+	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, []topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	var target topology.Node
+	for time.Now().Before(deadline) {
+		nodes, _ := store.SymbolsInFile(ctx, filepath.Join(ws, "internal/target/target.go"))
+		for _, n := range nodes {
+			if n.Name != "Target" || n.Kind != topology.KindFunction {
+				continue
+			}
+			target = n
+			res, rerr := store.ImpactFrom(ctx, n, topology.ImpactOpts{Depth: 1, MaxNodes: 50, MaxBytes: 50000, EdgeKinds: []string{"calls"}, IncludeDerivedCalls: true})
+			if rerr == nil {
+				for _, e := range res.DependedOnBy.Edges {
+					if e.Source == "call-resolver" {
+						goto settled
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+settled:
+	if target.ID == 0 {
+		t.Fatal("target function was not indexed")
+	}
+	defaultRes, err := store.ImpactFrom(ctx, target, topology.ImpactOpts{Depth: 1, MaxNodes: 50, MaxBytes: 50000, EdgeKinds: []string{"calls"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range defaultRes.DependedOnBy.Edges {
+		if e.Source == "call-resolver" {
+			t.Fatal("default impact exposed a derived caller")
+		}
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{"symbols": []string{"Target"}})
+	out, err := tool.Execute(ctx, args)
+	if err != nil {
+		t.Fatalf("topology_affected: %v", err)
+	}
+	if !strings.Contains(out, "internal/caller") || !strings.Contains(out, "1 tests") {
+		t.Errorf("admitted cross-file caller package/test count missing from affected output:\n%s", out)
+	}
+}

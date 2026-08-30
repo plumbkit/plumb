@@ -91,6 +91,10 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 			fmt.Fprintf(&sb, "%s\n", note)
 		}
 	}
+	// A fourth loud one-shot, on the same reasoning as the three above: a woken
+	// or resumed session that auto-briefs is exactly the case where the workspace
+	// on the line above may not be the one this agent chose.
+	sb.WriteString(t.contestedPinNote())
 	branch := gitBranch(ws)
 	if branch != "" {
 		fmt.Fprintf(&sb, "Branch:   %s\n", branch)

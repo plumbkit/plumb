@@ -83,6 +83,7 @@ type ReadMultipleFiles struct {
 	outsideFn    func(string) string // may be nil; returns a root label when a path is outside the workspace
 	outlineFn    func(string) bool   // may be nil; reports whether a path has a structural engine
 	ws           WorkspaceFn         // may be nil; anchors workspace-relative entries in paths
+	contested    ContestedFn         // may be nil; refuses a relative entry once the connection's pin is contested
 }
 
 // NewReadMultipleFiles mirrors NewReadFile's constructor shape: tracker may be
@@ -101,6 +102,13 @@ func (t *ReadMultipleFiles) WithBoundary(guard BoundaryGuard) *ReadMultipleFiles
 // paths resolve against the workspace root, matching read_file. Nil-safe.
 func (t *ReadMultipleFiles) WithWorkspace(ws WorkspaceFn) *ReadMultipleFiles {
 	t.ws = ws
+	return t
+}
+
+// WithContested wires the connection's contested-pin reporter so a RELATIVE
+// entry is refused once the pin is contested (issue #182). Nil-safe.
+func (t *ReadMultipleFiles) WithContested(fn ContestedFn) *ReadMultipleFiles {
+	t.contested = fn
 	return t
 }
 
@@ -306,6 +314,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 	reader := (&ReadFile{tracker: t.tracker, readsFor: t.readsFor}).
 		WithBoundary(t.guard).
 		WithWorkspace(t.ws).
+		WithContested(t.contested).
 		WithWrites(t.writes).
 		WithWritesFor(t.writesFor).
 		WithOutsideLabel(t.outsideFn).

@@ -307,6 +307,9 @@ func formatReachabilityLayers(g *topology.PackageGraph, res *topology.Reachabili
 	return capReachabilityBytes(sb.String())
 }
 
+// reachabilityTruncatedNote is included in the hard total response cap.
+const reachabilityTruncatedNote = "\n  [response truncated to fit the byte cap]"
+
 // capReachabilityBytes is the hard backstop under reachabilityMaxBytes,
 // truncating on a line boundary and saying so. The per-shape sample caps
 // above are what actually shape a normal answer; this only fires on a
@@ -316,9 +319,10 @@ func capReachabilityBytes(s string) string {
 	if len(s) <= reachabilityMaxBytes {
 		return s
 	}
-	cut := s[:reachabilityMaxBytes]
+	budget := reachabilityMaxBytes - len(reachabilityTruncatedNote)
+	cut := s[:budget]
 	if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
 		cut = cut[:idx]
 	}
-	return cut + "\n  [response truncated to fit the byte cap]"
+	return cut + reachabilityTruncatedNote
 }

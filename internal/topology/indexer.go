@@ -42,6 +42,21 @@ type Indexer struct {
 	done  chan struct{}
 	wg    sync.WaitGroup
 
+	// passCtx is cancelled by Stop so a derived-edge rebuild can abandon its
+	// transaction instead of making wg.Wait() sit out a full pass — the cost
+	// `plumb restart` used to pay. It is deliberately NOT threaded into per-file
+	// dispatch: processUpsert records a file as errored when extraction fails,
+	// so a shutdown cancel there would write an error row for every in-flight
+	// file. See the note in runQueueCycle.
+	passCtx    context.Context
+	passCancel context.CancelFunc
+
+	// forceFullRebuild makes the next derived-edge rebuild wholesale. It is set
+	// when a pass fails partway, so a cycle that got one of the two passes
+	// committed cannot leave a scoped rebuild reasoning from a half-updated
+	// graph. Only the single background worker goroutine touches it.
+	forceFullRebuild bool
+
 	// idleReclaim is the debounce delay before draining the parse-arena pool once
 	// the queue goes quiet. A steady trickle of single-file edits never trips the
 	// per-cycle burst gate (shouldReclaimAfterBurst), so without this the pooled
@@ -80,6 +95,7 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64, r
 	if maxSize <= 0 {
 		maxSize = 512 * 1024
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Indexer{
 		workspace:   workspace,
 		db:          db,
@@ -91,6 +107,8 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64, r
 		queue:       make(chan indexOp, 256),
 		done:        make(chan struct{}),
 		state:       "idle",
+		passCtx:     ctx,
+		passCancel:  cancel,
 	}
 }
 
@@ -112,6 +130,9 @@ func (idx *Indexer) Stop() {
 	default:
 		close(idx.done)
 	}
+	// Cancel before waiting: a derived-edge rebuild in flight aborts its
+	// transaction rather than running to completion under wg.Wait().
+	idx.passCancel()
 	idx.wg.Wait()
 }
 
@@ -220,54 +241,26 @@ func (idx *Indexer) backgroundWorker() {
 func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 	ops := idx.drain(initial)
 	idx.setState("running", "")
-	reclaimed := false
-	var lastErr error
-	for _, o := range ops {
-		// Background() is deliberate: the per-file extract timeout wraps the
-		// parse itself (extractFile), so it does not need an upstream deadline,
-		// and under a parent cancel every remaining op in the drain would fail
-		// individually (the loop continues past errors). If a cancellable
-		// parent is ever threaded through here (and into processResync below),
-		// processUpsert — the caller that decides whether to record — must
-		// first distinguish errors.Is(err, context.Canceled) (the worker is
-		// stopping; the file did not earn an error row) from
-		// context.DeadlineExceeded, which it did; otherwise every in-flight
-		// file is recorded as an error on shutdown.
-		err := idx.dispatch(context.Background(), o)
-		if err != nil {
-			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
-			lastErr = err
-			continue
-		}
-		if o.kind == opResync {
-			// Credit the reclaim only when the resync SUCCEEDED — processResync
-			// drains the pool as its final step, so a walk/prune failure means no
-			// drain ran. Crediting on intent would still cancel the idle-reclaim
-			// backstop, narrowly re-opening the retention this guards against.
-			reclaimed = true
-		}
-	}
+	changes, reclaimed, lastErr := idx.processOps(ops)
 	if idx.takeResyncPending() {
-		if err := idx.processResync(context.Background()); err != nil {
+		changed, err := idx.processResyncChanged(context.Background())
+		if err != nil {
 			slog.Warn("topology: recovery resync error", "err", err)
 			lastErr = err
 		} else {
 			reclaimed = true
+			if changed {
+				changes.markFull()
+			}
 		}
 	}
-	// Cross-file import edges are resolved after the batch, not during it: an
-	// import can only be linked to a package once that package has been indexed,
-	// which is not knowable while walking a single file. Running it per drain
-	// rather than per file also collapses a checkout-sized burst into one pass.
-	if err := idx.linkImports(); err != nil {
-		slog.Warn("topology: import linking error", "err", err)
-		lastErr = err
-	}
-	// Cross-file CALL edges are resolved after the imports pass for the same
-	// reason and one more: a call's target may live in a file indexed later in
-	// this very batch, so nothing per-file can see it.
-	if err := idx.resolveCalls(context.Background()); err != nil {
-		slog.Warn("topology: call resolution error", "err", err)
+	// Cross-file edges are resolved after the batch, not during it: an import can
+	// only be linked to a package once that package has been indexed, and a
+	// call's target may live in a file indexed later in this very batch, so
+	// nothing per-file can see either. Running it per drain rather than per file
+	// also collapses a checkout-sized burst into one pass.
+	if err := idx.rebuildDerived(changes); err != nil {
+		slog.Warn("topology: derived edge rebuild error", "err", err)
 		lastErr = err
 	}
 	if lastErr != nil {
@@ -284,6 +277,90 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 		reclaimed = true
 	}
 	return reclaimed
+}
+
+// processOps runs one drain's operations and reports what they actually changed.
+//
+// "Actually changed" is narrower than "was asked to do": an editor that rewrites
+// a file with identical bytes, or a resync revisiting an unchanged tree, reaches
+// here as work and leaves the graph untouched. Distinguishing the two is what
+// lets rebuildDerived skip entirely, which is the single biggest saving of the
+// derived-edge lifecycle — a save that changes nothing now costs nothing.
+func (idx *Indexer) processOps(ops []indexOp) (indexChanges, bool, error) {
+	var changes indexChanges
+	reclaimed := false
+	var lastErr error
+	for _, o := range ops {
+		// Background() is deliberate: the per-file extract timeout wraps the
+		// parse itself (extractFile), so it does not need an upstream deadline,
+		// and under a parent cancel every remaining op in the drain would fail
+		// individually (the loop continues past errors). If a cancellable
+		// parent is ever threaded through here (and into processResync above),
+		// processUpsert — the caller that decides whether to record — must
+		// first distinguish errors.Is(err, context.Canceled) (the worker is
+		// stopping; the file did not earn an error row) from
+		// context.DeadlineExceeded, which it did; otherwise every in-flight
+		// file is recorded as an error on shutdown.
+		changed, err := idx.dispatch(context.Background(), o)
+		if err != nil {
+			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
+			lastErr = err
+			continue
+		}
+		if o.kind == opResync {
+			// Credit the reclaim only when the resync SUCCEEDED — processResync
+			// drains the pool as its final step, so a walk/prune failure means no
+			// drain ran. Crediting on intent would still cancel the idle-reclaim
+			// backstop, narrowly re-opening the retention this guards against.
+			reclaimed = true
+		}
+		if !changed {
+			continue
+		}
+		if o.kind == opResync {
+			changes.markFull()
+		} else {
+			changes.mark(o.path)
+		}
+	}
+	return changes, reclaimed, lastErr
+}
+
+// rebuildDerived brings the derived cross-file edges back into agreement with
+// what this cycle changed.
+//
+// forceFullRebuild is raised BEFORE the passes run and lowered only once both
+// have committed and the fingerprint is stored. A cycle that commits the import
+// pass and then fails the call pass therefore leaves the next cycle no choice
+// but a wholesale rebuild, rather than letting a scoped rebuild reason from a
+// graph only half of which was updated.
+func (idx *Indexer) rebuildDerived(changes indexChanges) error {
+	if idx.passCtx.Err() != nil {
+		// Shutting down. The next Start() enqueues a full resync, and the missing
+		// fingerprint update forces that cycle to rebuild wholesale, so nothing
+		// is lost by not running here.
+		return nil
+	}
+	mode, fingerprint, err := idx.planRebuild(idx.passCtx, changes)
+	if err != nil {
+		idx.forceFullRebuild = true
+		return err
+	}
+	if mode == rebuildSkip {
+		return nil
+	}
+	idx.forceFullRebuild = true
+	if err := idx.linkImportsContext(idx.passCtx, mode, changes); err != nil {
+		return err
+	}
+	if err := idx.resolveCallsContext(idx.passCtx, mode, changes); err != nil {
+		return err
+	}
+	if err := writeMeta(idx.passCtx, idx.db, fingerprint); err != nil {
+		return err
+	}
+	idx.forceFullRebuild = false
+	return nil
 }
 
 // reclaimAfterOps is the burst size at which runQueueCycle reclaims transient
@@ -327,13 +404,14 @@ func (idx *Indexer) drain(initial indexOp) []indexOp {
 	}
 }
 
-func (idx *Indexer) dispatch(ctx context.Context, op indexOp) error {
+// dispatch runs one operation and reports whether it changed any indexed rows.
+func (idx *Indexer) dispatch(ctx context.Context, op indexOp) (bool, error) {
 	switch op.kind {
 	case opUpsert:
-		return idx.processUpsert(ctx, op.path)
+		return idx.processUpsertChanged(ctx, op.path)
 	case opDelete:
-		return idx.processDelete(ctx, op.path)
+		return idx.processDeleteChanged(ctx, op.path)
 	default:
-		return idx.processResync(ctx)
+		return idx.processResyncChanged(ctx)
 	}
 }

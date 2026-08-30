@@ -53,14 +53,15 @@ var findReferencesSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type FindReferences struct {
-	client  lsp.Client
-	cache   *cache.Cache
-	ttl     time.Duration
-	timeout time.Duration
-	warmup  LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
-	xcode   XcodeHintFn
-	proof   XcodeProofFn
+	client    lsp.Client
+	cache     *cache.Cache
+	ttl       time.Duration
+	timeout   time.Duration
+	warmup    LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
+	ws        WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
+	xcode     XcodeHintFn
+	proof     XcodeProofFn
 }
 
 // WithLSPWarmup wires the warm-up probe so a failure against a still-warming
@@ -93,6 +94,13 @@ func (t *FindReferences) WithWorkspace(ws WorkspaceFn) *FindReferences {
 	return t
 }
 
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *FindReferences) WithContested(fn ContestedFn) *FindReferences {
+	t.contested = fn
+	return t
+}
+
 func (t *FindReferences) Name() string                 { return "find_references" }
 func (t *FindReferences) InputSchema() json.RawMessage { return findReferencesSchema }
 func (t *FindReferences) Description() string {
@@ -119,7 +127,11 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if a.URI == "" {
 		return "", errors.New("find_references: uri is required")
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("find_references: %w", rerr)
+	}
 
 	includeDecl := true
 	if a.IncludeDeclaration != nil {

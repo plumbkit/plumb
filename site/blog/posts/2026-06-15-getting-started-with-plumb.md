@@ -86,7 +86,7 @@ plumb to give me an outline of this project and the riskiest files to change."*
 One more thing worth knowing on day one:
 
 ```bash
-plumb tui
+plumb              # no subcommand — this IS the live dashboard
 ```
 
 That opens a live dashboard — every active session and the file it's touching,

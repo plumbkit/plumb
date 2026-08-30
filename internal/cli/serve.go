@@ -37,9 +37,9 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveFlagNoReconnect, "no-reconnect", false,
 		"disable transparent daemon reconnect; exit on daemon failure (legacy byte-pump proxy)")
 	serveCmd.Flags().StringArrayVar(&serveFlagAllowDirs, "allow-dir", nil,
-		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the detected workspace and config extra_roots.")
+		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the pinned workspace and config extra_roots; inert until a workspace is pinned — never a workspace source on an unattached serve.")
 	serveCmd.Flags().StringVar(&serveFlagWorkspace, "workspace", "",
-		"pin this connection's workspace attach hint to a path (also PLUMB_WORKSPACE). Overrides the default serve-cwd hint for clients that report no roots; never overrides an explicit session_start pin.")
+		"pre-pin this connection's workspace to a path (also PLUMB_WORKSPACE) for clients that report no roots. Without it serve starts unattached and session_start pins the workspace; never overrides an explicit session_start pin.")
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
@@ -58,23 +58,32 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	allowDirs := resolveAllowDirs(serveFlagAllowDirs, os.Getenv("PLUMB_ALLOWED_DIRS"))
 
-	// The workspace attach hint transported in the initialize frame's _meta:
-	// an explicit --workspace/PLUMB_WORKSPACE wins over the serve proxy's
-	// working directory, the historical advisory hint for clients that report
-	// no roots (e.g. Claude Desktop). Getwd returns an absolute path; on error
-	// the hint is the explicit value alone, or omitted entirely.
+	// The explicit workspace pre-pin transported in the initialize frame's
+	// _meta: --workspace wins over PLUMB_WORKSPACE, and there is deliberately NO
+	// serve-cwd fallback — cwd is not intent (an MCP client spawns serve from its
+	// own launcher's directory, which says nothing about the project), so a serve
+	// started with neither starts UNATTACHED and session_start({workspace}) is
+	// the sole workspace-pin authority. The cwd is still captured for
+	// diagnostics in the unattached log below, never for an attach.
 	cwd, _ := os.Getwd()
-	workspace := resolveWorkspaceHint(serveFlagWorkspace, os.Getenv("PLUMB_WORKSPACE"), cwd)
+	workspace := resolveWorkspaceHint(serveFlagWorkspace, os.Getenv("PLUMB_WORKSPACE"))
 
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
 		if len(allowDirs) > 0 {
 			slog.Warn("serve: --allow-dir is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
 		}
-		if workspace != cwd {
+		if workspace != "" {
 			slog.Warn("serve: --workspace is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
 		}
 		return proxyStdio(ctx, conn)
+	}
+
+	// Name the unattached state at startup so a later "no workspace yet" reads
+	// as intent, not a bug. Only the resilient proxy ever transported the hint,
+	// so only here can the absence of one be new information.
+	if workspace == "" {
+		slog.Info("serve: no --workspace/PLUMB_WORKSPACE — starting unattached; the caller pins the workspace with session_start", "cwd", cwd)
 	}
 
 	p := newReconnectingProxy(proxyDeps{
@@ -86,7 +95,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
 		proxySessionID:    newProxySessionID(),
-		cwd:               workspace,
+		workspace:         workspace,
 	})
 	return p.run(ctx)
 }
@@ -117,23 +126,26 @@ func resolveAllowDirs(flags []string, env string) []string {
 	return out
 }
 
-// resolveWorkspaceHint picks the workspace attach hint the proxy transports in
-// the initialize frame's _meta: an explicit --workspace flag wins over
-// PLUMB_WORKSPACE, which wins over the serve process's working directory; ""
-// means no attach hint at all. Like resolveAllowDirs, an explicit value is
-// $VAR-expanded in the serve process's environment and made absolute, so the
-// daemon — a separate, possibly differently-rooted process — receives a
-// canonical-ready path; blank values are treated as unset. Symlink
-// canonicalisation is deliberately left to the daemon's pool.Detect, which
-// already resolves the hint exactly as it resolves any other candidate root —
-// canonicalising here as well could diverge from what Detect actually attaches.
-func resolveWorkspaceHint(flag, env, cwd string) string {
+// resolveWorkspaceHint picks the explicit workspace pre-pin the proxy
+// transports in the initialize frame's _meta: the --workspace flag wins over
+// PLUMB_WORKSPACE. There is deliberately NO serve-cwd fallback — the proxy's
+// working directory is whichever directory the MCP client's launcher happened
+// to use, which is not a declaration of intent — so with neither flag nor env
+// the serve starts unattached and session_start({workspace}) pins the
+// workspace. Like resolveAllowDirs, an explicit value is $VAR-expanded in the
+// serve process's environment and made absolute, so the daemon — a separate,
+// possibly differently-rooted process — receives a canonical-ready path; blank
+// values are treated as unset. Symlink canonicalisation is deliberately left to
+// the daemon's pool.Detect, which already resolves the hint exactly as it
+// resolves any other candidate root — canonicalising here as well could diverge
+// from what Detect actually attaches.
+func resolveWorkspaceHint(flag, env string) string {
 	v := strings.TrimSpace(os.ExpandEnv(flag))
 	if v == "" {
 		v = strings.TrimSpace(os.ExpandEnv(env))
 	}
 	if v == "" {
-		return cwd
+		return ""
 	}
 	if abs, err := filepath.Abs(v); err == nil {
 		v = abs

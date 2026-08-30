@@ -146,7 +146,10 @@ func TestTopologyAffected_FormatAggregatesRatherThanEnumerates(t *testing.T) {
 // It asks the clamp what the walk will actually run with, rather than reading
 // the constants, so it follows a change to the clamp instead of drifting from it.
 func TestGraphBudgetSurvivesTheTraversalCeilings(t *testing.T) {
-	asked := graphTraversalOpts()
+	asked := graphTraversalOpts(false)
+	if graphTraversalOpts(false).IncludeDerivedCalls || !graphTraversalOpts(true).IncludeDerivedCalls {
+		t.Fatalf("derived calls must be opt-in for the traversal")
+	}
 	// Vacuity guard: the point of the split is that this budget sits ABOVE the
 	// ceiling the MCP schemas advertise. Below it, every assertion here would
 	// hold for the broken code too.

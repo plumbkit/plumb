@@ -17,19 +17,32 @@ import (
 // os.Getwd(). The daemon is a singleton whose working directory is unrelated to
 // any workspace, so resolving against it would silently touch the wrong file;
 // leaving the path relative lets the boundary check reject it honestly instead.
-func resolvePath(ctx context.Context, path string, ws WorkspaceFn) string {
+//
+// A non-empty relative path is refused outright — before anchoring — when
+// contested reports true: on a connection whose pin is being fought over, a
+// relative path names no project of its own and would be aimed at whichever
+// root currently holds the pin (issue #182). See ContestedRelativePathError.
+//
+// The p != "" guard is deliberate, not an oversight: an EMPTY path means "the
+// workspace root" (search_in_files/find_files with no path argument), which is
+// read-only by construction, so it is still allowed to default to the
+// contested pin.
+func resolvePath(ctx context.Context, path string, ws WorkspaceFn, contested ContestedFn) (string, error) {
 	p := paths.URIToPath(path)
+	if !filepath.IsAbs(p) && p != "" && contested != nil && contested() {
+		return "", classifyContestedRelative(ContestedRelativePathError{Path: p})
+	}
 	if filepath.IsAbs(p) {
-		return p
+		return p, nil
 	}
 	base := ""
 	if ws != nil {
 		base = ws(ctx)
 	}
 	if base == "" {
-		return filepath.Clean(p)
+		return filepath.Clean(p), nil
 	}
-	return filepath.Join(base, p)
+	return filepath.Join(base, p), nil
 }
 
 // toFileURI normalises a filesystem path or file:// URI to a file:// URI, so
@@ -63,11 +76,14 @@ func toFileURI(s string) string {
 // An absolute path or existing file:// URI round-trips unchanged; when ws is
 // nil or resolves to "" a relative s is left relative (cleaned), so the
 // boundary check rejects it rather than producing a bogus file://app/... URI.
-func toFileURIAnchored(ctx context.Context, s string, ws WorkspaceFn) string {
+func toFileURIAnchored(ctx context.Context, s string, ws WorkspaceFn, contested ContestedFn) (string, error) {
 	if s == "" || strings.HasPrefix(s, "file://") {
-		return s
+		return s, nil
 	}
 	if !filepath.IsAbs(s) {
+		if contested != nil && contested() {
+			return "", classifyContestedRelative(ContestedRelativePathError{Path: s})
+		}
 		if ws != nil {
 			if base := ws(ctx); base != "" {
 				s = filepath.Join(base, s)
@@ -75,7 +91,7 @@ func toFileURIAnchored(ctx context.Context, s string, ws WorkspaceFn) string {
 		}
 	}
 	if !filepath.IsAbs(s) {
-		return "file://" + s
+		return "file://" + s, nil
 	}
-	return paths.PathToURI(s)
+	return paths.PathToURI(s), nil
 }

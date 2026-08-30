@@ -74,11 +74,12 @@ var diagnosticsSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type Diagnostics struct {
-	inv    waitableDiagnosticsSource
-	opener fileOpener // nil when no LSP client is available
-	guard  BoundaryGuard
-	warmup LSPWarmupFn // optional; flags a report taken while the server is still warming
-	ws     WorkspaceFn // may be nil; anchors workspace-relative uris to the pinned root
+	inv       waitableDiagnosticsSource
+	opener    fileOpener // nil when no LSP client is available
+	guard     BoundaryGuard
+	warmup    LSPWarmupFn // optional; flags a report taken while the server is still warming
+	ws        WorkspaceFn // may be nil; anchors workspace-relative uris to the pinned root
+	contested ContestedFn // may be nil; refuses a relative uri once the pin is contested
 }
 
 func NewDiagnostics(inv waitableDiagnosticsSource) *Diagnostics {
@@ -112,6 +113,13 @@ func (t *Diagnostics) WithWorkspace(ws WorkspaceFn) *Diagnostics {
 	return t
 }
 
+// WithContested wires the contested-pin reporter so a RELATIVE uri is refused
+// once the pin is contested (issue #182). Nil-safe.
+func (t *Diagnostics) WithContested(fn ContestedFn) *Diagnostics {
+	t.contested = fn
+	return t
+}
+
 func (t *Diagnostics) Name() string                 { return "diagnostics" }
 func (t *Diagnostics) InputSchema() json.RawMessage { return diagnosticsSchema }
 func (t *Diagnostics) Description() string {
@@ -131,9 +139,16 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("diagnostics: invalid arguments: %w", err)
 	}
-	a.URI = toFileURIAnchored(ctx, a.URI, t.ws)
+	var rerr error
+	a.URI, rerr = toFileURIAnchored(ctx, a.URI, t.ws, t.contested)
+	if rerr != nil {
+		return "", fmt.Errorf("diagnostics: %w", rerr)
+	}
 	for i := range a.URIs {
-		a.URIs[i] = toFileURIAnchored(ctx, a.URIs[i], t.ws)
+		a.URIs[i], rerr = toFileURIAnchored(ctx, a.URIs[i], t.ws, t.contested)
+		if rerr != nil {
+			return "", fmt.Errorf("diagnostics: %w", rerr)
+		}
 	}
 
 	// Backward-compat: scalar uri field is treated as uris:[uri].
