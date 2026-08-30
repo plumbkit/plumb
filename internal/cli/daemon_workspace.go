@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,8 +18,11 @@ import (
 // for a tool call, its entire budget. A client that never answers (minimal or
 // half-implemented MCP clients do exist) must degrade to the documented
 // defer-to-OnBeforeTool path, not stall the call; every roots/list caller
-// goes through rootsFromClient, so the bound lives here.
-const rootsListProbeTimeout = 5 * time.Second
+// goes through rootsFromClient, so the bound lives here. A var, not a const:
+// tests shorten it to prove the bound itself, not just the behaviour around
+// it — TestRootsFromClient_BoundReturnsUnderCallerDeadline fails if the
+// WithTimeout below is deleted.
+var rootsListProbeTimeout = 5 * time.Second
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root
 // URI, or "" if the client does not support roots/list or returns no roots.
@@ -52,7 +56,13 @@ func rootsFromClient(ctx context.Context, request mcp.RequestFn, logger *slog.Lo
 	defer cancel()
 	raw, err := request(probeCtx, "roots/list", nil)
 	if err != nil {
-		logger.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			// A slow-but-alive client lands here, not in the "not supported"
+			// line below: the probe had a deadline and the client outran it.
+			logger.Info("roots/list probe timed out — client never answered; deferring to OnBeforeTool", "bound", rootsListProbeTimeout)
+		} else {
+			logger.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
+		}
 		return nil
 	}
 
