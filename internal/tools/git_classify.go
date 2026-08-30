@@ -49,6 +49,37 @@ func checkGitGlobalFlags(args []string) error {
 	return nil
 }
 
+// gitRemoteLeadingSubcommands are the network verbs whose first positional
+// argument is a remote name or URL. They are exactly the calls where a caller
+// that repeats the verb inside args — the most common arg-shape slip this tool
+// sees — silently hands git a remote named after the verb and gets back the
+// cryptic "fatal: '<verb>' does not appear to be a git repository". The guard
+// is limited to this set because elsewhere the first argument can legitimately
+// repeat the verb (`git stash push`).
+var gitRemoteLeadingSubcommands = map[string]bool{
+	"push":  true,
+	"fetch": true,
+	"pull":  true,
+}
+
+// rejectDuplicatedLeadingSubcommand refuses a call whose args repeat the
+// subcommand as their first element, for the remote-leading verbs where the
+// duplicate is unambiguous caller error. It refuses rather than silently
+// stripping the duplicate: a caller that passed the token twice may have meant
+// something else, and quietly dropping an argument is how a command succeeds
+// at the wrong thing.
+func rejectDuplicatedLeadingSubcommand(sub string, args []string) error {
+	if len(args) == 0 || args[0] != sub || !gitRemoteLeadingSubcommands[sub] {
+		return nil
+	}
+	return fmt.Errorf(
+		"git %s: args must not repeat the subcommand — the verb goes only in the subcommand field, "+
+			"and args carries its arguments (e.g. subcommand %q, args [\"origin\", \"main\"]). "+
+			"As passed, git treats %q as the remote name and fails with %q",
+		sub, sub, sub, "'"+sub+"' does not appear to be a git repository'",
+	)
+}
+
 // normaliseSwitchCreate rewrites `git switch -c/-C` to its long form
 // (--create/--force-create). git switch's short create flags collide with the
 // globally-denylisted -c/-C (the -c key=value config-injection and -C run-in-path

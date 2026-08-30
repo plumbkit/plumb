@@ -163,6 +163,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := checkGitGlobalFlags(a.Args); err != nil {
 		return "", err
 	}
+	if err := rejectDuplicatedLeadingSubcommand(a.Subcommand, a.Args); err != nil {
+		return "", err
+	}
 	tier := classifyGit(a.Subcommand, a.Args)
 	if tier == tierReject {
 		if a.Subcommand == "stash" && len(a.Args) > 0 {
