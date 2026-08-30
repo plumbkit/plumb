@@ -18,6 +18,19 @@ make build
 `golangci-lint run --fix ./...`, so formatting and lint issues are caught before
 they reach the tree.
 
+> **Keep your golangci-lint on the pinned version.** `GOLANGCI_LINT_VERSION` in
+> `.github/workflows/ci.yml` is the single source of truth, and the pre-commit
+> hook reads it to warn when your binary differs. The warning matters because the
+> hook runs `--fix`: a newer binary brings newer gofumpt rules, so it can reformat
+> files your commit never touched, and they sit as unstaged modifications until
+> someone's `git add -A` sweeps them into an unrelated PR. Stage files by name
+> rather than with `-A` whenever the warning fires. To match the pin:
+> `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v<pinned>`
+> — note that a Homebrew-installed `golangci-lint` drifts on its own schedule and
+> will re-break the match on the next `brew upgrade`. When the newer version is
+> the one we want instead, bump the pin and commit any reformatting as its own
+> commit.
+
 ## Build & verify
 
 | Command | Does |
