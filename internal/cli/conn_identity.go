@@ -115,6 +115,11 @@ type nameClaim struct {
 	// changing it. Such a rename must not write the record back: the record
 	// already says this name, and the connection may be running under a
 	// temporary ID that would silently replace the proven one.
+	//
+	// The restore path deliberately leaves this FALSE for a record that carries
+	// no session ID: there is no proven ID to protect, so writing heals the row
+	// with this session's own — and without that, such a row would never gain an
+	// ID, never reserve its name, and report degraded on every reconnect forever.
 	restoring bool
 }
 

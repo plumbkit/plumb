@@ -83,6 +83,19 @@ func sessionIdentityMeta(frame []byte) (proxyIdentity, bool) {
 	}, true
 }
 
+// isErrorResponse reports whether a frame is a JSON-RPC error response. Anything
+// that does not parse is not treated as one — the callers' own shape checks are
+// fail-safe, so an unparseable frame contributes nothing either way.
+func isErrorResponse(frame []byte) bool {
+	var resp struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(frame, &resp); err != nil {
+		return false
+	}
+	return len(resp.Error) > 0
+}
+
 // daemonInstanceMeta extracts the daemon's process marker from an initialize
 // response frame, or "" when absent or malformed. Fail-safe like its sibling: an
 // unreadable marker becomes "unknown", never a false equality.
@@ -117,6 +130,12 @@ func daemonInstanceMeta(frame []byte) string {
 // versions cannot answer that: a restart onto the same build reports the same
 // version, and so does an idle eviction that restarted nothing.
 func (p *reconnectingProxy) observeInitializeResponse(frame []byte) {
+	if isErrorResponse(frame) {
+		// A failed initialize is not a handshake with a daemon; it establishes
+		// nothing about which process answered, and shifting the markers on it
+		// would make the next two reconnect notes report "unknown" for no reason.
+		return
+	}
 	instance := daemonInstanceMeta(frame)
 	snapshot, ok := sessionIdentityMeta(frame)
 

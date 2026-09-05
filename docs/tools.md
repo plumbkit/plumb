@@ -128,12 +128,19 @@ a durable identity that is disconnected but recoverable. The second is what stop
 a `plumb serve` outliving its daemon from having its name handed away during the
 outage.
 
-A reservation is held FOR someone, so it never refuses the party entitled to it:
-the identity that owns the name may always take it back, and so may a restarted
-`plumb serve` that re-links the same conversation (`session_start`'s `session_id`),
-which holds neither the old proxy secret nor the old session ID but is the same
-agent. With `[session] persist_state` off, reservations are not enforced at all —
-nothing would be able to reclaim one.
+A reservation is held FOR someone, so it does not refuse the party entitled to
+it: the identity that owns the name takes it back on reconnect, and so does a
+restarted `plumb serve` that re-links the same conversation (`session_start`'s
+`session_id`), which holds neither the old proxy secret nor the old session ID
+but is the same agent. That second entitlement is only as strong as the
+conversation ID the client supplies — the same basis `session_start`'s
+resume-by-linkage has always had.
+
+Reservations are enforced from the GLOBAL configuration: `[session]
+persist_state` set in a project's `.plumb/config.toml` does not switch them off,
+because this guard protects other sessions' names rather than the calling
+session's own state. With the global setting off they are not enforced at all —
+nothing would then be able to reclaim one.
 
 A session name is the address the mailbox delivers to, so a name another **live**
 session already answers to is refused (compared case-insensitively), as is `next`

@@ -407,7 +407,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 	// No exclusions here: this session has no identity yet, so it is entitled to
 	// none of them. It is about to be given a name of its own.
 	var reserved session.Reserved
-	if cfg.Session.PersistState {
+	if reservationsEnabled(store) {
 		reserved = reservationsExcept(sessState, "", "")
 	}
 	reg, err := session.RegisterReserved(session.Info{DaemonVersion: Version}, reserved)

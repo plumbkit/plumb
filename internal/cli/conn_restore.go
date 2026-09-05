@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
@@ -249,7 +250,19 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOu
 	if rec.Name == s.sessionName() {
 		return true
 	}
-	_, err := s.renameSessionClaiming(rec.Name, nameClaim{sessionID: rec.SessionID, restoring: true})
+	// BOTH entitlements, not just the session ID. A resume-by-external-ID writes
+	// a SECOND record claiming this name under the new serve's proxy key, and
+	// records are never deleted — so the old row goes on reserving the name
+	// forever. Excluding by session ID alone drops only one of the two, and the
+	// stale one then refuses this rename on every subsequent restart: the session
+	// comes back randomly renamed for good, recoverable only by another
+	// session_start. The record's own external linkage is what identifies the
+	// other rows as the same agent's.
+	_, err := s.renameSessionClaiming(rec.Name, nameClaim{
+		sessionID:  rec.SessionID,
+		externalID: rec.ExternalID,
+		restoring:  adoption != idAbsent,
+	})
 	if err == nil {
 		if adoption == idRefused {
 			s.inheritSessionID(rec.SessionID)
@@ -257,7 +270,12 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOu
 		return true
 	}
 	if errors.Is(err, session.ErrNameTaken) {
-		s.log().Info("daemon: the proven session name is held by a live session; keeping the generated name",
+		// "held" covers both halves of ErrNameTaken now: a LIVE session answering
+		// to the name, or another retained identity RESERVING it. The distinction
+		// matters to whoever reads this line while diagnosing a session that keeps
+		// coming back renamed, and naming only the live case sends them looking for
+		// a session that may not exist.
+		s.log().Info("daemon: the proven session name is held by a live session or reserved by another retained identity; keeping the generated name",
 			"proven", rec.Name, "using", s.sessionName())
 		return false
 	}
@@ -318,16 +336,36 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOu
 // session.Rename is untouched, so a name a live peer actually answers to is
 // refused regardless of what is excluded here.
 func (s *connSession) reservedNamesFor(ownerID, ownerExternalID string) session.Reserved {
-	v := s.view()
-	if !s.namePersistEnabled(v) {
-		// The feature is off (or this is not a serve proxy). Enforcing
-		// reservations here would be the worst of both worlds: nothing writes
-		// records, so nothing can ever reclaim a name, and every historically
-		// recorded name stays locked out forever. An opt-out has to remove the
-		// cost as well as the benefit.
+	if !reservationsEnabled(s.store) {
 		return nil
 	}
 	return reservationsExcept(s.sessionState, ownerID, ownerExternalID)
+}
+
+// reservationsEnabled reports whether name reservations are enforced, reading
+// the GLOBAL configuration and deliberately not the per-project merge.
+//
+// Two reasons, and the first is a boundary rather than a preference.
+// `session.persist_state` is a ClassPreference key, so a project's
+// `.plumb/config.toml` may set it without being trusted — which is defensible
+// while the setting only makes a connection's OWN state more or less sticky,
+// and is not once it also decides whether a guard protecting OTHER sessions'
+// names applies. A repository could otherwise ship three lines that let the
+// session attached to it take a name reserved for somebody else, and receive
+// the mail addressed to it.
+//
+// Second, it keeps this in step with the name DRAW in newConnSession, which
+// reads the same global value: a connection refused a reserved name at
+// registration must not be handed it by a rename a moment later.
+//
+// It does not require a proxy session ID either. That gates WRITING a record;
+// reading other sessions' reservations is what protects them, and a connection
+// with no credential of its own is exactly the one with no claim on their names.
+func reservationsEnabled(store *config.Store) bool {
+	if store == nil {
+		return false
+	}
+	return store.Current().Session.PersistState
 }
 
 // reservationsExcept reads the durable reservations and drops the ones the given

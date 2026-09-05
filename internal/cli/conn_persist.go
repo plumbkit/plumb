@@ -145,6 +145,20 @@ func (s *connSession) persistIdentity() bool {
 	if !s.namePersistEnabled(v) || name == "" {
 		return false
 	}
+	if v.recovery == recoveryDegraded {
+		// This connection is running under a TEMPORARY identity: recovery found
+		// the record and could not apply it. Writing now records the stand-in
+		// over the proven identity — the fork the refusal paths exist to avoid,
+		// arriving through whichever caller happens to persist next. session_start's
+		// external-ID linker is that caller in practice, and it is the first call
+		// most agents make.
+		//
+		// The guard lives HERE rather than at each call site precisely because the
+		// last two rounds of this fix each closed one path and left another open.
+		s.log().Debug("daemon: not recording a temporary identity over the proven durable record",
+			"temporary", s.sessionID(), "proven", v.persistedIdentity.SessionID)
+		return false
+	}
 	rec := sessionstate.Identity{
 		Name:       name,
 		SessionID:  s.sessionID(),

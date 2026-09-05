@@ -463,6 +463,172 @@ func TestRestore_ReservationDoesNotBlockTheSameConversationResuming(t *testing.T
 	}
 }
 
+// TestRestore_ResumeThenRestartStillRecoversWithoutAnotherSessionStart is the
+// case the sibling test above stops one step short of, and it is the one that
+// actually breaks the headline guarantee.
+//
+// Resuming by external ID writes a SECOND identity record claiming the name,
+// under the restarted serve's own proxy key. Records are never deleted, so the
+// OLD row keeps reserving that name forever. If the handshake restore excludes
+// only by session ID it drops one row and is refused by the other — on every
+// restart, permanently, recoverable only by yet another session_start. That is
+// precisely the "no extra session_start needed" claim the real-process test
+// makes, defeated by the feature added to protect it.
+func TestRestore_ResumeThenRestartStillRecoversWithoutAnotherSessionStart(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+	const externalID = "conversation-abc"
+
+	// Serve #1 establishes the identity and links the conversation.
+	first := newPersistSession(t, store, ss, "proxy-old")
+	provenName := first.sessionName()
+	session.SetExternalID(first.sessionID(), externalID)
+	first.persistIdentity()
+	first.close()
+
+	// Serve #2 (a restarted client): new proxy key, resumes the name by linkage.
+	resumed := newPersistSession(t, store, ss, "proxy-new")
+	session.SetExternalID(resumed.sessionID(), externalID)
+	if _, err := resumed.renameSessionResuming(provenName, externalID); err != nil {
+		t.Fatalf("resume by external ID: %v", err)
+	}
+	resumedID := resumed.sessionID()
+	resumed.close()
+
+	// Now a plain DAEMON restart under serve #2 — no session_start at all.
+	after := newPersistSession(t, store, ss, "proxy-new")
+	t.Cleanup(after.close)
+	if got := after.sessionName(); got != provenName {
+		t.Fatalf("after a resume and then a restart the session is called %q, want %q — the record "+
+			"left behind by the previous serve is still reserving the name, and the restore has "+
+			"no way past it without another session_start", got, provenName)
+	}
+	if got := after.sessionID(); got != resumedID {
+		t.Errorf("after the restart the session runs under %q, want the resumed %q", got, resumedID)
+	}
+	if got := after.recovery(); got != recoveryRestored {
+		t.Errorf("recovery outcome = %q, want %q", got, recoveryRestored)
+	}
+}
+
+// TestRestore_DegradedSessionStartDoesNotOverwriteTheRecord closes the last
+// path by which a temporary identity reached the durable record.
+//
+// The refusal paths and the restoring rename were each fixed in turn, and each
+// time the write simply arrived through the next caller along. session_start's
+// external-ID linker is that caller in practice — and it is the FIRST call most
+// agents make, in exactly the window (a restart with a predecessor still
+// detaching) where degradation happens. Hence the guard sits in persistIdentity
+// itself rather than at a third call site.
+func TestRestore_DegradedSessionStartDoesNotOverwriteTheRecord(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(first.close) // STAYS LIVE, so the reconnect below degrades
+	provenID, provenName := first.sessionID(), first.sessionName()
+
+	degraded := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(degraded.close)
+	if degraded.recovery() != recoveryDegraded {
+		t.Fatalf("the reconnect did not degrade; the test is not set up as intended")
+	}
+
+	// The agent now calls session_start and links its conversation, exactly as
+	// registerAllTools wires it.
+	session.SetExternalID(degraded.sessionID(), "conversation-abc")
+	degraded.persistIdentity()
+
+	after, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("the durable record vanished: (%+v, %v, %v)", after, ok, err)
+	}
+	if after.SessionID != provenID || after.Name != provenName {
+		t.Fatalf("session_start on a DEGRADED connection rewrote the record to (%q, %q); it must "+
+			"still name the proven (%q, %q). A connection running under a temporary identity must "+
+			"not record it, whichever caller happens to persist next.",
+			after.SessionID, after.Name, provenID, provenName)
+	}
+}
+
+// TestRestore_LegacyRecordGainsASessionID: applying a record that has a name but
+// no session ID must UPGRADE it, not merely use it.
+//
+// Suppressing the write during a restore is right when there is a proven ID to
+// protect and wrong when there is not: left alone such a row never gains an ID,
+// so it never reserves its name (a reservation with no owner is skipped), bound
+// mail never survives a restart, and recovery reports degraded forever. The
+// same reasoning the invalid-name branch already applies.
+func TestRestore_LegacyRecordGainsASessionID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "legacy-stag"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	if got := first.sessionName(); got != "legacy-stag" {
+		t.Fatalf("the legacy name was not applied (%q); the test is not set up as intended", got)
+	}
+	healedID := first.sessionID()
+	first.close()
+
+	rec, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadIdentity = (%+v, %v, %v)", rec, ok, err)
+	}
+	if rec.SessionID != healedID {
+		t.Fatalf("the record still has session ID %q after being applied; want it upgraded to %q, "+
+			"or it reserves nothing and degrades on every reconnect forever", rec.SessionID, healedID)
+	}
+
+	// And the next reconnect is a full restore rather than another degrade.
+	next := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(next.close)
+	if got := next.recovery(); got != recoveryRestored {
+		t.Errorf("the reconnect after healing reports %q, want %q", got, recoveryRestored)
+	}
+	if got := next.sessionID(); got != healedID {
+		t.Errorf("the reconnect runs under %q, want the healed %q", got, healedID)
+	}
+}
+
+// TestRestore_ProjectConfigCannotDisableReservations: `session.persist_state` is
+// a ClassPreference key, so an UNTRUSTED project config may set it.
+//
+// That is defensible while it only makes a connection's own state more or less
+// sticky. It stops being defensible once it also decides whether a guard
+// protecting OTHER sessions' names applies: a repository could otherwise ship
+// three lines of config that let the session attached to it take a name
+// reserved for somebody else, and receive the mail addressed to that name. So
+// the reservation gate reads the GLOBAL setting.
+func TestRestore_ProjectConfigCannotDisableReservations(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ss := openStateStore(t)
+	if err := ss.SaveIdentity("proxy-victim", sessionstate.Identity{
+		Name: "calm-stag", SessionID: "id-victim",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Global says persistence is ON; the session's merged view says off, as a
+	// project config would make it.
+	store := config.NewStore(config.Defaults())
+	s := newPersistSession(t, store, ss, "proxy-attacker")
+	t.Cleanup(s.close)
+	s.mutate(func(v *sessionView) { v.session.PersistState = false })
+
+	if _, err := s.renameSession("calm-stag"); err == nil {
+		t.Fatal("a project-level persist_state=false let a session take a name reserved for " +
+			"another identity; the reservation guard protects other sessions and must not be " +
+			"switchable from an untrusted repository")
+	}
+}
+
 // TestRestore_ReservationsAreNotEnforcedWithPersistenceOff: an explicit opt-out
 // must disable the whole feature, reads included.
 //

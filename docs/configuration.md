@@ -431,6 +431,8 @@ Authorisation is the record and nothing else. A plumb session ID or a session na
 
 With `persist_state` off there is no durable continuity at all, and plumb says so rather than implying otherwise: the reconnect note reports that this connection has no durable identity, and its name and ID are new. Nothing is written, and — equally — nothing is enforced: name reservations are ignored, because with the feature off no session could ever reclaim one, and an opt-out that kept the cost while removing the benefit would be worse than not having the feature.
 
+The reservation half reads the **global** setting only. `persist_state` is a preference-class key, so a project's `.plumb/config.toml` may set it untrusted — acceptable while it governs how sticky a connection's own state is, and not once it also governs a guard that protects OTHER sessions' names. A repository could otherwise ship three lines of config that let the session attached to it take a name reserved for someone else, and receive the mail addressed to that name. A project setting still applies to everything else `persist_state` covers.
+
 ## `[memory]` — per-workspace memory engine
 
 Markdown memories under `<workspace>/.plumb/memories/` are the source of truth;
