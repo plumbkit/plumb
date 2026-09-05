@@ -106,9 +106,13 @@ func taskLanguage(v sessionView, requested string) (string, error) {
 		requested, languagesWithCommands(v), requested, config.ProjectConfigPath(v.acquiredRoot))
 }
 
-// languagesWithCommands renders the languages this workspace can actually run a
-// task for, as the remedy half of a refusal. Sorted so the message is stable.
-func languagesWithCommands(v sessionView) string {
+// runnableTaskLanguages returns the languages this workspace can ACTUALLY run a
+// task for, sorted. That is a different question from which languages were
+// DETECTED, and conflating the two is how a remedy ends up naming something the
+// tool then refuses: the shipped LSP defaults give strong root markers to java,
+// kotlin and html, none of which appears in defaultTasks(), so a detected
+// language is not evidence that any command exists for it.
+func runnableTaskLanguages(v sessionView) []string {
 	var langs []string
 	for lang, tc := range v.tasks {
 		// Only what the caller could actually ask for. Config map keys are not
@@ -123,10 +127,17 @@ func languagesWithCommands(v sessionView) string {
 			langs = append(langs, lang)
 		}
 	}
+	sort.Strings(langs)
+	return langs
+}
+
+// languagesWithCommands renders runnableTaskLanguages as the remedy half of a
+// refusal.
+func languagesWithCommands(v sessionView) string {
+	langs := runnableTaskLanguages(v)
 	if len(langs) == 0 {
 		return "no language has task commands configured here"
 	}
-	sort.Strings(langs)
 	return "languages with commands: " + strings.Join(langs, ", ")
 }
 
@@ -243,7 +254,7 @@ func (s *connSession) taskState() tools.TaskState {
 	if lang == "none" {
 		lang = ""
 	}
-	st := tools.TaskState{Language: lang}
+	st := tools.TaskState{Language: lang, Runnable: runnableTaskLanguages(v)}
 	if lang != "" {
 		st.Configured = configuredSlots(v.tasks[lang], lang)
 	}

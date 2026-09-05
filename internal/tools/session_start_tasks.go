@@ -23,8 +23,15 @@ var allTaskSlots = []string{"build", "lint", "test", "e2e", "verify"}
 type TaskState struct {
 	Language    string   // the primary language task resolution uses ("" when none)
 	Configured  []string // slots with a command for that language
-	Unreachable []string // other detected languages, whose tasks run_task cannot reach
-	Commands    []string // names in the [[command]] allow-list, for run_command
+	Unreachable []string // other DETECTED languages, reachable via run_task's `language`
+	// Runnable is the languages that actually have [tasks.<lang>] commands, which
+	// is a different question from Unreachable's "what did detection find". The
+	// shipped LSP defaults give strong root markers to java, kotlin and html,
+	// none of which has default task commands — so naming a detected language as
+	// the one to pass to run_task can hand the caller an argument the tool then
+	// refuses, or claim something is runnable when nothing is.
+	Runnable []string
+	Commands []string // names in the [[command]] allow-list, for run_command
 }
 
 // WithTasks wires the resolved task/command state accessor. Injected rather than
@@ -49,7 +56,7 @@ func (t *SessionStart) writeSessionTasks(sb *strings.Builder, ws string) {
 		return
 	}
 	st := t.tasksFn()
-	if st.Language == "" && len(st.Commands) == 0 && len(st.Unreachable) == 0 {
+	if st.Language == "" && len(st.Commands) == 0 && len(st.Unreachable) == 0 && len(st.Runnable) == 0 {
 		return
 	}
 
@@ -70,9 +77,9 @@ func (t *SessionStart) writeSessionTasks(sb *strings.Builder, ws string) {
 // one line above a routing hint handing over that argument.
 func writeTaskSlotState(sb *strings.Builder, st TaskState) {
 	switch {
-	case st.Language == "" && len(st.Unreachable) > 0:
-		fmt.Fprintf(sb, "`run_task`: no primary language is attached, so an unqualified call cannot resolve — name one with `language: \"%s\"`.\n",
-			st.Unreachable[0])
+	case st.Language == "" && len(st.Runnable) > 0:
+		fmt.Fprintf(sb, "`run_task`: no primary language is attached, so an unqualified call cannot resolve — name one with `language: \"%s\"` (have: %s).\n",
+			st.Runnable[0], strings.Join(st.Runnable, ", "))
 	case st.Language == "":
 		sb.WriteString("`run_task` is unavailable — no language is attached to this workspace.\n")
 	case len(st.Configured) == 0:
@@ -98,11 +105,16 @@ func writeTaskSlotState(sb *strings.Builder, st TaskState) {
 // hint rather than a limitation — and it must say so, because the old wording
 // ("use the shell for those") actively sent agents out of the tool, losing the
 // no-shell argv contract and the trust gate, for work the tool can now do.
-// A workspace with no primary is handled by writeTaskSlotState above, which
-// already hands over the argument; naming the primary here would render the
-// empty "language ()".
+// With no primary attached the sibling list is still printed — that is the state
+// where the agent most needs to know what is here — but the sentence about
+// resolving "against the primary" is dropped, since naming an absent primary
+// rendered the empty "language ()".
 func writeUnreachableLanguages(sb *strings.Builder, st TaskState) {
-	if len(st.Unreachable) == 0 || st.Language == "" {
+	if len(st.Unreachable) == 0 {
+		return
+	}
+	if st.Language == "" {
+		fmt.Fprintf(sb, "\nAlso detected here: %s.\n", strings.Join(st.Unreachable, ", "))
 		return
 	}
 	fmt.Fprintf(sb, "\nAlso detected here: %s. An unqualified `run_task` resolves against the primary\n",

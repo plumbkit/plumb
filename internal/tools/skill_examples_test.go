@@ -68,11 +68,13 @@ var skillContentCounts = map[string]skillCounts{
 	// (batch reads before a multi-file edit) and one for edit_file's
 	// fail_on_new_errors (the refuse-to-break-the-build default verify move).
 	"plumb-refactor": {calls: 7, bullets: 0},
-	// 6, not 4: the skill gained two worked examples when the shipped test
+	// 7, not 4: the skill gained two worked examples when the shipped test
 	// defaults grew {target} placeholders and topology_affected started emitting
 	// a target run_task can take (PLAN-378) — the very composition this file's
-	// doc comment names as the defect class it exists to catch.
-	"plumb-testing": {calls: 7, bullets: 0}, // +1: run_task's `language` for a polyglot workspace
+	// doc comment names as the defect class it exists to catch — and a third when
+	// run_task took a `language` argument, so a polyglot workspace's non-primary
+	// commands became reachable through the tool.
+	"plumb-testing": {calls: 7, bullets: 0},
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill

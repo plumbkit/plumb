@@ -152,3 +152,61 @@ func TestNoCommandError_NamesLanguageAndSlots(t *testing.T) {
 		t.Errorf("expected a placeholder config key when the language is unknown, got: %s", unknown)
 	}
 }
+
+// The four combinations of (primary set?) x (siblings detected?). A re-review
+// found the no-primary branch entirely unpinned: the only test that set
+// Unreachable also set Language, so the branch added to fix the "language ()"
+// rendering could be reverted with the whole package green.
+func TestWriteSessionTasks_NoPrimaryNamesOnlyRunnableLanguages(t *testing.T) {
+	// Detection found java and typescript; only typescript has commands. The
+	// hint must name typescript — naming java would hand the agent an argument
+	// run_task refuses, which is the dead end this section exists to avoid.
+	out := renderTaskSection(t, TaskState{
+		Language:    "",
+		Unreachable: []string{"java", "typescript"},
+		Runnable:    []string{"typescript"},
+	})
+	if !strings.Contains(out, `language: "typescript"`) {
+		t.Errorf("expected the hint to name a language that HAS commands, got:\n%s", out)
+	}
+	if strings.Contains(out, `language: "java"`) {
+		t.Errorf("must not hand over a detected language with no commands, got:\n%s", out)
+	}
+	if strings.Contains(out, "is unavailable") {
+		t.Errorf("run_task is NOT unavailable here — an explicit language resolves, got:\n%s", out)
+	}
+	if !strings.Contains(out, "java") {
+		t.Errorf("the detected siblings should still be listed, got:\n%s", out)
+	}
+	if strings.Contains(out, "language ()") {
+		t.Errorf("empty primary must never be rendered, got:\n%s", out)
+	}
+}
+
+// The truth regression the same review caught: with nothing runnable, the old
+// "run_task is unavailable" was TRUE, and the fix must not replace it with a
+// claim that some language can be named.
+func TestWriteSessionTasks_NoPrimaryAndNothingRunnableStaysHonest(t *testing.T) {
+	out := renderTaskSection(t, TaskState{
+		Language:    "",
+		Unreachable: []string{"java"}, // detected, but no [tasks.java] commands
+		Runnable:    nil,
+	})
+	if !strings.Contains(out, "is unavailable") {
+		t.Errorf("with nothing runnable the section must say so, got:\n%s", out)
+	}
+	if strings.Contains(out, "name one with") {
+		t.Errorf("must not claim a language can be named when none has commands, got:\n%s", out)
+	}
+	if strings.Contains(out, "language ()") {
+		t.Errorf("empty primary must never be rendered, got:\n%s", out)
+	}
+}
+
+// Neither a primary nor siblings: unchanged, and still the honest message.
+func TestWriteSessionTasks_NoPrimaryNoSiblings(t *testing.T) {
+	out := renderTaskSection(t, TaskState{Language: "", Commands: []string{"fmt"}})
+	if !strings.Contains(out, "is unavailable") {
+		t.Errorf("expected the unavailable message, got:\n%s", out)
+	}
+}
