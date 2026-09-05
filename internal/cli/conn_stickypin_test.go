@@ -476,8 +476,15 @@ func TestStickyPin_MarkerlessExplicitPinIsSticky(t *testing.T) {
 func TestStickyPin_LanguageOnlyRepinNotRefused(t *testing.T) {
 	// forceLanguage re-pins the CURRENT root with a language override and no
 	// force flag; the guard's different-root clause must let it through even
-	// while the pin is sticky. (An inactive override is ignored by resolution —
-	// the point here is only that the call is not refused.)
+	// while the pin is sticky.
+	//
+	// The override names an ACTIVE language deliberately. This used to pass
+	// "swift", which newPersistSession's pool does not carry, and leaned on the
+	// fact that an inactive override was silently ignored — so the assertion
+	// "not refused" was being satisfied by a call that did nothing. Now that an
+	// unhonourable override is refused on its own merits, an inactive name here
+	// would fail this test for a reason that has nothing to do with the sticky
+	// guard it exists to pin.
 	store, ss := newOriginStore(t)
 	root := freshTempDir(t)
 	mustGitDir(t, root)
@@ -487,7 +494,7 @@ func TestStickyPin_LanguageOnlyRepinNotRefused(t *testing.T) {
 	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(context.Background(), root, "swift", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "go", false); err != nil {
 		t.Fatalf("language-only re-pin of a sticky pin must not be refused: %v", err)
 	}
 	if got := s.workspace(); got != root {

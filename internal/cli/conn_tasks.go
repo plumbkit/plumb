@@ -8,6 +8,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -15,16 +16,28 @@ import (
 )
 
 // taskResolver resolves slot (+ optional target) to a runnable command for this
-// session's workspace and primary language. Default- and global-supplied
-// commands always run; a command the project's .plumb/config.toml overrides
-// must be trusted first (plumb trust).
-func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, error) {
+// session's workspace. Default- and global-supplied commands always run; a
+// command the project's .plumb/config.toml overrides must be trusted first
+// (plumb trust).
+//
+// language names which [tasks.<lang>] block to read, or "" for the workspace's
+// primary. The primary is the right default and was long the only option, but
+// it is not always the language the caller means: a polyglot repo resolves ONE
+// primary, so every sibling language's commands — the shipped defaults
+// included — were unreachable through run_task, and an agent that wanted the
+// Python tests in a TypeScript-primary repo had to abandon the tool and shell
+// out, losing the no-shell argv contract and the trust gate with it.
+func (s *connSession) taskResolver(slot, target, language string) (tools.TaskCommand, error) {
 	ws := s.workspace()
-	lang := s.view().acquiredLanguage
-	if ws == "" || lang == "" || lang == "none" {
-		return tools.TaskCommand{}, errors.New("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
+	if ws == "" {
+		return tools.TaskCommand{}, errors.New("run_task: no workspace is pinned for this session")
 	}
-	tc := s.view().tasks[lang]
+	v := s.view()
+	lang, err := taskLanguage(v, language)
+	if err != nil {
+		return tools.TaskCommand{}, err
+	}
+	tc := v.tasks[lang]
 	steps, err := taskStepsOrRefusal(ws, tc, lang, slot, target)
 	if err != nil {
 		return tools.TaskCommand{}, err
@@ -38,15 +51,15 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 			ConfigPath: config.ProjectConfigPath(ws),
 		}, nil
 	}
-	workdir, err := commandWorkdir(ws, tc.WorkingDir)
-	if err != nil {
-		return tools.TaskCommand{}, fmt.Errorf("run_task %s: %w", slot, err)
+	workdir, wdErr := commandWorkdir(ws, tc.WorkingDir)
+	if wdErr != nil {
+		return tools.TaskCommand{}, fmt.Errorf("run_task %s: %w", slot, wdErr)
 	}
 	provenance, fromProject := taskProvenance(ws, lang, slot)
 	if fromProject {
-		cmds, err := config.ProjectTaskCommands(ws)
-		if err != nil {
-			return tools.TaskCommand{}, fmt.Errorf("run_task: reading project task commands: %w", err)
+		cmds, cmdErr := config.ProjectTaskCommands(ws)
+		if cmdErr != nil {
+			return tools.TaskCommand{}, fmt.Errorf("run_task: reading project task commands: %w", cmdErr)
 		}
 		if !config.NewTrustStore().IsTrustedForTasks(ws, cmds) {
 			return tools.TaskCommand{}, fmt.Errorf(
@@ -61,6 +74,52 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		ConfigPath: config.ProjectConfigPath(ws),
 		Notes:      taskNotes(tc, lang, slot, target),
 	}, nil
+}
+
+// taskLanguage picks the [tasks.<lang>] block a run_task call resolves against:
+// the requested language when one was given, else the workspace's primary.
+//
+// A requested language is checked against the languages this workspace actually
+// has commands for, NOT against the language set or the detected primary. Those
+// are different questions, and the one the caller is asking is "can you run my
+// Python tests" — which is answerable whenever [tasks.python] has a command,
+// whether or not pyright is installed, whether or not Python is the primary,
+// and whether or not detection saw Python at all. Gating on the LSP set instead
+// would refuse the shipped default commands on exactly the polyglot repos this
+// argument exists for.
+func taskLanguage(v sessionView, requested string) (string, error) {
+	if requested == "" {
+		lang := v.acquiredLanguage
+		if lang == "" || lang == LanguageNone {
+			return "", fmt.Errorf("run_task: no language is attached to this workspace, so there is no primary [tasks.<lang>] block to resolve against. "+
+				"Name one explicitly with the language argument (%s), or attach a language with session_start",
+				languagesWithCommands(v))
+		}
+		return lang, nil
+	}
+	if tc, ok := v.tasks[requested]; ok && len(configuredSlots(tc, requested)) > 0 {
+		return requested, nil
+	}
+	return "", fmt.Errorf("run_task: no [tasks.%s] commands are configured for this workspace (%s). "+
+		"Set one with [tasks.%s] <slot> = \"...\" in %s, then run `plumb trust` in the workspace "+
+		"if you wrote it to the project's config",
+		requested, languagesWithCommands(v), requested, config.ProjectConfigPath(v.acquiredRoot))
+}
+
+// languagesWithCommands renders the languages this workspace can actually run a
+// task for, as the remedy half of a refusal. Sorted so the message is stable.
+func languagesWithCommands(v sessionView) string {
+	var langs []string
+	for lang, tc := range v.tasks {
+		if len(configuredSlots(tc, lang)) > 0 {
+			langs = append(langs, lang)
+		}
+	}
+	if len(langs) == 0 {
+		return "no language has task commands configured here"
+	}
+	sort.Strings(langs)
+	return "languages with commands: " + strings.Join(langs, ", ")
 }
 
 // taskStepsOrRefusal builds a slot's steps, replacing the bare

@@ -26,7 +26,7 @@ func TestTaskResolver_TargetRefusalCrossesTheResolverSeam(t *testing.T) {
 	const stored = "go test -race -count=1 ./..."
 	s := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {Test: stored}})
 
-	_, err := s.taskResolver("test", "./internal/cli")
+	_, err := s.taskResolver("test", "./internal/cli", "")
 	if err == nil {
 		t.Fatal("a target against a placeholder-less command must be refused")
 	}
@@ -48,7 +48,7 @@ func TestTaskResolver_TargetRefusalCrossesTheResolverSeam(t *testing.T) {
 	// The other direction, same session: an unscoped call still resolves and runs
 	// the caller's command unchanged, so the assertions above cannot be satisfied
 	// by a resolver that refuses everything.
-	cmd, err := s.taskResolver("test", "")
+	cmd, err := s.taskResolver("test", "", "")
 	if err != nil {
 		t.Fatalf("an unscoped call must still resolve: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestTaskResolver_CompositeSlotSaysTheTargetWasIgnored(t *testing.T) {
 		Test:  config.DefaultTaskCommand("go", "test"),
 	}})
 
-	cmd, err := s.taskResolver("verify", target)
+	cmd, err := s.taskResolver("verify", target, "")
 	if err != nil {
 		t.Fatalf("a composite slot must not REFUSE a target — that trades one silent "+
 			"failure for a new rejection cluster: %v", err)
@@ -119,7 +119,7 @@ func TestTaskResolver_CompositeSlotSaysTheTargetWasIgnored(t *testing.T) {
 	}
 
 	// Other direction, same build: nothing to report when nothing was dropped.
-	un, err := s.taskResolver("verify", "")
+	un, err := s.taskResolver("verify", "", "")
 	if err != nil {
 		t.Fatalf("an unscoped composite must still resolve: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestTaskResolver_CompositeNoteNamesOnlyScopableSubSlots(t *testing.T) {
 		Build: "go build ./...",
 		Test:  "gotestsum ./...", // no placeholder, and not a shipped default
 	}})
-	cmd, err := s.taskResolver("verify", "./internal/cli")
+	cmd, err := s.taskResolver("verify", "./internal/cli", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestTaskResolver_ScopedRunSaysThePlaceholderWasRestored(t *testing.T) {
 	stored := expandShippedDefault(t, "go", "test")
 	s := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {Test: stored}})
 
-	cmd, err := s.taskResolver("test", "./internal/cli")
+	cmd, err := s.taskResolver("test", "./internal/cli", "")
 	if err != nil {
 		t.Fatalf("the expanded shipped default must still scope: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestTaskResolver_ScopedRunSaysThePlaceholderWasRestored(t *testing.T) {
 	untouched := newTaskTrustSession(t, ws, map[string]config.TasksConfig{
 		"go": {Test: config.DefaultTaskCommand("go", "test")},
 	})
-	plain, err := untouched.taskResolver("test", "./internal/cli")
+	plain, err := untouched.taskResolver("test", "./internal/cli", "")
 	if err != nil {
 		t.Fatal(err)
 	}

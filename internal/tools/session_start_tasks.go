@@ -77,17 +77,25 @@ func writeTaskSlotState(sb *strings.Builder, st TaskState) {
 	}
 }
 
-// writeUnreachableLanguages names the sibling languages whose task commands
-// exist but cannot be run, because resolution is single-primary. Without this
-// the agent sees "Language: Swift, Zig" in the identity line and reasonably
-// assumes run_task covers both.
+// writeUnreachableLanguages names the sibling languages whose task commands the
+// caller would otherwise not think to ask for. Without this the agent sees
+// "Language: Swift, Zig" in the identity line and reasonably assumes an
+// unqualified run_task covers both.
+//
+// The name is now historical: these languages WERE unreachable, because
+// resolution was single-primary and the tool had no way to say which language
+// it meant. run_task's `language` argument reaches them, so this is a routing
+// hint rather than a limitation — and it must say so, because the old wording
+// ("use the shell for those") actively sent agents out of the tool, losing the
+// no-shell argv contract and the trust gate, for work the tool can now do.
 func writeUnreachableLanguages(sb *strings.Builder, st TaskState) {
 	if len(st.Unreachable) == 0 {
 		return
 	}
-	fmt.Fprintf(sb, "\n⚠ Also detected here: %s. `run_task` resolves against the primary language only,\n",
+	fmt.Fprintf(sb, "\nAlso detected here: %s. An unqualified `run_task` resolves against the primary\n",
 		strings.Join(st.Unreachable, ", "))
-	sb.WriteString("so those languages' task commands cannot be run through it — use the shell for those.\n")
+	fmt.Fprintf(sb, "language (%s) — pass `language: \"%s\"` to run one of the others' commands.\n",
+		st.Language, st.Unreachable[0])
 }
 
 // writeCommandAllowList reports run_command's [[command]] allow-list, which

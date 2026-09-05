@@ -33,6 +33,12 @@ var taskSlotName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 // targetPattern bounds the {target} token to a single shell-safe argument.
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
 
+// taskLanguageName bounds run_task's optional `language` to the shape of a
+// [tasks.<lang>] key. Same alphabet as a slot name: these are TOML table keys
+// and config map keys, and letting an arbitrary string through would put it
+// into a refusal message quoting a key nobody could have written.
+var taskLanguageName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
 // TaskCommand is a resolved, ready-to-run task: one or more argv steps run in
 // sequence (verify is build then test), with the config layer it came from.
 type TaskCommand struct {
@@ -115,7 +121,14 @@ const runTaskContested = "run_task: this connection's workspace pin is contested
 // the session's workspace, applying the per-workspace trust gate. It returns an
 // error when the slot has no command, or when a project-supplied command is not
 // yet trusted. nil ⇒ the tool reports task commands are unavailable.
-type TaskResolverFn = func(slot, target string) (TaskCommand, error)
+//
+// language selects which [tasks.<lang>] block to read; "" means the workspace's
+// primary language, which is what every caller wanted while resolution was
+// single-primary. It is a parameter rather than a second resolver type because
+// this alias is SHARED with mutation_test, and a shared seam with two shapes is
+// how the two drift. mutation_test passes "" deliberately — a mutant is only
+// meaningful against the language its source is written in.
+type TaskResolverFn = func(slot, target, language string) (TaskCommand, error)
 
 // Tasks is the run_task MCP tool.
 type Tasks struct {
@@ -136,7 +149,11 @@ var runTaskSchema = json.RawMessage(`{
     },
     "target": {
       "type": "string",
-      "description": "Optional target substituted for a {target} token in the stored command (e.g. a single test name or package). The shipped go/python/rust test defaults carry a defaulted placeholder ({target:./...}), so scoping works with no config edit and omitting the target still runs everything. Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target} slot."
+      "description": "Optional target substituted for a {target} token in the stored command (e.g. one test name or package). Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target} slot."
+    },
+    "language": {
+      "type": "string",
+      "description": "Which [tasks.<language>] block to run, for a polyglot repo whose other languages are not the primary. Omit for the primary. A language with no commands is refused, naming those that have them."
     }
   },
   "required": ["slot"],
@@ -147,15 +164,16 @@ func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
 	return "Run a stored per-language task command — build, lint, test, e2e, verify, or a project-defined slot — configured in [tasks.<lang>]. " +
-		"It executes only the command the user saved for this workspace's language (no shell, no agent-supplied command line); the optional target fills a {target} placeholder with one shell-safe argument, and the shipped test defaults carry one so scoping needs no config edit. " +
+		"It executes only the command the user saved (no shell, no agent-supplied command line), for this workspace's primary language or the one you name in `language`. " +
 		"Commands run from the workspace root, or from [tasks.<lang>] working_dir when the module lives in a subdirectory. " +
 		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
 		"Pairs with topology_affected (which says WHICH tests to run; this runs them)."
 }
 
 type runTaskArgs struct {
-	Slot   string `json:"slot"`
-	Target string `json:"target"`
+	Slot     string `json:"slot"`
+	Target   string `json:"target"`
+	Language string `json:"language"`
 }
 
 func (a runTaskArgs) validate() error {
@@ -166,6 +184,12 @@ func (a runTaskArgs) validate() error {
 	}
 	if a.Target != "" && !targetPattern.MatchString(a.Target) {
 		return fmt.Errorf("run_task: target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.Target)
+	}
+	// Shape only. WHICH languages this workspace actually has commands for is a
+	// question only the cli seam can answer, and it refuses with that list.
+	if a.Language != "" && !taskLanguageName.MatchString(a.Language) {
+		return fmt.Errorf("run_task: language %q is not a valid [tasks.<lang>] key "+
+			"(lowercase letter first, then letters, digits, _ or -, max 32 characters)", a.Language)
 	}
 	return nil
 }
@@ -184,7 +208,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	if t.resolve == nil {
 		return "", errors.New("run_task: task commands are not available for this session")
 	}
-	cmd, err := t.resolve(a.Slot, a.Target)
+	cmd, err := t.resolve(a.Slot, a.Target, a.Language)
 	if err != nil {
 		return "", err
 	}
