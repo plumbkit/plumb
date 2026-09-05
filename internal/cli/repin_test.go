@@ -145,12 +145,20 @@ func TestBoundaryPolicy_RelativeRootNeverBricksTheSession(t *testing.T) {
 	}
 }
 
-// TestRepinWorkspace_IgnoresInactiveLanguageOverride verifies the language
-// override is a no-op when the named language is not active (uninstalled,
-// disabled, or unknown): detection wins, so a typo or an absent server never
-// breaks the pin or attaches the wrong primary. detectTestPool has only go +
-// python, so "swift" is inactive; the git-rooted dir resolves as LanguageNone.
-func TestRepinWorkspace_IgnoresInactiveLanguageOverride(t *testing.T) {
+// TestRepinWorkspace_RefusesInactiveLanguageOverride is the REVERSE of what this
+// test asserted until the language override stopped failing silently.
+//
+// It used to pin "an inactive override is a no-op: detection wins, so a typo or
+// an absent server never breaks the pin". That reasoning protects the pin and
+// abandons the caller: an agent that asks for a language and is answered with a
+// different one has no way to tell an honoured override from a discarded one,
+// which is how a misdetected workspace stayed misdetected through an explicit
+// correction. Reported from the field as "session_start(language=…) — ignored".
+//
+// The pin is still protected, just by refusing rather than by lying: a refused
+// override leaves the workspace exactly where it was. detectTestPool has only
+// go + python, so "swift" is inactive here.
+func TestRepinWorkspace_RefusesInactiveLanguageOverride(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
 	pool := detectTestPool()
@@ -160,12 +168,20 @@ func TestRepinWorkspace_IgnoresInactiveLanguageOverride(t *testing.T) {
 	s := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+root)
+	before := s.view().acquiredLanguage
 
-	if _, err := s.repinWorkspace(context.Background(), root, "swift", false); err != nil {
-		t.Fatalf("repin: %v", err)
+	_, err := s.repinWorkspace(context.Background(), root, "swift", false)
+	if err == nil {
+		t.Fatal("expected a refusal: swift is not active in this pool, so the override cannot be honoured")
 	}
-	if got := s.view().acquiredLanguage; got != LanguageNone {
-		t.Errorf("acquiredLanguage = %q, want %q (an inactive language override must be ignored)", got, LanguageNone)
+	if !strings.Contains(err.Error(), "swift") {
+		t.Errorf("refusal %q should quote the language that was asked for", err)
+	}
+	if got := s.view().acquiredLanguage; got != before {
+		t.Errorf("acquiredLanguage = %q, want it unchanged at %q — a refused override must not move the primary", got, before)
+	}
+	if got := s.workspace(); got != root {
+		t.Errorf("workspace = %q, want it unchanged at %q — a refused override must not move the pin", got, root)
 	}
 }
 

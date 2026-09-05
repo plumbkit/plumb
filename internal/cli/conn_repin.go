@@ -65,8 +65,12 @@ func (s *connSession) repinRemedy() string {
 // langOverride, when a non-empty active language, forces the primary language
 // instead of the detected one — for an ambiguous project (e.g. an Xcode app with
 // no SwiftPM Package.swift) where the agent knows the language detection cannot
-// infer. An unknown or inactive override is ignored (detection wins), so a typo
-// or an uninstalled server never breaks the pin.
+// infer. An unknown, disabled or uninstalled override is now REFUSED rather
+// than ignored: silently keeping the detected language told the caller its
+// declaration had been honoured when it had not, and an agent that asked for
+// Python and was answered with HTML had nothing to read that said otherwise.
+// Only session_start supplies an override; the roots and reconnect paths pass
+// "", so no automatic path can be broken by the refusal.
 //
 // force overrides the sticky-pin guard (issue #182): once this connection's pin
 // was set by an explicit session_start, a conflicting re-pin to a DIFFERENT root
@@ -160,7 +164,10 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// re-pin naming the SAME project by a different spelling as the no-op it is,
 	// rather than refusing it as a peer trying to steal the pin.
 	langForced := false
-	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
+	if langOverride != "" {
+		if err := s.languageOverrideErr(langOverride); err != nil {
+			return "", err
+		}
 		language = langOverride
 		langForced = true
 	}

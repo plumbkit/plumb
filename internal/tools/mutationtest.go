@@ -288,7 +288,13 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 	if t.resolve == nil {
 		return mutationPlan{}, errors.New("mutation_test: task commands are not available for this session")
 	}
-	compile, err := t.resolve(a.CompileTask, "")
+	// Both resolve against the workspace's PRIMARY language (the empty language
+	// argument), which is deliberate rather than a default taken for granted:
+	// mutation_test mutates a source file in place, so the only meaningful
+	// compile gate and test command are the ones for the language that file is
+	// written in. run_task's language argument exists to reach a sibling
+	// language's commands; pointing a mutant's gate at one would prove nothing.
+	compile, err := t.resolve(a.CompileTask, "", "")
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the compile gate (%s): %w", a.CompileTask, err)
 	}
@@ -297,7 +303,7 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 			"Without that proof a non-compiling mutant is indistinguishable from a kill, so the run is refused rather than reported unverifiably. "+
 			"Configure [tasks.<lang>] %s, or point compile_task at a slot that does compile", a.CompileTask, a.CompileTask)
 	}
-	test, err := t.resolve(a.TestTask, a.TestTarget)
+	test, err := t.resolve(a.TestTask, a.TestTarget, "")
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the test command (%s): %w", a.TestTask, err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -86,6 +87,65 @@ func lspActiveStatus(cfg config.LSPConfig) string {
 	default:
 		return "yes (installed)"
 	}
+}
+
+// languageOverrideErr validates a session_start `language` argument, returning
+// nil when it names an ACTIVE language (enabled and installed) and an
+// actionable refusal otherwise.
+//
+// This used to be a silent drop: an override that named an unknown, disabled or
+// uninstalled language was discarded and detection's answer kept. The caller
+// was told nothing, so an agent on a repo that had misdetected asked for its
+// real language, was answered with the wrong one, and had no way to tell the
+// override from a language plumb genuinely believed in. Reported from the field
+// as "session_start(language=...) — ignored once the workspace is already
+// pinned", which was the visible half of this.
+//
+// The three cases get three remedies because they are three different problems:
+// a typo needs the valid keys, a disabled language needs a config edit, and an
+// uninstalled server needs an install. lspActiveStatus already draws the second
+// two apart for `plumb config show`, so the wording cannot drift from it.
+func (s *connSession) languageOverrideErr(name string) error {
+	if s.pool == nil {
+		return nil // no pool wired (tests / degraded start): nothing to validate against
+	}
+	if s.pool.hasActiveLanguage(name) {
+		return nil
+	}
+	cfg, known := s.store.Current().LSP[name]
+	if !known {
+		return fmt.Errorf("session_start: language %q has no [lsp.%s] adapter. Known languages: %s",
+			name, name, strings.Join(knownLanguageNames(s.store.Current()), ", "))
+	}
+	// The pool's effective set and the config can disagree: the set is built at
+	// pool construction and widened by enable-lsp, so a language enabled or
+	// installed SINCE the daemon resolved it is configured-active but not yet
+	// pool-active. Reporting lspActiveStatus here would print the flatly
+	// self-contradicting "not active — yes (installed)", and send the caller to
+	// edit config that is already correct. The remedy for this case is the live
+	// enable that exists precisely for it.
+	if lspActive(cfg) {
+		return fmt.Errorf("session_start: language %q is enabled and %s is installed, but this daemon has not picked it up "+
+			"(its language set was resolved before that became true). Run `plumb enable-lsp %s` to activate it without a restart, then retry",
+			name, cfg.Command, name)
+	}
+	return fmt.Errorf("session_start: language %q is configured but not active — %s. "+
+		"Set [lsp.%s] enabled = true and install %s, then retry; "+
+		"or omit the language argument to use what detection resolves",
+		name, lspActiveStatus(cfg), name, cfg.Command)
+}
+
+// knownLanguageNames lists every configured [lsp.<lang>] key, sorted, for the
+// remedy half of an unknown-language refusal. Every key is listed, active or
+// not: a caller who named a disabled language needs to see that the key exists
+// before the enablement advice makes sense.
+func knownLanguageNames(cfg config.Config) []string {
+	names := make([]string, 0, len(cfg.LSP))
+	for name := range cfg.LSP {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // langsSnapshot returns the current effective-language slice under the langs

@@ -23,6 +23,22 @@
   `TestSessionStart_CallerIsDistinguishableFromItsPeers`,
   `TestSessionStart_SelfLineSurvivesTheBriefBudget` and
   `TestSessionStart_ResumedNameIsStillAnnounced`.
+- **`run_task` takes an optional `language`, so a polyglot workspace can run
+  more than one language's commands.** Resolution was a single map lookup on the
+  workspace's primary language, so in a repo with Python and TypeScript the
+  sibling language's commands — the shipped defaults included — could not be run
+  through `run_task` at all. `session_start` even said so, and told the agent to
+  use the shell for those, which loses the no-shell argv contract and the trust
+  gate for work the tool could otherwise do. Pass `language: "python"` to run
+  `[tasks.python]` whatever the primary is; omit it for the primary, which is
+  what every existing caller gets. A language with no configured commands is
+  refused with the list of languages that have them, rather than falling back to
+  the primary and running the wrong language's tests under the right name. The
+  eligibility question is "does `[tasks.<lang>]` configure anything", not "is
+  that language installed or detected" — the shipped defaults must stay reachable
+  on exactly the repos this exists for. `mutation_test` shares the resolver and
+  deliberately keeps resolving the primary: a mutant is only meaningful against
+  the language its source is written in.
 
 - **A site-claims drift guard (`make check-site-claims`, part of `verify`).**
   The same three site drifts — the footer stamp, the tool and language
@@ -181,6 +197,22 @@
   `TestIgnoreStack_ExcludedParentCannotBeReincluded`,
   `TestIgnoreStack_PathOutsideSetDirIsNotMatched` and
   `TestIgnoreStack_StarWithNegationInSameNestedDir`.
+- **`session_start`'s `language` argument is refused when it cannot be honoured,
+  instead of being silently discarded.** An override naming an unknown, disabled
+  or uninstalled language was dropped and detection's answer kept, with nothing
+  said. An agent whose workspace had misdetected could therefore correct it
+  explicitly, be answered with the original wrong language, and have no way to
+  tell a honoured override from a discarded one. Reported from the field as
+  "`session_start(language=…)` — ignored once the workspace is already pinned".
+  The three failure cases now get three remedies, because they are three
+  different problems: an unknown key lists the valid ones, a disabled language
+  names the config knob, and an uninstalled one names the binary. A fourth case
+  the old code could not express is now distinct too — enabled and installed,
+  but resolved into this daemon's language set before that became true, whose
+  remedy is `plumb enable-lsp` rather than a config edit that is already
+  correct. A refused override moves neither the pin nor the primary. Guarded by
+  `TestRepinWorkspace_RefusesInactiveLanguageOverride` (which reverses what it
+  used to assert) and the `TestLanguageOverride_*` cases.
 
 - **The `roots/list` probe bound is guarded by its own test, and a probe timeout
   no longer logs as "not supported".** The 5 s bound PR #435 put around the

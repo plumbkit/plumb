@@ -30,9 +30,17 @@ func TestWriteSessionTasks_ReportsEmptySlots(t *testing.T) {
 }
 
 // TestWriteSessionTasks_NamesUnreachableLanguages pins the finding that made F3
-// more than a config gap: task resolution keys on the single primary language,
-// so a monorepo's other languages cannot be reached even though their defaults
-// exist and the identity line lists them.
+// more than a config gap: an unqualified run_task keys on the single primary
+// language, so a monorepo's other languages go unnoticed even though their
+// defaults exist and the identity line lists them.
+//
+// The assertion changed with the capability. It used to require the words
+// "primary language only", which was the whole story while those commands could
+// not be run at all; the section then told the agent to use the shell for them.
+// run_task's `language` argument reaches them, so the section must hand over
+// that argument instead — and this test now pins the routing hint, because a
+// section that still said "use the shell" would send agents out of the tool for
+// work it can do.
 func TestWriteSessionTasks_NamesUnreachableLanguages(t *testing.T) {
 	out := renderTaskSection(t, TaskState{
 		Language:    "zig",
@@ -40,10 +48,13 @@ func TestWriteSessionTasks_NamesUnreachableLanguages(t *testing.T) {
 		Unreachable: []string{"typescript"},
 	})
 	if !strings.Contains(out, "typescript") {
-		t.Errorf("expected the unreachable sibling language to be named, got:\n%s", out)
+		t.Errorf("expected the sibling language to be named, got:\n%s", out)
 	}
-	if !strings.Contains(out, "primary language only") {
-		t.Errorf("expected the reason to be stated, got:\n%s", out)
+	if !strings.Contains(out, `language: "typescript"`) {
+		t.Errorf("expected the section to hand over the argument that reaches it, got:\n%s", out)
+	}
+	if strings.Contains(out, "use the shell") {
+		t.Errorf("the section must no longer send agents to the shell for a language run_task can reach, got:\n%s", out)
 	}
 }
 

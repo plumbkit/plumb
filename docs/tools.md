@@ -955,10 +955,22 @@ tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
 (100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
-one shell-safe argument). A project-supplied command must be trusted first
-(`plumb trust`); defaults and global-config commands always run. Pairs with
-`topology_affected` (which says *which* tests to run) — the `plumb-testing`
-skill walks the whole post-edit loop.
+one shell-safe argument), `language` (optional, see below). A project-supplied
+command must be trusted first (`plumb trust`); defaults and global-config
+commands always run. Pairs with `topology_affected` (which says *which* tests to
+run) — the `plumb-testing` skill walks the whole post-edit loop.
+
+**Polyglot workspaces.** Without `language`, resolution uses the workspace's
+primary — the one `session_start` reports. A repo with Python and TypeScript has
+only one primary, so the other language's commands, *including the shipped
+defaults*, used to be unreachable through this tool. Pass
+`language: "python"` to run `[tasks.python]` regardless of what the primary is.
+Eligibility is whether `[tasks.<lang>]` configures anything, not whether that
+language's server is installed or was detected, so the defaults stay reachable
+on exactly the repos this exists for. A language with no configured commands is
+refused, naming the ones that have them — never silently resolved against the
+primary, which would run a different language's tests and report them as yours.
+The `plumb build/test/lint` CLI subcommands remain primary-only.
 
 **Two things run_task does to your call, and says so in the response.** A stored
 command that is plumb's own default with the `{target:<D>}` placeholder *written

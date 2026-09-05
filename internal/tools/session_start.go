@@ -29,7 +29,7 @@ var sessionStartSchema = json.RawMessage(`{
     },
     "language": {
       "type": "string",
-      "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is ignored and normal detection applies. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
+      "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is refused, naming the reason and the remedy, not silently ignored. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
     },
     "force": {
       "type": "boolean",

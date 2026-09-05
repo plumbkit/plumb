@@ -63,7 +63,7 @@ func TestMutationTest_UnstartableCommandIsRefusedBeforeMutating(t *testing.T) {
 	env := newMutationEnv(t, original)
 	env.tool = NewMutationTest(
 		WriteDeps{WorkspaceFn: func(context.Context) string { return env.root }},
-		func(slot, _ string) (TaskCommand, error) {
+		func(slot, _, _ string) (TaskCommand, error) {
 			return TaskCommand{Slot: slot, Steps: [][]string{{"/nonexistent/plumb-mutation-binary"}}, Provenance: "default"}, nil
 		})
 
@@ -320,7 +320,7 @@ func TestMutationTest_RefusesWithoutACompileGate(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
 	env.tool = NewMutationTest(
 		WriteDeps{WorkspaceFn: func(context.Context) string { return env.root }},
-		func(slot, _ string) (TaskCommand, error) {
+		func(slot, _, _ string) (TaskCommand, error) {
 			if slot == "build" {
 				return TaskCommand{Slot: slot, Provenance: "default"}, nil // no steps
 			}
