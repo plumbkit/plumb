@@ -35,28 +35,55 @@ import (
 // connection. Keep in step with internal/tools/session_start.go.
 const sessionStartTool = "session_start"
 
-// observeClientRequest records a session_start request that carries an absolute
-// workspace argument, keyed by its JSON-RPC id, so the response can confirm it.
-// Everything else is ignored — in particular a session_start WITHOUT a workspace
-// arg never enters the map, so an orientation call can never clear a deliberate
-// pin.
+// pendingStart is an in-flight session_start the response will confirm: the
+// absolute workspace it asked for, if any.
+//
+// The workspace is optional and that is the point. EVERY session_start is now
+// tracked, because its result carries the connection's session ID — but only a
+// call that named a workspace may move the pin. Keeping the two facts in one
+// record, rather than using an empty string as a sentinel, is what stops the
+// identity capture and the pin update sharing a gate again.
+type pendingStart struct {
+	// workspace is the absolute path the call asked to pin, or "" when the call
+	// carried no workspace argument (or a relative one, which is refused).
+	workspace string
+}
+
+// observeClientRequest records an in-flight session_start, keyed by its JSON-RPC
+// id, so the response can be matched back to what the call asked for.
+//
+// Every session_start is tracked, including one with no workspace argument: its
+// result is how the proxy learns the connection's session ID, and an orientation
+// call is exactly the case that previously taught the proxy nothing. Whether the
+// call may move the PIN is a separate question, answered by the recorded
+// workspace — see commitSessionStartPin.
 //
 // Runs on the client→daemon pump.
 func (p *reconnectingProxy) observeClientRequest(frame []byte) {
 	e := parseEnvelope(frame)
-	if !e.isRequest() || e.Method != "tools/call" {
-		return
-	}
-	ws := sessionStartWorkspace(frame)
-	if ws == "" {
+	if !e.isRequest() || e.Method != "tools/call" || !isSessionStartCall(frame) {
 		return
 	}
 	p.pinMu.Lock()
 	defer p.pinMu.Unlock()
 	if p.pending == nil {
-		p.pending = map[string]string{}
+		p.pending = map[string]pendingStart{}
 	}
-	p.pending[idKey(e.ID)] = ws
+	p.pending[idKey(e.ID)] = pendingStart{workspace: sessionStartWorkspace(frame)}
+}
+
+// isSessionStartCall reports whether a tools/call frame names session_start.
+// Fail-safe: a frame that does not parse into the expected shape is not one.
+func isSessionStartCall(frame []byte) bool {
+	var req struct {
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(frame, &req); err != nil {
+		return false
+	}
+	return req.Params.Name == sessionStartTool
 }
 
 // sessionStartWorkspace returns the absolute workspace argument of a
@@ -111,18 +138,36 @@ func (p *reconnectingProxy) commitSessionStartPin(frame []byte) {
 	}
 	key := idKey(e.ID)
 	p.pinMu.Lock()
-	ws, waiting := p.pending[key]
+	defer p.pinMu.Unlock()
+	start, waiting := p.pending[key]
 	delete(p.pending, key)
-	if waiting && toolCallSucceeded(frame) {
-		if resolved := resolvedWorkspaceMeta(frame); resolved != "" {
-			ws = resolved
-		}
-		p.pinned = ws
-		if id := sessionIDMeta(frame); id != "" {
-			p.heldSessionID = id
+	if !waiting || !toolCallSucceeded(frame) {
+		return
+	}
+	// Identity first, and unconditionally: it is what every successful
+	// session_start now carries, and it must not inherit the pin's gate.
+	if id := sessionIDMeta(frame); id != "" {
+		p.heldSessionID = id
+		if !p.identity.known {
+			// A daemon that predates the handshake snapshot. This is the only
+			// identity channel such a daemon has, so take it rather than leave
+			// the proxy with nothing to replay — but do not mark it `known`,
+			// which would let it claim an acknowledged recovery outcome it was
+			// never told.
+			p.identity.sessionID = id
 		}
 	}
-	p.pinMu.Unlock()
+	if start.workspace == "" {
+		// A call that named no workspace says nothing about the pin. Clearing or
+		// rewriting it here would let an orientation call undo a deliberate
+		// choice — the precise coupling this split exists to remove.
+		return
+	}
+	ws := start.workspace
+	if resolved := resolvedWorkspaceMeta(frame); resolved != "" {
+		ws = resolved
+	}
+	p.pinned = ws
 }
 
 // resolvedWorkspaceMeta extracts the canonical workspace root the daemon echoed

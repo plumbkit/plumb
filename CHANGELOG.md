@@ -7,6 +7,23 @@
 
 ### Added
 
+- **`session_start` now tells the caller who it is.** Both packets — brief and
+  full — carry an explicit `Session:  <name> (you, id <id>)` line on first
+  contact and on every later call, rendered through one shared function so the
+  two cannot drift. Previously the identity block printed a name only when one
+  was INHERITED from a resumed conversation, so an ordinary first contact got
+  nothing while the peer digest directly below it confidently listed the other
+  agents by name. An agent that reads its own orientation and finds exactly one
+  name in it will use that name for itself — and the one name on offer belonged
+  to a peer. That is not hypothetical: it produced a report of a session being
+  silently renamed, which investigation showed had never happened. Peer entries
+  stay labelled as peers, and the resumed-name announcement is preserved (with
+  a note when the requested name was in use). Guarded by
+  `TestSessionStart_NamesTheCallerOnFirstContact`,
+  `TestSessionStart_CallerIsDistinguishableFromItsPeers`,
+  `TestSessionStart_SelfLineSurvivesTheBriefBudget` and
+  `TestSessionStart_ResumedNameIsStillAnnounced`.
+
 - **A site-claims drift guard (`make check-site-claims`, part of `verify`).**
   The same three site drifts — the footer stamp, the tool and language
   counts, and adapter tier claims — were fixed twice (the June production
@@ -22,6 +39,90 @@
   subcommand check builds the module once, and the hook must stay fast.
 
 ### Fixed
+
+- **A reconnecting `plumb serve` keeps its session identity, and no longer forks
+  it when a reconnect merely overlaps.** Session identity — the internal session
+  ID, the name peers address, and the authorised external-conversation linkage —
+  is now one canonical durable record, resolved as a single operation and
+  reported back to the proxy in the `initialize` result's `_meta`. Six
+  independent gaps closed together, because each on its own left a reconnect
+  able to come back as somebody else:
+
+  - **A refused restoration no longer overwrites the record it failed to
+    apply.** `restoreName`, `adoptSessionID` and `persistName` each behaved
+    reasonably alone; together they arranged for the REFUSAL paths to record the
+    temporary replacement identity over the proven one, so the next reconnect
+    recovered the replacement and the original ID, name and mailbox were durably
+    gone. A predecessor connection taking a beat longer to detach was enough.
+    Recovery now degrades honestly and leaves the record untouched, so the
+    overlap resolves itself on the next reconnect.
+  - **Identity records are no longer expired by the TTL sweep.** They were
+    deleted by `updated_at` like a cache, and the sweep that matters runs at
+    daemon start, before any connection exists to be exempted — so at the one
+    moment a surviving serve most needed its record, nothing protected it. Age
+    is not evidence that a serve process died. The cost is one small row per
+    proxy session, retained indefinitely and documented in
+    `[session] persist_state`.
+  - **Recovery no longer depends on the caller having named a workspace.** The
+    daemon emitted the session ID only for a `session_start` that carried a
+    `workspace` argument, and the proxy only observed such calls — so
+    `session_start({session_id})`, the exact call an agent makes to link a
+    conversation without re-pinning, taught the proxy nothing. The ID now rides
+    every successful `session_start`, and the proxy records it without
+    disturbing a pin the call never mentioned.
+  - **Identity now travels on the handshake**, under the new
+    `dev.plumbkit/session-identity` initialize-result `_meta` key, captured on
+    the first connect and on every replay. The proxy therefore holds an identity
+    before the first tool call, and recovery works for a `plumb serve` old
+    enough to predate the ID-replay channel entirely — previously exactly those
+    long-lived proxies, the ones a restart is most likely to catch, could not
+    come back as themselves.
+  - **A recoverable identity's name is reserved.** Uniqueness was checked against
+    LIVE sessions only, which is right until a `plumb serve` outlives its
+    daemon: for the length of the outage its name belonged to nobody, the next
+    session to draw one could take it, and the survivor came back renamed with
+    every note addressed to it orphaned.
+  - **External linkage survives the ended-session file.** It was recoverable only
+    from the predecessor's session JSON, which is collected 24 h after that
+    session ends, so an outage longer than the grace window dropped the linkage
+    while the identity itself survived — leaving `plumb mail --external-id`
+    unable to resolve a session that had in fact recovered perfectly.
+
+  Authorisation is unchanged and remains the whole security argument: only the
+  never-disclosed proxy session ID selects a record. A replayed plumb session ID
+  is now reconciled and reported rather than trusted, since `session_start`
+  echoes it to clients. Schema v7 adds `external_id` and `name_revision` to
+  `session_names`; legacy rows back-fill to "unknown", and duplicate retained
+  names — legal before retention existed — are reported at startup rather than
+  merged, renamed or deleted, because every automatic repair would either break
+  mail addressed to a name or fork an identity.
+
+  Proven end to end by `TestSmoke_SessionIdentitySurvivesDaemonRestarts`, which
+  keeps ONE real `plumb serve` process and one stdio connection alive across
+  three genuine daemon restarts and asserts the same name and ID each time, with
+  no extra `session_start`; and in
+  `TestRestore_OverlapDoesNotOverwriteTheProvenRecord`,
+  `TestRestore_AgedRecordSurvivesStartupPruning`,
+  `TestRestore_ExternalLinkageSurvivesTheEndedSessionFile`,
+  `TestRestore_RetainedNameIsNotHandedToANewSession`,
+  `TestInherit_IdentityIsContinuousAcrossConsecutiveRecoveries` and the
+  `TestProxyIdentity_*` suite.
+
+- **The reconnect note reports what happened instead of asserting a restart and
+  a wholesale state loss.** It read as a daemon RESTART when the commonest cause
+  is an idle eviction that restarted nothing, and said session state "was
+  rebuilt" unconditionally — wording that describes a successful identity
+  recovery and a failed one identically. An agent that read it and concluded it
+  had been renamed was reading it correctly; the note was wrong. The daemon now
+  publishes a per-process marker (`dev.plumbkit/daemon-instance`) the proxy
+  compares across the reconnect, so a same-process reconnect says so, a genuine
+  restart says so, and an unknown one says neither. The identity outcome is
+  stated separately from the caches that really are rebuilt — including "could
+  not be restored this time" and, against a daemon that reports no outcome,
+  "unknown" rather than a fabricated success. Guarded by
+  `TestReconnectNoteText_ReportsObservedFactsOnly`,
+  `TestProxyIdentity_DaemonRestartIsObservedNotAssumed` and
+  `TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee`.
 
 - **The `roots/list` probe bound is guarded by its own test, and a probe timeout
   no longer logs as "not supported".** The 5 s bound PR #435 put around the

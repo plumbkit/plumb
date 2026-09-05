@@ -87,7 +87,11 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	    sweep that must run exactly once per database can record that it did
 //	6 — logical_agent_id on read_tracking + pinned_workspace: a shared connection
 //	    persists each logical agent's reads and pin independently (PLAN-286)
-const SchemaVersion = 6
+//	7 — session_names.external_id + session_names.name_revision: the canonical
+//	    durable identity record carries its own authorised external linkage (so
+//	    recovery no longer depends on a prunable ended-session JSON file) and a
+//	    revision that orders name updates (PLAN-426)
+const SchemaVersion = 7
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -265,6 +269,57 @@ ALTER TABLE pinned_workspace_v6 RENAME TO pinned_workspace;`
 			return fmt.Errorf("sessionstate: migrate v6 (pinned_workspace.logical_agent_id): %w", err)
 		}
 	}
+	if from < 7 {
+		if err := migrateV7(db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV7 turns session_names into the canonical durable identity record.
+//
+// Split out of migrate to keep that function under the complexity cap as the
+// history grows; every step is still gated on the on-disk version by its one
+// caller, so it runs exactly once per database.
+func migrateV7(db *sql.DB) error {
+	// PLAN-426: session_names becomes the CANONICAL durable identity record,
+	// so it has to carry everything a recovery needs on its own.
+	//
+	// external_id is the authorised external-conversation linkage. It used to
+	// live only in the predecessor's session JSON file, which is garbage
+	// collected 24 h after the session ends — so an outage longer than that
+	// silently dropped the linkage even though the identity itself survived.
+	// A pre-v7 row back-fills to "", which means "unknown", never "none": the
+	// JSON path still supplies it while that file is there, and a blank value
+	// is never written over a known one (see SaveIdentity).
+	//
+	// name_revision orders name updates, so a proxy holding a snapshot taken
+	// before an explicit rename cannot replay the older name over the newer
+	// one. Pre-v7 rows start at 0 and take their first bump on the next save
+	// that changes the name.
+	//
+	// Two ALTERs rather than a table rebuild: session_names has a rowid and a
+	// single-column primary key, so ADD COLUMN with a default back-fills in
+	// place — no copy, and no window in which the identity table is absent.
+	const addExternal = `ALTER TABLE session_names ADD COLUMN external_id TEXT NOT NULL DEFAULT ''`
+	if _, err := db.Exec(addExternal); err != nil {
+		return fmt.Errorf("sessionstate: migrate v7 (session_names.external_id): %w", err)
+	}
+	const addRevision = `ALTER TABLE session_names ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0`
+	if _, err := db.Exec(addRevision); err != nil {
+		return fmt.Errorf("sessionstate: migrate v7 (session_names.name_revision): %w", err)
+	}
+	// The name index serves the reservation lookup, which now runs on every
+	// name draw. It is deliberately NOT unique: legacy rows can already hold
+	// the same name twice (before this release a name was only unique among
+	// LIVE sessions, and a pruned row's name could be redrawn by another
+	// proxy), and a unique index would fail the migration on exactly the
+	// databases that most need it. LegacyNameConflicts reports those rows
+	// instead of silently choosing an owner.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
+		return fmt.Errorf("sessionstate: migrate v7 (idx_sn_name): %w", err)
+	}
 	return nil
 }
 
@@ -435,74 +490,6 @@ func (s *Store) DeletePinForAgent(proxySessionID, logicalAgentID string) error {
 	return nil
 }
 
-// Identity is what a proxy session was last known as: the display name it
-// answered to, and the plumb session ID that name belonged to.
-//
-// The two travel together because a reconnect needs both. The name is what peers
-// address; the session ID is what a message addressed to that name is BOUND to,
-// so a reconnecting proxy has to present its predecessor's ID to collect mail
-// written before the restart. Storing the ID beside the name is what makes that
-// inheritance provable rather than assumed from the name alone.
-type Identity struct {
-	// Name is the session's display name.
-	Name string
-	// SessionID is the plumb session ID that held Name. Empty on a row written
-	// before this column existed, which inherits nothing.
-	SessionID string
-}
-
-// SaveIdentity records the session name and its plumb session ID under a proxy
-// session ID, so a reconnect after a daemon restart comes back under the same
-// name and can prove which session it continues. nil-safe; a no-op when
-// proxySessionID or name is empty. sessionID may be empty (an unregistered
-// session has no identity to hand on).
-func (s *Store) SaveIdentity(proxySessionID, name, sessionID string) error {
-	if s == nil || proxySessionID == "" || name == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec(
-		`INSERT INTO session_names (proxy_session_id, name, plumb_session_id, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(proxy_session_id)
-		 DO UPDATE SET name=excluded.name, plumb_session_id=excluded.plumb_session_id,
-		               updated_at=excluded.updated_at`,
-		proxySessionID, name, sessionID, time.Now().UnixMilli(),
-	)
-	if err != nil {
-		return fmt.Errorf("sessionstate: save identity: %w", err)
-	}
-	return nil
-}
-
-// LoadIdentity returns the identity recorded under proxySessionID. ok is false
-// when none is recorded. nil-safe (returns ok=false).
-//
-// A row written before the plumb_session_id column existed returns an empty
-// SessionID, so an upgraded daemon restores the name exactly as it always did
-// and inherits nothing — the caller must treat an empty SessionID as "no
-// predecessor", never as a wildcard.
-func (s *Store) LoadIdentity(proxySessionID string) (id Identity, ok bool, err error) {
-	if s == nil || proxySessionID == "" {
-		return Identity{}, false, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	row := s.db.QueryRow(
-		`SELECT name, plumb_session_id FROM session_names WHERE proxy_session_id=?`,
-		proxySessionID,
-	)
-	switch err := row.Scan(&id.Name, &id.SessionID); err {
-	case nil:
-		return id, true, nil
-	case sql.ErrNoRows:
-		return Identity{}, false, nil
-	default:
-		return Identity{}, false, fmt.Errorf("sessionstate: load identity: %w", err)
-	}
-}
-
 // liveExemption builds the "AND proxy_session_id NOT IN (?, ?, …)" tail that
 // spares live sessions from the TTL sweep, plus the full argument list for the
 // DELETE (cutoff first). Returns an empty tail when no session is live, so the
@@ -526,15 +513,36 @@ func liveExemption(cutoff int64, live []string) (string, []any) {
 	return b.String(), args
 }
 
-// Prune deletes all persisted state last updated before olderThan, reclaiming
-// rows left behind by a `plumb serve` that died without reconnecting. nil-safe.
+// Prune deletes EXPENDABLE persisted state last updated before olderThan,
+// reclaiming rows left behind by a `plumb serve` that died without
+// reconnecting. nil-safe.
+//
+// Expendable is the operative word, and session_names is deliberately NOT in
+// it (PLAN-426). Read records and pins are caches: losing one costs a re-read
+// or a re-pin. The identity row is the canonical proof of WHO a reconnecting
+// serve is — the only thing that authorises it to resume its predecessor's ID,
+// name and mailbox — so deleting it does not degrade a session, it forks one:
+// the surviving proxy comes back as a stranger under a new ID and name, and
+// mail addressed to the old one is orphaned. Age is no evidence that a serve
+// process died; only the serve itself knows that, and it cannot say so once
+// the daemon it would have told has restarted.
+//
+// The live exemption cannot stand in for this. It spares sessions connected to
+// THIS daemon, and the sweep that matters runs at daemon startup, before any
+// connection exists — so at the one moment a surviving serve most needs its
+// row, the exemption list is empty. That is why retention is a property of the
+// table, not of the caller's argument list.
+//
+// The cost is bounded and documented: one small row per proxy session, kept
+// indefinitely, whose name stays reserved (see ReservedNames). Reclaiming one
+// needs explicit retirement semantics — proof that the serve is gone, not a
+// guess from elapsed time — which this deliberately does not invent.
 //
 // Rows belonging to a proxy session in live are kept regardless of age. Without
 // that exemption the sweep reclaims state from sessions that are still
-// connected: read rows are refreshed as the session works, but the pin and the
-// name are written once at initialize, so any conversation older than the TTL
-// (24 h by default) loses them mid-flight and its next reconnect comes back
-// unpinned and renamed — the very churn persistence exists to prevent.
+// connected: read rows are refreshed as the session works, but the pin is
+// written once at initialize, so any conversation older than the TTL (24 h by
+// default) loses it mid-flight and its next reconnect comes back unpinned.
 func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if s == nil {
 		return nil
@@ -551,8 +559,7 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune pins: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM session_names WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
-		return fmt.Errorf("sessionstate: prune names: %w", err)
-	}
+	// session_names is intentionally absent — see the doc comment. Do not add a
+	// DELETE here without an explicit retirement signal to gate it on.
 	return nil
 }

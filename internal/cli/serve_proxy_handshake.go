@@ -63,6 +63,12 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 		}
 		e := parseEnvelope(frame)
 		if e.isResponse() && idKey(e.ID) == initID {
+			// The replayed response is the fresh daemon's authoritative answer
+			// about who this connection now is (PLAN-426). Capture it here, before
+			// the swallow/forward decision below, because the reconnect path
+			// swallows the frame — so this is the ONLY place a reconnect's identity
+			// can be observed at all.
+			p.observeInitializeResponse(frame)
 			p.hsMu.Lock()
 			answered := p.initializeAnswered
 			p.initializeAnswered = true

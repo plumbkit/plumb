@@ -269,7 +269,7 @@ func TestMigrateV3ToV4_NameSurvivesAndInheritsNothing(t *testing.T) {
 	}
 
 	// And the column really is usable afterwards.
-	if err := s.SaveIdentity("legacy-proxy", "steady-otter", "sess-new"); err != nil {
+	if err := s.SaveIdentity("legacy-proxy", Identity{Name: "steady-otter", SessionID: "sess-new"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, _ := s.LoadIdentity("legacy-proxy"); got.SessionID != "sess-new" {

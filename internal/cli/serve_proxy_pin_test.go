@@ -38,7 +38,7 @@ func rpcError(id string) []byte {
 }
 
 func newPinProxy() *reconnectingProxy {
-	return &reconnectingProxy{pending: map[string]string{}}
+	return &reconnectingProxy{pending: map[string]pendingStart{}}
 }
 
 func TestObserveSessionStart_RecordsWorkspaceOnSuccess(t *testing.T) {

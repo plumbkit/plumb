@@ -164,10 +164,12 @@ recorded by a daemon on an accepted call rather than asserted by a client in
 this handshake.
 
 That fallback is not unconditional, and the cost of losing it is larger than
-it first looks. The row is absent with `[session] persist_state` off, on a
+it first looks. The PIN row is absent with `[session] persist_state` off, on a
 first connect, and — the case that bites in the DEFAULT configuration — once
 the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
-startup prune, which runs with no live exemption, deletes it. When the row is
+startup prune, which runs with no live exemption, deletes it. (The identity
+record alongside it is retained regardless of age; only the pin expires. See
+`[session] persist_state`.) When the pin row is
 gone, every lower rung refuses the wide root too, because `roots` and the
 workspace pre-pin are weaker origins than the declaration that is now missing,
 so the caller must declare the workspace again. The boundary is never
@@ -469,11 +471,18 @@ concurrent case; and cross-project rows remain scoped by `target_workspace`.
 Unbound rows — a peer that was not connected, `next`, and anything written before
 the binding existed — are still addressed by name alone, which is the residual.
 
-A reconnecting session inherits its predecessor's session ID so a daemon restart
-does not strand bound mail. That grant is authorised by the **proxy session ID**
+A reconnecting session RESUMES its predecessor's session ID so a daemon restart
+does not strand bound mail, and while that identity is recoverable its **name
+stays reserved** — closing the window where a `plumb serve` outliving its daemon
+had its name handed to whoever drew one next, and came back to find its mail
+addressed to a stranger. When the identity cannot be resumed the session inherits
+the predecessor's ID as a second mailbox identity instead, gated on holding that
+predecessor's name. Both grants are authorised by the **proxy session ID**
 (122 bits from `crypto/rand`, generated per `plumb serve`, replayed only inside
 its own `initialize` handshake, and never written to a session file, a log, or
-any tool result) — never by answering to a name, which is the distinction the
+any tool result) — never by answering to a name, and never by replaying a plumb
+session ID, which `session_start` echoes to clients and which is therefore a
+claim rather than proof. That is the distinction the
 whole binding rests on. It is the same bearer token that already restores
 strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
 if it were forgeable, those would have been forgeable first. The same persisted

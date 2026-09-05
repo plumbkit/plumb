@@ -249,22 +249,96 @@ func serverInfoVersion(frame []byte) string {
 // The clause itself reports the lag without prescribing an action an
 // autonomous agent cannot take. An unknown daemon version falls back to the
 // proxy's.
-func reconnectNoteText(daemonVersion, proxyVersion string, warnMismatch bool) string {
-	const tail = " — your session state (read-tracking, caches, and the pinned " +
-		"workspace) was rebuilt. The daemon restores an explicit session_start " +
-		"workspace, but if you have not set one, a relative path may now resolve " +
-		"against a different project — confirm the pin before a relative-path " +
-		"write, and re-read a file before editing it (or pass dirty_ok:true for a " +
-		"file you wrote earlier this session)."
+func reconnectNoteText(daemonVersion, proxyVersion string, warnMismatch bool, outcome reconnectOutcome) string {
 	if daemonVersion == "" || daemonVersion == proxyVersion || !warnMismatch {
 		v := daemonVersion
 		if v == "" {
 			v = proxyVersion
 		}
-		return fmt.Sprintf("# plumb-note: plumb daemon reconnected (now %s)%s", v, tail)
+		return fmt.Sprintf("# plumb-note: %s (daemon %s)%s", outcome.cause(), v, outcome.tail())
 	}
-	return fmt.Sprintf("# plumb-note: plumb daemon reconnected (daemon now %s; this serve proxy is still %s — the mismatch is harmless; restart `plumb serve` when convenient to match versions)%s",
-		daemonVersion, proxyVersion, tail)
+	return fmt.Sprintf("# plumb-note: %s (daemon now %s; this serve proxy is still %s — the mismatch is harmless; restart `plumb serve` when convenient to match versions)%s",
+		outcome.cause(), daemonVersion, proxyVersion, outcome.tail())
+}
+
+// reconnectOutcome is what the proxy actually OBSERVED across a reconnect: did
+// the daemon process change, and what did it say about this connection's
+// identity.
+//
+// It exists because the note it feeds used to assert two things the proxy had
+// not established. It said the daemon "reconnected" in wording that reads as a
+// restart, when the commonest cause is an idle eviction that restarted nothing;
+// and it said session state "was rebuilt" unconditionally, when the identity may
+// have been recovered intact — or may have failed to recover, which the old
+// wording could not distinguish from success either. An agent reading that note
+// could reasonably conclude it had been renamed, which is precisely the false
+// conclusion that started this work.
+type reconnectOutcome struct {
+	// restarted is whether the daemon PROCESS changed. Meaningful only when
+	// instanceKnown; false otherwise means "not established", not "no".
+	restarted bool
+	// instanceKnown is whether both sides of the comparison had a process
+	// marker. False against a daemon that predates the marker.
+	instanceKnown bool
+	// recovery is the daemon's acknowledged identity outcome (see
+	// recoveryOutcome), or "" when it acknowledged none — a legacy daemon, an
+	// unparseable snapshot, or a connection that is not a serve proxy.
+	recovery string
+	// name and sessionID are the identity the daemon acknowledged, empty when
+	// none was.
+	name      string
+	sessionID string
+}
+
+// cause states what happened to the connection, in the strongest form the
+// evidence supports and no stronger.
+func (o reconnectOutcome) cause() string {
+	switch {
+	case !o.instanceKnown:
+		return "plumb daemon connection re-established"
+	case o.restarted:
+		return "plumb daemon process restarted and the connection was re-established"
+	default:
+		return "plumb daemon connection re-established (same daemon process — a transport reconnect, not a restart)"
+	}
+}
+
+// tail states what became of the session's identity and its expendable state.
+//
+// Identity and cached state are reported separately because they now behave
+// differently: the identity is durable and usually survives, while read
+// tracking, caches and — absent an explicit session_start — the pin genuinely
+// are rebuilt. Collapsing both into one "state was rebuilt" sentence is what
+// made a successful recovery read as a loss.
+func (o reconnectOutcome) tail() string {
+	const state = " Read-tracking and caches were rebuilt: re-read a file before " +
+		"editing it (or pass dirty_ok:true for a file you wrote earlier this " +
+		"session). The daemon restores an explicit session_start workspace, but " +
+		"if you have not set one, a relative path may now resolve against a " +
+		"different project — confirm the pin before a relative-path write."
+	return " — " + o.identitySentence() + state
+}
+
+// identitySentence reports the identity outcome, and says "unknown" rather than
+// inventing a result when the daemon acknowledged nothing.
+func (o reconnectOutcome) identitySentence() string {
+	switch recoveryOutcome(o.recovery) {
+	case recoveryRestored, recoveryEstablished:
+		if o.name != "" {
+			return fmt.Sprintf("Your session identity was restored: you are still %s (%s).", o.name, o.sessionID)
+		}
+		return "Your session identity was restored."
+	case recoveryDegraded:
+		return "Your session identity could NOT be restored this time and you are running under a temporary one; " +
+			"the durable record is intact, so a later reconnect will try again. Mail addressed to your previous " +
+			"name may not reach you until it succeeds."
+	case recoveryUnavailable:
+		return "This connection has no durable session identity (persistence is off, or the client is not `plumb serve`), " +
+			"so its name and ID are new."
+	default:
+		return "This daemon did not report an identity outcome, so whether your session name and ID carried over is unknown — " +
+			"call session_start to see them."
+	}
 }
 
 // injectReconnectNote appends a one-shot informational note as an extra text
@@ -279,7 +353,7 @@ func reconnectNoteText(daemonVersion, proxyVersion string, warnMismatch bool) st
 // tools/call result (an error response, a result with no content array,
 // anything that does not round-trip) is returned unchanged with ok=false, so a
 // malformed injection can never corrupt a real tool result.
-func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string, warnMismatch bool) (out []byte, ok bool) {
+func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string, warnMismatch bool, outcome reconnectOutcome) (out []byte, ok bool) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(frame, &full); err != nil {
 		return frame, false
@@ -303,7 +377,7 @@ func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string, warnM
 	}
 	note, err := json.Marshal(map[string]string{
 		"type": "text",
-		"text": reconnectNoteText(daemonVersion, proxyVersion, warnMismatch),
+		"text": reconnectNoteText(daemonVersion, proxyVersion, warnMismatch, outcome),
 	})
 	if err != nil {
 		return frame, false
@@ -324,4 +398,58 @@ func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string, warnM
 		return frame, false
 	}
 	return newFrame, true
+}
+
+// annotateReconnect appends a one-shot "daemon reconnected" note to the first
+// content-bearing tool result after a transparent reconnect, so a
+// silently-changed tool contract (e.g. a rebuilt daemon's new output format) is
+// attributable rather than spooky. It is called for every daemon response while
+// the flag is set and consumes the flag ONLY when injection actually succeeds —
+// so the note lands on a real tool result, not on a ping/initialize/error
+// response that happens to be the first frame back. The shape check inside
+// injectReconnectNote (a `result.content` array) is the filter, which is why no
+// request-id correlation is needed: the response can race ahead of its own
+// request being tracked (track-after-write), so id-matching would be unreliable.
+//
+// pumpDaemonToClient is the sole caller and runs single-threaded, so the
+// Load/Store pair needs no CAS.
+func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
+	if !p.reconnected.Load() {
+		return frame
+	}
+	p.hsMu.Lock()
+	daemonV := p.daemonVersion
+	// The version-mismatch clause fires ONCE per daemon version per proxy —
+	// the mismatch is harmless, so warning on every reconnect is alarm
+	// fatigue. A daemon version change re-arms it. The flag is recorded only
+	// after a successful injection, so a frame the note could not attach to
+	// keeps the warning armed rather than silently consuming it.
+	warnMismatch := daemonV != "" && daemonV != Version && p.notifiedMismatch != daemonV
+	p.hsMu.Unlock()
+	annotated, ok := injectReconnectNote(frame, daemonV, Version, warnMismatch, p.reconnectOutcome())
+	if !ok {
+		return frame // not a tool result — keep the note armed for the next response
+	}
+	if warnMismatch {
+		p.hsMu.Lock()
+		p.notifiedMismatch = daemonV
+		p.hsMu.Unlock()
+	}
+	p.reconnected.Store(false)
+	return annotated
+}
+
+// reconnectOutcome assembles what this proxy actually observed across the
+// reconnect — whether the daemon process changed, and what it acknowledged about
+// this connection's identity — so the note reports rather than assumes.
+func (p *reconnectingProxy) reconnectOutcome() reconnectOutcome {
+	restarted, instanceKnown := p.daemonRestarted()
+	id := p.heldIdentity()
+	return reconnectOutcome{
+		restarted:     restarted,
+		instanceKnown: instanceKnown,
+		recovery:      id.recovery,
+		name:          id.name,
+		sessionID:     id.sessionID,
+	}
 }

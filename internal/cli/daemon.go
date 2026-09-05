@@ -324,6 +324,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer sessState.Close()
 	pruneSessionState(sessState, cfg.Session.PersistStateTTLMinutes)
 	sweepLegacyWidePins(sessState)
+	reportLegacyNameConflicts(sessState)
 
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()

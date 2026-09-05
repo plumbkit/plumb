@@ -99,9 +99,11 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	if branch != "" {
 		fmt.Fprintf(&sb, "Branch:   %s\n", branch)
 	}
-	if inheritedName != "" {
-		fmt.Fprintf(&sb, "Session:  %s (resumed)\n", inheritedName)
-	}
+	// The same unconditional self line the full packet renders, through the same
+	// function. Brief is where it matters MOST: a woken or auto-briefed agent has
+	// no earlier packet to remember its name from, and this line sits directly
+	// above the peer list it must not confuse itself with.
+	sb.WriteString(t.selfIdentityLine(inheritedName))
 	if t.gitPolicyFn != nil && branch != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
 	}

@@ -98,9 +98,19 @@ type reconnectingProxy struct {
 	// failure. Deliberately its own mutex: it must survive a reconnect's sweep,
 	// and hsMu's critical sections stay tight.
 	pinMu         sync.Mutex
-	pending       map[string]string // in-flight session_start id → requested workspace
-	pinned        string            // last workspace the daemon accepted
-	heldSessionID string            // last plumb session ID the daemon echoed (PLAN-296)
+	pending       map[string]pendingStart // in-flight session_start id → what that call asked for
+	pinned        string                  // last workspace the daemon accepted
+	heldSessionID string                  // last plumb session ID the daemon echoed (PLAN-296)
+	// identity is the snapshot the daemon acknowledged in its initialize result
+	// (PLAN-426) — who this connection is, and whether that identity was
+	// recovered. See serve_proxy_identity.go for the rules that guard it.
+	identity proxyIdentity
+	// daemonInstance and prevDaemonInstance are the daemon PROCESS markers from
+	// the current and previous handshakes. Their comparison is the only evidence
+	// the proxy has for "did the daemon restart, or was this connection merely
+	// dropped?" — a question the reconnect note used to answer by assumption.
+	daemonInstance     string
+	prevDaemonInstance string
 
 	reconnectMu   sync.Mutex
 	daemonWriteMu sync.Mutex
@@ -407,45 +417,6 @@ func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
 	p.writeClient(frame)
 }
 
-// annotateReconnect appends a one-shot "daemon reconnected" note to the first
-// content-bearing tool result after a transparent reconnect, so a
-// silently-changed tool contract (e.g. a rebuilt daemon's new output format) is
-// attributable rather than spooky. It is called for every daemon response while
-// the flag is set and consumes the flag ONLY when injection actually succeeds —
-// so the note lands on a real tool result, not on a ping/initialize/error
-// response that happens to be the first frame back. The shape check inside
-// injectReconnectNote (a `result.content` array) is the filter, which is why no
-// request-id correlation is needed: the response can race ahead of its own
-// request being tracked (track-after-write), so id-matching would be unreliable.
-//
-// pumpDaemonToClient is the sole caller and runs single-threaded, so the
-// Load/Store pair needs no CAS.
-func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
-	if !p.reconnected.Load() {
-		return frame
-	}
-	p.hsMu.Lock()
-	daemonV := p.daemonVersion
-	// The version-mismatch clause fires ONCE per daemon version per proxy —
-	// the mismatch is harmless, so warning on every reconnect is alarm
-	// fatigue. A daemon version change re-arms it. The flag is recorded only
-	// after a successful injection, so a frame the note could not attach to
-	// keeps the warning armed rather than silently consuming it.
-	warnMismatch := daemonV != "" && daemonV != Version && p.notifiedMismatch != daemonV
-	p.hsMu.Unlock()
-	annotated, ok := injectReconnectNote(frame, daemonV, Version, warnMismatch)
-	if !ok {
-		return frame // not a tool result — keep the note armed for the next response
-	}
-	if warnMismatch {
-		p.hsMu.Lock()
-		p.notifiedMismatch = daemonV
-		p.hsMu.Unlock()
-	}
-	p.reconnected.Store(false)
-	return annotated
-}
-
 // resolveResponse marks the initialize handshake answered or de-tracks a
 // completed request so it is not error-synthesised on a later reconnect. The
 // initialize response also carries the daemon's serverInfo.version, captured
@@ -461,6 +432,12 @@ func (p *reconnectingProxy) resolveResponse(key string, frame []byte) {
 		}
 	}
 	p.hsMu.Unlock()
+	if isInit {
+		// The FIRST connect's identity, captured on the one response the replay
+		// path never sees. Outside hsMu: it takes pinMu, and holding both would
+		// pair the handshake lock with the pin lock for no reason.
+		p.observeInitializeResponse(frame)
+	}
 	if !isInit {
 		p.reqMu.Lock()
 		delete(p.outstanding, key)

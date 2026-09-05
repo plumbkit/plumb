@@ -94,7 +94,7 @@ func FuzzProxyFrameRewrite(f *testing.F) {
 		checkInjectionAuthoritative(t, in, out)
 		checkInjectionIdempotent(t, out, kv)
 
-		noted, ok := injectReconnectNote(in, "0.16.6", "0.16.5", true)
+		noted, ok := injectReconnectNote(in, "0.16.6", "0.16.5", true, reconnectOutcome{})
 		checkEnvelopePreserved(t, in, noted)
 		if ok {
 			checkAppendOnly(t, in, noted)

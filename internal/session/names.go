@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -58,26 +59,35 @@ const reservedName = "next"
 // User-provided names preserve their case.
 func NormaliseName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", errors.New("name is required")
-	}
-	if strings.EqualFold(name, reservedName) {
-		return "", fmt.Errorf("name %q is reserved for the mailbox's next-arrival address", reservedName)
-	}
-	if len(name) > MaxNameLength {
-		return "", fmt.Errorf("name is too long: max %d characters", MaxNameLength)
-	}
-	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
-		return "", errors.New("name must not start or end with '-'")
-	}
-	if strings.Contains(name, "--") {
-		return "", errors.New("name must not contain consecutive hyphens")
+	switch {
+	case name == "":
+		return "", fmt.Errorf("%w: name is required", ErrInvalidName)
+	case strings.EqualFold(name, reservedName):
+		return "", fmt.Errorf("%w: name %q is reserved for the mailbox's next-arrival address", ErrInvalidName, reservedName)
+	case len(name) > MaxNameLength:
+		return "", fmt.Errorf("%w: name is too long: max %d characters", ErrInvalidName, MaxNameLength)
+	case strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-"):
+		return "", fmt.Errorf("%w: name must not start or end with '-'", ErrInvalidName)
+	case strings.Contains(name, "--"):
+		return "", fmt.Errorf("%w: name must not contain consecutive hyphens", ErrInvalidName)
 	}
 	if err := checkNameCharset(name); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalidName, err)
 	}
 	return name, nil
 }
+
+// ErrInvalidName is returned by NormaliseName — and so by Register and Rename —
+// when a name breaks a validation rule, as opposed to merely colliding with
+// another session's (ErrNameTaken) or failing on I/O. Match it with errors.Is.
+//
+// The distinction is load-bearing for identity recovery, which reacts to the
+// three cases differently: a collision is transient and must be retried against
+// an untouched durable record, an invalid stored name can never succeed and so
+// is the one case where replacing the record is the repair, and an I/O failure
+// is neither — treating it as "invalid" would overwrite a perfectly good
+// identity because a disk was briefly busy.
+var ErrInvalidName = errors.New("invalid session name")
 
 // checkNameCharset enforces the charset rule — ASCII letters (any case), digits
 // and hyphens. Split out of NormaliseName to keep that function under the
@@ -150,4 +160,76 @@ var nouns = []string{
 	"storm", "stream", "tiger", "tundra", "vale", "valley", "vine",
 	"viper", "vista", "walrus", "warbler", "whale", "wolf", "wren",
 	"yak", "zebra",
+}
+
+// nameDrawAttempts is how many random draws freeName makes before falling back
+// to a numeric suffix. The pool is ~6k names, so against any realistic number
+// of live sessions the first draw lands; the retries cost one slice scan each
+// and only run in the rare collision case.
+const nameDrawAttempts = 8
+
+// freeName returns a generated name that neither a live session other than
+// selfID nor a reservation for another session holds.
+//
+// Termination still holds with reservations in play, and by the same argument
+// as before: both live sessions and reservations are finite sets, so at most
+// len(live)+len(reserved) suffixes can be occupied and the loop returns by
+// i = len(live)+len(reserved)+2 at the latest. Reservations accumulate over a
+// database's lifetime where live sessions do not, which is why the bound is
+// stated rather than assumed — the adjective/noun pool CAN fill, and the
+// suffix path is what makes that survivable rather than fatal.
+func freeName(live []Info, selfID string, reserved Reserved) string {
+	free := func(n string) bool {
+		return !nameTaken(live, n, selfID) && !reserved.taken(n, selfID)
+	}
+	for range nameDrawAttempts {
+		if n := generateName(); free(n) {
+			return n
+		}
+	}
+	base := generateName()
+	for i := 2; ; i++ {
+		if n := withSuffix(base, i); free(n) {
+			return n
+		}
+	}
+}
+
+// withSuffix appends "-n" to base, trimming base so the result fits
+// MaxNameLength and never ends in a hyphen — NormaliseName rejects both, and a
+// generated name has to survive being passed back through it.
+//
+// The hyphen trim is unconditional, not just after truncation: a base that is
+// entirely hyphens is short enough to skip the trim yet still produces "----2".
+// A base that trims away to nothing falls back to a letter, since a bare
+// "-2" leads with a hyphen. Neither is reachable from generateName's
+// adjective-noun output, but withSuffix must not depend on its caller for the
+// legality of what it returns.
+//
+// It does NOT sanitise an arbitrary string — an interior "--" survives and
+// NormaliseName would reject it. The contract is that a legal (or empty) base
+// yields a legal name.
+func withSuffix(base string, n int) string {
+	suffix := "-" + strconv.Itoa(n)
+	if room := MaxNameLength - len(suffix); len(base) > room {
+		base = base[:max(room, 0)]
+	}
+	if base = strings.Trim(base, "-"); base == "" {
+		base = "s"
+	}
+	return base + suffix
+}
+
+// nameTaken reports whether a live session other than selfID answers to name.
+//
+// The comparison is case-INSENSITIVE even though the mailbox matches addressees
+// with SQLite's case-sensitive '='. That is deliberate: being stricter than
+// delivery can only reject confusable names, never admit an ambiguous address.
+func nameTaken(live []Info, name, selfID string) bool {
+	for _, info := range live {
+		if info.ID != selfID && strings.EqualFold(info.Name, name) {
+			return true
+		}
+	}
+	return false
 }

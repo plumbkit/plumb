@@ -203,7 +203,7 @@ func TestDeletePin(t *testing.T) {
 
 func TestNameRoundTrip(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
+	if err := s.SaveIdentity("p", Identity{Name: "swift-falcon", SessionID: ""}); err != nil {
 		t.Fatalf("SaveIdentity: %v", err)
 	}
 	got, ok, err := s.LoadIdentity("p")
@@ -217,10 +217,10 @@ func TestNameRoundTrip(t *testing.T) {
 
 func TestNameUpsertOverwrites(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SaveIdentity("p", "old-name", ""); err != nil {
+	if err := s.SaveIdentity("p", Identity{Name: "old-name", SessionID: ""}); err != nil {
 		t.Fatalf("SaveIdentity 1: %v", err)
 	}
-	if err := s.SaveIdentity("p", "new-name", ""); err != nil {
+	if err := s.SaveIdentity("p", Identity{Name: "new-name", SessionID: ""}); err != nil {
 		t.Fatalf("SaveIdentity 2: %v", err)
 	}
 	got, ok, err := s.LoadIdentity("p")
@@ -251,7 +251,7 @@ func TestPruneByTTL(t *testing.T) {
 	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin: %v", err)
 	}
-	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
+	if err := s.SaveIdentity("p", Identity{Name: "swift-falcon", SessionID: ""}); err != nil {
 		t.Fatalf("SaveIdentity: %v", err)
 	}
 	// Backdate all rows so the prune cutoff (now) is strictly after them.
@@ -279,16 +279,28 @@ func TestPruneByTTL(t *testing.T) {
 	if _, _, _, ok, _ := s.LoadPin("p"); ok {
 		t.Fatalf("pin survived prune")
 	}
-	if _, ok, _ := s.LoadIdentity("p"); ok {
-		t.Fatalf("name survived prune")
+	// The identity record is NOT expendable and must survive any age (PLAN-426).
+	// It is the only proof of who a reconnecting serve is; deleting it does not
+	// shed a cache, it forks the session under a new ID and name and orphans the
+	// mail addressed to the old one. This assertion was inverted deliberately —
+	// the previous expectation was the defect.
+	if _, ok, _ := s.LoadIdentity("p"); !ok {
+		t.Fatalf("identity record was pruned by age; it must be retained regardless of TTL")
 	}
 }
 
 // TestPruneExemptsLiveSessions: a conversation that is still connected keeps
-// its state however old the rows are. Reads are refreshed as the session works,
-// but the pin and the name are written once at initialize, so a TTL sweep would
-// otherwise reclaim them mid-session and the next reconnect would come back
-// unpinned and renamed — the churn persistence exists to prevent.
+// its expendable state however old the rows are. Reads are refreshed as the
+// session works, but the pin is written once at initialize, so a TTL sweep
+// would otherwise reclaim it mid-session and the next reconnect would come back
+// unpinned — the churn persistence exists to prevent.
+//
+// The identity record needs no exemption because it is never swept at all, and
+// this test pins that difference: the "dead" session's identity survives even
+// though nothing vouches for it. That is the point. The exemption list is built
+// from connections attached to THIS daemon, and the sweep that matters runs at
+// startup before any connection exists — so at the one moment a surviving serve
+// most needs its record, the exemption would be empty.
 func TestPruneExemptsLiveSessions(t *testing.T) {
 	s := newTestStore(t)
 	for _, id := range []string{"live", "dead"} {
@@ -298,7 +310,7 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 		if err := s.UpsertPin(id, "/ws", "go", PinSourceRoots); err != nil {
 			t.Fatalf("UpsertPin(%s): %v", id, err)
 		}
-		if err := s.SaveIdentity(id, "swift-falcon-"+id, ""); err != nil {
+		if err := s.SaveIdentity(id, Identity{Name: "swift-falcon-" + id}); err != nil {
 			t.Fatalf("SaveIdentity(%s): %v", id, err)
 		}
 	}
@@ -322,7 +334,7 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 		t.Error("live session lost its pin")
 	}
 	if _, ok, _ := s.LoadIdentity("live"); !ok {
-		t.Error("live session lost its name")
+		t.Error("live session lost its identity record")
 	}
 	// The abandoned one is still reclaimed.
 	if recs, _ := s.LoadReads("dead", "/ws"); len(recs) != 0 {
@@ -331,8 +343,9 @@ func TestPruneExemptsLiveSessions(t *testing.T) {
 	if _, _, _, ok, _ := s.LoadPin("dead"); ok {
 		t.Error("dead session's pin survived")
 	}
-	if _, ok, _ := s.LoadIdentity("dead"); ok {
-		t.Error("dead session's name survived")
+	// ...but its identity record is retained, with no exemption asked for.
+	if _, ok, _ := s.LoadIdentity("dead"); !ok {
+		t.Error("an unexempted identity record was pruned; retention must not depend on the live list")
 	}
 }
 
@@ -367,7 +380,7 @@ func TestNilStoreMethodsAreSafe(t *testing.T) {
 	if _, _, _, ok, err := s.LoadPin("p"); err != nil || ok {
 		t.Fatalf("nil LoadPin: ok=%v err=%v", ok, err)
 	}
-	if err := s.SaveIdentity("p", "swift-falcon", ""); err != nil {
+	if err := s.SaveIdentity("p", Identity{Name: "swift-falcon", SessionID: ""}); err != nil {
 		t.Fatalf("nil SaveName: %v", err)
 	}
 	if _, ok, err := s.LoadIdentity("p"); err != nil || ok {

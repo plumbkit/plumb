@@ -241,6 +241,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessionID).
+		WithSelfIdentity(s.sessionName).
 		WithSurcharge(func() (int, int, int) {
 			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
 			return r.TotalBytes, r.Tokens, r.ToolCount
@@ -269,6 +270,13 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessionID(), externalID)
 			s.recordLogicalAgentAttach(externalID)
+			// Mirror the linkage into the durable identity record. Until
+			// PLAN-426 it lived only in the session JSON, which is collected
+			// 24 h after the session ends — so an outage longer than that lost
+			// the linkage while the identity itself survived, and
+			// `plumb mail --external-id` stopped resolving a session that had
+			// in fact recovered.
+			s.persistIdentity()
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
 				// session.Rename refuses a name a live session already holds, so
 				// two resumes racing on one external ID inside the grace window
@@ -336,6 +344,15 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.OnSessionID = func(_ context.Context, id string) {
 		s.onSessionID(id)
+	}
+	srv.InitializeMeta = func(_ context.Context) map[string]any {
+		// Runs after the param hooks above, so restoreIdentity has already
+		// decided who this connection is — the identity stated here is the
+		// settled one, not a guess made before recovery ran.
+		return map[string]any{
+			mcp.MetaSessionIdentityKey: s.identityMeta(),
+			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),
+		}
 	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure)

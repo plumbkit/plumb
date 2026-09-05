@@ -29,7 +29,7 @@ func TestFreeName_RedrawsPastACollision(t *testing.T) {
 	stubDraw(t, "taken-name", "taken-name", "free-name")
 	live := []Info{{ID: "peer", Name: "taken-name"}}
 
-	if got := freeName(live, "self"); got != "free-name" {
+	if got := freeName(live, "self", nil); got != "free-name" {
 		t.Fatalf("freeName = %q, want free-name", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestFreeName_SuffixesWhenEveryDrawCollides(t *testing.T) {
 		{ID: "b", Name: "amber-antelope-2"},
 	}
 
-	if got := freeName(live, "self"); got != "amber-antelope-3" {
+	if got := freeName(live, "self", nil); got != "amber-antelope-3" {
 		t.Fatalf("freeName = %q, want amber-antelope-3", got)
 	}
 }
@@ -55,7 +55,7 @@ func TestFreeName_IgnoresOwnName(t *testing.T) {
 	stubDraw(t, "mine")
 	live := []Info{{ID: "self", Name: "mine"}}
 
-	if got := freeName(live, "self"); got != "mine" {
+	if got := freeName(live, "self", nil); got != "mine" {
 		t.Fatalf("freeName = %q, want mine", got)
 	}
 }

@@ -170,15 +170,19 @@ type sessionView struct {
 	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
 	// the live sessID equal to it on reconnect.
 	replayedSessionID string
-	// persistedSessionID is the plumb session ID recorded in the session_names
-	// row under this connection's proxy session ID (captured by restoreName). It
-	// is the sole authorisation for adoptSessionID: the proxy session ID is a
-	// never-disclosed bearer secret — presenting it is evidence of being the same
-	// serve process — whereas the plumb session ID is echoed to clients
-	// (toolResultMeta), so a replayed one is only a CLAIM. The persisted pairing
-	// of the two is what turns the claim into proof; an empty value is "no
-	// proof", never a wildcard.
-	persistedSessionID string
+	// persistedIdentity is the durable identity record selected by this
+	// connection's proxy session ID (captured by restoreIdentity). It is the sole
+	// authorisation for resuming a predecessor's ID, name and mailbox: the proxy
+	// session ID is a never-disclosed bearer secret — presenting it is evidence of
+	// being the same serve process — whereas a plumb session ID or name is echoed
+	// to clients, so a replayed one is only a CLAIM. The record is what turns the
+	// claim into proof; a zero value is "no proof", never a wildcard.
+	persistedIdentity sessionstate.Identity
+	// recovery is what happened to this connection's identity during initialize
+	// (see recoveryOutcome). It is reported to the proxy in the initialize result
+	// _meta, which is what lets a reconnect note state an outcome rather than
+	// assume one. "" until restoreIdentity runs, and read through recovery().
+	recovery recoveryOutcome
 	// inheritedSessionIDs are predecessor plumb session IDs this connection may
 	// also read mailbox messages for, granted ONLY by the proxy-authenticated
 	// persisted-state path (see inheritSessionID). Nil for every other session.
@@ -383,7 +387,14 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 	// check and the session has no file for anyone else's check to find, so it
 	// must not become an address. addressableName gates that on sessID, which
 	// stays empty here.
-	reg, err := session.Register(session.Info{DaemonVersion: Version})
+	//
+	// The draw also avoids names RESERVED by identities that are recoverable but
+	// not currently live — a `plumb serve` outliving its daemon has no live record
+	// at all, and handing its name to this new session would orphan every note
+	// addressed to it once it reconnects and is renamed by the collision path. A
+	// store that cannot answer contributes nothing, leaving the live-session check
+	// exactly as it was.
+	reg, err := session.RegisterReserved(session.Info{DaemonVersion: Version}, reservedNamesFrom(sessState))
 	if err != nil {
 		slog.Warn("daemon: session registration failed; continuing unregistered and unaddressable", "err", err)
 		reg.Name = session.GenerateName()
@@ -498,63 +509,6 @@ func (s *connSession) log() *slog.Logger {
 // workspace returns the resolved workspace root for the session.
 func (s *connSession) workspace() string {
 	return s.view().acquiredRoot
-}
-
-// acquiredLanguageName returns the LSP language attached to this session, or ""
-// when none is (LanguageNone, or not yet attached). session_start uses it to
-// distinguish a real "LSP is ready" from a marker-detected project whose
-// server is opt-in/off/missing — it must not advertise LSP tools that error.
-func (s *connSession) acquiredLanguageName() string {
-	lang := s.view().acquiredLanguage
-	if lang == "" || lang == LanguageNone {
-		return ""
-	}
-	return lang
-}
-
-// acquiredLanguageLabels returns the distinct child languages discovered for a
-// monorepo root (the elected primary plus its siblings), as [lsp.<lang>] keys,
-// or nil for a single-language root. session_start renders these as the
-// "Language: Swift, Zig" identity line; the single primary still drives the
-// recommended-step guidance via acquiredLanguageName.
-func (s *connSession) acquiredLanguageLabels() []string {
-	return s.view().discoveredLangs
-}
-
-// lspWarming reports whether this session's primary language server is still
-// warming (handshake incomplete) and how long it has been. session_start uses it
-// to soften "LSP is ready" into a warming advisory so an agent reaches for
-// topology/workspace_symbols meanwhile instead of blocking a semantic tool on a cold
-// server. Returns (false, 0) when no language is attached or the server is ready.
-func (s *connSession) lspWarming() (bool, time.Duration) {
-	if s.acquiredLanguageName() == "" {
-		return false, 0
-	}
-	return s.sessionProxy.WarmupStatus("")
-}
-
-// routedLanguageNames returns the non-primary languages whose servers have
-// actually served this session (empty when none have). daemon_info and
-// session_start pair it with acquiredLanguageName so a connection with no
-// primary — a LanguageNone root served purely by per-file routing — stops
-// reporting that no language server is attached while one answers its queries.
-func (s *connSession) routedLanguageNames() []string {
-	if s.sessionProxy == nil {
-		return nil
-	}
-	return s.sessionProxy.routedLanguages()
-}
-
-// lspDiagMode reports the resolved diagnostics mode of this session's primary
-// language server (push / pull / hybrid / pull-requested-but-unavailable), or ""
-// when no server is attached or the mode is not yet resolved. daemon_info and
-// session_start surface it — the mode is authoritative negotiation state, never
-// inferred from cache contents.
-func (s *connSession) lspDiagMode() string {
-	if s.acquiredLanguageName() == "" {
-		return ""
-	}
-	return s.sessionProxy.DiagMode("")
 }
 
 // markBoundaryViolation records the violation on the session record and is

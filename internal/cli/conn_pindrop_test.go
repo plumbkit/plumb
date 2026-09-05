@@ -235,7 +235,14 @@ func TestAttachOnInit_ReplayedSubdirectorySpellingDropped(t *testing.T) {
 
 // TestToolResultMeta_EchoesCanonicalRoot: the daemon echoes the resolved root
 // on a session_start(workspace=…) result so the proxy can commit the canonical
-// spelling; anything else gets no _meta.
+// spelling — and the session ID on EVERY session_start, workspace or not.
+//
+// The two keys used to share the workspace gate, which meant
+// `session_start({session_id})` — an agent linking its conversation without
+// re-pinning — told the proxy nothing at all, so the connection had no identity
+// to prove on the next reconnect (PLAN-426). Identity does not depend on a
+// workspace and must not be gated on one; the resolved root still is, because
+// it answers a question only a workspace argument asks.
 func TestToolResultMeta_EchoesCanonicalRoot(t *testing.T) {
 	store, ss := newOriginStore(t)
 	root := freshTempDir(t)
@@ -249,8 +256,18 @@ func TestToolResultMeta_EchoesCanonicalRoot(t *testing.T) {
 	if !ok || got != root {
 		t.Fatalf("session_start result _meta = %v, want %s=%q", meta, mcp.MetaResolvedWorkspaceKey, root)
 	}
-	if m := s.toolResultMeta(context.Background(), "session_start", []byte(`{}`)); m != nil {
-		t.Fatalf("workspace-less session_start got _meta %v", m)
+	if _, ok := meta[mcp.MetaSessionIDKey]; !ok {
+		t.Fatalf("session_start result _meta = %v, want a %s", meta, mcp.MetaSessionIDKey)
+	}
+	bare := s.toolResultMeta(context.Background(), "session_start", []byte(`{}`))
+	if got, ok := bare[mcp.MetaSessionIDKey]; !ok || got != s.sessionID() {
+		t.Fatalf("workspace-less session_start _meta = %v, want %s=%q — gating identity on the "+
+			"workspace argument is what left an orientation-only caller unable to prove itself",
+			bare, mcp.MetaSessionIDKey, s.sessionID())
+	}
+	if _, ok := bare[mcp.MetaResolvedWorkspaceKey]; ok {
+		t.Fatalf("workspace-less session_start echoed a resolved workspace: %v — a call that named "+
+			"no workspace must say nothing about the pin", bare)
 	}
 	if m := s.toolResultMeta(context.Background(), "read_file", []byte(`{"workspace":"`+root+`"}`)); m != nil {
 		t.Fatalf("a non-session_start tool got _meta %v", m)
