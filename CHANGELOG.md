@@ -88,12 +88,16 @@
     while the identity itself survived — leaving `plumb mail --external-id`
     unable to resolve a session that had in fact recovered perfectly.
 
-  A name stays reserved only while nobody is entitled to it: the identity that
-  owns it may always take it back, and so may a RESTARTED `plumb serve` that
+  A reservation does not refuse the party entitled to it: the identity that owns
+  it takes it back on reconnect, and so does a RESTARTED `plumb serve` that
   re-links the same conversation — it holds neither the old proxy secret nor the
-  old internal session ID, and is nonetheless the party the name is being held
-  for. Reservations are not enforced at all when `persist_state` is off, since
-  nothing would then be able to reclaim one.
+  old internal session ID, and is nonetheless the party the name is held for.
+  That second entitlement is only as strong as the client-supplied conversation
+  ID, which is the same basis `session_start`'s resume-by-linkage always had.
+  Reservations are read from the GLOBAL configuration, so a project's
+  `.plumb/config.toml` cannot switch off a guard that protects other sessions'
+  names; with the global setting off they are not enforced at all, since nothing
+  could then reclaim one.
 
   Authorisation is unchanged and remains the whole security argument: only the
   never-disclosed proxy session ID selects a record. A replayed plumb session ID
@@ -117,13 +121,29 @@
   `TestRestore_ReservationsAreNotEnforcedWithPersistenceOff` and the
   `TestProxyIdentity_*` suite.
 
-  Two failure modes found by review rather than by construction, and worth
-  naming because both defeated the fix through a path the fix did not look at:
-  a PARTIALLY refused restoration (ID refused, name restored) re-recorded the
-  temporary identity through the successful rename, reintroducing the very fork
-  the refusal paths had just been made to avoid; and a legacy record carrying a
-  name but no session ID reported a full restore, so the note claimed continuity
-  for an ID the session had never held.
+  Five failure modes were found by review rather than by construction, over two
+  rounds, and every one of them defeated the fix through a path the fix had not
+  looked at — which is the honest shape of this change and worth recording:
+
+  - A PARTIALLY refused restoration (ID refused, name restored) re-recorded the
+    temporary identity through the SUCCESSFUL rename, reintroducing the fork the
+    refusal paths had just been made to avoid.
+  - `session_start`'s external-ID linker then did the same thing from a third
+    call site — the first call most agents make, in exactly the window
+    degradation occurs. The guard now lives in the write itself rather than at
+    each caller.
+  - Resuming by external ID writes a second record claiming the name, and
+    records are never deleted, so the stale one reserved that name forever and
+    refused every later handshake restore — the "no extra session_start needed"
+    guarantee, defeated by the feature added to protect it.
+  - Suppressing the write during a restore was right when there is a proven ID
+    to protect and wrong when there is not: a record with a name and no session
+    ID never gained one, so it reserved nothing and degraded forever.
+  - Reading the reservation gate from the per-project config let an untrusted
+    `.plumb/config.toml` disable a cross-session guard.
+
+  A legacy record carrying a name but no session ID also reported a full
+  restore, so the note claimed continuity for an ID the session had never held.
 
 - **The reconnect note reports what happened instead of asserting a restart and
   a wholesale state loss.** It read as a daemon RESTART when the commonest cause
