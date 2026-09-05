@@ -166,19 +166,21 @@
   directories are inherited; child directories can override" — but the lookup
   returned on the FIRST set in the stack that ignored a path, and the stack is
   ordered outermost-first, so a parent's `*.py` decided the answer before a
-  child's `!keep.py` was ever read. Every negation below the top-level ignore
-  file was unreachable. The verdict is now the LAST matching rule across the
-  whole stack, which is what gives a deeper file precedence. Two further
-  defects surfaced while fixing it and are closed with it: an excluded directory
-  could be re-included from inside itself (gitignore forbids this — git never
-  descends there to read the negation), and a nested ignore file could match
-  paths ABOVE its own directory, because a pattern with no slash matches on base
-  name alone and `filepath.Rel` happily returns `../outside.log`. The
-  excluded-parent scan runs only when a negation actually re-included a path, so
-  a tree with no negations pays nothing for it. Guarded by
-  `TestIgnoreStack_ChildNegationOverridesParent`,
-  `TestIgnoreStack_ExcludedParentCannotBeReincluded` and
-  `TestIgnoreStack_PathOutsideSetDirIsNotMatched`.
+  child's `!keep.py` was ever read. A negation could still override an exclusion
+  written in the SAME file — patterns within one file were already
+  last-match-wins — but it could never override a shallower one. The verdict is
+  now the LAST matching rule across the whole stack, which is what gives a
+  deeper file precedence. Two further defects surfaced while fixing it and are
+  closed with it: an excluded directory could be re-included from inside itself
+  (gitignore forbids this — git never descends there to read the negation), and
+  a nested ignore file could match paths ABOVE its own directory, because a
+  pattern with no slash matches on base name alone and `filepath.Rel` happily
+  returns `../outside.log`. The excluded-parent scan runs only when a negation
+  actually re-included a path, so a tree with no negations pays nothing for it.
+  Guarded by `TestIgnoreStack_ChildNegationOverridesParent`,
+  `TestIgnoreStack_ExcludedParentCannotBeReincluded`,
+  `TestIgnoreStack_PathOutsideSetDirIsNotMatched` and
+  `TestIgnoreStack_StarWithNegationInSameNestedDir`.
 
 - **The `roots/list` probe bound is guarded by its own test, and a probe timeout
   no longer logs as "not supported".** The 5 s bound PR #435 put around the

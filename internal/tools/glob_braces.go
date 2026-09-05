@@ -16,8 +16,10 @@ import (
 // documented per-extension workaround because of it.
 //
 // Expansion happens one layer above filepath.Match so that .gitignore matching
-// (ignorePattern.matchesPath) is untouched — gitignore genuinely has no brace
-// syntax, and giving it one here would silently change which files are ignored.
+// is untouched — gitignore genuinely has no brace syntax, and giving it one
+// here would silently change which files are ignored. That is now structural
+// rather than a convention: the matcher lives in internal/ignore, which cannot
+// see this file. See TestGitignore_BracesStayLiteral there.
 //
 // A brace can be ESCAPED to keep it literal: `notes\{draft,final\}.md` matches
 // the file of that exact name. Without an opt-out, a pattern that relied on

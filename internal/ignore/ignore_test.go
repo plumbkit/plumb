@@ -228,3 +228,46 @@ func TestGitignore_BracesStayLiteral(t *testing.T) {
 		t.Error("gitignore brace pattern must match the literal name")
 	}
 }
+
+// TestIgnoreStack_StarWithNegationInSameNestedDir pins the near-universal git
+// idiom of excluding everything in a directory and re-including a few entries:
+//
+//	logs/.gitignore:  *
+//	                  !.gitignore
+//	                  !keep.txt
+//
+// It is the case the excluded-parent scan broke on its first draft. Because
+// filepath.Match("*", ".") is true, a set whose own directory was not excluded
+// from its containment check judged ITSELF excluded by its own `*`, and the
+// scan then discarded the negation — hiding two files git reports as not
+// ignored. Verified against `git check-ignore` on the same fixture. A root
+// ignore file is present deliberately: without it the nested set is st[0] and
+// the ancestor scan has nothing above it to consult, so the bug does not
+// reproduce.
+func TestIgnoreStack_StarWithNegationInSameNestedDir(t *testing.T) {
+	dir := t.TempDir()
+	logs := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, ".gitignore"), []byte("*\n!.gitignore\n!keep.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var st Stack
+	st = st.Load(dir)
+	st = st.Load(logs)
+
+	if got := st.IsIgnored(filepath.Join(logs, "keep.txt"), false); got {
+		t.Error("logs/keep.txt: re-included by !keep.txt; git reports it not ignored")
+	}
+	if got := st.IsIgnored(filepath.Join(logs, ".gitignore"), false); got {
+		t.Error("logs/.gitignore: re-included by !.gitignore; git reports it not ignored")
+	}
+	if got := st.IsIgnored(filepath.Join(logs, "a.log"), false); !got {
+		t.Error("logs/a.log: matched by * with no negation, must stay ignored")
+	}
+}
