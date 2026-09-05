@@ -366,3 +366,63 @@ func TestRunTask_NoCommandRemedyClosesTheTrustLoop(t *testing.T) {
 		}
 	}
 }
+
+// TestRunTask_ExecutePassesLanguageToResolver closes the seam an adversarial
+// review found open: every resolver stub in this package takes the third
+// parameter as `_`, and the cli-side tests call taskResolver directly, so
+// NOTHING asserted that Execute forwards `language` at all. Reverting
+// `t.resolve(a.Slot, a.Target, a.Language)` to pass "" left the entire package
+// suite green — run_task(language:"python") would silently resolve the primary
+// and run a different language's tests under the name the caller asked for,
+// which is the exact failure the argument exists to prevent.
+func TestRunTask_ExecutePassesLanguageToResolver(t *testing.T) {
+	var gotSlot, gotTarget, gotLanguage string
+	tk := NewTasks(WriteDeps{}, func(slot, target, language string) (TaskCommand, error) {
+		gotSlot, gotTarget, gotLanguage = slot, target, language
+		return TaskCommand{}, nil // no Steps ⇒ Execute returns noCommandError, which is fine here
+	})
+	_, _ = tk.Execute(context.Background(), json.RawMessage(`{"slot":"test","target":"./pkg","language":"python"}`))
+
+	if gotSlot != "test" || gotTarget != "./pkg" {
+		t.Errorf("slot/target = %q/%q, want test/./pkg", gotSlot, gotTarget)
+	}
+	if gotLanguage != "python" {
+		t.Errorf("language reached the resolver as %q, want python", gotLanguage)
+	}
+}
+
+// TestRunTask_OmittedLanguageReachesResolverEmpty pins the default that every
+// pre-existing caller depends on, and that mutation_test relies on to keep
+// resolving the primary.
+func TestRunTask_OmittedLanguageReachesResolverEmpty(t *testing.T) {
+	got := "unset"
+	tk := NewTasks(WriteDeps{}, func(_, _, language string) (TaskCommand, error) {
+		got = language
+		return TaskCommand{}, nil
+	})
+	_, _ = tk.Execute(context.Background(), json.RawMessage(`{"slot":"test"}`))
+	if got != "" {
+		t.Errorf("language = %q, want empty (meaning the primary)", got)
+	}
+}
+
+// TestRunTask_MalformedLanguageRefusedBeforeResolving guards the shape check.
+// It must refuse before the resolver runs: the refusal quotes the key back, and
+// a [tasks.<lang>] key is a TOML table name, so an arbitrary string would put
+// something nobody could have written into the message.
+func TestRunTask_MalformedLanguageRefusedBeforeResolving(t *testing.T) {
+	called := false
+	tk := NewTasks(WriteDeps{}, func(_, _, _ string) (TaskCommand, error) {
+		called = true
+		return TaskCommand{}, nil
+	})
+	for _, bad := range []string{"Python", "py thon", "-py", "py/../etc"} {
+		_, err := tk.Execute(context.Background(), json.RawMessage(`{"slot":"test","language":"`+bad+`"}`))
+		if err == nil {
+			t.Errorf("language %q should be refused for shape", bad)
+		}
+	}
+	if called {
+		t.Error("the resolver must not be reached for a malformed language")
+	}
+}

@@ -202,7 +202,7 @@
   or uninstalled language was dropped and detection's answer kept, with nothing
   said. An agent whose workspace had misdetected could therefore correct it
   explicitly, be answered with the original wrong language, and have no way to
-  tell a honoured override from a discarded one. Reported from the field as
+  tell an honoured override from a discarded one. Reported from the field as
   "`session_start(language=…)` — ignored once the workspace is already pinned".
   The three failure cases now get three remedies, because they are three
   different problems: an unknown key lists the valid ones, a disabled language

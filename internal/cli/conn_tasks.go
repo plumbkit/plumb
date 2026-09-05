@@ -111,6 +111,14 @@ func taskLanguage(v sessionView, requested string) (string, error) {
 func languagesWithCommands(v sessionView) string {
 	var langs []string
 	for lang, tc := range v.tasks {
+		// Only what the caller could actually ask for. Config map keys are not
+		// case-folded, so a project writing [tasks.Python] gets a real, distinct
+		// entry that run_task's shape check then refuses — listing it here would
+		// hand the caller a key that bounces, which reads as a plumb bug rather
+		// than the config typo it is.
+		if !tools.ValidTaskLanguage(lang) {
+			continue
+		}
 		if len(configuredSlots(tc, lang)) > 0 {
 			langs = append(langs, lang)
 		}
