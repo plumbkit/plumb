@@ -75,20 +75,67 @@ func (s *connSession) setPurpose(purpose string) {
 // blocks it, which is what lets identity recovery restore its own retained name
 // through this same path rather than needing a second, weaker one.
 func (s *connSession) renameSession(name string) (string, error) {
-	return s.renameSessionClaiming(name, "")
+	return s.renameSessionClaiming(name, nameClaim{})
 }
 
-// renameSessionClaiming is renameSession for the identity-restore path: it
-// renames on behalf of ownerID, so the reservation held FOR that identity does
-// not refuse the identity itself. ownerID "" is an ordinary rename, checked
-// against every reservation. See reservedNamesClaiming.
-func (s *connSession) renameSessionClaiming(name, ownerID string) (string, error) {
-	name, err := session.RenameReserved(s.sessionID(), name, s.reservedNamesClaiming(ownerID))
+// renameSessionResuming renames a session that is taking back a name on the
+// strength of its external conversation ID — session_start's resume-by-linkage
+// path (PR #189), where the agent is the same but the `plumb serve` process,
+// and therefore every proxy-keyed credential, is not.
+//
+// It DOES persist: this is a real rename of a real identity, not the replay of
+// a record. The next reconnect must come back under the resumed name.
+func (s *connSession) renameSessionResuming(name, externalID string) (string, error) {
+	return s.renameSessionClaiming(name, nameClaim{externalID: externalID})
+}
+
+// nameClaim is the identity a rename is performed ON BEHALF OF, when that is
+// not simply "this connection as it currently stands".
+//
+// It exists because the restore path renames while the connection may still be
+// running under a TEMPORARY identity — the ID adoption can be refused while the
+// name restore succeeds — and the two things that follow from a rename both have
+// to know that:
+//
+//   - which reservations to set aside (the one held for the identity being
+//     restored is not a stranger's), and
+//   - whether the durable record may be re-recorded at all.
+//
+// A zero nameClaim is an ordinary rename by a session acting as itself.
+type nameClaim struct {
+	// sessionID is the internal session ID the claimed identity holds, or "" for
+	// an ordinary rename.
+	sessionID string
+	// externalID is the caller's own conversation ID, when the claim rests on
+	// that rather than on the internal session ID — a restarted `plumb serve`
+	// re-linking the same conversation holds neither the old secret nor the old
+	// session ID, and is nonetheless the party the name is being held for.
+	externalID string
+	// restoring marks a rename that is APPLYING the durable record rather than
+	// changing it. Such a rename must not write the record back: the record
+	// already says this name, and the connection may be running under a
+	// temporary ID that would silently replace the proven one.
+	restoring bool
+}
+
+// renameSessionClaiming renames on behalf of claim.
+//
+// The persist decision is the load-bearing part. A LEGITIMATE rename must write
+// the record — otherwise the next reconnect restores the name the agent just
+// changed. A RESTORING rename must not, and that asymmetry is not an
+// optimisation: when the ID adoption was refused, `s.sessionID()` is a temporary
+// value, and recording it replaces the only proof of what to come back to. The
+// refusal paths were made to leave the record alone; without this, the fork
+// simply arrived through the successful rename beside them instead.
+func (s *connSession) renameSessionClaiming(name string, claim nameClaim) (string, error) {
+	name, err := session.RenameReserved(s.sessionID(), name, s.reservedNamesFor(claim.sessionID, claim.externalID))
 	if err != nil {
 		return "", err
 	}
 	s.mutate(func(v *sessionView) { v.sessName = name })
 	s.statsStore.RenameSession(s.sessionID(), name)
-	s.persistIdentity()
+	if !claim.restoring {
+		s.persistIdentity()
+	}
 	return name, nil
 }

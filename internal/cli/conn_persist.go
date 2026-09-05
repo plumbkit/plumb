@@ -135,11 +135,15 @@ func (s *connSession) inheritedSessionIDs() []string {
 // external-ID link, and the one repair case where the stored name is invalid by
 // construction. Recovery FAILURES do not call it — see conn_restore.go, where
 // that used to be the identity-fork bug.
-func (s *connSession) persistIdentity() {
+// It reports whether the identity is now durably recorded. Callers that are
+// about to CLAIM durable continuity must consult it: advertising a recoverable
+// identity that was never committed is the one thing worse than not having one,
+// because the agent then relies on a name and ID that will not come back.
+func (s *connSession) persistIdentity() bool {
 	v := s.view()
 	name := v.sessName
 	if !s.namePersistEnabled(v) || name == "" {
-		return
+		return false
 	}
 	rec := sessionstate.Identity{
 		Name:       name,
@@ -148,7 +152,9 @@ func (s *connSession) persistIdentity() {
 	}
 	if err := s.sessionState.SaveIdentity(v.proxySessionID, rec); err != nil {
 		s.log().Debug("daemon: persist session identity failed", "err", err)
+		return false
 	}
+	return true
 }
 
 // externalID returns the external-conversation ID linked to this session, or ""

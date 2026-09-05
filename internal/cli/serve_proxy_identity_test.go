@@ -198,6 +198,28 @@ func TestProxyIdentity_DaemonRestartIsObservedNotAssumed(t *testing.T) {
 				"equality and connection loss cannot stand in for it")
 		}
 	})
+
+	// The case a fresh proxy cannot reach: markers seen EARLIER, then a daemon
+	// downgraded mid-session that reports none. Holding the old pair in place
+	// would keep answering with a transition observed two reconnects ago — the
+	// note would report a restart it did not see, which is the exact failure
+	// this whole marker exists to prevent.
+	t.Run("a marker going away makes the answer unknown again", func(t *testing.T) {
+		t.Parallel()
+		p := &reconnectingProxy{}
+		p.observeInitializeResponse(initFrame(t, "sess-1", "calm-stag", 1, string(recoveryRestored), "daemon-a"))
+		p.observeInitializeResponse(initFrame(t, "sess-1", "calm-stag", 1, string(recoveryRestored), "daemon-b"))
+		if restarted, known := p.daemonRestarted(); !known || !restarted {
+			t.Fatalf("setup: daemonRestarted = (%v, %v), want (true, true)", restarted, known)
+		}
+		// Now reconnect onto a daemon that predates the key.
+		p.observeInitializeResponse(initFrame(t, "sess-1", "calm-stag", 1, string(recoveryRestored), ""))
+		if restarted, known := p.daemonRestarted(); known {
+			t.Errorf("daemonRestarted = (%v, %v) after a reconnect that reported NO marker; the "+
+				"stale pair from the previous reconnect must not answer for one it never saw",
+				restarted, known)
+		}
+	})
 }
 
 // TestProxyIdentity_NoWorkspaceSessionStartCapturesIDWithoutTouchingThePin is the

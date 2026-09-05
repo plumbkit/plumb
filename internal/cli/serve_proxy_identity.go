@@ -122,10 +122,15 @@ func (p *reconnectingProxy) observeInitializeResponse(frame []byte) {
 
 	p.pinMu.Lock()
 	defer p.pinMu.Unlock()
-	if instance != "" {
-		p.prevDaemonInstance = p.daemonInstance
-		p.daemonInstance = instance
-	}
+	// Shift UNCONDITIONALLY, including an empty marker. Guarding the update on a
+	// non-empty value looks harmless and is not: a reconnect onto a daemon that
+	// sends no marker would leave the previous PAIR in place, and the next
+	// comparison would answer a question about a transition it never observed.
+	// Downgrade a daemon mid-session and the note confidently reports the restart
+	// from two reconnects ago. An empty marker means "unknown", and unknown has to
+	// propagate.
+	p.prevDaemonInstance = p.daemonInstance
+	p.daemonInstance = instance
 	if !ok {
 		// A legacy daemon, an error response, or a malformed snapshot. Hold what
 		// we have: absence proves nothing, and clearing a valid identity because

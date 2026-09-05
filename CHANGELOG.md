@@ -88,6 +88,13 @@
     while the identity itself survived — leaving `plumb mail --external-id`
     unable to resolve a session that had in fact recovered perfectly.
 
+  A name stays reserved only while nobody is entitled to it: the identity that
+  owns it may always take it back, and so may a RESTARTED `plumb serve` that
+  re-links the same conversation — it holds neither the old proxy secret nor the
+  old internal session ID, and is nonetheless the party the name is being held
+  for. Reservations are not enforced at all when `persist_state` is off, since
+  nothing would then be able to reclaim one.
+
   Authorisation is unchanged and remains the whole security argument: only the
   never-disclosed proxy session ID selects a record. A replayed plumb session ID
   is now reconciled and reported rather than trusted, since `session_start`
@@ -105,8 +112,18 @@
   `TestRestore_AgedRecordSurvivesStartupPruning`,
   `TestRestore_ExternalLinkageSurvivesTheEndedSessionFile`,
   `TestRestore_RetainedNameIsNotHandedToANewSession`,
-  `TestInherit_IdentityIsContinuousAcrossConsecutiveRecoveries` and the
+  `TestInherit_IdentityIsContinuousAcrossConsecutiveRecoveries`,
+  `TestRestore_ReservationDoesNotBlockTheSameConversationResuming`,
+  `TestRestore_ReservationsAreNotEnforcedWithPersistenceOff` and the
   `TestProxyIdentity_*` suite.
+
+  Two failure modes found by review rather than by construction, and worth
+  naming because both defeated the fix through a path the fix did not look at:
+  a PARTIALLY refused restoration (ID refused, name restored) re-recorded the
+  temporary identity through the successful rename, reintroducing the very fork
+  the refusal paths had just been made to avoid; and a legacy record carrying a
+  name but no session ID reported a full restore, so the note claimed continuity
+  for an ID the session had never held.
 
 - **The reconnect note reports what happened instead of asserting a restart and
   a wholesale state loss.** It read as a daemon RESTART when the commonest cause

@@ -171,11 +171,20 @@ func TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee(t *testing.T) {
 	stopDaemon(t, plumbBin, tmpHome)
 	packet := recoverWithSessionStart(t, c, 60*time.Second)
 
-	// The note rides the first content-bearing result after the reconnect, which
-	// is the call above.
+	// The note is ONE-SHOT and rides the first content-bearing tool result after
+	// the reconnect. recoverWithSessionStart retries until one succeeds, and only
+	// a SUCCESSFUL result carries content to inject into — the synthesised
+	// retryable errors it discards are error responses, which injectReconnectNote
+	// refuses by design. So the first successful call is necessarily the one
+	// carrying the note, and its absence is a failure rather than a timing
+	// accident.
+	//
+	// This deliberately does not skip. It is the only end-to-end assertion on the
+	// note's honesty, and a skip here would let the whole claim quietly stop being
+	// checked while the suite still reported green.
 	if !strings.Contains(packet, "plumb-note:") {
-		t.Skipf("no reconnect note landed on the recovery call; the note is one-shot and may "+
-			"have attached to an earlier retry:\n%s", packet)
+		t.Fatalf("no reconnect note on the first successful call after the daemon was stopped; "+
+			"the note is what tells an agent what just happened to its session:\n%s", packet)
 	}
 	if strings.Contains(packet, "your session state (read-tracking, caches, and the pinned workspace) was rebuilt") {
 		t.Errorf("the note still claims session state was wholesale rebuilt, with no distinction "+

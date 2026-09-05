@@ -164,6 +164,26 @@ func TestRestore_DegradedOverlapStillInheritsMail(t *testing.T) {
 	if got := next.recovery(); got != recoveryDegraded {
 		t.Errorf("recovery outcome = %q, want %q", got, recoveryDegraded)
 	}
+
+	// And — the assertion this file's header demands of every test in it, and
+	// which this one was missing — the record still names the PROVEN identity.
+	//
+	// A PARTIAL restoration is the dangerous case, not the total one. The name
+	// restore succeeded here, and a successful rename re-records the identity;
+	// recording the temporary ID it is running under would durably replace the
+	// proven one, and the next reconnect would restore the temporary identity.
+	// The inherit grant above papers over that for THIS connection only, which
+	// is what makes the fork so easy to miss.
+	after, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("the durable record vanished: (%+v, %v, %v)", after, ok, err)
+	}
+	if after.SessionID != provenID {
+		t.Fatalf("a partially refused restoration rewrote the record's session ID to %q; it must "+
+			"still be the proven %q. Adoption was refused, so the ID this connection is running "+
+			"under is temporary — storing it is the identity fork, arriving through the rename "+
+			"rather than through the refusal.", after.SessionID, provenID)
+	}
 }
 
 // TestRestore_UnreadableStoreDoesNotMintAReplacement: when the durable record
@@ -207,6 +227,44 @@ func TestRestore_UnreadableStoreDoesNotMintAReplacement(t *testing.T) {
 	if after.SessionID != provenID || after.Name != provenName {
 		t.Fatalf("a failed READ rewrote the record to (%q, %q), want the untouched (%q, %q)",
 			after.SessionID, after.Name, provenID, provenName)
+	}
+}
+
+// TestRestore_PersistIdentityReportsAFailedCommit pins the contract that keeps
+// a first contact from advertising continuity it does not have.
+//
+// "Established" is a promise about the FUTURE — through the reconnect note it
+// tells the agent its name and ID will come back after a restart. If the commit
+// did not land there is no record for a reconnect to resolve, and the agent goes
+// on using a name and ID that will be gone, with mail addressed to them
+// orphaned. So restoreIdentity reports `unavailable` instead, and it can only do
+// that if persistIdentity tells it the truth about the write.
+//
+// SCOPE, stated rather than implied: this asserts the reporting contract, not
+// the restoreIdentity branch that consumes it. Reaching that branch needs a
+// store whose reads succeed and whose writes fail, and there is no way to build
+// one through the public API — sessionstate.Open writes its schema, so a
+// read-only database cannot be opened at all, and chmod-ing one out from under a
+// live handle changes nothing (SQLite settles read-only-ness at open). The
+// alternative would be a production-only fault-injection seam, which is a worse
+// trade than an honestly narrower test.
+func TestRestore_PersistIdentityReportsAFailedCommit(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(s.close)
+	if !s.persistIdentity() {
+		t.Fatal("a healthy store reported a failed commit; the test would prove nothing")
+	}
+
+	// Now make every write fail. A closed handle is the bluntest form of the
+	// failure and is enough for this assertion, which is about the return value.
+	ss.Close()
+	if s.persistIdentity() {
+		t.Error("persistIdentity reported success against a store that cannot be written — the " +
+			"caller then advertises durable continuity for an identity that was never recorded")
 	}
 }
 
@@ -358,6 +416,81 @@ func TestRestore_RetainedNameIsNotHandedToANewSession(t *testing.T) {
 	}
 }
 
+// TestRestore_ReservationDoesNotBlockTheSameConversationResuming: a client that
+// restarts `plumb serve` and re-links the SAME conversation gets its name back.
+//
+// A restarted serve process has a NEW proxy secret, so it can never present the
+// old record's key — yet the old record still reserves the name. Left unguarded,
+// the reservation locks the name away from the only party entitled to it, and
+// PR #189's resume-by-external-ID guarantee turns into "you come back randomly
+// renamed" — the exact churn this work exists to prevent, moved to a new trigger.
+//
+// The external-conversation ID is the entitlement. It is the caller's own
+// conversation, the same fact `session_start` links on, and the durable record
+// now stores it — so a reservation whose record names this caller's conversation
+// is not a stranger's.
+func TestRestore_ReservationDoesNotBlockTheSameConversationResuming(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+	const externalID = "conversation-abc"
+
+	first := newPersistSession(t, store, ss, "proxy-old")
+	provenName := first.sessionName()
+	session.SetExternalID(first.sessionID(), externalID)
+	first.persistIdentity()
+	first.close()
+
+	// A RESTARTED serve process: new secret, so no claim on the old record's key.
+	resumed := newPersistSession(t, store, ss, "proxy-new")
+	t.Cleanup(resumed.close)
+	session.SetExternalID(resumed.sessionID(), externalID)
+
+	if _, err := resumed.renameSessionResuming(provenName, externalID); err != nil {
+		t.Fatalf("the same conversation could not take back its own name %q: %v — a reservation "+
+			"must hold a name FOR its owner, not away from them", provenName, err)
+	}
+	if got := resumed.sessionName(); got != provenName {
+		t.Fatalf("resumed session is called %q, want %q", got, provenName)
+	}
+
+	// A DIFFERENT conversation is still refused — the entitlement is the linkage,
+	// not merely asking.
+	stranger := newPersistSession(t, store, ss, "proxy-stranger")
+	t.Cleanup(stranger.close)
+	if _, err := stranger.renameSessionResuming(provenName, "conversation-other"); err == nil {
+		t.Fatalf("an unrelated conversation took the reserved name %q", provenName)
+	}
+}
+
+// TestRestore_ReservationsAreNotEnforcedWithPersistenceOff: an explicit opt-out
+// must disable the whole feature, reads included.
+//
+// Reservations were read unconditionally while only writes were gated, so with
+// `persist_state = false` every historically recorded name stayed locked out
+// forever — and with the feature off, no session can ever reclaim one. An opt-out
+// that leaves the costs in place and removes only the benefit is worse than not
+// having the feature.
+func TestRestore_ReservationsAreNotEnforcedWithPersistenceOff(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ss := openStateStore(t)
+	if err := ss.SaveIdentity("proxy-ghost", sessionstate.Identity{
+		Name: "calm-stag", SessionID: "id-ghost",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.Session.PersistState = false
+	s := newPersistSession(t, config.NewStore(cfg), ss, "proxyX")
+	t.Cleanup(s.close)
+
+	if _, err := s.renameSession("calm-stag"); err != nil {
+		t.Fatalf("a reservation was enforced with persistence disabled: %v — with the feature off "+
+			"nothing can ever reclaim the name, so enforcing it locks it away permanently", err)
+	}
+}
+
 // TestRestore_IdentityMetaStatesTheOutcome pins the initialize-result snapshot:
 // the daemon must state who the connection is AND whether that was recovered,
 // because a proxy that cannot tell those apart cannot report them honestly.
@@ -397,6 +530,39 @@ func TestRestore_IdentityMetaStatesTheOutcome(t *testing.T) {
 	// PLAN-425 item 1 asks for, one exchange earlier than session_start.
 	if got := bare.identityMeta()[identityMetaSessionID]; got != bare.sessionID() {
 		t.Errorf("identity meta session_id = %v, want %q", got, bare.sessionID())
+	}
+}
+
+// TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored: a schema-v3
+// record carries a name and no session ID, so there is nothing to resume — which
+// is not the same as having resumed something.
+//
+// The distinction is not pedantry. `recoveryRestored` makes the reconnect note
+// say "Your session identity was restored: you are still <name> (<id>)", and
+// with a legacy record that <id> is one the session has never held: mail bound
+// to the predecessor is unreachable while the note reports success. Degraded is
+// the honest answer — the name came back, the identity did not.
+func TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	// A pre-v4 row: name only, exactly what an upgraded database holds.
+	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "legacy-stag"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(s.close)
+	if got := s.sessionName(); got != "legacy-stag" {
+		t.Fatalf("the legacy name was not restored (%q); the test is not set up as intended", got)
+	}
+	if got := s.recovery(); got == recoveryRestored {
+		t.Fatalf("recovery outcome = %q for a record with no session ID — nothing was resumed, so "+
+			"the note would claim continuity for an ID this session has never held", got)
+	}
+	if got := s.recovery(); got != recoveryDegraded {
+		t.Errorf("recovery outcome = %q, want %q", got, recoveryDegraded)
 	}
 }
 

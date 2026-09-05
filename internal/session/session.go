@@ -103,9 +103,15 @@ type Info struct {
 	Synthetic bool `json:"synthetic,omitempty"`
 }
 
-// ErrNameTaken is returned by Register and Rename when another LIVE session
-// already answers to the requested name. Match it with errors.Is.
-var ErrNameTaken = errors.New("session name is already in use by a live session")
+// ErrNameTaken is returned by Register and Rename when the requested name is
+// not free — either a LIVE session already answers to it, or a disconnected but
+// recoverable identity has it RESERVED (see Reserved). Match it with errors.Is.
+//
+// The message names both, and deliberately so: it used to say "by a live
+// session", which became false the moment reservations existed. An agent told a
+// live session holds a name it can see is not live has no way to reason about
+// the refusal at all.
+var ErrNameTaken = errors.New("session name is already in use by a live session, or reserved by a session that can still reconnect")
 
 // Register writes a session file for this process.
 //
@@ -232,11 +238,14 @@ func writeSessionFileAtomic(path string, info Info) error {
 // normalised name that was stored.
 //
 // Refuses with ErrNameTaken when another LIVE session already answers to the
-// name. Session names are mailbox addresses — collab_rows.addressee holds the
-// name string — so two live sessions under one name make delivery ambiguous:
-// ClaimNotes' atomic claim hands the message to whichever asks first and the
-// intended recipient never sees it. Renaming to the name you already hold is
-// allowed, and an ended session does not reserve its name.
+// name, or — via RenameReserved — when a disconnected but recoverable identity
+// has it reserved. Session names are mailbox addresses — collab_rows.addressee
+// holds the name string — so two sessions under one name make delivery
+// ambiguous: ClaimNotes' atomic claim hands the message to whichever asks first
+// and the intended recipient never sees it. Renaming to the name you already
+// hold is allowed. An ended session reserves its name only while its durable
+// identity is still recoverable; plain Rename passes no reservations and so
+// checks live sessions alone, exactly as it always did.
 //
 // The check runs under the same flock as the write, so it cannot race a
 // concurrent Rename or Register.

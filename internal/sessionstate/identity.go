@@ -16,9 +16,12 @@ package sessionstate
 //
 //   - It is never expired by age (see Prune). A serve process that has been
 //     connected for a week is exactly the one that most needs its row.
-//   - A blank field never overwrites a known one. A caller that does not know
-//     the external linkage yet must not be able to erase the linkage the
-//     record already proves.
+//   - A blank EXTERNAL LINKAGE never overwrites a known one. A caller that has
+//     not learned it yet must not be able to erase the linkage the record
+//     already proves. (Name and SessionID are replaced outright — the live
+//     session is authoritative for those — so the guard is deliberately
+//     narrow, and it is the CALLER's job not to offer a temporary identity;
+//     see renameSessionClaiming.)
 //   - Its name is RESERVED while the identity is recoverable, so a new session
 //     cannot draw the name a disconnected one will come back to.
 
@@ -132,51 +135,67 @@ func (s *Store) LoadIdentity(proxySessionID string) (id Identity, ok bool, err e
 	}
 }
 
-// ReservedNames returns every name a recoverable identity holds, lower-cased,
-// mapped to the plumb session ID that holds it. nil-safe (returns nil).
+// Reservation is one retained identity's claim on a name: the name itself, the
+// plumb session ID that holds it, and the external conversation it is linked to.
+//
+// The external ID is here because the session ID is not always enough to decide
+// entitlement. A `plumb serve` that RESTARTS gets a new proxy secret and a new
+// internal session ID, so it can present neither — yet if it re-links the same
+// conversation it is the same agent, and the name is being held for exactly it.
+// Without this field the reservation would lock the name away from the only
+// party entitled to it.
+type Reservation struct {
+	// Name is the reserved name, as stored (compare case-insensitively).
+	Name string
+	// SessionID is the plumb session ID holding it. Never empty — a row with no
+	// session ID reserves nothing (see Reservations).
+	SessionID string
+	// ExternalID is the conversation the holder was linked to, or "" when
+	// unknown. Empty never matches, so it can only ever widen entitlement to a
+	// caller that names the same conversation, never to one that names none.
+	ExternalID string
+}
+
+// Reservations returns every name a recoverable identity holds. nil-safe.
 //
 // This is the reservation authority the session directory alone cannot provide.
 // Session-name uniqueness has always been checked against LIVE sessions, which
-// is correct while every session is live — but a `plumb serve` that outlives its
-// daemon has no live record at all, and its name would be handed to the next
-// session to draw one. It then comes back to find its own name taken, is renamed
-// by the collision path, and every note addressed to it is orphaned. Reserving
-// here closes that window for as long as the identity stays recoverable.
+// is correct while every session that owns a name is running — but a `plumb
+// serve` that outlives its daemon has no live record at all, and its name would
+// be handed to the next session to draw one. It then comes back to find its own
+// name taken, is renamed by the collision path, and every note addressed to it
+// is orphaned. Reserving here closes that window for as long as the identity
+// stays recoverable.
 //
-// Rows with no plumb_session_id (pre-v4, or a session that never registered)
-// are skipped. Such a row reserves a name that no session can ever claim as its
-// own, which would lock the name out permanently rather than hold it for
-// someone.
-//
-// The map is keyed lower-case because nameTaken compares case-insensitively;
-// keeping the two consistent means a reservation can only ever refuse a
-// confusable name, never admit one.
-func (s *Store) ReservedNames() (map[string]string, error) {
+// Rows with no plumb_session_id are skipped: such a row reserves a name that no
+// session could ever claim as its own, which locks the name out permanently
+// rather than holding it for someone.
+func (s *Store) Reservations() ([]Reservation, error) {
 	if s == nil {
 		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT name, plumb_session_id FROM session_names WHERE plumb_session_id != ''`,
+		`SELECT name, plumb_session_id, external_id FROM session_names WHERE plumb_session_id != ''`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sessionstate: reserved names: %w", err)
+		return nil, fmt.Errorf("sessionstate: reservations: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	var out []Reservation
 	for rows.Next() {
-		var name, sessionID string
-		if err := rows.Scan(&name, &sessionID); err != nil {
-			return nil, fmt.Errorf("sessionstate: scan reserved name: %w", err)
+		var r Reservation
+		if err := rows.Scan(&r.Name, &r.SessionID, &r.ExternalID); err != nil {
+			return nil, fmt.Errorf("sessionstate: scan reservation: %w", err)
 		}
-		if name == "" {
+		if r.Name == "" {
 			continue
 		}
-		out[strings.ToLower(name)] = sessionID
+		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sessionstate: reserved names: %w", err)
+		return nil, fmt.Errorf("sessionstate: reservations: %w", err)
 	}
 	return out, nil
 }

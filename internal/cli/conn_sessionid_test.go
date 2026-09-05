@@ -180,12 +180,12 @@ func TestOnSessionIDRefusesForgedReplay(t *testing.T) {
 	}
 	defer ss.Close()
 
-	// The persisted row for proxyX names a DIFFERENT plumb session ID than the
+	// The durable record for proxyX names a DIFFERENT plumb session ID than the
 	// one the connection is about to replay. A second live session holds the
-	// persisted NAME, so the restore declines on ErrNameTaken and cannot
-	// re-persist the row ahead of the refusal — that is what keeps the
-	// convergence assertion below honest (and the inheritance assertion exact:
-	// a declined rename grants no inherited identity either).
+	// recorded NAME, so the name restore declines on ErrNameTaken while the ID is
+	// resumed normally — which keeps the inheritance assertion exact (a declined
+	// rename grants no inherited identity) and gives the forgery a real identity
+	// to try to displace.
 	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "honest-heron", SessionID: "real-session-id"}); err != nil {
 		t.Fatalf("SaveIdentity: %v", err)
 	}
@@ -194,18 +194,23 @@ func TestOnSessionIDRefusesForgedReplay(t *testing.T) {
 	}
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	freshID := s.sessionID()
-	if freshID == "" {
-		t.Fatal("session did not register; the test would prove nothing")
+	// Recovery has already run off the proxy secret, so this is the identity the
+	// forgery must fail to displace — not a "fresh" ID. Reading it before the
+	// forgery, and asserting it is the RECORDED one, is what stops the final
+	// comparison being a tautology against whatever happens to be stored.
+	resumedID := s.sessionID()
+	if resumedID != "real-session-id" {
+		t.Fatalf("the connection runs under %q, want the recorded real-session-id — without a real "+
+			"resumed identity there is nothing for the forgery to displace", resumedID)
 	}
 	if got := s.view().persistedIdentity.SessionID; got != "real-session-id" {
-		t.Fatalf("persistedSessionID = %q, want real-session-id — the capture is the gate's input", got)
+		t.Fatalf("persistedIdentity.SessionID = %q, want real-session-id", got)
 	}
 
 	s.onSessionID("victim-session-id") // the forgery: a victim's disclosed ID
 
-	if got := s.sessionID(); got != freshID {
-		t.Fatalf("adopted a forged replay: sessionID() = %q, want the generated %q", got, freshID)
+	if got := s.sessionID(); got != resumedID {
+		t.Fatalf("a forged replay moved the live identity: sessionID() = %q, want the proven %q", got, resumedID)
 	}
 	if got := s.inheritedSessionIDs(); len(got) != 0 {
 		t.Fatalf("inheritedSessionIDs = %v, want none — the forged ID bought no mailbox identity", got)
@@ -219,14 +224,16 @@ func TestOnSessionIDRefusesForgedReplay(t *testing.T) {
 			t.Fatal("a session file exists under the victim's ID — the forgery was adopted")
 		}
 	}
-	// An authenticated proxy that replayed a stale ID converges the row to the
-	// session's REAL ID, so the next reconnect adopts correctly.
+	// And the durable record is UNTOUCHED. A forged replay must not be able to
+	// rewrite it either — a forgery that cannot take the identity now but can
+	// poison the record takes it on the next reconnect instead.
 	stored, ok, err := ss.LoadIdentity("proxyX")
 	if err != nil || !ok {
 		t.Fatalf("LoadIdentity: ok=%v err=%v", ok, err)
 	}
-	if stored.SessionID != freshID {
-		t.Errorf("stored session ID = %q, want the row converged to the real %q", stored.SessionID, freshID)
+	if stored.SessionID != "real-session-id" {
+		t.Errorf("a forged replay changed the durable record to %q; it must still name the proven "+
+			"real-session-id", stored.SessionID)
 	}
 }
 
