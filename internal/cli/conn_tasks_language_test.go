@@ -137,3 +137,68 @@ func TestTaskResolver_NoPrimaryNamesTheLanguagesYouCouldAskFor(t *testing.T) {
 		t.Errorf("Language = %q, want python", cmd.Language)
 	}
 }
+
+// TestTaskResolver_LanguageDoesNotBypassTheTrustGate is the security-relevant
+// property of the language argument, and it had no test until an adversarial
+// review pointed that out. Reaching a NON-primary language's commands must not
+// be a way around `plumb trust`: the gate keys on the RESOLVED language and
+// hashes the whole project command set, so it has to behave identically whether
+// the language came from detection or from the caller.
+func TestTaskResolver_LanguageDoesNotBypassTheTrustGate(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // isolate trust.json
+	ws := t.TempDir()
+	// A project-supplied command for a NON-primary language.
+	if err := config.SetProjectValue(ws, []string{"tasks", "python", "test"}, "pytest -x"); err != nil {
+		t.Fatal(err)
+	}
+	tasks := map[string]config.TasksConfig{
+		"go":     {Test: "go test ./..."},
+		"python": {Test: "pytest -x"},
+	}
+	s := newTaskLanguageSession(t, ws, "go", tasks)
+
+	_, err := s.taskResolver("test", "", "python")
+	if err == nil {
+		t.Fatal("an untrusted project command must be refused even when reached via `language`")
+	}
+	if !strings.Contains(err.Error(), "not trusted") {
+		t.Errorf("refusal %q should name the trust gate", err)
+	}
+
+	// Trusting the project's command set lets it through — proving the refusal
+	// above was the gate doing its job, not the language argument failing.
+	cmds, err := config.ProjectTaskCommands(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, nil); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := s.taskResolver("test", "", "python")
+	if err != nil {
+		t.Fatalf("after `plumb trust`, the non-primary command must run: %v", err)
+	}
+	if cmd.Language != "python" {
+		t.Errorf("Language = %q, want python", cmd.Language)
+	}
+}
+
+// TestLanguagesWithCommands_OmitsUnrequestableKeys: config map keys are not
+// case-folded, so [tasks.Python] is a distinct entry that run_task's shape
+// check refuses. The remedy list must not advertise a key that bounces.
+func TestLanguagesWithCommands_OmitsUnrequestableKeys(t *testing.T) {
+	ws := t.TempDir()
+	tasks := map[string]config.TasksConfig{
+		"python": {Test: "pytest"},
+		"Python": {Test: "pytest"}, // a config typo, not a second language
+	}
+	s := newTaskLanguageSession(t, ws, "go", tasks)
+
+	got := languagesWithCommands(s.view())
+	if !strings.Contains(got, "python") {
+		t.Errorf("remedy %q should list the requestable key", got)
+	}
+	if strings.Contains(got, "Python") {
+		t.Errorf("remedy %q must not advertise a key run_task would refuse for shape", got)
+	}
+}

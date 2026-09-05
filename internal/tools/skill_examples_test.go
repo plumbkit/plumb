@@ -72,7 +72,7 @@ var skillContentCounts = map[string]skillCounts{
 	// defaults grew {target} placeholders and topology_affected started emitting
 	// a target run_task can take (PLAN-378) — the very composition this file's
 	// doc comment names as the defect class it exists to catch.
-	"plumb-testing": {calls: 6, bullets: 0},
+	"plumb-testing": {calls: 7, bullets: 0}, // +1: run_task's `language` for a polyglot workspace
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill

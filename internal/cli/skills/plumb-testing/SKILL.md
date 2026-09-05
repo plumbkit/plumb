@@ -28,6 +28,12 @@ When the command takes a positional path, `topology_affected` hands you the targ
 
     run_task(slot="test", target="./internal/config/...")   # a row from topology_affected, verbatim
 
+On a polyglot workspace, an unqualified call resolves against the **primary** language — the one `session_start` reports. The others are reached by name:
+
+    run_task(slot="test", language="python")   # [tasks.python], whatever the primary is
+
+That is the whole remedy for a repo whose primary is not the language you are testing. `session_start`'s Tasks section names the other languages it found. A language with no configured commands is refused, naming the ones that have them — it never falls back to the primary, because running a different language's tests under the name you asked for is worse than refusing.
+
 Where no target can be spelled — a runner that scopes by test name, a project-specific flag, or a package outside the command's `working_dir` — `topology_affected` names the directory and guesses no command. Use your own runner there, but keep the scope it gave you. When the project configures no command for the slot, use the client's runner too — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
 
 ## 3. Confirm it still compiles

@@ -61,8 +61,18 @@ func (t *SessionStart) writeSessionTasks(sb *strings.Builder, ws string) {
 }
 
 // writeTaskSlotState reports run_task's resolved slots for the primary language.
+//
+// The no-primary case is split in two, because since run_task took a `language`
+// argument "no primary" stopped meaning "no tasks". A root whose primary server
+// failed to acquire still reports its discovered languages, and each of those is
+// runnable by name — so the flat "run_task is unavailable" was false in exactly
+// the state where the new argument is the ONLY way to run anything, and it sat
+// one line above a routing hint handing over that argument.
 func writeTaskSlotState(sb *strings.Builder, st TaskState) {
 	switch {
+	case st.Language == "" && len(st.Unreachable) > 0:
+		fmt.Fprintf(sb, "`run_task`: no primary language is attached, so an unqualified call cannot resolve — name one with `language: \"%s\"`.\n",
+			st.Unreachable[0])
 	case st.Language == "":
 		sb.WriteString("`run_task` is unavailable — no language is attached to this workspace.\n")
 	case len(st.Configured) == 0:
@@ -88,8 +98,11 @@ func writeTaskSlotState(sb *strings.Builder, st TaskState) {
 // hint rather than a limitation — and it must say so, because the old wording
 // ("use the shell for those") actively sent agents out of the tool, losing the
 // no-shell argv contract and the trust gate, for work the tool can now do.
+// A workspace with no primary is handled by writeTaskSlotState above, which
+// already hands over the argument; naming the primary here would render the
+// empty "language ()".
 func writeUnreachableLanguages(sb *strings.Builder, st TaskState) {
-	if len(st.Unreachable) == 0 {
+	if len(st.Unreachable) == 0 || st.Language == "" {
 		return
 	}
 	fmt.Fprintf(sb, "\nAlso detected here: %s. An unqualified `run_task` resolves against the primary\n",

@@ -155,3 +155,32 @@ func TestRepinWorkspace_ActiveLanguageOverrideStillPins(t *testing.T) {
 		t.Errorf("workspace = %q, want %q", got, root)
 	}
 }
+
+// TestLanguageOverride_ConfigActiveButPoolStaleSaysEnableLsp covers the fourth
+// case, which the pre-refusal code could not express at all and which an
+// adversarial review found untested.
+//
+// The pool's effective language set is resolved at construction and widened by
+// `plumb enable-lsp`; the config can move underneath it. So a language can be
+// enabled AND installed while this daemon has not picked it up. Reporting
+// lspActiveStatus there prints the flatly self-contradicting "not active — yes
+// (installed)" and sends the caller to edit config that is already correct.
+func TestLanguageOverride_ConfigActiveButPoolStaleSaysEnableLsp(t *testing.T) {
+	s := newOverrideSession(t, "go") // pool carries go only
+	cfg := s.store.Current()
+	// Enabled, and its "binary" is one that certainly exists on PATH, so
+	// lspActive(cfg) is true while the pool still knows nothing about it.
+	cfg.LSP["python"] = config.LSPConfig{Command: "sh", Enabled: true}
+	s.store = config.NewStore(cfg)
+
+	err := s.languageOverrideErr("python")
+	if err == nil {
+		t.Fatal("expected a refusal: the pool has not picked this language up yet")
+	}
+	if !strings.Contains(err.Error(), "enable-lsp python") {
+		t.Errorf("refusal %q should point at the live enable, not a config edit", err)
+	}
+	if strings.Contains(err.Error(), "disabled in config") || strings.Contains(err.Error(), "not installed") {
+		t.Errorf("refusal %q must not report a state that is not true", err)
+	}
+}

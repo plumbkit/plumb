@@ -39,6 +39,14 @@ var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
 // into a refusal message quoting a key nobody could have written.
 var taskLanguageName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
+// ValidTaskLanguage reports whether name is requestable as run_task's
+// `language`. Exported for the cli seam, which builds the "languages with
+// commands" remedy list: config map keys are NOT case-folded (a project may
+// write [tasks.Python] and get a distinct entry), so without this filter the
+// refusal could advertise a key that the shape check then rejects — a dead end
+// that reads as a plumb bug rather than a config typo.
+func ValidTaskLanguage(name string) bool { return taskLanguageName.MatchString(name) }
+
 // TaskCommand is a resolved, ready-to-run task: one or more argv steps run in
 // sequence (verify is build then test), with the config layer it came from.
 type TaskCommand struct {
