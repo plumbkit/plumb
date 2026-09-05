@@ -129,17 +129,6 @@ type ignoreSet struct {
 	patterns []ignorePattern
 }
 
-// ignored reports whether relPath (relative to set.dir) is ignored.
-func (s *ignoreSet) ignored(relPath string, isDir bool) bool {
-	result := false
-	for _, p := range s.patterns {
-		if p.matchesPath(relPath, isDir) {
-			result = !p.negate
-		}
-	}
-	return result
-}
-
 // ignoreStack accumulates ignore rules as the walker descends directories.
 // Rules from parent directories are inherited; child directories can override.
 type ignoreStack []*ignoreSet
@@ -174,15 +163,92 @@ func (st *ignoreStack) load(dir string) ignoreStack {
 	return next
 }
 
-// isIgnored reports whether absPath should be excluded from traversal.
-func (st *ignoreStack) isIgnored(absPath string, isDir bool) bool {
+// decide returns the verdict of the LAST rule in the whole stack that matches
+// absPath, and whether any rule matched at all. The stack is ordered
+// outermost-first, and patterns within a set are already last-match-wins, so
+// scanning both in order and keeping the final hit gives deeper rules
+// precedence over shallower ones — which is what makes a child's negation able
+// to override a parent.
+//
+// A set only speaks for paths beneath its OWN directory. Without that check a
+// deeper set reaches upward: filepath.Rel yields "../outside.log" for a sibling
+// above the set, and a pattern with no slash matches on base name alone, so
+// sub/.gitignore's `*.log` would hide a file that is not under sub/ at all.
+// That could not bite while only the first matching set was consulted during a
+// top-down walk; it can now, so it is refused explicitly.
+func (st *ignoreStack) decide(absPath string, isDir bool) (ignored, matched bool) {
 	for _, s := range *st {
 		rel, err := filepath.Rel(s.dir, absPath)
 		if err != nil {
 			continue
 		}
 		rel = filepath.ToSlash(rel)
-		if s.ignored(rel, isDir) {
+		if rel == ".." || strings.HasPrefix(rel, "../") {
+			continue // not beneath this set's directory
+		}
+		for _, p := range s.patterns {
+			if p.matchesPath(rel, isDir) {
+				ignored, matched = !p.negate, true
+			}
+		}
+	}
+	return ignored, matched
+}
+
+// ancestorDirs returns absPath's ancestor directories strictly below root,
+// outermost first. Used to enforce gitignore's excluded-parent rule.
+func ancestorDirs(root, absPath string) []string {
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return nil
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return nil
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 {
+		return nil
+	}
+	out := make([]string, 0, len(parts)-1)
+	cur := root
+	for _, p := range parts[:len(parts)-1] {
+		cur = filepath.Join(cur, p)
+		out = append(out, cur)
+	}
+	return out
+}
+
+// isIgnored reports whether absPath should be excluded from traversal.
+//
+// Two rules from gitignore(5), both load-bearing and neither previously
+// implemented. The old shape returned true on the FIRST set that ignored the
+// path, walking outermost-first, so a parent's `*.py` decided the answer before
+// a child's `!keep.py` was ever consulted — the ignoreStack type comment
+// promised child overrides that could not happen. Deeper-wins is now decided in
+// decide().
+//
+// The second rule is that an excluded directory cannot be re-included from
+// inside it: git never descends there, so a `!` line beneath one has nothing to
+// apply to. The ancestor scan below enforces it, and runs ONLY when a negation
+// actually put the path back in — the common case (nothing matched, or the last
+// match was an exclusion) returns without touching an ancestor, so a walk over a
+// tree with no negations pays nothing for it.
+func (st *ignoreStack) isIgnored(absPath string, isDir bool) bool {
+	if len(*st) == 0 {
+		return false
+	}
+	ignored, matched := st.decide(absPath, isDir)
+	if ignored {
+		return true
+	}
+	if !matched {
+		return false
+	}
+	// A negation re-included this path. It only stands if no ancestor directory
+	// is itself excluded.
+	for _, anc := range ancestorDirs((*st)[0].dir, absPath) {
+		if ancIgnored, _ := st.decide(anc, true); ancIgnored {
 			return true
 		}
 	}

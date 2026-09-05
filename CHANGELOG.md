@@ -160,6 +160,25 @@
   `TestReconnectNoteText_ReportsObservedFactsOnly`,
   `TestProxyIdentity_DaemonRestartIsObservedNotAssumed` and
   `TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee`.
+- **A child `.gitignore` can now override a parent's rule, as the walker always
+  claimed it could.** `search_in_files`, `find_files` and `find_replace` share a
+  gitignore stack whose own type comment promised that "rules from parent
+  directories are inherited; child directories can override" — but the lookup
+  returned on the FIRST set in the stack that ignored a path, and the stack is
+  ordered outermost-first, so a parent's `*.py` decided the answer before a
+  child's `!keep.py` was ever read. Every negation below the top-level ignore
+  file was unreachable. The verdict is now the LAST matching rule across the
+  whole stack, which is what gives a deeper file precedence. Two further
+  defects surfaced while fixing it and are closed with it: an excluded directory
+  could be re-included from inside itself (gitignore forbids this — git never
+  descends there to read the negation), and a nested ignore file could match
+  paths ABOVE its own directory, because a pattern with no slash matches on base
+  name alone and `filepath.Rel` happily returns `../outside.log`. The
+  excluded-parent scan runs only when a negation actually re-included a path, so
+  a tree with no negations pays nothing for it. Guarded by
+  `TestIgnoreStack_ChildNegationOverridesParent`,
+  `TestIgnoreStack_ExcludedParentCannotBeReincluded` and
+  `TestIgnoreStack_PathOutsideSetDirIsNotMatched`.
 
 - **The `roots/list` probe bound is guarded by its own test, and a probe timeout
   no longer logs as "not supported".** The 5 s bound PR #435 put around the

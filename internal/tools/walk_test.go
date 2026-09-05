@@ -131,6 +131,92 @@ func TestIgnoreStack(t *testing.T) {
 	}
 }
 
+// TestIgnoreStack_ChildNegationOverridesParent pins the rule the ignoreStack
+// type comment has always claimed and never implemented: rules from parent
+// directories are inherited, and a child directory can override them. A parent
+// ignoring *.py must not make a child's !keep.py unreachable.
+func TestIgnoreStack_ChildNegationOverridesParent(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.py\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".gitignore"), []byte("!keep.py\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var st ignoreStack
+	st = st.load(dir)
+	st = st.load(sub)
+
+	if got := st.isIgnored(filepath.Join(sub, "keep.py"), false); got {
+		t.Error("sub/keep.py: child !keep.py must re-include it, got ignored")
+	}
+	if got := st.isIgnored(filepath.Join(sub, "other.py"), false); !got {
+		t.Error("sub/other.py: parent *.py still applies, got not ignored")
+	}
+	if got := st.isIgnored(filepath.Join(dir, "keep.py"), false); !got {
+		t.Error("keep.py at root: the child's negation must not reach up, got not ignored")
+	}
+}
+
+// TestIgnoreStack_ExcludedParentCannotBeReincluded pins the other half of
+// gitignore(5): once a directory is excluded, a negation inside it has nothing
+// to apply to, because git never descends there to read it.
+func TestIgnoreStack_ExcludedParentCannotBeReincluded(t *testing.T) {
+	dir := t.TempDir()
+	build := filepath.Join(dir, "build")
+	if err := os.MkdirAll(build, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("build/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(build, ".gitignore"), []byte("!keep.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var st ignoreStack
+	st = st.load(dir)
+	st = st.load(build)
+
+	if got := st.isIgnored(build, true); !got {
+		t.Fatal("build/ itself must be ignored")
+	}
+	if got := st.isIgnored(filepath.Join(build, "keep.txt"), false); !got {
+		t.Error("build/keep.txt: an excluded directory cannot be re-included from inside, got not ignored")
+	}
+}
+
+// TestIgnoreStack_PathOutsideSetDirIsNotMatched guards the widened lookup: now
+// that every set in the stack is consulted rather than only the first to match,
+// a set must still only speak for paths beneath its own directory. Without the
+// containment check a sibling file matches a deeper set's base-name pattern.
+func TestIgnoreStack_PathOutsideSetDirIsNotMatched(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var st ignoreStack
+	st = st.load(dir)
+	st = st.load(sub)
+
+	if got := st.isIgnored(filepath.Join(dir, "outside.log"), false); got {
+		t.Error("outside.log sits above sub/, so sub/.gitignore must not reach it")
+	}
+	if got := st.isIgnored(filepath.Join(sub, "inside.log"), false); !got {
+		t.Error("sub/inside.log must still be ignored by sub/.gitignore")
+	}
+}
+
 // ── walk ────────────────────────────────────────────────────────────────────
 
 func TestWalk_RespectsGitignore(t *testing.T) {
