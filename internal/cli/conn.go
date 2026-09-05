@@ -166,9 +166,17 @@ type sessionView struct {
 	// once during the initialize exchange, before attach, and preserved across
 	// re-pins. "" when the client is not a session-id-injecting serve proxy.
 	proxySessionID string
-	// replayedSessionID is the stable plumb session ID the serve proxy replayed
-	// in _meta[MetaSessionIDKey] (PLAN-296). Observability today; adoption makes
-	// the live sessID equal to it on reconnect.
+	// replayedSessionID is the plumb session ID the serve proxy replayed in
+	// _meta[MetaSessionIDKey] — the identity a reconnecting session BELIEVED it
+	// held.
+	//
+	// Deliberately read by nothing in production. Recovery resolves from the
+	// proxy-keyed durable record instead (PLAN-426), because a plumb session ID
+	// is echoed to clients and is therefore a claim rather than proof. It is kept
+	// because the claim is worth having recorded when the two disagree:
+	// onSessionID logs the mismatch, and this is the value that mismatch is
+	// about. Anything that starts READING it to make a decision has re-created
+	// the hole.
 	replayedSessionID string
 	// persistedIdentity is the durable identity record selected by this
 	// connection's proxy session ID (captured by restoreIdentity). It is the sole
@@ -393,8 +401,16 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 	// at all, and handing its name to this new session would orphan every note
 	// addressed to it once it reconnects and is renamed by the collision path. A
 	// store that cannot answer contributes nothing, leaving the live-session check
-	// exactly as it was.
-	reg, err := session.RegisterReserved(session.Info{DaemonVersion: Version}, reservedNamesFrom(sessState))
+	// exactly as it was, and so does persistence being switched off — with nothing
+	// writing records, an enforced reservation could never be reclaimed by anyone.
+	//
+	// No exclusions here: this session has no identity yet, so it is entitled to
+	// none of them. It is about to be given a name of its own.
+	var reserved session.Reserved
+	if cfg.Session.PersistState {
+		reserved = reservationsExcept(sessState, "", "")
+	}
+	reg, err := session.RegisterReserved(session.Info{DaemonVersion: Version}, reserved)
 	if err != nil {
 		slog.Warn("daemon: session registration failed; continuing unregistered and unaddressable", "err", err)
 		reg.Name = session.GenerateName()

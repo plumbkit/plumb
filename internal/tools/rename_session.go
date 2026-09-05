@@ -68,7 +68,7 @@ func (t *renameSession) Execute(ctx context.Context, args json.RawMessage) (stri
 		if errors.Is(err, session.ErrNameTaken) {
 			// Say why it is refused rather than just that it is: an agent that
 			// reads "taken" as an arbitrary rule tends to retry the same name.
-			return "", fmt.Errorf("%w — a session name is the address the mailbox delivers to, so two live sessions cannot share one; pick another", err)
+			return "", fmt.Errorf("%w — a session name is the address the mailbox delivers to, so two sessions cannot share one, and a RESERVED name belongs to one that is disconnected but can still reconnect to it; pick another", err)
 		}
 		return "", err
 	}

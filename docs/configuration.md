@@ -429,7 +429,7 @@ On reconnect the fresh daemon resolves the identity from that record and RESUMES
 
 Authorisation is the record and nothing else. A plumb session ID or a session name is **disclosed** to clients, so presenting one is a claim, never proof; only the proxy secret selects a record. When the identity cannot be resumed — a predecessor connection still detaching, or a genuinely different live owner — the session says so (a `degraded` outcome), runs under a temporary identity, and **leaves the record untouched** so the next reconnect tries again. A session that holds the predecessor's name in that state additionally inherits the predecessor's ID as a second mailbox identity, so bound mail still reaches it; that grant too comes only from the proxy secret, never from answering to a name, which is what keeps `addressee_id` a real boundary.
 
-With `persist_state` off there is no durable continuity at all, and plumb says so rather than implying otherwise: the reconnect note reports that this connection has no durable identity, and its name and ID are new.
+With `persist_state` off there is no durable continuity at all, and plumb says so rather than implying otherwise: the reconnect note reports that this connection has no durable identity, and its name and ID are new. Nothing is written, and — equally — nothing is enforced: name reservations are ignored, because with the feature off no session could ever reclaim one, and an opt-out that kept the cost while removing the benefit would be worse than not having the feature.
 
 ## `[memory]` — per-workspace memory engine
 

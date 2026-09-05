@@ -282,7 +282,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 				// two resumes racing on one external ID inside the grace window
 				// cannot both inherit it — mailbox delivery matches on the name
 				// string, and an ambiguous address silently misdelivers.
-				name, err := s.renameSession(prev.Name)
+				// Resuming, not renaming: the entitlement is the external ID the
+				// caller just presented, which is what lets a RESTARTED `plumb
+				// serve` — new proxy secret, new session ID, same conversation —
+				// take back the name its own durable record reserves.
+				name, err := s.renameSessionResuming(prev.Name, externalID)
 				if err == nil {
 					return name
 				}

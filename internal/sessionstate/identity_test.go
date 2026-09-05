@@ -10,6 +10,7 @@ package sessionstate
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,18 +84,38 @@ func TestReservedNames_HoldsRecoverableIdentitiesAndSkipsUnownedRows(t *testing.
 		t.Fatal(err)
 	}
 
-	reserved, err := s.ReservedNames()
+	records, err := s.Reservations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Lower-cased, because the uniqueness check compares case-insensitively;
-	// keeping the two consistent means a reservation can only refuse a
-	// confusable name, never admit one.
-	if got := reserved["calm-stag"]; got != "id-1" {
-		t.Errorf("reserved[calm-stag] = %q, want id-1", got)
+	byName := map[string]Reservation{}
+	for _, r := range records {
+		byName[strings.ToLower(r.Name)] = r
 	}
-	if _, held := reserved["orphan-otter"]; held {
+	if got := byName["calm-stag"]; got.SessionID != "id-1" {
+		t.Errorf("reservation for calm-stag = %+v, want SessionID id-1", got)
+	}
+	if _, held := byName["orphan-otter"]; held {
 		t.Error("a row with no session ID reserved its name; nobody could ever claim it back")
+	}
+}
+
+// TestReservations_CarryTheExternalLinkage: the external conversation ID has to
+// travel with the reservation, or a RESTARTED `plumb serve` — new proxy secret,
+// new internal session ID, same conversation — has no way to prove it is the
+// party the name is being held for, and the reservation locks the name away
+// from its only rightful claimant.
+func TestReservations_CarryTheExternalLinkage(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveIdentity("p1", Identity{Name: "calm-stag", SessionID: "id-1", ExternalID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := s.Reservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ExternalID != "conv-1" {
+		t.Fatalf("reservations = %+v, want the external linkage carried through", records)
 	}
 }
 

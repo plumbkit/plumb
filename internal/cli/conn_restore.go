@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/session"
@@ -102,20 +103,56 @@ func (s *connSession) restoreIdentity(proxyID string) {
 		return
 	}
 	if !ok {
-		s.persistIdentity()
+		if !s.persistIdentity() {
+			// First contact whose commit did not land. The session works normally,
+			// but there is no record for a reconnect to resolve — so it must not
+			// advertise durable continuity it cannot deliver. Reporting
+			// "established" here would have the note tell the agent its identity is
+			// safe across a restart when nothing was written.
+			s.log().Warn("daemon: could not record this session's identity; it will not be recoverable after a restart")
+			s.setRecovery(recoveryUnavailable)
+			return
+		}
 		s.setRecovery(recoveryEstablished)
 		return
 	}
 	s.mutate(func(v *sessionView) { v.persistedIdentity = rec })
-	adopted := s.adoptStoredID(rec)
-	named := s.restoreStoredName(rec, adopted)
-	switch {
-	case adopted && named:
+	adoption := s.adoptStoredID(rec)
+	named := s.restoreStoredName(rec, adoption)
+	// "Restored" means BOTH halves came back, and nothing weaker qualifies.
+	//
+	// The case worth spelling out is a legacy record (schema v3) that carries a
+	// name but no session ID: the name is restored, and adoption reports
+	// idAbsent because there was nothing recorded to resume. That is not a
+	// restore. Counting it as one would have the reconnect note tell the agent
+	// "you are still <name> (<id>)" while naming an ID it has never held, with
+	// mail bound to the predecessor sitting unreachable behind the reassurance.
+	if adoption == idResumed && named {
 		s.setRecovery(recoveryRestored)
-	default:
-		s.setRecovery(recoveryDegraded)
+		return
 	}
+	s.setRecovery(recoveryDegraded)
 }
+
+// idOutcome is what became of the internal session ID during a restoration.
+//
+// It replaces a bool because "adopted" had to carry three meanings and could
+// only express two: resumed, refused, and "there was nothing recorded to
+// resume". The third was folded in with success — a legacy record with a name
+// and no ID reported a full restore — so the reconnect note claimed an identity
+// had been restored while the session ran under a brand-new ID.
+type idOutcome int
+
+const (
+	// idRefused: a session ID was recorded and could not be resumed. The record
+	// is preserved and a later reconnect will retry.
+	idRefused idOutcome = iota
+	// idResumed: this connection now IS the recorded identity.
+	idResumed
+	// idAbsent: the record carries no session ID (a pre-v4 row), so there is
+	// nothing to resume. Not a failure, and not a success either.
+	idAbsent
+)
 
 // adoptStoredID re-registers this connection under the internal session ID the
 // durable record proves it holds, so stats, memories, collab and the mailbox see
@@ -131,15 +168,18 @@ func (s *connSession) restoreIdentity(proxyID string) {
 // "the next reconnect adopts correctly" — but the record it overwrote was the
 // only proof of what to adopt, so the next reconnect adopted the temporary one
 // instead. Leaving the record alone is what makes the retry actually retry.
-func (s *connSession) adoptStoredID(rec sessionstate.Identity) bool {
+func (s *connSession) adoptStoredID(rec sessionstate.Identity) idOutcome {
 	oldID := s.sessionID()
-	if oldID == "" || rec.SessionID == "" {
-		// An unregistered session has no identity to move, and a pre-v4 record
-		// proves no predecessor. Neither is a failure worth reporting as one.
-		return rec.SessionID == "" && oldID != ""
-	}
-	if oldID == rec.SessionID {
-		return true
+	switch {
+	case rec.SessionID == "":
+		// A pre-v4 record proves no predecessor. There is nothing to resume,
+		// which the caller must not read as having resumed something.
+		return idAbsent
+	case oldID == "":
+		// An unregistered session has no identity to move.
+		return idRefused
+	case oldID == rec.SessionID:
+		return idResumed
 	}
 	reg, err := session.AdoptWithExternalID(oldID, rec.SessionID, rec.ExternalID)
 	if errors.Is(err, session.ErrIDTaken) {
@@ -148,12 +188,12 @@ func (s *connSession) adoptStoredID(rec sessionstate.Identity) bool {
 		// licence to mint a successor: keep the temporary ID, keep the record.
 		s.log().Info("daemon: the proven session ID is held by a live session; continuing under a temporary identity",
 			"proven", rec.SessionID, "using", oldID)
-		return false
+		return idRefused
 	}
 	if err != nil {
 		s.log().Warn("daemon: adopting the proven session ID failed; continuing under a temporary identity",
 			"proven", rec.SessionID, "using", oldID, "err", err)
-		return false
+		return idRefused
 	}
 	s.setSessionID(reg.ID)
 	// The adopted ID is the predecessor's own, so the mailbox-inheritance
@@ -169,7 +209,7 @@ func (s *connSession) adoptStoredID(rec sessionstate.Identity) bool {
 		s.registry.rekey(oldID, reg.ID)
 	}
 	s.log().Info("daemon: restored the proven session ID", "id", reg.ID, "previous", oldID)
-	return true
+	return idResumed
 }
 
 // restoreStoredName applies the name the durable record proves this session
@@ -202,16 +242,16 @@ func (s *connSession) adoptStoredID(rec sessionstate.Identity) bool {
 // on holding the name precisely because it is the degraded path: a session may
 // read a predecessor's mail only while it is actually answering to the address
 // that mail was sent to.
-func (s *connSession) restoreStoredName(rec sessionstate.Identity, adopted bool) bool {
+func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOutcome) bool {
 	if rec.Name == "" {
 		return false
 	}
 	if rec.Name == s.sessionName() {
 		return true
 	}
-	_, err := s.renameSessionClaiming(rec.Name, rec.SessionID)
+	_, err := s.renameSessionClaiming(rec.Name, nameClaim{sessionID: rec.SessionID, restoring: true})
 	if err == nil {
-		if !adopted {
+		if adoption == idRefused {
 			s.inheritSessionID(rec.SessionID)
 		}
 		return true
@@ -222,6 +262,20 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adopted bool)
 		return false
 	}
 	if errors.Is(err, session.ErrInvalidName) {
+		if adoption == idRefused {
+			// The stored name can never be applied, but this connection failed to
+			// resume the recorded identity — writing here would replace a PROVEN
+			// session ID with a temporary one in order to repair a NAME. Leave the
+			// record whole and let a reconnect that does resume it repair it.
+			//
+			// idAbsent is deliberately not included: a legacy row has no session ID
+			// to protect, so there is nothing to lose and the repair is the whole
+			// point — left alone such a row fails identically on EVERY reconnect and
+			// the session comes back randomly renamed each time.
+			s.log().Warn("daemon: the proven session name is no longer valid, but this connection could not resume the identity either; leaving the record intact for a later reconnect to repair",
+				"proven", rec.Name, "using", s.sessionName(), "err", err)
+			return false
+		}
 		s.log().Warn("daemon: the proven session name is no longer valid; replacing it",
 			"proven", rec.Name, "using", s.sessionName(), "err", err)
 		s.persistIdentity()
@@ -232,62 +286,79 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adopted bool)
 	return false
 }
 
-// reservedNames returns the names held by recoverable-but-absent identities, so
-// a name draw or a rename does not hand out a name a disconnected session is
-// coming back to. Nil on any failure: a reservation lookup that cannot answer
-// must not block a rename, because the live-session check behind it is still
-// the guard that protects delivery today.
-func (s *connSession) reservedNames() session.Reserved {
-	return reservedNamesFrom(s.sessionState)
-}
-
-// reservedNamesClaiming is reservedNames with ownerID's own reservations
-// removed — the set to check a RESTORE against.
+// reservedNamesFor builds the reservation set to check a name against, with the
+// entries this caller is ENTITLED to removed.
 //
-// A reservation exists to hold a name for the identity that owns it, against
-// everybody else. The session restoring that identity is not everybody else: it
-// proved its claim with the proxy secret, and the record it is restoring is the
-// very record the reservation was written from. Checking it against its own
-// reservation would mean an identity could never take back the name being held
-// for it — the guard defeating the case it exists to serve.
+// Two kinds of entitlement, and the second is not optional:
 //
-// Passing the owner explicitly, rather than relying on the session's live ID,
-// is what makes this work on the degraded path: the ID adoption may have been
-// refused, so this connection is not yet running under ownerID and would
-// otherwise read as a stranger to its own reservation.
+//   - ownerID: the internal session ID of the identity being restored. A
+//     reservation exists to hold a name for the identity that owns it, against
+//     everybody else — and the session restoring that identity is not everybody
+//     else. It proved its claim with the proxy secret, and the record it is
+//     restoring is the very record the reservation was written from. Passing
+//     the owner explicitly, rather than reading the session's live ID, is what
+//     makes this work on the degraded path, where the ID adoption was refused
+//     and the connection would otherwise read as a stranger to its own
+//     reservation.
+//   - ownerExternalID: the caller's own external conversation ID. A `plumb
+//     serve` that RESTARTS gets a fresh proxy secret and a fresh internal
+//     session ID, so it can present neither — but if it re-links the same
+//     conversation it is the same agent, and the name is being held for exactly
+//     it. Without this, a reservation would lock a name away from its only
+//     rightful claimant, and the resume-by-external-ID guarantee (PR #189)
+//     would degrade into "you come back randomly renamed": the same churn this
+//     persistence exists to prevent, relocated to a new trigger.
+//
+// An empty ownerExternalID matches nothing, so a caller that names no
+// conversation is entitled to no reservation — the exclusion can only ever widen
+// entitlement to someone naming the SAME conversation, never to someone naming
+// none. Both empty is an ordinary rename, checked against every reservation.
 //
 // Every other guard still applies. The live-session uniqueness check inside
 // session.Rename is untouched, so a name a live peer actually answers to is
-// still refused; only the durable reservation belonging to this same identity
-// is set aside.
-func (s *connSession) reservedNamesClaiming(ownerID string) session.Reserved {
-	reserved := s.reservedNames()
-	if ownerID == "" || len(reserved) == 0 {
-		return reserved
+// refused regardless of what is excluded here.
+func (s *connSession) reservedNamesFor(ownerID, ownerExternalID string) session.Reserved {
+	v := s.view()
+	if !s.namePersistEnabled(v) {
+		// The feature is off (or this is not a serve proxy). Enforcing
+		// reservations here would be the worst of both worlds: nothing writes
+		// records, so nothing can ever reclaim a name, and every historically
+		// recorded name stays locked out forever. An opt-out has to remove the
+		// cost as well as the benefit.
+		return nil
 	}
-	out := make(session.Reserved, len(reserved))
-	for name, owner := range reserved {
-		if owner == ownerID {
-			continue
-		}
-		out[name] = owner
-	}
-	return out
+	return reservationsExcept(s.sessionState, ownerID, ownerExternalID)
 }
 
-// reservedNamesFrom is reservedNames for callers that have the store but not
-// yet a connSession — newConnSession draws a name before the session it would
-// belong to exists. Nil-safe in both the store and the failure case.
-func reservedNamesFrom(store *sessionstate.Store) session.Reserved {
+// reservationsExcept reads the durable reservations and drops the ones the given
+// owner is entitled to. Nil-safe in both the store and the failure case: a
+// lookup that cannot answer must not block a rename, because the live-session
+// check behind it is still the guard that protects delivery today.
+//
+// It is a full read of the identity table, taken BEFORE the session-directory
+// flock the caller then enters — deliberately, so no storage query runs under
+// that lock. The table holds one row per proxy session ever seen, so the scan is
+// small in practice and bounded by the retention documented in Store.Prune.
+func reservationsExcept(store *sessionstate.Store, ownerID, ownerExternalID string) session.Reserved {
 	if store == nil {
 		return nil
 	}
-	reserved, err := store.ReservedNames()
+	records, err := store.Reservations()
 	if err != nil {
 		slog.Debug("daemon: could not read name reservations", "err", err)
 		return nil
 	}
-	return reserved
+	out := make(session.Reserved, len(records))
+	for _, r := range records {
+		if r.SessionID == ownerID {
+			continue
+		}
+		if ownerExternalID != "" && r.ExternalID == ownerExternalID {
+			continue
+		}
+		out[strings.ToLower(r.Name)] = r.SessionID
+	}
+	return out
 }
 
 // setRecovery records this connection's identity-recovery outcome, for the

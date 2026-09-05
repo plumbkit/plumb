@@ -534,7 +534,7 @@ func liveExemption(cutoff int64, live []string) (string, []any) {
 // table, not of the caller's argument list.
 //
 // The cost is bounded and documented: one small row per proxy session, kept
-// indefinitely, whose name stays reserved (see ReservedNames). Reclaiming one
+// indefinitely, whose name stays reserved (see Reservations). Reclaiming one
 // needs explicit retirement semantics — proof that the serve is gone, not a
 // guess from elapsed time — which this deliberately does not invent.
 //

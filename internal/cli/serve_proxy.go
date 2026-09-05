@@ -559,12 +559,33 @@ func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
 		delete(p.outstanding, k)
 	}
 	p.reqMu.Unlock()
+	p.dropPendingStarts(ids)
 
 	for _, raw := range ids {
 		resp := fmt.Sprintf(
 			`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"plumb daemon restarted mid-request; this request's outcome is unconfirmed — for a write, re-read the file to check whether it landed before retrying"}}`,
 			raw)
 		p.writeClient([]byte(resp))
+	}
+}
+
+// dropPendingStarts forgets the in-flight session_start bookkeeping for requests
+// that have just been failed, so a call whose response will never arrive does
+// not leave an entry behind forever.
+//
+// It matters more now than it used to: `pending` records EVERY session_start (a
+// no-workspace call still carries the connection's identity), so the leak it
+// closes is per-orientation-call rather than per-re-pin. The entry is small, but
+// a long-lived proxy across many reconnects is exactly the shape that
+// accumulates them.
+func (p *reconnectingProxy) dropPendingStarts(ids []json.RawMessage) {
+	if len(ids) == 0 {
+		return
+	}
+	p.pinMu.Lock()
+	defer p.pinMu.Unlock()
+	for _, raw := range ids {
+		delete(p.pending, idKey(raw))
 	}
 }
 
