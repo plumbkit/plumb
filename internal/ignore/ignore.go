@@ -9,6 +9,11 @@
 // that gitignores a large generated or vendored tree had it counted, indexed
 // and searched anyway.
 //
+// All four are TOP-DOWN walks that prune, which is what Stack.IsIgnored
+// answers for — read its contract before adding a fifth consumer. A caller that
+// samples paths out of walk order needs more than this package currently gives
+// it.
+//
 // Foundation layer: stdlib only, no plumb imports. See internal/arch.
 package ignore
 
@@ -197,8 +202,19 @@ func (st Stack) decide(absPath string, isDir bool) (ignored, matched bool) {
 			continue
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == ".." || strings.HasPrefix(rel, "../") {
-			continue // not beneath this set's directory
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			// Not STRICTLY beneath this set's directory. "." is the set's own
+			// directory, and excluding it matters as much as excluding a parent:
+			// filepath.Match("*", ".") is true, so the near-universal idiom
+			//
+			//	logs/.gitignore:  *
+			//	                  !keep.txt
+			//
+			// would have logs/ judge ITSELF excluded by its own `*`. The
+			// excluded-parent scan then discards the negation and hides
+			// logs/keep.txt — a file git reports as not ignored, and which the
+			// pre-stack-rewrite code returned correctly.
+			continue
 		}
 		for _, p := range s.patterns {
 			if p.matchesPath(rel, isDir) {
@@ -235,6 +251,16 @@ func ancestorDirs(root, absPath string) []string {
 
 // IsIgnored reports whether absPath should be excluded from traversal.
 //
+// CONTRACT: this answers for a TOP-DOWN walk that prunes what it excludes —
+// the caller must not descend into a directory IsIgnored rejected. It is not a
+// general "is this path ignored?" oracle for an arbitrary deep path, and the
+// difference is not academic: a file under an excluded directory is usually
+// matched by NO rule of its own, because `build/` is dirOnly and a bare
+// `build` matches on base name. Asked about build/x/y.txt directly, with
+// nothing pruned, this returns false where git says ignored. A walker never
+// asks, because it never got past build/. Anything that samples paths out of
+// walk order must test the ancestors itself.
+//
 // Two rules from gitignore(5), both load-bearing and neither implemented
 // before this package existed. The old shape returned true on the FIRST set
 // that ignored the path, walking outermost-first, so a parent's `*.py` decided
@@ -247,11 +273,10 @@ func ancestorDirs(root, absPath string) []string {
 // apply to. The ancestor scan below enforces it, and runs ONLY when a negation
 // actually put the path back in — the common case (nothing matched, or the last
 // match was an exclusion) returns without touching an ancestor, so a walk over a
-// tree with no negations pays nothing for it.
+// tree with no negations pays nothing for it. That gate is also why the walk
+// contract above is required rather than merely preferred: the scan cannot fire
+// for a path no rule matched.
 func (st Stack) IsIgnored(absPath string, isDir bool) bool {
-	if len(st) == 0 {
-		return false
-	}
 	ignored, matched := st.decide(absPath, isDir)
 	if ignored {
 		return true

@@ -464,7 +464,7 @@ func buildMatcher(pattern string, useRegex bool) (func(string) bool, error) {
 	}, nil
 }
 
-// buildGlobMatcher returns a matcher for a single brace-free glob: doubleStarMatch
+// buildGlobMatcher returns a matcher for a single brace-free glob: ignore.DoubleStarMatch
 // when it contains **, filepath.Match otherwise.
 func buildGlobMatcher(pattern string) (func(string) bool, error) {
 	if strings.Contains(pattern, "**") {
