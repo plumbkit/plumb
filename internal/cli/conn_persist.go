@@ -7,16 +7,15 @@ package cli
 // proxy's stable session ID (onProxySession). The fresh daemon uses that ID to
 // recognise the reconnected connection as a continuation of the previous one and
 // rehydrate the state that would otherwise be lost: strict-mode read tracking,
-// (for clients that do not report roots) the pinned workspace, and the session
-// name AND session identity. The name survives because a note is addressed by
-// name, so a rename on every reconnect would orphan it; the ID survives via
-// adoptSessionID, which re-registers the connection under its predecessor's
-// plumb session ID so stats, memories and collab see one continuous identity
-// (and, when adoption is declined, inheritSessionID still lets it collect mail
-// BOUND to the predecessor's ID). Both grants are authorised by the persisted
-// pairing under the proxy session ID — never by the replayed, client-disclosed
-// plumb session ID alone (see adoptSessionID and inheritSessionID, where the
-// authorisation argument lives).
+// and (for clients that do not report roots) the pinned workspace.
+//
+// The connection's IDENTITY — its internal session ID, its name, and its
+// authorised external linkage — is recovered by conn_restore.go, which owns that
+// whole lifecycle. This file keeps the expendable state: the caches whose loss
+// costs a re-read or a re-pin rather than a forked identity. The two are
+// deliberately separate, because they have opposite failure rules. Losing a
+// cache is fine and expiring one is correct; doing either to the identity record
+// forks the session.
 //
 // Everything here is gated on [session].persist_state, a non-nil store, and a
 // non-empty proxy session ID (reads and pins additionally need a pinned
@@ -26,7 +25,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -40,159 +38,45 @@ import (
 // onProxySession records the stable proxy session ID transported in the
 // initialize params' _meta. It fires synchronously during the initialize
 // exchange, before OnInit attaches the workspace, so the ID is present when
-// attachWorkspace rehydrates. It also restores the persisted session name here
-// — the name is workspace-independent, so it needs none of the attach state —
-// which means the first session_start already answers under the restored name.
+// attachWorkspace rehydrates. It then restores the session's identity from the
+// record that ID selects — identity is workspace-independent, so it needs none
+// of the attach state, which means the initialize RESULT can already state who
+// this session is and the first session_start already answers under the
+// restored name.
 func (s *connSession) onProxySession(id string) {
 	if id == "" {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.proxySessionID = id })
-	s.restoreName(id)
+	s.restoreIdentity(id)
 }
 
-// onSessionID records the stable plumb session ID the serve proxy replayed in
-// the initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting
-// session carried before the daemon restarted — and ADOPTS it as the live
-// sessID so stats/memories/collab see one continuous identity across the
-// restart (PLAN-296).
+// onSessionID records the plumb session ID the serve proxy replayed in the
+// initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting session
+// believed it held before the daemon restarted.
+//
+// It is now purely a CLAIM to be reconciled, not an input to recovery. Recovery
+// resolves the identity from the durable record the proxy secret selects
+// (restoreIdentity, which OnProxySession fires first), and that record is
+// authoritative. This matters beyond tidiness: a serve process built before the
+// ID was ever echoed replays nothing at all, and gating recovery on the replay
+// left exactly those long-lived proxies — the ones a restart is most likely to
+// catch — unable to come back as themselves.
+//
+// A mismatch is reported rather than converged. The proven record stands; the
+// stale claim is logged so a genuine inconsistency is visible instead of being
+// silently resolved in favour of whichever value was written last.
 func (s *connSession) onSessionID(id string) {
 	if id == "" {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.replayedSessionID = id })
-	s.adoptSessionID(id)
-}
-
-// adoptSessionID re-registers this connection under the stable session ID the
-// serve proxy replayed, so a daemon restart does not churn the session identity
-// stats, memories and collab key on. It is the ID counterpart to restoreName's
-// name restoration: the name survives via the persisted mapping, and this makes
-// the ID survive too.
-//
-// The replayed ID is client-supplied and DISCLOSED (session_start echoes the
-// live session ID in its result _meta), so presenting it proves nothing — any
-// client could claim an ended session's ID and inherit its mailbox binding,
-// stats attribution and episodic history. Adoption is therefore authorised ONLY
-// by the persisted session_names row: restoreName captured the plumb session ID
-// recorded under this connection's proxy session ID (the never-disclosed bearer
-// secret — see inheritSessionID for the full argument), and the replayed ID
-// must MATCH it. An empty persisted value — a pre-v4 row, a wiped store,
-// persist_state=false — means "no proof" and refuses; it is never a wildcard.
-// On a refusal with a non-empty persisted value (an authenticated proxy that
-// replayed a stale ID) the row is converged to the ID this session actually
-// holds, so the next reconnect adopts correctly.
-//
-// The adoption is additionally gated on "the replayed ID is not held by another
-// live session" (session.Adopt's ErrIDTaken): on an overlapping restart the
-// previous daemon may still be running and answering to that ID, so
-// re-registering would overwrite its session file. On a decline the connection
-// keeps its generated ID and the persisted identity is refreshed so the next
-// reconnect — by which time the predecessor has gone — retries with the right
-// ID.
-func (s *connSession) adoptSessionID(id string) {
-	oldID := s.sessionID()
-	if oldID == "" || oldID == id {
+	proven := s.view().persistedIdentity.SessionID
+	if proven == "" || proven == id {
 		return
 	}
-	expected := s.view().persistedSessionID
-	if expected == "" || expected != id {
-		s.log().Warn("daemon: replayed session ID does not match the persisted identity; refusing adoption",
-			"replayed", id, "expected", expected, "using", oldID)
-		if expected != "" {
-			// An authenticated proxy that replayed a stale ID: converge the
-			// persisted row to the current real ID so the next reconnect adopts.
-			s.persistName(s.sessionName())
-		}
-		return
-	}
-	reg, err := session.Adopt(oldID, id)
-	if errors.Is(err, session.ErrIDTaken) {
-		s.log().Debug("daemon: replayed session ID held by another live session; keeping the generated ID",
-			"replayed", id, "using", oldID)
-		s.persistName(s.sessionName())
-		return
-	}
-	if err != nil {
-		s.log().Warn("daemon: adopting replayed session ID failed; keeping the generated ID",
-			"replayed", id, "using", oldID, "err", err)
-		return
-	}
-	s.setSessionID(reg.ID)
-	// The adopted ID is the predecessor's own, so the mailbox-inheritance
-	// identity — which exists to read a predecessor's mail under its old ID —
-	// is now redundant: the session reads its own mail under its own ID. Clear
-	// it so the session's identity is one ID everywhere (PLAN-286 step 4).
-	s.mutate(func(v *sessionView) {
-		if len(v.inheritedSessionIDs) == 1 && v.inheritedSessionIDs[0] == reg.ID {
-			v.inheritedSessionIDs = nil
-		}
-	})
-	if s.registry != nil {
-		s.registry.rekey(oldID, reg.ID)
-	}
-	s.persistName(s.sessionName())
-	s.log().Info("daemon: adopted replayed stable session ID", "adopted", reg.ID, "previous", oldID)
-}
-
-// restoreName applies the name persisted under this proxy session ID, so a
-// reconnect after a daemon restart keeps the same session name. The gate is
-// namePersistEnabled — deliberately persistEnabled minus the workspace
-// requirement, since restoreName runs during initialize, before any workspace
-// is known. A first-seen proxy ID records the freshly generated name so the
-// NEXT reconnect can restore it. Applying the name goes through renameSession,
-// keeping the session file, view, and stats store consistent (and re-saving
-// the name, which refreshes its TTL).
-//
-// session.Rename is the authoritative uniqueness and validation check — it runs
-// inside the flock that performs the write — so this asks it rather than
-// pre-checking, which would cost a second full scan of the session directory to
-// reach a less reliable answer. The two failure modes are handled differently:
-// a name merely held by a live peer is worth retrying next reconnect, an
-// invalid one never will be.
-func (s *connSession) restoreName(id string) {
-	v := s.view()
-	if !s.namePersistEnabled(v) {
-		return
-	}
-	prev, ok, err := s.sessionState.LoadIdentity(id)
-	if err != nil {
-		s.log().Debug("daemon: load session identity failed", "err", err)
-		return
-	}
-	if !ok {
-		s.persistName(v.sessName)
-		return
-	}
-	// Capture the persisted plumb session ID BEFORE attempting the name restore:
-	// adoptSessionID consults it as the adoption authorisation, and the rename
-	// below returns early on ErrNameTaken — a name overlap must not veto a
-	// legitimate ID adoption.
-	s.mutate(func(v *sessionView) { v.persistedSessionID = prev.SessionID })
-	_, err = s.renameSession(prev.Name)
-	if err == nil {
-		s.inheritSessionID(prev.SessionID)
-		return
-	}
-	if errors.Is(err, session.ErrNameTaken) {
-		// A proxy reconnect can overlap its predecessor: the proxy reconnected but
-		// the previous connSession is still registered and still answers to this
-		// name. Keep the generated name this time and leave the stored mapping
-		// alone, so the next reconnect — by which time the predecessor has gone —
-		// gets the name back.
-		s.log().Debug("daemon: persisted session name still held by a live session; keeping the generated name",
-			"persisted", prev.Name, "using", v.sessName)
-		return
-	}
-	// Not merely busy: this daemon rejects the stored name outright (it predates a
-	// validation rule, e.g. a session named "next" before that became the reserved
-	// mailbox address). Left in place the row would fail identically on EVERY
-	// reconnect and the session would come back randomly renamed each time — the
-	// churn this persistence exists to prevent, and silent at Debug. Replace it
-	// with the name the session actually has so it converges after one reconnect.
-	s.log().Debug("daemon: persisted session name is no longer valid; replacing it",
-		"persisted", prev.Name, "using", v.sessName, "err", err)
-	s.persistName(v.sessName)
+	s.log().Warn("daemon: the replayed session ID disagrees with the proven durable record; keeping the proven identity",
+		"replayed", id, "proven", proven, "using", s.sessionID())
 }
 
 // inheritSessionID accepts a predecessor's plumb session ID as a second mailbox
@@ -211,21 +95,18 @@ func (s *connSession) restoreName(id string) {
 // session its predecessor's mailbox for the cost of one rename_session, which is
 // precisely the hole the binding closed.
 //
-// Inheritance is the DEGRADED path now that adoptSessionID exists: adoption
-// (same pairing, same authorisation) is primary, and on an authenticated
-// reconnect the adopted session reads its own mail under its own ID, so the
-// inherit grant is cleared as redundant. What remains here is the case adoption
-// is DECLINED — a live overlap, or an Adopt error — where the session runs
-// under a fresh ID and still needs its predecessor's mail.
+// Inheritance is the DEGRADED path: adoption (same record, same authorisation)
+// is primary, and on a successful restore the session reads its own mail under
+// its own ID, so no inherit grant is made at all. What remains here is the case
+// adoption was DECLINED — a live overlap, or an Adopt error — where the session
+// runs under a temporary ID and still needs its predecessor's mail.
 //
 // It is also gated on the rename having SUCCEEDED, so a session only inherits an
 // identity while actually holding the name that identity answered to.
 //
-// The chain is bounded at ONE predecessor, deliberately. persistName re-records
-// this session's OWN ID under the proxy key, so the next restart inherits this
-// session and forgets the one before it. A message that survives two restarts
-// unread is therefore orphaned — bounded, rather than an ever-growing set of
-// identities that would slowly widen what one session may read.
+// The chain is bounded at ONE predecessor, deliberately. A later legitimate
+// rename re-records this session's OWN ID under the proxy key, so the chain
+// never grows into an ever-widening set of identities one session may read.
 func (s *connSession) inheritSessionID(prevID string) {
 	if prevID == "" || prevID == s.sessionID() {
 		return
@@ -241,26 +122,50 @@ func (s *connSession) inheritedSessionIDs() []string {
 	return s.view().inheritedSessionIDs
 }
 
-// persistName records the session's current name AND its own session ID under
-// its proxy session ID, so the next reconnect can both come back under the name
-// and prove which session it continues.
+// persistIdentity commits this session's CURRENT identity — its name, its own
+// session ID, and its external linkage — to the durable record under the proxy
+// session ID, so the next reconnect can recover it.
 //
-// Recording this session's own ID — never an inherited one — is what bounds the
+// Recording this session's own ID, never an inherited one, is what bounds the
 // inheritance chain at a single predecessor: after a second restart the ID
 // stored here is this session's, and the one it inherited is forgotten.
-func (s *connSession) persistName(name string) {
+//
+// The callers are deliberately few, and every one of them is a case where the
+// stored record is genuinely out of date: first contact, a legitimate rename, an
+// external-ID link, and the one repair case where the stored name is invalid by
+// construction. Recovery FAILURES do not call it — see conn_restore.go, where
+// that used to be the identity-fork bug.
+func (s *connSession) persistIdentity() {
 	v := s.view()
+	name := v.sessName
 	if !s.namePersistEnabled(v) || name == "" {
 		return
 	}
-	if err := s.sessionState.SaveIdentity(v.proxySessionID, name, s.sessionID()); err != nil {
+	rec := sessionstate.Identity{
+		Name:       name,
+		SessionID:  s.sessionID(),
+		ExternalID: s.externalID(),
+	}
+	if err := s.sessionState.SaveIdentity(v.proxySessionID, rec); err != nil {
 		s.log().Debug("daemon: persist session identity failed", "err", err)
 	}
 }
 
-// namePersistEnabled is persistEnabled without the workspace requirement: the
-// session name is workspace-independent, so it can be loaded and saved during
-// the initialize exchange, before a workspace is known.
+// externalID returns the external-conversation ID linked to this session, or ""
+// when it has none. It is read from the session file rather than cached on the
+// view because session_start writes it there directly (session.SetExternalID),
+// and a second copy is a second thing that can go stale.
+func (s *connSession) externalID() string {
+	id := s.sessionID()
+	if id == "" {
+		return ""
+	}
+	return session.ExternalIDOf(id)
+}
+
+// namePersistEnabled is persistEnabled without the workspace requirement: a
+// session's identity is workspace-independent, so it can be loaded and saved
+// during the initialize exchange, before a workspace is known.
 func (s *connSession) namePersistEnabled(v sessionView) bool {
 	return s.sessionState != nil && v.session.PersistState && v.proxySessionID != ""
 }
@@ -520,26 +425,42 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 	}
 }
 
-// toolResultMeta contributes `_meta` to successful tool results. Today that is
-// one fact: for a session_start that carried a workspace argument, the
-// CANONICAL root the daemon actually pinned (mcp.MetaResolvedWorkspaceKey), so
-// the serve proxy commits the resolved spelling instead of the caller's raw
-// one. That closes the raw-spelling replay channel: an alias-spelled pin could
-// shadow a project under two roots, and a replayed subdirectory re-resolved
-// against a fresh daemon whose state the proxy knows nothing about. The
-// workspace is read after the call, when onBeforeTool/repin has already
-// attached the resolved (canonical) root.
+// toolResultMeta contributes `_meta` to successful tool results. It carries two
+// facts, and they are gated differently on purpose.
+//
+// The session ID (mcp.MetaSessionIDKey) rides EVERY successful session_start.
+// It used to ride only a call that carried a workspace argument, which coupled
+// identity to workspace selection: `session_start({session_id})` — the exact
+// call an agent makes to link a conversation without re-pinning — told the
+// proxy nothing, so the proxy held no identity and the connection could not
+// prove itself on the next reconnect. Nothing about identity depends on a
+// workspace, and the two must not share a gate.
+//
+// The resolved workspace (mcp.MetaResolvedWorkspaceKey) still rides only a call
+// that carried a workspace argument, because it answers "what did that argument
+// resolve to?" and there is no argument otherwise. It is the CANONICAL root the
+// daemon actually pinned, so the proxy commits the resolved spelling instead of
+// the caller's raw one: an alias-spelled pin could shadow a project under two
+// roots, and a replayed subdirectory would re-resolve against a fresh daemon
+// whose state the proxy knows nothing about. The workspace is read after the
+// call, when onBeforeTool/repin has already attached the resolved root.
+//
+// Emitting the ID for a no-workspace call is only half the repair; the proxy
+// must also record it without disturbing a pin the call never mentioned. See
+// commitSessionStartPin.
 func (s *connSession) toolResultMeta(_ context.Context, name string, args json.RawMessage) map[string]any {
-	if name != sessionStartTool || !workspaceArgPresent(args) {
+	if name != sessionStartTool {
 		return nil
 	}
-	ws := s.workspace()
-	if ws == "" {
-		return nil
-	}
-	meta := map[string]any{mcp.MetaResolvedWorkspaceKey: ws}
+	meta := map[string]any{}
 	if id := s.sessionID(); id != "" {
 		meta[mcp.MetaSessionIDKey] = id
+	}
+	if ws := s.workspace(); ws != "" && workspaceArgPresent(args) {
+		meta[mcp.MetaResolvedWorkspaceKey] = ws
+	}
+	if len(meta) == 0 {
+		return nil
 	}
 	return meta
 }

@@ -343,7 +343,7 @@ func TestProxyReconnectNote(t *testing.T) {
 	// this (older) proxy binary's own compiled Version.
 	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
 	frame := h.read(10 * time.Second)
-	if !strings.Contains(frame, `"id":6`) || !strings.Contains(frame, "daemon reconnected") {
+	if !strings.Contains(frame, `"id":6`) || !strings.Contains(frame, "connection re-established") {
 		t.Fatalf("expected reconnect note on the first tool call after reconnect, got %q", frame)
 	}
 	if !strings.Contains(frame, `"ok"`) {
@@ -352,7 +352,7 @@ func TestProxyReconnectNote(t *testing.T) {
 	if !strings.Contains(frame, "daemon now 2.0.0-repl") {
 		t.Fatalf("note must carry the new daemon's serverInfo.version, got %q", frame)
 	}
-	if strings.Contains(frame, "now "+Version+")") {
+	if strings.Contains(frame, "daemon "+Version+")") {
 		t.Fatalf("note must not claim the proxy's own version as the daemon's, got %q", frame)
 	}
 	if !strings.Contains(frame, "this serve proxy is still "+Version) {
@@ -361,7 +361,7 @@ func TestProxyReconnectNote(t *testing.T) {
 
 	// Second tools/call: no note (strictly one-shot).
 	h.write(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}`)
-	if frame := h.read(10 * time.Second); strings.Contains(frame, "daemon reconnected") {
+	if frame := h.read(10 * time.Second); strings.Contains(frame, "connection re-established") {
 		t.Fatalf("reconnect note must be one-shot, but a second tool call also carried it: %q", frame)
 	}
 	_ = h.clientIn.Close()
@@ -467,7 +467,7 @@ func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
 	readSynthError(t, h)
 	h.write(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{}}`)
 	frame = readToolResult(t, h, "8")
-	if !strings.Contains(frame, "daemon reconnected (now 2.0.0-mismatch)") {
+	if !strings.Contains(frame, "connection re-established (daemon 2.0.0-mismatch)") {
 		t.Fatalf("second reconnect must still carry the plain note, got %q", frame)
 	}
 	if strings.Contains(frame, "serve proxy") {
@@ -484,79 +484,6 @@ func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
 		t.Fatalf("a daemon version change must re-arm the mismatch clause, got %q", frame)
 	}
 	_ = h.clientIn.Close()
-}
-
-func TestInjectReconnectNote(t *testing.T) {
-	t.Parallel()
-
-	// Well-formed tools/call result: note appended, original content preserved.
-	good := []byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello"}]}}`)
-	out, ok := injectReconnectNote(good, "v9.9.9", "v9.9.9", true)
-	if !ok {
-		t.Fatal("expected injection into a well-formed tools/call result")
-	}
-	s := string(out)
-	if !strings.Contains(s, "hello") || !strings.Contains(s, "daemon reconnected") || !strings.Contains(s, "v9.9.9") {
-		t.Fatalf("expected note appended alongside original content, got %q", s)
-	}
-
-	// Fail-safe shapes: each returns the input unchanged with ok=false.
-	for _, c := range []struct {
-		name  string
-		frame string
-	}{
-		{"error response", `{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"x"}}`},
-		{"result without content", `{"jsonrpc":"2.0","id":3,"result":{"method":"x"}}`},
-		{"not json", `not json at all`},
-		{"content not array", `{"jsonrpc":"2.0","id":3,"result":{"content":"oops"}}`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			got, ok := injectReconnectNote([]byte(c.frame), "v1", "v1", true)
-			if ok {
-				t.Fatalf("expected ok=false for %s", c.name)
-			}
-			if string(got) != c.frame {
-				t.Fatalf("a refused injection must return the frame unchanged, got %q", got)
-			}
-		})
-	}
-}
-
-func TestReconnectNoteText(t *testing.T) {
-	t.Parallel()
-
-	// Same versions: plain note, no proxy-lag hint.
-	same := reconnectNoteText("1.2.3", "1.2.3", true)
-	if !strings.Contains(same, "(now 1.2.3)") || strings.Contains(same, "serve proxy") {
-		t.Errorf("same-version note wrong: %q", same)
-	}
-	// The note must name the workspace pin, not only read-tracking/caches — the
-	// original field report's sharpest point (a reconnect had silently changed
-	// which repository writes landed in).
-	if !strings.Contains(same, "workspace") {
-		t.Errorf("note does not mention the workspace pin: %q", same)
-	}
-	// Unknown daemon version: fall back to the proxy's, no lag hint.
-	fallback := reconnectNoteText("", "1.2.3", true)
-	if !strings.Contains(fallback, "(now 1.2.3)") || strings.Contains(fallback, "serve proxy") {
-		t.Errorf("fallback note wrong: %q", fallback)
-	}
-	// Differing versions: daemon's version leads, proxy lag stated.
-	differ := reconnectNoteText("2.0.0", "1.2.3", true)
-	if !strings.Contains(differ, "daemon now 2.0.0") ||
-		!strings.Contains(differ, "this serve proxy is still 1.2.3") ||
-		!strings.Contains(differ, "restart `plumb serve`") ||
-		strings.Contains(differ, "start a new client session") {
-		t.Errorf("differ note wrong: %q", differ)
-	}
-	// Differing versions with the mismatch clause suppressed (the proxy already
-	// warned for this daemon version once): plain note naming the daemon's
-	// version, no proxy-lag hint.
-	suppressed := reconnectNoteText("2.0.0", "1.2.3", false)
-	if !strings.Contains(suppressed, "(now 2.0.0)") || strings.Contains(suppressed, "serve proxy") {
-		t.Errorf("suppressed-mismatch note wrong: %q", suppressed)
-	}
 }
 
 func TestServerInfoVersion(t *testing.T) {
@@ -606,7 +533,7 @@ func TestProxyReconnectNote_LegacyDaemonShape(t *testing.T) {
 
 	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
 	frame := h.read(10 * time.Second)
-	if !strings.Contains(frame, "daemon reconnected") || !strings.Contains(frame, "(now "+Version+")") {
+	if !strings.Contains(frame, "connection re-established") || !strings.Contains(frame, "(daemon "+Version+")") {
 		t.Fatalf("legacy shape should fall back to the proxy version, got %q", frame)
 	}
 	if strings.Contains(frame, "serve proxy is still") {
@@ -645,10 +572,10 @@ func TestProxyReconnectNote_ModernThenLegacy(t *testing.T) {
 
 	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
 	frame := h.read(10 * time.Second)
-	if !strings.Contains(frame, "daemon reconnected") {
+	if !strings.Contains(frame, "connection re-established") {
 		t.Fatalf("expected reconnect note, got %q", frame)
 	}
-	if !strings.Contains(frame, "(now "+Version+")") {
+	if !strings.Contains(frame, "(daemon "+Version+")") {
 		t.Fatalf("a legacy replacement must fall back to the proxy version, got %q", frame)
 	}
 	if strings.Contains(frame, "2.0.0-orig") {

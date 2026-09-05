@@ -123,12 +123,17 @@ notice pointing at `daemon_info`.
 Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
 and `-` only; user-provided case is preserved; max 25 chars).
 
-The name must be free. A session name is the address the mailbox delivers to, so
-a name another **live** session already answers to is refused (compared
-case-insensitively), as is `next` — the next-arrival address. Renaming to the
-name you already hold is allowed, and an ended session does not reserve its
-name. Generated names are checked the same way at registration and re-drawn, so
-no two registered sessions share one. (A session whose registration failed keeps
+The name must be free — free of every LIVE session, and of every name RESERVED by
+a durable identity that is disconnected but recoverable. The second is what stops
+a `plumb serve` outliving its daemon from having its name handed away during the
+outage.
+
+A session name is the address the mailbox delivers to, so a name another **live**
+session already answers to is refused (compared case-insensitively), as is `next`
+— the next-arrival address. Renaming to the name you already hold is allowed, and
+an ended session whose identity is not recoverable does not reserve its name.
+Generated names are checked the same way at registration and re-drawn, so no two
+registered sessions share one. (A session whose registration failed keeps
 a display name but has no mailbox address at all, so it cannot shadow one.)
 
 ### `workspace_sessions`
@@ -244,10 +249,17 @@ for a private message. Addressing a peer that is *not connected* stores no
 binding and is delivered by name, as is `next` — that one is a first-claimer
 race by design. Messages written before this existed are likewise unbound and
 keep delivering by name. A **daemon restart does not orphan bound mail**: the
-reconnecting session inherits its predecessor's identity, but only on the
-strength of the proxy session ID `plumb serve` replays in its handshake — never
-for merely answering to the name. One predecessor is carried, so a message
-unread across two restarts expires instead.
+reconnecting session RESUMES the identity its durable record proves it holds, so
+it reads its own mail under its own ID — and the record is selected by the proxy
+session ID `plumb serve` replays in its handshake, never by answering to a name.
+While that identity is recoverable its **name stays reserved**, so no new session
+can be given it and come back to find its mail addressed elsewhere.
+
+When the identity cannot be resumed — a predecessor connection still detaching,
+or a genuinely different live owner — the session runs under a temporary one and,
+if it holds the predecessor's name, inherits that predecessor's ID as a second
+mailbox identity so mail still reaches it. That is the degraded path: the durable
+record is left untouched and a later reconnect resumes the identity properly.
 
 Addressing a session pinned to a **different workspace** is refused up front
 unless *that* project has already set `[collab] cross_project = true` — the

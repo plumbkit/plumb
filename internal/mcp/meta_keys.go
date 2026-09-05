@@ -33,6 +33,42 @@ const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 // across restarts (PLAN-296), distinct from the per-proxy MetaProxySessionKey.
 const MetaSessionIDKey = "dev.plumbkit/session-id"
 
+// MetaSessionIdentityKey is the initialize-RESULT `_meta` key under which the
+// daemon states, authoritatively, which session the connection it just accepted
+// belongs to: the internal plumb session ID, its current name, the revision
+// ordering name changes, and the outcome of the recovery attempt.
+//
+// It exists because every earlier identity channel was gated on something
+// incidental. MetaSessionIDKey rides a session_start RESULT, so a connection
+// that never calls the tool never learns its ID; the workspace-argument gate
+// narrowed it further still. The handshake, by contrast, is the one exchange
+// every MCP connection performs exactly once, before any tool is served — so an
+// identity delivered here is available to the proxy on first contact and on
+// every reconnect, whatever the client goes on to call.
+//
+// The value is a JSON object, not a string, because a bare ID cannot say
+// whether it was RECOVERED or freshly minted, and a proxy that cannot tell
+// those apart cannot report the difference honestly. It deliberately never
+// carries the proxy-session secret: this travels to the client, and the secret
+// is the one credential that must not.
+//
+// A daemon that predates the key sends nothing and a proxy that predates it
+// ignores the key, so either half upgrades independently.
+const MetaSessionIdentityKey = "dev.plumbkit/session-identity"
+
+// MetaDaemonInstanceKey is the initialize-RESULT `_meta` key under which the
+// daemon reports an opaque marker unique to this daemon PROCESS — minted at
+// start, constant for the process's life, and different for every start.
+//
+// It answers the one question a reconnecting proxy could not previously
+// answer and yet was reporting on anyway: did the daemon process restart, or
+// did this connection merely get dropped? Version equality cannot decide it (a
+// restart onto the same build reports the same version, and an idle eviction
+// reports the same version too), and the proxy has no other view of the daemon's
+// lifetime. Absent the marker the honest answer is "unknown", which is what the
+// reconnect note then says.
+const MetaDaemonInstanceKey = "dev.plumbkit/daemon-instance"
+
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its explicit workspace pre-pin — the --workspace
 // flag or PLUMB_WORKSPACE env var. There is deliberately no serve-cwd fallback:

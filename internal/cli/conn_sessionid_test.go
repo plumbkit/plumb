@@ -25,10 +25,14 @@ func TestOnSessionIDStoresReplayedID(t *testing.T) {
 }
 
 // TestOnSessionIDAdoptsReplayedID pins the PLAN-296 adoption half: a live
-// connSession adopts the replayed stable ID as its own, so stats/memories/collab
-// keyed on sessionID() see one continuous identity across the restart. Adoption
-// is authorised by the persisted session_names row under the proxy session ID —
-// here written by the pre-restart connection itself.
+// connSession resumes the proven session ID as its own, so stats/memories/collab
+// keyed on sessionID() see one continuous identity across the restart.
+//
+// The authority is the durable identity record under the proxy session ID — here
+// written by the pre-restart connection itself — and NOT the replayed ID. That
+// distinction is the point of the test: a `plumb serve` old enough to predate
+// the replay channel replays nothing, and gating recovery on the replay left
+// exactly those long-lived proxies unable to come back as themselves.
 func TestOnSessionIDAdoptsReplayedID(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
@@ -46,10 +50,25 @@ func TestOnSessionIDAdoptsReplayedID(t *testing.T) {
 	}
 	before.close()
 
-	// After the restart: a fresh connection on the same proxy session ID, and
-	// the proxy replays the ID the connection held before the restart.
-	after := newPersistSession(t, store, ss, "proxyX")
+	// After the restart: a fresh connection that has not yet seen its proxy ID,
+	// so its generated identity can be captured BEFORE recovery replaces it.
+	// newPersistSession fires onProxySession itself, which would make the
+	// "before" snapshot already be the "after" one.
+	after := newConnSession(context.Background(), detectTestPool(), nil, store, nil, ss, newSharedBudgets())
+	t.Cleanup(after.close)
 	oldID := after.sessionID()
+	if oldID == "" || oldID == prevID {
+		t.Fatalf("the fresh connection registered as %q; it must start under its OWN generated "+
+			"ID or this test cannot show that recovery replaced anything", oldID)
+	}
+	// Recovery runs off the proxy secret alone. The replayed ID is delivered
+	// afterwards, as the real handshake orders the two hooks, and must change
+	// nothing: it is a claim to reconcile, not the authority.
+	after.onProxySession("proxyX")
+	if got := after.sessionID(); got != prevID {
+		t.Fatalf("sessionID() = %q after recovery, want the proven %q — recovery must resolve "+
+			"the identity from the proxy-keyed record, with no replayed ID to help it", got, prevID)
+	}
 	after.onSessionID(prevID)
 	if got := after.sessionID(); got != prevID {
 		t.Fatalf("sessionID() = %q after adoption, want the persisted %q", got, prevID)
@@ -167,7 +186,7 @@ func TestOnSessionIDRefusesForgedReplay(t *testing.T) {
 	// re-persist the row ahead of the refusal — that is what keeps the
 	// convergence assertion below honest (and the inheritance assertion exact:
 	// a declined rename grants no inherited identity either).
-	if err := ss.SaveIdentity("proxyX", "honest-heron", "real-session-id"); err != nil {
+	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "honest-heron", SessionID: "real-session-id"}); err != nil {
 		t.Fatalf("SaveIdentity: %v", err)
 	}
 	if _, err := session.Register(session.Info{Name: "honest-heron"}); err != nil {
@@ -179,7 +198,7 @@ func TestOnSessionIDRefusesForgedReplay(t *testing.T) {
 	if freshID == "" {
 		t.Fatal("session did not register; the test would prove nothing")
 	}
-	if got := s.view().persistedSessionID; got != "real-session-id" {
+	if got := s.view().persistedIdentity.SessionID; got != "real-session-id" {
 		t.Fatalf("persistedSessionID = %q, want real-session-id — the capture is the gate's input", got)
 	}
 
@@ -245,12 +264,12 @@ func TestOnSessionIDRefusesWithoutPersistedProof(t *testing.T) {
 		defer ss.Close()
 
 		// A row written by an older daemon: a name, no plumb session ID.
-		if err := ss.SaveIdentity("proxyX", "steady-otter", ""); err != nil {
+		if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "steady-otter", SessionID: ""}); err != nil {
 			t.Fatalf("SaveIdentity: %v", err)
 		}
 		s := newPersistSession(t, store, ss, "proxyX")
 		generated := s.sessionID()
-		if got := s.view().persistedSessionID; got != "" {
+		if got := s.view().persistedIdentity.SessionID; got != "" {
 			t.Fatalf("persistedSessionID = %q, want empty for a pre-column row", got)
 		}
 		s.onSessionID("claimed-id")

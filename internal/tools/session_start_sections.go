@@ -39,9 +39,10 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 			fmt.Fprintf(sb, "Scale:    %s\n", scale)
 		}
 	}
-	if inheritedName != "" {
-		fmt.Fprintf(sb, "Session:  %s (resumed)\n", inheritedName)
-	}
+	// Unconditional, unlike the inherited-name-only line it replaces: the caller
+	// must be able to tell itself apart from the peers named below. See
+	// session_start_self.go for why that is not a nicety.
+	sb.WriteString(t.selfIdentityLine(inheritedName))
 	// An unlinked session is addressable by neither plumb mail (leave_note is
 	// addressed by session name) nor the peer wake hook (its stamp is keyed by
 	// the conversation id the caller never supplied). This is the one section

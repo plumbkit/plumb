@@ -63,15 +63,32 @@ func (s *connSession) setPurpose(purpose string) {
 }
 
 // renameSession renames the session, persisting the new name in the session
-// file and stats store, and — when per-connection persistence is on — under the
-// proxy session ID, so a daemon restart comes back under the same name.
+// file and stats store, and — when per-connection persistence is on — in the
+// durable identity record, so a daemon restart comes back under the same name.
+//
+// This is a LEGITIMATE rename: it moves the durable name reservation with the
+// name and increments its revision (SaveIdentity does the increment), so a
+// proxy still holding the older name cannot replay it back over this one.
+// The durable name reservations are consulted alongside the live-session
+// uniqueness check, so a rename cannot take a name a disconnected-but-
+// recoverable session is coming back to. A session's own reservation never
+// blocks it, which is what lets identity recovery restore its own retained name
+// through this same path rather than needing a second, weaker one.
 func (s *connSession) renameSession(name string) (string, error) {
-	name, err := session.Rename(s.sessionID(), name)
+	return s.renameSessionClaiming(name, "")
+}
+
+// renameSessionClaiming is renameSession for the identity-restore path: it
+// renames on behalf of ownerID, so the reservation held FOR that identity does
+// not refuse the identity itself. ownerID "" is an ordinary rename, checked
+// against every reservation. See reservedNamesClaiming.
+func (s *connSession) renameSessionClaiming(name, ownerID string) (string, error) {
+	name, err := session.RenameReserved(s.sessionID(), name, s.reservedNamesClaiming(ownerID))
 	if err != nil {
 		return "", err
 	}
 	s.mutate(func(v *sessionView) { v.sessName = name })
 	s.statsStore.RenameSession(s.sessionID(), name)
-	s.persistName(name)
+	s.persistIdentity()
 	return name, nil
 }

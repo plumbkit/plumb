@@ -27,7 +27,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -121,6 +120,15 @@ var ErrNameTaken = errors.New("session name is already in use by a live session"
 // changed — only a generated name gets disambiguated, because no caller asked
 // for that particular one.
 func Register(info Info) (Info, error) {
+	return register(info, nil)
+}
+
+// register is Register's body, parameterised by the reservations that names
+// held by absent-but-recoverable sessions add to the live-uniqueness check.
+// Register passes nil (no reservations, exactly the previous behaviour);
+// RegisterReserved passes the caller's set. One body, so the two can never
+// enforce different rules.
+func register(info Info, reserved Reserved) (Info, error) {
 	dir, err := Dir()
 	if err != nil {
 		return Info{}, err
@@ -158,8 +166,8 @@ func Register(info Info) (Info, error) {
 		}
 		switch {
 		case requested == "":
-			info.Name = freeName(live, info.ID)
-		case nameTaken(live, requested, info.ID):
+			info.Name = freeName(live, info.ID, reserved)
+		case nameTaken(live, requested, info.ID) || reserved.taken(requested, info.ID):
 			return fmt.Errorf("%w: %q", ErrNameTaken, requested)
 		}
 		return writeSessionFileAtomic(path, info)
@@ -170,69 +178,6 @@ func Register(info Info) (Info, error) {
 		return Info{}, fmt.Errorf("writing session file: %w", err)
 	}
 	return info, nil
-}
-
-// nameDrawAttempts is how many random draws freeName makes before falling back
-// to a numeric suffix. The pool is ~6k names, so against any realistic number
-// of live sessions the first draw lands; the retries cost one slice scan each
-// and only run in the rare collision case.
-const nameDrawAttempts = 8
-
-// freeName returns a generated name that no live session other than selfID
-// holds.
-func freeName(live []Info, selfID string) string {
-	for range nameDrawAttempts {
-		if n := generateName(); !nameTaken(live, n, selfID) {
-			return n
-		}
-	}
-	// Pigeonhole: only a live session can occupy a suffix, so at most len(live)
-	// of them are taken and this loop always returns.
-	base := generateName()
-	for i := 2; ; i++ {
-		if n := withSuffix(base, i); !nameTaken(live, n, selfID) {
-			return n
-		}
-	}
-}
-
-// withSuffix appends "-n" to base, trimming base so the result fits
-// MaxNameLength and never ends in a hyphen — NormaliseName rejects both, and a
-// generated name has to survive being passed back through it.
-//
-// The hyphen trim is unconditional, not just after truncation: a base that is
-// entirely hyphens is short enough to skip the trim yet still produces "----2".
-// A base that trims away to nothing falls back to a letter, since a bare
-// "-2" leads with a hyphen. Neither is reachable from generateName's
-// adjective-noun output, but withSuffix must not depend on its caller for the
-// legality of what it returns.
-//
-// It does NOT sanitise an arbitrary string — an interior "--" survives and
-// NormaliseName would reject it. The contract is that a legal (or empty) base
-// yields a legal name.
-func withSuffix(base string, n int) string {
-	suffix := "-" + strconv.Itoa(n)
-	if room := MaxNameLength - len(suffix); len(base) > room {
-		base = base[:max(room, 0)]
-	}
-	if base = strings.Trim(base, "-"); base == "" {
-		base = "s"
-	}
-	return base + suffix
-}
-
-// nameTaken reports whether a live session other than selfID answers to name.
-//
-// The comparison is case-INSENSITIVE even though the mailbox matches addressees
-// with SQLite's case-sensitive '='. That is deliberate: being stricter than
-// delivery can only reject confusable names, never admit an ambiguous address.
-func nameTaken(live []Info, name, selfID string) bool {
-	for _, info := range live {
-		if info.ID != selfID && strings.EqualFold(info.Name, name) {
-			return true
-		}
-	}
-	return false
 }
 
 func withSessionDirLock(dir string, fn func() error) error {
@@ -296,6 +241,11 @@ func writeSessionFileAtomic(path string, info Info) error {
 // The check runs under the same flock as the write, so it cannot race a
 // concurrent Rename or Register.
 func Rename(id, name string) (string, error) {
+	return rename(id, name, nil)
+}
+
+// rename is Rename's body, parameterised by reservations. See register.
+func rename(id, name string, reserved Reserved) (string, error) {
 	name, err := NormaliseName(name)
 	if err != nil {
 		return "", err
@@ -322,7 +272,7 @@ func Rename(id, name string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if nameTaken(live, name, id) {
+		if nameTaken(live, name, id) || reserved.taken(name, id) {
 			return fmt.Errorf("%w: %q", ErrNameTaken, name)
 		}
 		info.Name = name
@@ -417,6 +367,25 @@ func SetExternalID(id, externalID string) {
 	Patch(id, func(info *Info) {
 		info.ExternalID = externalID
 	})
+}
+
+// ExternalIDOf returns the external-conversation ID linked to the session at id,
+// or "" when the session has none, has no file, or the file cannot be read.
+//
+// It reads the session file rather than any cached copy on purpose: SetExternalID
+// writes there, so the file is the single source of truth and a second copy is a
+// second thing that can go stale. Failure is indistinguishable from "none" by
+// design — every caller treats an empty result as "unknown, carry nothing",
+// which is the only safe reading of an absent linkage.
+func ExternalIDOf(id string) string {
+	if id == "" {
+		return ""
+	}
+	info, err := readInfo(id)
+	if err != nil {
+		return ""
+	}
+	return info.ExternalID
 }
 
 // SetPurpose persists the human-readable purpose tag on the session file.

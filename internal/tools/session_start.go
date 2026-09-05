@@ -107,7 +107,8 @@ type SessionStart struct {
 	lspWarmingFn  func() (bool, time.Duration)                                                      // may be nil; reports whether the primary LSP is still warming + elapsed
 	lspDiagModeFn func() string                                                                     // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
 	purposeFn     func(purpose string)                                                              // may be nil; persists a validated session purpose tag
-	selfSessID    func() string                                                                     // this session's ID, excluded from the peer digest
+	selfSessID    func() string                                                                     // this session's ID, excluded from the peer digest and shown as the caller's own
+	selfName      func() string                                                                     // may be nil; this session's own current name, shown as the caller's own
 	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn     func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
 	xcodeHintFn   XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
@@ -141,7 +142,8 @@ func (t *SessionStart) WithXcodeHint(fn XcodeHintFn) *SessionStart {
 }
 
 // WithSelfSession records this connection's session ID so the peer digest can
-// exclude it from the active-session list. Returns the receiver for chaining.
+// exclude it from the active-session list, and so orientation can tell the
+// caller its own ID. Returns the receiver for chaining.
 func (t *SessionStart) WithSelfSession(id func() string) *SessionStart {
 	t.selfSessID = id
 	return t

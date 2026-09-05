@@ -34,6 +34,26 @@ var ErrIDTaken = errors.New("session ID is already in use by a live session")
 // the new one is written, so the name it holds is released to the new record
 // under the same lock and a concurrent reader never observes both live.
 func Adopt(oldID, newID string) (Info, error) {
+	return AdoptWithExternalID(oldID, newID, "")
+}
+
+// AdoptWithExternalID is Adopt with a fallback external-conversation linkage,
+// used when the predecessor's session JSON is no longer on disk.
+//
+// Adopt's carry-forward reads the record at newID, which the session-directory
+// janitor deletes 24 h after that session ended. So an outage longer than the
+// grace window recovered the ID and the name — both held durably — and silently
+// dropped the linkage, leaving `plumb mail --external-id` unable to resolve a
+// session that had in fact recovered perfectly. fallbackExternalID is the value
+// from the canonical durable identity record, which does not expire.
+//
+// Precedence is deliberate and narrow. The adopter's own ExternalID wins if it
+// has one (it ran session_start and declared itself). The predecessor JSON wins
+// next, because it is the record the previous daemon actually wrote. The
+// fallback applies only when neither is available — it fills a gap, it never
+// overwrites live evidence. An empty fallback carries nothing, exactly as
+// before: an absent record is no authority to invent an identity.
+func AdoptWithExternalID(oldID, newID, fallbackExternalID string) (Info, error) {
 	if oldID == newID {
 		return readInfo(oldID)
 	}
@@ -66,6 +86,9 @@ func Adopt(oldID, newID string) (Info, error) {
 		// absent or corrupt predecessor is no authority to invent an identity.
 		if predecessor, err := readInfo(newID); err == nil && info.ExternalID == "" {
 			info.ExternalID = predecessor.ExternalID
+		}
+		if info.ExternalID == "" {
+			info.ExternalID = fallbackExternalID
 		}
 		if err := writeSessionFileAtomic(filepath.Join(dir, newID+".json"), info); err != nil {
 			return fmt.Errorf("writing session file: %w", err)

@@ -269,7 +269,7 @@ func TestPersist_PersistedSessionIDCapturedDespiteNameOverlap(t *testing.T) {
 	}
 
 	after := newPersistSession(t, store, ss, "proxyX")
-	if got := after.view().persistedSessionID; got != prevID {
+	if got := after.view().persistedIdentity.SessionID; got != prevID {
 		t.Fatalf("persistedSessionID = %q, want %q — the capture must survive an ErrNameTaken decline", got, prevID)
 	}
 	// The replay passes the pairing gate (expected == replayed) and is declined
@@ -302,7 +302,7 @@ func TestPersist_FirstConnectNoReplayedID(t *testing.T) {
 	if id == "" {
 		t.Fatal("session did not register; the test would prove nothing")
 	}
-	if got := s.view().persistedSessionID; got != "" {
+	if got := s.view().persistedIdentity.SessionID; got != "" {
 		t.Fatalf("persistedSessionID = %q on a first connect, want empty", got)
 	}
 	if got := s.view().replayedSessionID; got != "" {
@@ -476,7 +476,7 @@ func TestPersist_StoredNameRejectedByValidationIsReplaced(t *testing.T) {
 	defer ss.Close()
 
 	// A row written by an older daemon, before "next" was reserved.
-	if err := ss.SaveIdentity("proxyX", "next", ""); err != nil {
+	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "next", SessionID: ""}); err != nil {
 		t.Fatalf("SaveName: %v", err)
 	}
 

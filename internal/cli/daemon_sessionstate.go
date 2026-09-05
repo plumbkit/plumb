@@ -22,11 +22,42 @@ func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...st
 	if sessState == nil || ttlMinutes <= 0 {
 		return
 	}
-	// live sessions are exempt: their pin and name are written once at
-	// initialize, so a conversation older than the TTL would otherwise have them
-	// reclaimed while it is still connected.
+	// live sessions are exempt: their pin is written once at initialize, so a
+	// conversation older than the TTL would otherwise have it reclaimed while it
+	// is still connected. The identity record needs no help from this list — it
+	// is exempt from the sweep entirely, which is the only thing that works at
+	// daemon start, when no connection exists to be exempted. See Store.Prune.
 	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes)*time.Minute), live...); err != nil {
 		slog.Debug("daemon: session-state prune failed", "err", err)
+	}
+}
+
+// reportLegacyNameConflicts logs identity records that claim the same name.
+//
+// It reports rather than repairs, and that is a decision rather than an
+// omission. Before names were retained (PLAN-426) a name was unique only among
+// LIVE sessions, so a pruned row's name could legitimately be redrawn by
+// another proxy — both rows are now kept, and the database holds no evidence of
+// which claim should win. Every candidate repair is worse than the ambiguity:
+// renaming a record breaks the notes addressed to it, deleting one forks the
+// identity it proves, and choosing by updated_at silently hands one session's
+// mailbox to another.
+//
+// Unaffected identities migrate and recover normally either way, so the cost of
+// leaving this alone is bounded to the conflicting names themselves. Logged at
+// Warn because an operator can resolve it deliberately and nothing else will.
+func reportLegacyNameConflicts(sessState *sessionstate.Store) {
+	if sessState == nil {
+		return
+	}
+	conflicts, err := sessState.LegacyNameConflicts()
+	if err != nil {
+		slog.Debug("daemon: could not check retained identities for name conflicts", "err", err)
+		return
+	}
+	for _, c := range conflicts {
+		slog.Warn("daemon: more than one retained session identity claims the same name — a pre-retention artefact plumb will not resolve on your behalf, since every automatic choice would either break mail addressed to a name or fork an identity; the affected sessions keep their records and reconnect normally, but that name is ambiguous as an address",
+			"name", c.Name, "claims", len(c.ProxySessionIDs))
 	}
 }
 
