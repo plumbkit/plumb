@@ -5,7 +5,6 @@ package tools
 // file detection, and hidden-file filtering.
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -15,245 +14,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/ignore"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
-
-// ── gitignore ────────────────────────────────────────────────────────────────
-
-// ignorePattern is one compiled line from a .gitignore / .ignore file.
-type ignorePattern struct {
-	negate   bool   // line starts with !
-	dirOnly  bool   // line ends with /
-	rooted   bool   // line starts with / (after negation strip)
-	hasSlash bool   // line contains / (match against path, not just name)
-	glob     string // the cleaned glob to match
-}
-
-// parseIgnoreLine parses one non-blank, non-comment gitignore line.
-func parseIgnoreLine(raw string) (ignorePattern, bool) {
-	line := strings.TrimRight(raw, " \t") // trailing whitespace is ignored
-	if line == "" || strings.HasPrefix(line, "#") {
-		return ignorePattern{}, false
-	}
-
-	p := ignorePattern{}
-	if strings.HasPrefix(line, "!") {
-		p.negate = true
-		line = line[1:]
-	}
-	if strings.HasSuffix(line, "/") {
-		p.dirOnly = true
-		line = strings.TrimSuffix(line, "/")
-	}
-	if strings.HasPrefix(line, "/") {
-		p.rooted = true
-		line = line[1:]
-	}
-	p.hasSlash = strings.Contains(line, "/")
-	p.glob = line
-	return p, true
-}
-
-// matchesPath reports whether the pattern matches relPath (slash-separated,
-// relative to the directory that owns this pattern set). isDir is true when
-// the entry is a directory.
-func (p ignorePattern) matchesPath(relPath string, isDir bool) bool {
-	if p.dirOnly && !isDir {
-		return false
-	}
-	if !p.hasSlash && !p.rooted {
-		// Match against base name only (unless the pattern contains a slash).
-		return doubleStarMatch(p.glob, filepath.Base(relPath))
-	}
-	return doubleStarMatch(p.glob, relPath)
-}
-
-// doubleStarMatch is filepath.Match extended to support the ** wildcard.
-// ** matches zero or more path components.
-func doubleStarMatch(pattern, name string) bool {
-	// Fast path: no doublestar.
-	if !strings.Contains(pattern, "**") {
-		m, _ := filepath.Match(pattern, name)
-		return m
-	}
-
-	// Split on **/ segments and match greedily.
-	// e.g. "a/**/b" → ["a/", "b"]
-	parts := strings.SplitN(pattern, "**/", 2)
-	if len(parts) == 1 {
-		// Trailing **: "dir/**" matches anything under dir/.
-		prefix := strings.TrimSuffix(pattern, "**")
-		return strings.HasPrefix(name, prefix)
-	}
-	left, right := parts[0], parts[1]
-
-	if left == "" {
-		// **/right — try matching right against name, or against any suffix.
-		if doubleStarMatch(right, name) {
-			return true
-		}
-		// Walk through each directory prefix.
-		idx := strings.Index(name, "/")
-		for idx >= 0 {
-			name = name[idx+1:]
-			if doubleStarMatch(right, name) {
-				return true
-			}
-			idx = strings.Index(name, "/")
-		}
-		return false
-	}
-
-	// left/**/right — name must start with left, then ** matches mid, then right.
-	leftGlob := strings.TrimSuffix(left, "/")
-	// Match the prefix portion.
-	if !strings.HasPrefix(name, leftGlob+"/") {
-		m, _ := filepath.Match(leftGlob, strings.SplitN(name, "/", 2)[0])
-		if !m {
-			return false
-		}
-		idx := strings.Index(name, "/")
-		if idx < 0 {
-			return false
-		}
-		name = name[idx+1:]
-	} else {
-		name = name[len(leftGlob)+1:]
-	}
-	return doubleStarMatch("**/"+right, name)
-}
-
-// ignoreSet holds the patterns from one directory's ignore files.
-type ignoreSet struct {
-	dir      string // absolute directory owning these patterns
-	patterns []ignorePattern
-}
-
-// ignoreStack accumulates ignore rules as the walker descends directories.
-// Rules from parent directories are inherited; child directories can override.
-type ignoreStack []*ignoreSet
-
-// load reads .gitignore and .ignore from dir and appends a new set if any
-// patterns were found.
-func (st *ignoreStack) load(dir string) ignoreStack {
-	var patterns []ignorePattern
-	for _, name := range []string{".gitignore", ".ignore"} {
-		f, err := os.Open(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			p, ok := parseIgnoreLine(sc.Text())
-			if ok {
-				patterns = append(patterns, p)
-			}
-		}
-		// Best-effort like the os.Open failure above: a truncated read still
-		// uses whatever patterns were parsed before the scan error.
-		_ = sc.Err()
-		_ = f.Close()
-	}
-	if len(patterns) == 0 {
-		return *st
-	}
-	next := make(ignoreStack, len(*st)+1)
-	copy(next, *st)
-	next[len(*st)] = &ignoreSet{dir: dir, patterns: patterns}
-	return next
-}
-
-// decide returns the verdict of the LAST rule in the whole stack that matches
-// absPath, and whether any rule matched at all. The stack is ordered
-// outermost-first, and patterns within a set are already last-match-wins, so
-// scanning both in order and keeping the final hit gives deeper rules
-// precedence over shallower ones — which is what makes a child's negation able
-// to override a parent.
-//
-// A set only speaks for paths beneath its OWN directory. Without that check a
-// deeper set reaches upward: filepath.Rel yields "../outside.log" for a sibling
-// above the set, and a pattern with no slash matches on base name alone, so
-// sub/.gitignore's `*.log` would hide a file that is not under sub/ at all.
-// That could not bite while only the first matching set was consulted during a
-// top-down walk; it can now, so it is refused explicitly.
-func (st *ignoreStack) decide(absPath string, isDir bool) (ignored, matched bool) {
-	for _, s := range *st {
-		rel, err := filepath.Rel(s.dir, absPath)
-		if err != nil {
-			continue
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == ".." || strings.HasPrefix(rel, "../") {
-			continue // not beneath this set's directory
-		}
-		for _, p := range s.patterns {
-			if p.matchesPath(rel, isDir) {
-				ignored, matched = !p.negate, true
-			}
-		}
-	}
-	return ignored, matched
-}
-
-// ancestorDirs returns absPath's ancestor directories strictly below root,
-// outermost first. Used to enforce gitignore's excluded-parent rule.
-func ancestorDirs(root, absPath string) []string {
-	rel, err := filepath.Rel(root, absPath)
-	if err != nil {
-		return nil
-	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return nil
-	}
-	parts := strings.Split(rel, "/")
-	if len(parts) < 2 {
-		return nil
-	}
-	out := make([]string, 0, len(parts)-1)
-	cur := root
-	for _, p := range parts[:len(parts)-1] {
-		cur = filepath.Join(cur, p)
-		out = append(out, cur)
-	}
-	return out
-}
-
-// isIgnored reports whether absPath should be excluded from traversal.
-//
-// Two rules from gitignore(5), both load-bearing and neither previously
-// implemented. The old shape returned true on the FIRST set that ignored the
-// path, walking outermost-first, so a parent's `*.py` decided the answer before
-// a child's `!keep.py` was ever consulted — the ignoreStack type comment
-// promised child overrides that could not happen. Deeper-wins is now decided in
-// decide().
-//
-// The second rule is that an excluded directory cannot be re-included from
-// inside it: git never descends there, so a `!` line beneath one has nothing to
-// apply to. The ancestor scan below enforces it, and runs ONLY when a negation
-// actually put the path back in — the common case (nothing matched, or the last
-// match was an exclusion) returns without touching an ancestor, so a walk over a
-// tree with no negations pays nothing for it.
-func (st *ignoreStack) isIgnored(absPath string, isDir bool) bool {
-	if len(*st) == 0 {
-		return false
-	}
-	ignored, matched := st.decide(absPath, isDir)
-	if ignored {
-		return true
-	}
-	if !matched {
-		return false
-	}
-	// A negation re-included this path. It only stands if no ancestor directory
-	// is itself excluded.
-	for _, anc := range ancestorDirs((*st)[0].dir, absPath) {
-		if ancIgnored, _ := st.decide(anc, true); ancIgnored {
-			return true
-		}
-	}
-	return false
-}
 
 // ── binary detection ─────────────────────────────────────────────────────────
 
@@ -346,9 +109,9 @@ func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var st ignoreStack
+	var st ignore.Stack
 	if opts.respectIgnore {
-		st = st.load(opts.root)
+		st = st.Load(opts.root)
 	}
 	return walkDir(ctx, opts.root, 0, st, opts, fn)
 }
@@ -413,20 +176,20 @@ func withheldSymlinkNote(rels []string) string {
 
 // shouldVisitEntry reports whether an entry passes the .git, hidden-file, and
 // gitignore filters.
-func shouldVisitEntry(name, absPath string, isDir bool, opts walkOptions, st ignoreStack) bool {
+func shouldVisitEntry(name, absPath string, isDir bool, opts walkOptions, st ignore.Stack) bool {
 	if isDir && name == gitDirName {
 		return false // unconditional — see gitDirName
 	}
 	if !opts.includeHidden && isHidden(name) {
 		return false
 	}
-	if opts.respectIgnore && st.isIgnored(absPath, isDir) {
+	if opts.respectIgnore && st.IsIgnored(absPath, isDir) {
 		return false
 	}
 	return true
 }
 
-func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+func walkDir(ctx context.Context, dir string, depth int, st ignore.Stack, opts walkOptions, fn walkFn) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -438,7 +201,7 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 
 	// Load ignore rules for this directory (already loaded for root above).
 	if depth > 0 && opts.respectIgnore {
-		st = st.load(dir)
+		st = st.Load(dir)
 	}
 
 	for _, d := range entries {
@@ -478,7 +241,7 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 // A non-SkipDir error from fn on a DIRECTORY is deliberately discarded, as it
 // always has been: pruning is the only signal a directory visit is allowed to
 // send, and a callback that reports a real problem does so from the file visit.
-func walkSubdir(ctx context.Context, absPath string, d fs.DirEntry, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+func walkSubdir(ctx context.Context, absPath string, d fs.DirEntry, depth int, st ignore.Stack, opts walkOptions, fn walkFn) error {
 	if pastDepthLimit(opts, depth) {
 		return nil // the directory itself sits at or past the limit
 	}

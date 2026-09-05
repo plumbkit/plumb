@@ -266,15 +266,8 @@ func TestFindReplace_BraceGlob(t *testing.T) {
 	}
 }
 
-// TestGitignore_BracesStayLiteral guards the blast radius: .gitignore has no
-// brace syntax, so expansion must NOT have leaked into ignore matching. A
-// gitignore line "*.{go,md}" ignores only a file literally named that.
-func TestGitignore_BracesStayLiteral(t *testing.T) {
-	p := ignorePattern{glob: "*.{go,md}"}
-	if p.matchesPath("a.go", false) {
-		t.Error("gitignore brace pattern must not expand: a.go was ignored")
-	}
-	if !p.matchesPath("a.{go,md}", false) {
-		t.Error("gitignore brace pattern must match the literal name")
-	}
-}
+// The counterpart guard — that brace expansion has NOT leaked into gitignore
+// matching — now lives in internal/ignore as TestGitignore_BracesStayLiteral,
+// with the pattern type it exercises. The package split makes the leak this
+// file worried about structurally impossible: expansion happens here, and the
+// ignore package cannot see it.

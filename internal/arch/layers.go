@@ -86,6 +86,7 @@ var Layers = map[string]Layer{
 	// ── Foundation ──
 	"internal/arch":                 LayerFoundation, // this package: the rules themselves
 	"internal/paths":                LayerFoundation,
+	"internal/ignore":               LayerFoundation, // gitignore matching, shared by every walk
 	"internal/fsync":                LayerFoundation,
 	"internal/sqlitex":              LayerFoundation, // the one place a SQLite DSN is built
 	"internal/tokenise":             LayerFoundation,

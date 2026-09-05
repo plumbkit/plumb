@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 // findFilesDefaultDeadline caps a single find_files call when the parent
@@ -467,7 +469,7 @@ func buildMatcher(pattern string, useRegex bool) (func(string) bool, error) {
 func buildGlobMatcher(pattern string) (func(string) bool, error) {
 	if strings.Contains(pattern, "**") {
 		return func(name string) bool {
-			return doubleStarMatch(pattern, name)
+			return ignore.DoubleStarMatch(pattern, name)
 		}, nil
 	}
 	// Validate the glob before returning.
