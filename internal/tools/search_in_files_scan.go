@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 // collectSearchPaths walks root and returns the scan candidates, plus the
@@ -334,5 +336,5 @@ func doubleStarMatchOne(glob, path string) (bool, error) {
 	if m, err := filepath.Match(glob, base); m || err != nil {
 		return m, err
 	}
-	return doubleStarMatch(glob, path), nil
+	return ignore.DoubleStarMatch(glob, path), nil
 }

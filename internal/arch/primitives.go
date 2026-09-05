@@ -250,7 +250,7 @@ var DelegationRules = []DelegationRule{
 		Why:      "appending to a .gitignore belongs in paths.EnsureGitignoreEntries, which matches entries by exact trimmed line — one hand-rolled copy used a substring match instead, so an entry appearing inside any other line (a comment, a longer path) was silently treated as already present and never appended",
 		Allowed: map[string]string{
 			"internal/arch.DelegationRules": "the rule's own declaration: a DelegationRule must spell the literal it pins, which the package-level-literal check then sees",
-			"internal/tools.load":           "ignoreStack.load READS .gitignore and .ignore to honour ignore rules during directory walks; it never writes the file, so there is nothing to delegate",
+			"internal/ignore.Load":          "ignore.Stack.Load READS .gitignore and .ignore to honour ignore rules during directory walks; it never writes the file, so there is nothing to delegate",
 		},
 	},
 }
