@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 // This file holds the indexer's whole-tree operations: deleting a single file's
-// rows, and the full resync walk (filepath.Walk → upsert, pacing, prune of
+// rows, and the full resync walk (filepath.WalkDir → upsert, pacing, prune of
 // vanished files). See indexer.go for the worker loop, indexer_extract.go for
 // per-file extraction, and indexer_persist.go for the DB writes.
 
@@ -68,7 +70,17 @@ func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 	present := make(map[string]bool)
 	processed := 0
 	changed := false
-	err := filepath.Walk(idx.workspace, func(path string, info os.FileInfo, walkErr error) error {
+	root := filepath.Clean(idx.workspace)
+	// One ignore.Stack per directory, keyed by absolute path. WalkDir is
+	// depth-first and pre-order, so a directory's parent is always loaded before
+	// it, and a pruned directory never has children that look it up.
+	//
+	// The walk PRUNES what it excludes rather than filtering it, which is what
+	// ignore.Stack.IsIgnored is contracted for: a file under an excluded
+	// directory usually matches no rule of its own, so filtering would both pay
+	// the descent and get the answer wrong.
+	stacks := make(map[string]ignore.Stack)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		// Abort promptly on shutdown or context cancellation, independent of
 		// pacing. pace() is the only other place the walk observes idx.done/ctx,
 		// and it is a no-op when pacing is disabled (resyncBatch/resyncPause == 0),
@@ -88,14 +100,14 @@ func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 			slog.Warn("topology: resync walk error", "path", path, "err", walkErr)
 			return nil
 		}
-		if info.IsDir() {
-			if shouldSkipDir(info.Name()) {
-				return filepath.SkipDir
-			}
+		if d.IsDir() {
+			return idx.resyncEnterDir(root, path, d.Name(), stacks)
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
 			return nil
 		}
-		rel, relErr := filepath.Rel(idx.workspace, path)
-		if relErr != nil {
+		if idx.resyncSkipsFile(path, rel, stacks) {
 			return nil
 		}
 		present[rel] = true
@@ -125,6 +137,48 @@ func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 	// state instead of lingering at the walk's peak.
 	idx.reclaimFn()
 	return changed, nil
+}
+
+// resyncEnterDir decides what the resync walk does with one directory: prune it
+// (fs.SkipDir) or record the ignore rules in force inside it. Split out of the
+// walk closure so that closure stays readable.
+//
+// The three exclusions are additive and ordered cheapest-first: the hardcoded
+// floor, then the configured patterns, then the tree's own ignore files.
+func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ignore.Stack) error {
+	if path == root {
+		// The workspace root is never judged by the skip list. It used to be: a
+		// checkout living at ~/.config/repo or ~/src/build had its own name
+		// matched by shouldSkipDir and indexed nothing.
+		var st ignore.Stack
+		stacks[root] = st.Load(root)
+		return nil
+	}
+	if shouldSkipDir(name) {
+		return fs.SkipDir
+	}
+	rel, relErr := filepath.Rel(root, path)
+	if relErr != nil {
+		return fs.SkipDir
+	}
+	if matchesExcludePattern(idx.excludePatterns, rel) {
+		return fs.SkipDir
+	}
+	parent := stacks[filepath.Dir(path)]
+	if parent.IsIgnored(path, true) {
+		return fs.SkipDir
+	}
+	stacks[path] = parent.Load(path)
+	return nil
+}
+
+// resyncSkipsFile reports whether the walk excludes one file. Its directory's
+// stack is already loaded, because a pruned directory never reaches here.
+func (idx *Indexer) resyncSkipsFile(path, rel string, stacks map[string]ignore.Stack) bool {
+	if matchesExcludePattern(idx.excludePatterns, rel) {
+		return true
+	}
+	return stacks[filepath.Dir(path)].IsIgnored(path, false)
 }
 
 // pace throttles the full resync walk: after every resyncBatch files it pauses
@@ -211,6 +265,12 @@ func (idx *Indexer) pruneDeletedChanged(present map[string]bool) (bool, error) {
 // shouldSkipDir returns true for directories that should never be indexed.
 // Dot-prefixed directories (hidden dirs like .vscode, .idea, .venv) are always
 // skipped to avoid indexing editor artefacts and virtual environments.
+//
+// This is the FLOOR, not the whole rule. The resync walk additionally honours
+// .gitignore / .ignore and [topology] exclude_patterns, both of which can only
+// exclude more. A repository that tracks its own vendor/ tree still does not
+// get it indexed, and a workspace with no ignore file behaves exactly as it did
+// before the walk learned to read them.
 func shouldSkipDir(name string) bool {
 	if len(name) > 1 && name[0] == '.' {
 		return true

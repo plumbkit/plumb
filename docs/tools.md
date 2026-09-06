@@ -93,6 +93,14 @@ commits, the live git tool policy (whether commits/destructive/push are
 enabled), and active diagnostics. When `[collab] peer_awareness` is on and other
 sessions are active on the workspace, it also appends an "Active peers" digest
 naming them and the areas (directories/packages) they recently touched. Idempotent.
+
+Both file-census walks — the `Scale:` line's count and the recently-modified
+list — honour `.gitignore` / `.ignore` on top of a hardcoded floor (`.git`,
+`node_modules`, `vendor`, `dist`, `build`, `.idea`, and every dot-directory),
+so a workspace's generated output is neither counted as its size nor listed as
+its newest work. Both stop at 50 000 files; a capped count renders as
+`~50000+ files` rather than reporting the ceiling as a measurement. Both are
+skipped entirely on a protected macOS root (`fsguard`).
 **Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
 workspace, then a cwd walk); `language` (string, optional — force the primary
 LSP language when detection cannot infer it); `session_id` (string, optional —
