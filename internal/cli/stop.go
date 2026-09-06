@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tui"
 )
@@ -222,19 +223,53 @@ func findAllDaemonByArgs() []int {
 		return nil
 	}
 	self := os.Getpid()
-	runtimeDir := filepath.Dir(daemonSocketPath())
+	dirs := ownedRuntimeDirs()
 	var pids []int
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))
 		if err != nil || pid <= 0 || pid == self || !isPlumbDaemonProcess(pid) {
 			continue
 		}
-		if !processUsesRuntimeDir(pid, runtimeDir) {
+		if !processUsesRuntimeDir(pid, dirs) {
 			continue
 		}
 		pids = append(pids, pid)
 	}
 	return pids
+}
+
+// ownedRuntimeDirs lists the runtime directories a daemon of OURS may be living
+// in: the current one, and the LEGACY cache-dir location.
+//
+// The legacy directory is not an edge case, it is a documented state the rest of
+// the CLI already handles: `plumb doctor` detects a daemon there and prints "run
+// `plumb stop`, then reconnect", and `plumb serve` warns about it after an
+// upgrade or when launched somewhere $XDG_RUNTIME_DIR is unset (cron, systemd,
+// docker exec, ssh). Scoping the sweep to the current directory alone would make
+// `plumb stop` answer "Daemon is not running." while one is demonstrably alive —
+// and `plumb restart` would then spawn a duplicate beside it. Fixing an
+// over-broad sweep must not create an under-broad one.
+func ownedRuntimeDirs() []string {
+	legacy := ""
+	if p := legacyDaemonSocketPath(); p != "" {
+		legacy = filepath.Dir(p)
+	}
+	return ownedDirsFrom(filepath.Dir(daemonSocketPath()), legacy)
+}
+
+// ownedDirsFrom is ownedRuntimeDirs's rule, separated from the environment that
+// feeds it so the rule itself is testable.
+//
+// Without this split the test is platform-conditional: on a machine where the
+// current and legacy locations happen to coincide it asserts nothing, and
+// deleting the legacy arm outright goes unnoticed — which is exactly what a
+// mutation run showed.
+func ownedDirsFrom(current, legacy string) []string {
+	dirs := []string{current}
+	if legacy != "" && legacy != current {
+		dirs = append(dirs, legacy)
+	}
+	return dirs
 }
 
 // processUsesRuntimeDir reports whether pid holds any open file under dir — the
@@ -243,12 +278,20 @@ func findAllDaemonByArgs() []int {
 // A daemon always holds its own listening socket, which lives in that directory,
 // so a true answer is reliable. An lsof that errors or returns nothing yields
 // false, which is the fail-closed direction: see findAllDaemonByArgs.
-func processUsesRuntimeDir(pid int, dir string) bool {
-	out, err := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn").Output() //nolint:gosec // G204: pid is a strconv-formatted int from pgrep, not user input
+func processUsesRuntimeDir(pid int, dirs []string) bool {
+	// -w suppresses warnings, which lsof is prone to emitting (unreadable mount
+	// points, and so on) and which would otherwise make it exit non-zero and
+	// discard the output we asked for through .Output().
+	out, err := exec.Command("lsof", "-w", "-p", strconv.Itoa(pid), "-Fn").Output() //nolint:gosec // G204: pid is a strconv-formatted int from pgrep, not user input
 	if err != nil {
 		return false
 	}
-	return openFilesUnderDir(string(out), dir)
+	for _, dir := range dirs {
+		if openFilesUnderDir(string(out), dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // openFilesUnderDir reports whether lsof -Fn output names any file under dir.
@@ -263,10 +306,19 @@ func openFilesUnderDir(lsofOutput, dir string) bool {
 	}
 	// The trailing separator is load-bearing: without it "/a/plumb-run" would
 	// claim a daemon whose files live in the sibling "/a/plumb-run-other".
-	prefix := strings.TrimSuffix(dir, string(filepath.Separator)) + string(filepath.Separator)
+	//
+	// Both sides are canonicalised because lsof reports the physically resolved
+	// path (/private/var/… on macOS) while the configured directory is usually
+	// the lexical one (/var/…). Comparing them raw only ever produces a false
+	// NEGATIVE — the fail-closed direction, so it is a missed stop rather than a
+	// wrong kill — but a stop that silently does nothing is its own bug.
+	prefix := strings.TrimSuffix(paths.Canonical(dir), string(filepath.Separator)) + string(filepath.Separator)
 	for line := range strings.SplitSeq(lsofOutput, "\n") {
 		name, ok := strings.CutPrefix(strings.TrimSpace(line), "n")
-		if ok && strings.HasPrefix(name, prefix) {
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(name, prefix) || strings.HasPrefix(paths.Canonical(name), prefix) {
 			return true
 		}
 	}
