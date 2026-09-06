@@ -242,3 +242,59 @@ func TestPrune_LeavesIdentityRowsAtEveryAge(t *testing.T) {
 			"is the proof of who a reconnecting serve is, and age is no evidence that a serve died", n)
 	}
 }
+
+// TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession pins the
+// conditional-repair contract at the storage layer: the repair is one atomic
+// UPDATE whose WHERE clause carries every guard, so a caller that read a stale
+// row cannot clobber a newer one and a known linkage can never be replaced
+// through this path.
+func TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveIdentity("p", Identity{Name: "calm-stag", SessionID: "id-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The repair itself: blank linkage, matching session ID.
+	repaired, err := s.RepairExternalID("p", "id-1", "conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired {
+		t.Fatal("a blank row naming the proven session refused the repair")
+	}
+	rec, _, err := s.LoadIdentity("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ExternalID != "conv-1" {
+		t.Fatalf("external linkage = %q after a landed repair, want conv-1", rec.ExternalID)
+	}
+	if rec.NameRevision != 1 {
+		t.Errorf("name_revision = %d after a repair, want untouched at 1 — the name did not "+
+			"change, and a bump would misorder concurrent name snapshots", rec.NameRevision)
+	}
+
+	// A known linkage is never replaced through the repair path.
+	repaired, err = s.RepairExternalID("p", "id-1", "conv-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired {
+		t.Fatal("the repair overwrote a known linkage; replacement is SaveIdentity's job, " +
+			"on the live session's own authority")
+	}
+
+	// A session-ID mismatch skips the row: it moved on between the caller's
+	// read and this write, and stale knowledge must not land.
+	if err := s.SaveIdentity("q", Identity{Name: "brave-owl", SessionID: "id-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if repaired, _ := s.RepairExternalID("q", "id-other", "conv-3"); repaired {
+		t.Fatal("a repair landed against a row naming a different session")
+	}
+
+	// An absent row is a skip, not an error — the caller logs it and moves on.
+	if repaired, _ := s.RepairExternalID("absent", "id-x", "conv-4"); repaired {
+		t.Fatal("a repair reported success against a row that does not exist")
+	}
+}
