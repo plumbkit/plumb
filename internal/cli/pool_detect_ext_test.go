@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -93,5 +94,35 @@ func TestDetect_GitRepoWithPyStaysNoneAtDetect(t *testing.T) {
 	}
 	if lang != LanguageNone {
 		t.Errorf("Detect language: got %q, want %s (sniff must not run in Detect)", lang, LanguageNone)
+	}
+}
+
+// TestFileLanguage_RecognisedButUnservedFileCastsNoVote pins the boundary
+// between the two registries the sniff sits between. langsupport recognises
+// .svelte (that is what lets file_outline and the topology census say something
+// true about it), but the sniff counts votes for LANGUAGE SERVERS, and plumb
+// configures none that serves a Svelte single-file component. So the file is
+// known and still casts no vote — adding the langsupport row must not quietly
+// enrol it in some other server's tally.
+//
+// The day plumb ships a Svelte adapter, or normaliseLangName folds svelte into
+// an existing one, this assertion is the thing that has to be revisited on
+// purpose rather than discovered afterwards.
+func TestFileLanguage_RecognisedButUnservedFileCastsNoVote(t *testing.T) {
+	pool := defaultsPool(t, "python", "typescript", "html")
+	for _, name := range []string{"App.svelte", "Card.vue"} {
+		if got := pool.fileLanguage(name); got != "" {
+			t.Errorf("fileLanguage(%q) = %q, want \"\" — no configured server owns it", name, got)
+		}
+	}
+
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "app.py"), "x = 1\n")
+	for i := range 20 {
+		mustWrite(t, filepath.Join(dir, "src", fmt.Sprintf("C%02d.svelte", i)), "<script></script>\n")
+	}
+	if got := pool.extLangAt(dir); got != "python" {
+		t.Errorf("extLangAt = %q, want python — 20 .svelte files are recognised but "+
+			"serve no language server, so the one .py file is the only vote cast", got)
 	}
 }

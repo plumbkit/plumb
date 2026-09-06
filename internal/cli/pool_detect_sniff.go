@@ -3,7 +3,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 // Deciding a language from FILE EVIDENCE, as opposed to from the marker walk in
@@ -83,7 +86,7 @@ func (p *workspacePool) extLangAt(dir string) string {
 // evidence at different depths. Defensive throughout — any read error skips that
 // entry rather than failing, so detection never crashes on an odd filesystem.
 //
-// ignore names files that must not be counted ANYWHERE in the walk — the
+// ignoreMarkers names files that must not be counted ANYWHERE in the walk — the
 // contested root markers, for the tie-break; nil for the plain sniff. It has to
 // reach the whole subtree, not just dir, because a build script is a source file
 // of one of the languages it is contested between and the standard Gradle
@@ -109,7 +112,28 @@ func (p *workspacePool) extLangAt(dir string) string {
 // the syscall must name the same file. There is nothing to gain by resolving
 // here: the count is a heuristic about what a project holds, and a link's target
 // is by definition not part of the tree being measured.
-func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignore []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
+//
+// .gitignore and .ignore are honoured, through the shared internal/ignore
+// package whose doc names this walk as one of the consumers that must. What a
+// repository excludes from version control is not what the repository is written
+// in, and the count could not tell the difference: a Python service that gitignores a generated `archive/` of
+// 8000 HTML reports counted 1949 of them before the file cap stopped it and
+// resolved html, starting an HTML language server for a repo with two tracked
+// .html files in it. The hardcoded skipDir prunes stay — .gitignore is ADDITIVE
+// evidence about one repository, never a replacement for the conventional noise
+// dirs, which a repo is free not to ignore (and node_modules is routinely
+// committed).
+//
+// This walk satisfies ignore.Stack.IsIgnored's contract exactly: it is top-down,
+// it loads each directory's rules as it enters it, and it PRUNES an excluded
+// directory rather than descending and filtering its files — which is what makes
+// the answer for a file below an excluded directory a question the walk never
+// has to ask. An ignored entry is skipped before it is charged against maxFiles,
+// because a file the repository excludes was never part of the tree being
+// measured: charging it would let an ignored tree exhaust the budget and set
+// truncated without contributing a single count, which is the same defect in a
+// quieter form.
+func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
 	counts = map[string]int{}
 	if len(p.langsSnapshot()) == 0 {
 		return counts, false
@@ -117,6 +141,10 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignore [
 	type item struct {
 		dir   string
 		depth int
+		// st holds the PARENT's accumulated rules; this directory's own are
+		// loaded when it is popped, so each .gitignore is read exactly once
+		// and siblings never see each other's.
+		st ignore.Stack
 	}
 	scanned := 0
 	stack := []item{{dir: dir, depth: 0}}
@@ -127,14 +155,19 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignore [
 		if err != nil {
 			continue
 		}
+		st := it.st.Load(it.dir)
 		for _, de := range entries {
 			// Neither descended nor counted — see the invariant on sniffCounts.
 			if de.Type()&os.ModeSymlink != 0 {
 				continue
 			}
+			abs := filepath.Join(it.dir, de.Name())
+			if st.IsIgnored(abs, de.IsDir()) {
+				continue
+			}
 			if de.IsDir() {
 				if it.depth < maxDepth && !skipDir(de.Name()) {
-					stack = append(stack, item{dir: filepath.Join(it.dir, de.Name()), depth: it.depth + 1})
+					stack = append(stack, item{dir: abs, depth: it.depth + 1, st: st})
 				}
 				continue
 			}
@@ -142,7 +175,7 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignore [
 				break
 			}
 			scanned++
-			if matchesAnyMarker(de.Name(), ignore) {
+			if matchesAnyMarker(de.Name(), ignoreMarkers) {
 				continue
 			}
 			if lang := p.fileLanguage(de.Name()); lang != "" {
@@ -216,11 +249,18 @@ func dominantAmong(counts map[string]int, candidates []string) string {
 // sitting directly in dir — the one place markerPresent looks — and every nested
 // `app/build.gradle.kts` kept its vote, so a Java multi-project with no Kotlin in
 // it resolved kotlin once it had more modules than the root had sources.
+//
+// WEAK markers are discounted for the same reason and not as an afterthought:
+// `index.html` is html's weak marker AND an html source file, so in the tie it
+// itself creates it arrives as one vote for html — a marker voting for the
+// language that put it in the running. The rule is the one above, stated once:
+// the files whose presence is why the tie exists carry no signal about how to
+// settle it.
 func contestedMarkerPatterns(matched []langConfig) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, l := range matched {
-		for _, marker := range l.cfg.RootMarkers {
+		for _, marker := range slices.Concat(l.cfg.RootMarkers, l.cfg.WeakRootMarkers) {
 			if seen[marker] {
 				continue
 			}

@@ -7,6 +7,21 @@
 
 ### Added
 
+- **Python weak root markers, and `.svelte` / `.vue` are recognised file types.**
+  `requirements.txt` and `uv.lock` are now weak python root markers and
+  `*.py.lock` a strong one, so the commonest Python repo shape — no
+  `pyproject.toml`, a `requirements.txt` beside the sources — resolves as Python
+  at the marker stage rather than falling through to the content sniff.
+  `langsupport` also gains rows for `.svelte` and `.vue`: neither has a
+  structural extractor yet (both embed markup, CSS and JS/TS in one file), but
+  recognising them lets plumb *say* it does not cover them — `file_outline`
+  reports a coverage gap instead of an empty outline, and the topology census
+  counts them — where before the files were indistinguishable from binary blobs.
+  Guarded by `TestStrongLangAt_PyLockResolvesPython`,
+  `TestWeakLangAt_UvLockResolvesPython`,
+  `TestSingleFileComponentsAreRecognisedButUncovered` and
+  `TestIndexer_UncoveredLanguageIsNamedAndReported`.
+
 - **`session_start` now tells the caller who it is.** Both packets — brief and
   full — carry an explicit `Session:  <name> (you, id <id>)` line on first
   contact and on every later call, rendered through one shared function so the
@@ -39,6 +54,50 @@
   subcommand check builds the module once, and the hook must stay fast.
 
 ### Fixed
+
+- **Language detection no longer counts what the repository gitignores, and a
+  directory claimed by two weak markers follows its sources.** A Python service
+  with a Svelte frontend resolved `Language: HTML`, started
+  `vscode-html-language-server` and left every one of its sources unserved. Two
+  independent causes, fixed together because either alone still misroutes the
+  repository:
+
+  - **The content sniff now honours `.gitignore` and `.ignore`** (`extLangAt`
+    and the contested-marker tie-break share the walk). What a repository
+    excludes from version control is not what it is written in, and the count
+    could not tell the difference: a gitignored `archive/` of 8000 generated
+    HTML reports contributed 1949 votes and exhausted the 2000-file budget
+    before the sources were reached, so 49 tracked `.py` files against 2 tracked
+    `.html` came out as html. Rules are read per directory as the walk descends
+    and an excluded directory is pruned rather than filtered, matching every
+    other walk in plumb; the hardcoded `node_modules`/`vendor`/build-output
+    prunes stay alongside them, because a repository is free not to ignore
+    those. An ignored file is skipped before it is charged against the file
+    budget, so an excluded tree can no longer report a truncated scan without
+    contributing a single count.
+  - **`weakLangAt` now breaks a tie the same way `strongLangAt` does.** It took
+    the first match in the pool's go-first-then-alphabetical language order, and
+    an ordinary frontend app ships `index.html` beside `package.json` — so
+    "html" won every such tie on its name alone. Both paths now share one
+    tie-break (`resolveMarkerTie`) that counts the source files beneath the
+    directory, and the markers that created the tie cast no vote: `index.html`
+    is html's weak marker *and* an html source file, so counted it settled the
+    tie its own presence created. The one deliberate difference is what a
+    truncated count is worth — the strong path discards it and falls back to
+    language order, where every candidate brought a build file of its own; the
+    weak path reads it, because there the order is a standing bias towards
+    markup rather than a choice between peers.
+
+  Guarded by `TestExtLangAt_GitignoredTreeCastsNoVote`,
+  `TestExtLangAt_NestedGitignoreIsHonoured`,
+  `TestExtLangAt_NegationInsideAnExcludedTreeDoesNotReadmitIt`,
+  `TestExtLangAt_HardcodedPrunesSurviveAGitignorelessRepo`,
+  `TestSniffCounts_IgnoredFilesDoNotSpendTheBudget`,
+  `TestWeakLangAt_IndexHTMLBesidePackageJSONFollowsSources`,
+  `TestWeakLangAt_ContestedMarkerDoesNotVoteForItself`,
+  `TestWeakLangAt_RequirementsBesidePackageJSONFollowsSources`,
+  `TestWeakLangAt_TruncatedTieDoesNotFallBackToMarkup` and
+  `TestWeakLangAt_SingleClaimantIsUnchanged`.
 
 - **A reconnecting `plumb serve` keeps its session identity, and no longer forks
   it when a reconnect merely overlaps.** Session identity — the internal session

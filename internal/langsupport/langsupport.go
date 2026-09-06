@@ -96,23 +96,35 @@ var registry = []Language{
 
 	// Known but NOT YET COVERED by the topology index (EngineNone, no extractor).
 	//
-	// THIS BLOCK IS NOW EMPTY, and that is the coverage programme completing
-	// rather than the mechanism breaking. Every language plumb recognises has an
-	// extractor, so Uncovered() returns nothing and the "not covered:" line has
-	// nothing to report.
-	//
-	// The machinery stays because the next language added will need it. These rows
-	// carry no capability — they exist so that "plumb does not cover this
-	// language" is a fact the codebase can state rather than an absence an agent
-	// has to infer from an empty Map. Without one, ByPath reports ok=false for the
-	// file, which is indistinguishable from a binary blob, and the indexer records
-	// it with zero symbols and no explanation.
+	// These rows carry no capability — they exist so that "plumb does not cover
+	// this language" is a fact the codebase can state rather than an absence an
+	// agent has to infer from an empty Map. Without one, ByPath reports ok=false
+	// for the file, which is indistinguishable from a binary blob: the indexer
+	// records it with zero symbols and no explanation, file_outline reports an
+	// empty outline as a fact about the file rather than a coverage gap, and
+	// topology_status has nothing to count.
 	//
 	// Every consumer that gates on capability already tests Structural !=
 	// EngineNone, so adding a row here grants nothing. Wiring a language means
 	// flipping its row to EngineTreeSitter and adding its constructor to
 	// cli.extractorCtors — the two edits TestBuildExtractorsCoversRegistry pins
 	// together.
+	//
+	// Both single-file-component formats below embed three languages in one file
+	// (markup, CSS and JS/TS), which is why neither is a quick extractor to wire
+	// even though gotreesitter carries a grammar for each: emitting useful
+	// landmarks means descending into the embedded script block, not listing the
+	// template's tags. Recognising them is worth doing on its own: .svelte files
+	// are the bulk of a Svelte app's sources, and until they had a row plumb
+	// could not name the format at all, let alone say it does not index it.
+	//
+	// A row does NOT give either format a vote in workspace language detection.
+	// That sniff counts votes for configured language SERVERS, and plumb ships
+	// none that serves a single-file component — pinned by
+	// cli.TestFileLanguage_RecognisedButUnservedFileCastsNoVote, so that wiring
+	// one later is a deliberate change rather than a surprise.
+	{Name: "svelte", Extensions: []string{".svelte"}, Structural: EngineNone, LSPAdapter: ""},
+	{Name: "vue", Extensions: []string{".vue"}, Structural: EngineNone, LSPAdapter: ""},
 }
 
 // Uncovered returns the registry entries for languages plumb recognises but

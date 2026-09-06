@@ -119,10 +119,29 @@ var defaults = Config{
 			Enabled:     true,
 		},
 		"python": {
-			Command:     "pyright-langserver",
-			Args:        []string{"--stdio"},
-			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json"},
-			Enabled:     true,
+			Command: "pyright-langserver",
+			Args:    []string{"--stdio"},
+			// `*.py.lock` is a glob (markerPresent globs any marker carrying
+			// '*', as swift's `*.xcodeproj` already does), so a lock file named
+			// for the environment it pins — `app.py.lock`, `3.12.py.lock` —
+			// names the root. Deliberately not a bare `*.lock`: that would claim
+			// every Cargo, npm and Terraform lock file in existence.
+			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json", "*.py.lock"},
+			// Weak, not strong, and deliberately so. A `requirements.txt` is the
+			// commonest thing a Python repo has instead of a manifest, but it is
+			// also routinely dropped into a directory that is not the project
+			// root (docs/, a Dockerfile context, a sibling service), which is the
+			// promiscuity weak markers exist for: it names the directory it sits
+			// in and never an ancestor. `uv.lock` is uv's resolved lock file,
+			// which travels with a pyproject.toml in a well-formed project and
+			// without one in a scripts repo.
+			//
+			// Together with the weak tie-break this resolves the case that
+			// motivated them: a Python service whose frontend lives in app/ has
+			// `requirements.txt` beside `package.json` at the root, and the
+			// language its sources are written in decides which server starts.
+			WeakRootMarkers: []string{"requirements.txt", "uv.lock"},
+			Enabled:         true,
 		},
 		"java": {
 			Command:     "jdtls",
