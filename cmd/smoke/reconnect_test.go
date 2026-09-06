@@ -5,7 +5,6 @@ package smoke_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -46,14 +45,10 @@ func TestSmoke_ProxyReconnect(t *testing.T) {
 	pid1 := waitForPID(t, tmpHome, 10*time.Second)
 	t.Logf("daemon up, pid=%s; killing it", pid1)
 
-	// Kill the daemon. `plumb stop` SIGTERMs the pid in the isolated cache dir.
-	stop := exec.Command(plumbBin, "stop", "--force")
-	stop.Env = isolatedEnv(tmpHome)
-	if out, err := stop.CombinedOutput(); err != nil {
-		// Best-effort: the proxy's heartbeat may have already reaped the daemon;
-		// what matters is the recovery assertion below.
-		t.Logf("plumb stop: %v\n%s", err, out)
-	}
+	// Kill the daemon by the isolated tree's own pid file, and wait for it to go
+	// — never `plumb stop`, whose discovery once reached every daemon on the
+	// machine, and which returns before the process has actually exited.
+	stopDaemon(t, tmpHome)
 
 	// A fresh request must succeed once the proxy has respawned the daemon and
 	// replayed the handshake. The first attempt(s) may see the synthesised

@@ -145,28 +145,45 @@ func (s *connSession) persistIdentity() bool {
 	if !s.namePersistEnabled(v) || name == "" {
 		return false
 	}
-	if proven := v.persistedIdentity.SessionID; proven != "" && proven != s.sessionID() {
-		// This connection is running under a TEMPORARY identity: a record proves
-		// a different session ID and recovery could not apply it. Writing now
-		// records the stand-in over the proven identity — the fork the refusal
-		// paths exist to avoid, arriving through whichever caller happens to
-		// persist next. session_start's external-ID linker is that caller in
-		// practice, and it is the first call most agents make.
+	proven := v.persistedIdentity.SessionID
+	if v.recovery == recoveryDegraded || (proven != "" && proven != s.sessionID()) {
+		// This connection is running under a TEMPORARY identity: a durable record
+		// exists and recovery could not fully apply it. Writing now records the
+		// stand-in over the proven identity — the fork the refusal paths exist to
+		// avoid, arriving through whichever caller happens to persist next.
+		// session_start's external-ID linker is that caller in practice, and it is
+		// the first call most agents make.
 		//
 		// The guard lives HERE rather than at each call site precisely because
-		// two rounds of this fix each closed one path and left another open.
+		// rounds of this fix each closed one path and left another open.
 		//
-		// It tests the STATE, not the reported outcome. Gating on
-		// recoveryDegraded looked equivalent and was not: a legacy record with no
-		// session ID is healed by the restore and still classified degraded (the
-		// ID was absent, so nothing was resumed), which would then refuse every
-		// later write for the connection's whole life — the external-ID link
-		// would never land, the reservation would never learn its conversation,
-		// and a rename_session would silently fail to be durable. The question
-		// that actually matters is "is the identity I hold the one the record
-		// proves?", and that is what this asks.
+		// BOTH arms, and neither is redundant — that was the last round's mistake.
+		// Replacing the outcome with the "state predicate" alone reopened two
+		// forks, because the record has TWO halves and an ID comparison guards
+		// only one:
+		//
+		//   - A store that fails to READ never populates the proven ID at all
+		//     (restoreIdentity returns before recording it), so the predicate
+		//     passes and the stand-in overwrites a record that was intact all
+		//     along. SQLITE_BUSY during a restart storm is exactly when this
+		//     happens — card §4.2 item 4, verbatim.
+		//   - A restore that resumed the ID but was REFUSED the name compares
+		//     equal, so the generated name overwrites the proven one and orphans
+		//     the mail addressed to it.
+		//
+		// The outcome arm answers "could I apply the record?"; the state arm
+		// answers "does a record prove someone else?".
+		//
+		// Stated plainly rather than flatteringly: the state arm is currently
+		// REDUNDANT — removing it fails no test, because every state in which it
+		// fires is already classified degraded. It is kept as defence in depth
+		// for the one thing this chain of fixes has repeatedly proved: a future
+		// path that forgets to classify itself is likelier than a future path
+		// that gets the identity comparison wrong. It cannot refuse a legitimate
+		// write, since a restored session compares equal and an established or
+		// unavailable one has no proven ID to compare against.
 		s.log().Debug("daemon: not recording a temporary identity over the proven durable record",
-			"temporary", s.sessionID(), "proven", proven)
+			"temporary", s.sessionID(), "proven", proven, "recovery", string(v.recovery))
 		return false
 	}
 	rec := sessionstate.Identity{

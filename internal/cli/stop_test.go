@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -184,5 +186,67 @@ func TestOpenFilesUnderDir_DecidesDaemonOwnership(t *testing.T) {
 				t.Errorf("openFilesUnderDir(%q, %q) = %v, want %v", c.output, c.dir, got, c.want)
 			}
 		})
+	}
+}
+
+// TestOwnedDirsFrom_ClaimsTheLegacyLocationToo guards against the mirror-image
+// of the over-broad sweep.
+//
+// The legacy cache-dir runtime location is a documented, expected state, not an
+// edge case: `plumb doctor` detects a daemon there and prints "run `plumb stop`,
+// then reconnect", and `plumb serve` warns about it after an upgrade or when
+// launched somewhere $XDG_RUNTIME_DIR is unset (cron, systemd, docker exec,
+// ssh). Scoping the sweep to the current directory alone would make `plumb stop`
+// report "Daemon is not running." while one is alive, and `plumb restart` would
+// then spawn a duplicate beside it. Fixing an over-broad sweep must not produce
+// an under-broad one.
+//
+// The RULE is tested rather than the environment, because the two locations
+// coincide on some platforms — and there the environment-driven version of this
+// test asserted nothing at all while the legacy arm could be deleted unnoticed.
+func TestOwnedDirsFrom_ClaimsTheLegacyLocationToo(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name            string
+		current, legacy string
+		want            []string
+	}{
+		{
+			"both locations are claimed when they differ", "/run/user/1000/plumb", "/home/u/.cache/plumb",
+			[]string{"/run/user/1000/plumb", "/home/u/.cache/plumb"},
+		},
+		{
+			"a coinciding legacy location is not duplicated", "/home/u/.cache/plumb", "/home/u/.cache/plumb",
+			[]string{"/home/u/.cache/plumb"},
+		},
+		{
+			"no legacy location leaves just the current one", "/run/user/1000/plumb", "",
+			[]string{"/run/user/1000/plumb"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ownedDirsFrom(c.current, c.legacy); !slices.Equal(got, c.want) {
+				t.Errorf("ownedDirsFrom(%q, %q) = %v, want %v", c.current, c.legacy, got, c.want)
+			}
+		})
+	}
+}
+
+// TestOwnedRuntimeDirs_AlwaysClaimsTheCurrentLocation is the thin wiring check
+// the rule test cannot make: whatever the environment resolves to, the directory
+// this process would actually use must be claimed, or every daemon becomes
+// unstoppable.
+func TestOwnedRuntimeDirs_AlwaysClaimsTheCurrentLocation(t *testing.T) {
+	dirs := ownedRuntimeDirs()
+	current := filepath.Dir(daemonSocketPath())
+	if !slices.Contains(dirs, current) {
+		t.Fatalf("the current runtime dir %q is not claimed; dirs=%v", current, dirs)
+	}
+	for _, d := range dirs {
+		if openFilesUnderDir("n/some/unrelated/path\n", d) {
+			t.Errorf("claimed dir %q matches an unrelated path", d)
+		}
 	}
 }

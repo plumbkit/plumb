@@ -212,11 +212,13 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 	})
 
 	// Stop the daemon we spawned at cleanup so it doesn't linger.
-	t.Cleanup(func() {
-		stopCmd := exec.Command(plumbBin, "stop", "--force")
-		stopCmd.Env = env
-		stopCmd.Run() //nolint:errcheck // best-effort teardown of a child process the test is finished with
-	})
+	//
+	// By pid file, not `plumb stop`. This cleanup runs after EVERY smoke test,
+	// and until the sweep was scoped it SIGTERMed every plumb daemon on the
+	// machine — including the developer's. The product bug is fixed, but a
+	// harness should not depend on a command's current blast radius for its own
+	// isolation.
+	t.Cleanup(func() { stopDaemonBestEffort(t, tmpHome) })
 
 	return c
 }

@@ -139,7 +139,15 @@
   cannot be proven ours is left alone, because a stray daemon surviving a stop is
   visible and recoverable while killing someone else's is neither.
   `TestOpenFilesUnderDir_DecidesDaemonOwnership` pins the rule, including the
-  sibling-directory case (`…/plumb` must not claim `…/plumb-other`).
+  sibling-directory case (`…/plumb` must not claim `…/plumb-other`). Two
+  refinements keep the narrower sweep from becoming an under-broad one: the
+  LEGACY cache-dir runtime location is claimed alongside the current one (it is
+  a documented state `plumb doctor` and `plumb serve` already warn about, and a
+  stop that answered "not running" beside a live legacy daemon would have
+  `plumb restart` spawn a duplicate — `TestOwnedDirsFrom_ClaimsTheLegacyLocationToo`),
+  and both sides of the ownership comparison are canonicalised, because `lsof`
+  reports kernel-resolved paths (`/private/var/…` on macOS) while the configured
+  directory is usually the lexical spelling (`/var/…`).
 
   `cmd/smoke` additionally stops its own daemon by SIGTERMing the PID in its own
   tree's pid file rather than shelling out at all. A harness must own its blast
@@ -153,11 +161,20 @@
   external-ID link never landed, so the reservation never learned its
   conversation (resurrecting the resume-then-restart failure for exactly those
   rows), and `rename_session` succeeded live while silently failing to be
-  durable. The guard now asks the STATE question — is the identity I hold the one
-  the record proves? — and a successful heal is classified `established`, with the
-  commit confirmed rather than assumed. Guarded by
-  `TestRestore_HealedLegacyRecordStillAcceptsLaterWrites` and
-  `TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored`.
+  durable. A successful heal is now classified `established`, with the commit
+  confirmed rather than assumed, so the outcome guard no longer fires for it. The
+  guard itself keeps BOTH arms — the reported outcome AND "does the record prove
+  a different session ID?" — because replacing the outcome with the ID
+  comparison alone, as an intermediate revision of this fix did, reopened two
+  forks the record's other half is exposed to: a store that fails to READ never
+  populates the proven ID, so a transiently busy database let `session_start`'s
+  external-ID link overwrite an intact record; and a restore that resumed the ID
+  but was refused the NAME compared equal, so the generated name overwrote the
+  proven one and orphaned its mail. Guarded by
+  `TestRestore_HealedLegacyRecordStillAcceptsLaterWrites`,
+  `TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored`,
+  `TestRestore_TransientlyUnreadableStoreDoesNotOverwriteTheRecord` and
+  `TestRestore_ResumedIDButRefusedNameDoesNotOverwriteTheName`.
 
 - **A reconnecting `plumb serve` keeps its session identity, and no longer forks
   it when a reconnect merely overlaps.** Session identity — the internal session

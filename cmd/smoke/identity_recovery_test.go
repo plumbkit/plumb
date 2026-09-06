@@ -107,7 +107,7 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 	pid := waitForPID(t, tmpHome, 15*time.Second)
 
 	for round := 1; round <= 3; round++ {
-		stopDaemon(t, plumbBin, tmpHome)
+		stopDaemon(t, tmpHome)
 
 		// A bare orientation call: no workspace argument, nothing that re-links
 		// the conversation. If identity recovery depended on either — as it did
@@ -171,7 +171,7 @@ func TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee(t *testing.T) {
 	c.call(t, "session_start", map[string]any{"workspace": fixture}, sessionStartTimeout)
 	waitForPID(t, tmpHome, 15*time.Second)
 
-	stopDaemon(t, plumbBin, tmpHome)
+	stopDaemon(t, tmpHome)
 	packet := recoverWithSessionStart(t, c, 60*time.Second)
 
 	// The note is ONE-SHOT and rides the first content-bearing tool result after
@@ -241,27 +241,10 @@ func recoverWithSessionStart(t *testing.T, c *mcpClient, budget time.Duration) s
 // The scoping bug in `plumb stop` itself is fixed separately; this does not
 // depend on that fix, and should not, because a test must own its blast radius
 // rather than borrow it from a command's current behaviour.
-func stopDaemon(t *testing.T, plumbBin, tmpHome string) {
+func stopDaemon(t *testing.T, tmpHome string) {
 	t.Helper()
-	pid := readDaemonPID(tmpHome)
-	if pid == "" {
-		t.Log("no daemon pid file in the isolated tree; nothing to stop")
-		return
-	}
-	n, err := strconv.Atoi(pid)
-	if err != nil || n <= 0 {
-		t.Fatalf("isolated daemon pid file holds %q, which is not a pid — refusing to signal anything", pid)
-	}
-	proc, err := os.FindProcess(n)
-	if err != nil {
-		t.Logf("isolated daemon pid %d not found: %v", n, err)
-		return
-	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		// Best-effort: the proxy's heartbeat may already have reaped it. The
-		// pid-change assertion at the call site is what actually establishes
-		// that a restart happened.
-		t.Logf("signalling isolated daemon %d: %v", n, err)
+	proc, n, ok := signalIsolatedDaemon(t, tmpHome)
+	if !ok {
 		return
 	}
 	// WAIT for it to actually go. `plumb stop` blocked until the process exited,
@@ -278,6 +261,49 @@ func stopDaemon(t *testing.T, plumbBin, tmpHome string) {
 	}
 	t.Fatalf("isolated daemon %d did not exit within 20s of SIGTERM; the reconnect this test "+
 		"depends on never happened", n)
+}
+
+// stopDaemonBestEffort is stopDaemon for TEARDOWN: it signals and returns
+// without waiting and without ever failing the test. A cleanup that fails the
+// test it is cleaning up after turns a passing run into a confusing red one.
+func stopDaemonBestEffort(t *testing.T, tmpHome string) {
+	t.Helper()
+	signalIsolatedDaemon(t, tmpHome)
+}
+
+// signalIsolatedDaemon SIGTERMs the daemon named by the isolated tree's own pid
+// file — and nothing else. ok is false when there was nothing to signal.
+//
+// The pid file is the only correct source here. `plumb stop`'s discovery has a
+// pgrep strategy that (before it was scoped) matched every daemon on the
+// machine, and a harness must own its blast radius rather than borrow it from a
+// command's current behaviour — which is also why this does not simply call the
+// now-scoped `plumb stop`.
+func signalIsolatedDaemon(t *testing.T, tmpHome string) (*os.Process, int, bool) {
+	t.Helper()
+	pid := readDaemonPID(tmpHome)
+	if pid == "" {
+		t.Log("no daemon pid file in the isolated tree; nothing to stop")
+		return nil, 0, false
+	}
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 0 {
+		t.Errorf("isolated daemon pid file holds %q, which is not a pid — refusing to signal anything", pid)
+		return nil, 0, false
+	}
+	proc, err := os.FindProcess(n)
+	if err != nil {
+		t.Logf("isolated daemon pid %d not found: %v", n, err)
+		return nil, 0, false
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		// Best-effort: the proxy's heartbeat may already have reaped it. The
+		// pid-change assertion at the call site is what actually establishes
+		// that a restart happened.
+		t.Logf("signalling isolated daemon %d: %v", n, err)
+		return nil, 0, false
+	}
+	return proc, n, true
 }
 
 // runPlumb runs a plumb subcommand against the isolated tree and returns its
