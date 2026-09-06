@@ -12,24 +12,35 @@ import (
 // limitation; it cannot route around silence, and every one of these surfaces
 // previously returned a confident-looking empty answer instead.
 
-// This test used to need a WITNESS — a language plumb recognised but had no
-// extractor for — and it moved as the coverage programme landed: .rb, then
-// .php, then .scala, going red each time as the registry pin did its job.
+// This test needs a WITNESS — a language plumb recognises but has no extractor
+// for — and it moves as the coverage programme lands: .rb, then .php, then
+// .scala, going red each time as the registry pin does its job. The witness is
+// currently Svelte, whose single-file-component shape embeds three languages in
+// one file and so is not a quick extractor to wire.
 //
-// There is no witness left. Every language in the registry is now indexed, so
-// Uncovered() is empty and this note can never fire. That is the programme
-// completing, not the mechanism breaking, and the mechanism is still here and
-// still correct — the moment a new EngineNone row is added, the note starts
-// firing again and the assertion below starts failing, which is exactly the
-// signal whoever adds that language wants.
-//
-// So the property under test inverts: the note must stay SILENT while nothing
-// is uncovered.
-func TestUncoveredOutlineNote_SilentWhileEveryLanguageIsIndexed(t *testing.T) {
-	if got := len(langsupport.Uncovered()); got != 0 {
-		t.Fatalf("Uncovered() = %d languages, want 0 — a new uncovered row was added, "+
-			"so this test should go back to naming it as the witness", got)
+// The property: for that language the note must FIRE and must name a route that
+// still works, because an agent can route around a stated limitation and cannot
+// route around silence.
+func TestUncoveredOutlineNote_NamesTheGapForAnUncoveredLanguage(t *testing.T) {
+	uncovered := langsupport.Uncovered()
+	if len(uncovered) == 0 {
+		t.Skip("no uncovered language left; the note is dormant and there is nothing to witness")
 	}
+	note := uncoveredOutlineNote("file:///ws/src/App" + uncovered[0].Extensions[0])
+	if note == "" {
+		t.Fatalf("%s is uncovered; an empty outline for it must be explained as a coverage gap", uncovered[0].Name)
+	}
+	if !strings.Contains(note, uncovered[0].Name) {
+		t.Errorf("the note must name the language; got:\n%s", note)
+	}
+	if !strings.Contains(note, "search_in_files") {
+		t.Errorf("the note must offer a route that still works; got:\n%s", note)
+	}
+}
+
+// The companion: a language that IS indexed must stay silent. Explaining an
+// empty outline away as a coverage gap is the same failure in reverse.
+func TestUncoveredOutlineNote_SilentForIndexedLanguages(t *testing.T) {
 	for _, uri := range []string{
 		"file:///ws/app/models/User.scala",
 		"file:///ws/lib/mod.ex",
@@ -87,13 +98,14 @@ func TestUncoveredPrimaryLanguageNote(t *testing.T) {
 		want string // "" ⇒ no note expected
 	}{
 		// The witness moves as extractors land: it was Ruby, then PHP, then
-		// Elixir. NOTE FOR WHOEVER WIRES THE LAST EXTRACTOR — langFileProfile only
-		// ever produces two labels that can be uncovered at all, "Elixir" and
-		// "C/C++ (CMake)", and the coverage programme indexes both. With Elixir
-		// landed, Scala is the only uncovered language left and it has no label
-		// here, so this table already has no non-empty witness. When Scala lands,
-		// Uncovered() is empty and every label correctly yields no note — assert
-		// that dormant state. It is the design completing, not breaking.
+		// Elixir. There is no non-empty witness in this table, and that is a
+		// property of langFileProfile rather than of coverage: it only ever
+		// produces two labels that can be uncovered at all, "Elixir" and
+		// "C/C++ (CMake)", and both are indexed. The languages that ARE uncovered
+		// (Svelte, Vue) have no label here, so session_start cannot detect one as
+		// a primary language and this note stays dormant for every label below.
+		// TestUncoveredOutlineNote_NamesTheGapForAnUncoveredLanguage is where the
+		// firing case is pinned.
 		{"elixir is indexed since its extractor landed", "Elixir", ""},
 		// langFileProfile maps this label to .c/.cpp/.cc/.h/.hpp; the first
 		// uncovered extension decides, which is what makes the label→registry

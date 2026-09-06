@@ -114,22 +114,20 @@ func TestIndexer_PopulatesLanguageInStatus(t *testing.T) {
 // indexed and, worse, stops being re-checked in a way that could not self-heal),
 // and it must not be counted under IndexedFiles (the confident-wrong answer this
 // work exists to remove).
-// The coverage programme is complete: every language in the registry has an
-// extractor, so langsupport.Uncovered() is empty and uncoveredLanguage() can
-// never return a name. This test used to need a WITNESS — a recognised but
-// unindexed language — and it moved as extractors landed: .rb, then .php, then
-// .scala, going red each time as the registry pin did its job.
+// This half uses a language that IS indexed but whose extractor is not wired
+// into this particular indexer — Scala. It must be RECORDED but NOT blamed on
+// coverage, and the empty content hash is what lets a later extractor pick the
+// file up on the next resync without anything marking it dirty.
 //
-// The mechanism is still here and still correct. What changes is what can be
-// asserted about it: with nothing uncovered, a file whose extractor is not
-// wired must be RECORDED but NOT blamed on coverage. That second half is the
-// one worth keeping — the empty content hash is what lets a later extractor
-// pick the file up on the next resync without anything marking it dirty, and
-// it was never directly pinned before.
+// Its companion, TestIndexer_UncoveredLanguageIsNamedAndReported, covers the
+// other side: a genuinely uncovered language must be named. The witness for
+// that has moved as extractors landed (.rb, then .php, then .scala) and is
+// currently Svelte; the two tests together are why neither case can silently
+// take the other's path.
 func TestIndexer_UncoveredPathIsDormantAndFilesStayRetryable(t *testing.T) {
-	if got := len(langsupport.Uncovered()); got != 0 {
-		t.Fatalf("Uncovered() = %d languages, want 0 — a new uncovered row was added, so this "+
-			"test should go back to naming it as the witness and asserting the gap is reported", got)
+	if l, ok := langsupport.ByName("scala"); !ok || l.Structural == langsupport.EngineNone {
+		t.Fatal("this test needs Scala to be an INDEXED language, so that a missing extractor " +
+			"is not confused with a coverage gap; pick another indexed language if Scala's row changes")
 	}
 
 	dir := t.TempDir()
@@ -189,6 +187,58 @@ func TestIndexer_UncoveredPathIsDormantAndFilesStayRetryable(t *testing.T) {
 	}
 	if nodes == 0 {
 		t.Error("the file did not re-index once an extractor existed; the empty-hash self-heal is broken")
+	}
+}
+
+// TestIndexer_UncoveredLanguageIsNamedAndReported is the other side of the
+// contract: for a language plumb RECOGNISES but has no extractor for, the row
+// must NAME it, so the census can count the gap and topology_status can report
+// it. Without the name the file is indistinguishable from a binary blob and the
+// gap stays invisible — which is the confident-wrong answer the uncovered
+// machinery exists to remove.
+//
+// Svelte is the current witness. It moves whenever an extractor lands; when it
+// does, name the next langsupport.Uncovered() row here.
+func TestIndexer_UncoveredLanguageIsNamedAndReported(t *testing.T) {
+	const witness = "svelte"
+	if l, ok := langsupport.ByName(witness); !ok || l.Structural != langsupport.EngineNone {
+		t.Fatalf("%s is no longer an uncovered language; name another langsupport.Uncovered() row as the witness", witness)
+	}
+
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "App.svelte"), []byte("<script>let n = 0;</script>\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	if err := idx.processUpsert(context.Background(), "App.svelte"); err != nil {
+		t.Fatalf("processUpsert: %v", err)
+	}
+
+	var lang, hash string
+	if err := db.QueryRow(
+		`SELECT language, content_hash FROM topology_files WHERE path = 'App.svelte'`,
+	).Scan(&lang, &hash); err != nil {
+		t.Fatalf("the file must still be recorded: %v", err)
+	}
+	if lang != witness {
+		t.Errorf("language = %q, want %q — an uncovered file must name its language or the gap is invisible", lang, witness)
+	}
+	if hash != "" {
+		t.Errorf("content_hash = %q, want empty — the empty hash is what makes the file re-index for free", hash)
+	}
+
+	s := Report(db, dir, idx)
+	if s.UncoveredFiles[witness] != 1 {
+		t.Errorf("UncoveredFiles = %v, want one %s file", s.UncoveredFiles, witness)
+	}
+	if slices.Contains(s.Languages, witness) {
+		t.Errorf("%s contributed no symbols; listing it as an indexed language is the answer that misleads", witness)
 	}
 }
 
