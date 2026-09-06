@@ -1,33 +1,6 @@
 # Changelog
 ## 0.18.1 (unreleased)
 
-### Fixed
-
-- **Reboot smoke tests now stop and reap the original serve process before replacing it.** The harness previously cancelled only its response reader, allowing the original proxy to reconnect and reclaim the session name during the replacement test. Cancellation now owns the child process and waits for its exit, and teardown waits for the isolated daemon to stop before its temporary directory is removed; the replacement scenario also checks the disclosure that predecessor-bound mail and threads are not inherited.
-
-- **A degraded connection now recovers by itself, and both session_start packets say what state it is in.** When a reconnect's identity recovery is refused — the standing case is a predecessor that has not finished detaching — the connection used to stay degraded until a LATER reconnect happened to converge it; a long-lived conversation could wait indefinitely. The restore is now retried on the live connection with the same proxy credential (three attempts at 5s/15s/45s, ownership-fenced so a second live claimant is never raced), converging to the proven identity the moment the blocker clears. And the state is no longer invisible: both orientation packets carry a linkage note keyed on the PERSISTED linkage and recovery — a degraded connection is told it is running under a temporary identity and that recovery is automatic, and the warning's old false positive (a bare re-orientation call telling a linked session it has no external id) is gone. Guarded by `TestRestore_DegradedConvergesOnBoundedRetry`, `TestRestore_RetryExhaustionLeavesRecordIntact`, and `TestSessionStart_LinkageNoteKeysOnPersistedState`.
-- **A name-only resume says what did not follow it.** Resuming by external conversation ID recovers the session's NAME but never its internal session ID (only the proxy credential can restore an ID), so mail and threads bound to the predecessor strand. The identity line now says so plainly — "new internal identity — mail and threads bound to the predecessor ID are not inherited" — instead of letting an agent discover it when a note goes missing. Guarded by `TestSessionStart_SelfLineDisclosesNameOnlyResume` and the serve-replacement smoke scenario.
-- **A restored session whose durable record has no external linkage gets it back
-  from its own session file.** The resume-by-external-ID path matches on the
-  durable `session_names` row, but a row written before the linkage column
-  existed (the schema v7 back-fill leaves it blank) reads as unlinked even when
-  the session's own file proves the conversation — the 2026-09-06 reboot
-  stranded an identity exactly this way. On a fully-restored identity (proxy
-  credential proved, ID and name both resumed) the blank is refilled from the
-  session file through a single conditional UPDATE matching the proven session
-  ID and a blank column: a known linkage is never replaced through this path, a
-  row that moved on underneath the caller is skipped rather than clobbered, and
-  the name revision is untouched. Guarded by
-  `TestRestore_BlankAnchorRefilledFromTheSessionFile`,
-  `TestRestore_KnownLinkageIsNeverRepairedOver`, and
-  `TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession`.
-
-## 0.18.0 (2026-09-06)
-
-### Security
-
-- **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
-
 ### Added
 
 - **Delivered notes can now be kept forever, unread notes have their own TTL, and a capped delivery says how much mail is still queued.**
@@ -66,6 +39,36 @@
   `TestLoadProject_NoteRetentionStaysProjectOverridable`,
   `TestValidateCollab_NegativeNoteTTLRejected` and
   `TestCollabPolicySpec_NoteRetentionNeedsNoTrust`.
+
+### Fixed
+
+- **Reboot smoke tests now stop and reap the original serve process before replacing it.** The harness previously cancelled only its response reader, allowing the original proxy to reconnect and reclaim the session name during the replacement test. Cancellation now owns the child process and waits for its exit, and teardown waits for the isolated daemon to stop before its temporary directory is removed; the replacement scenario also checks the disclosure that predecessor-bound mail and threads are not inherited.
+
+- **A degraded connection now recovers by itself, and both session_start packets say what state it is in.** When a reconnect's identity recovery is refused — the standing case is a predecessor that has not finished detaching — the connection used to stay degraded until a LATER reconnect happened to converge it; a long-lived conversation could wait indefinitely. The restore is now retried on the live connection with the same proxy credential (three attempts at 5s/15s/45s, ownership-fenced so a second live claimant is never raced), converging to the proven identity the moment the blocker clears. And the state is no longer invisible: both orientation packets carry a linkage note keyed on the PERSISTED linkage and recovery — a degraded connection is told it is running under a temporary identity and that recovery is automatic, and the warning's old false positive (a bare re-orientation call telling a linked session it has no external id) is gone. Guarded by `TestRestore_DegradedConvergesOnBoundedRetry`, `TestRestore_RetryExhaustionLeavesRecordIntact`, and `TestSessionStart_LinkageNoteKeysOnPersistedState`.
+- **A name-only resume says what did not follow it.** Resuming by external conversation ID recovers the session's NAME but never its internal session ID (only the proxy credential can restore an ID), so mail and threads bound to the predecessor strand. The identity line now says so plainly — "new internal identity — mail and threads bound to the predecessor ID are not inherited" — instead of letting an agent discover it when a note goes missing. Guarded by `TestSessionStart_SelfLineDisclosesNameOnlyResume` and the serve-replacement smoke scenario.
+- **A restored session whose durable record has no external linkage gets it back
+  from its own session file.** The resume-by-external-ID path matches on the
+  durable `session_names` row, but a row written before the linkage column
+  existed (the schema v7 back-fill leaves it blank) reads as unlinked even when
+  the session's own file proves the conversation — the 2026-09-06 reboot
+  stranded an identity exactly this way. On a fully-restored identity (proxy
+  credential proved, ID and name both resumed) the blank is refilled from the
+  session file through a single conditional UPDATE matching the proven session
+  ID and a blank column: a known linkage is never replaced through this path, a
+  row that moved on underneath the caller is skipped rather than clobbered, and
+  the name revision is untouched. Guarded by
+  `TestRestore_BlankAnchorRefilledFromTheSessionFile`,
+  `TestRestore_KnownLinkageIsNeverRepairedOver`, and
+  `TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession`.
+
+## 0.18.0 (2026-09-06)
+
+### Security
+
+- **A contested connection now fails closed instead of merely telling its agents to stop forcing (issue #182).** 0.17.7 made a force-fought workspace pin *legible* — the pin records that it was forced and what it displaced, the displaced agent is told so, and the refusal stops recommending `force: true` — but force still succeeded, so two undeclared agents could keep displacing each other and misrouting each other's relative-path calls. Now, once a connection's pin has been force-taken between two or more distinct roots at least twice in 30 minutes (the contested signature), the calls that cannot be attributed to a root are refused with an instructive error instead of being aimed at whichever project holds the pin right now: a RELATIVE path on the path-bearing tools — both the filesystem tools (`read_file`, `write_file`, `edit_file`, `search_in_files`, and the rest) and the LSP uri tools (`rename_symbol`, `move_symbol`, `replace_symbol_body`, `workspace_symbols`, and the rest) — `git` without an explicit `repo`, `run_task` (which has no workspace argument of its own), and `undo_edit` (whose snapshot cannot be attributed to the agent that wrote it). An ABSOLUTE path inside the currently-pinned workspace keeps working — a displaced agent can still do its real work by naming it — and a single-agent connection is completely unaffected, because the trigger needs the two-root force signature. Guarded by `TestResolvePath_ContestedRefusesRelative`, `TestWriteDeps_ContestedRefusesRelative`, `TestToFileURIAnchored_ContestedRefusesRelative`, `TestDefaultRepo_ContestedRefusesEmptyRepoOnly`, and `TestContestedFailClosed_RelativeRefusedAbsoluteWorks` / `TestContestedFailClosed_PathlessToolsRefused`.
+
+### Added
+
 - **Python weak root markers, and `.svelte` / `.vue` are recognised file types.**
   `requirements.txt`, `uv.lock` and `*.py.lock` are now weak python root
   markers, so the commonest Python repo shape — no `pyproject.toml`, a
