@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -248,5 +249,50 @@ func TestOwnedRuntimeDirs_AlwaysClaimsTheCurrentLocation(t *testing.T) {
 		if openFilesUnderDir("n/some/unrelated/path\n", d) {
 			t.Errorf("claimed dir %q matches an unrelated path", d)
 		}
+	}
+}
+
+// TestOpenFilesUnderDir_MatchesAcrossSymlinks pins the canonicalisation on BOTH
+// sides of the ownership comparison.
+//
+// lsof reports the kernel-resolved path (/private/var/… on macOS) while the
+// configured runtime directory is usually the lexical spelling (/var/…). Compare
+// them raw and a daemon that IS ours looks like somebody else's — the sweep then
+// silently finds nothing, which is the under-broad failure that `plumb stop`
+// answering "Daemon is not running." beside a live daemon is made of.
+//
+// It is precisely the macOS TMPDIR shape the smoke harness runs in, and it
+// shipped as code with nothing pinning it: mutants dropping either arm survived
+// the rest of this file.
+func TestOpenFilesUnderDir_MatchesAcrossSymlinks(t *testing.T) {
+	t.Parallel()
+	target := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("resolving %s: %v", target, err)
+	}
+	link := filepath.Join(t.TempDir(), "runtime-link")
+	if err := os.Symlink(resolved, link); err != nil {
+		t.Skipf("cannot create a symlink on this platform: %v", err)
+	}
+	if link == resolved {
+		t.Fatal("the symlink and its target are the same path; the test proves nothing")
+	}
+
+	// lsof reports the resolved path; the caller configured the symlinked one.
+	if !openFilesUnderDir("n"+resolved+"/plumb.sock\n", link) {
+		t.Error("a daemon reported under the RESOLVED path was not matched against the " +
+			"symlinked runtime dir — the sweep would silently find nothing")
+	}
+	// And the mirror: lsof reports through the symlink, the caller configured the
+	// resolved path.
+	if !openFilesUnderDir("n"+link+"/plumb.sock\n", resolved) {
+		t.Error("a daemon reported under the SYMLINKED path was not matched against the " +
+			"resolved runtime dir")
+	}
+	// Canonicalising must not make the comparison promiscuous: an unrelated
+	// directory is still not ours, however it is spelled.
+	if openFilesUnderDir("n"+resolved+"/plumb.sock\n", filepath.Join(resolved, "elsewhere")) {
+		t.Error("an unrelated directory matched after canonicalisation")
 	}
 }
