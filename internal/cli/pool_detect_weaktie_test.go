@@ -132,15 +132,60 @@ func TestWeakLangAt_SingleClaimantIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestStrongLangAt_PyLockResolvesPython pins the python lock-file marker as a
-// STRONG one: it names a project root on its own, with no sources needed and no
-// weak-marker ambiguity. It is a glob, which markerPresent supports.
-func TestStrongLangAt_PyLockResolvesPython(t *testing.T) {
+// TestWeakLangAt_PyLockResolvesPython pins the python lock-file marker, which is
+// a glob (markerPresent supports those). It names the directory it sits in.
+func TestWeakLangAt_PyLockResolvesPython(t *testing.T) {
 	dir := freshTempDir(t)
 	mustWrite(t, filepath.Join(dir, "app.py.lock"), "{}\n")
 
-	if got := defaultsPool(t, "python", "typescript").strongLangAt(dir); got != "python" {
-		t.Errorf("strongLangAt = %q, want python — *.py.lock is a python root marker", got)
+	if got := defaultsPool(t, "python", "typescript").weakLangAt(dir); got != "python" {
+		t.Errorf("weakLangAt = %q, want python — *.py.lock names this directory", got)
+	}
+}
+
+// TestPyLockIsWeak_ALockedHelperDoesNotClaimAForeignRepo is why that marker is
+// weak rather than strong, and it is the regression an adversarial review
+// caught before this shipped.
+//
+// `uv lock --script foo.py` exists FOR loose standalone scripts — exactly the
+// deploy/release helpers that live in tools/ or scripts/ inside repositories
+// written in some other language. As a STRONG marker it beat weakLangAt
+// outright with no tie-break and no source count, so a Node app carrying one
+// locked deploy.py resolved python and left every TypeScript source unserved:
+// the precise failure this whole change exists to remove, reintroduced by it.
+func TestPyLockIsWeak_ALockedHelperDoesNotClaimAForeignRepo(t *testing.T) {
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "package.json"), "{}\n")
+	mustWrite(t, filepath.Join(dir, "deploy.py"), "print(1)\n")
+	mustWrite(t, filepath.Join(dir, "deploy.py.lock"), "{}\n")
+	for i := range 20 {
+		mustWrite(t, filepath.Join(dir, "src", fmt.Sprintf("m%02d.ts", i)), "export const x = 1\n")
+	}
+	p := defaultsPool(t, "python", "typescript")
+
+	if got := p.strongLangAt(dir); got != "" {
+		t.Errorf("strongLangAt = %q, want \"\" — a per-script lock file must not assert a project root", got)
+	}
+	// Both weak markers match, so the tie-break counts the sources, and 20 .ts
+	// against 1 .py is not close.
+	if got := p.weakLangAt(dir); got != "typescript" {
+		t.Errorf("weakLangAt = %q, want typescript — the sources must settle a weak tie", got)
+	}
+}
+
+// The other path the strong marker reached: discoverChildLanguages matches
+// STRONG markers in subdirectories up to child_scan_depth and, finding any,
+// elects one as the connection primary WITHOUT ever consulting the content
+// sniff (conn_attach.go only reaches extLangAt when discovery returns nothing).
+// So one incidentally-locked helper under tools/ could make a manifest-less
+// TypeScript monorepo attach pyright rooted at tools/. Weak markers are never
+// consulted by child discovery, which closes that path by construction.
+func TestPyLockIsWeak_ALockedHelperIsNotADiscoverableChildRoot(t *testing.T) {
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "tools", "release.py.lock"), "{}\n")
+
+	if got := defaultsPool(t, "python", "typescript").discoverChildLanguages(dir, 2); len(got) != 0 {
+		t.Errorf("discoverChildLanguages = %v, want none — a per-script lock file must not be elected a monorepo primary", got)
 	}
 }
 

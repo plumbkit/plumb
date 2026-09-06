@@ -967,7 +967,7 @@ resolves the policy from scratch.
 |---|---|---|
 | `command` | string | Executable to launch (must be on `PATH`). Required when `enabled`. |
 | `args` | []string | Arguments passed to the server. |
-| `root_markers` | []string | Files whose presence identifies a workspace of this language. A marker containing `*` is a glob (`*.xcodeproj`, `*.py.lock`). |
+| `root_markers` | []string | Files whose presence identifies a workspace of this language. A marker containing `*` is a glob (`*.xcodeproj`); weak markers may be globs too (`*.py.lock`). |
 | `weak_root_markers` | []string | Promiscuous markers (`package.json`, `index.html`, `requirements.txt`) that name the language only of the directory they sit in directly, never an ancestor. Strong markers beat weak ones at the same directory; a directory claimed by several weak markers is decided by the source files beneath it. |
 | `env` | map | Extra environment variables for the server process. |
 | `enabled` | bool | Whether plumb starts this server and detects this language. |
@@ -982,7 +982,7 @@ these servers are installed):
 | Language | `command` | `root_markers` |
 |---|---|---|
 | `go` | `gopls` | `go.mod` |
-| `python` | `pyright-langserver --stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json`, `*.py.lock` (weak: `requirements.txt`, `uv.lock`) |
+| `python` | `pyright-langserver --stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json` (weak: `requirements.txt`, `uv.lock`, `*.py.lock`) |
 | `rust` | `rust-analyzer` | `Cargo.toml` |
 | `swift` | `sourcekit-lsp` | `Package.swift`, `*.xcodeproj`, `*.xcworkspace` |
 | `typescript` | `typescript-language-server --stdio` | `tsconfig.json`, `jsconfig.json` (weak: `package.json`) |
@@ -1478,8 +1478,8 @@ enabled      = true
 [lsp.python]
 command      = "pyright-langserver"
 args         = ["--stdio"]
-root_markers      = ["pyproject.toml", "setup.py", "pyrightconfig.json", "*.py.lock"]
-weak_root_markers = ["requirements.txt", "uv.lock"]
+root_markers      = ["pyproject.toml", "setup.py", "pyrightconfig.json"]
+weak_root_markers = ["requirements.txt", "uv.lock", "*.py.lock"]
 enabled           = true # auto-activates when pyright-langserver is on PATH; false excludes
 
 [lsp.java]

@@ -8,10 +8,18 @@
 ### Added
 
 - **Python weak root markers, and `.svelte` / `.vue` are recognised file types.**
-  `requirements.txt` and `uv.lock` are now weak python root markers and
-  `*.py.lock` a strong one, so the commonest Python repo shape — no
-  `pyproject.toml`, a `requirements.txt` beside the sources — resolves as Python
-  at the marker stage rather than falling through to the content sniff.
+  `requirements.txt`, `uv.lock` and `*.py.lock` are now weak python root
+  markers, so the commonest Python repo shape — no `pyproject.toml`, a
+  `requirements.txt` beside the sources — resolves as Python at the marker stage
+  rather than falling through to the content sniff. `*.py.lock` is what
+  `uv lock --script foo.py` writes beside a PEP 723 script. All three are weak
+  rather than strong on purpose: `pyproject.toml` is a project-root manifest by
+  convention, while a per-script lock file is exactly the sort of thing that
+  turns up in the `tools/` directory of a repository written in another
+  language. As a strong marker it would beat the weak path outright, with no
+  tie-break and no source count, so one locked `deploy.py` would resolve a Node
+  app as Python; weak markers instead go through the tie-break and let the
+  sources decide.
   `langsupport` also gains rows for `.svelte` and `.vue`: neither has a
   structural extractor yet (both embed markup, CSS and JS/TS in one file), but
   recognising them lets plumb *say* it does not cover them — `file_outline`
