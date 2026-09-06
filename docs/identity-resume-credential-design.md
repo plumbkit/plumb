@@ -208,6 +208,16 @@ sibling key to the identity snapshot, not a field inside it, so an older proxy
 ignores it wholesale and the per-key fail-safe rule ("absence of the key is
 not evidence of anything") applies to it independently.
 
+The same trigger covers a connection whose identity converged on the bounded
+degraded-recovery retry (C3): the retry flips the outcome to restored with the
+proxy credential proven, which is the same fact an initialize restore
+asserts, so the mint-and-disclose step rides the convergence point too.
+Without this, the flakiest class — a connection that degraded under a restart
+storm and healed in place — stays credential-less until its next reconnect,
+which is systematic, not incidental. The C3 ordering note applies: the retry
+sets the outcome before the heal commit, so anything reading the outcome
+after convergence reads it settled.
+
 The daemon stores only a SHA-256 hash. A 128-bit random secret has no
 dictionary, so the hash is not reversible in any sense that matters, and a
 dump of the session-state store discloses nothing usable. Disclosure is
@@ -396,6 +406,16 @@ Three triggers, each riding authority that already exists:
   a daemon with no record for the conversation do not count (a re-homed
   machine is not an attack), and superseded presentations do not count
   toward revocation — they are answered, not punished.
+
+  Named griefing vector, accepted with bounded harm: the request `_meta` is
+  client-settable and conversation IDs are client-visible claims, so any
+  connection can present three junk credentials against a VICTIM's
+  conversation and clear its credential. The worst case is the status quo
+  ante — the victim falls back to name-only continuity until it re-links —
+  with one loud log line naming the attacker's connection. Hardening that
+  would need an authority the client cannot forge, which is Design B's
+  problem, not this counter's; the implementation card must carry the vector
+  and this acceptance, not silently inherit the counter.
 - **Supersession.** A losing claimant's credential is dead by definition:
   the generation moved. The winner holds the only live secret.
 
@@ -581,7 +601,11 @@ The card's five, with what this design answers and what it leaves open.
    establishment on a healed record follows the repair in the same
    transaction-free but outcome-gated sequence, so a healed row is disclosed
    a credential exactly when it would have been disclosed had the linkage
-   never been blank.
+   never been blank. Extended for C3's bounded retry (the retry-converged
+   connection): the same outcome-gated ordering holds — the retry classifies
+   established/restored before any credential step — so the establishment
+   trigger covers retry-converged connections on identical terms, and Q4's
+   ordering claim is inherited, not new.
 5. **Test matrix.** Answered: section 7, extending the existing suite per D5.
 
 Left explicitly open for the implementation review:
