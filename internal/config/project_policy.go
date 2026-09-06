@@ -188,6 +188,14 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			out = append(out, PolicyEntry{Key: "collab." + k, Value: v})
 		}
 	}
+	for _, topology := range rawTables(raw, "topology") {
+		for k, v := range topology {
+			if isFreeTopologyField(k) {
+				continue
+			}
+			out = append(out, PolicyEntry{Key: "topology." + k, Value: v})
+		}
+	}
 	out = append(out, execPolicyEntries(raw)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
@@ -256,6 +264,29 @@ var policyCollabFreeFields = map[string]bool{
 	"max_exchanges": true, "chat_budget_bytes": true, "max_wait_seconds": true,
 }
 
+// policyTopologyFreeFields are the [topology] keys NOT gated on trust: sizes,
+// timeouts, pacing, and the on/off switch. A hostile value in any of them makes
+// this workspace's index slower or less complete, and none of them can hide a
+// particular file while the rest of the index still looks healthy.
+//
+// exclude_patterns can, which is why it is absent from this list. See its entry
+// in projectFieldClasses for the reasoning.
+//
+// An ALLOW-list, like its [lsp], [collab] and [commands] siblings and for the
+// same reason: a [topology] key added later is gated until someone decides
+// otherwise, rather than free until someone remembers.
+var policyTopologyFreeFields = map[string]bool{
+	"enabled": true, "resync_on_attach": true, "max_file_size_bytes": true,
+	"extract_timeout_seconds": true, "resync_batch": true, "resync_pause_ms": true,
+	"resync_interval_minutes": true, "watch": true,
+}
+
+// isFreeTopologyField reports whether a [topology] key is one a project may set
+// untrusted. Matched case-INSENSITIVELY, because go-toml/v2 binds a TOML key to
+// a struct field that way: `Exclude_Patterns` reaches ExcludePatterns, and an
+// exact-match check would let it past the gate unseen.
+func isFreeTopologyField(key string) bool { return policyTopologyFreeFields[strings.ToLower(key)] }
+
 // IsGatedProjectKey reports whether a dotted TOML key is one LoadProject gates
 // on trust. It exists so a display surface cannot drift from the loader: the TUI
 // needs the same answer to decide how to present a row whose trust status could
@@ -279,6 +310,8 @@ func IsGatedProjectKey(dotted string) bool {
 		return !isFreeCommandsField(strings.TrimPrefix(key, "commands."))
 	case strings.HasPrefix(key, "xcode."):
 		return true
+	case strings.HasPrefix(key, "topology."):
+		return !isFreeTopologyField(strings.TrimPrefix(key, "topology."))
 	}
 	return false
 }
@@ -416,6 +449,16 @@ func forceCapabilityFieldsToBase(base Config, merged *Config) {
 	// attacker's command as the user, unsandboxed, on attach. See policyLSPFields
 	// for the field-by-field reasoning and for what a project may always override.
 	merged.LSP = forceLSPExecToBase(base.LSP, merged.LSP)
+	// [topology] exclude_patterns keeps a named tree out of THIS workspace's
+	// index. Honoured from a cloned repository it is targeted concealment: the
+	// index stays present and healthy while the files the repository named are
+	// simply absent from topology_search, topology_explore, topology_affected and
+	// workspace_search's code corpus, so an agent auditing the repository is told
+	// nothing is there. Cloned, not aliased, for the reason
+	// forceGlobalOnlyToBase gives about the workspace roots: this is a slice, and
+	// sharing base's backing array with every per-connection merged config would
+	// make the boundary a property of caller discipline instead of this function.
+	merged.Topology.ExcludePatterns = slices.Clone(base.Topology.ExcludePatterns)
 }
 
 // forceLSPExecToBase returns merged's per-language [lsp.<lang>] tables with every

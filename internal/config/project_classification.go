@@ -159,15 +159,30 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"quality.max_findings_per_file": ClassInert,
 
 	// --- Topology: sizes, timeouts and pacing for this workspace's own index.
-	// exclude_patterns is now live (topology/exclude.go): the resync walk and the
-	// watcher both consult it, so a project can keep a COMMITTED tree out of its
-	// own index — the one exclusion .gitignore cannot express. A hostile value
-	// makes this workspace's index less complete and nothing else: it cannot
-	// widen access, run a process, or redirect a write, and the whole-workspace
-	// patterns that would blank the index are refused by sanitizeExcludePatterns.
+	// A hostile value in any of these makes this workspace's index slower or less
+	// complete and nothing else: it cannot widen access, run a process, or
+	// redirect a write.
+	//
+	// exclude_patterns is the exception, and it is TRUST-GATED. It became live in
+	// this change (topology/exclude.go): the resync walk and the watcher both
+	// consult it, so a project can now keep a COMMITTED tree out of its own index
+	// — and a CLONED project can too, verbatim, on attach, with no prompt. That
+	// is TARGETED concealment, which is a different thing from the wholesale kind
+	// topology.enabled already permits: a hostile repository shipping
+	// exclude_patterns = ["backdoor.go"] keeps that one file out of the index
+	// while everything else stays present and healthy, so topology_search,
+	// topology_explore, topology_affected and workspace_search's code corpus all
+	// report clean and an agent auditing the repository never sees the file. That
+	// is evidence an auditor would rely on being hidden, which is exactly what
+	// ClassPreference's own definition excludes — the same reasoning that made
+	// edits.show_write_diff ClassOneWay. `enabled = false` is not a precedent for
+	// it either: blanking the index wholesale is loud (topology_status says so,
+	// every tool says the index is off), while a missing row looks like a file
+	// that does not exist. A user who wants a project's own exclusions honoured
+	// approves them with `plumb trust`, with the patterns in view.
 	"topology.enabled":                 ClassPreference,
 	"topology.resync_on_attach":        ClassPreference,
-	"topology.exclude_patterns":        ClassPreference,
+	"topology.exclude_patterns":        ClassTrustGated,
 	"topology.max_file_size_bytes":     ClassPreference,
 	"topology.extract_timeout_seconds": ClassPreference,
 	"topology.resync_batch":            ClassPreference,

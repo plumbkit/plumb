@@ -149,16 +149,64 @@ func TestResync_ExcludePatternsSkipCommittedTree(t *testing.T) {
 // agent-writable field: `exclude_patterns = ["**"]` would prune every
 // directory and let the prune pass delete every row, leaving every topology
 // tool answering "nothing found" with no error anywhere.
+//
+// The refused list used to be a literal denylist of six spellings, and the
+// second group below is what walked straight past it — each of those four
+// matches every path a walk can present, and each emptied a real index end to
+// end. The rule is now a probe through the same matcher the filter runs
+// (ignore.ExcludePatternRefusal), which is why respelling the catch-all no
+// longer helps. The third group is the other half of the claim: a guard that
+// refused everything would not be a fix.
 func TestSanitizeExcludePatterns_RefusesCatchAll(t *testing.T) {
-	for _, p := range []string{"*", "**", "**/*", "*/**", ".", "./**", "/**/", "  ", ""} {
+	refused := []string{
+		// The spellings the original denylist knew.
+		"*", "**", "**/*", "*/**", ".", "./**", "/**/", "  ", "",
+		// The respellings it did not, all proven to empty a real index.
+		"**/**", "**/**/**", "**/**/*", "?*",
+		// And the shape those four share: wildcards with nothing named.
+		"?/**", "*/*/**", "**/?*",
+	}
+	for _, p := range refused {
 		if got := sanitizeExcludePatterns("/ws", []string{p}); got != nil {
 			t.Errorf("sanitizeExcludePatterns(%q) = %v, want nil", p, got)
+		}
+	}
+	for _, p := range []string{"vendor/**", "*.pb.go", "third_party/**", "gen", "*_generated.go", "a*/**"} {
+		if got := sanitizeExcludePatterns("/ws", []string{p}); !slices.Equal(got, []string{p}) {
+			t.Errorf("sanitizeExcludePatterns(%q) = %v, want it kept — a guard that "+
+				"refuses a legitimate pattern is not a fix", p, got)
 		}
 	}
 	got := sanitizeExcludePatterns("/ws", []string{"**", " third_party/** ", "gen"})
 	want := []string{"third_party/**", "gen"}
 	if !slices.Equal(got, want) {
 		t.Errorf("sanitizeExcludePatterns = %v, want %v", got, want)
+	}
+}
+
+// TestSanitizeExcludePatterns_RespelledCatchAllEmptiesTheIndex is the end-to-end
+// half: the four respellings above are refused because each one, if honoured,
+// leaves the resync with nothing to index. Proving that here rather than only
+// asserting the guard's return value is what keeps the guard tied to the
+// consequence it exists to prevent.
+func TestSanitizeExcludePatterns_RespelledCatchAllEmptiesTheIndex(t *testing.T) {
+	for _, pattern := range []string{"**/**", "**/**/**", "**/**/*", "?*"} {
+		t.Run(pattern, func(t *testing.T) {
+			dir := t.TempDir()
+			writeIndexTree(t, dir, map[string]string{
+				"main.go":          "package main\nfunc Main() {}\n",
+				"internal/keep.go": "package internal\nfunc Keep() {}\n",
+			})
+			idx, db := newTestIndexer(t, dir)
+			// Unsanitised: what the index would hold if the guard let it through.
+			idx.excludePatterns = []string{pattern}
+			if got := resyncPaths(t, idx, db); len(got) != 0 {
+				t.Fatalf("%q indexed %v; the premise of this test is that it excludes everything", pattern, got)
+			}
+			if got := sanitizeExcludePatterns(dir, []string{pattern}); got != nil {
+				t.Errorf("sanitizeExcludePatterns(%q) = %v, want nil — it empties the index", pattern, got)
+			}
+		})
 	}
 }
 

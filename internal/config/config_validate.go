@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 func validate(cfg Config) error {
@@ -295,6 +297,33 @@ func validateTopology(tp TopologyConfig) error {
 	}
 	if tp.ResyncIntervalMinutes < 0 {
 		return errors.New("topology.resync_interval_minutes must be non-negative (0 disables periodic resync)")
+	}
+	return validateExcludePatterns(tp.ExcludePatterns)
+}
+
+// validateExcludePatterns refuses a [topology] exclude pattern that would empty
+// the index, or that names no particular tree.
+//
+// It is here — in the authoritative whole-config validation — rather than only
+// in topology's own sanitiser, because the sanitiser runs at Store.Open and
+// only logs. exclude_patterns is agent-writable, so `agent_config set` with
+// ["**"] returned SUCCESS, persisted the value, and left the agent to find out
+// from a daemon log it never reads that nothing had happened. That is the very
+// "the write succeeded and nothing changed" pathology this field's revival was
+// about. AgentApplyBatch validates a candidate merged config before writing, so
+// stating the rule here refuses the write, names the pattern, and says why.
+//
+// The rule itself lives in internal/ignore, beside the matcher the real filter
+// runs, so the guard cannot drift from the behaviour it guards. The sanitiser
+// keeps its warn-and-drop as a second line: a Config can also be built in code.
+func validateExcludePatterns(patterns []string) error {
+	for _, p := range patterns {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if why := ignore.ExcludePatternRefusal(p); why != "" {
+			return fmt.Errorf("topology.exclude_patterns: %q is refused because %s", p, why)
+		}
 	}
 	return nil
 }

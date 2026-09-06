@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -208,13 +209,43 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 	if m.pendingProjectReload != ws {
 		t.Errorf("pendingProjectReload = %q, want %q", m.pendingProjectReload, ws)
 	}
-	merged, err := config.LoadProject(config.Defaults(), ws)
+	// Asserted on the project FILE, not on LoadProject's merged view.
+	// topology.exclude_patterns is trust-gated (a pattern hides named files from
+	// every topology query while the index still looks healthy), so an untrusted
+	// workspace — which is what a bare t.TempDir() is — has it forced back to the
+	// global value on load. Writing the file is this editor's whole job; whether
+	// the value is then honoured is LoadProject's, and
+	// TestLoadProject_ExcludePatternsNeedTrust covers both sides of it.
+	if got := projectListValue(t, ws, "topology", "exclude_patterns"); !slices.Equal(got, []string{"/b"}) {
+		t.Errorf("exclude_patterns written = %v, want [/b]", got)
+	}
+}
+
+// projectListValue reads one []string setting straight out of a workspace's
+// .plumb/config.toml, for the rows whose merged value is trust-gated.
+func projectListValue(t *testing.T, ws string, path ...string) []string {
+	t.Helper()
+	raw, err := config.LoadProjectRaw(ws)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("LoadProjectRaw: %v", err)
 	}
-	if len(merged.Topology.ExcludePatterns) != 1 || merged.Topology.ExcludePatterns[0] != "/b" {
-		t.Errorf("exclude_patterns = %v, want [/b]", merged.Topology.ExcludePatterns)
+	cur := any(raw)
+	for _, seg := range path {
+		table, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("%v is not a table in %v", path, raw)
+		}
+		cur = table[seg]
 	}
+	items, ok := cur.([]any)
+	if !ok {
+		t.Fatalf("%v = %#v, want a list", path, cur)
+	}
+	out := make([]string, 0, len(items))
+	for _, v := range items {
+		out = append(out, v.(string))
+	}
+	return out
 }
 
 // TestWorkspaceRoots_EditsWriteStoreNotProject exercises the store-backed roots
@@ -293,12 +324,9 @@ func TestListEditor_EscAutoSaves(t *testing.T) {
 	if cmd == nil {
 		t.Error("esc should auto-save and push a project reload")
 	}
-	merged, err := config.LoadProject(config.Defaults(), ws)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(merged.Topology.ExcludePatterns) != 1 || merged.Topology.ExcludePatterns[0] != "/x" {
-		t.Errorf("exclude_patterns = %v, want [/x] (esc auto-saves)", merged.Topology.ExcludePatterns)
+	// The project file, not the merged view — see projectListValue.
+	if got := projectListValue(t, ws, "topology", "exclude_patterns"); !slices.Equal(got, []string{"/x"}) {
+		t.Errorf("exclude_patterns written = %v, want [/x] (esc auto-saves)", got)
 	}
 }
 

@@ -149,11 +149,18 @@ func censusWalk(ws string, skipDirs map[string]bool, maxFiles int, visit func(pa
 		if stacks[filepath.Dir(path)].IsIgnored(path, false) {
 			return nil
 		}
-		visit(path, d)
-		seen++
+		// Checked BEFORE visiting, not after. Testing seen >= maxFiles once the
+		// maxFiles'th file had already been counted reported a COMPLETE walk of
+		// exactly maxFiles files as capped, so a workspace of exactly 50 000
+		// files rendered "~50000+ files" — the ceiling-read-as-a-count that
+		// renderScale's doc comment says this line exists to prevent, arrived at
+		// from the other side. Stopping here means truncated is true only when a
+		// file was actually left unvisited.
 		if maxFiles > 0 && seen >= maxFiles {
 			return errCensusCapped
 		}
+		visit(path, d)
+		seen++
 		return nil
 	})
 	return errors.Is(err, errCensusCapped)

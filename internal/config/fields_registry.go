@@ -118,7 +118,9 @@ var registryData = []Field{
 	},
 	{
 		Key: "topology.exclude_patterns", Type: FieldList, ReloadTier: ReloadNextSession,
-		Description: "Path globs to skip during indexing. Enter to edit the list.",
+		Description: "Extra globs the indexer skips, on top of .gitignore and the built-in " +
+			"skip list — for a tree the repo tracks on purpose. \"a/b\" matches a path, " +
+			"\"*.go\" a base name. A pattern matching everything is refused. Enter to edit.",
 	},
 
 	// --- Quality ---

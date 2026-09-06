@@ -63,10 +63,31 @@ func (e PolicyEntry) Warning(base Config) string {
 	if field, ok := strings.CutPrefix(key, "collab."); ok {
 		return collabFieldWarning(field, e.Value)
 	}
+	if field, ok := strings.CutPrefix(key, "topology."); ok {
+		return topologyFieldWarning(field)
+	}
 	if w := execFieldWarning(key, e.Value); w != "" {
 		return w
 	}
 	return ""
+}
+
+// topologyFieldWarning explains why a gated [topology] key needs approval.
+//
+// exclude_patterns is the one the gate exists for, and the warning states the
+// consequence rather than the mechanism: a pattern keeps named files out of the
+// index, and a file that is not in the index is not missing from a search
+// result in any visible way — every topology tool answers successfully, about a
+// tree with a hole in it. An unrecognised [topology] key is warned about too,
+// for the reason collabFieldWarning gives: it reached the spec because it is
+// not on the inert list, so the honest answer is that plumb cannot vouch for it.
+func topologyFieldWarning(field string) string {
+	if strings.ToLower(field) == "exclude_patterns" {
+		return "keeps the files these globs match out of this workspace's code index — " +
+			"topology_search, topology_explore, topology_affected and workspace_search will " +
+			"report no results for them, successfully, as though they did not exist"
+	}
+	return "a [topology] key plumb does not recognise as inert; it is gated because it may decide what the index can see"
 }
 
 // collabFieldWarning explains why a gated [collab] key grants capability. Split
