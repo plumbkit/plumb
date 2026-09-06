@@ -135,6 +135,45 @@ func (s *Store) LoadIdentity(proxySessionID string) (id Identity, ok bool, err e
 	}
 }
 
+// RepairExternalID refills a durable record's BLANK external linkage from a
+// source the caller has already authenticated, and reports whether it did.
+// nil-safe.
+//
+// The narrowness is the whole safety argument. The record is the only proof of
+// what a reconnecting session should come back as, and every identity fork this
+// package exists to prevent arrived through a write that fired when it should
+// not have. So this is a single conditional UPDATE rather than a save: it lands
+// only when the row still names the session ID the caller proved, and only when
+// the stored linkage is still blank. A known linkage is never overwritten here
+// — replacement is SaveIdentity's job, on the live session's own authority — and
+// a row that moved on between the caller's read and this write simply does not
+// match, so the caller is told the repair did not land rather than seeing a
+// silent success.
+//
+// NameRevision is deliberately untouched: the name did not change, and a
+// revision bump would misorder concurrent name snapshots.
+func (s *Store) RepairExternalID(proxySessionID, sessionID, externalID string) (bool, error) {
+	if s == nil || proxySessionID == "" || sessionID == "" || externalID == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE session_names
+		    SET external_id=?, updated_at=?
+		  WHERE proxy_session_id=? AND plumb_session_id=? AND external_id=''`,
+		externalID, time.Now().UnixMilli(), proxySessionID, sessionID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("sessionstate: repair external id: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sessionstate: repair external id: %w", err)
+	}
+	return n > 0, nil
+}
+
 // Reservation is one retained identity's claim on a name: the name itself, the
 // plumb session ID that holds it, and the external conversation it is linked to.
 //

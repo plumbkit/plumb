@@ -1,4 +1,23 @@
 # Changelog
+## 0.18.1 (unreleased)
+
+### Fixed
+
+- **A restored session whose durable record has no external linkage gets it back
+  from its own session file.** The resume-by-external-ID path matches on the
+  durable `session_names` row, but a row written before the linkage column
+  existed (the schema v7 back-fill leaves it blank) reads as unlinked even when
+  the session's own file proves the conversation — the 2026-09-06 reboot
+  stranded an identity exactly this way. On a fully-restored identity (proxy
+  credential proved, ID and name both resumed) the blank is refilled from the
+  session file through a single conditional UPDATE matching the proven session
+  ID and a blank column: a known linkage is never replaced through this path, a
+  row that moved on underneath the caller is skipped rather than clobbered, and
+  the name revision is untouched. Guarded by
+  `TestRestore_BlankAnchorRefilledFromTheSessionFile`,
+  `TestRestore_KnownLinkageIsNeverRepairedOver`, and
+  `TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession`.
+
 ## 0.18.0 (2026-09-06)
 
 ### Security

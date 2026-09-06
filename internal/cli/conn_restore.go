@@ -129,6 +129,7 @@ func (s *connSession) restoreIdentity(proxyID string) {
 	// "you are still <name> (<id>)" while naming an ID it has never held, with
 	// mail bound to the predecessor sitting unreachable behind the reassurance.
 	if adoption == idResumed && named {
+		s.repairBlankLinkage(rec)
 		s.setRecovery(recoveryRestored)
 		return
 	}

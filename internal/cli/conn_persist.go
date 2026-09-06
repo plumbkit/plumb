@@ -205,6 +205,50 @@ func (s *connSession) persistIdentity() bool {
 	return true
 }
 
+// repairBlankLinkage refills a durable record whose external linkage is blank
+// from the session file the connection just restored — the JSON/DB split that
+// leaves a row unresumable by external ID even though its own file proves the
+// linkage. The 2026-09-06 reboot stranded an identity exactly this way: the
+// session file carried the conversation and the row did not, and the row is
+// what the resume path matches.
+//
+// Every guard is load-bearing:
+//
+//   - It runs only from the fully-restored branch of restoreIdentity. The
+//     caller there has proved the proxy credential, found the record, and
+//     resumed BOTH the session ID and the name; a degraded connection runs
+//     under a temporary identity whose file says nothing about the proven one,
+//     and writing what it knows over the proven record is the fork bug.
+//   - A record that already knows a linkage is left alone — replacement is
+//     persistIdentity's job, on the live session's own authority.
+//   - The store-side UPDATE matches on the proven session ID and a blank
+//     column, so a row that moved on underneath us is skipped rather than
+//     clobbered, and the caller is told it did not land.
+//
+// A repair that does not land is logged and otherwise ignored: the linkage
+// still lives in the session file this connection holds, so any later
+// persistIdentity records it anyway. The repair exists for the session whose
+// conversation never calls session_start again — exactly the one that would
+// otherwise stay anchor-less forever.
+func (s *connSession) repairBlankLinkage(rec sessionstate.Identity) {
+	if rec.ExternalID != "" || rec.SessionID == "" {
+		return
+	}
+	external := s.externalID()
+	if external == "" {
+		return
+	}
+	repaired, err := s.sessionState.RepairExternalID(s.view().proxySessionID, rec.SessionID, external)
+	if err != nil {
+		s.log().Debug("daemon: external-linkage repair failed", "err", err)
+		return
+	}
+	if repaired {
+		s.log().Info("daemon: repaired the durable record's blank external linkage from the session file",
+			"session_id", rec.SessionID)
+	}
+}
+
 // externalID returns the external-conversation ID linked to this session, or ""
 // when it has none. It is read from the session file rather than cached on the
 // view because session_start writes it there directly (session.SetExternalID),
