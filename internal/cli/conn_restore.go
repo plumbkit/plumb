@@ -182,9 +182,19 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 		s.setRecovery(recoveryRestored)
 		return true
 	}
-	if adoption == idAbsent && named && s.persistIdentity() {
+	if adoption == idAbsent && named {
+		// The legacy-heal arm of the retry needs the outcome set BEFORE the
+		// commit: persistIdentity refuses writes on a degraded connection, so
+		// ordering the classification first is what lets the heal land (the
+		// initial path has the same ordering). A failed commit reverts — the
+		// connection stays degraded and the next attempt tries again.
 		s.setRecovery(recoveryEstablished)
-		return true
+		if s.persistIdentity() {
+			return true
+		}
+		s.log().Warn("daemon: could not record the healed legacy identity on retry; staying degraded for the next attempt")
+		s.setRecovery(recoveryDegraded)
+		return false
 	}
 	s.setRecovery(recoveryDegraded)
 	return false

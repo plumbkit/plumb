@@ -587,11 +587,11 @@ func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
 
 	var inboxes []string
 	var packets []string
+	var replies []string
 	for round := 1; round <= 3; round++ {
 		ping := fmt.Sprintf("round-%d ping", round)
 		noteOut := retryCall(t, sender, "leave_note", map[string]any{"to": a.name, "body": ping}, 30*time.Second)
 		t.Logf("round %d leave_note: %s", round, noteOut)
-
 		stopDaemon(t, tmpHome)
 		packet, _ := recoverWithSessionStart(t, receiver, 60*time.Second)
 		if got := parseSelfIdentity(packet); got.name != a.name {
@@ -623,26 +623,32 @@ func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
 
 		reply := fmt.Sprintf("round-%d reply", round)
 		receiver.call(t, "leave_note", map[string]any{"to": b.name, "body": reply}, toolTimeout)
+		replies = append(replies, reply)
 		bInbox := retryCall(t, sender, "check_messages", map[string]any{}, 30*time.Second)
 		assertContains(t, fmt.Sprintf("round %d sender inbox", round), bInbox, reply)
 	}
 
-	// No self-replay, matched on the round-specific body rather than a generic
-	// word: the inbox render quotes a claimed note's body inside its own
-	// template, so a generic substring matches honest output. Scan the recovery
-	// packets too — a self-replay delivered at session_start would surface
-	// there, never in an inbox.
-	for i, inbox := range inboxes {
-		if strings.Contains(inbox, fmt.Sprintf("round-%d reply", i+1)) {
-			t.Fatalf("inbox %d contains this session's own outbound note — mail is being "+
-				"replayed to its author:\n%s", i+1, inbox)
-		}
-	}
+	// No self-replay, checked against EVERY reply sent in a strictly earlier
+	// round: artifact i was captured before reply i+1 existed, so only replies
+	// from rounds up to i can possibly appear in it — and if any of them does,
+	// an earlier outbound note was replayed back to its author. Matched on the
+	// round-specific body because the inbox render quotes bodies inside its own
+	// reply template, so a generic word matches honest output.
 	for i, packet := range packets {
-		if strings.Contains(packet, fmt.Sprintf("round-%d reply", i+1)) {
-			t.Fatalf("recovery packet %d contains this session's own outbound note — mail is being "+
-				"replayed to its author at session_start:\n%s", i+1, packet)
+		for _, r := range replies[:min(i, len(replies))] {
+			if strings.Contains(packet, r) {
+				t.Fatalf("recovery packet %d contains reply %q, sent by this session — mail is "+
+					"being replayed to its author at session_start:\n%s", i+1, r, packet)
+			}
 		}
 	}
-	assertNoCredentialLeak(t, "mail round-trip outputs", strings.Join(inboxes, "\n"))
+	for i, inbox := range inboxes {
+		for _, r := range replies {
+			if strings.Contains(inbox, r) {
+				t.Fatalf("inbox %d contains this session's own outbound note %q — mail is being "+
+					"replayed to its author:\n%s", i+1, r, inbox)
+			}
+		}
+	}
+	assertNoCredentialLeak(t, "mail round-trip outputs", strings.Join(append(append([]string{}, inboxes...), packets...), "\n"))
 }

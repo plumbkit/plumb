@@ -131,6 +131,20 @@ func newPersistSession(t *testing.T, store *config.Store, ss *sessionstate.Store
 	return s
 }
 
+// newPersistSessionWithBackoff is newPersistSession with the degraded-recovery
+// retry schedule injected BEFORE onProxySession fires. The retry goroutine
+// starts inside onProxySession, so a post-construction injection races its
+// first read of the schedule — and when it loses, attempt 1 waits the
+// production 5s and a convergence deadline measured in seconds expires.
+func newPersistSessionWithBackoff(t *testing.T, store *config.Store, ss *sessionstate.Store, proxyID string, fn func(int) time.Duration) *connSession {
+	t.Helper()
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, ss, newSharedBudgets())
+	t.Cleanup(s.close)
+	s.restoreRetryBackoff = fn
+	s.onProxySession(proxyID)
+	return s
+}
+
 // TestPersist_ReadTrackingSurvivesRestart is the headline test: a read recorded
 // under proxy session X for workspace W is rehydrated by a *fresh* connSession
 // (a daemon restart) that reconnects under the same X and re-attaches W, so a
