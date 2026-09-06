@@ -52,14 +52,16 @@ func (s *connSession) collabStoreIfExists() *collab.Store {
 func (s *connSession) collabPolicy() tools.CollabPolicy {
 	c := s.collabConfig()
 	return tools.CollabPolicy{
-		Intents:          c.Intents,
-		Mailbox:          c.Mailbox,
-		KnowledgeHandoff: c.KnowledgeHandoff,
-		IntentTTLMinutes: c.IntentTTLMinutes,
-		CrossProject:     c.CrossProject,
-		MaxExchanges:     c.MaxExchanges,
-		ChatBudgetBytes:  c.ChatBudgetBytes,
-		MaxWaitSeconds:   c.MaxWaitSeconds,
+		Intents:            c.Intents,
+		Mailbox:            c.Mailbox,
+		KnowledgeHandoff:   c.KnowledgeHandoff,
+		IntentTTLMinutes:   c.IntentTTLMinutes,
+		NoteTTLMinutes:     c.NoteTTLMinutes,
+		KeepDeliveredNotes: c.KeepDeliveredNotes,
+		CrossProject:       c.CrossProject,
+		MaxExchanges:       c.MaxExchanges,
+		ChatBudgetBytes:    c.ChatBudgetBytes,
+		MaxWaitSeconds:     c.MaxWaitSeconds,
 	}
 }
 

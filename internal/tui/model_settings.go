@@ -119,6 +119,8 @@ const (
 	skCollabMaxWaitSec
 	skCollabKnowledgeHandoff
 	skCollabIntentTTLMin
+	skCollabNoteTTLMin
+	skCollabKeepDelivered
 	// [rastro] rows
 	skRastroEnabled
 	skRastroPath
@@ -322,6 +324,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Collab", label: "Max wait (s)", kind: settingNumber, key: skCollabMaxWaitSec, value: itoa(cfg.Collab.MaxWaitSeconds)},
 		{group: "Collab", label: "Knowledge handoff", kind: settingToggle, key: skCollabKnowledgeHandoff, value: onOff(cfg.Collab.KnowledgeHandoff)},
 		{group: "Collab", label: "Intent TTL (min)", kind: settingNumber, key: skCollabIntentTTLMin, value: itoa(cfg.Collab.IntentTTLMinutes)},
+		{group: "Collab", label: "Note TTL (min)", kind: settingNumber, key: skCollabNoteTTLMin, value: itoa(cfg.Collab.NoteTTLMinutes)},
+		{group: "Collab", label: "Keep delivered", kind: settingToggle, key: skCollabKeepDelivered, value: onOff(cfg.Collab.KeepDeliveredNotes)},
 
 		{group: "Rastro", label: "Enabled", kind: settingToggle, key: skRastroEnabled, value: onOff(cfg.Rastro.Enabled)},
 		{group: "Rastro", label: "Path", kind: settingText, key: skRastroPath, value: pathOrDefault(cfg.Rastro.Path)},

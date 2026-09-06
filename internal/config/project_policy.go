@@ -251,7 +251,9 @@ func rawTables(raw map[string]any, want string) []map[string]any {
 
 // policyCollabFreeFields are the [collab] keys that are NOT gated on trust,
 // because none of them can open a channel: peer_awareness surfaces only what the
-// daemon already observed in THIS project, and the rest are sizes and expiries.
+// daemon already observed in THIS project, and the rest are sizes and expiries —
+// note retention included: how long mail is kept, and whether a delivered note
+// becomes a transcript, decide nothing about WHO can send or read one.
 //
 // Like policyLSPFreeFields this is an ALLOW-list, and for the same reason. The
 // gated set is the interesting one, but enumerating IT would mean a [collab] key
@@ -261,6 +263,7 @@ func rawTables(raw map[string]any, want string) []map[string]any {
 // fails closed and a human has to decide.
 var policyCollabFreeFields = map[string]bool{
 	"peer_awareness": true, "hint_budget_bytes": true, "intent_ttl_minutes": true,
+	"note_ttl_minutes": true, "keep_delivered_notes": true,
 	"max_exchanges": true, "chat_budget_bytes": true, "max_wait_seconds": true,
 }
 

@@ -3,7 +3,7 @@ name: plumb-chat
 description: Talk to another agent working the same plumb workspace — address a peer session by name, hand your turn over while waiting for its reply, and read silence correctly. Use when work has to be coordinated with a concurrent session.
 ---
 
-Plumb's mailbox is two tools: `leave_note` sends, `check_messages` receives. It is for coordinating with a session working the same project right now — a claim on files you are about to touch, an answer only that agent has. Every message is agent-authored, secret-scrubbed before storage, and advisory: nothing sent here blocks anyone's write. Gated on `[collab] mailbox`, on by default and same-workspace only. Messages expire after `[collab] intent_ttl_minutes`, so an unread note does not sit forever.
+Plumb's mailbox is two tools: `leave_note` sends, `check_messages` receives. It is for coordinating with a session working the same project right now — a claim on files you are about to touch, an answer only that agent has. Every message is agent-authored, secret-scrubbed before storage, and advisory: nothing sent here blocks anyone's write. Gated on `[collab] mailbox`, on by default and same-workspace only. Unread messages expire after `[collab] note_ttl_minutes` (which follows `intent_ttl_minutes` until set), so an unread note does not sit forever; a workspace may also keep delivered notes forever as a transcript (`[collab] keep_delivered_notes`) — the read flag itself is then the permanence trigger.
 
 Under a lean tool profile none of these tools is advertised (they stay callable by name); set `[tools] profile = "full"` in `.plumb/config.toml` to see them.
 

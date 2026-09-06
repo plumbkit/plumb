@@ -254,6 +254,12 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"collab.chat_budget_bytes":  ClassPreference,
 	"collab.max_wait_seconds":   ClassPreference,
 	"collab.intent_ttl_minutes": ClassPreference,
+	"collab.note_ttl_minutes":   ClassPreference,
+
+	// Retention, not a channel: how long mail is kept decides nothing about who
+	// can send or read it. keep_delivered_notes is the recipient's choice at
+	// claim time and gates nothing.
+	"collab.keep_delivered_notes": ClassPreference,
 
 	// --- Tools. The profile decides which tools appear in tools/list. For a
 	// client that builds its whole tool set from that list (SchemaDiscoveryOnly,

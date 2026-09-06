@@ -89,6 +89,13 @@ var defaults = Config{
 		MaxWaitSeconds:   55,
 		IntentTTLMinutes: 120,
 		KnowledgeHandoff: false,
+
+		// Note retention: a zero note_ttl_minutes follows intent_ttl_minutes —
+		// the expiry notes always had before the key existed — and delivered
+		// notes keep expiring with it until a workspace opts into keeping its
+		// transcript.
+		NoteTTLMinutes:     0,
+		KeepDeliveredNotes: false,
 	},
 	Rastro: RastroConfig{
 		Enabled: false,

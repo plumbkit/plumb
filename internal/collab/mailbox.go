@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -388,7 +389,10 @@ func (s *Store) sentBy(ctx context.Context, authorID string, now time.Time, limi
 
 // ClaimNotes hands the caller every unexpired note addressed to who.Name or to
 // "next" that nobody has claimed yet, OLDEST FIRST so a conversation reads in
-// order, and marks each one delivered to who.Name in the same statement.
+// order, and marks each one delivered to who.Name in the same statement. Each
+// row keeps the expiry it was stored with: the TTL bounds a note only while it
+// is UNREAD. A workspace that keeps delivered notes claims through
+// ClaimNotesKeeping instead, which supersedes that expiry at delivery.
 //
 // Claiming replaced the original delete-on-delivery: a delivered row stays until
 // its TTL, which is what gives a conversation a readable transcript and a
@@ -420,6 +424,39 @@ func (s *Store) sentBy(ctx context.Context, authorID string, now time.Time, limi
 // failed on essentially every concurrent burst. A single UPDATE takes the write
 // lock up front, so contention is handled by busy_timeout as normal.
 func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, limit int) ([]Row, error) {
+	return s.claimNotes(ctx, who, now, limit, false)
+}
+
+// ClaimNotesKeeping is ClaimNotes under a workspace that keeps delivered notes
+// ([collab] keep_delivered_notes): delivery is the permanence trigger, so the
+// same statement that stamps the read watermark also stamps keptForever over
+// the stored expiry. The flag comes from the RECIPIENT's policy, not the
+// sender's — one Store serves every connection to a workspace, so retention is
+// decided by whoever is reading, at the moment of the read. Unread rows are
+// untouched and keep the TTL they were sent with, which is what keeps
+// unclaimed "next" and name-only mail aging out rather than piling up.
+func (s *Store) ClaimNotesKeeping(ctx context.Context, who Claimant, now time.Time, limit int) ([]Row, error) {
+	return s.claimNotes(ctx, who, now, limit, true)
+}
+
+// keptForever is the expires_at stamped over a delivered note when the reading
+// workspace keeps delivered notes: the latest nanosecond time.Time can
+// represent (year 2262), so every `expires_at > now` filter passes it and Prune
+// never matches it for as long as this software runs.
+//
+// It is a far-future TIMESTAMP rather than a zero-style sentinel because the
+// column already has a meaning for special values: zero is the column DEFAULT
+// and reads as already-expired everywhere, so reusing it would make every
+// future INSERT that omits expires_at silently immortal, and an older plumb —
+// one a peer's serve proxy can respawn the daemon from its own binary — would
+// read the sentinel as expired and hard-delete every kept note on its next
+// prune tick. A far-future value is simply an unexpired row to code that never
+// knew the concept, which is why this design changes no predicate, no index
+// and no migration: the schema is untouched and every existing filter just
+// works.
+var keptForever = time.Unix(0, math.MaxInt64)
+
+func (s *Store) claimNotes(ctx context.Context, who Claimant, now time.Time, limit int, keep bool) ([]Row, error) {
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
@@ -427,9 +464,13 @@ func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, lim
 	select_ := `SELECT id FROM collab_rows
 			 WHERE ` + where + `
 			 ORDER BY created_at ASC`
-	args := append(
-		[]any{now.UnixNano(), who.Name, who.ID}, // SET delivered_at, delivered_to, delivered_to_id
-		whereArgs...)
+	set := `SET delivered_at = ?, delivered_to = ?, delivered_to_id = ?`
+	args := []any{now.UnixNano(), who.Name, who.ID} // SET delivered_at, delivered_to, delivered_to_id
+	if keep {
+		set += `, expires_at = ?`
+		args = append(args, keptForever.UnixNano())
+	}
+	args = append(args, whereArgs...)
 	if limit > 0 {
 		select_ += ` LIMIT ?`
 		args = append(args, limit)
@@ -438,12 +479,45 @@ func (s *Store) ClaimNotes(ctx context.Context, who Claimant, now time.Time, lim
 	// a generated "?" list — no caller data reaches the statement text; identities and
 	// the limit are bound. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
-		`UPDATE collab_rows SET delivered_at = ?, delivered_to = ?, delivered_to_id = ?
-		 WHERE id IN (`+select_+`)
-		 RETURNING `+rowColumns, args...)
+		`UPDATE collab_rows `+set+`
+			 WHERE id IN (`+select_+`)
+			 RETURNING `+rowColumns, args...)
 	if err != nil {
 		return nil, fmt.Errorf("collab: claim notes: %w", err)
 	}
 	defer rows.Close()
 	return scanRows(rows)
+}
+
+// PendingCount reports how many notes a claim would hand this claimant right
+// now — the claimable predicate as a COUNT(*), claiming nothing. It exists for
+// the one moment an agent needs the number: a delivery that filled its per-call
+// cap, where "3 new" on its own cannot say whether it means three, or three of
+// more. It runs ONLY on that path; the every-call probe stays HasPendingNotes'
+// cheaper LIMIT 1. Like the probe it shares claimable verbatim, so it can never
+// advertise mail the claim would then refuse to hand over.
+//
+// The count is a SNAPSHOT. A peer's send, or a sibling claiming a "next" row,
+// can move the real number either way before the reader acts, so callers render
+// it as of the call, never as a promise. It prepares through probeStmt like the
+// existence probe — a distinct SQL text, so a distinct cache entry.
+func (s *Store) PendingCount(ctx context.Context, who Claimant, now time.Time) (int, error) {
+	if s == nil || s.db == nil || who.Name == "" {
+		return 0, nil
+	}
+	where, args := claimable(who, now)
+	query := `SELECT COUNT(*) FROM collab_rows WHERE ` + where
+	var n int
+	var err error
+	if stmt, prepErr := s.probeStmt(ctx, query); prepErr == nil {
+		err = stmt.QueryRowContext(ctx, args...).Scan(&n)
+	} else {
+		// Preparing is an optimisation; see HasPendingNotes for why falling
+		// through to the unprepared query loses nothing.
+		err = s.db.QueryRowContext(ctx, query, args...).Scan(&n)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("collab: count pending notes: %w", err)
+	}
+	return n, nil
 }

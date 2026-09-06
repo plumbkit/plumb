@@ -125,7 +125,7 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	// Claim first: something may already be waiting, in which case there is
 	// nothing to wait for.
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy)
+		return t.render(ctx, rows, policy, inbox)
 	}
 	wait, clamped := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
 	if wait <= 0 {
@@ -143,7 +143,7 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 		return fmt.Sprintf("No messages (waited %s).%s", humaniseAge(wait), notice)
 	}
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(rows, policy)
+		return t.render(ctx, rows, policy, inbox)
 	}
 	// Woken but nothing to claim. The legitimate cause is a race inside THIS
 	// session: another delivery path (a tool-result block, or session_start) got
@@ -269,8 +269,14 @@ func renderReceipt(unread []collab.Row, now time.Time) string {
 	return sb.String()
 }
 
-func (t *CheckMessages) render(rows []collab.Row, policy CollabPolicy) string {
+func (t *CheckMessages) render(ctx context.Context, rows []collab.Row, policy CollabPolicy, inbox Inbox) string {
 	body := RenderMessages(rows, policy.ChatBudget(), time.Now())
+	if AtCap(rows) {
+		// The claim filled the per-call cap, so "3 new" cannot say whether it
+		// means three or three-of-more. The count is one indexed read on this
+		// rare path only — never on the empty-mailbox path every call takes.
+		body += RenderBacklog(inbox.PendingCount(ctx))
+	}
 	return strings.TrimLeft(body, "\n")
 }
 

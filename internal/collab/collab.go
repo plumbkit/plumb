@@ -17,15 +17,19 @@
 //
 // Rows carry a TTL and are pruned on the daemon session-reaper tick AND filtered
 // from every read regardless of pruning, so a missed prune never resurrects a
-// stale row. Intents also die with their author session (cleared on close);
-// notes survive their author.
+// stale row. The TTL bounds a NOTE only while it is unread: a workspace that
+// keeps delivered notes ([collab] keep_delivered_notes) stamps a far-future
+// expiry at delivery, so the read flag is also the permanence trigger — the
+// transcript survives while unclaimed mail still ages out. Intents also die
+// with their author session (cleared on close); notes survive their author.
 //
 // Storage is a small SQLite DB at <workspace>/.plumb/collab.db (WAL,
 // auto-gitignored like topology.db), created lazily on first write. A workspace
 // where both the intents and mailbox flags stay off never gets a collab.db.
-// Losing collab.db loses only expiring advisory data, which is acceptable —
-// unlike memory.db it is not a rebuildable index of durable content, so the rows
-// deliberately do NOT live there.
+// Losing collab.db loses only advisory data — by default expiring, or where a
+// workspace keeps delivered notes, a transcript without a backup — which is
+// acceptable: unlike memory.db it is not a rebuildable index of durable
+// content, so the rows deliberately do NOT live there.
 package collab
 
 import "time"
@@ -62,7 +66,11 @@ type Row struct {
 	// connected, or an AddresseeNext note — and is delivered by name alone.
 	AddresseeID string
 	CreatedAt   time.Time
-	ExpiresAt   time.Time
+	// ExpiresAt is when the row dies while UNCLAIMED. A workspace that keeps
+	// delivered notes supersedes it with keptForever at delivery — the read
+	// flag is the permanence trigger — so a claimed transcript row outlives
+	// any TTL it was sent with.
+	ExpiresAt time.Time
 
 	// ConversationID groups a note with its replies into one thread. Minted by
 	// the store on a fresh message and echoed back by the recipient to reply.

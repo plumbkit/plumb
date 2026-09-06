@@ -150,9 +150,14 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	if len(rows) == 0 {
 		return ""
 	}
+	block := tools.RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now())
 	if tools.AtCap(rows) {
-		w := s.chatWatch
-		w.invalidate() // the remainder must arrive on the next call, not in 30s
+		s.chatWatch.invalidate() // the remainder must arrive on the next call, not in 30s
+		// And the recipient must KNOW the remainder exists — "3 new" alone
+		// cannot say three-of-three rather than three-of-more, and an agent
+		// that goes idle here believes it has read everything. One count read,
+		// only on this rare path; the miss path every call takes is untouched.
+		block += tools.RenderBacklog(inbox.PendingCount(ctx))
 	}
-	return strings.TrimRight(tools.RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now()), "\n")
+	return strings.TrimRight(block, "\n")
 }

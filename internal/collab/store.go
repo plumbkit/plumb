@@ -176,7 +176,10 @@ const budgetGuard = `(SELECT COUNT(*) FROM collab_rows
 // returns the conversation it belongs to — the caller's ConversationID when it
 // threads onto an existing exchange, otherwise a freshly minted one, which the
 // sender quotes to continue the thread. The body is stored verbatim (callers
-// redact first). TTL is clamped to minTTL.
+// redact first). TTL is clamped to minTTL, and bounds the note only while it is
+// UNREAD — a claim under a keep-delivered workspace supersedes it at delivery
+// (ClaimNotesKeeping), so the sender's TTL is the unread window, not the row's
+// lifetime.
 //
 // in.AddresseeID, when set, BINDS the note to that one session: only a claimant
 // presenting the same ID may read it. It is the caller's job to set it only for
