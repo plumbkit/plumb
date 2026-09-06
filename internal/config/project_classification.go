@@ -159,11 +159,15 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"quality.max_findings_per_file": ClassInert,
 
 	// --- Topology: sizes, timeouts and pacing for this workspace's own index.
-	// exclude_patterns has no consumer at all today (the skip list is hardcoded
-	// in indexer_resync.go) — recorded as inert rather than as a working control.
+	// exclude_patterns is now live (topology/exclude.go): the resync walk and the
+	// watcher both consult it, so a project can keep a COMMITTED tree out of its
+	// own index — the one exclusion .gitignore cannot express. A hostile value
+	// makes this workspace's index less complete and nothing else: it cannot
+	// widen access, run a process, or redirect a write, and the whole-workspace
+	// patterns that would blank the index are refused by sanitizeExcludePatterns.
 	"topology.enabled":                 ClassPreference,
 	"topology.resync_on_attach":        ClassPreference,
-	"topology.exclude_patterns":        ClassInert,
+	"topology.exclude_patterns":        ClassPreference,
 	"topology.max_file_size_bytes":     ClassPreference,
 	"topology.extract_timeout_seconds": ClassPreference,
 	"topology.resync_batch":            ClassPreference,

@@ -36,15 +36,17 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	if err != nil {
 		return nil, err
 	}
+	excludes := sanitizeExcludePatterns(workspace, cfg.ExcludePatterns)
 	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes, cfg.ResyncIntervalMinutes)
 	idx.resyncBatch = cfg.ResyncBatch
 	idx.resyncPause = time.Duration(cfg.ResyncPauseMs) * time.Millisecond
 	idx.extractTimeout = time.Duration(cfg.ExtractTimeoutSeconds) * time.Second
+	idx.excludePatterns = excludes
 	s := &Store{workspace: workspace, db: db, idx: idx}
 
 	var watcher *fsWatcher
 	if cfg.Watch {
-		w, werr := newFSWatcher(workspace, s)
+		w, werr := newFSWatcher(workspace, s, excludes)
 		if werr != nil {
 			slog.Warn("topology: file watcher unavailable; falling back to periodic resync",
 				"workspace", workspace, "err", werr)

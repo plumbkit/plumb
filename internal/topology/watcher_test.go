@@ -79,7 +79,7 @@ func TestShouldSkipPath(t *testing.T) {
 // TestFSWatcher_StartStop exercises the real platform watcher's lifecycle: it
 // must construct, start, and stop cleanly without hanging.
 func TestFSWatcher_StartStop(t *testing.T) {
-	fw, err := newFSWatcher(t.TempDir(), &fakeSink{})
+	fw, err := newFSWatcher(t.TempDir(), &fakeSink{}, nil)
 	if err != nil {
 		t.Fatalf("newFSWatcher: %v", err)
 	}

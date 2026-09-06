@@ -600,6 +600,19 @@ erDiagram
 a node — keying it on `(model, content_hash)` lets one vector serve every symbol
 with identical text and outlive a reindex.
 
+**What is indexed.** The resync walk is top-down and prunes, with three
+additive exclusions: a hardcoded floor (`vendor`, `node_modules`, `testdata`,
+`dist`, `build`, `__pycache__`, and every dot-directory — `shouldSkipDir`), the
+tree's own `.gitignore` / `.ignore` files (`internal/ignore`, an `ignore.Stack`
+loaded per directory), and `[topology] exclude_patterns` for a vendored tree the
+repository tracks on purpose. The floor applies whether or not an ignore file
+mentions those directories; the workspace ROOT is never judged by it, or a
+checkout at `~/.config/repo` would prune itself. The OS watcher applies the same
+three, and a change to a `.gitignore` / `.ignore` escalates to a full resync so
+the prune pass can un-index a newly ignored tree — which is why the watcher's
+source exclusion is anchored at the workspace root and must let those two
+filenames through (`watchExcludeRegexFor`, `internal/topology/watcher.go`).
+
 **Lifecycle.** `topology.db` is a *rebuildable* index, versioned by `PRAGMA
 user_version` (currently 1). When the on-disk version is older the indexer DROPs
 and recreates every table rather than migrating — the working tree is the source

@@ -30,6 +30,13 @@ type Indexer struct {
 	resyncBatch int           // files per pause during a full resync; 0 disables pacing
 	resyncPause time.Duration // pause between resync batches; 0 disables pacing
 
+	// excludePatterns is [topology] exclude_patterns, already sanitised by
+	// sanitizeExcludePatterns. It excludes paths ON TOP OF shouldSkipDir and the
+	// tree's own .gitignore / .ignore files, and is the only one of the three
+	// that can reach a tree the repository deliberately tracks. Read by the
+	// resync walk; set once before Start and not mutated afterwards.
+	excludePatterns []string
+
 	// extractTimeout caps one file's parse. The size gates bound how much source
 	// a grammar sees, not how long it spends on it — a pathological error-recovery
 	// path can burn tens of seconds on a file well inside maxSize — and the worker

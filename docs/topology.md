@@ -140,7 +140,13 @@ pipeline has four parts:
    switch, another editor. The full resync is **throttled** (it pauses briefly
    every `resync_batch` files) so a large repo's index build never saturates a
    core or competes with your live tool calls; the pause is interruptible so
-   daemon shutdown stays fast.
+   daemon shutdown stays fast. The resync walk **prunes** three ways, additively:
+   a hardcoded floor (`vendor`, `node_modules`, `testdata`, `dist`, `build`,
+   `__pycache__`, and every dot-directory), the tree's own `.gitignore` /
+   `.ignore` files, and `exclude_patterns`. Editing a `.gitignore` triggers a
+   full resync, so a newly ignored tree is un-indexed (the prune pass removes
+   rows for files the walk no longer visits) and a newly un-ignored one is
+   picked up.
 4. **Six tools query the graph** (below), reporting their source and freshness so
    an agent never mistakes an approximate answer for compiler-grade truth.
 
@@ -392,7 +398,7 @@ All `[topology]` fields (see the
 |---|---|---|
 | `enabled` | `true` | Turn the index on or off (on by default). |
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
-| `exclude_patterns` | `[]` | Path globs to skip during indexing. |
+| `exclude_patterns` | `[]` | Extra path globs the indexer and watcher skip, on top of the hardcoded skip list and the tree's own `.gitignore` / `.ignore`. For a vendored or generated tree the repository tracks on purpose — the one exclusion the other two cannot express. `third_party/**` matches a path, `*.pb.go` a base name at any depth. Whole-workspace patterns (`*`, `**`, `.`) are refused with a warning; use `enabled = false` instead. |
 | `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). |
 | `extract_timeout_seconds` | `10` | Longest one file's parse may run before it is abandoned and recorded as a file error. The size caps above bound how much source a grammar sees, not how long it spends: error recovery can go superlinear on a small file, and the indexer runs a single worker, so an unbounded parse would stall every file behind it. Bounded by a built-in 2-minute ceiling: this setting can LOWER the bound but not remove it, since an unbounded parse can wedge the single indexer worker permanently, so `0` means "use the ceiling" rather than "unbounded". A file that times out is recorded with its mtime (not a content hash), so every full resync re-attempts it and re-pays the full timeout — a pathological file costs one timeout per resync cycle. |
 | `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |

@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,20 +11,37 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/ignore"
 )
 
 // workspaceScale returns a human-readable file-count summary for the workspace
 // identity section, e.g. "~342 files (287 Go)".
 func workspaceScale(ws, lang string) string {
 	exts, label := langFileProfile(lang)
-	total, langCount := countWorkspaceFiles(ws, exts)
+	total, langCount, truncated := countWorkspaceFiles(ws, exts)
 	if total == 0 {
 		return ""
 	}
-	if label != "" && langCount > 0 {
-		return fmt.Sprintf("~%d files (%d %s)", total, langCount, label)
+	return renderScale(total, langCount, label, truncated)
+}
+
+// renderScale formats the Scale line. Split out of workspaceScale so the
+// truncation marker can be tested without materialising scaleWalkMaxFiles
+// files on disk.
+//
+// A capped walk renders "~50000+ files", never the bare cap: the number is the
+// one fact this line exists to give, and silently reporting a ceiling as if it
+// were a count is worse than reporting nothing — an agent reads "50000 files"
+// as a measured workspace size and sizes its next move to it.
+func renderScale(total, langCount int, label string, truncated bool) string {
+	count := fmt.Sprintf("~%d", total)
+	if truncated {
+		count += "+"
 	}
-	return fmt.Sprintf("~%d files", total)
+	if label != "" && langCount > 0 {
+		return fmt.Sprintf("%s files (%d %s)", count, langCount, label)
+	}
+	return count + " files"
 }
 
 // langFileProfile returns the primary source-file extensions and a short
@@ -62,35 +81,107 @@ func langFileProfile(lang string) (exts []string, label string) {
 	}
 }
 
-// countWorkspaceFiles walks ws and returns the total file count and the count
-// of files matching the given extensions. Skips .git, node_modules, vendor,
-// dist, build, and hidden directories.
-func countWorkspaceFiles(ws string, exts []string) (total, langCount int) {
+// scaleWalkMaxFiles caps how many files a session_start census walk visits.
+//
+// Both walks below run on every session_start, before the agent has said
+// anything, and neither had a bound: a monorepo or a home-adjacent root made
+// the cheapest line in the packet the most expensive call in the session. The
+// cap trades an exact count on a huge tree for a bounded one, and the Scale
+// line says which it gave (see renderScale).
+const scaleWalkMaxFiles = 50000
+
+// errCensusCapped stops a census walk at its file limit. Returned through
+// filepath.WalkDir, never to a caller.
+var errCensusCapped = errors.New("session_start: census walk capped")
+
+// censusWalk walks ws top-down and calls visit for every file that survives
+// three filters, reporting whether it stopped at maxFiles.
+//
+// The filters are ADDITIVE and applied in this order:
+//
+//  1. skipDirs — the hardcoded floor. A directory named here is pruned whether
+//     or not any ignore file mentions it.
+//  2. the dot-directory rule — same floor, same reason.
+//  3. .gitignore / .ignore, via ignore.Stack loaded per directory.
+//
+// gitignore is a supplement to the floor, not a replacement for it: a
+// repository that tracks its vendor/ tree (many do) must still not have it
+// counted as workspace scale, and a workspace with no ignore file at all must
+// behave exactly as it did before this walk learned to read them.
+//
+// The walk PRUNES excluded directories with fs.SkipDir rather than filtering
+// their files, which is what ignore.Stack.IsIgnored is contracted for — see the
+// CONTRACT note on that method. Filtering instead of pruning would both cost
+// the descent and get the answer wrong, because a file under an excluded
+// directory is usually matched by no rule of its own.
+//
+// This deliberately does not reuse tools.walk: that walker hides every dotfile
+// (the census counts them, they are workspace scale) and has no notion of the
+// hardcoded floor above.
+func censusWalk(ws string, skipDirs map[string]bool, maxFiles int, visit func(path string, d fs.DirEntry)) (truncated bool) {
+	root := filepath.Clean(ws)
+	// One stack per directory, keyed by absolute path. WalkDir is depth-first
+	// and pre-order, so a directory's parent is always already loaded, and a
+	// pruned directory never has children to look it up.
+	stacks := make(map[string]ignore.Stack)
+	seen := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path == root {
+				var st ignore.Stack
+				stacks[root] = st.Load(root)
+				return nil
+			}
+			name := d.Name()
+			if skipDirs[name] || strings.HasPrefix(name, ".") {
+				return fs.SkipDir
+			}
+			parent := stacks[filepath.Dir(path)]
+			if parent.IsIgnored(path, true) {
+				return fs.SkipDir
+			}
+			stacks[path] = parent.Load(path)
+			return nil
+		}
+		if stacks[filepath.Dir(path)].IsIgnored(path, false) {
+			return nil
+		}
+		visit(path, d)
+		seen++
+		if maxFiles > 0 && seen >= maxFiles {
+			return errCensusCapped
+		}
+		return nil
+	})
+	return errors.Is(err, errCensusCapped)
+}
+
+// censusSkipDirs is the hardcoded floor for the Scale walk: pruned whatever
+// the ignore files say. Dot-directories are pruned by censusWalk itself, so
+// .git is listed for the record rather than for effect.
+var censusSkipDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
+}
+
+// countWorkspaceFiles walks ws and returns the total file count, the count of
+// files matching the given extensions, and whether the walk hit
+// scaleWalkMaxFiles. Skips the censusSkipDirs floor, hidden directories, and
+// anything .gitignore / .ignore excludes.
+func countWorkspaceFiles(ws string, exts []string) (total, langCount int, truncated bool) {
 	extSet := make(map[string]bool, len(exts))
 	for _, e := range exts {
 		extSet[e] = true
 	}
-	skipDirs := map[string]bool{
-		".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
-	}
-	_ = filepath.Walk(ws, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			n := info.Name()
-			if skipDirs[n] || (strings.HasPrefix(n, ".") && path != ws) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+	truncated = censusWalk(ws, censusSkipDirs, scaleWalkMaxFiles, func(path string, _ fs.DirEntry) {
 		total++
 		if extSet[filepath.Ext(path)] {
 			langCount++
 		}
-		return nil
 	})
-	return total, langCount
+	return total, langCount, truncated
 }
 
 // detectLanguageInfo returns a human-readable language label and, when a plumb
@@ -253,31 +344,36 @@ func gitSubmodules(ws string) []string {
 	return paths
 }
 
+// recentSkipDirs is the hardcoded floor for the recent-files walk. Same set as
+// censusSkipDirs plus .idea, kept separate so neither list silently inherits a
+// change made for the other.
+var recentSkipDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true, ".idea": true,
+}
+
 // recentlyModifiedFiles returns up to n workspace-relative file paths sorted
-// by mtime (newest first). Skips hidden directories, .git, node_modules,
-// vendor — the usual noise.
+// by mtime (newest first). Skips hidden directories, the recentSkipDirs floor,
+// and anything .gitignore / .ignore excludes — a generated tree's build
+// artefacts are the newest files in most workspaces and were, until this walk
+// read the ignore files, the whole list.
+//
+// The walk stops at scaleWalkMaxFiles like the census does, which bounds the
+// entry slice as well as the traversal. On a workspace past that cap the five
+// newest come from the files visited before it, not from the whole tree: a
+// bounded walk that answers approximately beats an unbounded one that may not
+// return in time to answer at all.
 func recentlyModifiedFiles(ws string, n int) []string {
 	type fileEntry struct {
 		path string
 		mod  int64
 	}
 	var entries []fileEntry
-	skipDirs := map[string]bool{
-		".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true, ".idea": true,
-	}
-	_ = filepath.Walk(ws, func(path string, info os.FileInfo, err error) error {
+	_ = censusWalk(ws, recentSkipDirs, scaleWalkMaxFiles, func(path string, d fs.DirEntry) {
+		info, err := d.Info()
 		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			name := info.Name()
-			if skipDirs[name] || (strings.HasPrefix(name, ".") && path != ws) {
-				return filepath.SkipDir
-			}
-			return nil
+			return
 		}
 		entries = append(entries, fileEntry{path: path, mod: info.ModTime().UnixNano()})
-		return nil
 	})
 	sort.Slice(entries, func(i, j int) bool { return entries[i].mod > entries[j].mod })
 	if len(entries) > n {
