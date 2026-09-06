@@ -481,6 +481,9 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
 			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
 	}
+	if !strings.Contains(packet2, "new internal identity — mail and threads bound to the predecessor ID are not inherited") {
+		t.Errorf("the replacement packet does not disclose the name-only recovery boundary:\n%s", packet2)
+	}
 	if full2 == full1 {
 		t.Fatalf("the replacement serve recovered the internal session ID %q — only the proxy "+
 			"credential may restore an ID, and no credential survived the replacement", full2)

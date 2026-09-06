@@ -176,7 +176,9 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 
 	env := append(isolatedEnv(tmpHome), extraEnv...)
 
-	cmd := exec.CommandContext(ctx, plumbBin, "serve")
+	childCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(childCtx, plumbBin, "serve")
 	cmd.Env = env
 	cmd.Stderr = os.Stderr
 
@@ -192,24 +194,23 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 		t.Fatal("start plumb serve:", err)
 	}
 
-	childCtx, cancel := context.WithCancel(ctx)
 	c := &mcpClient{
 		enc:       json.NewEncoder(stdinW),
 		pending:   make(map[string]chan mcpMsg),
 		rootsPath: rootsPath,
-		cancel:    cancel,
+		// Reboot tests need the proxy gone before restarting its daemon. Cancelling
+		// only the reader leaves a live proxy that can reclaim the predecessor.
+		cancel: sync.OnceFunc(func() {
+			cancel()
+			stdinW.Close()
+			cmd.Wait() //nolint:errcheck // cancellation deliberately kills the child; wait reaps it before replacement
+		}),
 	}
 	c.enc.SetEscapeHTML(false)
 
 	// Background reader: dispatch responses to pending waiters; answer
 	// server-initiated requests (roots/list) inline.
 	go c.readLoop(childCtx, bufio.NewReader(stdoutR))
-
-	t.Cleanup(func() {
-		cancel()
-		stdinW.Close()
-		cmd.Wait() //nolint:errcheck // best-effort teardown of a child process the test is finished with
-	})
 
 	// Stop the daemon we spawned at cleanup so it doesn't linger.
 	//
@@ -218,7 +219,10 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 	// machine — including the developer's. The product bug is fixed, but a
 	// harness should not depend on a command's current blast radius for its own
 	// isolation.
-	t.Cleanup(func() { stopDaemonBestEffort(t, tmpHome) })
+	t.Cleanup(func() {
+		c.cancel()
+		stopDaemonBestEffort(t, tmpHome)
+	})
 
 	return c
 }
