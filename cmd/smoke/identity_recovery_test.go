@@ -291,12 +291,23 @@ func stopDaemon(t *testing.T, tmpHome string) {
 		"depends on never happened", n)
 }
 
-// stopDaemonBestEffort is stopDaemon for TEARDOWN: it signals and returns
-// without waiting and without ever failing the test. A cleanup that fails the
-// test it is cleaning up after turns a passing run into a confusing red one.
+// stopDaemonBestEffort is stopDaemon for TEARDOWN: it signals and waits for the
+// isolated daemon to exit, but never fails the test. Waiting matters because a
+// daemon still shutting down can write into tmpHome while testing removes it.
 func stopDaemonBestEffort(t *testing.T, tmpHome string) {
 	t.Helper()
-	signalIsolatedDaemon(t, tmpHome)
+	proc, n, ok := signalIsolatedDaemon(t, tmpHome)
+	if !ok {
+		return
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Logf("isolated daemon %d did not exit within 20s of teardown SIGTERM", n)
 }
 
 // signalIsolatedDaemon SIGTERMs the daemon named by the isolated tree's own pid
