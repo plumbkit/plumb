@@ -147,6 +147,49 @@ func TestCensusWalk_StopsAtCap(t *testing.T) {
 	}
 }
 
+// TestCensusWalk_CapBoundary pins the OFF-BY-ONE the cap check had: it fired
+// after the maxFiles'th file had been visited, so a walk that saw every file
+// there was and happened to stop on exactly the cap reported itself truncated —
+// and renderScale then printed "~50000+ files" for a workspace of exactly
+// 50 000, which is the ceiling-read-as-a-count that renderScale's doc comment
+// says the marker exists to prevent, arrived at from the other side.
+//
+// truncated must mean "a file was left unvisited", so it is false at the cap
+// and true one past it. The visited counts are asserted alongside, because a
+// fix that made truncated correct by walking one file further would be
+// counting a file the caller was told about as "and more".
+func TestCensusWalk_CapBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		files, cap    int
+		wantVisited   int
+		wantTruncated bool
+	}{
+		{"exactly at the cap is a complete walk", 5, 5, 5, false},
+		{"one over the cap is truncated", 6, 5, 5, true},
+		{"well under the cap", 3, 5, 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+			files := map[string]string{}
+			for i := range tc.files {
+				files[filepath.Join("pkg", string(rune('a'+i))+".go")] = "package p\n"
+			}
+			writeTree(t, ws, files)
+
+			visited := 0
+			truncated := censusWalk(ws, censusSkipDirs, tc.cap, func(string, fs.DirEntry) { visited++ })
+			if visited != tc.wantVisited {
+				t.Errorf("visited = %d, want %d", visited, tc.wantVisited)
+			}
+			if truncated != tc.wantTruncated {
+				t.Errorf("truncated = %v, want %v (%d files, cap %d)",
+					truncated, tc.wantTruncated, tc.files, tc.cap)
+			}
+		})
+	}
+}
+
 func TestRenderScale_AnnouncesCap(t *testing.T) {
 	if got := renderScale(342, 287, "Go", false); got != "~342 files (287 Go)" {
 		t.Errorf("uncapped = %q", got)
