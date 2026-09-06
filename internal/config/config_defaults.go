@@ -119,14 +119,9 @@ var defaults = Config{
 			Enabled:     true,
 		},
 		"python": {
-			Command: "pyright-langserver",
-			Args:    []string{"--stdio"},
-			// `*.py.lock` is a glob (markerPresent globs any marker carrying
-			// '*', as swift's `*.xcodeproj` already does), so a lock file named
-			// for the environment it pins — `app.py.lock`, `3.12.py.lock` —
-			// names the root. Deliberately not a bare `*.lock`: that would claim
-			// every Cargo, npm and Terraform lock file in existence.
-			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json", "*.py.lock"},
+			Command:     "pyright-langserver",
+			Args:        []string{"--stdio"},
+			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json"},
 			// Weak, not strong, and deliberately so. A `requirements.txt` is the
 			// commonest thing a Python repo has instead of a manifest, but it is
 			// also routinely dropped into a directory that is not the project
@@ -140,7 +135,27 @@ var defaults = Config{
 			// motivated them: a Python service whose frontend lives in app/ has
 			// `requirements.txt` beside `package.json` at the root, and the
 			// language its sources are written in decides which server starts.
-			WeakRootMarkers: []string{"requirements.txt", "uv.lock"},
+			//
+			// `*.py.lock` is a glob (markerPresent globs any marker carrying '*',
+			// as swift's `*.xcodeproj` already does) matching what `uv lock
+			// --script foo.py` writes beside a PEP 723 script: `foo.py.lock`.
+			// Deliberately not a bare `*.lock`, which would claim every Cargo, npm
+			// and Terraform lock file in existence.
+			//
+			// WEAK, and that distinction is the whole point. pyproject.toml and
+			// setup.py are project-root manifests by convention; `foo.py.lock` is a
+			// PER-SCRIPT artifact, and `uv lock --script` exists precisely for the
+			// loose standalone scripts that live in the tools/ or scripts/ directory
+			// of repositories written in any language. As a strong marker it beat
+			// weakLangAt outright, so a Node app with one locked deploy.py resolved
+			// python and left 200 TypeScript sources unserved; and because
+			// discoverChildLanguages matches strong markers in subdirectories, one
+			// incidentally-locked helper under tools/ could be elected a monorepo's
+			// primary before the content sniff was ever consulted. Weak markers are
+			// never consulted by child discovery, never claim an ancestor, and go
+			// through the tie-break — so the sources decide, which is what a
+			// per-script artifact deserves.
+			WeakRootMarkers: []string{"requirements.txt", "uv.lock", "*.py.lock"},
 			Enabled:         true,
 		},
 		"java": {
