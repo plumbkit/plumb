@@ -26,8 +26,10 @@ package smoke_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,7 +92,7 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 	c.initialize(t, fixture)
 
 	const externalID = "smoke-conversation-426"
-	first := c.call(t, "session_start", map[string]any{
+	first, firstMeta := c.callWithMeta(t, "session_start", map[string]any{
 		"workspace":  fixture,
 		"session_id": externalID,
 	}, sessionStartTimeout)
@@ -102,7 +104,16 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 	if want.id == "" {
 		t.Fatalf("session_start named the caller without its session ID; packet:\n%s", first)
 	}
-	t.Logf("established identity: %s (id %s)", want.name, want.id)
+	// The packet abbreviates the ID; mail binds to the FULL one, so the rounds
+	// below assert identity on the _meta form and only sanity-check the prefix
+	// against the text an agent actually reads.
+	fullID := fullSessionID(t, firstMeta)
+	if !strings.HasPrefix(fullID, want.id) {
+		t.Fatalf("the packet's abbreviated ID %q is not a prefix of the full _meta ID %q — the two "+
+			"channels report different identities", want.id, fullID)
+	}
+	t.Logf("established identity: %s (id %s)", want.name, fullID)
+	visible := []string{first}
 
 	pid := waitForPID(t, tmpHome, 15*time.Second)
 
@@ -112,8 +123,10 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 		// A bare orientation call: no workspace argument, nothing that re-links
 		// the conversation. If identity recovery depended on either — as it did
 		// before this card — this is where it would fail.
-		packet := recoverWithSessionStart(t, c, 60*time.Second)
+		packet, meta := recoverWithSessionStart(t, c, 60*time.Second)
 		got := parseSelfIdentity(packet)
+		gotFull := fullSessionID(t, meta)
+		visible = append(visible, packet)
 
 		newPID := waitForNewPID(t, tmpHome, pid, 20*time.Second)
 		if newPID == pid {
@@ -131,13 +144,19 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 			t.Fatalf("round %d: the session came back under ID %q, want %q — mail is BOUND to "+
 				"the ID, and a fork here strands it silently", round, got.id, want.id)
 		}
-		t.Logf("round %d: recovered as %s (id %s) behind a new daemon pid %s", round, got.name, got.id, pid)
+		if gotFull != fullID {
+			t.Fatalf("round %d: the full session ID is %q, want %q — the abbreviated packet check "+
+				"above can agree while the identity itself forked, and mail binds to the full ID",
+				round, gotFull, fullID)
+		}
+		t.Logf("round %d: recovered as %s (id %s) behind a new daemon pid %s", round, got.name, gotFull, pid)
 	}
 
 	// The external linkage survived too, and is resolvable by the real CLI
 	// rather than only by an in-process helper. This is the fact that used to
 	// live solely in an ended session file the janitor collects after 24 h.
 	out := runPlumb(t, plumbBin, tmpHome, "mail", "--external-id", externalID, "--json")
+	visible = append(visible, out)
 	if !strings.Contains(out, want.name) {
 		t.Errorf("`plumb mail --external-id %s` does not resolve to %q after three restarts; "+
 			"the authorised linkage did not survive:\n%s", externalID, want.name, out)
@@ -146,9 +165,18 @@ func TestSmoke_SessionIdentitySurvivesDaemonRestarts(t *testing.T) {
 	// daemon_info must agree with session_start about who this is. Two tools
 	// reporting different identities is the ambiguity that started this card.
 	info := c.call(t, "daemon_info", map[string]any{}, toolTimeout)
+	visible = append(visible, info)
 	if !strings.Contains(info, want.name) {
 		t.Errorf("daemon_info does not report the session as %q; the self-reporting tools "+
 			"disagree:\n%s", want.name, info)
+	}
+
+	// And nothing the client saw may carry the proxy session credential. It is
+	// the one secret in this scenario — the 122-bit value a surviving serve
+	// replays to prove itself — and it is UUID-shaped, which nothing else in
+	// this test's output legitimately is.
+	for i, out := range visible {
+		assertNoCredentialLeak(t, fmt.Sprintf("client-visible output #%d", i), out)
 	}
 }
 
@@ -172,7 +200,7 @@ func TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee(t *testing.T) {
 	waitForPID(t, tmpHome, 15*time.Second)
 
 	stopDaemon(t, tmpHome)
-	packet := recoverWithSessionStart(t, c, 60*time.Second)
+	packet, _ := recoverWithSessionStart(t, c, 60*time.Second)
 
 	// The note is ONE-SHOT and rides the first content-bearing tool result after
 	// the reconnect. recoverWithSessionStart retries until one succeeds, and only
@@ -211,12 +239,12 @@ func TestSmoke_ReconnectNoteDoesNotAssertARestartItCannotSee(t *testing.T) {
 // The bareness is the point. Recovery must not depend on the caller naming a
 // workspace or re-linking a conversation, because an agent that has done
 // neither is exactly the one a restart catches unprepared.
-func recoverWithSessionStart(t *testing.T, c *mcpClient, budget time.Duration) string {
+func recoverWithSessionStart(t *testing.T, c *mcpClient, budget time.Duration) (string, map[string]any) {
 	t.Helper()
 	deadline := time.Now().Add(budget)
 	for {
-		if txt, ok := c.callAllowError("session_start", map[string]any{}, toolTimeout); ok {
-			return txt
+		if txt, meta, ok := c.callAllowErrorMeta("session_start", map[string]any{}, toolTimeout); ok {
+			return txt, meta
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the proxy did not recover: session_start still failing after the daemon was stopped")
@@ -318,4 +346,286 @@ func runPlumb(t *testing.T, plumbBin, tmpHome string, args ...string) string {
 		t.Logf("plumb %s: %v", strings.Join(args, " "), err)
 	}
 	return string(out)
+}
+
+// callAllowErrorMeta is callAllowError, also returning the result's _meta on
+// success. Used across restarts, where transient failures are expected and
+// retried, and the identity assertions need the full ID the packet only
+// abbreviates.
+func (c *mcpClient) callAllowErrorMeta(toolName string, args map[string]any, timeout time.Duration) (string, map[string]any, bool) {
+	id, err := c.send("tools/call", map[string]any{"name": toolName, "arguments": args})
+	if err != nil {
+		return "", nil, false
+	}
+	msg, err := c.recv(id, timeout)
+	if err != nil || msg.Error != nil {
+		return "", nil, false
+	}
+	text, isErr, meta, derr := decodeToolResultFull(msg.Result)
+	if derr != nil || isErr {
+		return "", nil, false
+	}
+	return text, meta, true
+}
+
+// fullSessionID extracts the full internal session ID from a session_start
+// result's _meta. The wire key is mcp.MetaSessionIDKey; it is spelled literally
+// here because the tests assert the wire contract, not the Go constant. Mail
+// binds to the full ID, so identity assertions run on it rather than on the
+// abbreviation the packet prints.
+func fullSessionID(t *testing.T, meta map[string]any) string {
+	t.Helper()
+	if len(meta) == 0 {
+		t.Fatal("session_start returned no _meta; the full session ID travels there (mcp.MetaSessionIDKey)")
+	}
+	id, _ := meta["dev.plumbkit/session-id"].(string)
+	if id == "" {
+		t.Fatalf("session_start _meta carries no full session ID; meta: %v", meta)
+	}
+	return id
+}
+
+// uuidShape matches RFC-4122 tokens. In these scenarios the only UUID in play
+// is the proxy session credential — the secret a surviving serve replays to
+// prove itself — which must never reach client-visible output.
+var uuidShape = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// assertNoCredentialLeak fails when a UUID-shaped token appears in
+// client-visible output. Every identity scenario below funnels its tool
+// results, packets and CLI output through this.
+func assertNoCredentialLeak(t *testing.T, label, out string) {
+	t.Helper()
+	if leaked := uuidShape.FindString(out); leaked != "" {
+		t.Errorf("%s: client-visible output contains a UUID-shaped token (%q…). The only UUID in "+
+			"play is the proxy session credential, and it must never appear in any tool result, "+
+			"packet, or CLI output:\n%s", label, leaked, out)
+	}
+}
+
+// retryCall drives a tool call across a daemon restart: the first attempt may
+// land in the reconnect window and surface the proxy's retryable error.
+func retryCall(t *testing.T, c *mcpClient, tool string, args map[string]any, budget time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for {
+		if txt, ok := c.callAllowError(tool, args, toolTimeout); ok {
+			return txt
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s still failing after %s", tool, budget)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// TestSmoke_ServeReplacementResumesByName is the machine-reboot case, and the
+// reason the two restart tests above are not the whole story: a reboot kills
+// the serve proxy TOO, so no proxy credential survives and the daemon-restart
+// restore cannot fire. Continuity then rests entirely on the external linkage:
+// the new serve process presents the same conversation ID and takes back the
+// NAME its predecessor answered to. The internal session ID does NOT come
+// back — that would mean the credential boundary leaked — and the packet must
+// say the caller resumed rather than silently handing back the name.
+func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
+	plumbBin := buildPlumb(t)
+	fixture := makeMarkerFixture(t)
+	tmpHome := mkTmpHome(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const externalID = "smoke-reboot-426"
+	first := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	first.initialize(t, fixture)
+	packet1, meta1 := first.callWithMeta(t, "session_start", map[string]any{
+		"workspace":  fixture,
+		"session_id": externalID,
+	}, sessionStartTimeout)
+	want := parseSelfIdentity(packet1)
+	full1 := fullSessionID(t, meta1)
+	if want.name == "" || full1 == "" {
+		t.Fatalf("the first serve never established an identity; packet:\n%s", packet1)
+	}
+	waitForPID(t, tmpHome, 15*time.Second)
+
+	// Pre-restart sanity: the linkage must already resolve through the real CLI,
+	// so a resume failure below indicts the resume path, not the send.
+	if pre := runPlumb(t, plumbBin, tmpHome, "mail", "--external-id", externalID, "--json"); !strings.Contains(pre, want.name) {
+		t.Fatalf("the linkage did not resolve even before the replacement (mail --external-id → %q, want %q); "+
+			"the resume below never had a chance:\n%s", strings.TrimSpace(pre), want.name, pre)
+	}
+
+	// Kill the first serve process AND the daemon the way a reboot does: no
+	// graceful handover, no credential replay — both gone together. Killing the
+	// serve alone would leave the daemon holding the session for its reconnect
+	// grace (the idle-eviction window), and the replacement would then be a
+	// live-name collision rather than the reboot's resume-from-ended state.
+	first.cancel()
+	stopDaemon(t, tmpHome)
+
+	second := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	second.initialize(t, fixture)
+	packet2, meta2 := second.callWithMeta(t, "session_start", map[string]any{
+		"workspace":  fixture,
+		"session_id": externalID,
+	}, sessionStartTimeout)
+	t.Logf("successor packet:\n%s", packet2)
+	got := parseSelfIdentity(packet2)
+	full2 := fullSessionID(t, meta2)
+
+	if got.name != want.name {
+		t.Fatalf("the same conversation came back as %q, want its predecessor's name %q — a serve "+
+			"replacement must not cost the session the address its mail was sent to", got.name, want.name)
+	}
+	if !strings.Contains(packet2, "resumed") {
+		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
+			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
+	}
+	if full2 == full1 {
+		t.Fatalf("the replacement serve recovered the internal session ID %q — only the proxy "+
+			"credential may restore an ID, and no credential survived the replacement", full2)
+	}
+
+	// And the linkage is resolvable by the real CLI, not only in-process.
+	out := runPlumb(t, plumbBin, tmpHome, "mail", "--external-id", externalID, "--json")
+	if !strings.Contains(out, want.name) {
+		t.Errorf("`plumb mail --external-id %s` does not resolve to %q after the serve replacement; "+
+			"the linkage did not carry across:\n%s", externalID, want.name, out)
+	}
+	assertNoCredentialLeak(t, "serve-replacement outputs", packet1+packet2+out)
+}
+
+// TestSmoke_ServeReplacementWithoutLinkStartsAFreshIdentity pins the honest
+// half of the reboot case: a replacement serve whose conversation never linked
+// gets a fresh identity — different name, different ID — and the packet warns
+// that the session has no external id. Asserting the FORK is the point: the
+// alternative, inheriting a predecessor's name without its linkage, is the
+// name-reuse hole the reservation system exists to keep shut.
+func TestSmoke_ServeReplacementWithoutLinkStartsAFreshIdentity(t *testing.T) {
+	plumbBin := buildPlumb(t)
+	fixture := makeMarkerFixture(t)
+	tmpHome := mkTmpHome(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	first := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	first.initialize(t, fixture)
+	packet1, meta1 := first.callWithMeta(t, "session_start", map[string]any{
+		"workspace": fixture,
+	}, sessionStartTimeout)
+	want := parseSelfIdentity(packet1)
+	full1 := fullSessionID(t, meta1)
+	waitForPID(t, tmpHome, 15*time.Second)
+
+	// Same reboot shape as the linked case: the serve and the daemon die
+	// together, so the predecessor's session ends deterministically instead of
+	// waiting out the daemon's reconnect grace for a proxy that is never coming
+	// back.
+	first.cancel()
+	stopDaemon(t, tmpHome)
+
+	second := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	second.initialize(t, fixture)
+	packet2, meta2 := second.callWithMeta(t, "session_start", map[string]any{
+		"workspace": fixture,
+	}, sessionStartTimeout)
+	got := parseSelfIdentity(packet2)
+	full2 := fullSessionID(t, meta2)
+
+	if got.name == want.name {
+		t.Fatalf("an unlinked replacement serve inherited the predecessor's name %q; name "+
+			"inheritance requires the conversation linkage, and any weaker basis is the "+
+			"name-reuse hole", want.name)
+	}
+	if full2 == full1 {
+		t.Fatalf("an unlinked replacement serve recovered the internal session ID %q; without a "+
+			"linkage there is nothing to resume and the identity must be fresh", full2)
+	}
+	if !strings.Contains(packet2, "no external id") {
+		t.Errorf("the packet does not warn that the session has no external id; an agent left "+
+			"unlinked is one client restart away from losing its identity and must be told:\n%s", packet2)
+	}
+	assertNoCredentialLeak(t, "unlinked-replacement outputs", packet1+packet2)
+}
+
+// TestSmoke_MailBoundIdentitySurvivesDaemonRestarts is the continuity promise
+// that makes identity restoration worth having: mail BOUND to a session ID —
+// which is what stops a name-reuser reading it — still delivers to the
+// restored session, replies flow back, and nothing is delivered twice or to
+// the wrong side. Three restarts, because a single carry-forward can pass
+// where a repeated one forks (the sibling identity test's reasoning, applied
+// to mail).
+func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
+	plumbBin := buildPlumb(t)
+	fixture := makeMarkerFixture(t)
+	tmpHome := mkTmpHome(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	receiver := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	receiver.initialize(t, fixture)
+	sender := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
+	sender.initialize(t, fixture)
+
+	const externalID = "smoke-mail-426"
+	start, _ := receiver.callWithMeta(t, "session_start", map[string]any{
+		"workspace":  fixture,
+		"session_id": externalID,
+	}, sessionStartTimeout)
+	a := parseSelfIdentity(start)
+	if a.name == "" {
+		t.Fatalf("the receiving session was never named; packet:\n%s", start)
+	}
+	sStart := sender.call(t, "session_start", map[string]any{"workspace": fixture}, sessionStartTimeout)
+	b := parseSelfIdentity(sStart)
+	if b.name == "" {
+		t.Fatalf("the sending session was never named; packet:\n%s", sStart)
+	}
+	waitForPID(t, tmpHome, 15*time.Second)
+
+	var inboxes []string
+	for round := 1; round <= 3; round++ {
+		ping := fmt.Sprintf("round-%d ping", round)
+		noteOut := retryCall(t, sender, "leave_note", map[string]any{"to": a.name, "body": ping}, 30*time.Second)
+		t.Logf("round %d leave_note: %s", round, noteOut)
+
+		stopDaemon(t, tmpHome)
+		packet, _ := recoverWithSessionStart(t, receiver, 60*time.Second)
+		if got := parseSelfIdentity(packet); got.name != a.name {
+			t.Fatalf("round %d: the session came back as %q, want %q — a fork across the restart "+
+				"strands the note that was bound to the old ID, which is precisely the failure "+
+				"this test exists to catch", round, got.name, a.name)
+		}
+
+		// The note may arrive through either delivery channel: appended to the
+		// first post-restart tool result (the message hint claims it there, once,
+		// under its watermark) or handed over by an explicit check_messages. Both
+		// are the note reaching its reader; requiring the second specifically
+		// would test the watermark, not the mail.
+		inbox := retryCall(t, receiver, "check_messages", map[string]any{}, 30*time.Second)
+		inboxes = append(inboxes, inbox)
+		if !strings.Contains(packet, ping) && !strings.Contains(inbox, ping) {
+			t.Fatalf("round %d: the note sent before the restart reached neither delivery "+
+				"channel — recovery packet and inbox both lack %q. Mail bound to a restored "+
+				"session must survive the restart:\nrecovery packet:\n%s\ninbox:\n%s",
+				round, ping, packet, inbox)
+		}
+
+		reply := fmt.Sprintf("round-%d reply", round)
+		receiver.call(t, "leave_note", map[string]any{"to": b.name, "body": reply}, toolTimeout)
+		bInbox := retryCall(t, sender, "check_messages", map[string]any{}, 30*time.Second)
+		assertContains(t, fmt.Sprintf("round %d sender inbox", round), bInbox, reply)
+	}
+
+	// No self-replay: the receiver must never read its own outbound notes back,
+	// in any round's inbox.
+	for i, inbox := range inboxes {
+		if strings.Contains(inbox, "reply") {
+			t.Fatalf("inbox %d contains this session's own outbound note — mail is being "+
+				"replayed to its author:\n%s", i+1, inbox)
+		}
+	}
+	assertNoCredentialLeak(t, "mail round-trip outputs", strings.Join(inboxes, "\n"))
 }
