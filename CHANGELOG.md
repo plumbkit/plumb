@@ -1,5 +1,5 @@
 # Changelog
-## 0.17.8 (unreleased)
+## 0.18.0 (2026-09-06)
 
 ### Security
 
