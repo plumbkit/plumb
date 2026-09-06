@@ -262,7 +262,22 @@ func stopDaemon(t *testing.T, plumbBin, tmpHome string) {
 		// pid-change assertion at the call site is what actually establishes
 		// that a restart happened.
 		t.Logf("signalling isolated daemon %d: %v", n, err)
+		return
 	}
+	// WAIT for it to actually go. `plumb stop` blocked until the process exited,
+	// and dropping that wait quietly broke the callers: SIGTERM is asynchronous,
+	// so the very next tool call could still be answered by the daemon we just
+	// signalled — no reconnect, no reconnect note, and an assertion failing for a
+	// reason that has nothing to do with what it is testing.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return // gone
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("isolated daemon %d did not exit within 20s of SIGTERM; the reconnect this test "+
+		"depends on never happened", n)
 }
 
 // runPlumb runs a plumb subcommand against the isolated tree and returns its
