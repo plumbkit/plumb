@@ -477,7 +477,7 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 		t.Fatalf("the same conversation came back as %q, want its predecessor's name %q — a serve "+
 			"replacement must not cost the session the address its mail was sent to", got.name, want.name)
 	}
-	if !strings.Contains(packet2, "resumed") {
+	if !strings.Contains(packet2, "— resumed") {
 		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
 			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
 	}
@@ -586,6 +586,7 @@ func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
 	waitForPID(t, tmpHome, 15*time.Second)
 
 	var inboxes []string
+	var packets []string
 	for round := 1; round <= 3; round++ {
 		ping := fmt.Sprintf("round-%d ping", round)
 		noteOut := retryCall(t, sender, "leave_note", map[string]any{"to": a.name, "body": ping}, 30*time.Second)
@@ -598,6 +599,13 @@ func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
 				"strands the note that was bound to the old ID, which is precisely the failure "+
 				"this test exists to catch", round, got.name, a.name)
 		}
+		// And a LINKED session must never be told it has no external id — the
+		// warning keys on persisted state, not on this call's arguments.
+		if strings.Contains(packet, "no external id") {
+			t.Fatalf("round %d: a linked session was warned it has no external id — the warning "+
+				"is keying on the call's arguments instead of the persisted linkage:\n%s", round, packet)
+		}
+		packets = append(packets, packet)
 
 		// The note may arrive through either delivery channel: appended to the
 		// first post-restart tool result (the message hint claims it there, once,
@@ -619,12 +627,21 @@ func TestSmoke_MailBoundIdentitySurvivesDaemonRestarts(t *testing.T) {
 		assertContains(t, fmt.Sprintf("round %d sender inbox", round), bInbox, reply)
 	}
 
-	// No self-replay: the receiver must never read its own outbound notes back,
-	// in any round's inbox.
+	// No self-replay, matched on the round-specific body rather than a generic
+	// word: the inbox render quotes a claimed note's body inside its own
+	// template, so a generic substring matches honest output. Scan the recovery
+	// packets too — a self-replay delivered at session_start would surface
+	// there, never in an inbox.
 	for i, inbox := range inboxes {
-		if strings.Contains(inbox, "reply") {
+		if strings.Contains(inbox, fmt.Sprintf("round-%d reply", i+1)) {
 			t.Fatalf("inbox %d contains this session's own outbound note — mail is being "+
 				"replayed to its author:\n%s", i+1, inbox)
+		}
+	}
+	for i, packet := range packets {
+		if strings.Contains(packet, fmt.Sprintf("round-%d reply", i+1)) {
+			t.Fatalf("recovery packet %d contains this session's own outbound note — mail is being "+
+				"replayed to its author at session_start:\n%s", i+1, packet)
 		}
 	}
 	assertNoCredentialLeak(t, "mail round-trip outputs", strings.Join(inboxes, "\n"))

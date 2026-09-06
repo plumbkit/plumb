@@ -61,6 +61,103 @@ func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string
 	return inheritedName, true
 }
 
+// LinkageState is what the CONNECTION actually knows about its own external
+// linkage and recovery, as opposed to what this particular session_start call
+// declared. The distinction is the false-warning fix: a bare session_start on
+// a session that linked its conversation an hour ago must not be told it has
+// no external id, and a degraded connection must say so on every orientation
+// even though nothing about the call in flight is unusual.
+type LinkageState struct {
+	// ExternalID is the linkage persisted on the session — from this call or
+	// any earlier one. Empty means the session is genuinely unlinked (or the
+	// accessor is unwired).
+	ExternalID string
+	// Recovery is this connection's identity-recovery outcome — the same value
+	// the initialize _meta carries: established, restored, degraded, or
+	// unavailable. Empty before the handshake or without a proxy credential.
+	Recovery string
+}
+
+// WithLinkageState wires the accessor for the connection's persisted linkage
+// and recovery outcome, so the linkage notes key on ACTUAL state rather than
+// on whether this particular call carried a session_id. Nil-safe: unwired ⇒
+// the notes fall back to keying on this call's arguments alone. Returns the
+// receiver for chaining.
+func (t *SessionStart) WithLinkageState(fn func() LinkageState) *SessionStart {
+	t.linkageStateFn = fn
+	return t
+}
+
+// linkage returns the connection's actual linkage state, zero when unwired.
+func (t *SessionStart) linkage() LinkageState {
+	if t.linkageStateFn == nil {
+		return LinkageState{}
+	}
+	return t.linkageStateFn()
+}
+
+// WithResumedNewIdentity wires the flag that says this call resumed a
+// predecessor's NAME via its external id while running under a NEW internal
+// session ID. The resume-by-linkage path never adopts the predecessor's ID —
+// only the proxy credential can do that — so the caller is a continuation that
+// cannot fully prove itself, and the identity line must say what did not
+// follow it: mail and threads bound to the predecessor ID. Nil-safe. Returns
+// the receiver for chaining.
+func (t *SessionStart) WithResumedNewIdentity(fn func() bool) *SessionStart {
+	t.resumedNewIDFn = fn
+	return t
+}
+
+// resumedNewIdentity reports the name-only-resume flag, false when unwired.
+func (t *SessionStart) resumedNewIdentity() bool {
+	return t.resumedNewIDFn != nil && t.resumedNewIDFn()
+}
+
+// unlinkedSessionNotice is the exact identity-block line session_start emits
+// when the caller is genuinely unlinked — its persisted external id is empty.
+// Pinning the full string keeps the wording — and therefore the promise it
+// makes — stable. The promise changed with the linkage-state work (C5): the
+// line now states the future cost (a client restart forks the identity and
+// strands mail), not merely today's addressability gap.
+const unlinkedSessionNotice = "NOTE: this session has no external id — a client restart will start a NEW identity " +
+	"(new session ID), and mail or threads addressed to this one will not follow you. " +
+	"Pass session_id to session_start to link this conversation.\n"
+
+// linkageNote renders what the caller must know about its own linkage and
+// recovery state, keyed on the CONNECTION's persisted state rather than on
+// what this particular call declared. Two sentences, mutually exclusive,
+// rendered in both packet flavours:
+//
+//   - Degraded first: the connection's proven identity could not be applied
+//     this time. The reconnect note says it once, on the reconnect; this says
+//     it on every session_start, because a degraded connection outlives that
+//     one-shot note — the whole point of C3's visibility work.
+//   - Unlinked: the session's persisted external id is empty. The one state
+//     with a future cost, so it warns — and the wording states the cost, not
+//     just today's addressability gap.
+//
+// With the accessor unwired, falls back to keying on `linked` alone — the
+// only fact available — so a test that does not care still gets the legacy
+// behaviour. Rendered from session_start_sections.go and the brief packet.
+func (t *SessionStart) linkageNote(linked bool) string {
+	if t.linkageStateFn == nil {
+		if !linked {
+			return unlinkedSessionNotice
+		}
+		return ""
+	}
+	st := t.linkage()
+	if st.Recovery == "degraded" {
+		return "NOTE: identity recovery could not fully apply your proven identity this time — you are running " +
+			"under a temporary one. It is retried automatically and a later reconnect restores it; mail addressed " +
+			"to your previous name may not reach you until then.\n"
+	}
+	if st.ExternalID == "" {
+		return unlinkedSessionNotice
+	}
+	return ""
+}
+
 // SessionIDArg extracts the `session_id` argument, or "" when absent or the
 // input does not parse. This is THE reader of the argument: resolveLinkage and
 // withDeclaredAgent use it for Execute's own identity resolution, and cli's

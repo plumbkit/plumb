@@ -43,13 +43,7 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	// must be able to tell itself apart from the peers named below. See
 	// session_start_self.go for why that is not a nicety.
 	sb.WriteString(t.selfIdentityLine(inheritedName))
-	// An unlinked session is addressable by neither plumb mail (leave_note is
-	// addressed by session name) nor the peer wake hook (its stamp is keyed by
-	// the conversation id the caller never supplied). This is the one section
-	// every agent reads, so say so plainly before the first query.
-	if !linked {
-		sb.WriteString("NOTE: this session has no external id — plumb mail and the peer wake hook cannot address it by name; pass session_id to session_start to link it.\n")
-	}
+	sb.WriteString(t.linkageNote(linked))
 	sb.WriteString(t.contestedPinNote())
 	if note := uncoveredPrimaryLanguageNote(lang); note != "" {
 		sb.WriteString(note)

@@ -267,6 +267,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithDeclaredAgent(s.declaredAgentCtx).
 		WithPinConflict(s.onPinConflict).
 		WithPurpose(s.setPurpose).
+		WithLinkageState(func() tools.LinkageState {
+			return tools.LinkageState{ExternalID: s.externalID(), Recovery: string(s.recovery())}
+		}).
+		WithResumedNewIdentity(func() bool { return s.view().resumedNewIdentity }).
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessionID(), externalID)
 			s.recordLogicalAgentAttach(externalID)
@@ -278,6 +282,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			// in fact recovered.
 			s.persistIdentity()
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
+				// A predecessor was found: this call resumed its NAME under a NEW
+				// internal session ID (the linker never adopts IDs). The flag is
+				// what the identity line discloses — see session_start_self.go.
+				s.mutate(func(v *sessionView) { v.resumedNewIdentity = true })
 				// session.Rename refuses a name a live session already holds, so
 				// two resumes racing on one external ID inside the grace window
 				// cannot both inherit it — mailbox delivery matches on the name

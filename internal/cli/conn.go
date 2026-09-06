@@ -61,8 +61,13 @@ type sessionView struct {
 	// purpose is the optional human-readable session tag set via session_start's
 	// purpose arg. Descriptive only; stamped on this session's stats rows and
 	// surfaced by daemon_info. "" when unset.
-	purpose      string
-	lastCfgMtime time.Time
+	purpose string
+	// resumedNewIdentity: this connection resumed a predecessor's NAME through
+	// the external-ID linker while running under a NEW internal session ID —
+	// the linker never adopts the predecessor's ID, so the session_start
+	// identity line discloses what did not follow it (mail, threads).
+	resumedNewIdentity bool
+	lastCfgMtime       time.Time
 	// projectWatchRoot: the canonical root this session holds a project-config
 	// watcher reference on (PLAN-414), acquired on every config apply, released
 	// on re-pin / close. fallbackWarned latches the one-time poll-fallback log
@@ -305,8 +310,14 @@ type connSession struct {
 	shardsMu sync.Mutex
 	shards   map[string]*agentShard
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx context.Context
+	// restoreRetryBackoff is the injectable wait schedule for the bounded
+	// degraded-recovery retry (C3). Nil ⇒ the production 5s/15s/45s ladder.
+	// Lives on the connSession (not the per-agent view) because convergence is
+	// a connection-level fact: the retry re-runs restoreIdentity with the same
+	// proxy credential, and the proxy credential belongs to the connection.
+	restoreRetryBackoff func(attempt int) time.Duration
+	cancel              context.CancelFunc
 
 	state    atomic.Pointer[sessionView] // lock-free reads of the session snapshot
 	muMutate sync.Mutex                  // the single mutation lane (see mutate)
