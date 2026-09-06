@@ -666,8 +666,7 @@ func TestRestore_DegradedConvergesOnBoundedRetry(t *testing.T) {
 	first := newPersistSession(t, store, ss, "proxyX")
 	provenID, provenName := first.sessionID(), first.sessionName()
 
-	overlapping := newPersistSession(t, store, ss, "proxyX")
-	overlapping.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+	overlapping := newPersistSessionWithBackoff(t, store, ss, "proxyX", func(int) time.Duration { return time.Millisecond })
 	if overlapping.recovery() != recoveryDegraded {
 		t.Fatalf("the overlap did not degrade; the test is not set up as intended")
 	}
@@ -706,9 +705,8 @@ func TestRestore_RetryExhaustionLeavesRecordIntact(t *testing.T) {
 	t.Cleanup(first.close) // STAYS LIVE for the whole test — the blocker never clears
 	provenID, provenName := first.sessionID(), first.sessionName()
 
-	degraded := newPersistSession(t, store, ss, "proxyX")
+	degraded := newPersistSessionWithBackoff(t, store, ss, "proxyX", func(int) time.Duration { return time.Millisecond })
 	t.Cleanup(degraded.close)
-	degraded.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
 	if degraded.recovery() != recoveryDegraded {
 		t.Fatalf("the reconnect did not degrade; the test is not set up as intended")
 	}
@@ -727,5 +725,100 @@ func TestRestore_RetryExhaustionLeavesRecordIntact(t *testing.T) {
 		t.Fatalf("the retry loop rewrote the record to (%q, %q); it must still name the "+
 			"proven (%q, %q) — a retry that cannot converge must fail exactly as "+
 			"honestly as the first attempt did", after.SessionID, after.Name, provenID, provenName)
+	}
+}
+
+// TestRestore_BlankAnchorRefilledFromTheSessionFile: a durable record whose
+// external linkage is blank while the session's own file proves it gets the
+// linkage back on the first full restore.
+//
+// The shape is not hypothetical. An upgraded database back-fills external_id
+// to blank (schema v7), and a linkage that lived only in a session file — the
+// only place it existed before PLAN-426 — therefore reads as unknown to the
+// resume path, which matches on the ROW. The 2026-09-06 reboot stranded an
+// identity this way: the file carried the conversation, the row did not, and
+// nothing would ever have written it, because a successful restore writes
+// nothing and this conversation never called session_start again.
+func TestRestore_BlankAnchorRefilledFromTheSessionFile(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+	const externalID = "conversation-abc"
+
+	// The record knows the identity but not the linkage; the session file knows
+	// only the linkage. The row after this first contact already reads exactly
+	// like an upgraded blank — assert that rather than assume it.
+	first := newPersistSession(t, store, ss, "proxyX")
+	provenID, provenName := first.sessionID(), first.sessionName()
+	session.SetExternalID(provenID, externalID) // the linker writes the file; persistIdentity is what mirrors it
+	first.close()
+
+	before, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("the first contact did not record an identity: (%+v, %v, %v)", before, ok, err)
+	}
+	if before.ExternalID != "" {
+		t.Fatalf("setup: the record already knows a linkage (%q); the test is not exercising the repair", before.ExternalID)
+	}
+
+	next := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(next.close)
+	if got := next.recovery(); got != recoveryRestored {
+		t.Fatalf("recovery outcome = %q, want %q — the repair rides the restored branch, so a "+
+			"degraded restore must not attempt it", got, recoveryRestored)
+	}
+	after, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadIdentity after the restore = (%+v, %v, %v)", after, ok, err)
+	}
+	if after.ExternalID != externalID {
+		t.Fatalf("the blank linkage was not repaired from the session file: record now %+v, want "+
+			"external_id %q — the row is what external-ID resume matches on, so leaving it blank "+
+			"keeps the identity unresumable even though its own file proves the conversation",
+			after, externalID)
+	}
+	if after.SessionID != provenID || after.Name != provenName {
+		t.Fatalf("the repair rewrote the record's identity to (%q, %q); it must refill the linkage "+
+			"and nothing else — (%q, %q) is the proven identity", after.SessionID, after.Name, provenID, provenName)
+	}
+}
+
+// TestRestore_KnownLinkageIsNeverRepairedOver: a record that already names a
+// conversation is authority, and the repair must not replace it with whatever
+// the session file happens to hold — replacement is the linker's job, on the
+// live session's own statement.
+func TestRestore_KnownLinkageIsNeverRepairedOver(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+	const recorded, inFile = "conversation-keep", "conversation-other"
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	provenID := first.sessionID()
+	// Mirror a re-link into the row (the linker's own path), then desynchronise
+	// the file — the successor's file will name a different conversation.
+	session.SetExternalID(provenID, recorded)
+	if !first.persistIdentity() {
+		t.Fatal("the re-link did not record")
+	}
+	session.SetExternalID(provenID, inFile)
+	first.close()
+
+	next := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(next.close)
+	if got := next.recovery(); got != recoveryRestored {
+		t.Fatalf("recovery outcome = %q, want %q", got, recoveryRestored)
+	}
+	if got := next.externalID(); got != inFile {
+		t.Fatalf("the restored session's own linkage = %q; the test is not set up as intended", got)
+	}
+
+	after, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadIdentity = (%+v, %v, %v)", after, ok, err)
+	}
+	if after.ExternalID != recorded {
+		t.Fatalf("the repair overwrote the recorded linkage %q with the file's %q; a known "+
+			"recorded linkage is authority and only the linker may replace it", recorded, after.ExternalID)
 	}
 }
