@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// unlinkedSessionNotice is the exact identity-block line session_start emits
-// when the caller passed no session_id. Pinning the full string keeps the
-// wording — and therefore the promise it makes — stable.
-const unlinkedSessionNotice = "NOTE: this session has no external id — plumb mail and the peer wake hook cannot address it by name; pass session_id to session_start to link it."
-
 // TestSessionStart_UnlinkedNotice pins the unlinked-session seam of the
 // orientation packet. A session that never passes session_id to session_start
 // is silently unaddressable: its wake stamp is keyed by a conversation id the

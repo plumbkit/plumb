@@ -76,6 +76,13 @@ func (t *SessionStart) selfIdentityLine(resumedName string) string {
 			// hint that the requested one was refused, is how a caller concludes
 			// the session_id argument did nothing.
 			fmt.Fprintf(&sb, "; requested %s, which is in use", resumedName)
+		} else if t.resumedNewIdentity() {
+			// The resume-by-linkage path recovers the NAME but never the
+			// predecessor's internal session ID — only the proxy credential can
+			// do that. Saying so is the difference between an agent that knows
+			// its predecessor's bound mail and threads will not follow it and
+			// one that discovers it when a note goes missing.
+			sb.WriteString("; new internal identity — mail and threads bound to the predecessor ID are not inherited")
 		}
 	}
 	sb.WriteString("\n")

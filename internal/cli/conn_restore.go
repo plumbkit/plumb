@@ -101,6 +101,7 @@ func (s *connSession) restoreIdentity(proxyID string) {
 		s.log().Warn("daemon: could not read the durable identity record; continuing under a temporary identity",
 			"err", err)
 		s.setRecovery(recoveryDegraded)
+		s.scheduleRestoreRetry(proxyID)
 		return
 	}
 	if !ok {
@@ -154,6 +155,95 @@ func (s *connSession) restoreIdentity(proxyID string) {
 		return
 	}
 	s.setRecovery(recoveryDegraded)
+	s.scheduleRestoreRetry(proxyID)
+}
+
+// retryRestoreIdentity re-runs the application half of restoreIdentity with
+// the same proxy credential, and reports whether the proven identity fully
+// applied this time. Convergence flips the connection's outcome to restored
+// (or established, for a legacy heal that commits) and runs the blank-anchor
+// repair, exactly as a full restore would — because that is what it is: the
+// bounded retry is C3's answer to a degraded connection that would otherwise
+// wait for a lucky reconnect to converge.
+//
+// Every refusal is honest: a vanished record, an unreadable store, a still-held
+// ID, a refused name — each leaves the connection degraded with the durable
+// record untouched, which is the invariant the fork tests pin.
+func (s *connSession) retryRestoreIdentity(proxyID string) bool {
+	rec, ok, err := s.sessionState.LoadIdentity(proxyID)
+	if err != nil || !ok {
+		return false
+	}
+	s.mutate(func(v *sessionView) { v.persistedIdentity = rec })
+	adoption := s.adoptStoredID(rec)
+	named := s.restoreStoredName(rec, adoption)
+	if adoption == idResumed && named {
+		s.repairBlankLinkage(rec)
+		s.setRecovery(recoveryRestored)
+		return true
+	}
+	if adoption == idAbsent && named && s.persistIdentity() {
+		s.setRecovery(recoveryEstablished)
+		return true
+	}
+	s.setRecovery(recoveryDegraded)
+	return false
+}
+
+// scheduleRestoreRetry runs the bounded retry for a connection whose identity
+// recovery came back degraded: three attempts on a growing backoff (5s, 15s,
+// 45s — injectable through restoreRetryBackoff for tests), each re-running the
+// restore with the SAME proxy credential. The credential never changes: the
+// retry converges the moment whatever blocked adoption (a predecessor that had
+// not finished detaching is the standing case) goes away, and it cannot mint a
+// new identity, because every attempt resolves the same durable record.
+//
+// Explicit, per the design review: the retry LIMIT is three; in-flight calls
+// keep running under the temporary identity until convergence (nothing is
+// revoked mid-flight); the temporary identity keeps reading predecessor mail
+// through its inheritance grant; and ownership stays fenced by adoptStoredID's
+// live-holder check, so a second live claimant of the proven ID is never
+// raced. Cancellation is the connection's own context — a disconnect cancels
+// the retries, and the next reconnect runs a fresh restoreIdentity anyway.
+func (s *connSession) scheduleRestoreRetry(proxyID string) {
+	go func() {
+		const attempts = 3
+		for attempt := 1; attempt <= attempts; attempt++ {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(s.retryBackoff(attempt)):
+			}
+			if s.ctx.Err() != nil {
+				return
+			}
+			if s.retryRestoreIdentity(proxyID) {
+				s.log().Info("daemon: identity recovery converged on retry; the proven identity is live again",
+					"attempt", attempt, "session_id", s.sessionID())
+				return
+			}
+		}
+		s.log().Info("daemon: identity recovery retries exhausted; the durable record is intact and "+
+			"the next reconnect will restore it", "attempts", attempts)
+	}()
+}
+
+// retryBackoff returns the wait before the given retry attempt: 5s, 15s, 45s
+// by default — long enough for a detaching predecessor to finish, short enough
+// that a conversation converges within a minute — or the injected schedule
+// when a test set one.
+func (s *connSession) retryBackoff(attempt int) time.Duration {
+	if s.restoreRetryBackoff != nil {
+		return s.restoreRetryBackoff(attempt)
+	}
+	switch attempt {
+	case 1:
+		return 5 * time.Second
+	case 2:
+		return 15 * time.Second
+	default:
+		return 45 * time.Second
+	}
 }
 
 // idOutcome is what became of the internal session ID during a restoration.

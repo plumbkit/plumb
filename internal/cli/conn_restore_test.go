@@ -651,3 +651,81 @@ func TestDaemonInstanceID(t *testing.T) {
 		t.Errorf("an unknown start time must yield no marker (so the note says \"unknown\"), got %q", got)
 	}
 }
+
+// TestRestore_DegradedConvergesOnBoundedRetry: a degraded connection is not
+// abandoned to luck. Once whatever blocked adoption (the standing case: a
+// predecessor that had not finished detaching) goes away, the bounded retry —
+// same proxy credential, same durable record — converges the LIVE connection
+// to the proven identity without any new connection and without any
+// session_start.
+func TestRestore_DegradedConvergesOnBoundedRetry(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	provenID, provenName := first.sessionID(), first.sessionName()
+
+	overlapping := newPersistSession(t, store, ss, "proxyX")
+	overlapping.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+	if overlapping.recovery() != recoveryDegraded {
+		t.Fatalf("the overlap did not degrade; the test is not set up as intended")
+	}
+
+	// The blocker detaches; the scheduled retry — not a new connection — is
+	// what must converge the still-open degraded session.
+	first.close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for overlapping.recovery() != recoveryRestored {
+		if time.Now().After(deadline) {
+			t.Fatalf("the degraded connection never converged after the blocker detached; " +
+				"the bounded retry is the only thing that can restore a long-lived " +
+				"conversation without waiting for a lucky reconnect")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := overlapping.sessionID(); got != provenID {
+		t.Errorf("the converged session runs under %q, want the proven %q", got, provenID)
+	}
+	if got := overlapping.sessionName(); got != provenName {
+		t.Errorf("the converged session is called %q, want %q", got, provenName)
+	}
+}
+
+// TestRestore_RetryExhaustionLeavesRecordIntact: a blocker that never goes
+// away must not be raced. The attempts stop at the limit, the connection stays
+// honestly degraded, and the durable record still names the proven identity —
+// the shape every fork test in this file demands.
+func TestRestore_RetryExhaustionLeavesRecordIntact(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	first := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(first.close) // STAYS LIVE for the whole test — the blocker never clears
+	provenID, provenName := first.sessionID(), first.sessionName()
+
+	degraded := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(degraded.close)
+	degraded.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+	if degraded.recovery() != recoveryDegraded {
+		t.Fatalf("the reconnect did not degrade; the test is not set up as intended")
+	}
+
+	// Well past three attempts at a millisecond each: the retry must have
+	// exhausted and stopped, not kept racing a live holder.
+	time.Sleep(300 * time.Millisecond)
+	if got := degraded.recovery(); got != recoveryDegraded {
+		t.Errorf("recovery outcome after exhausted retries = %q, want %q", got, recoveryDegraded)
+	}
+	after, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("the durable record vanished: (%+v, %v, %v)", after, ok, err)
+	}
+	if after.SessionID != provenID || after.Name != provenName {
+		t.Fatalf("the retry loop rewrote the record to (%q, %q); it must still name the "+
+			"proven (%q, %q) — a retry that cannot converge must fail exactly as "+
+			"honestly as the first attempt did", after.SessionID, after.Name, provenID, provenName)
+	}
+}

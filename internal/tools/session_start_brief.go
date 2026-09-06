@@ -77,7 +77,7 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // woken session must still see its pending mail, or the wake flow loses its
 // point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
 // so it costs nothing when there is nothing to deliver.
-func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string) string {
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string, linked bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
@@ -104,6 +104,11 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	// no earlier packet to remember its name from, and this line sits directly
 	// above the peer list it must not confuse itself with.
 	sb.WriteString(t.selfIdentityLine(inheritedName))
+	// The same linkage note the full packet renders, for the same reason the
+	// self line above is not full-only: a resumed or woken session auto-briefs
+	// precisely when a degraded or unlinked state is likeliest, and the one
+	// place it will definitely look is here.
+	sb.WriteString(t.linkageNote(linked))
 	if t.gitPolicyFn != nil && branch != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
 	}
