@@ -146,6 +146,7 @@ var numberMetaTable = map[settingKey]struct {
 	skMemoryGeneratedKeep:        {10, "generated keep"},
 	skCollabHintBudgetBytes:      {128, "collab hint budget (B)"},
 	skCollabIntentTTLMin:         {30, "collab intent ttl (min)"},
+	skCollabNoteTTLMin:           {30, "collab note ttl (min)"},
 	skCollabMaxExchanges:         {1, "collab max exchanges"},
 	skCollabChatBudgetBytes:      {256, "collab chat budget (B)"},
 	skCollabMaxWaitSec:           {5, "collab max wait (s)"},
@@ -228,6 +229,8 @@ func intFieldCollab(c *config.Config, key settingKey) *int {
 		return &c.Collab.HintBudgetBytes
 	case skCollabIntentTTLMin:
 		return &c.Collab.IntentTTLMinutes
+	case skCollabNoteTTLMin:
+		return &c.Collab.NoteTTLMinutes
 	case skCollabMaxExchanges:
 		return &c.Collab.MaxExchanges
 	case skCollabChatBudgetBytes:
@@ -366,6 +369,8 @@ func boolFieldCollab(c *config.Config, key settingKey) *bool {
 		return &c.Collab.CrossProject
 	case skCollabKnowledgeHandoff:
 		return &c.Collab.KnowledgeHandoff
+	case skCollabKeepDelivered:
+		return &c.Collab.KeepDeliveredNotes
 	default:
 		return nil
 	}
@@ -535,6 +540,8 @@ func toggleLabelMore(key settingKey) string {
 		return "cross-project"
 	case skCollabKnowledgeHandoff:
 		return "knowledge handoff"
+	case skCollabKeepDelivered:
+		return "keep delivered notes"
 	case skXcodeAutoBuildServer:
 		return "xcode auto build server"
 	default:

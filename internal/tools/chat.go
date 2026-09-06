@@ -109,6 +109,11 @@ func (i Inbox) stores() []*collab.Store {
 // delivered. Returns nil when the mailbox is off, no store exists, or nothing is
 // waiting. Errors are swallowed: delivery is advisory and must never turn a
 // successful tool call into a failure.
+//
+// Under [collab] keep_delivered_notes the claim is the permanence trigger too:
+// it stamps each delivered row kept-forever. That is the RECIPIENT's policy —
+// the recipient is the one reading — so a cross-project note's retention is
+// decided by whichever project claims it, never by the sender's setting.
 func (i Inbox) Claim(ctx context.Context) []collab.Row {
 	if !i.Policy.Mailbox || i.Self == "" {
 		return nil
@@ -127,7 +132,11 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 		if remaining <= 0 {
 			break
 		}
-		rows, err := s.ClaimNotes(ctx, i.claimant(), now, remaining)
+		claim := s.ClaimNotes
+		if i.Policy.KeepDeliveredNotes {
+			claim = s.ClaimNotesKeeping
+		}
+		rows, err := claim(ctx, i.claimant(), now, remaining)
 		if err != nil {
 			// Delivery is advisory and must never fail the tool call that carried
 			// it, but a swallowed error here means an agent silently did not get a
@@ -172,6 +181,37 @@ func (i Inbox) HasPending(ctx context.Context) bool {
 	return false
 }
 
+// PendingCount reports how many notes remain claimable across this inbox's
+// stores, claiming nothing — the source of the backlog line a capped delivery
+// renders. Same gates and the same swallowed errors as Claim: a count is
+// advisory too. Zero from an empty mailbox and zero from a failed count are
+// indistinguishable to the caller, which is acceptable — the line only rides a
+// delivery that just filled its cap, so the worst a swallowed error does is
+// understate a backlog the next delivery will surface anyway.
+func (i Inbox) PendingCount(ctx context.Context) int {
+	if !i.Policy.Mailbox || i.Self == "" {
+		return 0
+	}
+	stores := i.stores()
+	if len(stores) == 0 {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
+	defer cancel()
+
+	now := time.Now()
+	total := 0
+	for _, s := range stores {
+		n, err := s.PendingCount(ctx, i.claimant(), now)
+		if err != nil {
+			slog.Debug("collab: count pending failed", "session", i.Self, "err", err)
+			continue
+		}
+		total += n
+	}
+	return total
+}
+
 // AtCap reports whether a claim filled the per-call ceiling, meaning more
 // messages are probably still waiting. Callers that cache a "nothing new"
 // baseline use it to avoid parking the remainder behind that cache.
@@ -202,6 +242,19 @@ func RenderMessages(rows []collab.Row, budget int, now time.Time) string {
 	fmt.Fprintf(&sb, "  reply: leave_note({to: %q, conversation_id: %q, body: \"…\"})\n",
 		rows[len(rows)-1].AuthorSession, rows[len(rows)-1].ConversationID)
 	return sb.String()
+}
+
+// RenderBacklog states what a capped delivery left behind: how many notes were
+// still claimable the moment the batch filled the per-call cap. It points the
+// agent at an immediate drain rather than at patience — the next tool call
+// WOULD deliver the remainder, but an agent about to reply to message one of
+// seven should read the other six first, and the newest may answer the oldest.
+// The count is a snapshot, not a promise, and the wording keeps saying so.
+func RenderBacklog(waiting int) string {
+	if waiting <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("  %d more waiting as of this call — call check_messages (no wait_seconds) to read them now, before replying; the newest may answer the oldest.\n", waiting)
 }
 
 // clampWithTruncationMarker clamps body to budget bytes and, if that cut

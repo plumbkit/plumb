@@ -208,9 +208,12 @@ flag and refuses with a clear enable hint when the flag is off. Everything is
 agent *says* is a **claim**, rendered distinctly from what the daemon *observed*
 (phase-1 peer awareness). `share_intent` and same-project messages live in
 `<workspace>/.plumb/collab.db` (WAL, auto-gitignored like `topology.db`), created
-lazily on first use, expiring per `[collab] intent_ttl_minutes` and pruned on the
-daemon session-reaper tick; `share_findings` instead writes a durable generated
-memory.
+lazily on first use: intents expire per `[collab] intent_ttl_minutes`, unread
+notes per `[collab] note_ttl_minutes` (falling back to `intent_ttl_minutes`),
+and with `[collab] keep_delivered_notes = true` a claimed note is stamped
+far-future at delivery — the transcript survives while unclaimed rows are
+pruned on the daemon session-reaper tick; `share_findings` instead writes a
+durable generated memory.
 
 **Delivery is by polling only — plumb does not push to another agent.** That single
 constraint shapes the mailbox. It is a property of plumb, not of MCP: some clients
@@ -257,7 +260,12 @@ Each message is delivered **exactly once**, to whichever path reads it first:
 the block appended to an ordinary tool result, `check_messages`, or the
 recipient's next `session_start`. A delivered message stays in the store until
 its TTL, which is what gives a conversation its transcript and its exchange
-count.
+count — or, with `[collab] keep_delivered_notes = true`, past it: claiming
+stamps the row far-future, so the read flag is the permanence trigger and only
+unclaimed mail ages out. One delivery hands over at most **three** messages,
+oldest first; when a batch fills that cap the block also states how many more
+were waiting at that moment and points at `check_messages` (no wait) to drain
+them before replying.
 
 A message is addressed to a **session**, not to a name. When the peer you name
 is connected, the message is bound to that exact session and only it can ever

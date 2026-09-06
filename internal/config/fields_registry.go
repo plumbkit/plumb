@@ -268,6 +268,14 @@ var registryData = []Field{
 		Key: "collab.intent_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Expiry, in minutes, for a new intent or note before it is pruned.",
 	},
+	{
+		Key: "collab.note_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
+		Description: "Expiry, in minutes, for an UNREAD note; 0 follows collab.intent_ttl_minutes. Delivery supersedes it when keep_delivered_notes is on.",
+	},
+	{
+		Key: "collab.keep_delivered_notes", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Keep claimed notes as a permanent transcript (far-future expiry stamped at delivery) instead of expiring with the TTL.",
+	},
 
 	// --- Xcode ---
 	{

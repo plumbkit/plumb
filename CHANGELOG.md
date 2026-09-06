@@ -30,6 +30,42 @@
 
 ### Added
 
+- **Delivered notes can now be kept forever, unread notes have their own TTL, and a capped delivery says how much mail is still queued.**
+  Two `[collab]` keys, both project-settable without `plumb trust` because
+  they tune retention, not who can send or read: `note_ttl_minutes`
+  (default `0` = follow `intent_ttl_minutes`, the expiry notes always had, so
+  upgrading changes nothing until set) bounds a note **while it is unread**,
+  and `keep_delivered_notes` (default `false`) makes delivery the permanence
+  trigger — the claim's own UPDATE stamps a far-future expiry
+  (`math.MaxInt64` ns, year 2262) over the stored one, so the read flag keeps
+  the transcript while unclaimed `next` and name-only mail still ages out.
+  The far-future timestamp rather than a zero sentinel is deliberate: zero
+  already means "expired" to every filter and to older plumbs a peer's serve
+  proxy can respawn the daemon from, and a far-future value needs no
+  predicate, index or migration change at all — `Prune`, every read filter
+  and the schema are untouched. Retention is the **recipient's** policy
+  (whoever claims a row decides, including rows in the shared daemon-level
+  cross-project store); note the interaction that a spent conversation stays
+  closed at `max_exchanges` forever once its rows stop aging out. Independently,
+  a delivery batch that fills the three-per-call cap now appends how many more
+  messages were waiting at that moment — a `COUNT(*)` probe sharing the
+  claimable predicate verbatim, run only on the capped path so the every-call
+  miss path is untouched — in the tool-result block, `check_messages`, and
+  `session_start` alike, pointing at `check_messages` (no wait) to drain
+  before replying. `leave_note`'s refusal for an expired thread now names
+  `note_ttl_minutes`. Guarded by `TestKeptForever_IsAFarFutureTimestamp`,
+  `TestClaimNotesKeeping_MakesDeliveredRowImmortal`,
+  `TestClaimNotes_LeavesStoredExpiryAlone`, `TestPendingCount_MatchesClaimable`,
+  `TestPendingCount_ExcludesExpired`, `TestRenderBacklog`,
+  `TestCheckMessages_BacklogNamesRemainder`,
+  `TestCheckMessages_KeepsDeliveredNotes`,
+  `TestCheckMessages_PlainPolicyExpiresDelivered`,
+  `TestResolveNoteTTL_FollowsIntentUntilSet`, `TestLeaveNote_KeptLineInReceipt`,
+  `TestMessageHint_BacklogNamesRemainder`, `TestMessageHint_KeepsDeliveredNotes`,
+  `TestCollabNoteRetentionDefaults`,
+  `TestLoadProject_NoteRetentionStaysProjectOverridable`,
+  `TestValidateCollab_NegativeNoteTTLRejected` and
+  `TestCollabPolicySpec_NoteRetentionNeedsNoTrust`.
 - **Python weak root markers, and `.svelte` / `.vue` are recognised file types.**
   `requirements.txt`, `uv.lock` and `*.py.lock` are now weak python root
   markers, so the commonest Python repo shape — no `pyproject.toml`, a

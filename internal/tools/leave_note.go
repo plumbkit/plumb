@@ -264,9 +264,9 @@ func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (
 	if !participant {
 		return "", fmt.Sprintf(
 			"Not sent: conversation %s is not one of yours, so there is nobody to reply to.\n\n"+
-				"Either the id is wrong, or the thread expired ([collab] intent_ttl_minutes "+
-				"prunes it). Name the recipient explicitly with `to`, or start a new thread by "+
-				"omitting conversation_id.", convID)
+				"Either the id is wrong, or the thread expired — unread notes age out per [collab] "+
+				"note_ttl_minutes (falling back to intent_ttl_minutes). Name the recipient explicitly "+
+				"with `to`, or start a new thread by omitting conversation_id.", convID)
 	}
 
 	switch len(others) {
@@ -414,7 +414,7 @@ func sameWorkspace(a, b string) bool {
 
 func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPolicy, args leaveNoteArgs) (string, error) {
 	body, redacted := redactBody(args.Body)
-	ttl := resolveTTL(policy.IntentTTLMinutes, 0)
+	ttl := resolveNoteTTL(policy)
 	now := time.Now()
 	limit := policy.maxExchanges()
 	var inherited []string
@@ -468,7 +468,8 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// costs delivery latency (the next periodic check still finds the row), never
 	// the message.
 	t.deps.Notifier.Bump(collab.NotifyKey(t.deps.Workspace(), args.To))
-	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget()), nil
+	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget(),
+		policy.KeepDeliveredNotes && !target.crossProject), nil
 }
 
 // replyDeliveryLine names BOTH delivery paths, because they are not
@@ -483,7 +484,7 @@ func replyDeliveryLine() string {
 		"otherwise it is appended to the result of your next tool call.\n"
 }
 
-func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget, budget int) string {
+func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget, budget int, keepDelivered bool) string {
 	var sb strings.Builder
 	dest := "session " + to
 	if to == collab.AddresseeNext {
@@ -493,6 +494,9 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 	writeDeliveredBody(&sb, body, conv, budget)
 	fmt.Fprintf(&sb, "  conversation: %s  — quote this as conversation_id to stay in the thread\n", conv)
 	fmt.Fprintf(&sb, "  expires:      in %s\n", humaniseTTL(ttl))
+	if keepDelivered {
+		sb.WriteString("  kept:         this workspace keeps DELIVERED notes ([collab] keep_delivered_notes) — the \"expires\" line is the unread window, not the lifetime.\n")
+	}
 	if redacted {
 		sb.WriteString("  note:         a likely secret in the body was redacted before storage.\n")
 	}

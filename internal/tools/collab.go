@@ -28,8 +28,20 @@ type CollabPolicy struct {
 	Mailbox bool
 	// KnowledgeHandoff gates share_findings.
 	KnowledgeHandoff bool
-	// IntentTTLMinutes is the shared TTL for intents and notes.
+	// IntentTTLMinutes is the TTL for intents — and the FALLBACK TTL for notes
+	// when NoteTTLMinutes is unset, which is the value notes shared before the
+	// key existed, so an existing deployment's effective note retention does not
+	// silently drop to the compiled default the day it upgrades.
 	IntentTTLMinutes int
+	// NoteTTLMinutes is the TTL for a new note while it is UNREAD — the unread
+	// window, not the row's lifetime, because delivery under KeepDeliveredNotes
+	// supersedes it. Non-positive means "follow IntentTTLMinutes".
+	NoteTTLMinutes int
+	// KeepDeliveredNotes stamps a far-future expiry over each note AT DELIVERY:
+	// the read flag becomes the permanence trigger and the conversation survives
+	// as a transcript while unclaimed mail still ages out. Retention, not a
+	// channel — the recipient's policy, applied by whoever claims the row.
+	KeepDeliveredNotes bool
 	// CrossProject allows messages to and from sessions pinned to a DIFFERENT
 	// workspace. It is read as the RECIPIENT's gate: a session only reads the
 	// daemon-level cross-project store when its own project sets this, so one
@@ -197,6 +209,16 @@ func resolveTTL(policyMinutes, overrideMinutes int) time.Duration {
 		m = defaultIntentTTLMinutes
 	}
 	return time.Duration(m) * time.Minute
+}
+
+// resolveNoteTTL is resolveTTL for notes: note_ttl_minutes when the deployment
+// sets one, else intent_ttl_minutes — the value notes shared before the note key
+// existed — else the compiled default. The fallback is what makes the new key a
+// no-change upgrade: a workspace running intent_ttl_minutes = 1440 keeps its
+// one-day notes unless it says otherwise, rather than dropping to 120 minutes
+// because a key it has never set carries a compiled default.
+func resolveNoteTTL(policy CollabPolicy) time.Duration {
+	return resolveTTL(policy.IntentTTLMinutes, policy.NoteTTLMinutes)
 }
 
 // redactBody scrubs likely secrets from an agent-authored body before it is

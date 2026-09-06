@@ -558,11 +558,14 @@ When `peer_awareness` is on it adds three signals:
 | `chat_budget_bytes` | int | `2048` | Byte cap (UTF-8 boundary) on a single delivered message body. Separate from `hint_budget_bytes` because a message is content the agent must act on, not a pointer to look up. `0` uses the default. |
 | `max_wait_seconds` | int | `55` | Ceiling on how long `check_messages` will block waiting for a message. Kept below the client's own MCP call timeout so a wait expires cleanly rather than surfacing as a tool timeout. `0` uses the default. |
 | `knowledge_handoff` | bool | `false` | **Gated on `plumb trust`.** Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
-| `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
+| `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent — and the fallback expiry for notes (see `note_ttl_minutes`). Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
+| `note_ttl_minutes` | int | `0` | Expiry applied to a new note **while it is unread**. `0` follows `intent_ttl_minutes` — the expiry notes always had before this key existed — so setting the key changes nothing until you set it. With `keep_delivered_notes` on, this is the unread window, not the row's lifetime. |
+| `keep_delivered_notes` | bool | `false` | Keep **claimed** notes as a permanent transcript: delivery stamps a far-future expiry, so the read flag is the permanence trigger and unclaimed mail still ages out per the TTLs above. The **recipient's** policy — whoever claims a row decides its retention, including rows in the shared daemon-level cross-project store. Note the interaction: a spent conversation stays closed at `max_exchanges` forever once its rows stop aging out, so raise `max_exchanges` alongside if long threads matter. |
 
 A session holds at most **one live intent** — a new `share_intent` replaces it,
 and it is cleared when the session ends. A `next` note is consumed on first
-delivery; an addressed note persists until its TTL. Delivery is polling plus
+delivery; an addressed note persists until its TTL while unread, and — with
+`keep_delivered_notes = true` — as a kept transcript once claimed. Delivery is polling plus
 hint injection only — plumb does not push to a peer (a property of plumb, not of
 MCP: it wires no server→client wake path for any client it supports today). `share_findings` writes its
 memory as `finding-<timestamp>-<session>`, retention-shared with the idle

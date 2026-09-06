@@ -273,9 +273,12 @@ jq -n --argjson n "$count" '{
   count drop is strong evidence of consumption, not proof: a note expiring
   mid-turn, or a peer winning the claim race on a `"next"` note, drops the
   count too and buys one duplicate wake before the chain stands down.
-- **`ages_seconds` is there if you want a staleness rule.** Messages expire
-  after `[collab] intent_ttl_minutes` (default 120), and one a few minutes from
-  expiry may not be worth an interruption. `ages_seconds[0]` is the oldest.
+- **`ages_seconds` is there if you want a staleness rule.** Unread messages expire
+  after `[collab] note_ttl_minutes` (falling back to `intent_ttl_minutes`;
+  default 120), and one a few minutes from expiry may not be worth an
+  interruption. `ages_seconds[0]` is the oldest. A workspace keeping delivered
+  notes (`keep_delivered_notes`) changes nothing here — the hook counts UNREAD
+  rows, and those still age out.
 
 ## What it does not cover
 

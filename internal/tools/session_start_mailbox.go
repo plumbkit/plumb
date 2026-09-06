@@ -36,6 +36,10 @@ func (t *SessionStart) writeSessionMessages(sb *strings.Builder, _ string) {
 		return
 	}
 	sb.WriteString("\n## Messages\n")
-	sb.WriteString(RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now()))
+	body := RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now())
+	if AtCap(rows) {
+		body += RenderBacklog(inbox.PendingCount(ctx))
+	}
+	sb.WriteString(body)
 	sb.WriteString("\n")
 }

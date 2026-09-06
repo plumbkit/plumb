@@ -272,6 +272,8 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"max_wait_seconds", strconv.Itoa(col.MaxWaitSeconds), sourceFor("max_wait_seconds", dcol.MaxWaitSeconds, gcol.MaxWaitSeconds, col.MaxWaitSeconds)},
 		{"knowledge_handoff", strconv.FormatBool(col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
 		{"intent_ttl_minutes", strconv.Itoa(col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
+		{"note_ttl_minutes", strconv.Itoa(col.NoteTTLMinutes), sourceFor("note_ttl_minutes", dcol.NoteTTLMinutes, gcol.NoteTTLMinutes, col.NoteTTLMinutes)},
+		{"keep_delivered_notes", strconv.FormatBool(col.KeepDeliveredNotes), sourceFor("keep_delivered_notes", dcol.KeepDeliveredNotes, gcol.KeepDeliveredNotes, col.KeepDeliveredNotes)},
 	})
 
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
