@@ -424,6 +424,30 @@ func (c *mcpClient) call(t *testing.T, toolName string, args map[string]any, tim
 	return text
 }
 
+// callWithMeta is call, returning the result's _meta alongside the text.
+func (c *mcpClient) callWithMeta(t *testing.T, toolName string, args map[string]any, timeout time.Duration) (string, map[string]any) {
+	t.Helper()
+	id, err := c.send("tools/call", map[string]any{"name": toolName, "arguments": args})
+	if err != nil {
+		t.Fatalf("tools/call %s: send: %v", toolName, err)
+	}
+	msg, err := c.recv(id, timeout)
+	if err != nil {
+		t.Fatalf("tools/call %s: %v", toolName, err)
+	}
+	if msg.Error != nil {
+		t.Fatalf("tools/call %s: RPC error %d: %s", toolName, msg.Error.Code, msg.Error.Message)
+	}
+	text, isErr, meta, derr := decodeToolResultFull(msg.Result)
+	if derr != nil {
+		t.Fatalf("tools/call %s: unmarshal result: %v\nraw: %s", toolName, derr, msg.Result)
+	}
+	if isErr {
+		t.Fatalf("tools/call %s returned isError=true:\n%s", toolName, text)
+	}
+	return text, meta
+}
+
 // initialize performs the MCP initialize / notifications/initialized handshake.
 func (c *mcpClient) initialize(t *testing.T, rootsPath string) {
 	t.Helper()
@@ -454,15 +478,24 @@ func (c *mcpClient) initialize(t *testing.T, rootsPath string) {
 // decodeToolResult pulls the concatenated text content and isError flag from a
 // tools/call result.
 func decodeToolResult(raw json.RawMessage) (string, bool, error) {
+	text, isErr, _, err := decodeToolResultFull(raw)
+	return text, isErr, err
+}
+
+// decodeToolResultFull also returns the result's _meta object. session_start
+// reports the caller's FULL session ID under _meta while the packet text
+// abbreviates it, so identity tests need both halves.
+func decodeToolResultFull(raw json.RawMessage) (string, bool, map[string]any, error) {
 	var result struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		IsError bool `json:"isError"`
+		IsError bool           `json:"isError"`
+		Meta    map[string]any `json:"_meta"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", false, err
+		return "", false, nil, err
 	}
 	var texts []string
 	for _, item := range result.Content {
@@ -470,7 +503,7 @@ func decodeToolResult(raw json.RawMessage) (string, bool, error) {
 			texts = append(texts, item.Text)
 		}
 	}
-	return strings.Join(texts, ""), result.IsError, nil
+	return strings.Join(texts, ""), result.IsError, result.Meta, nil
 }
 
 // assertContains fails the test if text does not contain want.
