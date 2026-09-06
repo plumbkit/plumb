@@ -201,6 +201,55 @@ func (p *workspacePool) strongLangAt(dir string) string {
 			}
 		}
 	}
+	// A truncated count is not weaker evidence, it is evidence about the wrong
+	// thing: the walk stopped at a file cap, so the counts describe whichever
+	// prefix of the tree it happened to reach first — and the order is a LIFO
+	// over directory listings, i.e. reverse-alphabetical, which has nothing to
+	// do with where a project keeps its code. A repo of 200 Java files and 3
+	// Kotlin ones, with a large asset directory sorting between them, counted
+	// the 3 and then ran out; the tie-break believed it and answered kotlin.
+	// Trusting a complete count and discarding a partial one is the whole
+	// distinction; without it the scan is confidently wrong rather than unsure.
+	//
+	// Discarding it is safe HERE because the fallback is neutral: every strong
+	// candidate got there by carrying a build file of its own, so language order
+	// picks between peers. weakLangAt cannot say that — see resolveMarkerTie.
+	return p.resolveMarkerTie(dir, matched, discardPartialCount)
+}
+
+// partialCountPolicy says what a marker tie-break does when the source scan hits
+// its file cap and can only report a prefix of the tree.
+type partialCountPolicy bool
+
+const (
+	// discardPartialCount falls back to deterministic language order — the
+	// strong-marker rule, where that order picks between peers.
+	discardPartialCount partialCountPolicy = false
+	// keepPartialCount reads the partial counts anyway — the weak-marker rule,
+	// where deterministic order is not neutral.
+	keepPartialCount partialCountPolicy = true
+)
+
+// resolveMarkerTie names the language owning dir out of the candidates whose
+// markers matched there, or "" when none did. One candidate is that candidate;
+// several are decided by what the project actually contains — the tied language
+// owning the most source files beneath dir — falling back to the pool's
+// deterministic language order (go first, then alphabetical) when the scan
+// cannot separate them.
+//
+// Shared by strongLangAt and weakLangAt because the shape of the question is the
+// same, and only ONE thing differs between them: what a partial count is worth.
+//
+// For strong markers, discarding it costs nothing — the fallback order chooses
+// between languages that each brought a build file, and no ordering of those is
+// systematically wrong. For weak markers it is the opposite: the shipped set is
+// small and one of its members is `index.html`, whose language sorts first, so
+// `truncated -> names[0]` hands html EVERY tie it appears in as soon as the tree
+// is big enough to hit the cap — and a tree that big is precisely the one least
+// likely to be a static HTML page. There the partial count, poor as it is, is
+// evidence; the order is a standing bias. Hence the policy argument rather than
+// a shared default.
+func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, partial partialCountPolicy) string {
 	if len(matched) == 0 {
 		return ""
 	}
@@ -222,16 +271,7 @@ func (p *workspacePool) strongLangAt(dir string) string {
 		return names[0]
 	}
 	counts, truncated := p.sniffCounts(dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir)
-	// A truncated count is not weaker evidence, it is evidence about the wrong
-	// thing: the walk stopped at a file cap, so the counts describe whichever
-	// prefix of the tree it happened to reach first — and the order is a LIFO
-	// over directory listings, i.e. reverse-alphabetical, which has nothing to
-	// do with where a project keeps its code. A repo of 200 Java files and 3
-	// Kotlin ones, with a large asset directory sorting between them, counted
-	// the 3 and then ran out; the tie-break believed it and answered kotlin.
-	// Trusting a complete count and discarding a partial one is the whole
-	// distinction; without it the scan is confidently wrong rather than unsure.
-	if truncated {
+	if truncated && partial == discardPartialCount {
 		return names[0]
 	}
 	if lang := dominantAmong(counts, names); lang != "" {
@@ -369,20 +409,32 @@ func (p *workspacePool) hasActiveLanguage(name string) bool {
 	return false
 }
 
-// weakLangAt returns the first active language whose WeakRootMarkers exist
-// directly in dir, or "". Weak markers (package.json, index.html) are
-// promiscuous, so they only name the language of the directory they sit in —
-// never an ancestor — which is what keeps a stray package.json from capturing
-// an unrelated workspace.
+// weakLangAt returns the active language whose WeakRootMarkers exist directly in
+// dir, or "". Weak markers (package.json, index.html) are promiscuous, so they
+// only name the language of the directory they sit in — never an ancestor —
+// which is what keeps a stray package.json from capturing an unrelated
+// workspace.
+//
+// Several languages can claim the same directory here just as they can in
+// strongLangAt, and weak markers make that the COMMON case rather than a rare
+// one: an ordinary Svelte or React app ships `index.html` beside `package.json`,
+// so html and typescript both match. First-wins over the pool's language order
+// resolved that alphabetically, and "html" sorts before "typescript" — every
+// such app attached vscode-html-language-server and left its actual sources
+// unserved. So the same evidence decides it: whichever tied language owns the
+// most source files beneath dir. See resolveMarkerTie for why the weak path
+// reads a truncated count where the strong path discards it.
 func (p *workspacePool) weakLangAt(dir string) string {
+	var matched []langConfig
 	for _, l := range p.langsSnapshot() {
 		for _, marker := range l.cfg.WeakRootMarkers {
 			if markerPresent(dir, marker) {
-				return l.name
+				matched = append(matched, l)
+				break
 			}
 		}
 	}
-	return ""
+	return p.resolveMarkerTie(dir, matched, keepPartialCount)
 }
 
 // languageForRoot resolves the language for an already-determined workspace root
