@@ -132,6 +132,26 @@ func (s *connSession) restoreIdentity(proxyID string) {
 		s.setRecovery(recoveryRestored)
 		return
 	}
+	if adoption == idAbsent && named {
+		// A legacy record (schema v3) carried a name and no session ID. The name
+		// came back and the restore HEALED the row with this session's own ID, so
+		// nothing failed — but nothing was resumed either, because there was
+		// nothing recorded to resume. That is `established`, the same outcome a
+		// first contact gets, and reporting it as degraded would be wrong twice
+		// over: it tells the agent recovery failed when it did not, and it is the
+		// state a reconnect from here is entitled to build on.
+		//
+		// The commit is confirmed rather than assumed (persistIdentity is an
+		// idempotent upsert), because `established` is a promise that a reconnect
+		// will find a record — and a heal whose write failed leaves none.
+		if s.persistIdentity() {
+			s.setRecovery(recoveryEstablished)
+			return
+		}
+		s.log().Warn("daemon: could not record this session's identity while healing a legacy record; it will not be recoverable after a restart")
+		s.setRecovery(recoveryUnavailable)
+		return
+	}
 	s.setRecovery(recoveryDegraded)
 }
 

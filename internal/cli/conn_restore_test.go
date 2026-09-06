@@ -26,6 +26,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // TestRestore_OverlapDoesNotOverwriteTheProvenRecord is the identity-fork
@@ -240,14 +241,8 @@ func TestRestore_UnreadableStoreDoesNotMintAReplacement(t *testing.T) {
 // orphaned. So restoreIdentity reports `unavailable` instead, and it can only do
 // that if persistIdentity tells it the truth about the write.
 //
-// SCOPE, stated rather than implied: this asserts the reporting contract, not
-// the restoreIdentity branch that consumes it. Reaching that branch needs a
-// store whose reads succeed and whose writes fail, and there is no way to build
-// one through the public API — sessionstate.Open writes its schema, so a
-// read-only database cannot be opened at all, and chmod-ing one out from under a
-// live handle changes nothing (SQLite settles read-only-ness at open). The
-// alternative would be a production-only fault-injection seam, which is a worse
-// trade than an honestly narrower test.
+// This asserts the reporting CONTRACT; the branch that consumes it is covered by
+// TestRestore_UncommittedFirstContactReportsNoContinuity below.
 func TestRestore_PersistIdentityReportsAFailedCommit(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
@@ -265,6 +260,75 @@ func TestRestore_PersistIdentityReportsAFailedCommit(t *testing.T) {
 	if s.persistIdentity() {
 		t.Error("persistIdentity reported success against a store that cannot be written — the " +
 			"caller then advertises durable continuity for an identity that was never recorded")
+	}
+}
+
+// blockIdentityWrites makes every INSERT into session_names fail while leaving
+// the table readable, and returns a function that lifts the block.
+//
+// This is the store shape the first-contact branch needs and that nothing else
+// produces: reads working, writes failing. Permissions cannot do it —
+// sessionstate.Open writes its schema, so a read-only database cannot be opened
+// at all, and chmod-ing one out from under a live handle changes nothing because
+// SQLite settles read-only-ness at open. A trigger can, and it needs no
+// production seam: the fault lives entirely in the database the test owns.
+//
+// The second connection goes through internal/sqlitex like every other SQLite
+// DSN in the tree, and WAL mode is what lets it coexist with the store's own.
+func blockIdentityWrites(t *testing.T) func() {
+	t.Helper()
+	db, err := sqlitex.Open(sessionstate.DBPath(), sqlitex.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("opening a second connection to install the fault: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER block_identity_writes BEFORE INSERT ON session_names
+		BEGIN SELECT RAISE(ABORT, 'injected write failure'); END`); err != nil {
+		db.Close()
+		t.Fatalf("installing the fault trigger: %v", err)
+	}
+	return func() {
+		_, _ = db.Exec(`DROP TRIGGER IF EXISTS block_identity_writes`)
+		db.Close()
+	}
+}
+
+// TestRestore_UncommittedFirstContactReportsNoContinuity closes the branch the
+// contract test above only feeds: a first contact whose commit does not land
+// must not report an established identity.
+//
+// "Established" is a promise about the future — the reconnect note tells the
+// agent its name and ID will come back after a restart. With nothing written
+// there is no record for a reconnect to resolve, so the agent keeps using a name
+// and ID that will be gone and mail addressed to them is orphaned. `unavailable`
+// is both true and the safer error.
+//
+// The premise is guarded on both sides: the write must have been ATTEMPTED and
+// must have FAILED, and the READ must have succeeded — a store that fails to read
+// degrades on an earlier branch and would let this pass without reaching the
+// commit at all.
+func TestRestore_UncommittedFirstContactReportsNoContinuity(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+	t.Cleanup(blockIdentityWrites(t))
+
+	if _, _, err := ss.LoadIdentity("proxyX"); err != nil {
+		t.Fatalf("reads must still work for this test to reach the commit branch: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(s.close)
+
+	if rec, ok, err := ss.LoadIdentity("proxyX"); err != nil || ok {
+		t.Fatalf("the commit was not blocked (recorded %+v, ok=%v, err=%v); the test is not "+
+			"exercising the branch it targets", rec, ok, err)
+	}
+	if got := s.recovery(); got == recoveryEstablished {
+		t.Fatalf("recovery outcome = %q after a commit that failed — nothing was written, so a "+
+			"reconnect has no record to resolve and the continuity claim is false", got)
+	}
+	if got := s.recovery(); got != recoveryUnavailable {
+		t.Errorf("recovery outcome = %q, want %q", got, recoveryUnavailable)
 	}
 }
 
@@ -727,8 +791,69 @@ func TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored(t *testing.T
 		t.Fatalf("recovery outcome = %q for a record with no session ID — nothing was resumed, so "+
 			"the note would claim continuity for an ID this session has never held", got)
 	}
-	if got := s.recovery(); got != recoveryDegraded {
-		t.Errorf("recovery outcome = %q, want %q", got, recoveryDegraded)
+	// `established`, not `degraded`: the name came back and the row was healed
+	// with this session's own ID, so nothing failed — there was simply nothing
+	// recorded to resume. Degraded would tell the agent recovery failed when it
+	// did not, and (before the guard became a state predicate) it also silently
+	// blocked every later write for the connection's life.
+	if got := s.recovery(); got != recoveryEstablished {
+		t.Errorf("recovery outcome = %q, want %q", got, recoveryEstablished)
+	}
+}
+
+// TestRestore_HealedLegacyRecordStillAcceptsLaterWrites is the second half of
+// the heal, and the half that actually bit.
+//
+// The write guard used to key on the reported outcome. A healed legacy row was
+// classified degraded — correctly, by that reading: nothing was resumed — and the
+// guard then refused every subsequent write for the connection's whole life. So
+// session_start's external-ID link never landed, the reservation never learned
+// its conversation (resurrecting the resume-then-restart failure for exactly
+// these rows), and a rename_session succeeded live while silently failing to be
+// durable. The guard asks about STATE now: is the identity I hold the one the
+// record proves?
+func TestRestore_HealedLegacyRecordStillAcceptsLaterWrites(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss := openStateStore(t)
+
+	if err := ss.SaveIdentity("proxyX", sessionstate.Identity{Name: "legacy-stag"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(s.close)
+	if got := s.sessionName(); got != "legacy-stag" {
+		t.Fatalf("the legacy name was not applied (%q); the test is not set up as intended", got)
+	}
+
+	// The agent links its conversation, exactly as session_start's linker does.
+	session.SetExternalID(s.sessionID(), "conversation-abc")
+	if !s.persistIdentity() {
+		t.Fatal("a write was refused on a connection that holds the identity the record now " +
+			"proves — the guard is keying on the reported outcome instead of the state")
+	}
+
+	rec, ok, err := ss.LoadIdentity("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadIdentity = (%+v, %v, %v)", rec, ok, err)
+	}
+	if rec.ExternalID != "conversation-abc" {
+		t.Errorf("external linkage = %q after the link; want it recorded, or the reservation "+
+			"never learns this conversation and resume-then-restart breaks for healed rows",
+			rec.ExternalID)
+	}
+	if rec.SessionID != s.sessionID() {
+		t.Errorf("record session ID = %q, want the healed %q", rec.SessionID, s.sessionID())
+	}
+
+	// A rename must be durable too — it succeeded live, so the record has to agree.
+	if _, err := s.renameSession("renamed-legacy"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if rec, _, _ := ss.LoadIdentity("proxyX"); rec.Name != "renamed-legacy" {
+		t.Errorf("stored name = %q after a rename, want %q — a rename that is not durable is a "+
+			"rename the next reconnect undoes, silently", rec.Name, "renamed-legacy")
 	}
 }
 
