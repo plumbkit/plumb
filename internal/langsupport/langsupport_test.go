@@ -37,6 +37,8 @@ func TestByPath(t *testing.T) {
 		"docs/guide.markdown": "markdown",
 		"site/index.html":     "html",
 		"page.htm":            "html",
+		"src/App.svelte":      "svelte",
+		"components/Card.vue": "vue",
 		"Makefile":            "",
 	}
 	for path, want := range cases {
@@ -91,6 +93,47 @@ func TestByName(t *testing.T) {
 	if _, ok := ByName("cobol"); ok {
 		t.Error("ByName(cobol) should not be found")
 	}
+}
+
+// TestSingleFileComponentsAreRecognisedButUncovered pins the deliberate shape of
+// the .svelte and .vue rows: plumb RECOGNISES the file — so the detection sniff,
+// the session_start census and file_outline can all say something true about it
+// — while stating plainly that it has no structural extractor.
+//
+// The two halves have to hold together. Recognised-and-uncovered is a fact the
+// codebase can report ("no extractor for svelte; use search_in_files"); an
+// absent row is an absence every consumer has to guess at, and each guessed
+// differently: ByPath reported the file as unknown, indistinguishable from a
+// binary blob, and the indexer recorded it with zero symbols and no explanation.
+//
+// Flip a row to EngineTreeSitter only together with a cli.extractorCtors entry —
+// TestBuildExtractorsCoversRegistry pins the pair — and then move the witness in
+// TestIndexer_UncoveredLanguageIsNamedAndReported.
+func TestSingleFileComponentsAreRecognisedButUncovered(t *testing.T) {
+	for _, name := range []string{"svelte", "vue"} {
+		l, ok := ByName(name)
+		if !ok {
+			t.Fatalf("%s is not in the registry; a file plumb cannot name is one it cannot report a gap for", name)
+		}
+		if l.Structural != EngineNone {
+			t.Errorf("%s: Structural = %v, want EngineNone until an extractor is wired", name, l.Structural)
+		}
+		if l.LSPAdapter != "" {
+			t.Errorf("%s: LSPAdapter = %q, want empty — plumb ships no server for it", name, l.LSPAdapter)
+		}
+		if !containsLang(Uncovered(), name) {
+			t.Errorf("%s: not reported by Uncovered(), so the coverage gap stays invisible", name)
+		}
+	}
+}
+
+func containsLang(ls []Language, name string) bool {
+	for _, l := range ls {
+		if l.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRegistryConsistency guards the registry invariants: non-empty names and

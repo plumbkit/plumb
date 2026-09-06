@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -16,19 +14,7 @@ import (
 // exists so the result does not depend on what is installed on the test machine.
 func contestedPool(t *testing.T, extra ...string) *workspacePool {
 	t.Helper()
-	cfg := config.Defaults()
-	keep := append([]string{"java", "kotlin"}, extra...)
-	for name := range cfg.LSP {
-		if !contains(keep, name) {
-			delete(cfg.LSP, name)
-			continue
-		}
-		c := cfg.LSP[name]
-		c.Command = "go" // always present: the toolchain running this test
-		c.Enabled = true
-		cfg.LSP[name] = c
-	}
-	return newWorkspacePool(context.Background(), cfg)
+	return defaultsPool(t, append([]string{"java", "kotlin"}, extra...)...)
 }
 
 func contains(hay []string, needle string) bool {
