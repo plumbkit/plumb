@@ -145,18 +145,28 @@ func (s *connSession) persistIdentity() bool {
 	if !s.namePersistEnabled(v) || name == "" {
 		return false
 	}
-	if v.recovery == recoveryDegraded {
-		// This connection is running under a TEMPORARY identity: recovery found
-		// the record and could not apply it. Writing now records the stand-in
-		// over the proven identity — the fork the refusal paths exist to avoid,
-		// arriving through whichever caller happens to persist next. session_start's
-		// external-ID linker is that caller in practice, and it is the first call
-		// most agents make.
+	if proven := v.persistedIdentity.SessionID; proven != "" && proven != s.sessionID() {
+		// This connection is running under a TEMPORARY identity: a record proves
+		// a different session ID and recovery could not apply it. Writing now
+		// records the stand-in over the proven identity — the fork the refusal
+		// paths exist to avoid, arriving through whichever caller happens to
+		// persist next. session_start's external-ID linker is that caller in
+		// practice, and it is the first call most agents make.
 		//
-		// The guard lives HERE rather than at each call site precisely because the
-		// last two rounds of this fix each closed one path and left another open.
+		// The guard lives HERE rather than at each call site precisely because
+		// two rounds of this fix each closed one path and left another open.
+		//
+		// It tests the STATE, not the reported outcome. Gating on
+		// recoveryDegraded looked equivalent and was not: a legacy record with no
+		// session ID is healed by the restore and still classified degraded (the
+		// ID was absent, so nothing was resumed), which would then refuse every
+		// later write for the connection's whole life — the external-ID link
+		// would never land, the reservation would never learn its conversation,
+		// and a rename_session would silently fail to be durable. The question
+		// that actually matters is "is the identity I hold the one the record
+		// proves?", and that is what this asks.
 		s.log().Debug("daemon: not recording a temporary identity over the proven durable record",
-			"temporary", s.sessionID(), "proven", v.persistedIdentity.SessionID)
+			"temporary", s.sessionID(), "proven", proven)
 		return false
 	}
 	rec := sessionstate.Identity{

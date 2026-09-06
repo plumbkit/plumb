@@ -461,8 +461,12 @@ mitigations against a malicious peer. A peer agent running as the same user can
 do anything the user can.
 
 **Mailbox addressing.** A session *name* is not an identity: names come from a
-pool of a few thousand, an ended session does not reserve its name, and
-`rename_session` lets a live session take any free one. A message left for a
+pool of a few thousand, and `rename_session` lets a live session take any free
+one. (An ended session used to reserve nothing at all. Since PLAN-426 its name
+stays reserved while its durable identity record survives — which is retained
+indefinitely — so the pool of genuinely free names shrinks over time. That
+narrows the window below rather than closing it, and a name is still not an
+identity.) A message left for a
 peer that exits before reading it was therefore claimable by whoever next
 answered to that name. Delivery is now bound to the recipient's session ID when
 that peer is live (`collab_rows.addressee_id`), so a successor reads nothing;
@@ -483,7 +487,21 @@ its own `initialize` handshake, and never written to a session file, a log, or
 any tool result) — never by answering to a name, and never by replaying a plumb
 session ID, which `session_start` echoes to clients and which is therefore a
 claim rather than proof. That is the distinction the
-whole binding rests on. It is the same bearer token that already restores
+whole binding rests on.
+
+The NAME half has one further, weaker key, and it is a deliberate residual
+rather than an oversight. A reservation is also released to a caller presenting
+the record's external conversation ID (`session_start`'s `session_id`), because a
+restarted `plumb serve` holds neither the old proxy secret nor the old session ID
+and would otherwise be locked out of its own name. That ID is client-supplied, so
+the reservation is only as strong as it is. This grants no new access: the
+`FindEnded` resume path already handed an ended session's name to anyone naming
+its conversation ID, long before reservations existed, and the mailbox BINDING
+— which is what actually protects a message — is unaffected and still needs the
+proxy secret. What it means precisely is that the reservation hardens name
+continuity against accident, not against a caller who knows the conversation ID.
+
+The proxy session ID is the same bearer token that already restores
 strict-mode read tracking and the workspace pin, so it is not a new trust anchor;
 if it were forgeable, those would have been forgeable first. The same persisted
 pairing also gates session-ID **adoption** (the reconnect re-registering under

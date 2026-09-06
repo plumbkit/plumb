@@ -123,3 +123,66 @@ func keyPress(s string) tea.KeyPressMsg {
 	}
 	return tea.KeyPressMsg(tea.Key{Text: s, Code: []rune(s)[0]})
 }
+
+// TestOpenFilesUnderDir_DecidesDaemonOwnership pins the rule that keeps
+// `plumb stop` inside the environment it was invoked in.
+//
+// The sweep that reaches this rule is `pgrep -f "plumb daemon"`, which matches
+// every plumb daemon on the machine regardless of which XDG tree it belongs to.
+// Unscoped, that made `plumb stop` in an isolated tree — a test harness, a second
+// checkout, a container mount — SIGTERM the developer's live daemon. It is not
+// hypothetical: an integration harness did exactly that, restarting an operator's
+// daemon three times mid-session while it served eleven other connections, and
+// stretching one test from 15s to 347s as the two fought.
+//
+// So this is the whole blast-radius decision, and it is unit-tested rather than
+// left to an integration test that can only observe the damage after the fact.
+func TestOpenFilesUnderDir_DecidesDaemonOwnership(t *testing.T) {
+	t.Parallel()
+	const runtimeDir = "/Users/dev/Library/Caches/plumb"
+	ours := "n" + runtimeDir + "/plumb.sock\nn/dev/null\n"
+
+	cases := []struct {
+		name   string
+		output string
+		dir    string
+		want   bool
+	}{
+		{"a daemon holding our socket is ours", ours, runtimeDir, true},
+		{"a trailing separator on the dir is tolerated", ours, runtimeDir + "/", true},
+		{
+			// The case the whole fix exists for: an isolated harness daemon.
+			name:   "a daemon in another tree is not ours",
+			output: "n/tmp/plsmk123/Library/Caches/plumb/plumb.sock\n",
+			dir:    runtimeDir,
+			want:   false,
+		},
+		{
+			// A prefix match without the separator would claim this one, and it
+			// belongs to a different environment entirely.
+			name:   "a sibling directory sharing a prefix is not ours",
+			output: "n" + runtimeDir + "-other/plumb.sock\n",
+			dir:    runtimeDir,
+			want:   false,
+		},
+		{
+			// Fail closed: lsof that told us nothing is not evidence of ownership.
+			name: "no open files proves nothing", output: "", dir: runtimeDir, want: false,
+		},
+		{
+			// A degenerate dir would claim half the filesystem, and with it every
+			// daemon on the machine — the exact failure, arrived at differently.
+			name:   "the filesystem root is never an ownership claim",
+			output: "n/anything\n", dir: "/", want: false,
+		},
+		{"an empty dir is never an ownership claim", "n/anything\n", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := openFilesUnderDir(c.output, c.dir); got != c.want {
+				t.Errorf("openFilesUnderDir(%q, %q) = %v, want %v", c.output, c.dir, got, c.want)
+			}
+		})
+	}
+}

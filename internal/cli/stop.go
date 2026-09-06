@@ -195,22 +195,82 @@ func findAllDaemonPIDs() []int {
 	return pids
 }
 
-// findAllDaemonByArgs uses pgrep to find ALL "plumb daemon" processes
-// regardless of which socket or PID file path they were started with.
+// findAllDaemonByArgs uses pgrep to find "plumb daemon" processes whose socket
+// or PID path may have changed, and then keeps ONLY those belonging to this
+// environment's runtime directory.
+//
+// The scoping is the whole point. pgrep matches every plumb daemon on the
+// machine, and this process's XDG/HOME environment decides which one is "ours" —
+// so an unscoped sweep makes `plumb stop` in an isolated tree (a test harness, a
+// second checkout, a container mount) reach out and SIGTERM the developer's live
+// daemon. That is not hypothetical: it is what an integration harness did,
+// restarting an operator's daemon three times mid-session while it served eleven
+// other connections. A stop command must not have a blast radius wider than the
+// environment it was invoked in.
+//
+// Ownership is decided by the runtime DIRECTORY rather than the socket file:
+// strategy 2 already catches a daemon holding the exact socket, so the only work
+// left for this strategy is a daemon whose socket NAME changed inside our own
+// tree. Anything holding no file under our runtime dir is somebody else's.
+//
+// It fails CLOSED. A daemon we cannot prove is ours is left alone — the cost is a
+// stray daemon surviving a stop, which the operator can see and kill; the cost of
+// failing open is killing a daemon that was never ours.
 func findAllDaemonByArgs() []int {
 	out, err := exec.Command("pgrep", "-f", "plumb daemon").Output()
 	if err != nil {
 		return nil
 	}
 	self := os.Getpid()
+	runtimeDir := filepath.Dir(daemonSocketPath())
 	var pids []int
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err == nil && pid > 0 && pid != self && isPlumbDaemonProcess(pid) {
-			pids = append(pids, pid)
+		if err != nil || pid <= 0 || pid == self || !isPlumbDaemonProcess(pid) {
+			continue
 		}
+		if !processUsesRuntimeDir(pid, runtimeDir) {
+			continue
+		}
+		pids = append(pids, pid)
 	}
 	return pids
+}
+
+// processUsesRuntimeDir reports whether pid holds any open file under dir — the
+// test for "this daemon belongs to the environment we resolved".
+//
+// A daemon always holds its own listening socket, which lives in that directory,
+// so a true answer is reliable. An lsof that errors or returns nothing yields
+// false, which is the fail-closed direction: see findAllDaemonByArgs.
+func processUsesRuntimeDir(pid int, dir string) bool {
+	out, err := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn").Output() //nolint:gosec // G204: pid is a strconv-formatted int from pgrep, not user input
+	if err != nil {
+		return false
+	}
+	return openFilesUnderDir(string(out), dir)
+}
+
+// openFilesUnderDir reports whether lsof -Fn output names any file under dir.
+// Split from processUsesRuntimeDir so the ownership RULE is testable without a
+// live process: the rule is what decides whether a stop reaches outside its own
+// tree, and it is not something to leave to an integration test.
+func openFilesUnderDir(lsofOutput, dir string) bool {
+	if dir == "" || dir == "." || dir == string(filepath.Separator) {
+		// A degenerate runtime dir would match half the filesystem. Refuse to
+		// claim ownership on that basis.
+		return false
+	}
+	// The trailing separator is load-bearing: without it "/a/plumb-run" would
+	// claim a daemon whose files live in the sibling "/a/plumb-run-other".
+	prefix := strings.TrimSuffix(dir, string(filepath.Separator)) + string(filepath.Separator)
+	for line := range strings.SplitSeq(lsofOutput, "\n") {
+		name, ok := strings.CutPrefix(strings.TrimSpace(line), "n")
+		if ok && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPlumbDaemonProcess verifies a pgrep candidate really is a `plumb daemon`

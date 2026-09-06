@@ -126,6 +126,38 @@
 - **The `session_start` workspace census and the topology index now read `.gitignore`, so a workspace's build output is no longer reported as its size or indexed as its code.** Both walks behind the identity line's `Scale:` figure and the "Recently modified files" list — `countWorkspaceFiles` and `recentlyModifiedFiles` — used a hardcoded five-entry skip set and read no ignore file at all, and so did the topology indexer's full-resync walk. One user's workspace reported ~8 340 files of which 8 110 were gitignored and 212 tracked: the number an agent reads as "how big is this project" was almost entirely generated output, and the newest files in the tree — the ones the recent-files list is FOR — were build artefacts. All three walks now carry an `ignore.Stack` loaded per directory and PRUNE what it excludes with `fs.SkipDir`, which is the traversal `ignore.Stack.IsIgnored` is contracted for; the hardcoded skip set and the dot-directory rule remain the FLOOR, since gitignore is additive and a repository that tracks its own `vendor/` still must not have it counted or indexed. The census walks also gained a 50 000-file cap, and the `Scale:` line renders a capped count as `~50000+ files` rather than passing a ceiling off as a measurement — the cap is tested BEFORE a file is visited, so `truncated` means "a file was left unvisited" and a workspace of exactly 50 000 files reports a complete walk rather than the ceiling-read-as-a-count the marker exists to prevent (`TestCensusWalk_CapBoundary`). Guarded by the new `internal/tools/session_start_detect_test.go` (nothing tested either walk before) and `internal/topology/indexer_resync_ignore_test.go`.
 - **The OS file watcher never delivered an event for a `.gitignore`, and dropped every event for a workspace living under a dot directory.** `watchExcludeRegex` was a fixed string matched by fswatcher against BOTH the full event path and the base name, so its `(^|/)\.[^/]+(/|$)` branch matched the base name `.gitignore` — anything reacting to ignore-file edits would have passed a direct unit test of `handle` and fired zero times in production — and matched the *ancestors* of the workspace too, so a checkout at `~/.config/app` (or under a dot-prefixed test cache) had every one of its events excluded and the watcher silently delivered nothing. The exclusion is now built per workspace (`watchExcludeRegexFor`), anchored at the workspace root, with the dot branch requiring a trailing separator so it excludes dot DIRECTORIES inside the tree and not a dot component at the end of a path. `.plumb/` and `.git/` are still excluded at the source, so the self-trigger loop stays closed; relaxing the branch cannot widen what is WATCHED, because fswatcher applies the filter to events only and never to watch registration. A `.gitignore` or `.ignore` change now drops the watcher's ignore cache and forces a full resync, and the watcher filters gitignored paths before enqueuing, walking the ancestor chain itself as `IsIgnored`'s contract requires of an out-of-walk-order caller. Guarded by `TestFSWatcher_ThroughOSWatcher`, which drives real create / delete / rename / `.gitignore`-edit events rather than calling `handle`, plus `TestWatchExcludeRegexFor` and `TestFSWatcher_IgnoredPathTestsAncestors`.
 - **The topology resync no longer refuses to index a checkout whose own directory name is on the skip list.** The walk applied `shouldSkipDir` to the workspace root itself, so a repository at `~/.config/repo`, `~/src/build` or any path whose base name is dot-prefixed or one of `vendor`/`node_modules`/`testdata`/`dist`/`build`/`__pycache__` pruned its own root and indexed nothing. Guarded by `TestResync_RootDirectoryNameIsNotJudged`.
+- **`plumb stop` no longer reaches outside the environment it was invoked in.**
+  Its third daemon-discovery strategy was an unscoped `pgrep -f "plumb daemon"`,
+  which matches every daemon on the machine whatever XDG tree it belongs to — so
+  a stop from an isolated tree (a test harness, a second checkout, a container
+  mount) SIGTERMed the developer's live daemon. Not hypothetical: `cmd/smoke`'s
+  shared cleanup runs `plumb stop --force` after every test, and a review run of
+  the identity suite restarted an operator's daemon three times mid-session while
+  it served eleven other connections, stretching one test from 15s to 347s as the
+  two fought each other. The sweep now keeps only daemons holding an open file
+  under the caller's resolved runtime directory, and fails CLOSED — a daemon that
+  cannot be proven ours is left alone, because a stray daemon surviving a stop is
+  visible and recoverable while killing someone else's is neither.
+  `TestOpenFilesUnderDir_DecidesDaemonOwnership` pins the rule, including the
+  sibling-directory case (`…/plumb` must not claim `…/plumb-other`).
+
+  `cmd/smoke` additionally stops its own daemon by SIGTERMing the PID in its own
+  tree's pid file rather than shelling out at all. A harness must own its blast
+  radius rather than borrow it from a command's current behaviour.
+
+- **A healed legacy identity record no longer freezes the connection that healed
+  it.** The write guard keyed on the reported recovery outcome, and a schema-v3
+  record (a name, no session ID) is healed by the restore yet classified
+  degraded, because nothing was *resumed*. The guard then refused every
+  subsequent write for that connection's whole life: `session_start`'s
+  external-ID link never landed, so the reservation never learned its
+  conversation (resurrecting the resume-then-restart failure for exactly those
+  rows), and `rename_session` succeeded live while silently failing to be
+  durable. The guard now asks the STATE question — is the identity I hold the one
+  the record proves? — and a successful heal is classified `established`, with the
+  commit confirmed rather than assumed. Guarded by
+  `TestRestore_HealedLegacyRecordStillAcceptsLaterWrites` and
+  `TestRestore_LegacyRecordWithNoSessionIDIsNotReportedAsRestored`.
 
 - **A reconnecting `plumb serve` keeps its session identity, and no longer forks
   it when a reconnect merely overlaps.** Session identity — the internal session

@@ -26,8 +26,11 @@ package smoke_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -222,19 +225,43 @@ func recoverWithSessionStart(t *testing.T, c *mcpClient, budget time.Duration) s
 	}
 }
 
-// stopDaemon stops the isolated daemon this test spawned, by the pid file inside
-// its own XDG tree. It never touches the developer's daemon: `plumb stop` reads
-// the pid path derived from the environment, and isolatedEnv redirects every
-// directory that path is built from.
+// stopDaemon stops the isolated daemon this test spawned, by signalling the PID
+// in its own tree's pid file — and nothing else.
+//
+// It deliberately does NOT shell out to `plumb stop`. That command's third
+// discovery strategy is an unscoped `pgrep -f "plumb daemon"`, which finds every
+// daemon on the machine no matter which XDG tree it belongs to, so running it
+// under isolatedEnv also SIGTERMs the developer's live daemon. That is not a
+// theoretical hazard: a review run of this file restarted the operator's real
+// daemon three times and stretched one test from 15s to 347s, because the
+// daemon it kept killing was serving eleven other sessions.
+//
+// Card §7 makes harness isolation a hard precondition — "clean up only
+// harness-owned PIDs/paths" — so the pid file is the only correct source here.
+// The scoping bug in `plumb stop` itself is fixed separately; this does not
+// depend on that fix, and should not, because a test must own its blast radius
+// rather than borrow it from a command's current behaviour.
 func stopDaemon(t *testing.T, plumbBin, tmpHome string) {
 	t.Helper()
-	stop := exec.Command(plumbBin, "stop", "--force")
-	stop.Env = isolatedEnv(tmpHome)
-	if out, err := stop.CombinedOutput(); err != nil {
+	pid := readDaemonPID(tmpHome)
+	if pid == "" {
+		t.Log("no daemon pid file in the isolated tree; nothing to stop")
+		return
+	}
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 0 {
+		t.Fatalf("isolated daemon pid file holds %q, which is not a pid — refusing to signal anything", pid)
+	}
+	proc, err := os.FindProcess(n)
+	if err != nil {
+		t.Logf("isolated daemon pid %d not found: %v", n, err)
+		return
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		// Best-effort: the proxy's heartbeat may already have reaped it. The
 		// pid-change assertion at the call site is what actually establishes
 		// that a restart happened.
-		t.Logf("plumb stop: %v\n%s", err, out)
+		t.Logf("signalling isolated daemon %d: %v", n, err)
 	}
 }
 
