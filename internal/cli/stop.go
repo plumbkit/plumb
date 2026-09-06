@@ -217,6 +217,13 @@ func findAllDaemonPIDs() []int {
 // It fails CLOSED. A daemon we cannot prove is ours is left alone — the cost is a
 // stray daemon surviving a stop, which the operator can see and kill; the cost of
 // failing open is killing a daemon that was never ours.
+//
+// One consequence of that, stated so it is not discovered as a surprise: the
+// ownership probe shells out to lsof, so on a host WITHOUT lsof this strategy
+// finds nothing at all and is effectively inert. Strategies 1 and 2 (the pid
+// file and the socket) are unaffected and cover the ordinary case; what is lost
+// is only the fallback for a daemon whose socket name changed inside our own
+// tree.
 func findAllDaemonByArgs() []int {
 	out, err := exec.Command("pgrep", "-f", "plumb daemon").Output()
 	if err != nil {

@@ -182,6 +182,13 @@ func (s *connSession) persistIdentity() bool {
 		// that gets the identity comparison wrong. It cannot refuse a legitimate
 		// write, since a restored session compares equal and an established or
 		// unavailable one has no proven ID to compare against.
+		//
+		// The trade-off it DOES make, deliberately: a degraded session that
+		// renames itself on purpose gets a live rename that is not made durable.
+		// That is the right way round — the alternative is letting a session which
+		// is not the identity rewrite the identity's record — and it is not lost
+		// work: the rename applies for this connection, and the proven name comes
+		// back on the reconnect that resolves the conflict.
 		s.log().Debug("daemon: not recording a temporary identity over the proven durable record",
 			"temporary", s.sessionID(), "proven", proven, "recovery", string(v.recovery))
 		return false
