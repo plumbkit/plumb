@@ -1,5 +1,5 @@
 # Changelog
-## 0.18.1 (unreleased)
+## 0.18.1 (2026-09-07)
 
 ### Added
 
