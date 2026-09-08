@@ -1,13 +1,14 @@
 package treesitter
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 )
+
+const mib = 1024 * 1024
 
 // largeMarkdown builds a synthetic Markdown document of roughly targetKB. The
 // Markdown grammar is GLR-heavy (~200 nodes/byte), so a few-hundred-KB document
@@ -22,68 +23,100 @@ func largeMarkdown(targetKB int) []byte {
 	return []byte(b.String())
 }
 
-// markdownParseArenaBytes parses src with the given per-parse memory budget (MB;
-// "" leaves gotreesitter's default) and returns the live HeapInuse delta while
-// the parse tree is still alive — the per-file transient that drives the daemon's
-// heap high-water.
-func markdownParseArenaBytes(t *testing.T, src []byte, budgetMB string) int64 {
+// parseMarkdownRuntime parses src under the given GOT_PARSE_MEMORY_BUDGET_MB and
+// returns gotreesitter's own accounting for that parse.
+//
+// The library's ParseRuntime is the measurement, deliberately, rather than a
+// runtime.MemStats delta around the call. Both MemoryBudgetBytes and
+// ArenaBytesAllocated are computed by the parser from the parse itself, so they
+// are identical run to run and machine to machine; a HeapInuse delta is a
+// sample of the Go heap at two instants and moves with GC timing, core count
+// and whatever else the process has done. See the note on the test below.
+func parseMarkdownRuntime(t *testing.T, src []byte, budgetMB string) tsg.ParseRuntime {
 	t.Helper()
-	if budgetMB == "" {
-		t.Setenv("GOT_PARSE_MEMORY_BUDGET_MB", "0") // disabled: unbounded baseline
-	} else {
-		t.Setenv("GOT_PARSE_MEMORY_BUDGET_MB", budgetMB)
-	}
+	t.Setenv("GOT_PARSE_MEMORY_BUDGET_MB", budgetMB)
 	tsg.ResetParseEnvConfigCacheForTests()
 	t.Cleanup(tsg.ResetParseEnvConfigCacheForTests)
-
-	tsg.DrainArenaPools()
-	runtime.GC()
-	runtime.GC()
-	var m0 runtime.MemStats
-	runtime.ReadMemStats(&m0)
 
 	tree, err := tsg.NewParser(grammars.MarkdownLanguage()).Parse(src)
 	if err != nil || tree == nil {
 		t.Fatalf("parse markdown: tree=%v err=%v", tree, err)
 	}
-	var m1 runtime.MemStats
-	runtime.ReadMemStats(&m1)
-	tree.Release()
-
-	return int64(m1.HeapInuse) - int64(m0.HeapInuse)
+	defer tree.Release()
+	return tree.ParseRuntime()
 }
 
 // TestParseMemoryBudgetBoundsLargeMarkdown is the regression guard for the daemon
-// memory work: it proves a per-parse memory budget actually bounds the transient
-// arena of a large GLR-heavy file. Without a budget a ~300 KB Markdown document
-// allocates hundreds of MB for a single parse; with the daemon's 128 MB default
-// the same parse is materially smaller. The assertion is relative (budgeted vs
-// unbudgeted in the same run) so it is robust across machines and grammar
-// versions — the absolute numbers vary, the bounding effect does not.
+// memory work: a per-parse memory budget must actually reach the parser and must
+// bound the transient arena of a large GLR-heavy file.
 //
-// The package runs no parallel tests and the gotreesitter env cache is process
-// global; this test resets it on cleanup so siblings observe the restored env.
+// It asserts two things, both from gotreesitter's own per-parse accounting:
+//
+//  1. the budget REACHES the parser — MemoryBudgetBytes echoes the env var, so a
+//     release that stops honouring GOT_PARSE_MEMORY_BUDGET_MB fails here;
+//  2. the budget BOUNDS the arena — ArenaBytesAllocated stays within it.
+//
+// History, so this is not "simplified" back into a trap. The original guard
+// compared two runtime.MemStats HeapInuse deltas, budgeted versus unbudgeted,
+// and skipped itself unless the unbudgeted parse exceeded an absolute 200 MB.
+// That made it environment-dependent in both directions: it SKIPPED silently on
+// machines where the unbudgeted parse came in under the threshold (which is what
+// it had been doing on CI), and once a library change pushed the unbudgeted
+// figure over the line it FAILED on CI while passing locally, because a HeapInuse
+// delta is not comparable across machines. A guard that is skipped is not a
+// guard, and one that fails only on the runner cannot be diagnosed. Both
+// assertions below are exact and machine-independent; neither can skip.
 func TestParseMemoryBudgetBoundsLargeMarkdown(t *testing.T) {
+	const budgetMB = 128
 	src := largeMarkdown(300)
 
-	unbounded := markdownParseArenaBytes(t, src, "")
-	bounded := markdownParseArenaBytes(t, src, "128")
+	rt := parseMarkdownRuntime(t, src, "128")
 
-	const mb = 1024 * 1024
-	t.Logf("large markdown (%d KB): unbudgeted=%.0f MB, budget=128 → %.0f MB",
-		len(src)/1024, float64(unbounded)/mb, float64(bounded)/mb)
+	t.Logf("large markdown (%d KB): MemoryBudgetBytes=%d (%d MiB), ArenaBytesAllocated=%d (%d MiB), stop=%q",
+		len(src)/1024, rt.MemoryBudgetBytes, rt.MemoryBudgetBytes/mib,
+		rt.ArenaBytesAllocated, rt.ArenaBytesAllocated/mib, rt.MemoryBudgetStopSource)
 
-	// Sanity: the unbudgeted parse must be genuinely large, else the test proves
-	// nothing (e.g. a future grammar that no longer blows up).
-	if unbounded < 200*mb {
-		t.Skipf("unbudgeted parse only %d MB — grammar no longer pathological; guard not meaningful", unbounded/mb)
+	if want := int64(budgetMB) * mib; rt.MemoryBudgetBytes != want {
+		t.Fatalf("GOT_PARSE_MEMORY_BUDGET_MB not applied: MemoryBudgetBytes=%d, want %d — "+
+			"the per-parse budget did not reach the parser, so nothing bounds the daemon's transient arena",
+			rt.MemoryBudgetBytes, want)
 	}
-	// The 128 MB budget must bound the transient well below the unbudgeted size.
-	if bounded >= unbounded {
-		t.Fatalf("budget did not bound the parse: budgeted=%d MB >= unbudgeted=%d MB — GOT_PARSE_MEMORY_BUDGET_MB not applied",
-			bounded/mb, unbounded/mb)
+
+	// Guard the accounting itself: a release that stopped populating this field
+	// would otherwise satisfy the bound below by reporting zero.
+	if rt.ArenaBytesAllocated <= 0 {
+		t.Fatalf("ArenaBytesAllocated=%d — the parse reported no arena accounting, so the bound below proves nothing",
+			rt.ArenaBytesAllocated)
 	}
-	if bounded > 350*mb {
-		t.Fatalf("budgeted parse still %d MB (>350 MB) — per-parse budget is not effectively bounding arena growth", bounded/mb)
+
+	if rt.ArenaBytesAllocated > rt.MemoryBudgetBytes {
+		t.Fatalf("budget did not bound the parse: arena=%d bytes (%d MiB) exceeds budget=%d bytes (%d MiB)",
+			rt.ArenaBytesAllocated, rt.ArenaBytesAllocated/mib, rt.MemoryBudgetBytes, rt.MemoryBudgetBytes/mib)
 	}
+}
+
+// TestParseMemoryBudgetTracksTheConfiguredValue pins the wiring itself: a
+// DIFFERENT budget must produce a different MemoryBudgetBytes. Without this, the
+// assertion above could be satisfied by a parser that hardcoded 128 MiB and
+// ignored the environment entirely.
+func TestParseMemoryBudgetTracksTheConfiguredValue(t *testing.T) {
+	src := largeMarkdown(50)
+	for _, mb := range []int64{16, 64} {
+		rt := parseMarkdownRuntime(t, src, itoa(mb))
+		if want := mb * mib; rt.MemoryBudgetBytes != want {
+			t.Errorf("GOT_PARSE_MEMORY_BUDGET_MB=%d: MemoryBudgetBytes=%d, want %d", mb, rt.MemoryBudgetBytes, want)
+		}
+	}
+}
+
+func itoa(v int64) string {
+	if v == 0 {
+		return "0"
+	}
+	var digits []byte
+	for v > 0 {
+		digits = append([]byte{byte('0' + v%10)}, digits...)
+		v /= 10
+	}
+	return string(digits)
 }
