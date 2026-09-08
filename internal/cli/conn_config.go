@@ -106,6 +106,14 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		}
 		v.policy = s.buildPathPolicy(v)
 	})
+	// The [lsp.<lang>] block is resolved by the pool, not held in the view: it
+	// decides which language servers this workspace may run, which is a
+	// daemon-wide pool question rather than a per-session one. Dropping the pool's
+	// cached resolution here is what makes an edit to the block take effect on the
+	// same reload every other block does. The stamp check would notice the change
+	// on its own; what this adds is the generation bump, so a live session whose
+	// primary never resolved re-detects instead of waiting for its next attach.
+	s.invalidatePoolLanguages(workspace)
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
 	if projectCfg.Edits.Strict != base.Edits.Strict ||
 		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||

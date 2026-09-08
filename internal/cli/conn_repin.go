@@ -165,7 +165,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// rather than refusing it as a peer trying to steal the pin.
 	langForced := false
 	if langOverride != "" {
-		if err := s.languageOverrideErr(langOverride); err != nil {
+		if err := s.languageOverrideErr(root, langOverride); err != nil {
 			return "", err
 		}
 		language = langOverride

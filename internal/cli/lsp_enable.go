@@ -105,12 +105,24 @@ func lspActiveStatus(cfg config.LSPConfig) string {
 // a typo needs the valid keys, a disabled language needs a config edit, and an
 // uninstalled server needs an install. lspActiveStatus already draws the second
 // two apart for `plumb config show`, so the wording cannot drift from it.
-func (s *connSession) languageOverrideErr(name string) error {
+//
+// Validated against the set governing ROOT, not the daemon's global one, so a
+// project that enables a language in its own .plumb/config.toml can name it —
+// the same set detection and routing use for that workspace. The fourth case
+// falls out of that: a language active globally but turned off by this project
+// needs its own remedy, because neither a config edit at the global level nor an
+// install would change anything.
+func (s *connSession) languageOverrideErr(root, name string) error {
 	if s.pool == nil {
 		return nil // no pool wired (tests / degraded start): nothing to validate against
 	}
-	if s.pool.hasActiveLanguage(name) {
+	if s.pool.hasActiveLanguageIn(root, name) {
 		return nil
+	}
+	if s.pool.hasActiveLanguage(name) {
+		return fmt.Errorf("session_start: language %q is active in this daemon but turned off for %s by that project's .plumb/config.toml "+
+			"([lsp.%s] enabled = false). Remove that override to use it here, or omit the language argument",
+			name, root, name)
 	}
 	cfg, known := s.store.Current().LSP[name]
 	if !known {
@@ -209,7 +221,6 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	newLSP := make(map[string]config.LSPConfig, len(p.baseConfig.LSP))
 	maps.Copy(newLSP, p.baseConfig.LSP)
 	newLSP[name] = cfg
-	p.baseConfig.LSP = newLSP
 
 	// Copy-on-write the effective language set: build a fresh sorted slice and
 	// swap it in under langsMu, so a reader ranging a previously-published slice
@@ -218,9 +229,22 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	copy(next, p.langs)
 	next = append(next, langConfig{name: name, cfg: cfg})
 	sortLangs(next)
+	// Both publications under the SAME lock, in one critical section. p.mu no
+	// longer covers every reader of baseConfig: the per-project language resolver
+	// reads it without p.mu (it runs beneath startOrReuse, which already holds
+	// that mutex), so langsMu is what makes the widened map and the widened slice
+	// observable together. Publishing the map outside it would let a resolver
+	// merge a project config onto the new map while ranging the old slice.
 	p.langsMu.Lock()
+	p.baseConfig.LSP = newLSP
 	p.langs = next
 	p.langsMu.Unlock()
+	// Every per-project resolution was merged onto the base config this call just
+	// replaced, so all of them are stale. Dropped rather than recomputed: the next
+	// question about a project reparses its config once and re-caches. The cache
+	// lock is taken here and never under p.mu's inverse order — see
+	// languageConfigState.
+	p.invalidateAllLanguageConfigs()
 	// Published last, so a connection that observes the new generation is
 	// guaranteed to see the widened set when it re-detects. Bumped only on a real
 	// widening — the already-enabled no-op above returns before here, so a repeat

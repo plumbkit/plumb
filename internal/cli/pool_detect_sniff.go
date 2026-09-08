@@ -68,13 +68,21 @@ const (
 // last resort it is strictly better than LanguageNone and never overrides a
 // strong or weak marker.
 func (p *workspacePool) extLangAt(dir string) string {
+	return p.extLangAtIn(dir, p.effectiveLanguages(dir))
+}
+
+// extLangAtIn is extLangAt against an already-resolved effective language set.
+// The set is resolved once for the whole scan: a project's .plumb/config.toml is
+// parsed at most once here, never once per file, which is what keeps the sniff's
+// 2000-file budget a filesystem cost rather than a config-parsing one.
+func (p *workspacePool) extLangAtIn(dir string, langs []langConfig) string {
 	// The truncation flag is deliberately ignored here, where strongLangAt
 	// heeds it. The two callers want opposite things from a partial answer:
 	// this one is a LAST RESORT whose alternative is LanguageNone, so a coarse
 	// guess off the first 2000 files beats no language at all; the tie-break is
 	// choosing between two specific candidates, where a partial count is not a
 	// weaker answer but a differently-wrong one.
-	counts, _ := p.sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
+	counts, _ := p.sniffCountsIn(langs, dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
 	return bestSniffedLang(counts)
 }
 
@@ -134,8 +142,17 @@ func (p *workspacePool) extLangAt(dir string) string {
 // truncated without contributing a single count, which is the same defect in a
 // quieter form.
 func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
+	return p.sniffCountsIn(p.effectiveLanguages(dir), dir, maxDepth, maxFiles, ignoreMarkers, skipDir)
+}
+
+// sniffCountsIn is sniffCounts against an already-resolved effective language
+// set. langs leads the parameter list because it is what the whole walk is
+// counted AGAINST: every entry is classified by fileLanguageIn over this exact
+// slice, so the answer describes one project's enablement rather than drifting
+// as the walk crosses directories.
+func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
 	counts = map[string]int{}
-	if len(p.langsSnapshot()) == 0 {
+	if len(langs) == 0 {
 		return counts, false
 	}
 	type item struct {
@@ -178,7 +195,7 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMa
 			if matchesAnyMarker(de.Name(), ignoreMarkers) {
 				continue
 			}
-			if lang := p.fileLanguage(de.Name()); lang != "" {
+			if lang := p.fileLanguageIn(langs, de.Name()); lang != "" {
 				counts[lang]++
 			}
 		}

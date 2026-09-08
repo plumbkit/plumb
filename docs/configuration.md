@@ -852,9 +852,68 @@ cost and its markers never enter detection.
 
 > **The knob is the opposite of "enable":** set `[lsp.<lang>] enabled = false` to
 > *exclude* a language even when its server is installed. `plumb config show`
-> prints an `active` row per language (`yes (installed)` /
+> prints an `eligible (this command)` row per language (`yes (installed)` /
 > `no (… not installed)` / `no (disabled in config)`); `plumb doctor` reports the
-> same.
+> same. Both describe the **merged configuration and `PATH` of the command you
+> just ran** — not what the running daemon has attached. For that, use
+> `plumb debug lsp`.
+
+### Per-project enablement
+
+`enabled` in a project's `.plumb/config.toml` is authoritative **for that
+project**, in both directions. A repository whose Python sources have no
+`pyproject.toml` can turn Python on for itself:
+
+```toml
+# <workspace>/.plumb/config.toml
+[lsp.python]
+enabled = true
+[lsp.typescript]
+enabled = true
+```
+
+… on a machine whose global config leaves both off, and the same file can turn a
+globally-enabled language off for one repository. The setting governs **every**
+language question plumb asks about that workspace — marker detection, the
+content sniff for a manifest-less root, child-root discovery in a monorepo,
+per-file routing, a `session_start({language: …})` override, and starting the
+server — so detection and routing can never disagree about which languages a
+project has.
+
+The governing project is the **nearest enclosing `.plumb/` or `.git/`**. A
+language subroot inherits it: `app/tsconfig.json` under a `.plumb/` root is
+served under that root's enablement, with no config of its own. A directory that
+declares its own boundary does **not** inherit — a submodule or a vendored
+checkout keeps its own policy, and a sibling project is untouched.
+
+Changes take effect on the next request; no daemon restart, and no
+`plumb enable-lsp` (which is the *global*, daemon-lifetime knob). Creating,
+editing and deleting the file are all picked up, whether or not a session is
+attached to that workspace.
+
+> **What this changes in the threat model, stated deliberately.** A project
+> config is an untrusted surface — cloning a repository ships one. `enabled` is
+> one of the four fields honoured without `plumb trust`, and always has been, so
+> a cloned repository can now cause a language server to **start** that your
+> global config alone would never have started. It cannot choose **which
+> binary**: `command`, `args`, `env`, `initialization_options`, `root_markers`
+> and `weak_root_markers` are all forced back to your global config unless you
+> have trusted that exact content, and a language your global config does not
+> define is dropped outright. So the process is one you installed and configured;
+> what the repository gains is a say in whether it runs **for that repository**.
+> Note that a global `enabled = false` is *not* a remedy — overriding it is
+> precisely what this section describes. If you do not want a server startable by
+> a repository you clone, keep its binary off `PATH` (an uninstalled server never
+> joins the set, project config or not), or read the `.plumb/config.toml` of
+> repositories before you open them.
+
+> **Limits, stated rather than implied.** The project's set decides which servers
+> plumb *starts and routes to* from that point on. A server already attached to a
+> live session is not torn down or swapped when the file changes: a session that
+> resolved no primary language picks one up on its next tool call, but one already
+> holding a primary keeps it until it re-attaches (a new session, or
+> `session_start` with an explicit workspace). Revoking a language stops new
+> acquisitions rather than killing a request in flight.
 
 > **Per-workspace trust required for everything except four fields.** In a
 > project's `.plumb/config.toml`, only `enabled`, `diagnostics`, `idle_timeout`

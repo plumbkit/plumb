@@ -218,14 +218,21 @@ func captureStdout(t *testing.T, fn func()) string {
 		os.Stdout = orig
 	}()
 
+	// Drained CONCURRENTLY with fn, not after it. A pipe holds ~64 KiB before the
+	// writer blocks, so reading only once fn returns deadlocks the moment the
+	// captured command prints more than that — the test hangs until the package
+	// timeout and reports as "test timed out", naming no cause. `config show`
+	// crosses that threshold on a full config.
+	done := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		done <- out
+	}()
+
 	fn()
 
 	if err := w.Close(); err != nil {
 		t.Fatalf("closing stdout pipe: %v", err)
 	}
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("reading stdout pipe: %v", err)
-	}
-	return string(out)
+	return string(<-done)
 }

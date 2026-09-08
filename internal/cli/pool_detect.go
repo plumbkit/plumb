@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -85,8 +84,18 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 }
 
 // detect is Detect's marker walk, before canonicalisation.
+//
+// The effective language set is resolved ONCE, from the project governing start,
+// and threaded through the whole walk. Resolving per directory would be both
+// slower and wrong: the ancestors visited on the way up are not the project
+// whose config governs this detection, and a walk that changed policy as it
+// climbed could answer with a language the caller's own project has disabled.
+// The walk never ascends past its own policy root — that root is by definition a
+// .plumb or .git boundary, and both terminate the walk — so one resolution
+// covers every rung.
 func (p *workspacePool) detect(start string) (root, language string, err error) {
 	homeInfo := homeDirInfos()
+	langs := p.effectiveLanguages(start)
 	d := filepath.Clean(start)
 	first := true
 	for {
@@ -117,7 +126,7 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 		// on every session from then on, auto_attach or not.
 		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
 			if !atHome || deliberatePlumbMarker(d) {
-				return d, p.languageForRoot(d), nil
+				return d, p.languageForRootIn(d, langs), nil
 			}
 			p.homePlumbWarn.Do(func() {
 				slog.Warn("workspace detection: ignoring the .plumb marker at the home directory — it carries no context.md, so it looks machine-created (an earlier build's auto_attach_persist). To keep the directory's memories and index and silence this, create the file: touch ~/.plumb/context.md. To discard it entirely, remove ~/.plumb — note that deletes ~/.plumb/memories and the topology index with it",
@@ -140,7 +149,7 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 			return "", "", fmt.Errorf("no project root found between %s and the home directory (which is never used as a workspace root, nor ascended past)", start)
 		}
 		// Next: first language whose STRONG root marker exists at d.
-		if lang := p.strongLangAt(d); lang != "" {
+		if lang := p.strongLangAtIn(d, langs); lang != "" {
 			return d, lang, nil
 		}
 		// A .git directory marks a project boundary even without a strong
@@ -155,7 +164,7 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 			}
 		}
 		if gitHere || first {
-			if lang := p.weakLangAt(d); lang != "" {
+			if lang := p.weakLangAtIn(d, langs); lang != "" {
 				return d, lang, nil
 			}
 		}
@@ -192,8 +201,16 @@ func (p *workspacePool) detect(start string) (root, language string, err error) 
 // attach the language its sources are written in. Pinned by the
 // "exclusive java marker beside the contested one" case.
 func (p *workspacePool) strongLangAt(dir string) string {
+	return p.strongLangAtIn(dir, p.effectiveLanguages(dir))
+}
+
+// strongLangAtIn is strongLangAt against an already-resolved effective language
+// set. Every caller that examines more than one directory resolves once and
+// calls this, so a Detect ascent or a child scan pays for project resolution
+// exactly once.
+func (p *workspacePool) strongLangAtIn(dir string, langs []langConfig) string {
 	var matched []langConfig
-	for _, l := range p.langsSnapshot() {
+	for _, l := range langs {
 		for _, marker := range l.cfg.RootMarkers {
 			if markerPresent(dir, marker) {
 				matched = append(matched, l)
@@ -214,7 +231,7 @@ func (p *workspacePool) strongLangAt(dir string) string {
 	// Discarding it is safe HERE because the fallback is neutral: every strong
 	// candidate got there by carrying a build file of its own, so language order
 	// picks between peers. weakLangAt cannot say that — see resolveMarkerTie.
-	return p.resolveMarkerTie(dir, matched, discardPartialCount)
+	return p.resolveMarkerTie(dir, matched, discardPartialCount, langs)
 }
 
 // partialCountPolicy says what a marker tie-break does when the source scan hits
@@ -249,7 +266,7 @@ const (
 // likely to be a static HTML page. There the partial count, poor as it is, is
 // evidence; the order is a standing bias. Hence the policy argument rather than
 // a shared default.
-func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, partial partialCountPolicy) string {
+func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, partial partialCountPolicy, langs []langConfig) string {
 	if len(matched) == 0 {
 		return ""
 	}
@@ -270,7 +287,7 @@ func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, parti
 	if len(matched) == 1 {
 		return names[0]
 	}
-	counts, truncated := p.sniffCounts(dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir)
+	counts, truncated := p.sniffCountsIn(langs, dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir)
 	if truncated && partial == discardPartialCount {
 		return names[0]
 	}
@@ -300,6 +317,13 @@ type discoveredRoot struct {
 // are pruned so depth does not explode. Symlinked dirs are skipped (DirEntry.
 // IsDir is false for them), avoiding cycles. maxDepth <= 0 disables discovery.
 // The caller is responsible for not invoking this on $HOME.
+//
+// Language POLICY is inherited from root, not re-resolved per child: a language
+// subroot (app/tsconfig.json under a .plumb/ root) belongs to the project above
+// it, so the parent's [lsp.<lang>] enablement is what decides whether its marker
+// counts. The exception is a child that declares a boundary of its own — a
+// nested .plumb or .git, i.e. a vendored checkout or a submodule — which gets
+// its own resolution so it cannot inherit its host's enables.
 func (p *workspacePool) discoverChildLanguages(root string, maxDepth int) []discoveredRoot {
 	if maxDepth <= 0 {
 		return nil
@@ -307,9 +331,16 @@ func (p *workspacePool) discoverChildLanguages(root string, maxDepth int) []disc
 	type item struct {
 		dir   string
 		depth int
+		langs []langConfig
 	}
+	// Hoisted once, like detect() and detectLanguageAt do, and threaded rather
+	// than re-derived per child. homeDirInfos is uncached — two os.Stat calls plus
+	// an os/user lookup every time — and this is the one loop in the language
+	// resolution that asks the boundary question per DIRECTORY, so calling the
+	// deriving form here would put that cost on every child of every scan.
+	homeInfo := homeDirInfos()
 	var out []discoveredRoot
-	stack := []item{{dir: root, depth: 0}}
+	stack := []item{{dir: root, depth: 0, langs: p.effectiveLanguages(root)}}
 	for len(stack) > 0 {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -325,11 +356,15 @@ func (p *workspacePool) discoverChildLanguages(root string, maxDepth int) []disc
 				continue
 			}
 			child := filepath.Join(it.dir, de.Name())
-			if lang := p.strongLangAt(child); lang != "" {
+			langs := it.langs
+			if languageBoundaryAtHome(child, homeInfo) {
+				langs = p.effectiveLanguages(child)
+			}
+			if lang := p.strongLangAtIn(child, langs); lang != "" {
 				out = append(out, discoveredRoot{root: child, language: lang})
 				continue // a language root is a project boundary — do not descend
 			}
-			stack = append(stack, item{dir: child, depth: it.depth + 1})
+			stack = append(stack, item{dir: child, depth: it.depth + 1, langs: langs})
 		}
 	}
 	return out
@@ -397,18 +432,6 @@ func lessDiscovered(a, b discoveredRoot) bool {
 	return a.root < b.root
 }
 
-// hasActiveLanguage reports whether name is an active (enabled + installed)
-// language in this pool — the set workspace detection and routing consult. Used
-// to validate a caller-supplied language override before pinning it.
-func (p *workspacePool) hasActiveLanguage(name string) bool {
-	for _, l := range p.langsSnapshot() {
-		if l.name == name {
-			return true
-		}
-	}
-	return false
-}
-
 // weakLangAt returns the active language whose WeakRootMarkers exist directly in
 // dir, or "". Weak markers (package.json, index.html) are promiscuous, so they
 // only name the language of the directory they sit in — never an ancestor —
@@ -425,8 +448,13 @@ func (p *workspacePool) hasActiveLanguage(name string) bool {
 // most source files beneath dir. See resolveMarkerTie for why the weak path
 // reads a truncated count where the strong path discards it.
 func (p *workspacePool) weakLangAt(dir string) string {
+	return p.weakLangAtIn(dir, p.effectiveLanguages(dir))
+}
+
+// weakLangAtIn is weakLangAt against an already-resolved effective language set.
+func (p *workspacePool) weakLangAtIn(dir string, langs []langConfig) string {
 	var matched []langConfig
-	for _, l := range p.langsSnapshot() {
+	for _, l := range langs {
 		for _, marker := range l.cfg.WeakRootMarkers {
 			if markerPresent(dir, marker) {
 				matched = append(matched, l)
@@ -434,91 +462,7 @@ func (p *workspacePool) weakLangAt(dir string) string {
 			}
 		}
 	}
-	return p.resolveMarkerTie(dir, matched, keepPartialCount)
-}
-
-// languageForRoot resolves the language for an already-determined workspace root
-// (a .plumb marker, or a re-pin): a strong marker at the root or an ancestor,
-// else a weak marker at the root itself, else LanguageNone.
-func (p *workspacePool) languageForRoot(dir string) string {
-	if lang := p.lspLanguageForRoot(dir); lang != "" {
-		return lang
-	}
-	return LanguageNone
-}
-
-// lspLanguageForRoot returns the LSP language owning dir — a strong marker at
-// dir or any ancestor (bounded at $HOME), else a weak marker at dir itself — or
-// "" when none. Unlike languageForRoot it returns "" (not LanguageNone) so
-// callers that need an actual server language can tell "no language" apart.
-func (p *workspacePool) lspLanguageForRoot(dir string) string {
-	if lang := p.detectLanguageAt(dir); lang != "" {
-		return lang
-	}
-	return p.weakLangAt(dir)
-}
-
-// detectLanguageAt returns the language whose STRONG root marker is present at
-// dir or any ancestor, or "". Used to resolve the adapter for an already-known
-// root. Weak markers are not consulted here (see weakLangAt / lspLanguageForRoot).
-//
-// The ancestor walk stops at $HOME by IDENTITY, mirroring Detect's .git
-// fallback guard: a stray language marker in the home directory (e.g. a global
-// ~/go.mod) must not capture every .plumb workspace beneath it. For a walk
-// starting beneath $HOME that also covers everything above it — the walk meets
-// $HOME first — but a walk starting elsewhere does consult directories that
-// contain a home directory. That is deliberate, not an oversight: this
-// function names a LANGUAGE for an already-fixed root, never the root or the
-// boundary, and testing containment here would return "" for a repo whose
-// sandbox $HOME lives inside it (the round-6 B3 regression class).
-func (p *workspacePool) detectLanguageAt(dir string) string {
-	homeInfo := homeDirInfos()
-	d := dir
-	for {
-		if sameDirAs(d, homeInfo) {
-			return ""
-		}
-		if lang := p.strongLangAt(d); lang != "" {
-			return lang
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return ""
-		}
-		d = parent
-	}
-}
-
-// fileLanguage maps a file path to the ENABLED config language key whose LSP
-// should handle it, or "" when no enabled language owns the file. It is the
-// per-file routing primitive that lets a single root drive several language
-// servers (e.g. a .html file routed to the HTML server while .go files go to
-// gopls). langsupport.ByPath resolves the owning language by extension;
-// normaliseLangName folds tree-sitter dialect names to the config LSP key
-// (tsx/jsx/javascript share the typescript-language-server); cfgFor gates on
-// the language actually being enabled.
-func (p *workspacePool) fileLanguage(path string) string {
-	l, ok := langsupport.ByPath(path)
-	if !ok {
-		return ""
-	}
-	key := normaliseLangName(l.Name)
-	if _, ok := p.cfgFor(key); !ok {
-		return ""
-	}
-	return key
-}
-
-// normaliseLangName folds a langsupport.Language.Name to the config LSP map key.
-// The tsx/jsx/javascript dialects are all served by the typescript adapter, so
-// they collapse to "typescript"; every other name already equals its config key.
-func normaliseLangName(name string) string {
-	switch name {
-	case "tsx", "jsx", "javascript":
-		return "typescript"
-	default:
-		return name
-	}
+	return p.resolveMarkerTie(dir, matched, keepPartialCount, langs)
 }
 
 // resolveCLIWorkspace resolves start to the same workspace root the daemon

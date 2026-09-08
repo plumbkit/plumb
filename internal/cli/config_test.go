@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,5 +36,49 @@ func TestRenderConfigShowTableBorderShape(t *testing.T) {
 	}
 	if got := strings.Count(lines[3], "│"); got < 3 {
 		t.Fatalf("data row should include continuous column separators, got %d:\n%s", got, lines[3])
+	}
+}
+
+func TestConfigShowHelpDescribesMergedCommandProjection(t *testing.T) {
+	if got, want := configShowCmd.Short, "Show resolved configuration and provenance"; got != want {
+		t.Fatalf("config show short help = %q, want %q", got, want)
+	}
+	for _, want := range []string{
+		"merged for this command",
+		"does not report a running daemon's current state",
+		"plumb debug lsp for running servers",
+	} {
+		if !strings.Contains(configShowCmd.Long, want) {
+			t.Errorf("config show help must say %q:\n%s", want, configShowCmd.Long)
+		}
+	}
+}
+
+func TestConfigShowReportsLSPCommandProjection(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	oldWorkspace, oldAdapters := configShowWorkspace, configShowAdapters
+	configShowWorkspace, configShowAdapters = workspace, false
+	defer func() {
+		configShowWorkspace, configShowAdapters = oldWorkspace, oldAdapters
+	}()
+
+	out := stripANSI(captureStdout(t, func() {
+		if err := runConfigShow(nil, nil); err != nil {
+			t.Fatalf("runConfigShow: %v", err)
+		}
+	}))
+	for _, want := range []string{
+		"eligible (this command)",
+		"merged config + PATH",
+		"LSP eligibility is derived from this command's merged config and PATH; use plumb debug lsp for running servers.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config show output must contain %q:\n%s", want, out)
+		}
 	}
 }

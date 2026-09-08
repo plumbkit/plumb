@@ -62,15 +62,16 @@ var (
 
 var configShowCmd = &cobra.Command{
 	Use:   "show",
-	Short: "Show resolved configuration with source provenance",
-	Long: `Print the resolved configuration as plumb actually sees it, with each
-layer (defaults → global → project → env) labelled so you can tell where
-each value came from. Pass --workspace to include a project-local
-.plumb/config.toml in the merge.
+	Short: "Show resolved configuration and provenance",
+	Long: `Print the configuration merged for this command (defaults → global →
+project → env), with each layer labelled so you can tell where each value came
+from. Pass --workspace to include a project-local .plumb/config.toml in the
+merge. This does not report a running daemon's current state.
 
 Pass --adapters to print only the language-server adapter table (language,
-server binary, validation tier, and live activation state). Aliases: --adapter,
---lsp, --lsps, --integration, --integrations.`,
+server binary, validation tier, and configured availability for this command).
+Use plumb debug lsp for running servers. Aliases: --adapter, --lsp, --lsps,
+--integration, --integrations.`,
 	RunE: runConfigShow,
 }
 
@@ -80,7 +81,7 @@ var configReloadCmd = &cobra.Command{
 	Long: `Force the running plumb daemon to reload its global config immediately,
 rather than waiting for the file watcher. Live-reloadable settings (edits, git,
 walk, log level, topology, cache) take effect at once; settings that still need a
-restart are flagged by 'plumb config show'.`,
+restart are flagged in the merged configuration shown by 'plumb config show'.`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		resp, err := dialDaemonCtrl("reload-config")
@@ -284,7 +285,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		prefix := "lsp." + lang + "."
 		addConfigSection(cfgTable, "lsp."+lang, [][]string{
 			{"enabled", strconv.FormatBool(cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
-			{"active", lspActiveStatus(cfg), "derived"},
+			{"eligible (this command)", lspActiveStatus(cfg), "merged config + PATH"},
 			{"command", cfg.Command, policySourceFor(policy, prefix+"command", sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command))},
 			{"args", fmt.Sprintf("%v", cfg.Args), policySourceFor(policy, prefix+"args", sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args))},
 			{"root_markers", fmt.Sprintf("%v", cfg.RootMarkers), policySourceFor(policy, prefix+"root_markers", sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers))},
@@ -294,6 +295,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Println(renderConfigShowTable(cfgTable))
+	fmt.Println(configShowMutedStyle().Render("LSP eligibility is derived from this command's merged config and PATH; use plumb debug lsp for running servers."))
 	printProjectPolicyNotice(ws, policy)
 
 	// 4. Reload behaviour — which groups the running daemon applies live versus
@@ -310,7 +312,13 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	reloadTable.Row("ui.theme", configShowOkStyle().Render("live (TUI)"))
 	reloadTable.Row("topology", configShowOkStyle().Render("live (reconciled)"))
 	reloadTable.Row("workspace, quality, lsp_query", configShowOkStyle().Render("live on next attach/session"))
-	reloadTable.Row("lsp.* servers, cache, log_format", configShowWarnStyle().Render("needs daemon restart"))
+	// The two halves of [lsp.<lang>] reload differently, and collapsing them into
+	// one "needs daemon restart" row was wrong in the direction that costs the
+	// user most: a project that enables a language in its own .plumb/config.toml
+	// takes effect on the next request, and telling them to restart the daemon
+	// invites them to conclude the setting does not work.
+	reloadTable.Row("lsp.* (project)", configShowOkStyle().Render("live on next request"))
+	reloadTable.Row("lsp.* (global), cache, log_format", configShowWarnStyle().Render("needs daemon restart (or `plumb enable-lsp`)"))
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 

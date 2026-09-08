@@ -97,7 +97,7 @@ func TestAdapterOrder(t *testing.T) {
 	}
 }
 
-func TestRenderAdapterActive(t *testing.T) {
+func TestRenderAdapterAvailability(t *testing.T) {
 	cases := []struct {
 		name string
 		cfg  config.LSPConfig
@@ -107,9 +107,9 @@ func TestRenderAdapterActive(t *testing.T) {
 		{"install-gated", config.LSPConfig{Enabled: true, Command: "definitely-not-on-path-xyz"}, "install-gated"},
 	}
 	for _, c := range cases {
-		got := stripANSI(renderAdapterActive(c.cfg))
+		got := stripANSI(renderAdapterAvailability(c.cfg))
 		if got != c.want {
-			t.Errorf("%s: renderAdapterActive = %q, want %q", c.name, got, c.want)
+			t.Errorf("%s: renderAdapterAvailability = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

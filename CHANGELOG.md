@@ -1,4 +1,66 @@
 # Changelog
+
+## Unreleased
+
+### Fixed
+
+- **A project's `[lsp.<lang>] enabled` now decides which language servers that
+  project gets — in both directions.** The daemon built its effective language
+  set once from the GLOBAL config, and every language question consulted that set
+  first: detection, the manifest-less content sniff, monorepo child-root
+  discovery, per-file routing, the `session_start({language: …})` override, and
+  server acquisition. A project config could narrow that set but never widen it,
+  so `[lsp.python] enabled = true` in a repository's own `.plumb/config.toml` was
+  silently inert on a daemon whose global config left Python off — reported from
+  the field as a mixed Python/TypeScript repository that attached only an HTML
+  server, with its Python files casting no votes in the sniff and its TypeScript
+  child root invisible. The set is now resolved per project, once per operation,
+  and threaded through all of those seams, so detection and routing can never
+  disagree about which languages a workspace has. The governing project is the
+  nearest enclosing `.plumb/` or `.git/`: a language subroot (`app/tsconfig.json`
+  under a `.plumb/` root) inherits it, while a submodule or vendored checkout
+  declaring its own boundary does not, and a sibling project is untouched.
+  Disable is applied BEFORE detection rather than filtering its answer, so
+  turning one language off lets another eligible one win instead of collapsing to
+  `none`; and eligibility is now checked before an already-pooled entry is
+  reused, so revoking a language does not depend on whether the daemon happened
+  to start that server first. Resolution is cached per project and revalidated by
+  a stat of the project config AND the trust store (`plumb trust` changes the
+  resolved adapter with the file untouched), so creating, editing or deleting the
+  file takes effect on the next request with no watcher, no restart, and no
+  reparse per scanned file — `BenchmarkWorkspacePoolDetect_ProjectLanguage` moves
+  582µs → 611µs (+5%), one ancestor walk and two stats per detection. Trust is
+  unchanged — `enabled` was always one of the four fields honoured without
+  `plumb trust`, and `command`/`args`/`env`/`initialization_options`/
+  `root_markers`/`weak_root_markers` are still forced back to the global config
+  — but the consequence is worth stating rather than leaving implicit: a cloned
+  repository can now cause a language server to **start** that your global config
+  alone would not have started. It still cannot choose which binary, and a
+  language your global config does not define is dropped outright, so the process
+  is one you installed; what the repository gains is a say in whether it runs for
+  itself. `docs/configuration.md` says so in the same words. Guarded by
+  `TestProjectLSPAcceptanceMixedRepository` (the reported shape end to end,
+  through the real pool and routing proxy) and `project_lsp_policy_test.go`.
+
+### Changed
+
+- **`plumb config show` no longer claims to report a running daemon's state.**
+  Its LSP row was labelled `active`, and the `--adapters` table `Active`, for a
+  value derived entirely from the merged configuration and `PATH` of the CLI
+  process you just ran — which is exactly the reading that made a
+  project-enabled-but-globally-disabled language look like it had attached. Both
+  now read `eligible (this command)`, with provenance `merged config + PATH` and
+  a line pointing at `plumb debug lsp` for what is actually running. The reload
+  table also splits `lsp.*`: the project half is live on the next request, the
+  global half still needs a daemon restart or `plumb enable-lsp`.
+
+### Internal
+
+- `captureStdout` in the CLI tests now drains the pipe concurrently with the
+  captured function. Reading only after it returned deadlocked on any command
+  printing more than a pipe buffer (~64 KiB) — `config show` on a full config —
+  and surfaced as a bare package-level "test timed out", naming no cause.
+
 ## 0.18.1 (2026-09-07)
 
 ### Added

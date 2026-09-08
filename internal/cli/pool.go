@@ -50,9 +50,10 @@ type workspacePool struct {
 	mu      sync.Mutex
 	entries map[poolKey]*poolEntry // key: (root, language); one LS per pair
 
-	// langs is the effective (enabled + installed) language set — the slice that
-	// workspace detection, per-file routing, and hasActiveLanguage consult. It is
-	// built once by newWorkspacePool and thereafter mutated ONLY by enableLanguage
+	// langs is the global effective (enabled + installed) language set. Project
+	// detection and routing derive their own cached effective slice from baseConfig
+	// plus the governing workspace config. It is built once by newWorkspacePool and
+	// thereafter mutated ONLY by enableLanguage
 	// (live `enable-lsp`), which replaces it wholesale (copy-on-write) rather than
 	// appending in place. Readers on the hot path (Detect, fileLanguage) range a
 	// snapshot taken under langsMu.RLock and never mutate it, so a concurrent
@@ -72,8 +73,9 @@ type workspacePool struct {
 	// detection path.
 	langsGen atomic.Uint64
 
-	baseConfig config.Config // global base for per-workspace LSP overrides
-	cacheTTL   time.Duration
+	baseConfig     config.Config // global base for per-workspace LSP overrides
+	languageConfig languageConfigState
+	cacheTTL       time.Duration
 
 	// idleGrace is how long a pinned entry lingers after its last session
 	// detaches before the language server is torn down. The delay absorbs a
@@ -191,25 +193,16 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	var langs []langConfig
-	for name, lspCfg := range cfg.LSP {
-		// Effective enablement: the user's intent gated on the server actually
-		// being installed (automatic mode). An enabled-but-uninstalled language
-		// is excluded so its root markers never pollute workspace detection.
-		if lspActive(lspCfg) {
-			langs = append(langs, langConfig{name: name, cfg: lspCfg})
-		}
-	}
-	sortLangs(langs)
 	return &workspacePool{
-		entries:    make(map[poolKey]*poolEntry),
-		langs:      langs,
-		baseConfig: cfg,
-		cacheTTL:   cfg.Cache.TTL.Duration,
-		idleGrace:  poolIdleGrace,
-		startGrace: firstStartGrace,
-		baseCtx:    baseCtx,
-		xcode:      newPoolXcodeState(),
+		entries:        make(map[poolKey]*poolEntry),
+		langs:          activeLanguages(cfg),
+		baseConfig:     cfg,
+		languageConfig: languageConfigState{cache: make(map[string]cachedWorkspaceLanguages)},
+		cacheTTL:       cfg.Cache.TTL.Duration,
+		idleGrace:      poolIdleGrace,
+		startGrace:     firstStartGrace,
+		baseCtx:        baseCtx,
+		xcode:          newPoolXcodeState(),
 	}
 }
 
@@ -331,6 +324,22 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		}
 	}
 
+	// Eligibility is checked BEFORE the reuse lookup, not after it. The set of
+	// languages a workspace may run is a property of that workspace's config, and
+	// the config can move under a live daemon — a project that turns [lsp.<lang>]
+	// off must stop being handed that server, not keep the one it already has
+	// because an entry happens to be in the map. Checking only on the miss path
+	// made the refusal depend on whether the daemon had started the server before
+	// the config changed, which is not a distinction the user asked for.
+	//
+	// It refuses; it does not tear down. An entry left behind is unreferenced by
+	// this acquire and reaped by the idle path, so revoking a language never kills
+	// a request already in flight against it.
+	lspCfg, ok := p.cfgForWorkspace(root, language)
+	if !ok {
+		return nil, nil, fmt.Errorf("language %q not configured or not enabled for %s", language, root)
+	}
+
 	if e, ok := p.entries[poolKey{root, language}]; ok {
 		// Pin only AFTER any fallible step (wakeLocked): pinning before a wake that
 		// errors would leak a reference (refs incremented, no matching release) and
@@ -362,11 +371,6 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 			slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
 			return e, nil, nil
 		}
-	}
-
-	lspCfg, ok := p.cfgForWorkspace(root, language)
-	if !ok {
-		return nil, nil, fmt.Errorf("language %q not configured or not enabled for %s", language, root)
 	}
 
 	// LRU eviction: before starting a new server, if this language is at its

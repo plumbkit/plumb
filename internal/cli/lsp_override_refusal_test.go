@@ -8,6 +8,13 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
+// overrideRoot is the workspace these helper-level tests validate against. The
+// pools below are narrow (no config snapshot), so they resolve their language
+// set globally and the root never reaches a project config — which is the point:
+// these cases are about the REFUSAL WORDING. The project-scoped resolution has
+// its own coverage in project_lsp_policy_test.go.
+const overrideRoot = ""
+
 // newOverrideSession builds a session whose pool holds exactly the given active
 // languages, so languageOverrideErr can be exercised without starting a server.
 func newOverrideSession(t *testing.T, active ...string) *connSession {
@@ -27,7 +34,7 @@ func newOverrideSession(t *testing.T, active ...string) *connSession {
 // refusing the others is that a real one still passes silently.
 func TestLanguageOverride_ActiveLanguageAccepted(t *testing.T) {
 	s := newOverrideSession(t, "go", "python")
-	if err := s.languageOverrideErr("python"); err != nil {
+	if err := s.languageOverrideErr(overrideRoot, "python"); err != nil {
 		t.Fatalf("an active language must be accepted, got %v", err)
 	}
 }
@@ -37,7 +44,7 @@ func TestLanguageOverride_ActiveLanguageAccepted(t *testing.T) {
 // is exactly what is wrong.
 func TestLanguageOverride_UnknownLanguageNamesTheKnownOnes(t *testing.T) {
 	s := newOverrideSession(t, "go")
-	err := s.languageOverrideErr("pyhton")
+	err := s.languageOverrideErr(overrideRoot, "pyhton")
 	if err == nil {
 		t.Fatal("expected a refusal for a language with no [lsp.<lang>] adapter")
 	}
@@ -63,7 +70,7 @@ func TestLanguageOverride_DisabledLanguageSaysSoAndHow(t *testing.T) {
 	cfg.LSP["typescript"] = ts
 	s.store = config.NewStore(cfg)
 
-	err := s.languageOverrideErr("typescript")
+	err := s.languageOverrideErr(overrideRoot, "typescript")
 	if err == nil {
 		t.Fatal("expected a refusal for a configured-but-inactive language")
 	}
@@ -87,7 +94,7 @@ func TestLanguageOverride_UninstalledLanguageNamesTheBinary(t *testing.T) {
 	}
 	s.store = config.NewStore(cfg)
 
-	err := s.languageOverrideErr("rust")
+	err := s.languageOverrideErr(overrideRoot, "rust")
 	if err == nil {
 		t.Fatal("expected a refusal for an enabled but uninstalled language")
 	}
@@ -104,7 +111,7 @@ func TestLanguageOverride_UninstalledLanguageNamesTheBinary(t *testing.T) {
 // that into a refusal of a legitimate call.
 func TestLanguageOverride_NoPoolIsNotARefusal(t *testing.T) {
 	s := &connSession{store: config.NewStore(config.Defaults()), ctx: context.Background()}
-	if err := s.languageOverrideErr("python"); err != nil {
+	if err := s.languageOverrideErr(overrideRoot, "python"); err != nil {
 		t.Fatalf("a session with no pool must not refuse, got %v", err)
 	}
 }
@@ -173,7 +180,7 @@ func TestLanguageOverride_ConfigActiveButPoolStaleSaysEnableLsp(t *testing.T) {
 	cfg.LSP["python"] = config.LSPConfig{Command: "sh", Enabled: true}
 	s.store = config.NewStore(cfg)
 
-	err := s.languageOverrideErr("python")
+	err := s.languageOverrideErr(overrideRoot, "python")
 	if err == nil {
 		t.Fatal("expected a refusal: the pool has not picked this language up yet")
 	}

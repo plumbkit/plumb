@@ -127,7 +127,7 @@ func printAdaptersView(cfg config.Config) {
 	fmt.Printf("Language Server Adapters\n")
 
 	t := configShowTableBase().
-		Headers("Language", "Server", "Tier", "Active").
+		Headers("Language", "Server", "Tier", "Eligible (this command)").
 		StyleFunc(configShowColStyle())
 
 	active := 0
@@ -140,7 +140,7 @@ func printAdaptersView(cfg config.Config) {
 		if lspActive(lspCfg) {
 			active++
 		}
-		t.Row(meta.display, lspCfg.Command, renderTier(meta.tier), renderAdapterActive(lspCfg))
+		t.Row(meta.display, lspCfg.Command, renderTier(meta.tier), renderAdapterAvailability(lspCfg))
 	}
 
 	fmt.Println(renderConfigShowTable(t))
@@ -157,10 +157,9 @@ func renderTier(tier adapterTier) string {
 	}
 }
 
-// renderAdapterActive reduces an LSP config to a one-word activation state:
-// ready (enabled + installed), install-gated (enabled, binary absent), or
-// disabled (excluded in config).
-func renderAdapterActive(cfg config.LSPConfig) string {
+// renderAdapterAvailability renders what this command's merged configuration
+// and PATH make eligible. It does not inspect running daemon processes.
+func renderAdapterAvailability(cfg config.LSPConfig) string {
 	switch {
 	case !cfg.Enabled:
 		return tui.WarnStyle.Render("disabled")
@@ -177,7 +176,7 @@ func adapterLegend(active int) string {
 		noun = "adapter"
 	}
 	return tui.MutedStyle.Render(fmt.Sprintf(
-		"%d active %s · on PATH = active · set [lsp.<lang>] enabled = false to exclude one",
+		"%d eligible %s · derived from merged config + PATH · use `plumb debug lsp` for running servers",
 		active, noun))
 }
 
