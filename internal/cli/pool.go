@@ -80,6 +80,13 @@ type workspacePool struct {
 	// for it. Routing shipped exactly that regression once (Detect and
 	// fileLanguage each resolving), and a benchmark could not pin it — on a loaded
 	// machine the variance is larger than the effect. A counter can.
+	//
+	// Where it is incremented is load-bearing, for the same reason the language
+	// cache's lock scope is: it counts CALLS, from the first statement of
+	// effectiveLanguages, so cache hits and both early returns are counted too.
+	// Moving it past the cache-hit return would count misses — and misses are not
+	// the cost, since the walk and the stats run on a hit as well. The guard would
+	// then pass while the regression it exists to catch was back.
 	langResolves atomic.Uint64
 
 	baseConfig     config.Config // global base for per-workspace LSP overrides

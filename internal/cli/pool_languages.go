@@ -142,10 +142,16 @@ func activeLanguages(cfg config.Config) []langConfig {
 func languagePolicyRoot(start string) string {
 	homeInfo := homeDirInfos()
 	for dir := filepath.Clean(start); ; dir = filepath.Dir(dir) {
-		if languageBoundaryAtHome(dir, homeInfo) {
+		// sameDirAs stats dir, and BOTH questions on this rung need its answer:
+		// "is this a boundary" (a .plumb AT $HOME counts only when deliberate) and
+		// "must the walk stop here". Asking once per rung rather than once per
+		// question removes one stat per ancestor level from a walk that runs on
+		// every routing request. See languageBoundaryKnownHome.
+		atHome := sameDirAs(dir, homeInfo)
+		if languageBoundaryKnownHome(dir, atHome) {
 			return paths.Canonical(dir)
 		}
-		if sameDirAs(dir, homeInfo) || filepath.Dir(dir) == dir {
+		if atHome || filepath.Dir(dir) == dir {
 			return ""
 		}
 	}
@@ -159,7 +165,15 @@ func languagePolicyRoot(start string) string {
 // homeInfo is passed in rather than derived, deliberately: homeDirInfos is
 // uncached, and every caller asks this question in a loop over directories.
 func languageBoundaryAtHome(dir string, homeInfo []os.FileInfo) bool {
-	atHome := sameDirAs(dir, homeInfo)
+	return languageBoundaryKnownHome(dir, sameDirAs(dir, homeInfo))
+}
+
+// languageBoundaryKnownHome is languageBoundaryAtHome for a caller that has
+// ALREADY established whether dir is the home directory. Split out because
+// sameDirAs stats dir, and languagePolicyRoot needs that same answer for its own
+// termination test on every rung — so deriving it twice per rung doubled the
+// per-level stat cost of the walk for nothing.
+func languageBoundaryKnownHome(dir string, atHome bool) bool {
 	if _, err := os.Stat(filepath.Join(dir, ".plumb")); err == nil && (!atHome || deliberatePlumbMarker(dir)) {
 		return true
 	}

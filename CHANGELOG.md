@@ -62,11 +62,23 @@
   lookup was ~30ns. The five URI-bearing call sites (`route`, the pull
   `owningKey`, `warmupTarget`, and both diagnostics-invalidator sites) now go
   through one `resolveFileTarget`, which resolves the set once and reuses it for
-  both questions. Guarded by a resolution COUNTER rather than a benchmark:
-  under load the run-to-run variance of this path exceeds the regression
-  (measured 1.4ms–5.9ms per op with the before/after ordering inverting between
-  runs), so a timing assertion would be flaky or asleep, where
-  `TestProjectLSP_RoutingResolvesThePolicyOnce` is exact.
+  both questions. `languagePolicyRoot` also asked `sameDirAs` twice per ancestor
+  level — once to decide "is this a boundary", once to decide "must the walk
+  stop here" — and each call stats the directory; the answer is now computed once
+  per rung (an interleaved A/B measured −17%, −18%, −32% across three rounds).
+
+  In proportion: the removed resolution is tens of microseconds against a route
+  decision costing ~1.5ms, most of which is the marker walk `Detect` has to do
+  regardless. The *ratio* on `fileLanguage` alone is large; the share of a
+  request is a few per cent.
+
+  Guarded by a resolution COUNTER rather than a benchmark, because two
+  independent attempts established that no benchmark here can hold the claim:
+  the effect is a quarter of this path's own run-to-run spread, and unpaired
+  runs reported the fix as both a 4x win and a 40% loss on the same code. The
+  counter is exact and indifferent to machine load;
+  `TestProjectLSP_RoutingResolvesThePolicyOnce` fails with "cost 2 policy
+  resolutions, want exactly 1" if the two-call shape returns.
 
 ### Internal
 
