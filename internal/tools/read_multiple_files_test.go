@@ -350,3 +350,24 @@ func TestReadMultipleFiles_RangedRead_HeaderCarriesBaseline(t *testing.T) {
 		t.Fatalf("expected the returned slice to report lines=2:\n%s", block)
 	}
 }
+
+func TestReadMultipleFiles_ContextCancellation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel before executing
+
+	out, err := (&ReadMultipleFiles{}).Execute(ctx, mustJSON(map[string]any{
+		"paths": []string{path},
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(out, "context canceled") {
+		t.Fatalf("expected output to report context canceled, got:\n%s", out)
+	}
+}

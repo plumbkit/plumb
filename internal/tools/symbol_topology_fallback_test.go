@@ -36,8 +36,9 @@ func fallbackFixture(t *testing.T) (store *topology.Store, fpath, uri string) {
 }
 
 func TestReadSymbol_TopologyFallback(t *testing.T) {
-	store, _, uri := fallbackFixture(t)
-	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+	store, fpath, uri := fallbackFixture(t)
+	tracker := tools.NewReadTracker()
+	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tracker).
 		WithTopologyFallback(func() *topology.Store { return store })
 	args, _ := json.Marshal(map[string]any{"path": uri, "name": "Beta"})
 
@@ -45,10 +46,13 @@ func TestReadSymbol_TopologyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected topology fallback to succeed, got: %v", err)
 	}
-	for _, want := range []string{"topology fallback", "func Beta() int {", "return 2"} {
+	for _, want := range []string{"topology fallback", "# plumb-read mtime=", "func Beta() int {", "return 2"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("read_symbol fallback missing %q:\n%s", want, out)
 		}
+	}
+	if tracker.Mtime(fpath).IsZero() {
+		t.Errorf("expected tracker to record read for %s", fpath)
 	}
 	if strings.Contains(out, "return 1") {
 		t.Errorf("read_symbol fallback for Beta should not include Alpha's body:\n%s", out)
