@@ -73,6 +73,15 @@ type workspacePool struct {
 	// detection path.
 	langsGen atomic.Uint64
 
+	// langResolves counts calls to effectiveLanguages. It exists because the cost
+	// this fix has to keep bounded is invisible in the return value: a resolution
+	// walks ancestors and stats the project config even on a cache hit, so a
+	// caller that asks twice per request doubles that walk with nothing to show
+	// for it. Routing shipped exactly that regression once (Detect and
+	// fileLanguage each resolving), and a benchmark could not pin it — on a loaded
+	// machine the variance is larger than the effect. A counter can.
+	langResolves atomic.Uint64
+
 	baseConfig     config.Config // global base for per-workspace LSP overrides
 	languageConfig languageConfigState
 	cacheTTL       time.Duration

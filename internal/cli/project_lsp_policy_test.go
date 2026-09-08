@@ -411,6 +411,51 @@ func TestProjectLSP_InvalidConfigIsCachedUnderItsOwnStamp(t *testing.T) {
 	}
 }
 
+// TestProjectLSP_RoutingResolvesThePolicyOnce is the regression guard for a cost
+// that is invisible in every return value, and which this fix shipped once.
+//
+// Resolving a project's language set walks ancestors to find the policy root and
+// stats the config and trust files — on a cache HIT as much as a miss; the cache
+// only elides the TOML parse. Routing originally asked twice per request, once
+// inside Detect and again in the bare fileLanguage, which doubled that walk and
+// bought nothing: Detect had already resolved the very set fileLanguage needed.
+// An independent review measured it at ~135µs on a deep file where the old
+// global-slice lookup was ~30ns.
+//
+// Asserted with a counter rather than a benchmark, deliberately. On a loaded
+// machine the run-to-run variance of this path is larger than the regression —
+// measured at 1.4ms to 5.9ms per op with the before/after ordering inverting
+// between runs — so a timing assertion would be either flaky or asleep. The
+// number of resolutions is exact and does not care what else the machine is
+// doing.
+func TestProjectLSP_RoutingResolvesThePolicyOnce(t *testing.T) {
+	pool := projectPolicyPool(t, "python")
+	root := paths.Canonical(t.TempDir())
+	writePoolProjectConfig(t, root, "[lsp.python]\nenabled = true\n")
+	deep := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(deep, "mod.py")
+	mustWrite(t, file, "value = 1")
+
+	// Warm the cache first, so this counts resolutions and not first-parse work.
+	pool.resolveFileTarget(file) //nolint:errcheck // asserted below
+
+	before := pool.langResolves.Load()
+	gotRoot, language, err := pool.resolveFileTarget(file)
+	if err != nil {
+		t.Fatalf("resolveFileTarget: %v", err)
+	}
+	if gotRoot != root || language != "python" {
+		t.Fatalf("resolveFileTarget = (%q, %q), want (%q, python)", gotRoot, language, root)
+	}
+	if got := pool.langResolves.Load() - before; got != 1 {
+		t.Errorf("one routing decision cost %d policy resolutions, want exactly 1 — "+
+			"each extra one re-walks the ancestor chain and re-stats the project config", got)
+	}
+}
+
 // TestProjectLanguageStamp_CoversBothConfigAndTrust is the unit-level guard for
 // the two halves of the stamp. Each half is what makes one class of change
 // visible without a restart; dropping either leaves a cached resolution serving

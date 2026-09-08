@@ -901,11 +901,20 @@ attached to that workspace.
 > have trusted that exact content, and a language your global config does not
 > define is dropped outright. So the process is one you installed and configured;
 > what the repository gains is a say in whether it runs **for that repository**.
-> Note that a global `enabled = false` is *not* a remedy — overriding it is
-> precisely what this section describes. If you do not want a server startable by
-> a repository you clone, keep its binary off `PATH` (an uninstalled server never
-> joins the set, project config or not), or read the `.plumb/config.toml` of
-> repositories before you open them.
+>
+> That matters most for the language servers that **execute project-controlled
+> code as part of loading a project** — rust-analyzer (`build.rs`, proc-macro
+> expansion), jdtls (Gradle/Maven import), tsserver (plugins resolved from the
+> repository's own `node_modules`), gopls (the `toolchain` directive). For those,
+> "the server starts" and "the repository's code runs" are the same event. If you
+> globally disabled one of them *for that reason*, note that a global
+> `enabled = false` is **not** a defence here: overriding it is precisely what
+> this section describes. The controls that do work are to keep the binary off
+> `PATH` (an uninstalled server never joins the set, project config or not) —
+> which also disarms it for your own projects — or to read a clone's
+> `.plumb/config.toml` before you open it. A narrower control (a global list of
+> languages no project may enable) would fit this gap without touching the trust
+> model; it does not exist today.
 
 > **Limits, stated rather than implied.** The project's set decides which servers
 > plumb *starts and routes to* from that point on. A server already attached to a

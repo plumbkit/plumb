@@ -79,15 +79,23 @@ type cachedWorkspaceLanguages struct {
 // section would leave one goroutine holding langsMu and wanting this mutex while
 // another holds this mutex and wants langsMu, which is the cycle.
 //
-// The same nesting closes the stale-write window, which is why the base config
-// is read INSIDE this lock rather than before it. A resolver that read the base
-// config first could compute a set from base version N and then cache it under a
-// stamp taken before version N+1 was published, surviving the very invalidation
-// meant to discard it. Because snapshotBaseConfig runs under this mutex and
-// invalidateAllLanguageConfigs needs the same mutex, a concurrent enable either
-// publishes before the resolver reads (so the resolver sees N+1) or blocks until
-// the resolver has written (so the clear discards it). There is no order in
-// which a stale entry survives.
+// Separately, the SCOPE of this mutex — not the position of any other lock — is
+// what closes the stale-write window, and that distinction decides what a future
+// change may do. effectiveLanguages takes this lock BEFORE reading the base
+// config and holds it through the cache write. invalidateAllLanguageConfigs
+// needs the same lock, so it cannot land between that read and that write: it
+// runs wholly before (the resolver then reads the widened base) or wholly after
+// (the resolver's entry is swept). Were the read outside, a resolution computed
+// from base version N could be cached under a stamp taken before N+1 was
+// published, surviving the very invalidation meant to discard it — and surviving
+// FOREVER, because the project file never changed, so the stamp never flips to
+// repair it.
+//
+// Two natural-looking refactors would reopen that, so they are named here rather
+// than left to be rediscovered: serving a resolution from the RLock fast path,
+// and hoisting snapshotBaseConfig above the Lock to get LoadProject's filesystem
+// I/O out from under a write lock. Neither is a data race, so -race stays quiet
+// and the failure is a lost update, not a crash.
 type languageConfigState struct {
 	mu    sync.RWMutex
 	cache map[string]cachedWorkspaceLanguages
@@ -172,8 +180,11 @@ func languageBoundaryAtHome(dir string, homeInfo []os.FileInfo) bool {
 // LoadProject would fail validation. LogLevel is the sentinel for that, matching
 // what cfgForWorkspace used before this became a shared resolver.
 func (p *workspacePool) effectiveLanguages(root string) []langConfig {
+	p.langResolves.Add(1)
 	// LogLevel is written once at construction and never mutated, so it needs no
-	// lock; the maps and slices behind it do (see langsSnapshot).
+	// lock; the maps and slices behind it do (see langsSnapshot). Safe only while
+	// nothing assigns p.baseConfig WHOLE — .LSP is replaced field-wise by
+	// enableLanguage for exactly this reason.
 	if p.baseConfig.LogLevel == "" {
 		return p.langsSnapshot()
 	}
@@ -258,6 +269,14 @@ func (s *connSession) invalidatePoolLanguages(workspace string) {
 // from the project-config reload lane; the stamp alone would already give a
 // correct answer to the next question asked, but nothing would prompt a session
 // to ask one.
+//
+// The generation is a GLOBAL wakeup, not a targeted one, and the asymmetry is
+// worth naming: the cache drop is per project, but langsGen is pool-wide and
+// refreshPrimaryIfStale claims the generation before it checks whether this
+// session needs anything. So a config edit in one project costs every session in
+// every project one re-Detect. That is cheap (a filesystem walk, once) and
+// simpler than a per-project generation map, but a reader should not infer a
+// targeted wakeup from a per-project invalidation.
 func (p *workspacePool) invalidateLanguageConfig(root string) {
 	// Keyed on the POLICY root, not on the caller's root, because those are not
 	// always the same directory: detect() stops at a strong language marker, so a

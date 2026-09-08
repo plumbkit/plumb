@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"maps"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -104,17 +103,6 @@ func uriUnderRoot(uri, root string) bool {
 	return path == root || strings.HasPrefix(path, root+"/")
 }
 
-// routeLang resolves the language whose invalidator owns path: the file's own
-// language by extension, falling back to the root's primary (detectLang) for
-// files no enabled language owns. Mirrors routingProxy.route's resolution so
-// diagnostics land on the same server that produced them.
-func (r *routingInvProxy) routeLang(path, detectLang string) string {
-	if fl := r.pool.fileLanguage(path); fl != "" {
-		return fl
-	}
-	return detectLang
-}
-
 // resolveInv returns the invalidator that owns uri, or nil when no acquired
 // workspace does.
 //
@@ -138,9 +126,8 @@ func (r *routingInvProxy) resolveInv(uri string) *cache.Invalidator {
 	if uri == "" || primary == nil {
 		return primary
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
-	targetLang := r.routeLang(path, language)
+	// One policy resolution for both halves — see resolveFileTarget.
+	root, targetLang, err := r.pool.resolveFileTarget(paths.URIToPath(uri))
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		return primary
 	}

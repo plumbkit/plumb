@@ -94,8 +94,14 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 // .plumb or .git boundary, and both terminate the walk — so one resolution
 // covers every rung.
 func (p *workspacePool) detect(start string) (root, language string, err error) {
+	return p.detectIn(start, p.effectiveLanguages(start))
+}
+
+// detectIn is detect against an already-resolved effective language set, for a
+// caller that has one and would otherwise pay to resolve it twice. See
+// resolveFileTarget.
+func (p *workspacePool) detectIn(start string, langs []langConfig) (root, language string, err error) {
 	homeInfo := homeDirInfos()
-	langs := p.effectiveLanguages(start)
 	d := filepath.Clean(start)
 	first := true
 	for {

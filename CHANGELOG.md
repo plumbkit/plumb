@@ -54,6 +54,20 @@
   table also splits `lsp.*`: the project half is live on the next request, the
   global half still needs a daemon restart or `plumb enable-lsp`.
 
+- **Routing resolves a file's project policy once per request, not twice.**
+  `route()` called `Detect` and then `fileLanguage`, and once both resolve the
+  governing project's language set that is two ancestor walks and two config
+  stats per LSP request — the cache elides the TOML parse, not the walk. An
+  independent review measured ~135µs on a deep file where the old global-slice
+  lookup was ~30ns. The five URI-bearing call sites (`route`, the pull
+  `owningKey`, `warmupTarget`, and both diagnostics-invalidator sites) now go
+  through one `resolveFileTarget`, which resolves the set once and reuses it for
+  both questions. Guarded by a resolution COUNTER rather than a benchmark:
+  under load the run-to-run variance of this path exceeds the regression
+  (measured 1.4ms–5.9ms per op with the before/after ordering inverting between
+  runs), so a timing assertion would be flaky or asleep, where
+  `TestProjectLSP_RoutingResolvesThePolicyOnce` is exact.
+
 ### Internal
 
 - `captureStdout` in the CLI tests now drains the pipe concurrently with the

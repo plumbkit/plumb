@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -49,14 +48,10 @@ func (r *routingProxy) owningKey(uri string) (root, language string) {
 	if uri == "" {
 		return primaryRoot, primaryLang
 	}
-	path := paths.URIToPath(uri)
-	detRoot, detLang, err := r.pool.Detect(filepath.Dir(path))
+	// One policy resolution for both halves — see resolveFileTarget.
+	detRoot, targetLang, err := r.pool.resolveFileTarget(paths.URIToPath(uri))
 	if err != nil {
 		return primaryRoot, primaryLang
-	}
-	targetLang := detLang
-	if fl := r.pool.fileLanguage(path); fl != "" {
-		targetLang = fl
 	}
 	if targetLang == "" || targetLang == LanguageNone {
 		return primaryRoot, primaryLang

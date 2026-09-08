@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -76,15 +75,12 @@ func (r *routingProxy) warmupTarget(uri string) (root, language string) {
 		defer r.mu.RUnlock()
 		return r.primaryRoot, r.primaryLang
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
+	// One policy resolution for both halves — see resolveFileTarget.
+	root, language, err := r.pool.resolveFileTarget(paths.URIToPath(uri))
 	if err != nil {
 		r.mu.RLock()
 		defer r.mu.RUnlock()
 		return r.primaryRoot, r.primaryLang
-	}
-	if fileLang := r.pool.fileLanguage(path); fileLang != "" {
-		language = fileLang
 	}
 	return root, language
 }

@@ -172,19 +172,16 @@ func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Cl
 			return nil, err
 		}
 	}
-	root, language, err := r.pool.Detect(filepath.Dir(path))
+	// Root and language together, in one project-policy resolution: the file's own
+	// language by extension (so a .html file in a Go root reaches the HTML server),
+	// falling back to the root's detected language for files no active language
+	// owns (a .md next to .go still goes to gopls, which simply ignores it).
+	// Resolving them separately walked the ancestor chain twice per request — see
+	// resolveFileTarget. When neither yields a real language, there is no server
+	// for this file — defer to the primary.
+	root, targetLang, err := r.pool.resolveFileTarget(path)
 	if err != nil {
 		return r.primaryClientWait(ctx, wait)
-	}
-
-	// Pick the language by file extension first (so a .html file in a Go root
-	// reaches the HTML server), falling back to the root's primary language for
-	// files no enabled language owns (e.g. a .md next to .go still goes to gopls,
-	// which simply ignores it). When neither yields a real language, there is no
-	// server for this file — defer to the primary.
-	targetLang := language
-	if fileLang := r.pool.fileLanguage(path); fileLang != "" {
-		targetLang = fileLang
 	}
 	if targetLang == "" || targetLang == LanguageNone {
 		return r.primaryClientWait(ctx, wait)

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"path/filepath"
 	"sort"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -29,9 +28,8 @@ func (r *routingInvProxy) owningInv(uri string) *cache.Invalidator {
 	if uri == "" {
 		return primary
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
-	targetLang := r.routeLang(path, language)
+	// One policy resolution for both halves — see resolveFileTarget.
+	root, targetLang, err := r.pool.resolveFileTarget(paths.URIToPath(uri))
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		return primary
 	}
