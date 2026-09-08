@@ -350,8 +350,14 @@ func readSymbolBody(fpath string, start, end int, lines []string) string {
 		if lo >= hi {
 			return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
 		}
-		src := strings.Join(lines[lo:hi], "\n") + "\n"
-		return withLineGutter(src, lo+1)
+		var sb strings.Builder
+		for i := lo; i < hi; i++ {
+			if i > lo {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
+		}
+		return withLineGutter(sb.String(), lo+1)
 	}
 	f, ferr := os.Open(fpath)
 	if ferr != nil {

@@ -210,9 +210,14 @@ func emitContextLine(lineNo int, data []byte, lastEmitted *int, formatted *[]str
 }
 
 func pushRing(ring []searchLine, lineNo int, data []byte, ringHead, ringCount *int, contextLines int) {
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	ring[*ringHead] = searchLine{number: lineNo, data: cp}
+	buf := ring[*ringHead].data
+	if cap(buf) >= len(data) {
+		buf = buf[:len(data)]
+	} else {
+		buf = make([]byte, len(data))
+	}
+	copy(buf, data)
+	ring[*ringHead] = searchLine{number: lineNo, data: buf}
 	*ringHead = (*ringHead + 1) % contextLines
 	if *ringCount < contextLines {
 		*ringCount++

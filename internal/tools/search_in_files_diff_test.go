@@ -348,7 +348,7 @@ func TestSearchInFiles_OverlappingMatchesMarkAllHitsWithArrow(t *testing.T) {
 
 // TestSearchInFiles_ZeroRetentionNoMatches asserts that scanning a 1,000-line
 // zero-match file allocates only bounded setup resources rather than buffering
-// the entire file into memory.
+// the entire file into memory, for both zero context and bounded ring lookback.
 func TestSearchInFiles_ZeroRetentionNoMatches(t *testing.T) {
 	dir := t.TempDir()
 	fpath := filepath.Join(dir, "large_zero_match.txt")
@@ -362,17 +362,22 @@ func TestSearchInFiles_ZeroRetentionNoMatches(t *testing.T) {
 	p := searchPathPair{abs: fpath, rel: "large_zero_match.txt"}
 	re := regexp.MustCompile("needle")
 
-	res := searchScanFile(p, re, 0)
-	if res != nil {
-		t.Fatalf("expected nil result for zero-match file, got %+v", res)
-	}
+	for _, ctxLines := range []int{0, 2} {
+		t.Run(fmt.Sprintf("context_lines=%d", ctxLines), func(t *testing.T) {
+			res := searchScanFile(p, re, ctxLines)
+			if res != nil {
+				t.Fatalf("expected nil result for zero-match file, got %+v", res)
+			}
 
-	allocs := testing.AllocsPerRun(10, func() {
-		_ = searchScanFile(p, re, 0)
-	})
-	// In the zero-retention path, allocation is bounded by file open/read setup.
-	// Whole-file buffering of 1,000 lines would exceed 1,000 allocations.
-	if allocs > 50 {
-		t.Errorf("allocations per run %f exceeded threshold of 50 for 1,000-line zero-match file", allocs)
+			allocs := testing.AllocsPerRun(10, func() {
+				_ = searchScanFile(p, re, ctxLines)
+			})
+			// In both 0-context and bounded ring-buffer paths, allocation is bounded
+			// by file open/read setup and ring capacity. Whole-file buffering of 1,000
+			// lines would exceed 1,000 allocations.
+			if allocs > 50 {
+				t.Errorf("context_lines=%d: allocations per run %f exceeded threshold of 50 for 1,000-line zero-match file", ctxLines, allocs)
+			}
+		})
 	}
 }
