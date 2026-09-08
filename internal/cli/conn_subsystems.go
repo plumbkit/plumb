@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
@@ -18,6 +20,7 @@ import (
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/quality"
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
+	"github.com/plumbkit/plumb/internal/quality/ruff"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/toolerror"
@@ -139,9 +142,10 @@ func (s *connSession) startQualityRunner(v *sessionView, workspace string) {
 		return
 	}
 	timeout := time.Duration(q.TimeoutMs) * time.Millisecond
+	logSkippedAnalysersOnce(q)
 	r := quality.NewRunner(quality.RunnerConfig{
 		Workspace:          workspace,
-		Analysers:          buildAnalysers(q.Analysers),
+		Analysers:          buildAnalysers(q.Analysers, q.Bin),
 		Mode:               q.Mode,
 		Timeout:            timeout,
 		MaxFindingsPerFile: q.MaxFindingsPerFile,
@@ -150,17 +154,52 @@ func (s *connSession) startQualityRunner(v *sessionView, workspace string) {
 	v.qualityRunner = r
 }
 
-// buildAnalysers constructs the Analyser list from the configured names.
-// Unknown names are silently skipped.
-func buildAnalysers(names []string) []quality.Analyser {
+// buildAnalysers constructs the Analyser list from the configured names, in
+// configured order. An entry with no adapter is skipped here and reported by
+// logSkippedAnalysersOnce, so "skipped" is never silent.
+//
+// This switch is the only place that may import the adapter packages, which is
+// why the registry cannot own it. TestBuildAnalysersCoversRegistry pins the two
+// together: a registry row marked Implemented with no case here — or a case with
+// no row — is a name that resolves in the Settings pane and not in the runner,
+// which is precisely the class of bug this whole change exists to remove.
+func buildAnalysers(names []string, bin map[string]string) []quality.Analyser {
 	out := make([]quality.Analyser, 0, len(names))
 	for _, n := range names {
 		switch n {
 		case "golangci-lint":
-			out = append(out, golangcilint.New())
+			out = append(out, golangcilint.New(bin[n]))
+		case "ruff":
+			out = append(out, ruff.New(bin[n]))
 		}
 	}
 	return out
+}
+
+// skippedAnalysersOnce bounds the skipped-entry report to one line per daemon
+// lifetime. startQualityRunner runs on every attach, so an unconditional log
+// would repeat the same list for every workspace a session opens — and a warning
+// that repeats is a warning that gets filtered out.
+var skippedAnalysersOnce sync.Once
+
+// logSkippedAnalysersOnce names every configured analyser plumb will not run,
+// and why.
+//
+// Before this, an unrecognised entry vanished inside buildAnalysers' switch with
+// no error, no log and no mark anywhere: a user who configured "ruff", or pasted
+// the absolute path of their ruff, got a silently empty feature and nothing to
+// diagnose it with. `plumb doctor` reports the same classification for someone
+// who thinks to look; this is for someone who does not.
+func logSkippedAnalysersOnce(q config.QualityConfig) {
+	skippedAnalysersOnce.Do(func() {
+		for _, st := range quality.ClassifyEntries(q.Analysers, q.Bin) {
+			if st.Status == quality.EntryOK {
+				continue
+			}
+			slog.Info("quality: skipping configured analyser",
+				"entry", st.Entry, "reason", st.Reason)
+		}
+	})
 }
 
 // javaPostWriteNotify sends DidOpen + DidClose to jdtls after a write so that

@@ -7,7 +7,7 @@ import (
 )
 
 func TestSupports(t *testing.T) {
-	a := New()
+	a := New("")
 	cases := []struct {
 		path string
 		want bool
@@ -98,7 +98,7 @@ func TestParseOutput_NullIssues(t *testing.T) {
 }
 
 func TestAnalyse_EmptyFiles(t *testing.T) {
-	a := New()
+	a := New("")
 	findings, err := a.Analyse(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

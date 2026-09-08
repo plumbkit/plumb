@@ -322,7 +322,13 @@ type WebConfig struct {
 }
 
 // QualityConfig controls post-write offline code-quality analysis.
-// All fields can be overridden per-project via <workspace>/.plumb/config.toml.
+//
+// GLOBAL ONLY. The runner is built from the global store at attach
+// (cli.startQualityRunner), never from the merged project config, so a value in
+// a workspace's .plumb/config.toml is parsed and then never read — which is why
+// every quality.* key is ClassInert in project_classification.go, and why the
+// Settings pane marks such a row as set-but-not-in-effect rather than as an
+// override. This comment used to claim the opposite, and the TUI believed it.
 type QualityConfig struct {
 	// Enabled turns quality analysis on. Default false (opt-in until proven in use).
 	Enabled bool `toml:"enabled"`
@@ -330,8 +336,22 @@ type QualityConfig struct {
 	//   background — enqueue files; findings available on the next request.
 	//   sync       — block up to TimeoutMs and append findings inline.
 	Mode string `toml:"mode"`
-	// Analysers lists which analysers to run. Default ["golangci-lint"].
+	// Analysers lists which analysers to run, by NAME — never by path. Default
+	// ["golangci-lint"]. A name is resolved against quality.Tools(), the closed
+	// registry, and an entry that does not match one is skipped; that closure is
+	// what keeps this key from being a way to name an executable plumb runs.
 	Analysers []string `toml:"analysers"`
+	// Bin overrides where an analyser's executable lives, keyed by the same name
+	// used in Analysers: [quality.bin] ruff = "~/.local/bin/ruff". Empty by
+	// default; ~ and $VARs are expanded on load.
+	//
+	// It exists because the daemon does not run with the user's interactive
+	// PATH, and the per-ecosystem fallback in quality.LookBinary cannot cover
+	// every install layout. Unlike its siblings this key is ClassForcedGlobal
+	// rather than merely inert: it NAMES AN EXECUTABLE, so its global-only
+	// nature has to be a mechanism that survives [quality] ever being wired
+	// per-project, not an accident of today's wiring.
+	Bin map[string]string `toml:"bin"`
 	// TimeoutMs caps each analyser run in milliseconds. Default 2000.
 	TimeoutMs int `toml:"timeout_ms"`
 	// MaxFindingsPerFile caps findings appended per file to keep responses

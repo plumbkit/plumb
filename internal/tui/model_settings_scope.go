@@ -125,8 +125,12 @@ func (m *Model) buildScopeItems() []settingItem {
 	}
 	raw, _ := config.LoadProjectRaw(scope.folder)
 	policy, policyErr := projectPolicyStatus(scope.folder)
-	out := make([]settingItem, 0, len(buildSettingItems(merged)))
-	for _, it := range buildSettingItems(merged) {
+	rows := buildSettingItems(merged)
+	// The same rows built from the GLOBAL config, to restore the value of any row
+	// the merged config carries but plumb does not read. See globalValueFor.
+	globals := indexSettingItems(buildSettingItems(m.settingsCfg))
+	out := make([]settingItem, 0, len(rows))
+	for _, it := range rows {
 		if storeBackedWorkspaceKey(it.key) {
 			// A manual, out-of-repo per-workspace grant (WorkspaceRootsStore), not a
 			// project-config override — populate the row from the store.
@@ -136,6 +140,9 @@ func (m *Model) buildScopeItems() []settingItem {
 		path, ok := itemTOMLPath(it)
 		if !ok { // global-only setting: hidden in a workspace scope
 			continue
+		}
+		if !config.AppliesAtProjectScope(strings.Join(path, ".")) {
+			it = globalValueFor(it, globals)
 		}
 		if rawHasPath(raw, path) {
 			it.overridden, it.notInEffect = scopeRowState(policy, policyErr, path)
@@ -154,15 +161,30 @@ var projectPolicyStatus = config.ProjectPolicyStatusFor
 // scopeRowState decides how a row the project config sets should present: a live
 // override, or set-and-ignored.
 //
-// A key the project sets but which is not trusted is set-and-ignored, never
-// "override" — Asked() is the authority, being true exactly for the keys
-// LoadProject gates on trust. When the status could not be read at all, a
-// capability-granting row presents as ignored rather than live: LoadProject fails
-// closed on the same fault and will have forced the value back, so claiming the
-// row is live would have the display disagree with the config in the one
-// direction that misleads.
+// There are two ways to be ignored, and both must reach ⁶ or the mark means only
+// half of what it says.
+//
+// The first is trust: a key the project sets but which is not trusted is
+// set-and-ignored, never "override" — Asked() is the authority, being true
+// exactly for the keys LoadProject gates on trust. When the status could not be
+// read at all, a capability-granting row presents as ignored rather than live:
+// LoadProject fails closed on the same fault and will have forced the value
+// back, so claiming the row is live would have the display disagree with the
+// config in the one direction that misleads.
+//
+// The second is scope, and it is checked FIRST because no amount of trust can
+// change it: a key whose only reader takes the global config reaches no consumer
+// from a project file at all. Every [quality] key is one, and until this check
+// existed all five rendered with the green ⁴ override mark — so a user could set
+// analysers on a workspace, watch the pane confirm an override, and get no
+// findings, with nothing anywhere to explain it. config.AppliesAtProjectScope
+// answers from the classification table rather than a second list here, so the
+// loader and the display cannot drift.
 func scopeRowState(policy config.ProjectPolicyStatus, policyErr error, path []string) (overridden, notInEffect bool) {
 	key := strings.Join(path, ".")
+	if !config.AppliesAtProjectScope(key) {
+		return false, true
+	}
 	if policyErr != nil {
 		return !isCapabilityKey(key), isCapabilityKey(key)
 	}
@@ -324,19 +346,43 @@ func (m Model) resetToInherit() Model {
 
 // scopedStatus formats the post-change status for the current scope.
 //
-// A workspace-scope write that lands on a capability-granting key of an
-// untrusted root SAYS SO. Writing the file and reporting a plain success would
-// be the original complaint restored: the user would believe they had configured
-// something. The refresh inside applyScopedAt has already re-evaluated the row,
-// so the flag consulted here is the state after the write.
+// A workspace-scope write plumb will ignore SAYS SO. Writing the file and
+// reporting a plain success would be the original complaint restored: the user
+// would believe they had configured something. The refresh inside applyScopedAt
+// has already re-evaluated the row, so the flag consulted here is the state
+// after the write.
+//
+// The two reasons carry different remedies, and giving the wrong one is worse
+// than giving none: telling someone to run `plumb trust` for a global-only key
+// sends them to grant a permission that will not change the outcome.
 func (m Model) scopedStatus(key settingKey, change string) string {
 	if m.currentScope().global {
 		return settingStatus(key, change)
 	}
 	if m.focusedRowNotInEffect() {
+		if m.focusedRowGlobalOnly() {
+			return change + " · written, NOT in effect — this setting is read from the " +
+				"global config; set it in the Global scope"
+		}
 		return change + " · written, NOT in effect — run `plumb trust` in this workspace"
 	}
 	return change + " · workspace override"
+}
+
+// focusedRowGlobalOnly reports whether the highlighted row is ignored because no
+// consumer reads it from a project file — as opposed to because the workspace is
+// untrusted. Recomputed from the row's TOML path rather than stored beside
+// notInEffect: one flag with two possible causes is exactly how a display starts
+// giving the wrong remedy for the right symptom.
+func (m Model) focusedRowGlobalOnly() bool {
+	if m.settingsCursor < 0 || m.settingsCursor >= len(m.settingsItems) {
+		return false
+	}
+	path, ok := itemTOMLPath(m.settingsItems[m.settingsCursor])
+	if !ok {
+		return false
+	}
+	return !config.AppliesAtProjectScope(strings.Join(path, "."))
 }
 
 // focusedRowNotInEffect reports whether the highlighted row is a project

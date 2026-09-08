@@ -97,6 +97,7 @@ var Layers = map[string]Layer{
 	"internal/render":               LayerFoundation, // pure presentation helpers
 	"internal/quality":              LayerFoundation, // post-write analyser interface
 	"internal/quality/golangcilint": LayerFoundation,
+	"internal/quality/ruff":         LayerFoundation,
 	"internal/clientcaps":           LayerFoundation, // static client capability data
 	"internal/clienttemplates":      LayerFoundation, // shared per-client instruction template bodies (embedded)
 

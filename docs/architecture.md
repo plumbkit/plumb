@@ -29,7 +29,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
 | `internal/tools` | MCP tool implementations (58 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
-| `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
+| `internal/quality` | Offline post-write code analysers against changed files; findings appended to write responses. `registry.go` is the closed set of names `[quality] analysers` accepts and which of them have adapters; `golangcilint` and `ruff` are the two that do |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
 | `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 16); also holds the `episodic_memories` table for idle-session summaries |

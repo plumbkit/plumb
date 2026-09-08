@@ -369,22 +369,74 @@ denylist rejects global flags that would reconfigure git (`-c`/`-C`/`--git-dir`/
 
 ## `[quality]` — post-write code analysis
 
+**Global only.** The runner is built from your global config when a session
+attaches, so a `[quality]` block in a workspace's `.plumb/config.toml` is parsed
+and then never read. The TUI Settings pane says so: a quality row set at a
+workspace scope renders with the ⁶ *set here, not in effect* mark rather than
+the ⁴ override mark, and editing one tells you to set it in the Global scope.
+
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `enabled` | bool | `false` | Run offline analysers against changed files; findings appended to write responses. |
 | `mode` | string | `"background"` | `background` (findings on the next request) or `sync` (block up to `timeout_ms` and append inline). |
-| `analysers` | []string | `["golangci-lint"]` | Which analysers to run. Unknown names are skipped. |
+| `analysers` | []string | `["golangci-lint"]` | Which analysers to run, **by name** — see the table below. An entry plumb does not recognise is skipped, and named in the daemon log and in `plumb doctor`. |
+| `bin` | table | `{}` | Optional per-analyser executable override, keyed by the same name: `[quality.bin] ruff = "~/.local/bin/ruff"`. `~` and `$VARs` are expanded. Global only, and never settable by a project — it names a program plumb runs. |
 | `timeout_ms` | int | `2000` | Per-analyser run cap. |
 | `max_findings_per_file` | int | `5` | Cap on findings appended per file. |
 
-The `golangci-lint` analyser needs the binary itself. plumb looks for it on
-`PATH` first, then in the Go tool bin directory — `$GOBIN`, else `$GOPATH/bin`,
-else `~/go/bin` — because the daemon inherits the environment of whichever
-`plumb serve` proxy started it, which frequently lacks `~/go/bin` even when your
-shell has it. If it is found nowhere, writes still succeed, findings are simply
-absent, and the daemon log says so **once** (`quality: golangci-lint not found`)
-rather than leaving you to wonder. `plumb doctor`'s **Dev Tools** section
-reports the resolved path, or warns with a fix hint when there is none.
+### Recognised analysers
+
+Entries are **names, not paths**. A path is refused — that closure is what keeps
+this key from being a way to name an arbitrary program — and if its basename is
+a name plumb knows, the refusal says which name to use instead.
+
+plumb runs two of them today. The rest are recognised so that "plumb has no
+adapter for this" is something it can tell you, instead of an entry that
+disappears:
+
+| Name | Language | |
+|---|---|---|
+| `golangci-lint` | go | **runs** |
+| `ruff` | python | **runs** |
+| `staticcheck` | go | recognised, no adapter |
+| `mypy`, `pylint` | python | recognised, no adapter |
+| `eslint`, `biome`, `oxlint` | typescript / javascript | recognised, no adapter |
+| `clippy` | rust | recognised, no adapter |
+| `ktlint`, `detekt` | kotlin | recognised, no adapter |
+| `checkstyle` | java | recognised, no adapter |
+| `swiftlint` | swift | recognised, no adapter |
+| `shellcheck` | bash | recognised, no adapter |
+| `clang-tidy` | c / c++ | recognised, no adapter |
+| `rubocop` | ruby | recognised, no adapter |
+| `phpstan` | php | recognised, no adapter |
+| `luacheck` | lua | recognised, no adapter |
+| `hadolint` | dockerfile | recognised, no adapter |
+| `tflint` | hcl | recognised, no adapter |
+| `sqlfluff` | sql | recognised, no adapter |
+| `yamllint` | yaml | recognised, no adapter |
+| `markdownlint` | markdown | recognised, no adapter |
+| `stylelint` | css / scss | recognised, no adapter |
+| `taplo` | toml | recognised, no adapter |
+
+The source of truth is `internal/quality/registry.go`.
+
+### Finding the binary
+
+An analyser needs its executable. plumb looks at `[quality.bin]` first, then
+`PATH`, then the directories that language's package manager installs into —
+`$GOBIN`, `$GOPATH/bin`, `~/go/bin` for Go tools; `$VIRTUAL_ENV/bin` and
+`~/.local/bin` for Python ones.
+
+That fallback is not a nicety. The daemon inherits the environment of whichever
+`plumb serve` proxy started it, which frequently lacks `~/go/bin` or
+`~/.local/bin` even when your shell has both — so a `go install`ed or
+`uv tool install`ed linter that works fine in your terminal is invisible to a
+PATH-only lookup.
+
+If a binary is found nowhere, writes still succeed, findings are simply absent,
+and the daemon log says so **once** rather than leaving you to wonder.
+`plumb doctor`'s **Dev Tools** section lists every configured analyser with its
+language and resolved path, or the reason it will not run.
 
 ## `[topology]` — semantic index
 
@@ -1411,9 +1463,14 @@ agent_config_writes = false   # default off; user-settable only
 
 When `true`, the `agent_config` tool may write a small allowlist of project
 config keys: the `[tasks.<lang>]` slots plus `log_level`, `ui.theme`,
-`ui.path_style`, `topology.exclude_patterns`, `quality.analysers`. Every other
-key — including this knob itself and all safety guardrails — is never
-agent-writable. Agent writes are validated and applied atomically, tagged
+`ui.path_style`, `topology.exclude_patterns`. Every other key — including this
+knob itself and all safety guardrails — is never agent-writable.
+
+`quality.analysers` was on that list and is not any more. `agent_config` writes
+at project scope only and `[quality]` is read from the global config, so every
+use of it was a silent no-op reported as success.
+
+Agent writes are validated and applied atomically, tagged
 `provenance=agent` in a (gitignored) `.plumb/config.provenance.json` sidecar,
 shown by `plumb config show`, and revertible with `plumb config unset <key>`.
 The knob is editable only by the user (e.g. the TUI Settings screen).
@@ -1513,12 +1570,15 @@ commit_trailer     = false                  # stamp commits with a Plumb-Session
 env                = {}                     # extra env for the git child (hooks see it); trust-gated
 write_timeout      = "10m"                  # bound on a mutating git child before plumb kills it; trust-gated
 
-[quality]
+[quality]                                   # GLOBAL ONLY — a project value is never read
 enabled               = false               # post-write offline analysers
 mode                  = "background"         # background | sync
-analysers             = ["golangci-lint"]
+analysers             = ["golangci-lint"]   # names, not paths; unknown names are skipped and logged
 timeout_ms            = 2000
 max_findings_per_file = 5
+
+[quality.bin]                               # optional explicit executables
+# ruff = "~/.local/bin/ruff"
 
 [topology]
 enabled                 = true              # on by default; set false to opt out

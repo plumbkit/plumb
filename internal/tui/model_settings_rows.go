@@ -5,7 +5,6 @@ package tui
 // reload-tier and override markers, the controls, and the footer status bar.
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -79,13 +78,64 @@ func clampSettingsValueW(valueW, labelW int, items []settingItem, rowsW int) int
 func settingsContLine(it settingItem, idx, labelW, valueW int, wsScope bool) string {
 	_, style := rowScopeStyles(it, wsScope)
 	if it.lspMissing {
-		style = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+		style = MissingStyle
 	}
-	entry := ""
-	if idx < len(it.list) {
-		entry = textfmt.Ellipsis(it.list[idx], valueW-2)
+	cell := ""
+	if idx < rowValueCount(it) {
+		cell = renderValueCell(rowValue(it, idx), valueW, style)
 	}
-	return strings.Repeat(" ", labelW+3) + style.Render(entry)
+	return strings.Repeat(" ", labelW+3) + cell
+}
+
+// renderValueCell renders one value cell: the text truncated two short of the
+// column (so an over-long value keeps a gap before the control instead of
+// running into it), then the badge, then the whole thing in the entry's own
+// style when it has one.
+//
+// Truncating BEFORE appending the badge is the point. textfmt.Ellipsis budgets
+// runes, and a badge folded into the text can be cut mid-glyph — ⚠️ is a base
+// character plus a variation selector, so losing the selector silently prints a
+// different symbol. Reserving the badge's display width up front means a narrow
+// pane loses detail and never the signal.
+func renderValueCell(e listEntry, valueW int, fallback lipgloss.Style) string {
+	style := fallback
+	if e.styled {
+		style = e.style
+	}
+	return style.Render(valueCellText(e, valueW))
+}
+
+// valueCellText is renderValueCell's unstyled half: the text a cell shows, cut
+// to the column and carrying its badge.
+//
+// Separate because the FOCUSED row cannot use the styled form — it renders
+// label, value and control in one SelectedStyle pass — and must still be cut to
+// the same width. Sharing one function is what keeps the two from disagreeing:
+// while the focused branch did its own thing it quietly lost the truncation, and
+// a long value ran past its column into the control, wrapping the row and
+// corrupting the pane's borders — the exact failure clampSettingsValueW exists
+// to prevent.
+func valueCellText(e listEntry, valueW int) string {
+	budget := valueW - 2
+	if e.badge != "" {
+		budget -= lipgloss.Width(e.badge) + 1 // the badge plus its leading space
+	}
+	text := textfmt.Ellipsis(e.text, max(budget, 1))
+	if e.badge != "" {
+		text += " " + e.badge
+	}
+	return text
+}
+
+// padValueCell right-pads a rendered cell to the column width.
+//
+// Measured with lipgloss.Width rather than fmt's "%-*s": fmt counts RUNES, and a
+// badge glyph is one rune occupying two terminal columns, so a padded emoji cell
+// comes out a column short and drags the control left on that row alone.
+// lipgloss.Width measures display columns and ignores ANSI, so one call is
+// correct for both the styled and the plain form.
+func padValueCell(cell string, valueW int) string {
+	return cell + strings.Repeat(" ", max(valueW-lipgloss.Width(cell), 0))
 }
 
 // settingsHeaderDisplay renders a group header as the name followed by a faded
@@ -93,7 +143,7 @@ func settingsContLine(it settingItem, idx, labelW, valueW int, wsScope bool) str
 func settingsHeaderDisplay(group string, innerW int, warn bool) string {
 	marker := ""
 	if warn { // an enabled LSP server in this group is not on PATH
-		marker = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("*")
+		marker = MissingStyle.Render("*")
 	}
 	used := 1 + lipgloss.Width(group) + lipgloss.Width(marker) + 1 // " " + name + marker + " "
 	dots := max(innerW-1-used, 0)
@@ -107,9 +157,6 @@ func settingsHeaderDisplay(group string, innerW int, warn bool) string {
 // superscript ⁴/⁵ after the numeral marks override vs inherited.
 func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW int) string {
 	label := rowLabel(it)
-	// Truncate two short of the column so an over-long value keeps a gap
-	// before the control instead of running into it.
-	value := fmt.Sprintf("%-*s", valueW, textfmt.Ellipsis(rowValues(it)[0], valueW-2))
 	ctrl := settingControl(it)
 
 	numeral, numeralPlain := reloadNumeral(it.key)
@@ -124,16 +171,20 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 
 	labelStyle, valueStyle := rowScopeStyles(it, wsScope)
 	if it.lspMissing {
-		red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-		labelStyle, valueStyle = red, red
+		labelStyle, valueStyle = MissingStyle, MissingStyle
 	}
 
 	var core string
 	if focused {
-		// One SelectedStyle pass, so the markers take the selection colour.
-		core = SelectedStyle.Render("❯ " + label + markers + pad + value + ctrl)
+		// One SelectedStyle pass, so the markers take the selection colour. The
+		// entry's own colour is deliberately dropped here: a per-entry red inside
+		// a selection highlight is unreadable on several themes, and the row is
+		// the one the status bar is already describing in words.
+		plain := padValueCell(valueCellText(rowValue(it, 0), valueW), valueW)
+		core = SelectedStyle.Render("❯ " + label + markers + pad + plain + ctrl)
 	} else {
-		core = "  " + labelStyle.Render(label) + numeral + mark + pad + valueStyle.Render(value) + MutedStyle.Render(ctrl)
+		padded := padValueCell(renderValueCell(rowValue(it, 0), valueW, valueStyle), valueW)
+		core = "  " + labelStyle.Render(label) + numeral + mark + pad + padded + MutedStyle.Render(ctrl)
 	}
 	return " " + core
 }
@@ -269,8 +320,14 @@ func settingsLegend(wsScope, untrusted bool) string {
 			muted.Render("⁵") + SettingsBarStyle.Render(" inherited")
 	}
 	if wsScope && untrusted {
+		// Deliberately generic. A ⁶ has two possible causes — an untrusted
+		// workspace, and a key no consumer reads from a project file — and this
+		// legend has room for a key, not a manual. Naming only `plumb trust` here
+		// would send a user with a global-only row to grant a permission that
+		// changes nothing; the per-row remedy is on the status line beneath it and
+		// in the message the edit itself returns.
 		legend += SettingsBarStyle.Render("  ·  ") +
-			warn.Render("⁶") + SettingsBarStyle.Render(" set here, ignored — `plumb trust`")
+			warn.Render("⁶") + SettingsBarStyle.Render(" set here, not in effect")
 	}
 	return legend
 }

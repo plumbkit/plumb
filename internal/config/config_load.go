@@ -277,11 +277,21 @@ func normaliseConfig(cfg *Config) {
 			cfg.LSP[name] = lsp
 		}
 	}
+	// [quality.bin] names a binary the same way [lsp.<lang>] command does, so it
+	// gets the same expansion. Without it `ruff = "~/.local/bin/ruff"` — the
+	// obvious thing to write, and what plumb's own docs show — would stat a
+	// literal "~" directory and silently fall through to PATH.
+	for name, bin := range cfg.Quality.Bin {
+		if expanded := expandPath(bin); expanded != bin {
+			cfg.Quality.Bin[name] = expanded
+		}
+	}
 }
 
-// expandPath expands environment variables and a leading "~"/"~/" in an LSP
-// command path so config files stay portable across machines. Thin wrapper over
-// paths.ExpandHome (the shared implementation).
+// expandPath expands environment variables and a leading "~"/"~/" in a config
+// path (an LSP command, a [quality.bin] entry) so config files stay portable
+// across machines. Thin wrapper over paths.ExpandHome (the shared
+// implementation).
 func expandPath(s string) string {
 	return paths.ExpandHome(s)
 }
@@ -486,4 +496,18 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// project has no legitimate claim on which tools a given CLIENT is offered —
 	// that is a property of the client, not of the repository it has open.
 	merged.Tools.ClientProfiles = maps.Clone(base.Tools.ClientProfiles)
+	// [quality.bin] maps an analyser name to the executable plumb runs for it, so
+	// a project able to set it would choose the binary that runs on every write to
+	// a file of that language — arbitrary code execution as the user, by the same
+	// argument as [lsp.<lang>] command. It is forced rather than trust-gated
+	// because there is no legitimate per-repository answer: where a tool is
+	// installed is a fact about the MACHINE.
+	//
+	// The rest of [quality] is not forced here only because no consumer reads a
+	// merged value at all (see QualityConfig's doc comment). Forcing this one key
+	// regardless means wiring [quality] per-project later cannot open this hole by
+	// omission.
+	//
+	// Cloned, not aliased, for the reason the workspace roots above give.
+	merged.Quality.Bin = maps.Clone(base.Quality.Bin)
 }

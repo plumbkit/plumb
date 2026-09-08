@@ -115,6 +115,15 @@ var enforcementCases = map[string]struct {
 		"[workspace]\nread_roots = [\"/\"]\n",
 		func(c Config) bool { return len(c.Workspace.ReadRoots) > 0 },
 	},
+	// A project naming the executable plumb runs for an analyser is arbitrary
+	// code execution as the user, on every write to a file of that language — the
+	// [lsp.<lang>] command hole, one table over. Forced, not trust-gated: where a
+	// tool is installed is a fact about the MACHINE, so there is no legitimate
+	// per-repository answer to honour even with approval.
+	"quality.bin": {
+		"[quality.bin]\nruff = \"/tmp/evil\"\n",
+		func(c Config) bool { return len(c.Quality.Bin) > 0 },
+	},
 	"tools.client_profiles": {
 		"[tools.client_profiles]\nclaude-code = \"lean\"\n",
 		func(c Config) bool { return len(c.Tools.ClientProfiles) > 0 },

@@ -260,6 +260,11 @@ func cloneConfig(cfg Config) Config {
 	// RestartNeeded on every fresh daemon (the defaults use Args: []string{}).
 	out.Topology.ExcludePatterns = slices.Clone(cfg.Topology.ExcludePatterns)
 	out.Quality.Analysers = slices.Clone(cfg.Quality.Analysers)
+	// Cloned for Git.Env's reason as well as the aliasing one: go-toml merges a
+	// project's `[quality.bin]` sub-table into whatever map is already there, so
+	// sharing base's map would let a project write into the daemon's live config
+	// even though the key is forced back to global a moment later.
+	out.Quality.Bin = maps.Clone(cfg.Quality.Bin)
 	out.Workspace.ExtraRoots = slices.Clone(cfg.Workspace.ExtraRoots)
 	out.Workspace.ReadRoots = slices.Clone(cfg.Workspace.ReadRoots)
 	out.Git.ProtectedBranches = slices.Clone(cfg.Git.ProtectedBranches)

@@ -196,9 +196,8 @@ func (r *Runner) format(findings []Finding) string {
 	if len(capped) == 0 {
 		return ""
 	}
-	names := r.analyserNames()
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "\ncode quality (%s):\n", names)
+	fmt.Fprintf(&sb, "\ncode quality (%s):\n", sourceNames(capped))
 	for _, f := range capped {
 		if f.Line > 0 {
 			fmt.Fprintf(&sb, "  L%d %s: %s\n", f.Line, f.Code, f.Message)
@@ -222,10 +221,23 @@ func (r *Runner) anySupports(path string) bool {
 	return false
 }
 
-func (r *Runner) analyserNames() string {
-	names := make([]string, 0, len(r.cfg.Analysers))
-	for _, a := range r.cfg.Analysers {
-		names = append(names, a.Name())
+// sourceNames lists the analysers that actually produced the findings being
+// rendered, in first-seen order.
+//
+// It replaced a version that named every CONFIGURED analyser, which was
+// harmless while only one could ever be configured and became a lie the moment
+// a second adapter shipped: a Go file's findings would be headed "code quality
+// (golangci-lint, ruff)", crediting ruff with output it never produced and
+// could not have — it does not support .go at all.
+func sourceNames(findings []Finding) string {
+	seen := make(map[string]bool, len(findings))
+	names := make([]string, 0, len(findings))
+	for _, f := range findings {
+		if f.Source == "" || seen[f.Source] {
+			continue
+		}
+		seen[f.Source] = true
+		names = append(names, f.Source)
 	}
 	return strings.Join(names, ", ")
 }

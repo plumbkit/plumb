@@ -2,7 +2,75 @@
 
 ## Unreleased
 
+### Added
+
+- **`[quality]` gets an analyser registry, a ruff adapter, and a
+  `[quality.bin]` escape hatch.** `analysers` was resolved by a one-case switch
+  on the literal string `"golangci-lint"`, and every other entry — `ruff`, a
+  typo, the absolute path of a linter that is installed and working — was
+  dropped mid-loop with no error, no log, and no mark in the Settings pane. The
+  names are now a table (`internal/quality/registry.go`) carrying each tool's
+  language, extensions, binary and whether plumb has an adapter for it, so
+  "plumb does not support this" is something the codebase can state rather than
+  an absence you infer from silence; `TestBuildAnalysersCoversRegistry` pins the
+  constructor switch to it in both directions. **ruff** is implemented
+  (`ruff check --output-format=json --force-exclude`, `.py`/`.pyi`, null rule
+  codes mapped to a syntax error rather than an empty one), and twenty-odd tools
+  across the languages plumb indexes are recognised-but-unimplemented. Binary
+  resolution is now per ecosystem: `[quality.bin]` first (global-only — it names
+  a program plumb runs), then `PATH`, then `$GOBIN`/`$GOPATH/bin`/`~/go/bin` for
+  Go and `$VIRTUAL_ENV/bin`/`~/.local/bin` for Python. That last one is the same
+  bug golangci-lint had in `~/go/bin`: the daemon inherits the `plumb serve`
+  proxy's environment, so a `uv tool install`ed ruff that works in your shell was
+  invisible. A skipped entry is now logged once per daemon with the reason, and
+  `plumb doctor`'s Dev Tools lists every configured analyser — language, resolved
+  path, or why it will not run — instead of one hardcoded golangci-lint row. A
+  ruff run that emits partial output and then fails is reported rather than
+  silently truncated, while its ordinary exit-1-with-violations is not, so the
+  warning stays worth reading.
+
 ### Fixed
+
+- **The Settings pane no longer reports a workspace override plumb does not
+  read.** Every `quality.*` key was offered at a workspace scope, written into
+  `.plumb/config.toml`, and rendered with the green ⁴ *override* mark — while the
+  runner builds itself from the GLOBAL store, so nothing set there ever ran. You
+  could configure an analyser on a project, watch the pane confirm the override,
+  get no findings, and have nothing anywhere to explain it. `⁶ set here, not in
+  effect` now covers both reasons a row can be ignored, not just an untrusted
+  workspace: the new `config.AppliesAtProjectScope` answers from the existing
+  `projectFieldClasses` table, which turns that classification from documentation
+  into behaviour and stops the loader and the display drifting. Editing such a
+  row says where the setting *does* apply rather than sending you to
+  `plumb trust`, which would not have helped. Such a row also shows the value
+  that is actually in force rather than the one the project file asked for:
+  nothing forces an inert key back to the global value (nothing reads it, so
+  nothing bothers), so the merged config faithfully carries the project's list
+  and rendering it would have put `ruff` on screen, resolved and unbadged,
+  beside a mark saying the row does not apply. `quality.analysers` is also
+  withdrawn from the `agent_config` allowlist for the same reason — that tool
+  writes project scope only, so its every use of the key was a no-op reported as
+  success — and `QualityConfig`'s doc comment, which claimed the opposite of all
+  of this, is corrected.
+
+- **Settings shows paths as paths.** The rows pane never called the contraction
+  helpers `internal/render` already had, so an analyser or LSP command showed as
+  `/Users/some.long.name/.local/bin/ruff` and set the column width for every row
+  beside it. Path-valued rows (analysers, `lsp.<lang>` command, extra/read roots,
+  `log_file`, `rastro.path`) now render `~`-contracted and elided in the MIDDLE
+  on separator boundaries, capped at 50 columns — both ends of a path identify
+  it, so a head or tail cut throws one of those away. Display only: the stored
+  value and the list editor are untouched. Analyser entries additionally carry
+  their language and their state — red ⚠️ for a supported tool whose binary is
+  missing (yours to fix), yellow 🚧 for something plumb can see but has no adapter
+  for (nothing you install will help) — with the badge appended after truncation
+  so a narrow pane loses the detail and never the signal.
+
+- **A findings block no longer credits an analyser that produced nothing.** The
+  `code quality (…)` header named every CONFIGURED analyser, which was harmless
+  while only one could be configured and became false the moment a second adapter
+  shipped: a Go file's findings would be headed `(golangci-lint, ruff)`. It now
+  names the analysers the findings actually came from.
 
 - **A project's `[lsp.<lang>] enabled` now decides which language servers that
   project gets — in both directions.** The daemon built its effective language

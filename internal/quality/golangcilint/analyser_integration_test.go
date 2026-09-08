@@ -39,7 +39,7 @@ func TestIntegration_RealBinary(t *testing.T) {
 	// golangci-lint resolves the module from the working directory.
 	t.Chdir(dir)
 
-	findings, err := golangcilint.New().Analyse(context.Background(), []string{src})
+	findings, err := golangcilint.New("").Analyse(context.Background(), []string{src})
 	if err != nil {
 		t.Fatalf("Analyse returned error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestIntegration_BelowModuleRootFindingSurvives(t *testing.T) {
 	})
 
 	t.Run("Analyse passes the real finding through", func(t *testing.T) {
-		findings, err := golangcilint.New().Analyse(context.Background(), []string{src})
+		findings, err := golangcilint.New("").Analyse(context.Background(), []string{src})
 		if err != nil {
 			t.Fatalf("Analyse returned error: %v", err)
 		}
@@ -177,7 +177,7 @@ func TestIntegration_PathPrefixDoesNotSurviveAbsPathMode(t *testing.T) {
 	})
 
 	t.Run("Analyse passes the real finding through", func(t *testing.T) {
-		findings, err := golangcilint.New().Analyse(context.Background(), []string{src})
+		findings, err := golangcilint.New("").Analyse(context.Background(), []string{src})
 		if err != nil {
 			t.Fatalf("Analyse returned error: %v", err)
 		}

@@ -1,11 +1,14 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRegistry_AgentAllowlist(t *testing.T) {
 	writable := []string{
 		"ui.theme", "ui.path_style", "log_level",
-		"topology.exclude_patterns", "quality.analysers",
+		"topology.exclude_patterns",
 		"tasks.go.build", "tasks.python.test", "tasks.rust.verify",
 	}
 	for _, k := range writable {
@@ -36,6 +39,14 @@ func TestRegistry_DenyListNeverWritable(t *testing.T) {
 		"log_file",
 		"lsp.go.command",
 		"lsp.go.enabled",
+		// quality.bin names the executable plumb runs for an analyser — the
+		// [lsp.<lang>] command hole in a different table.
+		"quality.bin",
+		// Not a guardrail: refused because agent_config writes PROJECT scope
+		// only and [quality] is read from the global store, so allowing it would
+		// hand an agent a control whose every use is a silent no-op reported as
+		// success.
+		"quality.analysers",
 		"unknown.key",
 	}
 	for _, k := range denied {
@@ -54,5 +65,25 @@ func TestAgentWritableKeys_ReturnsAllowlist(t *testing.T) {
 		if !agentWritableKeys[f.Key] {
 			t.Errorf("AgentWritableKeys returned non-allowlisted %q", f.Key)
 		}
+	}
+}
+
+// No [quality] key may be agent-writable. agent_config writes PROJECT scope
+// only and the runner reads the global store, so any of them would be a control
+// whose every use is a no-op reported as success.
+//
+// Stated as a rule over the whole block rather than as one entry in the deny
+// list above, because a [quality] key added later inherits the property and
+// would otherwise have to be remembered.
+func TestRegistry_NoQualityKeyIsAgentWritable(t *testing.T) {
+	for key := range agentWritableKeys {
+		if strings.HasPrefix(key, "quality.") {
+			t.Errorf("%q is agent-writable, but [quality] is read from the global config and "+
+				"agent_config writes project scope only — the write would be a silent no-op", key)
+		}
+	}
+	// The negative control: the rule is about [quality], not about everything.
+	if !IsAgentWritable("topology.exclude_patterns") {
+		t.Error("topology.exclude_patterns must stay agent-writable — it IS honoured per project")
 	}
 }

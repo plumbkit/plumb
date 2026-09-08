@@ -5,6 +5,11 @@
 // noisy one (this bit us: golangci-lint was installed in ~/go/bin, the daemon's
 // PATH did not include it, and the post-write quality findings simply never
 // appeared, with nothing anywhere to explain why).
+//
+// The binary search that fixed that now lives in quality.LookBinary, shared with
+// every other adapter — the same failure recurred for ruff in ~/.local/bin, so
+// the fallback is a per-ecosystem table rather than one adapter's local
+// workaround.
 package golangcilint
 
 import (
@@ -24,19 +29,28 @@ import (
 	"github.com/plumbkit/plumb/internal/quality"
 )
 
+// name is the registry spelling, and the Source stamped on every finding.
+const name = "golangci-lint"
+
 // Analyser runs golangci-lint on Go source files.
 // Concurrency: Analyse may be called concurrently; each call is independent.
-type Analyser struct{}
+type Analyser struct {
+	// bin is the [quality.bin] override, empty when the user set none.
+	bin string
+}
 
-// New returns a new golangci-lint Analyser.
-func New() *Analyser { return &Analyser{} }
+// New returns a new golangci-lint Analyser. binOverride is the [quality.bin]
+// entry for golangci-lint, or "" to resolve it the ordinary way.
+func New(binOverride string) *Analyser { return &Analyser{bin: binOverride} }
 
-func (*Analyser) Name() string { return "golangci-lint" }
+func (*Analyser) Name() string { return name }
 
-// Supports reports whether path is a Go source file eligible for linting.
+// Supports reports whether path is a Go source file eligible for linting. The
+// extension list lives in the registry so the Settings pane and the analyser
+// cannot disagree about which files a tool owns.
 func (*Analyser) Supports(path string) bool {
-	ext := filepath.Ext(path)
-	return ext == ".go"
+	t, ok := quality.ToolByName(name)
+	return ok && t.SupportsPath(path)
 }
 
 // pathModeAbs makes golangci-lint report absolute filenames.
@@ -71,9 +85,13 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 	if len(files) == 0 {
 		return nil, nil
 	}
-	bin, ok := LookBinary()
+	t, ok := quality.ToolByName(name)
 	if !ok {
-		logUnavailableOnce(ctx)
+		return nil, nil // unreachable: the registry always carries this row
+	}
+	bin, found := quality.LookBinary(t, a.bin)
+	if !found {
+		logUnavailableOnce(ctx, t)
 		return nil, nil // binary absent — skip, but not silently (logged once)
 	}
 
@@ -245,64 +263,17 @@ func pathPresent(p string) bool {
 	return !errors.Is(err, fs.ErrNotExist)
 }
 
-// lookPath is the PATH lookup seam (tests substitute it).
-var lookPath = exec.LookPath
-
-// LookBinary resolves the golangci-lint executable: PATH first, then the Go
-// tool bin directory ($GOBIN, else $GOPATH/bin, else ~/go/bin).
-//
-// The fallback matters because the daemon does NOT run with the user's
-// interactive PATH: it inherits the environment of whichever `plumb serve`
-// proxy spawned it, which is captured when that agent session starts and
-// routinely lacks ~/go/bin. `go install`-ed tools land exactly there, so PATH
-// alone silently disables this analyser on a perfectly well set-up machine.
-//
-// Exported so `plumb doctor` reports the same binary the analyser will actually
-// run — a doctor check that resolved differently would be worse than none.
-func LookBinary() (string, bool) {
-	if bin, err := lookPath("golangci-lint"); err == nil {
-		return bin, true
-	}
-	for _, dir := range goToolBinDirs() {
-		candidate := filepath.Join(dir, "golangci-lint")
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-// goToolBinDirs lists the directories `go install` writes to, most specific
-// first. Read from the environment rather than shelling out to `go env`, which
-// would spawn a process on a write path that must stay cheap.
-func goToolBinDirs() []string {
-	var dirs []string
-	if gobin := os.Getenv("GOBIN"); gobin != "" {
-		dirs = append(dirs, gobin)
-	}
-	if gopath := os.Getenv("GOPATH"); gopath != "" {
-		// GOPATH may be a list; only the first element receives installs.
-		first, _, _ := strings.Cut(gopath, string(os.PathListSeparator))
-		if first != "" {
-			dirs = append(dirs, filepath.Join(first, "bin"))
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, "go", "bin"))
-	}
-	return dirs
-}
-
 // unavailableOnce bounds the "not found" log to one line per daemon lifetime:
 // the analyser runs on every Go write, so an unconditional warning would flood
 // the log, and that is precisely how a warning ends up being ignored.
 var unavailableOnce sync.Once
 
-func logUnavailableOnce(ctx context.Context) {
+func logUnavailableOnce(ctx context.Context, t quality.Tool) {
 	unavailableOnce.Do(func() {
 		slog.InfoContext(ctx, "quality: golangci-lint not found — post-write Go quality findings are disabled",
-			"searched", append([]string{"PATH"}, goToolBinDirs()...),
-			"hint", "install golangci-lint, or put its directory on the PATH the daemon inherits")
+			"searched", append([]string{"PATH"}, quality.BinDirs(t.Ecosystem)...),
+			"hint", "install golangci-lint, set [quality.bin] golangci-lint, "+
+				"or put its directory on the PATH the daemon inherits")
 	})
 }
 

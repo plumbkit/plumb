@@ -46,6 +46,7 @@ var (
 
 	OkStyle          lipgloss.Style
 	WarnStyle        lipgloss.Style
+	MissingStyle     lipgloss.Style // red — a configured tool plumb cannot find
 	RestartStyle     lipgloss.Style // purple — the "needs a daemon restart" reload tier
 	ScrollThumbStyle lipgloss.Style
 	ScrollTrackStyle lipgloss.Style
@@ -214,6 +215,20 @@ func RebuildStyles() {
 
 	WarnStyle = lipgloss.NewStyle().
 		Foreground(t.Warning)
+
+	// Fixed ANSI red (theme-independent) for a configured tool plumb cannot
+	// resolve — an enabled LSP server that is not on PATH, an analyser whose
+	// binary is missing. It reads as "this is broken", one step past WarnStyle's
+	// yellow "this will not run", and the two must stay distinguishable because a
+	// missing binary is the user's to fix while an unsupported tool is plumb's.
+	//
+	// Named rather than inlined: this exact colour was hardcoded three times in
+	// model_settings_rows.go, so a theme wanting to change it had nowhere to look.
+	// It is NOT a Theme field — adding one obliges all eight themes to define it
+	// (theme_parity_test.go) for a colour whose whole job is to be alarming
+	// regardless of palette.
+	MissingStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("1"))
 
 	// Fixed purple (theme-independent) for the daemon-restart reload tier, so it
 	// reads distinctly from live (green) and next-session (yellow) on any theme.

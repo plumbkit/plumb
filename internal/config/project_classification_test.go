@@ -55,6 +55,53 @@ func configLeafKeys(t *testing.T) []string {
 	return out
 }
 
+// AppliesAtProjectScope is what turned this table from documentation into
+// behaviour: the Settings pane asks it before calling a workspace row an
+// override.
+//
+// The [quality] rows are the case that prompted it. All five were offered at a
+// workspace scope, written into .plumb/config.toml, rendered with the green ⁴
+// override mark — and read from the global store, so nothing a user set there
+// ever ran. A row that reports a value plumb is not using is the one thing a
+// settings editor must never do.
+func TestAppliesAtProjectScope(t *testing.T) {
+	cases := []struct {
+		key  string
+		want bool
+		why  string
+	}{
+		{"quality.analysers", false, "inert: the runner reads the global store"},
+		{"quality.enabled", false, "inert"},
+		{"quality.bin", false, "forced global"},
+		{"ui.theme", false, "forced global"},
+		{"log_level", false, "inert"},
+		{"cache.ttl", false, "inert"},
+		// These DO reach a consumer from a project file. A one-way or trust-gated
+		// key still applies at project scope — it is constrained, not ignored — and
+		// conflating the two would mark a legitimate [git] override as dead.
+		{"topology.watch", true, "plain preference"},
+		{"edits.strict", true, "one-way, but honoured in the safe direction"},
+		{"git.allow_push", true, "trust-gated, honoured once trusted"},
+		{"lsp.go.command", true, "trust-gated; per-language key normalises to its template"},
+		{"tasks.python.test", true, "trust-gated; per-language key normalises to its template"},
+	}
+	for _, tc := range cases {
+		if got := AppliesAtProjectScope(tc.key); got != tc.want {
+			t.Errorf("AppliesAtProjectScope(%q) = %v, want %v (%s)", tc.key, got, tc.want, tc.why)
+		}
+	}
+}
+
+// A key the table does not know answers true. A miss means the table is
+// incomplete — which TestProjectFieldClasses_CoverEveryConfigField forbids — not
+// that the key is dead, and inventing a warning out of a lookup failure would be
+// its own kind of lie.
+func TestAppliesAtProjectScope_UnknownKeyIsNotReportedAsDead(t *testing.T) {
+	if !AppliesAtProjectScope("not.a.real.key") {
+		t.Error("an unrecorded key must not be reported as not-in-effect")
+	}
+}
+
 // TestProjectFieldClasses_CoverEveryConfigField is the guard that makes the
 // classification an audit rather than a document. Adding a field to Config
 // without recording whether a hostile project value is safe fails here.

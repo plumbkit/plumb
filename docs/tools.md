@@ -1072,7 +1072,9 @@ Read and (when the user enabled `[agent_config_writes]`) write a small allowlist
 of config keys on the user's behalf. **Inputs:** `op` (`describe`/`set`), `set`
 (map of dotted key → value for `op=set`), `scope` (`project` only). Writable:
 the `[tasks.<lang>]` slots + `log_level`, `ui.theme`, `ui.path_style`,
-`topology.exclude_patterns`, `quality.analysers`. Guardrails (git tiers, roots,
-strict mode, API keys, the enable knob itself) are never agent-writable. A batch
-is validated and applied atomically, tagged `provenance=agent`, and revertible
-with `plumb config unset`.
+`topology.exclude_patterns`. Guardrails (git tiers, roots, strict mode, API
+keys, `quality.bin`, the enable knob itself) are never agent-writable, and
+`quality.analysers` was withdrawn because `[quality]` is read from the global
+config — a project-scope write to it could only ever be a no-op reported as
+success. A batch is validated and applied atomically, tagged `provenance=agent`,
+and revertible with `plumb config unset`.

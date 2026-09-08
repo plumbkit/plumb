@@ -194,17 +194,27 @@ type settingItem struct {
 	help       string   // one-line description, shown on the status bar's second line
 	overridden bool     // workspace scope: the key is set in the project config AND in effect
 	// notInEffect marks a workspace row the project config sets but plumb is
-	// ignoring: a capability-granting key ([git], an exec-deciding [lsp.<lang>]
-	// field) on a root the user has not trusted. Mutually exclusive with
-	// overridden on purpose — an ignored override must never render as a live one,
-	// which is the whole complaint this state exists to answer. The row's value
-	// column shows what is ACTUALLY in effect (the global value), not what the
-	// project file says.
+	// ignoring. Two distinct reasons reach it: a capability-granting key ([git],
+	// an exec-deciding [lsp.<lang>] field) on a root the user has not trusted, and
+	// a key no consumer ever reads from a project file at all (every [quality]
+	// key — see config.AppliesAtProjectScope). Mutually exclusive with overridden
+	// on purpose — an ignored override must never render as a live one, which is
+	// the whole complaint this state exists to answer. The row's value column
+	// shows what is ACTUALLY in effect (the global value), not what the project
+	// file says.
 	notInEffect bool
 	lspLang     string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
 	lspMissing  bool     // enabled LSP server whose command is not on PATH
 	list        []string // raw entries for settingList rows; rendered one per line
-	tab         int      // which rows-pane tab owns this row (settingsTabGeneral/LSP/Semantics)
+	// path marks a row whose value (or every list entry) is a filesystem path, so
+	// the renderer contracts $HOME to ~ and elides interior segments. Display
+	// only: the stored value is never rewritten.
+	path bool
+	// entries carries per-entry presentation for a settingList row, index-aligned
+	// with list. nil for an ordinary list row, whose entries render as plain text
+	// in the row's scope style.
+	entries []listEntry
+	tab     int // which rows-pane tab owns this row (settingsTabGeneral/LSP/Semantics)
 }
 
 var (
@@ -264,7 +274,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 
 		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions},
 		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions},
-		{group: "Logging", label: "Log file", kind: settingPopup, key: skLogFile, value: pathOrDefault(cfg.LogFile)},
+		{group: "Logging", label: "Log file", kind: settingPopup, key: skLogFile, value: pathOrDefault(cfg.LogFile), path: true},
 
 		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
 		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
@@ -291,7 +301,11 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Quality", label: "Mode", kind: settingCycle, key: skQualityMode, value: qualityModeValue(cfg.Quality.Mode), options: qualityModeOptions},
 		{group: "Quality", label: "Timeout (ms)", kind: settingNumber, key: skQualityTimeoutMs, value: itoa(cfg.Quality.TimeoutMs)},
 		{group: "Quality", label: "Max findings/file", kind: settingNumber, key: skQualityMaxFindings, value: itoa(cfg.Quality.MaxFindingsPerFile)},
-		{group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers), list: cfg.Quality.Analysers},
+		{
+			group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers,
+			value: listSummary(cfg.Quality.Analysers), list: cfg.Quality.Analysers,
+			entries: analyserEntries(cfg.Quality),
+		},
 
 		{group: "Git", label: "Git allow writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites)},
 		{group: "Git", label: "Git allow destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive)},
@@ -328,7 +342,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Collab", label: "Keep delivered", kind: settingToggle, key: skCollabKeepDelivered, value: onOff(cfg.Collab.KeepDeliveredNotes)},
 
 		{group: "Rastro", label: "Enabled", kind: settingToggle, key: skRastroEnabled, value: onOff(cfg.Rastro.Enabled)},
-		{group: "Rastro", label: "Path", kind: settingText, key: skRastroPath, value: pathOrDefault(cfg.Rastro.Path)},
+		{group: "Rastro", label: "Path", kind: settingText, key: skRastroPath, value: pathOrDefault(cfg.Rastro.Path), path: true},
 
 		{group: "Xcode", label: "Auto build server", kind: settingToggle, key: skXcodeAutoBuildServer, value: onOff(cfg.Xcode.AutoBuildServer)},
 		{group: "Xcode", label: "Scheme", kind: settingText, key: skXcodeScheme, value: pathOrDefault(cfg.Xcode.Scheme)},
@@ -338,8 +352,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},
 		{group: "Workspace", label: "Allow dependency reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads)},
 		{group: "Workspace", label: "Child scan depth", kind: settingNumber, key: skChildScanDepth, value: itoa(cfg.Workspace.ChildScanDepth)},
-		{group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots},
-		{group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots},
+		{group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots, path: true},
+		{group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots, path: true},
 
 		{group: "Others", label: "Cache TTL", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions},
 		{group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize)},
@@ -392,7 +406,7 @@ func lspSettingItems(cfg config.Config) []settingItem {
 			},
 			settingItem{
 				group: g, label: "command", kind: settingText, key: skLSPCommand, lspLang: lang, lspMissing: dormant,
-				value: pathOrDefault(e.Command),
+				value: pathOrDefault(e.Command), path: true,
 			},
 			settingItem{
 				group: g, label: "args", kind: settingList, key: skLSPArgs, lspLang: lang, lspMissing: dormant,

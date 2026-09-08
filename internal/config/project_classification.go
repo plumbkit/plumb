@@ -150,13 +150,27 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"session.persist_state_ttl_minutes": ClassInert,
 
 	// --- Quality. Reads the global store, so a project value never applies.
-	// Note the analyser NAMES are resolved against a closed switch and never
+	// Note the analyser NAMES are resolved against a closed registry and never
 	// reach an argv, so even wiring this up would not make it a capability.
+	//
+	// Inert is a statement about today's wiring, not a promise, and the Settings
+	// pane now says so out loud: AppliesAtProjectScope reads this table, so a
+	// quality.* key a project sets renders as set-but-not-in-effect instead of as
+	// a live override. That display was the actual bug — the value was written,
+	// ignored, and shown as if it were running.
 	"quality.enabled":               ClassInert,
 	"quality.mode":                  ClassInert,
 	"quality.analysers":             ClassInert,
 	"quality.timeout_ms":            ClassInert,
 	"quality.max_findings_per_file": ClassInert,
+	// bin is the exception, and FORCED rather than inert. Its values are
+	// filesystem paths that quality.LookBinary hands straight to exec: a project
+	// that could set it would choose the binary plumb runs on every write to a
+	// file of that language. Inert would be true today and would quietly become
+	// false the day someone wires [quality] per-project — which is exactly the
+	// change this table exists to make deliberate. forceGlobalOnlyToBase clones
+	// the global map over any project one.
+	"quality.bin": ClassForcedGlobal,
 
 	// --- Topology: sizes, timeouts and pacing for this workspace's own index.
 	// A hostile value in any of these makes this workspace's index slower or less
@@ -322,6 +336,38 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// --- The enable knob for agent-writable config. A project must never be
 	// able to switch on the tool that lets an agent rewrite config.
 	"agent_config_writes": ClassForcedGlobal,
+}
+
+// ClassOf returns the classification recorded for a dotted TOML key, and whether
+// one exists. A per-language family key is normalised to its template first, so
+// "lsp.go.command" answers from the "lsp.<lang>.command" entry.
+func ClassOf(dotted string) (ProjectFieldClass, bool) {
+	c, ok := projectFieldClasses[normaliseFamilyKey(dotted)]
+	return c, ok
+}
+
+// AppliesAtProjectScope reports whether a value a project's .plumb/config.toml
+// sets for this key can EVER reach a consumer — false for a key whose only
+// reader takes the global config (ClassInert) and for one the loader forces back
+// to global (ClassForcedGlobal).
+//
+// It exists because a settings editor that offers a row it will then ignore is
+// worse than one that offers nothing: the whole [quality] block was writable at
+// a workspace scope, rendered as a live override, and read from the global store
+// — so a user could set analysers on a project, watch the pane report an
+// override, and get no findings, with nothing anywhere to explain it. Answering
+// from this table rather than from a second list in the TUI is the point: the
+// classification and the display cannot drift.
+//
+// An unrecorded key answers true. A miss means the table is incomplete (which
+// TestProjectFieldClasses_CoverEveryConfigField forbids), not that the key is
+// dead, and inventing a warning from a lookup failure would be its own lie.
+func AppliesAtProjectScope(dotted string) bool {
+	c, ok := ClassOf(dotted)
+	if !ok {
+		return true
+	}
+	return c != ClassInert && c != ClassForcedGlobal
 }
 
 // oneWaySafeValue reports which boolean value is the SAFE one for a ClassOneWay

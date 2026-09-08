@@ -64,7 +64,7 @@ func settingsLogicalLines(items []settingItem) []settingsLine {
 		out = append(out, settingsLine{kind: slRow, item: i})
 		// A multi-entry list row stacks its remaining entries on continuation lines.
 		if it.kind == settingList {
-			for j := 1; j < len(it.list); j++ {
+			for j := 1; j < rowValueCount(it); j++ {
 				out = append(out, settingsLine{kind: slRow, item: i, cont: j})
 			}
 		}
@@ -75,22 +75,63 @@ func settingsLogicalLines(items []settingItem) []settingsLine {
 // rowLabel is a row's display label: list rows get a trailing "(N)" count so the
 // value column can stack one entry per line instead of a long joined string.
 func rowLabel(it settingItem) string {
-	if it.kind == settingList && len(it.list) > 0 {
-		return fmt.Sprintf("%s (%d)", it.label, len(it.list))
+	if n := rowValueCount(it); it.kind == settingList && n > 0 {
+		return fmt.Sprintf("%s (%d)", it.label, n)
 	}
 	return it.label
 }
 
-// rowValues is the value column as one or more lines: a list row yields one line
-// per entry ("(none)" when empty), everything else a single line.
-func rowValues(it settingItem) []string {
-	if it.kind == settingList {
-		if len(it.list) == 0 {
-			return []string{"(none)"}
-		}
-		return it.list
+// rowValueCount is how many entries a list row has. It reads entries when the
+// row carries them and falls back to list otherwise, so the "(N)" count, the
+// continuation lines and the rendered cells are all driven by one number — a row
+// whose two sources disagreed would stack entries the label had not counted.
+func rowValueCount(it settingItem) int {
+	if len(it.entries) > 0 {
+		return len(it.entries)
 	}
-	return []string{it.value}
+	return len(it.list)
+}
+
+// rowValue returns the idx'th value cell of a row, as text plus an optional
+// trailing badge (see listEntry).
+func rowValue(it settingItem, idx int) listEntry {
+	if it.kind != settingList {
+		return listEntry{text: maybeDisplayPath(it, it.value)}
+	}
+	if idx < len(it.entries) {
+		return it.entries[idx]
+	}
+	if idx < len(it.list) {
+		return listEntry{text: maybeDisplayPath(it, it.list[idx])}
+	}
+	return listEntry{text: "(none)"}
+}
+
+// maybeDisplayPath contracts a value only on rows that hold a path, so an
+// ordinary setting that happens to contain a slash is left exactly as stored.
+func maybeDisplayPath(it settingItem, s string) string {
+	if !it.path {
+		return s
+	}
+	return displayPath(s)
+}
+
+// rowValues is the value column as one or more plain lines, for width
+// measurement: a list row yields one line per entry ("(none)" when empty),
+// everything else a single line.
+func rowValues(it settingItem) []string {
+	n := rowValueCount(it)
+	if it.kind != settingList {
+		n = 1
+	}
+	if n == 0 {
+		return []string{"(none)"}
+	}
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, rowValue(it, i).display())
+	}
+	return out
 }
 
 // settingsColumnWidths returns the label and value column widths (including a

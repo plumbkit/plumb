@@ -204,15 +204,23 @@ func TestAllPathsMissing_StatsEachDistinctPathOnce(t *testing.T) {
 }
 
 // fakeLinter installs a stub golangci-lint that prints jsonOut on stdout and
-// exits 1, as the real binary does when it has issues to report.
-func fakeLinter(t *testing.T, jsonOut string) {
+// exits 1, as the real binary does when it has issues to report. It returns the
+// stub's path, to be handed to New as the [quality.bin] override.
+func fakeLinter(t *testing.T, jsonOut string) string {
 	t.Helper()
-	fakeLinterScript(t, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PLUMB_ARGS\"\ncat <<'PLUMBEOF'\n"+jsonOut+"\nPLUMBEOF\nexit 1\n")
+	return fakeLinterScript(t, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PLUMB_ARGS\"\ncat <<'PLUMBEOF'\n"+jsonOut+"\nPLUMBEOF\nexit 1\n")
 }
 
-// fakeLinterScript installs an arbitrary stub script as golangci-lint. Each
-// invocation appends its argv to $PLUMB_ARGS; read it back with readArgs.
-func fakeLinterScript(t *testing.T, body string) {
+// fakeLinterScript installs an arbitrary stub script as golangci-lint and
+// returns its path. Each invocation appends its argv to $PLUMB_ARGS; read it
+// back with readArgs.
+//
+// The stub reaches the analyser through New's binary override rather than a
+// stubbed PATH lookup: the override wins outright over PATH and the ecosystem
+// directories, so a test no longer depends on what the host has installed, and
+// the override itself — the [quality.bin] escape hatch — is exercised by every
+// test in this file rather than by one of its own.
+func fakeLinterScript(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "golangci-lint")
@@ -220,10 +228,7 @@ func fakeLinterScript(t *testing.T, body string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PLUMB_ARGS", filepath.Join(dir, "args.txt"))
-
-	orig := lookPath
-	lookPath = func(string) (string, error) { return script, nil }
-	t.Cleanup(func() { lookPath = orig })
+	return script
 }
 
 // readArgs returns the argv the stub linter was invoked with so far.
@@ -255,9 +260,9 @@ func issuesJSON(filenames ...string) string {
 func TestAnalyse_RequestsAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()
 	src := touch(t, dir, "live.go")
-	fakeLinter(t, issuesJSON(src))
+	bin := fakeLinter(t, issuesJSON(src))
 
-	if _, err := New().Analyse(t.Context(), []string{src}); err != nil {
+	if _, err := New(bin).Analyse(t.Context(), []string{src}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if args := readArgs(t); !slices.Contains(args, pathModeAbs) {
@@ -271,9 +276,9 @@ func TestAnalyse_StaleCacheSignalReachesFindings(t *testing.T) {
 	dir := t.TempDir()
 	src := touch(t, dir, "live.go")
 	gone := filepath.Join(t.TempDir(), "removed-worktree", "internal")
-	fakeLinter(t, issuesJSON(filepath.Join(gone, "a.go"), filepath.Join(gone, "b.go")))
+	bin := fakeLinter(t, issuesJSON(filepath.Join(gone, "a.go"), filepath.Join(gone, "b.go")))
 
-	got, err := New().Analyse(t.Context(), []string{src})
+	got, err := New(bin).Analyse(t.Context(), []string{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,9 +300,9 @@ func TestAnalyse_StaleCacheSignalReachesFindings(t *testing.T) {
 func TestAnalyse_RealFindingBelowRunDirIsNotFlagged(t *testing.T) {
 	root := t.TempDir()
 	src := touch(t, root, filepath.Join("sub", "deep", "live.go"))
-	fakeLinter(t, issuesJSON(src))
+	bin := fakeLinter(t, issuesJSON(src))
 
-	got, err := New().Analyse(t.Context(), []string{src})
+	got, err := New(bin).Analyse(t.Context(), []string{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -317,9 +322,9 @@ func TestAnalyse_MixedFindingsPassThrough(t *testing.T) {
 	root := t.TempDir()
 	src := touch(t, root, filepath.Join("sub", "deep", "live.go"))
 	gone := filepath.Join(t.TempDir(), "removed-worktree")
-	fakeLinter(t, issuesJSON(filepath.Join(gone, "a.go"), src, filepath.Join(gone, "b.go")))
+	bin := fakeLinter(t, issuesJSON(filepath.Join(gone, "a.go"), src, filepath.Join(gone, "b.go")))
 
-	got, err := New().Analyse(t.Context(), []string{src})
+	got, err := New(bin).Analyse(t.Context(), []string{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,9 +353,9 @@ func TestAnalyse_RetriesWithoutPathModeOnOlderBinary(t *testing.T) {
 		"  case \"$a\" in --path-mode*) echo 'unknown flag: --path-mode' >&2; exit 3;; esac\n" +
 		"done\n" +
 		"cat <<'PLUMBEOF'\n" + issuesJSON("sub/deep/live.go") + "\nPLUMBEOF\nexit 1\n"
-	fakeLinterScript(t, body)
+	bin := fakeLinterScript(t, body)
 
-	got, err := New().Analyse(t.Context(), []string{src})
+	got, err := New(bin).Analyse(t.Context(), []string{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -402,7 +407,7 @@ func TestAnalyse_OldBinaryLoggedOnce(t *testing.T) {
 		"  case \"$a\" in --path-mode*) echo 'unknown flag: --path-mode' >&2; exit 3;; esac\n" +
 		"done\n" +
 		"cat <<'PLUMBEOF'\n" + issuesJSON("sub/deep/live.go") + "\nPLUMBEOF\nexit 1\n"
-	fakeLinterScript(t, body)
+	bin := fakeLinterScript(t, body)
 
 	var mu sync.Mutex
 	var records []string
@@ -416,7 +421,7 @@ func TestAnalyse_OldBinaryLoggedOnce(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	for i := range 3 {
-		if _, err := New().Analyse(t.Context(), []string{src}); err != nil {
+		if _, err := New(bin).Analyse(t.Context(), []string{src}); err != nil {
 			t.Fatalf("Analyse call #%d: unexpected error: %v", i, err)
 		}
 	}
@@ -458,9 +463,9 @@ func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 func TestAnalyse_TotalFailureYieldsNoFindings(t *testing.T) {
 	dir := t.TempDir()
 	src := touch(t, dir, "live.go")
-	fakeLinterScript(t, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PLUMB_ARGS\"\necho boom >&2\nexit 3\n")
+	bin := fakeLinterScript(t, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PLUMB_ARGS\"\necho boom >&2\nexit 3\n")
 
-	got, err := New().Analyse(t.Context(), []string{src})
+	got, err := New(bin).Analyse(t.Context(), []string{src})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
