@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Removed
+
+- **`plumb setup` no longer writes into `AGENTS.md`, `CLAUDE.md` or
+  `GEMINI.md`.** Registering a client used to append a versioned, marker-bounded
+  managed block to the project's own agent instruction file (PLAN-364), and
+  `--sync` wrote one for every instruction-capable client whether or not that
+  client was installed or registered. `plumb setup` now writes only the client's
+  own MCP config. The `--check`, `--sync` and `--global` flags are gone with the
+  mechanism, as is `internal/setup`; `--uninstall` no longer removes blocks
+  either.
+  **Existing blocks are left exactly as they are** — plumb will not update,
+  rewrite or delete one again. If you want a block gone, delete the span from
+  `<!-- plumb:managed:start v1 -->` to `<!-- plumb:managed:end -->` by hand;
+  `grep -rl "plumb:managed:start"` finds them. Nothing outside those markers was
+  ever touched.
+  The doctrine itself is unaffected: it still reaches the agent through the MCP
+  `initialize` response's `instructions` field (PLAN-366), which is rendered from
+  the same `internal/clienttemplates` source and costs the user nothing. That
+  body now *suggests* recording plumb's conventions in an agent instruction file
+  the project already keeps — asking the user first, and never creating one for
+  the purpose — so where the guidance lives is the agent's and the user's call
+  rather than plumb's.
+
 ### Added
 
 - **`[quality]` gets an analyser registry, a ruff adapter, and a

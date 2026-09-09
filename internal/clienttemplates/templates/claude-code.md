@@ -8,4 +8,6 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **Subagents.** Call `session_start({detail:"brief"})` first for a short orientation packet.
 
+**Persisting this.** If this project already has an agent instruction file (`AGENTS.md`, or your client's own), these conventions are worth recording there — ask the user first; don't create the file just for this.
+
 More detail lives in each tool's own description, in the plumb skills (`plumb skills sync claude-code` installs them), and in `session_start`'s full output.

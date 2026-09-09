@@ -1,16 +1,20 @@
 // Package clienttemplates is the single source of the per-client instruction
-// prose that plumb hands to an agent through several channels: the managed
-// AGENTS.md/CLAUDE.md/GEMINI.md block internal/setup writes into a project
-// (PLAN-364), and the MCP `initialize` response's `instructions` field
-// internal/mcp renders per connection (PLAN-366). One doctrine — lane rules,
-// the refuse-to-break-the-build pointer, the mailbox pointer, the subagent
-// session_start hint — sized and delivered per channel from this one body of
-// text, instead of each channel drifting its own.
+// prose that plumb hands to an agent: one doctrine — lane rules, the
+// refuse-to-break-the-build pointer, the mailbox pointer, the subagent
+// session_start hint — rendered into the MCP `initialize` response's
+// `instructions` field by internal/mcp, per connection (PLAN-366).
+//
+// This is the ONLY channel. PLAN-364 also wrote these bodies into a managed
+// block inside a project's own AGENTS.md/CLAUDE.md/GEMINI.md; that writer is
+// gone, because plumb does not write prose into files it does not own. A
+// body here must therefore describe what plumb is and what it needs, and must
+// never instruct an agent to create a file on plumb's behalf.
 //
 // It lives at the Foundation layer (internal/arch/layers.go) — stdlib and
-// `embed` only — so BOTH a Domain-layer package (internal/setup) and a
-// Transport-layer package (internal/mcp) can import it without inverting the
-// layering: Foundation sits below both.
+// `embed` only. Only the Transport-layer internal/mcp imports it today, so
+// Foundation is lower than it strictly needs to be; it stays there because
+// the layering rule forbids Transport importing Domain, and nothing here
+// needs anything above Foundation to remain correct.
 package clienttemplates
 
 import (
@@ -20,8 +24,9 @@ import (
 
 // Per-client instruction bodies, embedded as data files rather than string
 // constants in code (PLAN-364 PR 2, relocated here by PLAN-366). Each is
-// size-guarded to MaxLines by TestManagedBlock_ClientTemplateSizeGuard
-// (internal/setup) and each holds even under a lean/allowlisted client
+// size-guarded by internal/mcp's MaxInstructionsBytes
+// (TestInstructions_KnownClientsWithinBudget) and each holds even under a
+// lean/allowlisted client
 // config: `plumb setup gemini --lean` and `plumb setup codex --lean` write a
 // client-side tool allowlist (tools.LeanToolNames — read_file/edit_file/
 // write_file/transaction_apply/run_task/git/session_start, among others)

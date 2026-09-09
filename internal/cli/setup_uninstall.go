@@ -17,12 +17,10 @@ import (
 
 // This file is the inverse of the registration writers: `plumb setup <client>
 // --uninstall` removes plumb's server entry from that client's config —
-// and, for a skill-capable client, the skill files plumb itself installed,
-// and, for an instructions-capable client, plumb's managed instruction block
-// (see removeInstructionsBlock in setup_instructions.go). Every removal
-// backs up before writing, preserves sibling entries, and is a no-op when
-// plumb is not registered: an uninstall must be as safe to repeat as a
-// registration.
+// and, for a skill-capable client, the skill files plumb itself installed.
+// Every removal backs up before writing, preserves sibling entries, and is a
+// no-op when plumb is not registered: an uninstall must be as safe to repeat
+// as a registration.
 
 var setupUninstallFlag bool
 
@@ -100,17 +98,15 @@ func uninstallTargetAt(t setupTarget, paths []string, userScoped bool) error {
 	return nil
 }
 
-// uninstallSideEffectLines appends the skill-removal and instructions-block-
-// removal report lines onto lines, returning the extended slice — factored
-// out of uninstallTargetAt to keep that function under the project's
-// cyclomatic-complexity budget. Only called once something was actually
-// unregistered (see uninstallTargetAt), so the removals here are
-// unconditional on that account.
+// uninstallSideEffectLines appends the skill-removal report lines onto lines,
+// returning the extended slice — factored out of uninstallTargetAt to keep
+// that function under the project's cyclomatic-complexity budget. Only called
+// once something was actually unregistered (see uninstallTargetAt), so the
+// removals here are unconditional on that account.
 //
 // userScoped gates the removals that live in the USER scope — the skills and
 // the lifecycle hooks — so a project-scoped Claude Code uninstall leaves both
-// alone. The instructions block is not gated: it is written into the project
-// plumb was registered in, so it goes with that registration either way.
+// alone.
 func uninstallSideEffectLines(t setupTarget, userScoped bool, lines []string) []string {
 	if userScoped && t.skillsDirFn != nil {
 		if dir, err := t.skillsDirFn(); err == nil {
@@ -128,14 +124,6 @@ func uninstallSideEffectLines(t setupTarget, userScoped bool, lines []string) []
 		lines = append(lines, removePlumbHooksFor(t)...)
 	}
 
-	if t.instructionsFn != nil {
-		instrLines, err := removeInstructionsBlock(t)
-		if err != nil {
-			lines = append(lines, fmt.Sprintf("instructions: error: %v", err))
-		} else {
-			lines = append(lines, instrLines...)
-		}
-	}
 	return lines
 }
 

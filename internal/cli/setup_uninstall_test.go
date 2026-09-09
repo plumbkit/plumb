@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
-
-	"github.com/plumbkit/plumb/internal/setup"
 )
 
 // The uninstall tests pin the safety properties the feature promises: plumb's
@@ -342,86 +340,86 @@ func TestRemovePlumbSkills(t *testing.T) {
 	}
 }
 
-// TestUninstallTargetAt_RemovesInstructionsBlock is the PLAN-364 PR-2
-// deferred item: `plumb setup <client> --uninstall` must remove the managed
-// instruction block it (or a bare `plumb setup <client>`) wrote, not just
-// the client's MCP config entry. Drives the same two steps a real `plumb
-// setup codex` then `plumb setup codex --uninstall` would: register, apply
-// the instructions block, uninstall, and confirm the block is gone while the
-// rest of the file the block was appended to would have survived.
-func TestUninstallTargetAt_RemovesInstructionsBlock(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", "")
-	setupGlobalInstructionsFlag = false
+// TestSetupAndUninstall_NeverTouchAnAgentInstructionFile pins the owner's
+// headline guarantee for the managed-block removal: plumb writes nothing into
+// a project's AGENTS.md / CLAUDE.md / GEMINI.md, and — crucially — does not
+// clean up the blocks an older plumb wrote there either. Those files belong to
+// the user.
+//
+// It exists because the guarantee is otherwise enforced only by the ABSENCE of
+// code (internal/setup and setup_instructions.go are gone), which nothing
+// detects if a future change reintroduces a writer. The predecessor test,
+// TestUninstallTargetAt_NoRegistrationLeavesInstructionsBlockAlone, asserted a
+// narrower version of the same property — that an uninstall with no
+// registration to reverse left a block alone — and is superseded by this one:
+// now NO path may touch the file, registered or not.
+//
+// Byte-identical, not "still contains the block": a writer that reformatted or
+// re-versioned the span while leaving the markers in place would pass a
+// contains-check and still have edited a file plumb does not own.
+func TestSetupAndUninstall_NeverTouchAnAgentInstructionFile(t *testing.T) {
+	const seeded = `# My Project
 
-	cfgPath, err := codexTarget.pathFn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := codexTarget.intoFn(cfgPath, "/bin/plumb"); err != nil {
-		t.Fatalf("intoFn: %v", err)
-	}
-	if _, err := applyInstructionsBlock(codexTarget); err != nil {
-		t.Fatalf("applyInstructionsBlock: %v", err)
-	}
+Prose above the block, written by the user.
 
-	agentsPath := filepath.Join(dir, "AGENTS.md")
-	before, err := os.ReadFile(agentsPath)
-	if err != nil {
-		t.Fatalf("AGENTS.md not written by setup: %v", err)
-	}
-	if !strings.Contains(string(before), "<!-- plumb:managed:start") {
-		t.Fatal("AGENTS.md has no managed block to begin with")
-	}
+<!-- plumb:managed:start v1 -->
+plumb is registered as an MCP server in this project.
+...or create it yourself if you have write authorisation.
+<!-- plumb:managed:end -->
 
-	if err := uninstallTargetAt(codexTarget, []string{cfgPath}, true); err != nil {
-		t.Fatalf("uninstallTargetAt: %v", err)
-	}
+Prose below the block.
+`
+	for _, tc := range []struct {
+		target setupTarget
+		file   string
+	}{
+		{codexTarget, "AGENTS.md"},
+		{claudeCodeTarget, "CLAUDE.md"},
+		{geminiTarget, "GEMINI.md"},
+	} {
+		t.Run(tc.target.use, func(t *testing.T) {
+			dir := t.TempDir()
+			home := t.TempDir()
+			t.Chdir(dir)
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", "")
 
-	status, err := setup.Check(agentsPath, setup.DefaultTemplate, setup.DefaultVersion)
-	if err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-	if status != setup.StatusMissing {
-		t.Errorf("status after --uninstall = %v, want %v (block removed)", status, setup.StatusMissing)
+			path := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(path, []byte(seeded), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfgPath, err := tc.target.pathFn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := tc.target.intoFn(cfgPath, "/bin/plumb"); err != nil {
+				t.Fatalf("intoFn: %v", err)
+			}
+			assertUnchanged(t, path, seeded, "after registration")
+
+			if err := uninstallTargetAt(tc.target, []string{cfgPath}, true); err != nil {
+				t.Fatalf("uninstallTargetAt: %v", err)
+			}
+			assertUnchanged(t, path, seeded, "after --uninstall")
+
+			// A second uninstall (nothing left to reverse) must be just as quiet.
+			if err := uninstallTargetAt(tc.target, []string{cfgPath}, true); err != nil {
+				t.Fatalf("repeat uninstallTargetAt: %v", err)
+			}
+			assertUnchanged(t, path, seeded, "after a repeat --uninstall")
+		})
 	}
 }
 
-// TestUninstallTargetAt_NoRegistrationLeavesInstructionsBlockAlone is the
-// inverse: uninstall is a no-op (matching the skills-removal precedent) when
-// plumb was not registered in the client's config to begin with, even if an
-// instructions block happens to be present — an uninstall must not delete
-// content it had no registration to reverse.
-func TestUninstallTargetAt_NoRegistrationLeavesInstructionsBlockAlone(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	t.Chdir(dir)
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", "")
-	setupGlobalInstructionsFlag = false
-
-	if _, err := applyInstructionsBlock(codexTarget); err != nil {
-		t.Fatalf("applyInstructionsBlock: %v", err)
-	}
-	agentsPath := filepath.Join(dir, "AGENTS.md")
-
-	cfgPath, err := codexTarget.pathFn()
+func assertUnchanged(t *testing.T, path, want, when string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: reading %s: %v", when, filepath.Base(path), err)
 	}
-	// No intoFn call: plumb was never registered in the config.
-	if err := uninstallTargetAt(codexTarget, []string{cfgPath}, true); err != nil {
-		t.Fatalf("uninstallTargetAt: %v", err)
-	}
-
-	after, err := os.ReadFile(agentsPath)
-	if err != nil {
-		t.Fatalf("reading AGENTS.md: %v", err)
-	}
-	if !strings.Contains(string(after), "<!-- plumb:managed:start") {
-		t.Error("instructions block was removed even though plumb was never registered in the config")
+	if string(got) != want {
+		t.Errorf("%s: %s was modified — plumb must not touch an agent instruction file.\ngot:\n%s\nwant:\n%s",
+			when, filepath.Base(path), got, want)
 	}
 }
