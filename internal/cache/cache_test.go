@@ -2,7 +2,6 @@ package cache_test
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -104,6 +103,9 @@ func TestCache_Stats(t *testing.T) {
 	if stats.MaxSize != 0 {
 		t.Fatalf("maxSize: got %d, want 0", stats.MaxSize)
 	}
+	if stats.ShardBudget != 0 {
+		t.Fatalf("shardBudget: got %d, want 0", stats.ShardBudget)
+	}
 }
 
 func TestCache_ZeroTTL_treatedAsOneHour(t *testing.T) {
@@ -197,6 +199,9 @@ func TestCache_MaxSize_PerShardBudget(t *testing.T) {
 	// maxSize = 16 => shardBudget = ceil(16/16) = 1
 	c := cache.New(time.Hour, 16)
 	defer c.Close()
+	if got := c.Stats().ShardBudget; got != 1 {
+		t.Fatalf("expected shard budget 1, got %d", got)
+	}
 
 	c.Set(k1, "v1", time.Hour)
 	if got, ok := c.Get(k1); !ok || got != "v1" {
@@ -313,7 +318,6 @@ func TestCache_MaxSize_GetUpdatesRecency(t *testing.T) {
 func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
 	const (
 		maxSize      = 64
-		budget       = (maxSize + 16 - 1) / 16 // ceil(64/16) = 4
 		workers      = 10
 		readers      = 10
 		opsPerWorker = 200
@@ -324,8 +328,13 @@ func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
 	c := cache.New(time.Hour, maxSize)
 	defer c.Close()
 
-	if stats := c.Stats(); stats.MaxSize != maxSize {
+	stats := c.Stats()
+	if stats.MaxSize != maxSize {
 		t.Fatalf("stats.MaxSize: got %d, want %d", stats.MaxSize, maxSize)
+	}
+	budget := stats.ShardBudget
+	if budget <= 0 {
+		t.Fatalf("expected positive shard budget, got %d", budget)
 	}
 
 	stopSampler := make(chan struct{})
@@ -339,11 +348,14 @@ func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
 				return
 			default:
 			}
+			// Note: Stats().Size counts unexpired entries across all shards. Since
+			// all keys map to a single shard and TTL is 1 hour, Size equals
+			// the live entry count of that shard, strictly bounded by ShardBudget.
 			if sz := c.Stats().Size; sz > budget {
 				t.Errorf("in-flight cache size %d exceeded single-shard budget %d", sz, budget)
 				return
 			}
-			runtime.Gosched()
+			time.Sleep(time.Millisecond)
 		}
 	}()
 

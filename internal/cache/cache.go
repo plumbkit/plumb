@@ -31,10 +31,11 @@ type shard struct {
 
 // Stats reports cache health metrics.
 type Stats struct {
-	Size    int
-	MaxSize int
-	Hits    int64
-	Misses  int64
+	Size        int
+	MaxSize     int // configured maximum; enforcement is per-shard (see ShardBudget)
+	ShardBudget int // capacity bound per shard (ceil(maxSize/numShards)); 0 when unbounded
+	Hits        int64
+	Misses      int64
 }
 
 // Cache is a sharded TTL cache backed by in-memory maps.
@@ -211,10 +212,11 @@ func (c *Cache) Stats() Stats {
 		s.mu.RUnlock()
 	}
 	return Stats{
-		Size:    size,
-		MaxSize: c.maxSize,
-		Hits:    c.hits.Load(),
-		Misses:  c.misses.Load(),
+		Size:        size,
+		MaxSize:     c.maxSize,
+		ShardBudget: c.shardBudget,
+		Hits:        c.hits.Load(),
+		Misses:      c.misses.Load(),
 	}
 }
 
