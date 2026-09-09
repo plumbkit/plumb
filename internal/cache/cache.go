@@ -31,9 +31,10 @@ type shard struct {
 
 // Stats reports cache health metrics.
 type Stats struct {
-	Size   int
-	Hits   int64
-	Misses int64
+	Size    int
+	MaxSize int
+	Hits    int64
+	Misses  int64
 }
 
 // Cache is a sharded TTL cache backed by in-memory maps.
@@ -130,7 +131,7 @@ func (s *shard) enforceBudgetLocked(budget int, key string, now time.Time) {
 	}
 	// 2. If still at/over capacity, evict the entry with oldest lastAccess.
 	for (!exists && len(s.entries) >= budget) || (exists && len(s.entries) > budget) {
-		oldestKey := s.oldestKeyLocked()
+		oldestKey := s.oldestKeyLocked(key)
 		if oldestKey == "" {
 			break
 		}
@@ -138,10 +139,17 @@ func (s *shard) enforceBudgetLocked(budget int, key string, now time.Time) {
 	}
 }
 
-func (s *shard) oldestKeyLocked() string {
+// oldestKeyLocked returns the key with the oldest lastAccess timestamp in the shard,
+// skipping skipKey so the key being inserted or updated in Set is not evicted.
+// When timestamps tie (e.g. on coarse system clocks or batch inserts), selection
+// falls back to Go map iteration order.
+func (s *shard) oldestKeyLocked(skipKey string) string {
 	var oldestKey string
 	var oldestAccess int64 = math.MaxInt64
 	for k, e := range s.entries {
+		if k == skipKey {
+			continue
+		}
 		acc := e.lastAccess.Load()
 		if acc < oldestAccess {
 			oldestAccess = acc
@@ -203,9 +211,10 @@ func (c *Cache) Stats() Stats {
 		s.mu.RUnlock()
 	}
 	return Stats{
-		Size:   size,
-		Hits:   c.hits.Load(),
-		Misses: c.misses.Load(),
+		Size:    size,
+		MaxSize: c.maxSize,
+		Hits:    c.hits.Load(),
+		Misses:  c.misses.Load(),
 	}
 }
 

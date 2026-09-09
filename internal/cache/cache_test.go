@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -99,6 +100,9 @@ func TestCache_Stats(t *testing.T) {
 	}
 	if stats.Size != 1 {
 		t.Fatalf("size: got %d, want 1", stats.Size)
+	}
+	if stats.MaxSize != 0 {
+		t.Fatalf("maxSize: got %d, want 0", stats.MaxSize)
 	}
 }
 
@@ -207,6 +211,15 @@ func TestCache_MaxSize_PerShardBudget(t *testing.T) {
 	if got, ok := c.Get(k2); !ok || got != "v2" {
 		t.Fatalf("expected k2 hit, got (%v, %v)", got, ok)
 	}
+
+	// Updating k2 in place should keep size at 1 and not evict k2
+	c.Set(k2, "v2-updated", time.Hour)
+	if got, ok := c.Get(k2); !ok || got != "v2-updated" {
+		t.Fatalf("expected k2 update hit, got (%v, %v)", got, ok)
+	}
+	if stats := c.Stats(); stats.Size != 1 {
+		t.Fatalf("expected size 1 after update, got %d", stats.Size)
+	}
 }
 
 func TestCache_MaxSize_ExpiredFirst(t *testing.T) {
@@ -297,24 +310,71 @@ func TestCache_MaxSize_GetUpdatesRecency(t *testing.T) {
 	}
 }
 
-func TestCache_MaxSize_Concurrent(t *testing.T) {
-	c := cache.New(time.Hour, 64)
+func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
+	const (
+		maxSize      = 64
+		budget       = (maxSize + 16 - 1) / 16 // ceil(64/16) = 4
+		workers      = 10
+		readers      = 10
+		opsPerWorker = 200
+		numKeys      = 50
+	)
+	keys := shardCollisions(numKeys)
+
+	c := cache.New(time.Hour, maxSize)
 	defer c.Close()
 
-	const workers = 20
-	const ops = 100
-	var wg sync.WaitGroup
+	if stats := c.Stats(); stats.MaxSize != maxSize {
+		t.Fatalf("stats.MaxSize: got %d, want %d", stats.MaxSize, maxSize)
+	}
 
+	stopSampler := make(chan struct{})
+	var sampleWg sync.WaitGroup
+	sampleWg.Add(1)
+	go func() {
+		defer sampleWg.Done()
+		for {
+			select {
+			case <-stopSampler:
+				return
+			default:
+			}
+			if sz := c.Stats().Size; sz > budget {
+				t.Errorf("in-flight cache size %d exceeded single-shard budget %d", sz, budget)
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+
+	var wg sync.WaitGroup
 	for w := range workers {
 		wg.Add(1)
 		go func(worker int) {
 			defer wg.Done()
-			for i := range ops {
-				key := fmt.Sprintf("ckey-%d-%d", worker, i%10)
-				c.Set(key, i, time.Minute)
-				c.Get(key)
+			for i := range opsPerWorker {
+				key := keys[(worker*opsPerWorker+i)%len(keys)]
+				c.Set(key, fmt.Sprintf("val-%d-%d", worker, i), time.Hour)
 			}
 		}(w)
 	}
+
+	for r := range readers {
+		wg.Add(1)
+		go func(reader int) {
+			defer wg.Done()
+			for i := range opsPerWorker {
+				key := keys[(reader*opsPerWorker+i)%len(keys)]
+				c.Get(key)
+			}
+		}(r)
+	}
+
 	wg.Wait()
+	close(stopSampler)
+	sampleWg.Wait()
+
+	if sz := c.Stats().Size; sz > budget {
+		t.Fatalf("final cache size %d exceeded single-shard budget %d", sz, budget)
+	}
 }
