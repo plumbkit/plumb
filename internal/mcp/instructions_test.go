@@ -17,12 +17,25 @@ import (
 // falling back to DefaultInstructions.
 var knownInstructionClients = []string{"claude-code", "codex", "gemini"}
 
-// TestInstructions_KnownClientsWithinBudget proves every per-client render
-// fits the ~1.5 KB channel budget (mcp.MaxInstructionsBytes) — comparable to
-// the managed block's own clienttemplates.MaxLines guard, sized for a field
-// that competes with the user's own prompt for context.
+// TestInstructions_KnownClientsWithinBudget proves every render fits the
+// ~1.5 KB channel budget (mcp.MaxInstructionsBytes), sized for a field that
+// competes with the user's own prompt for context. Every body in
+// clienttemplates.ByClient is covered, so a newly added per-client template is
+// guarded the moment it is registered.
+//
+// It covers the DEFAULT body as well as each per-client one. That is not
+// belt-and-braces: the managed-block writer's line budget
+// (clienttemplates.MaxLines) was deleted along with the writer, so this is
+// now the only size guard any of these bodies has, and DefaultInstructions —
+// the render every unrecognised client gets — had no size test before.
 func TestInstructions_KnownClientsWithinBudget(t *testing.T) {
-	for _, client := range knownInstructionClients {
+	// Ranged over ByClient, not knownInstructionClients: the guard this
+	// replaced (internal/setup's TestManagedBlock_ClientTemplateSizeGuard) also
+	// ranged the registry, so a body added to clienttemplates was size-guarded
+	// the moment it existed. Iterating the hand-maintained slice instead would
+	// let the next per-client template ship unmeasured — nothing else fails
+	// when a body is in ByClient but absent from that slice.
+	for client := range clienttemplates.ByClient {
 		t.Run(client, func(t *testing.T) {
 			got := mcp.InstructionsForClient(client)
 			if got == "" {
@@ -33,13 +46,21 @@ func TestInstructions_KnownClientsWithinBudget(t *testing.T) {
 			}
 		})
 	}
+	t.Run("default", func(t *testing.T) {
+		if mcp.DefaultInstructions == "" {
+			t.Fatal("DefaultInstructions is empty")
+		}
+		if n := len(mcp.DefaultInstructions); n > mcp.MaxInstructionsBytes {
+			t.Errorf("DefaultInstructions is %d bytes, want <= %d", n, mcp.MaxInstructionsBytes)
+		}
+	})
 }
 
 // TestInstructions_MatchesSharedTemplate is the substance-parity check: a
 // known client's rendered instructions must be EXACTLY its
-// internal/clienttemplates body — the single source PLAN-366 draws from,
-// shared with internal/setup's managed AGENTS.md/CLAUDE.md/GEMINI.md block
-// (PLAN-364). Byte-identical rather than "contains the same ideas" is what
+// internal/clienttemplates body — the single source PLAN-366 draws from, and
+// since the managed-block writer's removal the only one. Byte-identical
+// rather than "contains the same ideas" is what
 // makes this check structural: it can never silently drift the way two
 // independently authored strings would.
 func TestInstructions_MatchesSharedTemplate(t *testing.T) {
@@ -80,9 +101,8 @@ func TestInstructions_ClaudeCodeCarriesRequiredContent(t *testing.T) {
 
 // TestInstructions_UnknownClientFallsBackToDefault proves a client with no
 // clienttemplates body (empty name, or one clientcaps does not recognise)
-// gets DefaultInstructions — the same client-agnostic body internal/setup
-// falls back to for a shared managed-block file — never an empty or panicking
-// render.
+// gets DefaultInstructions — the client-agnostic body — never an empty or
+// panicking render.
 func TestInstructions_UnknownClientFallsBackToDefault(t *testing.T) {
 	for _, client := range []string{"", "some-agent-nobody-has-heard-of", "claude-desktop"} {
 		t.Run(client, func(t *testing.T) {
@@ -94,9 +114,8 @@ func TestInstructions_UnknownClientFallsBackToDefault(t *testing.T) {
 	}
 }
 
-// TestInstructions_DefaultMatchesSharedFallback proves DefaultInstructions
-// itself is sourced from the same place as internal/setup's client-agnostic
-// managed-block fallback, not a separately authored constant.
+// TestInstructions_DefaultMatchesSharedFallback proves DefaultInstructions is
+// sourced from clienttemplates, not a separately authored constant.
 func TestInstructions_DefaultMatchesSharedFallback(t *testing.T) {
 	if mcp.DefaultInstructions != clienttemplates.DefaultTemplate {
 		t.Errorf("mcp.DefaultInstructions diverged from clienttemplates.DefaultTemplate")
@@ -104,13 +123,16 @@ func TestInstructions_DefaultMatchesSharedFallback(t *testing.T) {
 }
 
 // TestInstructions_DefaultCarriesPlumbInitRecovery pins the ".plumb/ marker
-// missing -> run `plumb init`" recovery text: the pre-PLAN-366
-// DefaultInstructions constant carried it for every client, and swapping in
-// clienttemplates.DefaultTemplate (TestInstructions_DefaultMatchesSharedFallback)
-// must not silently drop it from the only render an unrecognised/unmeasured
-// client — the only agent-facing surface left to carry it, once
-// InstructionsForClient renders a doctrine-only body for known clients — ever
-// sees.
+// missing -> run `plumb init`" recovery text. This render is the only
+// agent-facing surface that carries it: InstructionsForClient gives known
+// clients a doctrine-only body, so an unrecognised or unmeasured client's
+// default render is the last place the recovery can be stated.
+//
+// Both tokens are pinned deliberately. The sentence was reworded when the
+// managed-block writer was removed — it used to end "or create it yourself if
+// you have write authorisation", which is exactly the kind of
+// write-a-file-for-plumb directive that removal was meant to stop — and the
+// rewrite must still name the marker AND the command that creates it.
 func TestInstructions_DefaultCarriesPlumbInitRecovery(t *testing.T) {
 	got := mcp.DefaultInstructions
 	for _, want := range []string{"plumb init", ".plumb/"} {

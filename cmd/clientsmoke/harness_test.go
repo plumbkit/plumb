@@ -626,20 +626,18 @@ func pollToolCallsAtLeast(t *testing.T, tmpHome string, minimum int, timeout tim
 // client's MCP config into the isolated HOME.
 //
 // It also points the plumb process at a working directory inside that isolated
-// HOME. `plumb setup` writes its managed instruction block to the current
-// directory's instruction file (internal/cli/setup_instructions.go resolves
-// the project path from os.Getwd, not workspace detection), so with no
-// explicit dir the process inherits this test binary's cwd — the
-// cmd/clientsmoke source directory in the developer's checkout — and leaves an
-// untracked AGENTS.md/CLAUDE.md/GEMINI.md behind in the repo tree on every
-// run. Every env passed here comes from isolatedEnv/conformanceEnv, which
-// always set HOME to the tmpHome mkTmpHome removes at test end, so the block
-// lands there instead.
+// HOME. `plumb setup` no longer writes anything into the current directory by
+// default, but `--project` still resolves .mcp.json from os.Getwd, so a run
+// with no explicit dir would inherit this test binary's cwd — the
+// cmd/clientsmoke source directory in the developer's checkout. Every env
+// passed here comes from isolatedEnv/conformanceEnv, which always set HOME to
+// the tmpHome mkTmpHome removes at test end, so any such write lands there
+// instead of in the repo tree.
 func runPlumbSetup(t *testing.T, env []string, args ...string) {
 	t.Helper()
 	home, ok := envHome(env)
 	if !ok {
-		t.Fatal("runPlumbSetup: env carries no HOME — refusing to inherit the test process cwd, which plumb setup would write instruction files into")
+		t.Fatal("runPlumbSetup: env carries no HOME — refusing to inherit the test process cwd, which a --project setup run would write .mcp.json into")
 	}
 	cmd := exec.Command(plumbBin, args...)
 	cmd.Env = env
