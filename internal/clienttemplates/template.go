@@ -16,7 +16,11 @@ package clienttemplates
 // It describes what plumb needs in order to work, and never instructs the
 // agent to create a file: plumb writes nothing into a workspace it was not
 // explicitly asked to (`plumb init`), and its guidance must not ask an agent
-// to do so on its behalf either. The "Persisting this" line is deliberately a
+// to do so on its behalf either. Note that `plumb init` does create a
+// `.plumb/` directory, which is why that line says to ask the USER to run it
+// rather than telling the agent to — the removed clause ("or create it
+// yourself if you have write authorisation") is what made it plumb's
+// decision instead of theirs. The "Persisting this" line is deliberately a
 // SUGGESTION, conditioned on a file the project already has and on asking the
 // user — the agent decides whether these conventions belong in its own
 // instruction file. plumb used to make that decision for the user by writing
@@ -41,7 +45,7 @@ package clienttemplates
 // channel this body is actually delivered over.
 const DefaultTemplate = `plumb is registered as an MCP server in this project — LSP-backed navigation and edits, a code-structure index, and per-project memory. Prefer its tools over native file/search/git operations where both cover the same task.
 
-If ` + "`session_start`" + ` reports the workspace as resolving or empty, plumb has no ` + "`.plumb/`" + ` workspace marker for this project, so its index and memory are unavailable — ` + "`plumb init`" + ` in the project root is what creates one.
+If ` + "`session_start`" + ` reports the workspace as resolving or empty, plumb has no ` + "`.plumb/`" + ` workspace marker for this project, so its index and memory are unavailable — ask the user to run ` + "`plumb init`" + ` in the project root, which creates one.
 
 **Edit lane.** Read a file with plumb before editing it (` + "`read_file`" + ` -> ` + "`edit_file`" + `/` + "`write_file`" + `), passing back ` + "`expected_mtime`" + `/` + "`expected_sha`" + `. If you edit that file with a native tool instead, plumb never sees the change — its own read-tracking goes stale, so your next ` + "`write_file`" + ` call, or an ` + "`edit_file`" + ` call passing ` + "`expected_mtime`" + `/` + "`expected_sha`" + `, on it is refused (` + "`edit_file`" + ` warns unless you pass that guard). Re-` + "`read_file`" + ` and retry.
 
