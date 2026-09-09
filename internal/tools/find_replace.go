@@ -297,11 +297,12 @@ func applyFindReplace(data []byte, a findReplaceArgs, re *regexp.Regexp) (int, [
 		}
 		return count, re.ReplaceAllLiteral(data, []byte(a.Replacement))
 	default:
-		count := strings.Count(string(data), a.Pattern)
+		pat := []byte(a.Pattern)
+		count := bytes.Count(data, pat)
 		if count == 0 {
 			return 0, nil
 		}
-		return count, []byte(strings.ReplaceAll(string(data), a.Pattern, a.Replacement))
+		return count, bytes.ReplaceAll(data, pat, []byte(a.Replacement))
 	}
 }
 

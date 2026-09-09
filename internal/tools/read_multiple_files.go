@@ -319,15 +319,19 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		WithWritesFor(t.writesFor).
 		WithOutsideLabel(t.outsideFn).
 		WithOutlineHint(t.outlineFn)
-
 	sem := make(chan struct{}, readMultipleFilesParallelism)
 	var wg sync.WaitGroup
 	for i, p := range a.Paths {
 		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
+		go func(i int, p string) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[i] = rmfResult{err: ctx.Err()}
+				return
+			}
 			// Every one of these keys must be a canonical read_file schema
 			// property — see TestInProcessCompositionsUseCanonicalKeys
 			// (inprocess_call_guard_test.go), which checks this literal
@@ -346,10 +350,9 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 			})
 			out, err := reader.Execute(ctx, raw)
 			results[i] = rmfResult{content: out, err: err}
-		}()
+		}(i, p)
 	}
 	wg.Wait()
-
 	return rmfAssemble(a.Paths, results, t.outsideFn, t.clientNameFn), nil
 }
 

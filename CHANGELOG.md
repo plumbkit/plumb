@@ -133,6 +133,16 @@
   `TestProjectLSPAcceptanceMixedRepository` (the reported shape end to end,
   through the real pool and routing proxy) and `project_lsp_policy_test.go`.
 
+- **`search_in_files` now marks every matching line with `> ` in overlapping and adjacent context windows.**
+  When two matches fell within the same `context_lines` window, the second hit was emitted during the first
+  hit's context lookahead pass and labelled with the context prefix `"  "` rather than `"> "`, because an
+  earlier seen-check suppressed re-formatting when processing the second hit. Matching lines now consistently
+  receive `> ` across all context windows and adjacency patterns. Additionally, `search_in_files` replaces
+  whole-file line buffering with a zero-retention streaming scan for `context_lines == 0` and a bounded ring
+  buffer for lookback lines when `context_lines > 0`, eliminating transient heap retention on non-matching files.
+  Guards: `TestSearchInFiles_OverlappingMatchesMarkAllHitsWithArrow`, `TestSearchInFiles_ZeroRetentionNoMatches`,
+  and `TestSearchInFiles_DifferentialScanParity`.
+
 ### Changed
 
 - **`plumb config show` no longer claims to report a running daemon's state.**

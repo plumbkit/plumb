@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
@@ -36,8 +37,9 @@ func fallbackFixture(t *testing.T) (store *topology.Store, fpath, uri string) {
 }
 
 func TestReadSymbol_TopologyFallback(t *testing.T) {
-	store, _, uri := fallbackFixture(t)
-	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+	store, fpath, uri := fallbackFixture(t)
+	tracker := tools.NewReadTracker()
+	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tracker).
 		WithTopologyFallback(func() *topology.Store { return store })
 	args, _ := json.Marshal(map[string]any{"path": uri, "name": "Beta"})
 
@@ -45,10 +47,13 @@ func TestReadSymbol_TopologyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected topology fallback to succeed, got: %v", err)
 	}
-	for _, want := range []string{"topology fallback", "func Beta() int {", "return 2"} {
+	for _, want := range []string{"topology fallback", "# plumb-read mtime=", "func Beta() int {", "return 2"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("read_symbol fallback missing %q:\n%s", want, out)
 		}
+	}
+	if tracker.Mtime(fpath).IsZero() {
+		t.Errorf("expected tracker to record read for %s", fpath)
 	}
 	if strings.Contains(out, "return 1") {
 		t.Errorf("read_symbol fallback for Beta should not include Alpha's body:\n%s", out)
@@ -559,5 +564,91 @@ func TestReplaceSymbolBody_IncludeDocComment_IndentedMember(t *testing.T) {
 	want := "class Widget:\n    # Does the thing, now faster.\n    def run(self):\n        return 2\n"
 	if string(got) != want {
 		t.Errorf("indented member replace mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestReadSymbol_StreamingAndFallbackParity guards that read_symbol emits
+// byte-identical symbol bodies across both the primary LSP streaming path and
+// the topology fallback path, specifically asserting CRLF endings are normalized
+// consistently without carriage returns in the gutter-rendered output.
+func TestReadSymbol_StreamingAndFallbackParity(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "LF line endings",
+			src:  "package demo\n\nfunc Calculate(a, b int) int {\n\tc := a + b\n\treturn c * 2\n}\n",
+		},
+		{
+			name: "CRLF line endings",
+			src:  "package demo\r\n\r\nfunc Calculate(a, b int) int {\r\n\tc := a + b\r\n\treturn c * 2\r\n}\r\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+			fpath := filepath.Join(ws, "calc.go")
+			if err := os.WriteFile(fpath, []byte(tc.src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+				[]topology.Extractor{goext.New()})
+			if err != nil {
+				t.Fatalf("topology.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			// 1. Streaming LSP path: mock LSP returning the Calculate symbol range (lines 2-5 0-based).
+			mock := &mockLSP{
+				docSymbols: []protocol.DocumentSymbol{
+					{
+						Name: "Calculate",
+						Kind: protocol.SKFunction,
+						Range: protocol.Range{
+							Start: protocol.Position{Line: 2, Character: 0},
+							End:   protocol.Position{Line: 5, Character: 1},
+						},
+					},
+				},
+			}
+			toolStreaming := tools.NewReadSymbol(mock, nil, 0, 0, tools.NewReadTracker())
+			// 2. Topology fallback path: broken LSP forcing tree-sitter fallback.
+			toolFallback := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+				WithTopologyFallback(func() *topology.Store { return store })
+
+			args, _ := json.Marshal(map[string]any{"path": "file://" + fpath, "name": "Calculate"})
+
+			outStreaming, err := toolStreaming.Execute(context.Background(), args)
+			if err != nil {
+				t.Fatalf("streaming read_symbol failed: %v", err)
+			}
+			outFallback, err := toolFallback.Execute(context.Background(), args)
+			if err != nil {
+				t.Fatalf("fallback read_symbol failed: %v", err)
+			}
+
+			// Extract symbol body portion (starting at "# symbol:")
+			const symMarker = "# symbol:"
+			idxStreaming := strings.Index(outStreaming, symMarker)
+			idxFallback := strings.Index(outFallback, symMarker)
+			if idxStreaming < 0 || idxFallback < 0 {
+				t.Fatalf("missing symbol marker in output:\nstreaming: %s\nfallback: %s", outStreaming, outFallback)
+			}
+			bodyStreaming := outStreaming[idxStreaming:]
+			bodyFallback := outFallback[idxFallback:]
+
+			if bodyStreaming != bodyFallback {
+				t.Errorf("streaming and fallback symbol bodies diverged:\nstreaming:\n%q\nfallback:\n%q", bodyStreaming, bodyFallback)
+			}
+
+			// Ensure neither output contains raw \r carriage returns
+			if strings.Contains(bodyStreaming, "\r") {
+				t.Errorf("streaming body contains \\r carriage return:\n%q", bodyStreaming)
+			}
+			if strings.Contains(bodyFallback, "\r") {
+				t.Errorf("fallback body contains \\r carriage return:\n%q", bodyFallback)
+			}
+		})
 	}
 }

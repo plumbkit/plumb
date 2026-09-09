@@ -201,7 +201,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		return t.noSymbolMessage(a.Name, fpath, syms), nil
 	}
-	return t.formatReadSymbolResult(ctx, fpath, a.Name, matches)
+	return t.formatReadSymbolResult(ctx, fpath, a.Name, matches, nil)
 }
 
 // topologyReadFallback locates the named symbol from a fresh tree-sitter parse
@@ -222,7 +222,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, reason symbolFall
 	for _, n := range matchNodes {
 		matches = append(matches, nodeToDocSymbol(n, lines))
 	}
-	out, err := t.formatReadSymbolResult(ctx, fpath, name, matches)
+	out, err := t.formatReadSymbolResult(ctx, fpath, name, matches, lines)
 	if err != nil {
 		return "", false
 	}
@@ -292,7 +292,7 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string, wai
 	return syms, nil
 }
 
-func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name string, matches []protocol.DocumentSymbol) (string, error) {
+func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name string, matches []protocol.DocumentSymbol, lines []string) (string, error) {
 	info, err := os.Stat(fpath)
 	if err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
@@ -335,26 +335,41 @@ func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name str
 		} else {
 			fmt.Fprintf(&sb, "# symbol: %s (%s) lines %d–%d\n\n", sym.Name, symbolKindName(sym.Kind), start, end)
 		}
-		f, ferr := os.Open(fpath)
-		if ferr != nil {
-			fmt.Fprintf(&sb, "(error reading lines: %v)\n", ferr)
-			continue
-		}
-		src, hasLines, rerr := readContentMaybeRanged(f, &start, &end)
-		f.Close()
-		if rerr != nil {
-			fmt.Fprintf(&sb, "(error reading lines: %v)\n", rerr)
-			continue
-		}
-		if hasLines {
-			// Display-only 1-based file line-number gutter (see withLineGutter);
-			// strip the "<n>\t" prefix before reusing a line as an edit old_string.
-			src = withLineGutter(src, start)
-		}
-		sb.WriteString(src)
+		sb.WriteString(readSymbolBody(fpath, start, end, lines))
 		if i < len(matches)-1 {
 			sb.WriteByte('\n')
 		}
 	}
 	return sb.String(), nil
+}
+
+func readSymbolBody(fpath string, start, end int, lines []string) string {
+	if lines != nil {
+		lo := max(0, start-1)
+		hi := min(len(lines), end)
+		if lo >= hi {
+			return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
+		}
+		var sb strings.Builder
+		for i := lo; i < hi; i++ {
+			if i > lo {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
+		}
+		return withLineGutter(sb.String(), lo+1)
+	}
+	f, ferr := os.Open(fpath)
+	if ferr != nil {
+		return fmt.Sprintf("(error reading lines: %v)\n", ferr)
+	}
+	defer f.Close()
+	src, hasLines, rerr := readContentMaybeRanged(f, &start, &end)
+	if rerr != nil {
+		return fmt.Sprintf("(error reading lines: %v)\n", rerr)
+	}
+	if hasLines {
+		src = withLineGutter(src, start)
+	}
+	return src
 }

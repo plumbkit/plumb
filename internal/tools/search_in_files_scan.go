@@ -120,75 +120,125 @@ func searchScanFile(p searchPathPair, re *regexp.Regexp, contextLines int) *sear
 		return nil
 	}
 
-	var hitLineIdxs []int
-	var lines []searchLine
 	lineNo := 1
 	skippedLines := 0
-
 	scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(sniff[:n]), f))
 	scanner.Buffer(make([]byte, 64*1024), 2*searchMaxLineBytes)
 	scanner.Split(makeSearchLineSplit(&skippedLines, &lineNo))
 
+	if contextLines == 0 {
+		return scanDirect(p, scanner, re, &lineNo, &skippedLines)
+	}
+	return scanWithContext(p, scanner, re, contextLines, &lineNo, &skippedLines)
+}
+
+func scanDirect(p searchPathPair, scanner *bufio.Scanner, re *regexp.Regexp, lineNo, skippedLines *int) *searchFileMatch {
+	var hitNums []int
+	var formatted []string
 	for scanner.Scan() {
 		data := scanner.Bytes()
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		idx := len(lines)
-		lines = append(lines, searchLine{number: lineNo, data: cp})
-		if re.Match(cp) {
-			hitLineIdxs = append(hitLineIdxs, idx)
+		if re.Match(data) {
+			hitNums = append(hitNums, *lineNo)
+			formatted = append(formatted, fmt.Sprintf("  %d:> %s", *lineNo, strings.TrimRight(string(data), "\r")))
 		}
-		lineNo++
+		*lineNo++
 	}
 	if scanner.Err() != nil {
-		// A line exceeded 2*searchMaxLineBytes; count the scanner abort as
-		// one more skipped line.
-		skippedLines++
+		*skippedLines++
 	}
+	return buildSearchFileMatch(p, formatted, hitNums, *skippedLines)
+}
 
-	if len(hitLineIdxs) == 0 {
+func scanWithContext(p searchPathPair, scanner *bufio.Scanner, re *regexp.Regexp, contextLines int, lineNo, skippedLines *int) *searchFileMatch {
+	var hitNums []int
+	var formatted []string
+	ring := make([]searchLine, contextLines)
+	ringCount, ringHead := 0, 0
+	postContextRemaining := 0
+	lastEmitted := 0
+
+	for scanner.Scan() {
+		data := scanner.Bytes()
+		if re.Match(data) {
+			hitNums = append(hitNums, *lineNo)
+			flushRing(ring, ringCount, ringHead, contextLines, &lastEmitted, &formatted)
+			ringCount = 0
+			emitMatchLine(*lineNo, data, &lastEmitted, &formatted)
+			postContextRemaining = contextLines
+		} else if postContextRemaining > 0 {
+			emitContextLine(*lineNo, data, &lastEmitted, &formatted)
+			postContextRemaining--
+		} else {
+			pushRing(ring, *lineNo, data, &ringHead, &ringCount, contextLines)
+		}
+		*lineNo++
+	}
+	if scanner.Err() != nil {
+		*skippedLines++
+	}
+	return buildSearchFileMatch(p, formatted, hitNums, *skippedLines)
+}
+
+func flushRing(ring []searchLine, ringCount, ringHead, contextLines int, lastEmitted *int, formatted *[]string) {
+	if ringCount <= 0 {
+		return
+	}
+	startIdx := (ringHead - ringCount + contextLines) % contextLines
+	for k := range ringCount {
+		item := ring[(startIdx+k)%contextLines]
+		if item.number > *lastEmitted {
+			*formatted = append(*formatted, fmt.Sprintf("  %d:  %s", item.number, strings.TrimRight(string(item.data), "\r")))
+			*lastEmitted = item.number
+		}
+	}
+}
+
+func emitMatchLine(lineNo int, data []byte, lastEmitted *int, formatted *[]string) {
+	if lineNo > *lastEmitted {
+		trimmed := strings.TrimRight(string(data), "\r")
+		*formatted = append(*formatted, fmt.Sprintf("  %d:> %s", lineNo, trimmed))
+		*lastEmitted = lineNo
+	}
+}
+
+func emitContextLine(lineNo int, data []byte, lastEmitted *int, formatted *[]string) {
+	if lineNo > *lastEmitted {
+		trimmed := strings.TrimRight(string(data), "\r")
+		*formatted = append(*formatted, fmt.Sprintf("  %d:  %s", lineNo, trimmed))
+		*lastEmitted = lineNo
+	}
+}
+
+func pushRing(ring []searchLine, lineNo int, data []byte, ringHead, ringCount *int, contextLines int) {
+	buf := ring[*ringHead].data
+	if cap(buf) >= len(data) {
+		buf = buf[:len(data)]
+	} else {
+		buf = make([]byte, len(data))
+	}
+	copy(buf, data)
+	ring[*ringHead] = searchLine{number: lineNo, data: buf}
+	*ringHead = (*ringHead + 1) % contextLines
+	if *ringCount < contextLines {
+		*ringCount++
+	}
+}
+
+func buildSearchFileMatch(p searchPathPair, formatted []string, hitNums []int, skippedLines int) *searchFileMatch {
+	if len(hitNums) == 0 {
 		if skippedLines > 0 {
 			return &searchFileMatch{relPath: p.rel, skippedLines: skippedLines}
 		}
 		return nil
 	}
-
-	hitNums := make([]int, len(hitLineIdxs))
-	for i, h := range hitLineIdxs {
-		hitNums[i] = lines[h].number
-	}
 	return &searchFileMatch{
 		relPath:      p.rel,
 		absPath:      p.abs,
-		lines:        formatHitLines(lines, hitLineIdxs, contextLines),
+		lines:        formatted,
 		hitLineNums:  hitNums,
-		hits:         len(hitLineIdxs),
+		hits:         len(hitNums),
 		skippedLines: skippedLines,
 	}
-}
-
-// formatHitLines builds the formatted output lines for a set of hits,
-// merging overlapping context windows to avoid duplicate lines.
-func formatHitLines(lines []searchLine, hitLineIdxs []int, contextLines int) []string {
-	var formatted []string
-	shown := make(map[int]bool)
-	for _, h := range hitLineIdxs {
-		lo := max(0, h-contextLines)
-		hi := min(len(lines)-1, h+contextLines)
-		for i := lo; i <= hi; i++ {
-			if shown[i] {
-				continue
-			}
-			shown[i] = true
-			prefix := "  "
-			if i == h {
-				prefix = "> "
-			}
-			formatted = append(formatted,
-				fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
-		}
-	}
-	return formatted
 }
 
 // makeSearchLineSplit returns a bufio.SplitFunc that strips CRLF line endings
