@@ -19,7 +19,9 @@ var knownInstructionClients = []string{"claude-code", "codex", "gemini"}
 
 // TestInstructions_KnownClientsWithinBudget proves every render fits the
 // ~1.5 KB channel budget (mcp.MaxInstructionsBytes), sized for a field that
-// competes with the user's own prompt for context.
+// competes with the user's own prompt for context. Every body in
+// clienttemplates.ByClient is covered, so a newly added per-client template is
+// guarded the moment it is registered.
 //
 // It covers the DEFAULT body as well as each per-client one. That is not
 // belt-and-braces: the managed-block writer's line budget
@@ -27,7 +29,13 @@ var knownInstructionClients = []string{"claude-code", "codex", "gemini"}
 // now the only size guard any of these bodies has, and DefaultInstructions —
 // the render every unrecognised client gets — had no size test before.
 func TestInstructions_KnownClientsWithinBudget(t *testing.T) {
-	for _, client := range knownInstructionClients {
+	// Ranged over ByClient, not knownInstructionClients: the guard this
+	// replaced (internal/setup's TestManagedBlock_ClientTemplateSizeGuard) also
+	// ranged the registry, so a body added to clienttemplates was size-guarded
+	// the moment it existed. Iterating the hand-maintained slice instead would
+	// let the next per-client template ship unmeasured — nothing else fails
+	// when a body is in ByClient but absent from that slice.
+	for client := range clienttemplates.ByClient {
 		t.Run(client, func(t *testing.T) {
 			got := mcp.InstructionsForClient(client)
 			if got == "" {
