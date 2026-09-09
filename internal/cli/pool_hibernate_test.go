@@ -46,7 +46,7 @@ func TestPool_HibernateIdle_ReclaimsButKeepsEntry(t *testing.T) {
 	p := hibernatePool("java", time.Millisecond, 0)
 	cp := installEntryLang(p, "/root", "java", &stubClient{})
 	e := p.lookup("/root", "java")
-	warmCache := cache.New(time.Minute)
+	warmCache := cache.New(time.Minute, 0)
 	e.cache = warmCache
 	e.proxy.lastUsed.Store(time.Now().Add(-time.Hour).UnixNano())
 

@@ -15,7 +15,7 @@ import (
 // push+pull union (mergedLocked), not the push-only snapshot. A URI carrying
 // both a pushed diagnostic and a distinct pulled one must return BOTH.
 func TestInvalidator_WaitDiagnostics_EarlyReturnMerged(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -46,7 +46,7 @@ func TestInvalidator_WaitDiagnostics_EarlyReturnMerged(t *testing.T) {
 // immediately rather than blocking for a push that a pull-only server never
 // sends.
 func TestInvalidator_WaitDiagnostics_PullOnlyDoesNotBlock(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 

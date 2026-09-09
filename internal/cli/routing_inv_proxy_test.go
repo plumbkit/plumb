@@ -51,7 +51,7 @@ func pushDiag(t *testing.T, inv *cache.Invalidator, uri string, diags []protocol
 // workspace root so a no-args `diagnostics` call cannot report errors from
 // files the user never wrote.
 func TestRoutingInvProxy_AllDiagnostics_FiltersOutOfRoot(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -85,7 +85,7 @@ func TestRoutingInvProxy_AllDiagnostics_FiltersOutOfRoot(t *testing.T) {
 // so a leak here would re-surface out-of-root entries via the "modified after
 // analysis" path.
 func TestRoutingInvProxy_AllDiagnosticTimes_FiltersOutOfRoot(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 

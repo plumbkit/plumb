@@ -278,10 +278,10 @@ func TestRoutingInvProxy_MergesAcrossLanguages(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
 
 	pool := newTestPoolMulti("go", "html")
-	goCache := cache.New(time.Hour)
+	goCache := cache.New(time.Hour, 0)
 	defer goCache.Close()
 	goInv := cache.NewInvalidator(goCache)
-	htmlCache := cache.New(time.Hour)
+	htmlCache := cache.New(time.Hour, 0)
 	defer htmlCache.Close()
 	htmlInv := cache.NewInvalidator(htmlCache)
 	pool.entries[poolKey{root, "go"}] = &poolEntry{root: root, language: "go", inv: goInv}
@@ -323,10 +323,10 @@ func TestRoutingInvProxy_MergesSubRootSecondary(t *testing.T) {
 	mustMkdir(t, site)
 
 	pool := newTestPoolMulti("go", "html")
-	goCache := cache.New(time.Hour)
+	goCache := cache.New(time.Hour, 0)
 	defer goCache.Close()
 	goInv := cache.NewInvalidator(goCache)
-	htmlCache := cache.New(time.Hour)
+	htmlCache := cache.New(time.Hour, 0)
 	defer htmlCache.Close()
 	htmlInv := cache.NewInvalidator(htmlCache)
 	pool.entries[poolKey{root, "go"}] = &poolEntry{root: root, language: "go", inv: goInv}

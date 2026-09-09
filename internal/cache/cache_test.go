@@ -11,7 +11,7 @@ import (
 
 func newCache(t *testing.T) *cache.Cache {
 	t.Helper()
-	c := cache.New(time.Hour) // slow cleanup so tests control expiry themselves
+	c := cache.New(time.Hour, 0) // slow cleanup and unbounded capacity so tests control expiry themselves
 	t.Cleanup(c.Close)
 	return c
 }
@@ -100,6 +100,12 @@ func TestCache_Stats(t *testing.T) {
 	if stats.Size != 1 {
 		t.Fatalf("size: got %d, want 1", stats.Size)
 	}
+	if stats.MaxSize != 0 {
+		t.Fatalf("maxSize: got %d, want 0", stats.MaxSize)
+	}
+	if stats.ShardBudget != 0 {
+		t.Fatalf("shardBudget: got %d, want 0", stats.ShardBudget)
+	}
 }
 
 func TestCache_ZeroTTL_treatedAsOneHour(t *testing.T) {
@@ -144,11 +150,245 @@ func TestCache_Concurrent(t *testing.T) {
 // works without the proactive cleanup loop.
 func TestNew_NonPositiveInterval_NoPanic(t *testing.T) {
 	for _, interval := range []time.Duration{0, -time.Second} {
-		c := cache.New(interval) // must not panic
+		c := cache.New(interval, 0) // must not panic
 		c.Set("k", "v", time.Minute)
 		if got, ok := c.Get("k"); !ok || got != "v" {
 			t.Fatalf("interval %v: Get = (%v, %v), want (v, true)", interval, got, ok)
 		}
 		c.Close()
+	}
+}
+
+func TestCache_MaxSize_Unbounded(t *testing.T) {
+	c := cache.New(time.Hour, 0)
+	defer c.Close()
+
+	for i := range 500 {
+		c.Set(fmt.Sprintf("item-%d", i), i, time.Hour)
+	}
+	if stats := c.Stats(); stats.Size != 500 {
+		t.Fatalf("unbounded cache should retain all items; got size %d, want 500", stats.Size)
+	}
+}
+
+// shardCollisions finds n distinct keys that map to the same shard index in a 16-shard Cache.
+func shardCollisions(n int) []string {
+	// Simple polynomial hash matching shardIndex: h = h*31 + byte
+	shardOf := func(k string) int {
+		var h uint32
+		for i := range len(k) {
+			h = h*31 + uint32(k[i])
+		}
+		return int(h % 16)
+	}
+	targetShard := 0
+	var res []string
+	for i := 0; len(res) < n; i++ {
+		candidate := fmt.Sprintf("k-shard-test-%d", i)
+		if shardOf(candidate) == targetShard {
+			res = append(res, candidate)
+		}
+	}
+	return res
+}
+
+func TestCache_MaxSize_PerShardBudget(t *testing.T) {
+	keys := shardCollisions(2)
+	k1, k2 := keys[0], keys[1]
+
+	// maxSize = 16 => shardBudget = ceil(16/16) = 1
+	c := cache.New(time.Hour, 16)
+	defer c.Close()
+	if got := c.Stats().ShardBudget; got != 1 {
+		t.Fatalf("expected shard budget 1, got %d", got)
+	}
+
+	c.Set(k1, "v1", time.Hour)
+	if got, ok := c.Get(k1); !ok || got != "v1" {
+		t.Fatalf("expected k1 hit, got (%v, %v)", got, ok)
+	}
+
+	// Setting k2 in the same shard should evict k1
+	c.Set(k2, "v2", time.Hour)
+	if _, ok := c.Get(k1); ok {
+		t.Fatal("expected k1 to be evicted when shard budget of 1 is reached")
+	}
+	if got, ok := c.Get(k2); !ok || got != "v2" {
+		t.Fatalf("expected k2 hit, got (%v, %v)", got, ok)
+	}
+
+	// Updating k2 in place should keep size at 1 and not evict k2
+	c.Set(k2, "v2-updated", time.Hour)
+	if got, ok := c.Get(k2); !ok || got != "v2-updated" {
+		t.Fatalf("expected k2 update hit, got (%v, %v)", got, ok)
+	}
+	if stats := c.Stats(); stats.Size != 1 {
+		t.Fatalf("expected size 1 after update, got %d", stats.Size)
+	}
+}
+
+func TestCache_MaxSize_ExpiredFirst(t *testing.T) {
+	keys := shardCollisions(3)
+	k1, k2, k3 := keys[0], keys[1], keys[2]
+
+	// maxSize = 32 => shardBudget = ceil(32/16) = 2
+	c := cache.New(time.Hour, 32)
+	defer c.Close()
+
+	// k1 has short TTL; k2 has long TTL
+	c.Set(k1, "v1", 10*time.Millisecond)
+	c.Set(k2, "v2", time.Hour)
+
+	time.Sleep(20 * time.Millisecond) // k1 expires
+
+	// Adding k3 when k1 is expired: eviction should prune expired k1, retaining k2
+	c.Set(k3, "v3", time.Hour)
+
+	if _, ok := c.Get(k1); ok {
+		t.Fatal("expired k1 should not be in cache")
+	}
+	if got, ok := c.Get(k2); !ok || got != "v2" {
+		t.Fatalf("k2 should survive because expired k1 is evicted first; got (%v, %v)", got, ok)
+	}
+	if got, ok := c.Get(k3); !ok || got != "v3" {
+		t.Fatalf("k3 should be stored; got (%v, %v)", got, ok)
+	}
+}
+
+func TestCache_MaxSize_LRURecency(t *testing.T) {
+	keys := shardCollisions(3)
+	k1, k2, k3 := keys[0], keys[1], keys[2]
+
+	// maxSize = 32 => shardBudget = 2
+	c := cache.New(time.Hour, 32)
+	defer c.Close()
+
+	c.Set(k1, "v1", time.Hour)
+	time.Sleep(2 * time.Millisecond)
+	c.Set(k2, "v2", time.Hour)
+	time.Sleep(2 * time.Millisecond)
+
+	// k1 is oldest accessed; setting k3 should evict k1
+	c.Set(k3, "v3", time.Hour)
+
+	if _, ok := c.Get(k1); ok {
+		t.Fatal("k1 should be evicted as oldest access")
+	}
+	if _, ok := c.Get(k2); !ok {
+		t.Fatal("k2 should survive")
+	}
+	if _, ok := c.Get(k3); !ok {
+		t.Fatal("k3 should survive")
+	}
+}
+
+func TestCache_MaxSize_GetUpdatesRecency(t *testing.T) {
+	keys := shardCollisions(3)
+	k1, k2, k3 := keys[0], keys[1], keys[2]
+
+	// maxSize = 32 => shardBudget = 2
+	c := cache.New(time.Hour, 32)
+	defer c.Close()
+
+	c.Set(k1, "v1", time.Hour)
+	time.Sleep(2 * time.Millisecond)
+	c.Set(k2, "v2", time.Hour)
+	time.Sleep(2 * time.Millisecond)
+
+	// Get(k1) updates its lastAccess
+	if _, ok := c.Get(k1); !ok {
+		t.Fatal("expected k1 hit")
+	}
+	time.Sleep(2 * time.Millisecond)
+
+	// Now k2 has the oldest lastAccess; setting k3 should evict k2, retaining k1 and k3
+	c.Set(k3, "v3", time.Hour)
+
+	if _, ok := c.Get(k2); ok {
+		t.Fatal("k2 should be evicted because k1's recency was updated by Get")
+	}
+	if _, ok := c.Get(k1); !ok {
+		t.Fatal("k1 should survive")
+	}
+	if _, ok := c.Get(k3); !ok {
+		t.Fatal("k3 should survive")
+	}
+}
+
+func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
+	const (
+		maxSize      = 64
+		workers      = 10
+		readers      = 10
+		opsPerWorker = 200
+		numKeys      = 50
+	)
+	keys := shardCollisions(numKeys)
+
+	c := cache.New(time.Hour, maxSize)
+	defer c.Close()
+
+	stats := c.Stats()
+	if stats.MaxSize != maxSize {
+		t.Fatalf("stats.MaxSize: got %d, want %d", stats.MaxSize, maxSize)
+	}
+	budget := stats.ShardBudget
+	if budget <= 0 {
+		t.Fatalf("expected positive shard budget, got %d", budget)
+	}
+
+	stopSampler := make(chan struct{})
+	var sampleWg sync.WaitGroup
+	sampleWg.Add(1)
+	go func() {
+		defer sampleWg.Done()
+		for {
+			select {
+			case <-stopSampler:
+				return
+			default:
+			}
+			// Note: Stats().Size counts unexpired entries across all shards. Since
+			// all keys map to a single shard and TTL is 1 hour, Size equals
+			// the live entry count of that shard, strictly bounded by ShardBudget.
+			// This in-flight sampler serves as a regression guard in case the
+			// enforceBudgetLocked and insert critical sections are ever separated.
+			if sz := c.Stats().Size; sz > budget {
+				t.Errorf("in-flight cache size %d exceeded single-shard budget %d", sz, budget)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for i := range opsPerWorker {
+				key := keys[(worker*opsPerWorker+i)%len(keys)]
+				c.Set(key, fmt.Sprintf("val-%d-%d", worker, i), time.Hour)
+			}
+		}(w)
+	}
+
+	for r := range readers {
+		wg.Add(1)
+		go func(reader int) {
+			defer wg.Done()
+			for i := range opsPerWorker {
+				key := keys[(reader*opsPerWorker+i)%len(keys)]
+				c.Get(key)
+			}
+		}(r)
+	}
+
+	wg.Wait()
+	close(stopSampler)
+	sampleWg.Wait()
+
+	if sz := c.Stats().Size; sz > budget {
+		t.Fatalf("final cache size %d exceeded single-shard budget %d", sz, budget)
 	}
 }

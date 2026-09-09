@@ -154,7 +154,7 @@ config. `plumb web --port` overrides it for a single launch.
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `ttl` | duration | `"5m"` | Time-to-live for cached LSP query results. |
-| `max_size` | int | `1000` | Maximum cache entries. Must be ≥ 0. |
+| `max_size` | int | `1000` | Maximum cache entries (approximate — enforced per shard). `0` disables the limit (unbounded). Must be ≥ 0. |
 
 ## `[edits]` — write-tool safety
 

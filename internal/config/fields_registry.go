@@ -334,7 +334,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "cache.max_size", Type: FieldInt, ReloadTier: ReloadRestart, Min: &minZero,
-		Description: "Max entries in the session symbol cache. Needs a daemon restart.",
+		Description: "Max entries in the session symbol cache (approximate — enforced per shard, 0 disables). Needs a daemon restart.",
 	},
 	{
 		Key: "lsp_query.timeout", Type: FieldDuration, ReloadTier: ReloadNextSession,

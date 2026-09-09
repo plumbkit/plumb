@@ -444,7 +444,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		ttl:          ttl,
 		sessionProxy: newRoutingProxy(pool),
 		sessionInv:   newRoutingInvProxy(pool),
-		sessionCache: cache.New(ttl),
+		sessionCache: cache.New(ttl, cfg.Cache.MaxSize),
 		readTracker:  tools.NewReadTracker(),
 		writeTracker: tools.NewWriteTracker(),
 		undoStore:    tools.NewUndoStore(),

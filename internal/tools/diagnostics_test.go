@@ -15,7 +15,7 @@ import (
 
 func newTestInvalidator(t *testing.T) *cache.Invalidator {
 	t.Helper()
-	c := cache.New(5 * time.Minute)
+	c := cache.New(5*time.Minute, 0)
 	t.Cleanup(c.Close)
 	return cache.NewInvalidator(c)
 }

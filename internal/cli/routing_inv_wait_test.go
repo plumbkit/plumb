@@ -32,7 +32,7 @@ func TestRoutingInvProxy_SatisfiesAnyDiagnosticsWaiter(t *testing.T) {
 // production type end to end: a publish on the primary invalidator must wake a
 // waiter held through the proxy.
 func TestRoutingInvProxy_WaitForAnyDiagnostics_WokenByPrimary(t *testing.T) {
-	inv := cache.NewInvalidator(cache.New(0))
+	inv := cache.NewInvalidator(cache.New(0, 0))
 	proxy := newRoutingInvProxy(newWorkspacePool(context.Background(), config.Config{}))
 	proxy.setPrimary("/ws", "go", inv)
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestInvalidator_PublishDiagnostics(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -34,7 +34,7 @@ func TestInvalidator_PublishDiagnostics(t *testing.T) {
 }
 
 func TestInvalidator_OtherMethod_noEviction(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -47,7 +47,7 @@ func TestInvalidator_OtherMethod_noEviction(t *testing.T) {
 }
 
 func TestInvalidator_MalformedParams_noEviction(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -60,7 +60,7 @@ func TestInvalidator_MalformedParams_noEviction(t *testing.T) {
 }
 
 func TestInvalidator_WaitDiagnostics_AlreadyTracked(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -79,7 +79,7 @@ func TestInvalidator_WaitDiagnostics_AlreadyTracked(t *testing.T) {
 }
 
 func TestInvalidator_WaitDiagnostics_BlocksUntilPush(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -103,7 +103,7 @@ func TestInvalidator_WaitDiagnostics_BlocksUntilPush(t *testing.T) {
 }
 
 func TestInvalidator_WaitDiagnostics_ContextCancelled(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -117,7 +117,7 @@ func TestInvalidator_WaitDiagnostics_ContextCancelled(t *testing.T) {
 }
 
 func TestInvalidator_Tracked(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -141,7 +141,7 @@ func TestInvalidator_Tracked(t *testing.T) {
 }
 
 func TestInvalidator_AllDiagnosticTimes(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 
@@ -177,7 +177,7 @@ func TestInvalidator_AllDiagnosticTimes(t *testing.T) {
 }
 
 func TestInvalidator_EmptyURI_noEviction(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 

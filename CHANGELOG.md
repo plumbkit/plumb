@@ -145,6 +145,9 @@
 
 ### Changed
 
+- **`cache.max_size` is now actively enforced via lock-free LRU capacity eviction.**
+  `CacheConfig.MaxSize` was previously validated and displayed in configuration tables but was inert at runtime: `cache.New` took only a cleanup interval and entries grew unbounded within each TTL window. `cache.New` now takes `maxSize int` and bounds capacity deterministically per shard (`ceil(maxSize/numShards)`). On insertion under capacity pressure, expired entries in the target shard are swept first; if still at or over capacity, the least recently accessed entry is evicted. Recency updates on `Get` use atomic timestamps under `RLock` without lock promotion or contention. `max_size = 0` continues to admit unbounded storage. Both production call sites (`internal/cli/conn.go` and `internal/cli/pool.go`) wire `cfg.Cache.MaxSize`. Guarded by unit and race tests in `internal/cache/cache_test.go`.
+
 - **`plumb config show` no longer claims to report a running daemon's state.**
   Its LSP row was labelled `active`, and the `--adapters` table `Active`, for a
   value derived entirely from the merged configuration and `PATH` of the CLI

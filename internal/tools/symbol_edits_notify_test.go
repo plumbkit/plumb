@@ -24,7 +24,7 @@ func TestReplaceSymbolBody_NotifiesLSPAndInvalidatesCache(t *testing.T) {
 	t.Run("apply notifies and invalidates", func(t *testing.T) {
 		path, uri := writeFixture(t, "main.go", src)
 		mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
-		c := cache.New(0)
+		c := cache.New(0, 0)
 		defer c.Close()
 		cacheKey := uri + ":documentSymbol"
 		c.Set(cacheKey, "stale", 0)
@@ -56,7 +56,7 @@ func TestReplaceSymbolBody_NotifiesLSPAndInvalidatesCache(t *testing.T) {
 	t.Run("dry-run notifies nothing and keeps cache", func(t *testing.T) {
 		_, uri := writeFixture(t, "main.go", src)
 		mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
-		c := cache.New(0)
+		c := cache.New(0, 0)
 		defer c.Close()
 		cacheKey := uri + ":documentSymbol"
 		c.Set(cacheKey, "fresh", 0)
@@ -101,7 +101,7 @@ func TestRenameSymbol_NotifiesEachModifiedFile(t *testing.T) {
 		},
 	}
 	mock := &mockLSP{renameResult: we}
-	c := cache.New(0)
+	c := cache.New(0, 0)
 	defer c.Close()
 	c.Set(aURI+":documentSymbol", "stale", 0)
 	c.Set(bURI+":documentSymbol", "stale", 0)
