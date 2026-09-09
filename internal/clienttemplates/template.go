@@ -1,30 +1,27 @@
 package clienttemplates
 
-import "strings"
-
-// DefaultVersion is the template version this build ships. Bumping it is how
-// a template change rolls out: internal/setup.Check reports every installed
-// managed block recorded against an older version as StatusStale, and Apply
-// (via a bare re-register or `--sync`) restores it to the new one.
-const DefaultVersion = "v1"
-
-// DefaultTemplate is the client-agnostic body used two ways: (1) the fallback
-// for any client that has no entry in ByClient yet — including an MCP
-// initialize `instructions` render for a client clientcaps does not
-// recognise — and (2) the body written to a managed-block file whose
-// canonical path is shared by MORE than one instruction-capable client
-// (this repo's own layout: CLAUDE.md/GEMINI.md symlink to AGENTS.md, so
-// claude-code/codex/gemini all name one real file). See
-// internal/cli/setup_instructions.go's templateForGroup.
+// DefaultTemplate is the client-agnostic body plumb renders into the MCP
+// `initialize` response's `instructions` field for any client that has no
+// entry in ByClient — one clientcaps does not recognise, or recognises but has
+// no per-client body for yet.
 //
-// Case (2) is why this body is deliberately conservative rather than the
-// richest thing any one client could show: a shared file may belong to a
-// lean-configured Codex or Gemini, whose client-side tool allowlist
-// (tools.LeanToolNames) strips the peer mailbox and every symbol-scoped edit
-// tool — see client_templates.go's doc comment. Naming only lean-safe tools
-// here means the body written to a SHARED file, or sent to an UNRECOGNISED
-// MCP client, is never a false claim for whichever audience turns out to be
-// the strictest one.
+// It is deliberately conservative rather than the richest thing any one client
+// could show. An unrecognised client may be a lean-configured Codex or Gemini
+// whose client-side tool allowlist (tools.LeanToolNames) strips the peer
+// mailbox and every symbol-scoped edit tool — see client_templates.go's doc
+// comment. Naming only lean-safe tools here means the body sent to an
+// UNRECOGNISED client is never a false claim for whichever audience turns out
+// to be the strictest one.
+//
+// It describes what plumb needs in order to work, and never instructs the
+// agent to create a file: plumb writes nothing into a workspace it was not
+// explicitly asked to (`plumb init`), and its guidance must not ask an agent
+// to do so on its behalf either. The "Persisting this" line is deliberately a
+// SUGGESTION, conditioned on a file the project already has and on asking the
+// user — the agent decides whether these conventions belong in its own
+// instruction file. plumb used to make that decision for the user by writing
+// a managed block into AGENTS.md/CLAUDE.md/GEMINI.md itself; that is the
+// behaviour this replaces.
 //
 // The edit-lane paragraph also deliberately does NOT quote the "has not
 // been read" / "modified since read" strings — those are Claude Code
@@ -39,35 +36,17 @@ const DefaultVersion = "v1"
 // unguarded edit_file only WARNS (internal/tools/edit_file.go's
 // staleReadNote), since its str_replace anchor already protects the edited
 // region and the warning is informational, not a refusal.
+//
+// Size is guarded by internal/mcp's MaxInstructionsBytes, the budget for the
+// channel this body is actually delivered over.
 const DefaultTemplate = `plumb is registered as an MCP server in this project — LSP-backed navigation and edits, a code-structure index, and per-project memory. Prefer its tools over native file/search/git operations where both cover the same task.
 
-If ` + "`session_start`" + ` reports the workspace as resolving or empty, the project has no ` + "`.plumb/`" + ` marker: ask the user to run ` + "`plumb init`" + ` in the project root, or create it yourself if you have write authorisation.
+If ` + "`session_start`" + ` reports the workspace as resolving or empty, plumb has no ` + "`.plumb/`" + ` workspace marker for this project, so its index and memory are unavailable — ` + "`plumb init`" + ` in the project root is what creates one.
 
 **Edit lane.** Read a file with plumb before editing it (` + "`read_file`" + ` -> ` + "`edit_file`" + `/` + "`write_file`" + `), passing back ` + "`expected_mtime`" + `/` + "`expected_sha`" + `. If you edit that file with a native tool instead, plumb never sees the change — its own read-tracking goes stale, so your next ` + "`write_file`" + ` call, or an ` + "`edit_file`" + ` call passing ` + "`expected_mtime`" + `/` + "`expected_sha`" + `, on it is refused (` + "`edit_file`" + ` warns unless you pass that guard). Re-` + "`read_file`" + ` and retry.
 
 **Compile truth on write.** Pass ` + "`fail_on_new_errors`" + ` or ` + "`await_diagnostics`" + ` on an edit/write to have plumb catch (or report) a change that breaks the build, instead of finding out later.
 
+**Persisting this.** If this project already has an agent instruction file (` + "`AGENTS.md`" + `, or your client's own), these conventions are worth recording there — ask the user first; don't create the file just for this.
+
 More detail lives in each tool's own description and in ` + "`session_start`" + `'s full output.`
-
-// MaxLines is the size budget every per-client template must fit inside —
-// the ops check-agents-brief.sh pattern applied to these templates instead
-// of the repo brief. A body earns its place in someone else's file (or a
-// client's system prompt) only by staying short; if it needs more room the
-// answer is a pointer to a skill or doc, not a longer body. Enforced by
-// internal/setup's TestManagedBlock_TemplateSizeGuard.
-const MaxLines = 25
-
-// LineCount returns the number of lines in body — the same measure
-// WithinBudget applies, and the one an author bumping DefaultTemplate or a
-// per-client body should check before committing.
-func LineCount(body string) int {
-	if body == "" {
-		return 0
-	}
-	return strings.Count(strings.TrimRight(body, "\n"), "\n") + 1
-}
-
-// WithinBudget reports whether body fits inside MaxLines.
-func WithinBudget(body string) bool {
-	return LineCount(body) <= MaxLines
-}
