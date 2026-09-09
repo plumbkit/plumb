@@ -369,6 +369,10 @@ func TestSearchInFiles_ZeroRetentionNoMatches(t *testing.T) {
 				t.Fatalf("expected nil result for zero-match file, got %+v", res)
 			}
 
+			if raceEnabled {
+				t.Skip("AllocsPerRun is inflated by race instrumentation")
+			}
+
 			allocs := testing.AllocsPerRun(10, func() {
 				_ = searchScanFile(p, re, ctxLines)
 			})
