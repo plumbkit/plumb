@@ -351,6 +351,8 @@ func TestCache_MaxSize_ConcurrentSingleShardOverfill(t *testing.T) {
 			// Note: Stats().Size counts unexpired entries across all shards. Since
 			// all keys map to a single shard and TTL is 1 hour, Size equals
 			// the live entry count of that shard, strictly bounded by ShardBudget.
+			// This in-flight sampler serves as a regression guard in case the
+			// enforceBudgetLocked and insert critical sections are ever separated.
 			if sz := c.Stats().Size; sz > budget {
 				t.Errorf("in-flight cache size %d exceeded single-shard budget %d", sz, budget)
 				return
