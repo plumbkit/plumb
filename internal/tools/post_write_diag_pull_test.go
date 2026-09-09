@@ -56,7 +56,7 @@ func (p *pullModeLSP) WorkspaceDiagnostic(_ context.Context, _ string, params pr
 
 func newPullInv(t *testing.T) *cache.Invalidator {
 	t.Helper()
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	t.Cleanup(c.Close)
 	return cache.NewInvalidator(c)
 }

@@ -92,6 +92,7 @@ type workspacePool struct {
 	baseConfig     config.Config // global base for per-workspace LSP overrides
 	languageConfig languageConfigState
 	cacheTTL       time.Duration
+	cacheMaxSize   int
 
 	// idleGrace is how long a pinned entry lingers after its last session
 	// detaches before the language server is torn down. The delay absorbs a
@@ -215,6 +216,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		baseConfig:     cfg,
 		languageConfig: languageConfigState{cache: make(map[string]cachedWorkspaceLanguages)},
 		cacheTTL:       cfg.Cache.TTL.Duration,
+		cacheMaxSize:   cfg.Cache.MaxSize,
 		idleGrace:      poolIdleGrace,
 		startGrace:     firstStartGrace,
 		baseCtx:        baseCtx,
@@ -400,7 +402,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	}
 
 	rootURI := protocol.FileURI(root)
-	c := cache.New(p.cacheTTL)
+	c := cache.New(p.cacheTTL, p.cacheMaxSize)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
 	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now()}

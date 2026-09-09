@@ -192,7 +192,7 @@ func TestDiagnosticsHybridFlip(t *testing.T) {
 // snapshots (the seam poolOnStart runs when a server process (re)starts), and is
 // nil-safe for an entry that never attached an Invalidator.
 func TestClearEntryPullState(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 	uri := "file:///x/a.go"

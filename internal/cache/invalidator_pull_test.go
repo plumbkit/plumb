@@ -34,7 +34,7 @@ func pushDiagnostics(inv *cache.Invalidator, uri string, diags []protocol.Diagno
 
 func newInv(t *testing.T) *cache.Invalidator {
 	t.Helper()
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	t.Cleanup(func() { c.Close() })
 	return cache.NewInvalidator(c)
 }

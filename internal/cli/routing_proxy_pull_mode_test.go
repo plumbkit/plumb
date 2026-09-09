@@ -235,7 +235,7 @@ func TestRoutingProxy_WorkspaceDiagnostic_UnsupportedAdapter(t *testing.T) {
 // ─── workspace/diagnostic/refresh (the server-request wrapper) ───────────────
 
 func TestPool_WrapServerRequest_RefreshClearsPullState(t *testing.T) {
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	defer c.Close()
 	inv := cache.NewInvalidator(c)
 	inv.RecordPullFull("file:///p/a.go", "r1", []protocol.Diagnostic{{Severity: protocol.SevError, Message: "x"}})
@@ -291,7 +291,7 @@ func TestPool_WrapServerRequest_NilInner(t *testing.T) {
 
 func newInv(t *testing.T) *cache.Invalidator {
 	t.Helper()
-	c := cache.New(time.Hour)
+	c := cache.New(time.Hour, 0)
 	t.Cleanup(c.Close)
 	return cache.NewInvalidator(c)
 }

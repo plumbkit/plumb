@@ -24,7 +24,7 @@ func (settleSourceNoWait) WaitNextDiagnostics(context.Context, string) ([]protoc
 // file re-published fresh. It is now a ceiling — once a dependent file actually
 // re-publishes, the sweep proceeds immediately.
 func TestWaitForCrossFileSettle_ReturnsEarlyOnPublish(t *testing.T) {
-	inv := cache.NewInvalidator(cache.New(0))
+	inv := cache.NewInvalidator(cache.New(0, 0))
 
 	// Publish REPEATEDLY until the wait returns. A single timed publish would race
 	// the subscription inside waitForCrossFileSettle: if the publisher got there
@@ -62,7 +62,7 @@ func TestWaitForCrossFileSettle_ReturnsEarlyOnPublish(t *testing.T) {
 // must still end at the configured grace. The ceiling and its default are
 // unchanged by this fix.
 func TestWaitForCrossFileSettle_HonoursCeiling(t *testing.T) {
-	inv := cache.NewInvalidator(cache.New(0))
+	inv := cache.NewInvalidator(cache.New(0, 0))
 	start := time.Now()
 	waitForCrossFileSettle(inv, 80*time.Millisecond)
 	elapsed := time.Since(start)
@@ -89,7 +89,7 @@ func TestWaitForCrossFileSettle_FallsBackWhenUnsignalled(t *testing.T) {
 // TestWaitForAnyDiagnostics_WokenByAnyURI pins the invalidator primitive: a
 // wildcard waiter is woken by a publish for a file it never named.
 func TestWaitForAnyDiagnostics_WokenByAnyURI(t *testing.T) {
-	inv := cache.NewInvalidator(cache.New(0))
+	inv := cache.NewInvalidator(cache.New(0, 0))
 	done := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -114,7 +114,7 @@ func TestWaitForAnyDiagnostics_WokenByAnyURI(t *testing.T) {
 // TestWaitNextDiagnostics_StillPerURI guards the blast radius: adding the
 // wildcard must not make a per-URI waiter fire for an unrelated file.
 func TestWaitNextDiagnostics_StillPerURI(t *testing.T) {
-	inv := cache.NewInvalidator(cache.New(0))
+	inv := cache.NewInvalidator(cache.New(0, 0))
 	done := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
