@@ -56,12 +56,6 @@ type setupTarget struct {
 	flags       func(cmd *cobra.Command)
 	note        func() string
 	skillsDirFn func() (string, error)
-	// instructionsFn resolves this client's project-level and global-level
-	// instruction file (AGENTS.md/CLAUDE.md/GEMINI.md, per client convention).
-	// nil means the client has no instruction-file convention plumb writes to
-	// (yet) — see setup_instructions.go, which holds every implementation and
-	// the shared writer that calls it.
-	instructionsFn func() (project, global string, err error)
 }
 
 // claudeDesktopCommandExtractor reads the plumb launch binary back from a
@@ -132,27 +126,25 @@ var extraSetupTargets = []setupTarget{
 // geminiTarget and codexTarget do not — their commands were line-for-line
 // copies of runSetupTarget and now call it directly.
 var (
-	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: claudeSkillsDir, instructionsFn: claudeCodeInstructionPaths}
+	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: claudeSkillsDir}
 	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON}
 	// Gemini CLI shares Claude Desktop's mcpServers shape but has its own writer
 	// (setup_lean.go): --lean writes an includeTools allowlist Claude Desktop
 	// does not read.
 	geminiTarget = setupTarget{
 		use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupGeminiInto,
-		extractFn:      claudeDesktopCommandExtractor,
-		outFn:          removeMcpServersJSON,
-		flags:          leanFlagRegistrar(&setupGeminiLeanFlag, geminiLeanClient),
-		note:           func() string { return leanSetupNote(geminiLeanClient, leanChoiceOf(setupGeminiLeanFlag)) },
-		instructionsFn: geminiInstructionPaths,
+		extractFn: claudeDesktopCommandExtractor,
+		outFn:     removeMcpServersJSON,
+		flags:     leanFlagRegistrar(&setupGeminiLeanFlag, geminiLeanClient),
+		note:      func() string { return leanSetupNote(geminiLeanClient, leanChoiceOf(setupGeminiLeanFlag)) },
 	}
 	codexTarget = setupTarget{
 		use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto,
-		extractFn:      mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
-		outFn:          removeCodexTOML,
-		flags:          leanFlagRegistrar(&setupCodexLeanFlag, codexLeanClient),
-		note:           func() string { return leanSetupNote(codexLeanClient, leanChoiceOf(setupCodexLeanFlag)) },
-		skillsDirFn:    codexSkillsDir,
-		instructionsFn: codexInstructionPaths,
+		extractFn:   mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
+		outFn:       removeCodexTOML,
+		flags:       leanFlagRegistrar(&setupCodexLeanFlag, codexLeanClient),
+		note:        func() string { return leanSetupNote(codexLeanClient, leanChoiceOf(setupCodexLeanFlag)) },
+		skillsDirFn: codexSkillsDir,
 	}
 )
 
@@ -273,7 +265,6 @@ func runSetupTarget(t setupTarget) error {
 		fmt.Printf("Config: %s\n", cfgPath)
 		printSetupNote(t)
 		printSkillsDriftHint(t)
-		printInstructionsResult(t)
 		return nil
 	}
 
@@ -287,7 +278,6 @@ func runSetupTarget(t setupTarget) error {
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	printSetupNote(t)
 	printSkillsDriftHint(t)
-	printInstructionsResult(t)
 	return nil
 }
 

@@ -83,9 +83,9 @@ type Capabilities struct {
 	// InstructionsForClient, internal/mcp/server_handlers.go — sent to every
 	// client today regardless of this flag, since an unaware client just
 	// ignores an unknown field). PLAN-366 renders a per-client body into that
-	// field, drawn from the same internal/clienttemplates source as this
-	// client's managed AGENTS.md/CLAUDE.md/GEMINI.md block (PLAN-364) — this
-	// flag is evidence of observed CONSUMPTION, not a gate InstructionsForClient
+	// field from internal/clienttemplates, now the only channel carrying it
+	// (PLAN-364's managed AGENTS.md/CLAUDE.md/GEMINI.md block was removed) —
+	// this flag is evidence of observed CONSUMPTION, not a gate InstructionsForClient
 	// reads: it renders for every client with a clienttemplates body whether or
 	// not this flag is set. Unproven ⇒ false, the same evidence discipline as
 	// ReliableDeferredToolDiscovery.
