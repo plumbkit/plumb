@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     purpose               TEXT    NOT NULL DEFAULT '',
     error_kind            TEXT    NOT NULL DEFAULT '',
     error_retryable       INTEGER NOT NULL DEFAULT 0,
-    remediation_class     TEXT    NOT NULL DEFAULT ''
+    remediation_class     TEXT    NOT NULL DEFAULT '',
+    logical_agent         TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -145,6 +146,11 @@ WHERE tool IN ('leave_note', 'share_intent', 'share_findings', 'check_messages',
 	// computed idempotently per day and upserted here — additive only, no
 	// existing column changes. See health.go.
 	{from: 17, to: 18, sql: healthDailyDDL},
+	// v19 adds the logical-agent id the call carried (PLAN-401): on a shared
+	// connection several agents write under ONE session, and the row used to
+	// name only the connection. Defaults to '', which every existing row reads
+	// back as — "plumb makes no claim about which agent", never a guess.
+	{from: 18, to: 19, addColumn: "logical_agent", sql: `ALTER TABLE tool_calls ADD COLUMN logical_agent         TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -237,7 +243,8 @@ func DBPathFor() string {
 //	16 — added remediation_class column (failure telemetry)
 //	17 — scrubbed historical collaboration bodies from tool-call telemetry
 //	18 — added health_daily table (three standing health metrics, PLAN-368)
-const SchemaVersion = 18
+//	19 — added logical_agent column (per-agent write attribution, PLAN-401)
+const SchemaVersion = 19
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -343,6 +350,13 @@ type Call struct {
 	// "deploy-fix"), set via session_start. Empty when unset.
 	Purpose string
 
+	// LogicalAgent is the logical-agent id the call carried (per-call _meta or
+	// the argument-carried stamp), when the connection is shared by several
+	// agents. Empty when the call declared none — which is also what every
+	// pre-v19 row reads back as. Render it with AgentLabel; never infer an
+	// agent from a blank.
+	LogicalAgent string
+
 	// Failure classification, mirroring the `_meta` envelope the same call put on
 	// the wire. Both are stamped from ONE classification made at the MCP dispatch
 	// boundary, so the recorded row and the client's copy can never disagree.
@@ -375,8 +389,8 @@ func capString(s string) string {
 
 // insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
 const insertCallSQL = `INSERT INTO tool_calls
-	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose, error_kind, error_retryable, remediation_class)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose, error_kind, error_retryable, remediation_class, logical_agent)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
 // These three are the row's identity: without them it cannot be attributed to a
@@ -478,6 +492,7 @@ func callArgs(c Call) []any {
 		c.TokensSaved, c.SavingsModelVersion, c.CapabilityTokens, c.EfficiencyTokens,
 		c.Purpose,
 		string(c.ErrorKind), retryable, string(c.RemediationClass),
+		c.LogicalAgent,
 	}
 }
 
