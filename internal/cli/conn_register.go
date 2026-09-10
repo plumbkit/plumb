@@ -13,7 +13,6 @@ import (
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/xcodebsp"
@@ -271,40 +270,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return tools.LinkageState{ExternalID: s.externalID(), Recovery: string(s.recovery())}
 		}).
 		WithResumedNewIdentity(func() bool { return s.view().resumedNewIdentity }).
-		WithExternalID(func(externalID string) string {
-			session.SetExternalID(s.sessionID(), externalID)
-			s.recordLogicalAgentAttach(externalID)
-			// Mirror the linkage into the durable identity record. Until
-			// PLAN-426 it lived only in the session JSON, which is collected
-			// 24 h after the session ends — so an outage longer than that lost
-			// the linkage while the identity itself survived, and
-			// `plumb mail --external-id` stopped resolving a session that had
-			// in fact recovered.
-			s.persistIdentity()
-			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
-				// A predecessor was found: this call resumed its NAME under a NEW
-				// internal session ID (the linker never adopts IDs). The flag is
-				// what the identity line discloses — see session_start_self.go.
-				s.mutate(func(v *sessionView) { v.resumedNewIdentity = true })
-				// session.Rename refuses a name a live session already holds, so
-				// two resumes racing on one external ID inside the grace window
-				// cannot both inherit it — mailbox delivery matches on the name
-				// string, and an ambiguous address silently misdelivers.
-				// Resuming, not renaming: the entitlement is the external ID the
-				// caller just presented, which is what lets a RESTARTED `plumb
-				// serve` — new proxy secret, new session ID, same conversation —
-				// take back the name its own durable record reserves.
-				name, err := s.renameSessionResuming(prev.Name, externalID)
-				if err == nil {
-					return name
-				}
-				// Log it: a silently dropped inheritance looks to the caller like
-				// the session_id argument did nothing at all.
-				s.log().Debug("daemon: could not inherit the previous session name; keeping the generated one",
-					"inherited", prev.Name, "err", err)
-			}
-			return ""
-		}))
+		WithExternalID(s.linkExternalID))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
