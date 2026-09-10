@@ -24,18 +24,18 @@ import (
 // ("git add", "git push") — the feed filter only admits write-tier git rows,
 // so the subcommand is the operation — plus the no-change marker when the call
 // failed or was refused.
-func writeGitWriteEntry(sb *strings.Builder, w stats.RecentCall, workspace, age string) {
+func writeGitWriteEntry(sb *strings.Builder, w stats.RecentCall, who, workspace, age string) {
 	sha, subject, ok := gitCommitAttribution(w)
 	if !ok {
 		label := w.Tool
 		if sub := gitInputField(w.InputJSON, "subcommand"); sub != "" {
 			label += " " + sub
 		}
-		fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", w.SessionName, label, age, feedOutcomeMarker(w))
+		fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", who, label, age, feedOutcomeMarker(w))
 		return
 	}
 	fmt.Fprintf(sb, "  %-20s  %-18s  %s %s  [repo: %s]  (%s ago)\n",
-		w.SessionName, "git commit", sha, subject, gitCommitRepo(w, workspace), age)
+		who, "git commit", sha, subject, gitCommitRepo(w, workspace), age)
 }
 
 // gitCommitAttribution recovers the commit identity recorded for a successful

@@ -362,7 +362,10 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 // the session's last-seen timestamp so idle detection stays accurate. Savings are
 // scored here, at write time: this is the single point where the tool name,
 // client identity, raw sizes and body-free collaboration telemetry all co-exist.
-func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
+// logicalAgent is the id the call carried on a shared connection ("" when it
+// carried none); it is recorded as-is so the row names the agent, not merely
+// the connection (PLAN-401).
+func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string) {
 	session.Touch(s.sessionID())
 	v := s.view()
 	root := v.acquiredRoot
@@ -399,5 +402,6 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		EfficiencyTokens:    saved.Efficiency,
 		SavingsModelVersion: clientcaps.ModelVersion,
 		Purpose:             v.purpose,
+		LogicalAgent:        logicalAgent,
 	}, failure))
 }

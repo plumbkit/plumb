@@ -332,8 +332,11 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),
 		}
 	}
-	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
-		s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure)
+	srv.OnAfterTool = func(ctx context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
+		// The ctx carries the call's logical-agent identity (the same one
+		// OnBeforeTool and the shards resolved on), so the stats row names the
+		// agent that wrote, not just the connection it wrote through.
+		s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure, mcp.LogicalAgentFromCtx(ctx))
 	}
 	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn, notify mcp.NotifyFn) {
 		// Capture the notifier and seed the last-advertised profile so a later

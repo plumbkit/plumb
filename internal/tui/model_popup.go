@@ -85,7 +85,7 @@ func (m Model) popupRightAll(rw int) []string {
 	}
 	sessLabel := sID + "  " + sl
 	if c.SessionName != "" {
-		sessLabel = DetailStyle.Render(c.SessionName) + "  " + sID + "  " + sl
+		sessLabel = DetailStyle.Render(recentCallWho(c, m.sessionExternalIDs())) + "  " + sID + "  " + sl
 	}
 	lines = append(lines,
 		detailRow("Tool", DetailStyle.Render(c.Tool)),
