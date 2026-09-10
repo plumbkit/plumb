@@ -104,11 +104,31 @@ skipped entirely on a protected macOS root (`fsguard`).
 **Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
 workspace, then a cwd walk); `language` (string, optional — force the primary
 LSP language when detection cannot infer it); `session_id` (string, optional —
-links the plumb session to the caller's own session for name inheritance);
+the caller's own stable conversation or agent id; see *Identity* below);
 `purpose` (string, optional — a human-readable tag for this session, e.g.
 `deploy-fix`; letters, digits, and `-` only, max 32 chars; surfaced in the TUI
 session list, `daemon_info`, and `workspace_sessions`. An invalid value is
 rejected with a clear error).
+
+**Identity.** On a connection that several logical agents share (Claude Code's
+subagents inherit the parent's one `plumb serve`), the daemon keys each agent's
+workspace pin, read tracking, undo history and rate budget by a logical-agent
+id, and refuses a state-changing call it cannot attribute. The id reaches the
+daemon on three channels, strongest first: a per-call
+`_meta["dev.plumbkit/logical-agent"]` set by the client's transport; the same
+key placed by a client **runtime** as a top-level key inside `arguments`, which
+the daemon lifts out before any tool or schema sees it (Claude Code's
+`plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
+every `mcp__plumb__*` call and also fills `session_id` on this tool); and
+`session_id` itself, declared once by this call. Pass a stable value per agent:
+the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
+The session **record** — the name mail is addressed to, `plumb mail
+--external-id`, name inheritance on resume — is linked to the conversation half,
+so a subagent declaring itself never rewrites its parent's linkage. Passing the
+same id again is idempotent; a session that never passes one still has a name
+and is addressable by it, but a client restart starts a new identity. The
+daemon cannot tell a runtime-injected stamp from a typed one; the trust
+boundary is the connection, as for `_meta` (see `docs/threat-model.md`).
 
 ### `daemon_info`
 Current session name and ID, daemon version, the source commit the daemon binary

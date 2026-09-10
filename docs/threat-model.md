@@ -236,8 +236,11 @@ re-pin (requires `force: true`); pin provenance is recorded and surfaced in
 working directory; boundary violations mark session health.
 
 Residual: a client that multiplexes several logical agents over one connection
-shares one pin. plumb cannot currently distinguish them — see
-[Known gaps](#known-gaps).
+shares one pin unless each call carries a logical-agent identity — per-call
+`_meta`, the same key stamped into `arguments` by a client runtime (Claude
+Code's PreToolUse hook), or `session_start.session_id`. A client that sends
+none still shares one pin, and its anonymous state-changing calls are refused
+once two identities have been seen — see [Known gaps](#known-gaps).
 
 ### A2 — Path escape via alias or traversal
 
@@ -588,10 +591,21 @@ Stated plainly, because an unclaimed property is not a guarantee:
 
 Tracked, not hidden. Each is real today.
 
-1. **Logical-agent isolation.** State is per MCP *connection*. A client that
-   multiplexes several logical agents over one connection shares the pin, read
-   tracker, write budget, undo history and language selection. The honest
-   ceiling today is one `plumb serve` per logical agent for state-changing work.
+1. **Logical-agent isolation.** State is per MCP *connection* unless the
+   client identifies each logical agent. With an identity — per-call `_meta`,
+   the `dev.plumbkit/logical-agent` key a client runtime stamps into
+   `arguments` (Claude Code's PreToolUse hook), or `session_start.session_id`
+   — the pin, read tracker, write budget and undo history are per agent; the
+   primary language selection is still per connection. Two limits stay. The
+   daemon cannot tell a runtime-injected stamp from one the model typed, so a
+   model can misattribute its own call or claim a peer's id on the same
+   connection: the identity is a routing key, and the trust boundary remains
+   the connection (one client process, one user), exactly as for `_meta`. This
+   differs from the model-typed token the design rejected only in that a
+   runtime stamp is deterministic per frame and cannot be forgotten. And a
+   client that sends no identity at all still shares one pin, with anonymous
+   state-changing calls refused once two identities have been seen; for it the
+   honest ceiling is still one `plumb serve` per logical agent.
 2. **Support-bundle redaction.** `plumb doctor --bundle` does not exist yet.
    When it does, it aggregates config, logs, session state and failure data into
    one shareable object — the single artefact most likely to leak, and the one
