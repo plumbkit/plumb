@@ -21,6 +21,15 @@
   `updatedInput` requires `permissionDecision: "allow"`. **Re-run
   `plumb hooks install claude-code` after upgrading** — an older install shows
   the new hook as `missing`.
+- **`plumb doctor` warns on config keys frozen at compiled-in defaults (PLAN-416).**
+  Configs saved prior to the v0.17.8 sparse-write fix (PLAN-382) could explicitly
+  record compiled defaults into `~/.config/plumb/config.toml` (e.g. `command = []`,
+  `git.protected_branches = ['main', 'master']`, `quality.analysers = ['golangci-lint']`,
+  `topology.exclude_patterns = []`, `workspace.extra_roots = []`, or `lsp.*.args = []`),
+  shadowing future default updates. `plumb doctor` now detects these frozen keys
+  under the Configuration section and advises on removing redundant default lines
+  to inherit future updates automatically. `config.FindFrozenDefaults` and
+  `config.PruneFrozenDefaults` identify and round-trip clean affected keys.
 - **`workspace_sessions` now says WHICH agent wrote.** With several logical
   agents multiplexed over one connection, every recent-writes row carried the
   connection's session name — four agents, one name. A row now records the
