@@ -59,6 +59,16 @@ those as restart-needed.
 
 ---
 
+## Resetting frozen defaults
+
+Earlier versions of Plumb (prior to v0.17.8) serialized the entire configuration struct when saving settings from the TUI, which could explicitly write compiled-in default values into `~/.config/plumb/config.toml` (for example, `command = []`, `git.protected_branches = ['main', 'master']`, `quality.analysers = ['golangci-lint']`, `topology.exclude_patterns = []`, or `workspace.extra_roots = []`).
+
+Because an explicit setting in `config.toml` overrides built-in defaults, these frozen entries prevent newly shipped default commands or settings from taking effect.
+
+`plumb doctor` checks for these frozen defaults under the **Configuration** section and flags them if found. To reset them and track compiled-in defaults automatically, open `~/.config/plumb/config.toml` and remove the redundant lines that match defaults, or run `plumb config show` to compare your configured values against compiled-in defaults.
+
+---
+
 ## Logging (top level)
 
 | Field | Type | Default | Env | Effect |

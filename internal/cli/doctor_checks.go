@@ -302,6 +302,17 @@ func checkConfigs(ws string) []checkResult {
 			ok:     true,
 			detail: contractConfigPath(globalPath),
 		})
+		if data, err := os.ReadFile(globalPath); err == nil {
+			if frozen := config.FindFrozenDefaults(data); len(frozen) > 0 {
+				results = append(results, checkResult{
+					name:   "frozen defaults",
+					ok:     true,
+					warn:   true,
+					detail: fmt.Sprintf("%d key(s) explicitly set to compiled defaults: %s", len(frozen), strings.Join(frozen, ", ")),
+					fix:    "delete redundant default lines from " + contractConfigPath(globalPath) + " to inherit future defaults automatically (see docs/configuration.md)",
+				})
+			}
+		}
 	}
 
 	if ws == "" {

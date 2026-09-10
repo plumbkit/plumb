@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`plumb doctor` warns on config keys frozen at compiled-in defaults (PLAN-416).**
+  Configs saved prior to the v0.17.8 sparse-write fix (PLAN-382) could explicitly
+  record compiled defaults into `~/.config/plumb/config.toml` (e.g. `command = []`,
+  `git.protected_branches = ['main', 'master']`, `quality.analysers = ['golangci-lint']`,
+  `topology.exclude_patterns = []`, `workspace.extra_roots = []`, or `lsp.*.args = []`),
+  shadowing future default updates. `plumb doctor` now detects these frozen keys
+  under the Configuration section and advises on removing redundant default lines
+  to inherit future updates automatically. `config.FindFrozenDefaults` and
+  `config.PruneFrozenDefaults` identify and round-trip clean affected keys.
+
 ## 0.19.0 (2026-09-09)
 
 ### Removed
