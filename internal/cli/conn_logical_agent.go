@@ -16,7 +16,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
@@ -34,6 +36,12 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
+	// first is the identity that was declared before any other — on a Claude
+	// Code connection, the parent conversation whose reads and pin lived on the
+	// connection itself until a subagent turned it shared. shardFor seeds that
+	// agent's shard from the connection's state so nothing it did before the
+	// flip is lost; every later agent starts fresh.
+	first string
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -60,9 +68,55 @@ func (l *logicalAgentState) record(id string) (shared, transition bool) {
 	if l.seen == nil {
 		l.seen = make(map[string]struct{})
 	}
+	if len(l.seen) == 0 {
+		l.first = id
+	}
 	l.seen[id] = struct{}{}
 	shared = len(l.seen) > 1
 	return shared, shared && !wasShared
+}
+
+// firstID returns the first identity committed on this connection, or "".
+func (l *logicalAgentState) firstID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.first
+}
+
+// linkageIDOf returns the conversation half of a logical-agent id. A Claude
+// Code subagent is stamped `<conversation>/<agent>` by the PreToolUse hook;
+// the session RECORD (external id, name inheritance, `plumb mail
+// --external-id`, the Stop-hook wake) is linked to the conversation, so a
+// subagent declaring itself never rewrites the linkage its parent owns, while
+// the shard machinery keeps the full id. A plain id is its own linkage.
+func linkageIDOf(id string) string {
+	if i := strings.IndexByte(id, '/'); i >= 0 {
+		return id[:i]
+	}
+	return id
+}
+
+// logicalAgentLabel renders a logical-agent id for logs and status lines:
+// the first eight characters of the conversation half, plus `/agent-<first
+// eight of the agent half>` for a hook-stamped subagent. Nothing is stored;
+// the label is derived from the id's shape on every render.
+func logicalAgentLabel(id string) string {
+	conv, agent := id, ""
+	if i := strings.IndexByte(id, '/'); i >= 0 {
+		conv, agent = id[:i], id[i+1:]
+	}
+	label := shortIDPrefix(conv)
+	if agent != "" {
+		label += "/agent-" + shortIDPrefix(agent)
+	}
+	return label
+}
+
+func shortIDPrefix(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
 
 // sharedWith reports whether the connection is shared once the caller of THIS
@@ -174,7 +228,8 @@ func (s *connSession) recordLogicalAgent(id string) {
 		return
 	}
 	if transition {
-		s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused")
+		s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused",
+			"agent", logicalAgentLabel(id), "first", logicalAgentLabel(s.logicalAgents.firstID()))
 	}
 	s.markSharedConnectionDetected()
 }
@@ -203,7 +258,7 @@ func (s *connSession) markSharedConnectionDetected() {
 			return
 		}
 		info.Health = "shared_connection_detected"
-		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, anonymous state-changing calls are refused — run one plumb serve per logical agent"
+		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, and a state-changing call carrying no identity is refused — " + sharedIdentityRemedy
 	})
 }
 
@@ -220,5 +275,69 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if !s.logicalAgents.refuse(logicalAgent) {
 		return nil
 	}
-	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection; the supported topology is one plumb serve per logical agent — pass session_start.session_id or a per-call _meta[%s] to identify each agent", name, mcp.MetaLogicalAgentKey)
+	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection — %s", name, sharedIdentityRemedy)
+}
+
+// sharedIdentityRemedy names the ways an agent on a shared connection gets an
+// identity, cheapest first. Identity comes before topology on purpose
+// (PLAN-417): the previous wording led with "one plumb serve per agent", the
+// one remedy an agent cannot apply from inside a tool call.
+const sharedIdentityRemedy = "each agent must identify itself: on Claude Code, `plumb hooks install claude-code` stamps every call (the PreToolUse identity hook); otherwise pass a stable per-agent session_start.session_id or a per-call _meta[" + mcp.MetaLogicalAgentKey + "]; or run one plumb serve per logical agent"
+
+// linkExternalID is session_start's external-ID linker: it records the
+// declared identity, links the session RECORD to its conversation, and
+// inherits a predecessor's name when the conversation resumed within the
+// grace window. It returns the inherited name, or "".
+//
+// Two ids are in play and they are deliberately different. The full id
+// (`<conversation>` or `<conversation>/<agent>`) is what the shard machinery
+// keys on, so a hook-stamped subagent gets its own pin and trackers. The
+// LINKAGE is the conversation half only: `plumb mail --external-id`, the
+// Stop-hook wake and name inheritance all address the conversation, and a
+// subagent declaring itself must not rewrite the linkage its parent owns.
+// Before this rooting, any subagent session_id silently replaced the
+// connection's external id and the parent's mail stopped resolving.
+//
+// The inheritance branch runs once per linkage: a session already linked to
+// this conversation (the parent already attached; a second subagent attaching)
+// has nothing to resume, and re-running the rename against a name the session
+// already holds is at best a no-op and at worst a second resumedNewIdentity.
+func (s *connSession) linkExternalID(externalID string) string {
+	linkage := linkageIDOf(externalID)
+	alreadyLinked := linkage != "" && s.externalID() == linkage
+	session.SetExternalID(s.sessionID(), linkage)
+	s.recordLogicalAgentAttach(externalID)
+	// Mirror the linkage into the durable identity record. Until PLAN-426 it
+	// lived only in the session JSON, which is collected 24 h after the session
+	// ends — so an outage longer than that lost the linkage while the identity
+	// itself survived, and `plumb mail --external-id` stopped resolving a
+	// session that had in fact recovered.
+	s.persistIdentity()
+	if alreadyLinked {
+		return ""
+	}
+	prev := session.FindEnded(linkage, 24*time.Hour)
+	if prev == nil {
+		return ""
+	}
+	// A predecessor was found: this call resumed its NAME under a NEW internal
+	// session ID (the linker never adopts IDs). The flag is what the identity
+	// line discloses — see session_start_self.go.
+	s.mutate(func(v *sessionView) { v.resumedNewIdentity = true })
+	// session.Rename refuses a name a live session already holds, so two resumes
+	// racing on one external ID inside the grace window cannot both inherit it —
+	// mailbox delivery matches on the name string, and an ambiguous address
+	// silently misdelivers. Resuming, not renaming: the entitlement is the
+	// external ID the caller just presented, which is what lets a RESTARTED
+	// `plumb serve` — new proxy secret, new session ID, same conversation — take
+	// back the name its own durable record reserves.
+	name, err := s.renameSessionResuming(prev.Name, linkage)
+	if err == nil {
+		return name
+	}
+	// Log it: a silently dropped inheritance looks to the caller like the
+	// session_id argument did nothing at all.
+	s.log().Debug("daemon: could not inherit the previous session name; keeping the generated one",
+		"inherited", prev.Name, "err", err)
+	return ""
 }

@@ -108,6 +108,15 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		}
 	}
 	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
+	// The FIRST agent on the connection was the connection until a peer turned
+	// it shared: its strict-mode reads live in the connection tracker and are
+	// persisted under the empty agent id, where the per-agent rehydration below
+	// cannot see them. Seed its shard from that tracker, so an edit it has in
+	// flight does not fail "has not been read" the moment a subagent appears.
+	// Later agents start empty — they never read anything as the connection.
+	if id == s.logicalAgents.firstID() {
+		sh.readTracker.Hydrate(s.readTracker.Records())
+	}
 	// Mirror every strict-mode read to the durable store under (proxy, agent),
 	// so a shared connection's per-agent reads survive a daemon restart (2e).
 	sh.readTracker.SetPersistSink(s.persistReadShard(sh))

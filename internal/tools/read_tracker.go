@@ -126,3 +126,21 @@ func (r *ReadTracker) recorded(path string) (readEntry, bool) {
 	e, ok := r.entries[filepath.Clean(path)]
 	return e, ok
 }
+
+// Records snapshots every recorded read. It exists so a connection's reads can
+// seed the shard of the agent that made them when the connection turns shared:
+// the connection-level tracker persists under the empty agent id, so a fresh
+// shard rehydrating only its own rows would start empty and every strict-mode
+// edit the agent had in flight would fail "has not been read". nil-safe.
+func (r *ReadTracker) Records() []ReadRecord {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ReadRecord, 0, len(r.entries))
+	for path, e := range r.entries {
+		out = append(out, ReadRecord{Path: path, Mtime: e.mtime, SHA: e.sha})
+	}
+	return out
+}
