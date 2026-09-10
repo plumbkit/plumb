@@ -200,3 +200,37 @@ func TestWeakLangAt_UvLockResolvesPython(t *testing.T) {
 		t.Errorf("weakLangAt = %q, want python — uv.lock is a python weak root marker", got)
 	}
 }
+
+// TestWeakLangAt_SvelteWithPackageJSONBeatsIndexHTML pins the reported shape:
+// a pure Svelte app with package.json, index.html, and .svelte components.
+// index.html and package.json are contested weak markers. Before the census
+// recognized .svelte files as counting toward the typescript/web ecosystem,
+// .svelte files cast zero votes, leaving index.html to win by alphabetical order.
+// With .svelte counting in the census, package.json's candidate (typescript) wins.
+func TestWeakLangAt_SvelteWithPackageJSONBeatsIndexHTML(t *testing.T) {
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "index.html"), "<html></html>\n")
+	mustWrite(t, filepath.Join(dir, "package.json"), "{}")
+	for i := range 10 {
+		mustWrite(t, filepath.Join(dir, "src", fmt.Sprintf("Component%d.svelte", i)), "<script></script>\n")
+	}
+
+	if got := defaultsPool(t, "typescript", "html").weakLangAt(dir); got != "typescript" {
+		t.Errorf("weakLangAt = %q, want typescript — 10 .svelte components settle the tie for package.json, "+
+			"not static index.html", got)
+	}
+}
+
+// TestWeakLangAt_VueWithPackageJSONBeatsIndexHTML tests the same for Vue.
+func TestWeakLangAt_VueWithPackageJSONBeatsIndexHTML(t *testing.T) {
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "index.html"), "<html></html>\n")
+	mustWrite(t, filepath.Join(dir, "package.json"), "{}")
+	for i := range 10 {
+		mustWrite(t, filepath.Join(dir, "src", fmt.Sprintf("Component%d.vue", i)), "<template></template>\n")
+	}
+
+	if got := defaultsPool(t, "typescript", "html").weakLangAt(dir); got != "typescript" {
+		t.Errorf("weakLangAt = %q, want typescript — 10 .vue components settle the tie for package.json", got)
+	}
+}

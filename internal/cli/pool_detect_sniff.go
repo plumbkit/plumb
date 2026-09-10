@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/ignore"
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // Deciding a language from FILE EVIDENCE, as opposed to from the marker walk in
@@ -83,7 +84,11 @@ func (p *workspacePool) extLangAtIn(dir string, langs []langConfig) string {
 	// choosing between two specific candidates, where a partial count is not a
 	// weaker answer but a differently-wrong one.
 	counts, _ := p.sniffCountsIn(langs, dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
-	return bestSniffedLang(counts)
+	best := bestSniffedLang(counts)
+	if _, ok := cfgAmong(langs, best); !ok {
+		return ""
+	}
+	return best
 }
 
 // sniffCounts counts source files per ACTIVE language in a bounded shallow scan
@@ -195,7 +200,7 @@ func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, 
 			if matchesAnyMarker(de.Name(), ignoreMarkers) {
 				continue
 			}
-			if lang := p.fileLanguageIn(langs, de.Name()); lang != "" {
+			if lang := p.sniffFileLanguage(de.Name()); lang != "" {
 				counts[lang]++
 			}
 		}
@@ -306,4 +311,31 @@ func matchesAnyMarker(name string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// sniffFileLanguage maps a file path/name to the canonical language name it counts
+// toward in content sniffing and tie-break censuses, or "" when unrecognised.
+//
+// Unlike fileLanguage — which answers a ROUTING question ("which enabled LSP
+// server should receive requests for this file?") and therefore returns "" for
+// files no configured server can parse — this answers a CENSUS question ("which
+// language does this file represent?").
+//
+// Single-file components (.svelte, .vue) embed scripts within the JavaScript /
+// TypeScript ecosystem governed by package.json. In the census they count toward
+// "typescript", allowing package.json to win weak-marker ties against static
+// markup (index.html), while fileLanguage continues to return "" so that
+// typescript-language-server is never started on files it cannot parse.
+// Other languages return their own canonical name from langsupport.
+func (p *workspacePool) sniffFileLanguage(path string) string {
+	l, ok := langsupport.ByPath(path)
+	if !ok {
+		return ""
+	}
+	switch l.Name {
+	case "svelte", "vue":
+		return "typescript"
+	default:
+		return normaliseLangName(l.Name)
+	}
 }
