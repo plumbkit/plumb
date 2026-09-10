@@ -143,9 +143,6 @@ func testHookStampedParentAndSubagentWrite(t *testing.T) {
 	if got := c.s.externalID(); got != conv {
 		t.Errorf("session linkage = %q, want the conversation %q", got, conv)
 	}
-	if got := c.s.logicalAgents.firstID(); got != conv {
-		t.Errorf("firstID = %q, want %q", got, conv)
-	}
 	// The unstamped control: a write with no identity is still refused, so the
 	// channel attributes rather than disables the ceiling.
 	if text, isErr := c.call(t, "", "write_file", map[string]any{"file_path": filepath.Join(ws, "anon.txt"), "content": "x"}); !isErr || !strings.Contains(text, "no logical-agent identity") {

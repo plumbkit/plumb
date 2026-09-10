@@ -116,8 +116,11 @@ func TestToolsCall_ReservedArgumentReachesTheRefusalHook(t *testing.T) {
 }
 
 // TestToolsCall_ReservedArgumentOnAliasedTool: a retired tool name whose alias
-// adapter re-marshals the arguments must still be served when stamped — the
-// strip happens before the adapter, so the key never reaches a closed schema.
+// adapter re-marshals the arguments must still be served when stamped, and
+// the identity must survive the redirect. (This pins the outcome, not the
+// strip's placement: dropArgs keeps unknown keys, so a strip after the adapter
+// would also pass here. The placement before the adapter is for byte fidelity
+// of sibling values, pinned by TestSplitLogicalAgentArg.)
 func TestToolsCall_ReservedArgumentOnAliasedTool(t *testing.T) {
 	s, agent, _ := identityServer(t)
 	resps := serveOn(t, s, callWith("list_symbols", `{"uri":"f.go","include_signatures":true,"`+mcp.ArgLogicalAgentKey+`":"a1"}`))

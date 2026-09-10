@@ -282,11 +282,12 @@ cannot reach.
 | `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 330s) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
 
-Both clients get the same pair. **`SessionStart`** states the client's own
-conversation ID as a fact, so the agent's first `session_start` can pass it as
-`session_id` — the linkage that lets `plumb mail`, `leave_note` and the wake
-path address that exact session rather than guessing from a shared directory.
-**`Stop`** reports unread peer mail as a turn ends. Claude Code gets a third:
+Both clients get the `SessionStart`/`Stop` pair. **`SessionStart`** states the
+client's own conversation ID as a fact, so the agent's first `session_start`
+can pass it as `session_id` — the linkage that lets `plumb mail`, `leave_note`
+and the wake path address that exact session rather than guessing from a
+shared directory. **`Stop`** reports unread peer mail as a turn ends. Claude
+Code gets a third:
 
 - **`PreToolUse` stamps identity.** Claude Code runs every subagent over the
   parent's one `plumb serve`, and its transport carries no per-agent identity,

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -38,7 +39,7 @@ func runHooksStatus(cmd *cobra.Command) error {
 			continue
 		}
 		report.group(t, path, states, statusAction)
-		if note := identityHookSkewNote(t, states); note != "" {
+		if note := identityHookSkewNote(t, states, probeDaemonVersion); note != "" {
 			report.note(note)
 		}
 	}
@@ -50,8 +51,8 @@ func runHooksStatus(cmd *cobra.Command) error {
 // nothing: the running daemon predates the argument channel. Without it the
 // table reads "installed" while every subagent write is still refused, and
 // the reader has no way to connect the two.
-func identityHookSkewNote(t hooksTarget, states []hookState) string {
-	if t.use != claudeCodeHooksTarget.use {
+func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (string, error)) string {
+	if t.use != claudeCodeHooksTarget.use || probe == nil {
 		return ""
 	}
 	installed := false
@@ -63,10 +64,12 @@ func identityHookSkewNote(t hooksTarget, states []hookState) string {
 	if !installed {
 		return ""
 	}
-	version, err := probeDaemonVersion()
+	version, err := probe()
 	switch {
+	case errors.Is(err, errDaemonNotRunning):
+		return "Claude Code — the identity hook is installed but no daemon is running; stamping starts by itself once one is (the next plumb serve starts it)."
 	case err != nil:
-		return "Claude Code — the identity hook stamps nothing right now: no running daemon reported a version (" + err.Error() + ")."
+		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon predates the identity channel (needs %s or later). Run `plumb restart`.", identityChannelMinVersion)
 	case !daemonVersionAcceptsStamp(version):
 		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon is %s, and the identity channel needs %s or later. Run `plumb restart`.", version, identityChannelMinVersion)
 	}

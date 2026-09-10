@@ -280,9 +280,10 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return errRespData(req.ID, codeInvalidParams, "invalid params: "+err.Error(), invalidCallEnvelope(""))
 	}
 
-	// The argument-carried identity is lifted out FIRST, before the alias
-	// adapter re-marshals the arguments and before the guard validates them, so
-	// nothing downstream ever sees the reserved key. See argidentity.go.
+	// The argument-carried identity is lifted out FIRST: before the guard, so
+	// no tool schema has to declare it, and before the alias adapter, so the
+	// sibling values it re-marshals are exactly the client's bytes rather than a
+	// decode/encode round trip of them. See argidentity.go.
 	argAgent, stripped := splitLogicalAgentArg(params.Arguments)
 	params.Arguments = stripped
 

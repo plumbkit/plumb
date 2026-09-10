@@ -36,12 +36,6 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
-	// first is the identity that was declared before any other — on a Claude
-	// Code connection, the parent conversation whose reads and pin lived on the
-	// connection itself until a subagent turned it shared. shardFor seeds that
-	// agent's shard from the connection's state so nothing it did before the
-	// flip is lost; every later agent starts fresh.
-	first string
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -68,19 +62,34 @@ func (l *logicalAgentState) record(id string) (shared, transition bool) {
 	if l.seen == nil {
 		l.seen = make(map[string]struct{})
 	}
-	if len(l.seen) == 0 {
-		l.first = id
-	}
 	l.seen[id] = struct{}{}
 	shared = len(l.seen) > 1
 	return shared, shared && !wasShared
 }
 
-// firstID returns the first identity committed on this connection, or "".
-func (l *logicalAgentState) firstID() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.first
+// seedsConnectionReads decides which agent's new shard inherits the reads the
+// connection made before it turned shared: the agent whose id IS the
+// connection's linkage — the conversation the session record is linked to,
+// which the SessionStart hook and the identity hook both derive from the
+// same client id — and only for the root the connection holds.
+//
+// Not "the first identity this process saw". After a daemon restart the
+// connection tracker is rehydrated from the rows persisted under the empty
+// agent id (the parent's reads), the proxy replays the pin but no agent id,
+// and in the house pattern the parent is parked on the Agent tool while a
+// subagent works — so the subagent's stamped call is routinely the FIRST the
+// new session sees, and a first-seen rule would hand it the parent's reads,
+// letting it edit in strict mode files it never read. The linkage survives
+// the restart in the durable identity record, so keying on it does not.
+//
+// Root too: a shard that restored a pin elsewhere (loadPinForAgent) must not
+// resurrect reads for a workspace it is not pinned to; ReadTracker.Reset
+// documents that a read is only ever valid for the root it was made under.
+func (s *connSession) seedsConnectionReads(id, shardRoot, connRoot string) bool {
+	if id == "" || linkageIDOf(id) != id {
+		return false
+	}
+	return id == s.externalID() && shardRoot == connRoot
 }
 
 // linkageIDOf returns the conversation half of a logical-agent id. A Claude
@@ -229,7 +238,7 @@ func (s *connSession) recordLogicalAgent(id string) {
 	}
 	if transition {
 		s.log().Warn("daemon: shared connection detected — multiple logical agents multiplexed over one serve; per-agent state is isolated, anonymous state-changing calls are refused",
-			"agent", logicalAgentLabel(id), "first", logicalAgentLabel(s.logicalAgents.firstID()))
+			"agent", logicalAgentLabel(id))
 	}
 	s.markSharedConnectionDetected()
 }

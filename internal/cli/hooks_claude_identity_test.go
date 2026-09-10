@@ -197,6 +197,13 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 	if daemonAcceptsIdentityStamp(failing, cache, now.Add(10*time.Minute)) {
 		t.Fatal("a failing probe must read as no")
 	}
+	// A cache stamped in the future (clock stepped back, a copied home) is not
+	// fresh: it must re-probe rather than trust a record from "later".
+	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.19.1", CheckedAt: now.Add(time.Hour)})
+	probes = 0
+	if daemonAcceptsIdentityStamp(func() (string, error) { probes++; return "0.19.0", nil }, cache, now) || probes != 1 {
+		t.Fatalf("a future-stamped cache must be re-probed: probes=%d", probes)
+	}
 	if daemonAcceptsIdentityStamp(nil, filepath.Join(t.TempDir(), "none.json"), now) {
 		t.Fatal("no probe and no cache must read as no")
 	}
@@ -204,6 +211,40 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 		if got := daemonVersionAcceptsStamp(v); got != want {
 			t.Errorf("daemonVersionAcceptsStamp(%q) = %v, want %v", v, got, want)
 		}
+	}
+}
+
+// TestIdentityHookSkewNote: the status table says WHY an installed identity
+// hook is stamping nothing, and tells a stopped daemon from an old one — the
+// remedies differ.
+func TestIdentityHookSkewNote(t *testing.T) {
+	installed := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateInstalled}}
+	missing := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateMissing}}
+	current := func() (string, error) { return "0.19.1", nil }
+	old := func() (string, error) { return "0.19.0", nil }
+	down := func() (string, error) { return "", errDaemonNotRunning }
+	mute := func() (string, error) { return "", errDaemonVersionUnknown }
+
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, current); got != "" {
+		t.Errorf("a current daemon needs no note, got %q", got)
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, missing, old); got != "" {
+		t.Errorf("a hook that is not installed needs no note, got %q", got)
+	}
+	if got := identityHookSkewNote(codexHooksTarget, installed, old); got != "" {
+		t.Errorf("only the Claude Code target carries the identity hook, got %q", got)
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, old); !strings.Contains(got, "0.19.0") || !strings.Contains(got, "plumb restart") {
+		t.Errorf("an old daemon must be named with the restart remedy, got %q", got)
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, mute); !strings.Contains(got, "predates") || !strings.Contains(got, "plumb restart") {
+		t.Errorf("a daemon that cannot answer predates the channel, got %q", got)
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, down); !strings.Contains(got, "no daemon is running") || strings.Contains(got, "restart") {
+		t.Errorf("a stopped daemon is not a skew and needs no restart, got %q", got)
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, nil); got != "" {
+		t.Errorf("no probe, no note; got %q", got)
 	}
 }
 
