@@ -31,8 +31,8 @@ func TestRemoveHooksAt_RemovesOnlyPlumbs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed != 2 {
-		t.Errorf("removed = %d, want 2", removed)
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3 (session linkage, mailbox wake, agent identity)", removed)
 	}
 
 	got := readHookJSON(t, path)
@@ -166,6 +166,14 @@ func TestInstallHooksAt_MigratesLegacyScriptHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range states {
+		if s.entry.event == "PreToolUse" {
+			// The identity hook postdates the shell recipe: nothing legacy
+			// to migrate, so it is simply missing until installed.
+			if s.state != hookStateMissing {
+				t.Errorf("%s state = %q, want missing", s.entry.label, s.state)
+			}
+			continue
+		}
 		if s.state != hookStateStale {
 			t.Errorf("%s state = %q, want stale", s.entry.label, s.state)
 		}
@@ -594,10 +602,19 @@ func TestRunsPlumbVerb(t *testing.T) {
 }
 
 func TestPlumbShapedGroup(t *testing.T) {
-	if !plumbShapedGroup(map[string]any{"hooks": []any{}}) {
+	if !plumbShapedGroup("Stop", map[string]any{"hooks": []any{}}) {
 		t.Error("a bare hooks group is plumb's own shape")
 	}
-	if plumbShapedGroup(map[string]any{"hooks": []any{}, "matcher": "*"}) {
+	if plumbShapedGroup("Stop", map[string]any{"hooks": []any{}, "matcher": "*"}) {
 		t.Error("a group carrying a matcher is the user's, not plumb's shape")
+	}
+	if !plumbShapedGroup("PreToolUse", map[string]any{"hooks": []any{}, "matcher": claudeIdentityMatcher}) {
+		t.Error("the identity hook's own matcher group is plumb's shape on PreToolUse")
+	}
+	if plumbShapedGroup("Stop", map[string]any{"hooks": []any{}, "matcher": claudeIdentityMatcher}) {
+		t.Error("plumb's PreToolUse matcher on another event is the user's shape")
+	}
+	if plumbShapedGroup("PreToolUse", map[string]any{"hooks": []any{}, "matcher": claudeIdentityMatcher, "note": "mine"}) {
+		t.Error("a group carrying anything beyond matcher+hooks is the user's")
 	}
 }

@@ -48,15 +48,19 @@ var hooksInstallCmd = &cobra.Command{
 	Use:   "install [client]",
 	Short: "Install or refresh plumb's lifecycle hooks",
 	Long: `Install plumb's opt-in lifecycle hooks in every registered client, or in the
-named one. Two hooks per client: SessionStart states the conversation ID that
-session_start records as session_id, and Stop reports unread peer mail.
+named one. SessionStart states the conversation ID that session_start records
+as session_id, and Stop reports unread peer mail. Claude Code gets a third,
+PreToolUse, which stamps a per-agent identity onto every plumb call so
+subagents multiplexed over one connection keep their own workspace pin and
+trackers instead of being refused as unattributable.
 
 Claude Code's Stop hook is a background watcher (async + asyncRewake): it wakes
 a session that has already gone idle. Codex has no equivalent, so its Stop hook
 performs one read-only check as a turn ends — that narrows the end-of-turn race,
-it is not push delivery. Both fail open: a missing mailbox, an unavailable
-daemon or an ambiguous session all let the turn end normally, and neither ever
-carries a message body.
+it is not push delivery. All of them fail open: a missing mailbox, an
+unavailable daemon, an ambiguous session or a daemon that predates the identity
+channel all leave the turn and the call exactly as the client sent them, and
+none ever carries a message body.
 
 Existing entries are merged, never replaced wholesale: hooks the user wrote
 survive, the file is backed up first, and re-running refreshes plumb's own
