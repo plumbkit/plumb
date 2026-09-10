@@ -49,12 +49,25 @@ const (
 type ownershipTest func(event string, handler map[string]any) bool
 
 // hookEntry is one handler plumb wants installed for a client: the event in
-// that client's own vocabulary, a short label for the status table, and the
-// rendered handler object.
+// that client's own vocabulary, a short label for the status table, the
+// rendered handler object, and the matcher its group carries ("" for a bare
+// group, which is what every event but PreToolUse gets).
 type hookEntry struct {
 	event   string
 	label   string
+	matcher string
 	handler map[string]any
+}
+
+// newHookGroup renders the group plumb writes for an entry: bare when the
+// entry has no matcher — byte-identical to what earlier plumbs wrote, so a
+// re-run over an old install stays a no-op — and {"matcher", "hooks"} otherwise.
+func newHookGroup(e hookEntry) map[string]any {
+	group := map[string]any{"hooks": []any{e.handler}}
+	if e.matcher != "" {
+		group["matcher"] = e.matcher
+	}
+	return group
 }
 
 // hooksTarget describes one `plumb hooks <verb> [client]` row.
@@ -91,6 +104,7 @@ var claudeCodeHooksTarget = hooksTarget{
 	notes: []string{
 		"Claude Code — settings.json hot-reloads, so sessions already running pick these up without a restart.",
 		"Claude Code — the Stop hook stays silent, and costs nothing, unless `plumb mail` reports unread peer messages.",
+		"Claude Code — the PreToolUse hook stamps a per-agent identity onto every plumb call, so subagents sharing this connection get their own workspace pin and trackers; set PLUMB_IDENTITY_HOOK=off to disable it.",
 	},
 }
 
@@ -211,11 +225,30 @@ func codexHookOwned(event string, h map[string]any) bool {
 var codexHookEvents = []string{"SessionStart", "Stop"}
 
 // plumbShapedGroup reports whether a hook group is one plumb wrote: a bare
-// {"hooks": […]} and nothing else. A group carrying anything more — a matcher,
-// a note of the user's own — is theirs even when plumb's handler is the only
-// thing inside it, so emptying it must not take the group with it.
-func plumbShapedGroup(group map[string]any) bool {
-	return len(group) == 1
+// {"hooks": […]} and nothing else, or {"matcher", "hooks"} carrying exactly
+// the matcher plumb writes on that event. A group carrying anything more — a
+// different matcher, a note of the user's own — is theirs even when plumb's
+// handler is the only thing inside it, so emptying it must not take the group
+// with it.
+func plumbShapedGroup(event string, group map[string]any) bool {
+	switch len(group) {
+	case 1:
+		return true
+	case 2:
+		matcher, _ := group["matcher"].(string)
+		return matcher != "" && matcher == plumbWrittenMatcher(event)
+	}
+	return false
+}
+
+// plumbWrittenMatcher is the matcher plumb's own group carries on an event, or
+// "" where plumb writes bare groups. Kept as a table rather than derived from
+// a target's entries so the removal path needs no binary path to answer it.
+func plumbWrittenMatcher(event string) string {
+	if event == "PreToolUse" {
+		return claudeIdentityMatcher
+	}
+	return ""
 }
 
 // runsPlumbVerb reports whether cmd invokes one of plumb's own hook verbs. The
@@ -336,7 +369,7 @@ func installHooksAt(path string, entries []hookEntry, ours ownershipTest) (bool,
 func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, error) {
 	existing, ok := hooks[e.event]
 	if !ok {
-		hooks[e.event] = []any{map[string]any{"hooks": []any{e.handler}}}
+		hooks[e.event] = []any{newHookGroup(e)}
 		return true, nil
 	}
 	groups, ok := existing.([]any)
@@ -385,14 +418,14 @@ func upsertHook(hooks map[string]any, e hookEntry, ours ownershipTest) (bool, er
 		// Same rule as the removal path: a group goes only when THIS write
 		// emptied it and it was plumb's own. A bare empty group the user already
 		// had is not residue of ours to tidy away.
-		if took > 0 && len(kept) == 0 && plumbShapedGroup(group) {
+		if took > 0 && len(kept) == 0 && plumbShapedGroup(e.event, group) {
 			continue
 		}
 		group["hooks"] = kept
 		keptGroups = append(keptGroups, group)
 	}
 	if !seen {
-		keptGroups = append(keptGroups, map[string]any{"hooks": []any{e.handler}})
+		keptGroups = append(keptGroups, newHookGroup(e))
 		changed = true
 	}
 	hooks[e.event] = keptGroups
@@ -496,86 +529,11 @@ func groupsWithout(event string, groups []any, ours ownershipTest) ([]any, int) 
 			}
 			kept = append(kept, handlerAny)
 		}
-		if took > 0 && len(kept) == 0 && plumbShapedGroup(group) {
+		if took > 0 && len(kept) == 0 && plumbShapedGroup(event, group) {
 			continue
 		}
 		group["hooks"] = kept
 		keptGroups = append(keptGroups, group)
 	}
 	return keptGroups, removed
-}
-
-// hookState is one entry's classification for the status table and for the
-// per-hook action lines the writers print.
-type hookState struct {
-	entry  hookEntry
-	state  string
-	detail string
-}
-
-// hookStatesAt classifies every entry plumb would install against what is on
-// disk: missing (nothing of plumb's on that event), installed (byte-identical
-// to what this binary writes), or stale (plumb's, but written by a different
-// binary path or an older entry shape — including a legacy script hook).
-func hookStatesAt(path string, entries []hookEntry, ours ownershipTest) ([]hookState, error) {
-	cfg, isNew, err := readHookConfig(path)
-	if err != nil {
-		return nil, err
-	}
-	var hooks map[string]any
-	if !isNew {
-		hooks, _ = cfg["hooks"].(map[string]any)
-	}
-
-	out := make([]hookState, 0, len(entries))
-	for _, e := range entries {
-		found := findHookHandler(hooks, e.event, ours)
-		switch {
-		case found == nil:
-			out = append(out, hookState{entry: e, state: hookStateMissing})
-		case reflect.DeepEqual(found, e.handler):
-			out = append(out, hookState{entry: e, state: hookStateInstalled})
-		default:
-			out = append(out, hookState{entry: e, state: hookStateStale, detail: staleHookDetail(found, e.handler)})
-		}
-	}
-	return out, nil
-}
-
-// findHookHandler returns plumb's handler on one event, or nil. A nil hooks map
-// (no config, or no "hooks" key) simply finds nothing.
-func findHookHandler(hooks map[string]any, event string, ours ownershipTest) map[string]any {
-	groups, ok := hooks[event].([]any)
-	if !ok {
-		return nil
-	}
-	for _, groupAny := range groups {
-		group, ok := groupAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		handlers, ok := group["hooks"].([]any)
-		if !ok {
-			continue
-		}
-		for _, handlerAny := range handlers {
-			if handler, ok := handlerAny.(map[string]any); ok && ours(event, handler) {
-				return handler
-			}
-		}
-	}
-	return nil
-}
-
-// staleHookDetail says why an installed entry is not the one this binary would
-// write. A different command is the case that matters and the one a reader can
-// act on — a moved binary, or a legacy script hook awaiting migration — so it
-// is quoted verbatim rather than summarised.
-func staleHookDetail(found, want map[string]any) string {
-	foundCmd, _ := found["command"].(string)
-	wantCmd, _ := want["command"].(string)
-	if foundCmd != wantCmd {
-		return "runs " + foundCmd
-	}
-	return "entry differs from this binary's — install refreshes it"
 }

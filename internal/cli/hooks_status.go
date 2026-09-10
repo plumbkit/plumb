@@ -38,9 +38,39 @@ func runHooksStatus(cmd *cobra.Command) error {
 			continue
 		}
 		report.group(t, path, states, statusAction)
+		if note := identityHookSkewNote(t, states); note != "" {
+			report.note(note)
+		}
 	}
 	report.render(nil, cmd)
 	return nil
+}
+
+// identityHookSkewNote explains an installed identity hook that is stamping
+// nothing: the running daemon predates the argument channel. Without it the
+// table reads "installed" while every subagent write is still refused, and
+// the reader has no way to connect the two.
+func identityHookSkewNote(t hooksTarget, states []hookState) string {
+	if t.use != claudeCodeHooksTarget.use {
+		return ""
+	}
+	installed := false
+	for _, s := range states {
+		if s.entry.event == "PreToolUse" && s.state != hookStateMissing {
+			installed = true
+		}
+	}
+	if !installed {
+		return ""
+	}
+	version, err := probeDaemonVersion()
+	switch {
+	case err != nil:
+		return "Claude Code — the identity hook stamps nothing right now: no running daemon reported a version (" + err.Error() + ")."
+	case !daemonVersionAcceptsStamp(version):
+		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon is %s, and the identity channel needs %s or later. Run `plumb restart`.", version, identityChannelMinVersion)
+	}
+	return ""
 }
 
 // hookAction maps a hook's state before an operation to the word that goes in

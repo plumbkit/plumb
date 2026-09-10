@@ -218,3 +218,18 @@ func TestRunLogLevel_InvalidLevelRejectedBeforeDial(t *testing.T) {
 		t.Fatalf("invalid level should be rejected before dialing daemon, got %q", err.Error())
 	}
 }
+
+// TestHandleCtrlConn_Version: the identity hook gates its stamp on this reply,
+// so the shape `ok <version>` is a wire contract, not a display string.
+func TestHandleCtrlConn_Version(t *testing.T) {
+	ln := testCtrlListener(t)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{})
+
+	resp := sendCtrl(t, ln, "version")
+	if resp != "ok "+Version {
+		t.Fatalf("version reply = %q, want %q", resp, "ok "+Version)
+	}
+	if v, err := parseDaemonVersionReply(resp); err != nil || v != Version {
+		t.Fatalf("the hook's parser rejects the daemon's own reply: %q, %v", v, err)
+	}
+}

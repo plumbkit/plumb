@@ -174,6 +174,15 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 		return
 	}
 
+	// version: the running daemon's version, for a caller that must know
+	// whether the daemon it is about to talk to understands a newer wire
+	// feature (the Claude Code identity hook gates its stamp on this). An older
+	// daemon answers `error: unknown command`, which the caller reads as "no".
+	if line == "version" {
+		fmt.Fprintf(conn, "ok %s\n", Version)
+		return
+	}
+
 	const prefix = "set-level "
 	if !strings.HasPrefix(line, prefix) {
 		fmt.Fprintf(conn, "error: unknown command %q\n", line)

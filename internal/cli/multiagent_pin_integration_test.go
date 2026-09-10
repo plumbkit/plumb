@@ -12,11 +12,14 @@ package cli
 //
 //   - session_start calls carry NO per-call `_meta` identity. That is the honest
 //     model of the target client, and it is the channel the fix is about.
-//   - LATER calls (the write_file cases) DO carry one. That is NOT the target
-//     client: Claude Code's per-call `_meta` has a tool-use id and a progress
-//     token, nothing agent-scoped. Those subtests therefore prove per-agent
-//     routing for a client that CAN identify each call — a real supported
-//     topology, but not the one the subagents in the story are running.
+//   - LATER calls (the write_file cases) DO carry one. Claude Code's own
+//     transport does not: its per-call `_meta` has a tool-use id and a progress
+//     token, nothing agent-scoped. What DOES carry one on Claude Code is plumb's
+//     PreToolUse identity hook, which stamps the id into `arguments` (see
+//     hooks_claude_identity.go and internal/mcp/argidentity.go). The subtests
+//     here drive the `_meta` channel directly; the argument channel, routed
+//     through a real mcp.Server, is pinned in
+//     multiagent_identity_integration_test.go.
 //
 // The gap between the two WAS deliberate and pinned, not overlooked:
 // testAnonymousCallsInheritTheLastAttachedAgent recorded what happened when a
