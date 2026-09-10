@@ -188,6 +188,9 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			status = "current"
 			tally.current++
 		case r.action == "installed":
+			if dryRun {
+				status = "missing"
+			}
 			tally.installed++
 		case strings.HasPrefix(r.action, skillActionConflict):
 			status = skillActionConflict
@@ -198,11 +201,14 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)"
 			tally.conflict++
 		default:
+			if dryRun {
+				status = "stale"
+			}
 			tally.updated++
 		}
 		t.Row(name, r.name, statusStyle(status).Render(status), shown)
 	}
-	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally, cleanup))
+	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally, cleanup, dryRun))
 }
 
 // findSkillCapable resolves a sync argument against the capable set by command
@@ -235,7 +241,7 @@ type skillSyncTally struct {
 // UNCONDITIONALLY: a writer command that succeeds silently is
 // indistinguishable from a broken one, so "no output" may only ever mean the
 // command did not run — never that it no-opped.
-func skillSyncSummaryLine(client string, t skillSyncTally, cleanup skillCleanupReport) string {
+func skillSyncSummaryLine(client string, t skillSyncTally, cleanup skillCleanupReport, dryRun bool) string {
 	total := t.installed + t.updated + t.current + t.failed + t.conflict
 	line := client + ": nothing to sync"
 	switch {
@@ -244,24 +250,57 @@ func skillSyncSummaryLine(client string, t skillSyncTally, cleanup skillCleanupR
 	case t.installed == 0 && t.updated == 0 && t.failed == 0 && t.conflict == 0:
 		line = fmt.Sprintf("%s: %d %s current", client, t.current, textfmt.Plural(t.current, "skill", "skills"))
 	default:
-		parts := make([]string, 0, 5)
-		for _, p := range []struct {
-			n    int
-			word string
-		}{
-			{t.installed, "installed"},
-			{t.updated, "updated"},
-			{t.current, "current"},
-			{t.conflict, "needs review"},
-			{t.failed, "failed"},
-		} {
-			if p.n > 0 {
-				parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
-			}
-		}
+		parts := skillSyncParts(t, dryRun)
 		line = fmt.Sprintf("%s: %d %s — %s", client, total, textfmt.Plural(total, "skill", "skills"), strings.Join(parts, ", "))
 	}
 	return line + skillCleanupSuffix(cleanup)
+}
+
+func skillSyncParts(t skillSyncTally, dryRun bool) []string {
+	if dryRun {
+		return skillSyncPartsDryRun(t)
+	}
+	return skillSyncPartsReal(t)
+}
+
+func skillSyncPartsDryRun(t skillSyncTally) []string {
+	parts := make([]string, 0, 5)
+	if t.installed > 0 {
+		parts = append(parts, fmt.Sprintf("would install %d", t.installed))
+	}
+	if t.updated > 0 {
+		parts = append(parts, fmt.Sprintf("would update %d", t.updated))
+	}
+	if t.current > 0 {
+		parts = append(parts, fmt.Sprintf("%d current", t.current))
+	}
+	if t.conflict > 0 {
+		parts = append(parts, fmt.Sprintf("%d needs review", t.conflict))
+	}
+	if t.failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", t.failed))
+	}
+	return parts
+}
+
+func skillSyncPartsReal(t skillSyncTally) []string {
+	items := []struct {
+		n    int
+		word string
+	}{
+		{t.installed, "installed"},
+		{t.updated, "updated"},
+		{t.current, "current"},
+		{t.conflict, "needs review"},
+		{t.failed, "failed"},
+	}
+	parts := make([]string, 0, 5)
+	for _, p := range items {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
+		}
+	}
+	return parts
 }
 
 // skillCleanupSuffix renders the backup-cleanup outcome as a trailing clause
