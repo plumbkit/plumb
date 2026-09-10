@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 // skillsTestTarget builds a skill-capable target pointed at temp config and
@@ -221,19 +224,19 @@ func TestSkillSyncSummaryLine(t *testing.T) {
 		cleanup skillCleanupReport
 		want    string
 	}{
-		{"all current", skillSyncTally{current: 7}, skillCleanupReport{}, "Test: 7 skills current"},
-		{"singular", skillSyncTally{current: 1}, skillCleanupReport{}, "Test: 1 skill current"},
-		{"fresh install", skillSyncTally{installed: 7}, skillCleanupReport{}, "Test: 7 skills — 7 installed"},
-		{"mixed", skillSyncTally{installed: 1, updated: 2, current: 4}, skillCleanupReport{}, "Test: 7 skills — 1 installed, 2 updated, 4 current"},
-		{"failure is visible", skillSyncTally{current: 6, failed: 1}, skillCleanupReport{}, "Test: 7 skills — 6 current, 1 failed"},
-		{"empty", skillSyncTally{}, skillCleanupReport{}, "Test: nothing to sync"},
+		{"nothing to sync", skillSyncTally{}, skillCleanupReport{}, "Test: nothing to sync"},
+		{"all current", skillSyncTally{current: 8}, skillCleanupReport{}, "Test: 8 skills current"},
+		{"one current singular", skillSyncTally{current: 1}, skillCleanupReport{}, "Test: 1 skill current"},
+		{"mixture with install and update", skillSyncTally{installed: 1, updated: 2, current: 5}, skillCleanupReport{}, "Test: 8 skills — 1 installed, 2 updated, 5 current"},
 		{"conflict is visible", skillSyncTally{current: 6, conflict: 1}, skillCleanupReport{}, "Test: 7 skills — 6 current, 1 needs review"},
 		{"cleanup removed", skillSyncTally{current: 7}, skillCleanupReport{removed: []string{"a.bak", "b.bak"}}, "Test: 7 skills current; 2 shipped-hash backups removed"},
 		{"cleanup kept", skillSyncTally{current: 7}, skillCleanupReport{kept: []string{"c.bak"}}, "Test: 7 skills current; 1 backup left for review (c.bak)"},
+		{"dryRun would install and update", skillSyncTally{installed: 2, updated: 3, current: 1}, skillCleanupReport{}, "Test: 6 skills — would install 2, would update 3, 1 current"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := skillSyncSummaryLine("Test", tc.tally, tc.cleanup); got != tc.want {
+			dryRun := tc.name == "dryRun would install and update"
+			if got := skillSyncSummaryLine("Test", tc.tally, tc.cleanup, dryRun); got != tc.want {
 				t.Errorf("skillSyncSummaryLine = %q, want %q", got, tc.want)
 			}
 		})
@@ -465,5 +468,72 @@ func TestDoctorSeesSkillDrift(t *testing.T) {
 	}
 	if _, ok := skillFreshnessResult(target); ok {
 		t.Error("current skills must produce no doctor line")
+	}
+}
+
+// TestSkillsSync_CheckVocabularyPinsFutureTense verifies that plumb skills sync --check
+// uses non-past-tense status words (missing, stale) and summary wording (would install, would update)
+// rather than past-tense words (installed, updated).
+func TestSkillsSync_CheckVocabularyPinsFutureTense(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "mcp.json")
+	skillsDir := filepath.Join(dir, "skills")
+	target := skillsTestTarget(cfg, skillsDir)
+
+	// Step 1: In an empty directory, --check should report "missing" and "would install", never "installed".
+	var summaries []string
+	tbl := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	syncClientGroup(tbl, &summaries, target, true)
+
+	tblRendered := ansiStripForCLITest(tbl.Render())
+	if strings.Contains(tblRendered, "installed") {
+		t.Errorf("--check table should not say 'installed', got:\n%s", tblRendered)
+	}
+	if !strings.Contains(tblRendered, "missing") {
+		t.Errorf("--check table should say 'missing', got:\n%s", tblRendered)
+	}
+	if len(summaries) == 0 || !strings.Contains(summaries[0], "would install") {
+		t.Errorf("--check summary should say 'would install', got: %v", summaries)
+	}
+	if strings.Contains(summaries[0], " installed") {
+		t.Errorf("--check summary should not say 'installed', got: %v", summaries)
+	}
+
+	// Step 2: Install an old/stale skill with a recorded manifest and re-run under --check.
+	// Now it should report "stale" and "would update", never "updated".
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &skillManifest{Skills: map[string]skillManifestEntry{}}
+	for _, s := range embeddedSkills() {
+		sDir := filepath.Join(skillsDir, s.Name)
+		_ = os.MkdirAll(sDir, 0o755)
+		oldContent := "<!-- plumb: 0.1.0 -->\nold content\n"
+		_ = os.WriteFile(filepath.Join(sDir, "SKILL.md"), []byte(oldContent), 0o600)
+		manifest.Skills[s.Name] = skillManifestEntry{
+			Hash:    hashSkillContent("old content\n"),
+			Version: "0.1.0",
+		}
+	}
+	if err := saveSkillManifest(skillsDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries = nil
+	tbl = render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	syncClientGroup(tbl, &summaries, target, true)
+
+	tblRendered = ansiStripForCLITest(tbl.Render())
+	if strings.Contains(tblRendered, "updated") {
+		t.Errorf("--check table should not say 'updated', got:\n%s", tblRendered)
+	}
+	if !strings.Contains(tblRendered, "stale") {
+		t.Errorf("--check table should say 'stale', got:\n%s", tblRendered)
+	}
+	if len(summaries) == 0 || !strings.Contains(summaries[0], "would update") {
+		t.Errorf("--check summary should say 'would update', got: %v", summaries)
+	}
+	if strings.Contains(summaries[0], " updated") {
+		t.Errorf("--check summary should not say 'updated', got: %v", summaries)
 	}
 }

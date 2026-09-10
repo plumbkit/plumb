@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`find_files` gains `exclude` glob filter.** Accepts an array of patterns
+  matching relative paths or base names (supporting `**`), matching
+  `search_in_files` behavior. Matching directories are pruned from the walk
+  without descending; matching files are skipped.
+
+### Fixed
+
+- **`plumb skills sync --check` uses non-past-tense status and summary wording.**
+  Under `--check` (dry run), the status column reports `missing` or `stale`
+  instead of `installed` or `updated`, and the summary line reports
+  `would install N, would update N` rather than claiming changes were applied.
+
 ## 0.19.0 (2026-09-09)
 
 ### Removed

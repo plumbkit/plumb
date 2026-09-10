@@ -60,6 +60,11 @@ var findFilesSchema = json.RawMessage(`{
       "type": "string",
       "description": "Filter by file extension, e.g. 'go' or '.go'."
     },
+    "exclude": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Glob patterns to exclude from the walk. Matching directories are pruned without descending; matching files are skipped. Matched against relative paths and base names (supports **)."
+    },
     "max_depth": {
       "type": "integer",
       "description": "Maximum directory depth to descend. 1 lists one level only, like ls. Default: unlimited.",
@@ -127,16 +132,17 @@ func (t *FindFiles) Description() string {
 }
 
 type findFilesArgs struct {
-	Pattern        string `json:"pattern"`
-	Path           string `json:"path"`
-	Type           string `json:"type"`
-	Extension      string `json:"extension"`
-	MaxDepth       int    `json:"max_depth"`
-	MaxResults     int    `json:"max_results"`
-	IncludeHidden  bool   `json:"include_hidden"`
-	IncludeDetails bool   `json:"include_details"`
-	SortBy         string `json:"sort_by"`
-	UseRegex       bool   `json:"use_regex"`
+	Pattern        string   `json:"pattern"`
+	Path           string   `json:"path"`
+	Type           string   `json:"type"`
+	Extension      string   `json:"extension"`
+	Exclude        []string `json:"exclude"`
+	MaxDepth       int      `json:"max_depth"`
+	MaxResults     int      `json:"max_results"`
+	IncludeHidden  bool     `json:"include_hidden"`
+	IncludeDetails bool     `json:"include_details"`
+	SortBy         string   `json:"sort_by"`
+	UseRegex       bool     `json:"use_regex"`
 }
 
 // findFilesConfig holds the resolved walk parameters derived from findFilesArgs.
@@ -344,13 +350,22 @@ func (w *findFilesWalker) visit(path string, d fs.DirEntry, depth int) error {
 }
 
 // shouldPrune reports whether a directory subtree cannot hold a match for a
-// slash-bearing glob, so the walk can skip it without descending.
+// slash-bearing glob or matches an exclude pattern, so the walk can skip it without descending.
 func (w *findFilesWalker) shouldPrune(path string) bool {
-	if w.cfg.globPrefix == "" || path == w.cfg.root {
+	if path == w.cfg.root {
 		return false
 	}
 	rel, _ := filepath.Rel(w.cfg.root, path)
-	return !dirCompatibleWithPrefix(filepath.ToSlash(rel), w.cfg.globPrefix)
+	relSlash := filepath.ToSlash(rel)
+	if w.cfg.globPrefix != "" && !dirCompatibleWithPrefix(relSlash, w.cfg.globPrefix) {
+		return true
+	}
+	for _, excl := range w.a.Exclude {
+		if m, _ := doubleStarMatchFile(excl, relSlash); m {
+			return true
+		}
+	}
+	return false
 }
 
 // matches applies the depth, type, extension, and pattern filters. The depth
@@ -365,6 +380,11 @@ func (w *findFilesWalker) matches(rel string, d fs.DirEntry, isDir bool, depth i
 	}
 	if !w.passesTypeFilter(isDir) || !w.passesExtFilter(d, isDir) {
 		return false
+	}
+	for _, excl := range w.a.Exclude {
+		if m, _ := doubleStarMatchFile(excl, rel); m {
+			return false
+		}
 	}
 	target := d.Name()
 	if w.cfg.patternHasSlash {

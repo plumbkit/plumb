@@ -593,7 +593,7 @@ agrees on one indent convention (3 or more files), it is stated once in a
 ### `find_files`
 Glob/regex file or directory finder, and plumb's directory lister. **Inputs:**
 `pattern` (optional — omit to match everything), `path`, `type` (`file` | `dir`
-| `any`, default `file`), `extension`, `max_depth` (`1` lists one level, like
+| `any`, default `file`), `extension`, `exclude` (array of globs to exclude; matching directories are pruned, matching files skipped), `max_depth` (`1` lists one level, like
 `ls`), `max_results` (default 500), `include_hidden`, `include_details`,
 `sort_by` (`name` | `size` | `modified`, default `name`), `use_regex`. Honours
 `.gitignore`. Glob patterns support brace alternation (`*.{ts,tsx}`), including

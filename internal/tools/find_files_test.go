@@ -560,3 +560,100 @@ func TestNewFindFileHit_DirectorySizeIsZero(t *testing.T) {
 		t.Error("a directory hit must still carry its modified time")
 	}
 }
+
+// TestFindFiles_ExcludeSuppressesMatch verifies that an exclude pattern hides
+// matches and prunes directory subtrees.
+func TestFindFiles_ExcludeSuppressesMatch(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, content string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(root, "vendor", "dep"))
+	mustWrite(filepath.Join(root, "main.go"), "package main\n")
+	mustWrite(filepath.Join(root, "vendor", "dep", "lib.go"), "package dep\n")
+
+	// Without exclude: both files appear.
+	out := runFindFiles(t, map[string]any{"path": root})
+	if !strings.Contains(out, "main.go") || !strings.Contains(out, "vendor") {
+		t.Errorf("expected both files without exclude:\n%s", out)
+	}
+
+	// With exclude: vendor subtree is pruned.
+	out2 := runFindFiles(t, map[string]any{
+		"path":    root,
+		"exclude": []string{"vendor"},
+	})
+	if !strings.Contains(out2, "main.go") {
+		t.Errorf("main.go should still match:\n%s", out2)
+	}
+	if strings.Contains(out2, "vendor") {
+		t.Errorf("vendor/ should be excluded:\n%s", out2)
+	}
+}
+
+// TestFindFiles_ExcludeByGlob verifies that glob patterns in exclude work
+// against file base names.
+func TestFindFiles_ExcludeByGlob(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go", "package main\n")
+	write("main.pb.go", "package generated\n")
+
+	out := runFindFiles(t, map[string]any{
+		"path":    root,
+		"exclude": []string{"*.pb.go"},
+	})
+	if !strings.Contains(out, "main.go") {
+		t.Errorf("main.go should match:\n%s", out)
+	}
+	if strings.Contains(out, "main.pb.go") {
+		t.Errorf("main.pb.go should be excluded by glob:\n%s", out)
+	}
+}
+
+// TestFindFiles_ExcludePrunesDirectoryDescents verifies that an excluded directory
+// is skipped at the directory level and never descended into.
+func TestFindFiles_ExcludePrunesDirectoryDescents(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, content string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(root, "node_modules", "pkg", "deep"))
+	mustWrite(filepath.Join(root, "node_modules", "pkg", "deep", "dep.js"), "console.log(1)\n")
+	mustWrite(filepath.Join(root, "app.js"), "console.log(2)\n")
+
+	out := runFindFiles(t, map[string]any{
+		"path":    root,
+		"exclude": []string{"node_modules"},
+		"type":    "any",
+	})
+	if strings.Contains(out, "node_modules") {
+		t.Errorf("expected node_modules to be pruned, got:\n%s", out)
+	}
+	if !strings.Contains(out, "app.js") {
+		t.Errorf("expected app.js to be included, got:\n%s", out)
+	}
+}
