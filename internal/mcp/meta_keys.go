@@ -140,3 +140,16 @@ const MetaToolErrorKey = "dev.plumbkit/error"
 // that cannot supply one fails closed on state-changing calls (PLAN-286 §3).
 // Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaLogicalAgentKey = "dev.plumbkit/logical-agent"
+
+// ArgLogicalAgentKey is the ARGUMENT-carried form of MetaLogicalAgentKey: the
+// same reverse-DNS string, placed as a top-level key inside tools/call
+// `arguments` instead of `_meta`. It exists for client runtimes that can rewrite
+// a tool call's input but not its envelope — Claude Code's PreToolUse hook
+// (`plumb hooks run-claude`) is the emitter — and it is stripped in
+// handleToolsCall before the argument guard or any tool sees the arguments, so
+// no tool schema declares it and no tool ever receives it. `_meta` outranks it
+// when both are present. Reverse-DNS with a `/` cannot collide with a declared
+// parameter or a parameter alias. The daemon cannot distinguish a stamp a
+// runtime injected from one a model typed; the trust boundary stays the
+// connection, exactly as for `_meta` (docs/threat-model.md).
+const ArgLogicalAgentKey = MetaLogicalAgentKey

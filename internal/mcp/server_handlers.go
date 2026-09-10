@@ -280,6 +280,12 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return errRespData(req.ID, codeInvalidParams, "invalid params: "+err.Error(), invalidCallEnvelope(""))
 	}
 
+	// The argument-carried identity is lifted out FIRST, before the alias
+	// adapter re-marshals the arguments and before the guard validates them, so
+	// nothing downstream ever sees the reserved key. See argidentity.go.
+	argAgent, stripped := splitLogicalAgentArg(params.Arguments)
+	params.Arguments = stripped
+
 	// A retired tool name is resolved onto its canonical tool BEFORE the registry
 	// lookup, so the canonical name is what the hooks, the parameter-alias
 	// resolver, execTool, and the recorded stats all see. See toolalias.go.
@@ -296,7 +302,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			invalidCallEnvelope(params.Name))
 	}
 
-	logicalAgent := logicalAgentFromMeta(params.Meta)
+	logicalAgent := resolveLogicalAgent(params.Meta, argAgent)
 	ctx = WithLogicalAgent(ctx, logicalAgent)
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
