@@ -279,14 +279,47 @@ cannot reach.
 
 | Client | Config | Hooks installed |
 |---|---|---|
-| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s) and `Stop` (`async` + `asyncRewake`, timeout 330s) |
+| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 330s) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
 
 Both clients get the same pair. **`SessionStart`** states the client's own
 conversation ID as a fact, so the agent's first `session_start` can pass it as
 `session_id` — the linkage that lets `plumb mail`, `leave_note` and the wake
 path address that exact session rather than guessing from a shared directory.
-**`Stop`** reports unread peer mail as a turn ends.
+**`Stop`** reports unread peer mail as a turn ends. Claude Code gets a third:
+
+- **`PreToolUse` stamps identity.** Claude Code runs every subagent over the
+  parent's one `plumb serve`, and its transport carries no per-agent identity,
+  so the daemon could not tell a subagent's call from its parent's — and, once
+  two agents had declared themselves, refused every write from both as
+  unattributable. The hook closes that: on every `mcp__plumb__*` call it adds
+  one top-level argument, `dev.plumbkit/logical-agent`, holding the
+  conversation id (main thread) or `<conversation>/<agent_id>` (subagent), and
+  on `session_start` it also sets `session_id` to the same value, so no agent
+  has to remember one. The daemon lifts the key out before validation; no tool
+  ever sees it. The stamp is gated on the running daemon's version (cached for
+  a minute under `PLUMB_WAKE_DIR`): a daemon older than 0.19.1 would reject it
+  as an unknown parameter, so against one the hook stamps nothing and bare
+  `plumb hooks` says so. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
+  a call: the only failure mode is an unstamped call, which is what the client
+  sent anyway. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
+  not matched. Codex is not covered: its `updatedInput` requires
+  `permissionDecision: "allow"`, a permission side-effect plumb will not take
+  silently. **After upgrading, re-run `plumb hooks install claude-code`** — an
+  older install has only the first two hooks, and the table shows the third as
+  `missing` until it does.
+
+What `plumb hooks install claude-code` writes, in full:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 5 }] }],
+    "Stop":         [{ "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 330, "async": true, "asyncRewake": true }] }],
+    "PreToolUse":   [{ "matcher": "mcp__plumb__.*", "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 5 }] }]
+  }
+}
+```
 
 What `Stop` can do differs by client, and the difference is not cosmetic:
 
@@ -343,9 +376,10 @@ rather than leaving two that both fire. An uninstall removes
 emptied it and only where that structure was plumb's own** — a bare
 `{"hooks": [...]}` group it took the last handler from, then an event key with
 no group left, then the file itself if the whole config was plumb's hooks and
-nothing else. A group carrying anything more — a `matcher`, a note of your own —
-is yours even when plumb's handler is the only thing inside it, so it stays with
-its keys intact and an emptied `hooks` array. A group you left empty (Claude
+nothing else, or the `{"matcher": "mcp__plumb__.*", "hooks": [...]}` group the
+identity hook installs into. A group carrying anything more — a different
+`matcher`, a note of your own — is yours even when plumb's handler is the only
+thing inside it, so it stays with its keys intact and an emptied `hooks` array. A group you left empty (Claude
 Code's own `/hooks` editor leaves those) is structure plumb never wrote and is
 untouched. An uninstall with nothing of plumb's to remove writes nothing at all
 — not even a backup.

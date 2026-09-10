@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.19.1 (unreleased)
+
+### Added
+
+- **Claude Code subagents get their own identity on a shared connection.**
+  `plumb hooks install claude-code` now installs a third hook, `PreToolUse`
+  (matcher `mcp__plumb__.*`), which stamps a per-agent identity onto every
+  plumb call: the conversation id for the main thread,
+  `<conversation>/<agent_id>` for a subagent. On `session_start` it also fills
+  `session_id` with the same value, so no agent has to remember one. The daemon
+  accepts the stamp as a new identity channel — the `dev.plumbkit/logical-agent`
+  key placed inside `arguments` by a client runtime that can rewrite tool input
+  but not `_meta` — and lifts it out before the argument guard or any tool sees
+  it; `_meta` still outranks it. The stamp is gated on the running daemon's
+  version (a new `version` control-socket command, cached for a minute), so a
+  hook binary newer than its daemon stamps nothing rather than getting every
+  call refused as an unknown parameter; bare `plumb hooks` explains the skew.
+  `PLUMB_IDENTITY_HOOK=off` disables it. Codex is not covered: its
+  `updatedInput` requires `permissionDecision: "allow"`. **Re-run
+  `plumb hooks install claude-code` after upgrading** — an older install shows
+  the new hook as `missing`.
+
+### Fixed
+
+- **A shared connection refused every write after a subagent declared
+  itself.** Claude Code's transport carries no per-call agent identity, so once
+  a second `session_id` had been seen the daemon could attribute no later write
+  to anyone and refused all of them — the parent's included — for the
+  connection's life, and re-calling `session_start` could not clear it. With the
+  identity hook every call is attributable; the anonymous refusal itself is
+  unchanged, and its remedy now leads with identity rather than with "one plumb
+  serve per agent", the one fix an agent cannot apply from inside a call.
+- **The first agent's reads survived nothing.** When a peer turned the
+  connection shared, the agent that had been the connection was moved onto a
+  fresh shard whose read tracker started empty, so every strict-mode edit it
+  had in flight failed "has not been read". The first agent's shard is now
+  seeded from the connection's reads; its write tracker and undo history still
+  start fresh at the flip.
+- **A subagent's `session_id` rewrote the conversation's linkage.** The
+  session record (the name mail is addressed to, `plumb mail --external-id`,
+  name inheritance on resume) is now linked to the conversation half of a
+  `<conversation>/<agent>` id, so a subagent declaring itself no longer makes
+  its parent's mail stop resolving.
+
 ## 0.19.0 (2026-09-09)
 
 ### Removed
