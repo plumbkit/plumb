@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -255,7 +256,7 @@ func writeIdentityProbe(path string, rec identityProbeRecord) {
 func probeDaemonVersion() (string, error) {
 	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
 	if err != nil {
-		return "", err
+		return "", errDaemonNotRunning
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
@@ -280,10 +281,11 @@ func parseDaemonVersionReply(line string) (string, error) {
 	return "", errDaemonVersionUnknown
 }
 
-var errDaemonVersionUnknown = errUnknownDaemonVersion{}
-
-type errUnknownDaemonVersion struct{}
-
-func (errUnknownDaemonVersion) Error() string {
-	return "daemon did not report a version (it predates the identity channel, or is not running)"
-}
+// The two ways a probe fails are told apart because their remedies differ:
+// a daemon that is not running starts on the next `plumb serve` and stamping
+// resumes by itself, while one that answers but predates the channel needs
+// `plumb restart`.
+var (
+	errDaemonNotRunning     = errors.New("no daemon is listening on the control socket")
+	errDaemonVersionUnknown = errors.New("the daemon did not report a version, so it predates the identity channel")
+)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func TestLinkageIDOf(t *testing.T) {
@@ -40,11 +41,11 @@ func TestLogicalAgentLabel(t *testing.T) {
 	}
 }
 
-// TestFirstShardInheritsConnectionReads: the agent that WAS the connection
-// before a peer turned it shared keeps the reads it made as the connection; the
-// peer starts empty. Without the seeding, every edit the first agent had in
+// TestLinkageOwnerInheritsConnectionReads: the agent that WAS the connection
+// before a peer turned it shared keeps the reads it made as the connection;
+// the peer starts empty. Without the seeding, every edit the parent had in
 // flight fails "has not been read" the moment a subagent declares itself.
-func TestFirstShardInheritsConnectionReads(t *testing.T) {
+func TestLinkageOwnerInheritsConnectionReads(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
 	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
@@ -52,42 +53,78 @@ func TestFirstShardInheritsConnectionReads(t *testing.T) {
 
 	root := freshTempDir(t)
 	mustGitDir(t, root)
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
 	path := root + "/main.go"
 	when := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
-	// Single-agent phase: the first agent attaches and reads as the connection.
-	s.recordLogicalAgentAttach("conv")
+	// Single-agent phase: the parent links the conversation and reads as the
+	// connection.
+	s.linkExternalID("conv")
 	s.readTracker.Record(path, when, "sha-1")
 
 	// A subagent declares itself: the connection is now shared.
 	s.recordLogicalAgentCall("conv/agent-1")
 
-	first := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv"))
-	if first == s.readTracker {
-		t.Fatal("the first agent must be routed to its own shard once the connection is shared")
+	parent := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv"))
+	if parent == s.readTracker {
+		t.Fatal("the parent must be routed to its own shard once the connection is shared")
 	}
-	if got := first.Mtime(path); !got.Equal(when) {
-		t.Fatalf("first agent's shard lost the read it made as the connection: mtime %v, want %v", got, when)
+	if got := parent.Mtime(path); !got.Equal(when) {
+		t.Fatalf("the parent's shard lost the read it made as the connection: mtime %v, want %v", got, when)
 	}
-	second := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv/agent-1"))
-	if got := second.Mtime(path); !got.IsZero() {
-		t.Fatalf("a later agent must start with no reads, got mtime %v", got)
+	sub := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv/agent-1"))
+	if got := sub.Mtime(path); !got.IsZero() {
+		t.Fatalf("a subagent must start with no reads, got mtime %v", got)
 	}
 }
 
-// TestFirstIDIsTheFirstCommittedIdentity pins that a refused-then-retried or
-// re-declared identity cannot displace the first.
-func TestFirstIDIsTheFirstCommittedIdentity(t *testing.T) {
-	var l logicalAgentState
-	if got := l.firstID(); got != "" {
-		t.Fatalf("empty state must have no first id, got %q", got)
+// TestConnectionReadsSeedOnlyTheLinkageOwner is the daemon-restart shape the
+// first review of this change caught: the connection's reads are rehydrated,
+// the linkage is restored from the durable record, no agent has re-declared
+// itself yet, and the FIRST stamped call is the subagent's. It must not
+// inherit the parent's reads — that would let it edit, in strict mode, files
+// it never read. The parent, arriving later, still does.
+func TestConnectionReadsSeedOnlyTheLinkageOwner(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+		t.Fatalf("pin: %v", err)
 	}
-	l.record("")
-	l.record("a")
-	l.record("b")
-	l.record("a")
-	if got := l.firstID(); got != "a" {
-		t.Fatalf("firstID = %q, want a", got)
+	path := root + "/main.go"
+	when := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	// "After the restart": linkage restored, reads rehydrated, nothing declared.
+	session.SetExternalID(s.sessionID(), "conv")
+	s.readTracker.Record(path, when, "sha-1")
+
+	// The subagent's stamped call is the first identity the new session sees;
+	// then the parent's.
+	s.recordLogicalAgentCall("conv/agent-1")
+	s.recordLogicalAgentCall("conv")
+
+	sub := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv/agent-1"))
+	if got := sub.Mtime(path); !got.IsZero() {
+		t.Fatalf("the subagent inherited the parent's read (mtime %v) because it was seen first", got)
+	}
+	parent := s.readTrackerFor(mcp.WithLogicalAgent(context.Background(), "conv"))
+	if got := parent.Mtime(path); !got.Equal(when) {
+		t.Fatalf("the linkage owner's shard must inherit the connection's reads: mtime %v, want %v", got, when)
+	}
+
+	// A shard pinned to a different root than the connection is not seeded
+	// either: a read is only valid for the root it was made under.
+	if s.seedsConnectionReads("conv", root+"/elsewhere", root) {
+		t.Fatal("a shard on another root must not inherit the connection's reads")
+	}
+	if s.seedsConnectionReads("", root, root) || s.seedsConnectionReads("conv/agent-1", root, root) || s.seedsConnectionReads("other", root, root) {
+		t.Fatal("only the linkage owner qualifies")
 	}
 }
 
@@ -115,9 +152,6 @@ func TestSubagentLinkageKeepsTheConversation(t *testing.T) {
 	if !s.logicalAgents.sharedWith("") {
 		t.Fatal("the subagent's full id must be committed as a second logical agent")
 	}
-	if got := s.logicalAgents.firstID(); got != "conv-1" {
-		t.Fatalf("firstID = %q, want conv-1", got)
-	}
 	// The subagent attaching FIRST links the same conversation.
 	fresh := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
 	t.Cleanup(fresh.close)
@@ -138,5 +172,39 @@ func TestExternalIDLinkerIsWired(t *testing.T) {
 	body := registerAllToolsBody(string(src))
 	if !strings.Contains(body, "WithExternalID(s.linkExternalID)") {
 		t.Error("session_start is registered without WithExternalID(s.linkExternalID): a subagent's session_id would rewrite the conversation's linkage")
+	}
+}
+
+// TestSubagentAttachDoesNotResumeTwice: name inheritance from an ended
+// predecessor runs once per linkage. The parent resumes the name; a subagent
+// attaching under the same conversation must not run the inheritance again
+// (a second rename against a name the session already holds, or a second
+// resumedNewIdentity flip).
+func TestSubagentAttachDoesNotResumeTwice(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+
+	// An ended predecessor linked to the conversation, inside the grace window.
+	prev, err := session.Register(session.Info{Name: "old-owl", Folder: "/w", Language: "go"})
+	if err != nil {
+		t.Fatalf("register predecessor: %v", err)
+	}
+	session.SetExternalID(prev.ID, "conv-r")
+	session.Unregister(prev.ID)
+
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	if got := s.linkExternalID("conv-r"); got != "old-owl" {
+		t.Fatalf("the parent's attach must inherit the predecessor's name, got %q", got)
+	}
+	if !s.view().resumedNewIdentity {
+		t.Fatal("the inheritance must be disclosed as a resumed identity")
+	}
+	if got := s.linkExternalID("conv-r/agent-1"); got != "" {
+		t.Fatalf("a subagent attaching under an already-linked conversation must not resume again, got %q", got)
+	}
+	if got := s.externalID(); got != "conv-r" {
+		t.Fatalf("linkage = %q, want conv-r", got)
 	}
 }
