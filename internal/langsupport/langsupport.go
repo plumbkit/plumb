@@ -118,11 +118,12 @@ var registry = []Language{
 	// are the bulk of a Svelte app's sources, and until they had a row plumb
 	// could not name the format at all, let alone say it does not index it.
 	//
-	// A row does NOT give either format a vote in workspace language detection.
-	// That sniff counts votes for configured language SERVERS, and plumb ships
-	// none that serves a single-file component — pinned by
-	// cli.TestFileLanguage_RecognisedButUnservedFileCastsNoVote, so that wiring
-	// one later is a deliberate change rather than a surprise.
+	// In the workspace content sniff and marker tie-breaks, single-file components
+	// count toward the typescript / web ecosystem governed by package.json,
+	// allowing package.json to win weak-marker ties against static markup (index.html).
+	// For routing, fileLanguage continues to report no server until a dedicated
+	// adapter (e.g. svelte-language-server) is added, so typescript-language-server
+	// is never started on files it cannot parse.
 	{Name: "svelte", Extensions: []string{".svelte"}, Structural: EngineNone, LSPAdapter: ""},
 	{Name: "vue", Extensions: []string{".vue"}, Structural: EngineNone, LSPAdapter: ""},
 }
