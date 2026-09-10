@@ -57,6 +57,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -73,6 +74,11 @@ func newMultiAgentConn(t *testing.T) *multiAgentConn {
 	t.Helper()
 	store, ss := newOriginStore(t)
 	s := newPersistSession(t, store, ss, "proxy-multiagent")
+	if s.statsStore == nil {
+		// The attribution assertions read the rows onAfterTool records; the
+		// store opens lazily under the XDG_DATA_HOME newOriginStore isolated.
+		s.statsStore = newStatsStore()
+	}
 	start := tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).
@@ -101,7 +107,14 @@ func (m *multiAgentConn) call(t *testing.T, metaAgent, name string, args map[str
 	}
 	m.s.recordLogicalAgentCall(metaAgent)
 	m.s.onBeforeTool(ctx, name, raw)
-	_, err = exec(ctx, raw)
+	out, err := exec(ctx, raw)
+	// The after-tool leg is what records the call: PLAN-401's attribution
+	// claim is about the stats row, so the harness must run it.
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent)
 	return err
 }
 
@@ -482,6 +495,30 @@ func testEveryAgentWriteVisible(t *testing.T) {
 			if m.s.writeTrackerFor(agentCtx(peer)).Wrote(path) {
 				t.Errorf("%s's write leaked into %s's tracker", id, peer)
 			}
+		}
+	}
+
+	// PLAN-401: the recorded row names the AGENT that wrote, not just the one
+	// connection they all wrote through. Close the writer to flush the batch,
+	// then read the feed the way workspace_sessions does.
+	m.s.statsStore.Close()
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.RecentWritesByWorkspace(ws, tools.WriteToolNames(), 50)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace: %v", err)
+	}
+	writerOf := map[string]string{}
+	for _, r := range rows {
+		writerOf[tools.FileFromToolInput(r.InputJSON)] = r.LogicalAgent
+	}
+	for _, id := range agents {
+		path := filepath.Join(ws, id+".txt")
+		if got, ok := writerOf[path]; !ok || got != id {
+			t.Errorf("stats row for %s names agent %q (present=%v), want %q", path, got, ok, id)
 		}
 	}
 }

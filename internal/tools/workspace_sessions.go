@@ -488,15 +488,17 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 	if len(annotations) > 0 {
 		sb.WriteString("  (symbol/package annotations are best-effort from the topology index)\n")
 	}
+	writer := newWriterLabels()
 	for _, w := range writes {
 		age := humaniseAge(now.Sub(w.CalledAt))
+		who := writer.label(w)
 		if w.Tool == "git" {
-			writeGitWriteEntry(sb, w, workspace, age)
+			writeGitWriteEntry(sb, w, who, workspace, age)
 			continue
 		}
 		file := fileFromInputJSON(w.InputJSON)
 		if file == "" {
-			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", w.SessionName, w.Tool, age, feedOutcomeMarker(w))
+			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)%s\n", who, w.Tool, age, feedOutcomeMarker(w))
 			continue
 		}
 		abs := file
@@ -510,7 +512,7 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 		if rel, ok := paths.WorkspaceRel(workspace, abs); ok {
 			file = rel
 		}
-		fmt.Fprintf(sb, "  %-20s  %-18s  %s  (%s ago)", w.SessionName, w.Tool, file, age)
+		fmt.Fprintf(sb, "  %-20s  %-18s  %s  (%s ago)", who, w.Tool, file, age)
 		if a := annotations[abs]; a != "" {
 			fmt.Fprintf(sb, "  [%s]", a)
 		}

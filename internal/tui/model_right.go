@@ -7,6 +7,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
@@ -263,10 +264,12 @@ func (m *Model) rightLinesHistory(rw int) []string {
 	h := "  " + rlc + s3 + render.PadLeft(HintStyle.Render("Dur"), c2w) + s3 + render.PadLeft(HintStyle.Render("When"), c3w) + s3 + render.PadLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
 	lines := []string{h, sln}
 	m.recentTableBodyRow = 2 // tab bar + blank = 2 rows before this content
+	extIDs := m.sessionExternalIDs()
 	for i, c := range m.recentCalls {
 		sel := m.focusPanel == focusStats && i == m.statsCursor
 		tn := render.PadRight(textfmt.Ellipsis(c.Tool, rc1w-2), rc1w-2)
-		sn := render.PadRight(textfmt.Ellipsis(c.SessionName, c5w), c5w)
+		who := recentCallWho(c, extIDs)
+		sn := render.PadRight(textfmt.Ellipsis(who, c5w), c5w)
 		if sel {
 			pd, pw, pe := render.PadLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), render.PadLeft(render.HumanAge(c.CalledAt), c3w), render.PadLeft("", c4w)
 			if !c.Success {
@@ -282,11 +285,30 @@ func (m *Model) rightLinesHistory(rw int) []string {
 			if !c.Success {
 				c4 = render.PadLeft(WarnStyle.Render("✗"), c4w)
 			}
-			c5 := render.PadRight(MutedStyle.Render(textfmt.Ellipsis(c.SessionName, c5w)), c5w)
+			c5 := render.PadRight(MutedStyle.Render(textfmt.Ellipsis(who, c5w)), c5w)
 			lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
 		}
 	}
 	return lines
+}
+
+// sessionExternalIDs maps the live sessions' ids to their external ids, from
+// the session list the model already holds — so labelling the history table
+// costs no file reads per row per frame.
+func (m *Model) sessionExternalIDs() map[string]string {
+	out := make(map[string]string, len(m.sessions))
+	for _, s := range m.sessions {
+		out[s.ID] = s.ExternalID
+	}
+	return out
+}
+
+// recentCallWho is the Session column: the session name, qualified by the
+// logical agent when the call carried one (PLAN-401). A session no longer in
+// the live list has no external id to compare against, so a plain agent id
+// on it renders qualified — the honest reading of a row plumb cannot resolve.
+func recentCallWho(c stats.RecentCall, extIDs map[string]string) string {
+	return stats.AgentLabel(c.SessionName, extIDs[c.SessionID], c.LogicalAgent)
 }
 
 func (m Model) rightLinesDiagnostics(_ int) []string {
