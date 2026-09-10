@@ -266,6 +266,9 @@ type RecentCall struct {
 	OutputBytes int
 	InputJSON   string // raw args JSON
 	OutputText  string // full output
+	// LogicalAgent is the id the call carried on a shared connection; "" when
+	// it carried none (or the row predates v19). See AgentLabel.
+	LogicalAgent string
 }
 
 // Recent returns the n most recent calls matching filter.
@@ -276,7 +279,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	where, args := filter.where()
 	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
-	             error_msg, input_bytes, output_bytes, input_json, output_text
+	             error_msg, input_bytes, output_bytes, input_json, output_text, logical_agent
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
 
@@ -293,7 +296,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		var success int
 		if err := rows.Scan(
 			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
-			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText, &c.LogicalAgent,
 		); err != nil {
 			continue
 		}
@@ -423,7 +426,7 @@ func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limi
 	//nolint:gosec // G202: placeholders is only "?,?,.."; every value is a bound arg
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json,
-	             CASE WHEN tool = 'git' THEN output_text ELSE '' END
+	             CASE WHEN tool = 'git' THEN output_text ELSE '' END, logical_agent
 	      FROM tool_calls
 	      WHERE workspace = ? AND tool IN (` + placeholders + `)
 	      ORDER BY called_at DESC LIMIT ?`
@@ -441,7 +444,7 @@ func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limi
 		var success int
 		if err := rows.Scan(
 			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
-			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText, &c.LogicalAgent,
 		); err != nil {
 			continue
 		}
