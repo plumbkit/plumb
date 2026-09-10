@@ -97,18 +97,15 @@ func TestDetect_GitRepoWithPyStaysNoneAtDetect(t *testing.T) {
 	}
 }
 
-// TestFileLanguage_RecognisedButUnservedFileCastsNoVote pins the boundary
-// between the two registries the sniff sits between. langsupport recognises
-// .svelte (that is what lets file_outline and the topology census say something
-// true about it), but the sniff counts votes for LANGUAGE SERVERS, and plumb
-// configures none that serves a Svelte single-file component. So the file is
-// known and still casts no vote — adding the langsupport row must not quietly
-// enrol it in some other server's tally.
-//
-// The day plumb ships a Svelte adapter, or normaliseLangName folds svelte into
-// an existing one, this assertion is the thing that has to be revisited on
-// purpose rather than discovered afterwards.
-func TestFileLanguage_RecognisedButUnservedFileCastsNoVote(t *testing.T) {
+// TestFileLanguage_SvelteCastsVoteInSniff pins the separation between routing
+// and the content sniff. langsupport recognises .svelte and .vue as single-file
+// components. For ROUTING, fileLanguage returns "" because plumb configures no
+// server that can parse them (passing them to typescript-language-server would
+// fail). But for the CENSUS (extLangAt and weak marker tie-breaks), they count
+// toward the typescript/web ecosystem: a project dominated by .svelte files
+// resolves typescript when typescript is active, rather than letting a single
+// stray .py file hijack the repository or static index.html winning by default.
+func TestFileLanguage_SvelteCastsVoteInSniff(t *testing.T) {
 	pool := defaultsPool(t, "python", "typescript", "html")
 	for _, name := range []string{"App.svelte", "Card.vue"} {
 		if got := pool.fileLanguage(name); got != "" {
@@ -121,8 +118,14 @@ func TestFileLanguage_RecognisedButUnservedFileCastsNoVote(t *testing.T) {
 	for i := range 20 {
 		mustWrite(t, filepath.Join(dir, "src", fmt.Sprintf("C%02d.svelte", i)), "<script></script>\n")
 	}
-	if got := pool.extLangAt(dir); got != "python" {
-		t.Errorf("extLangAt = %q, want python — 20 .svelte files are recognised but "+
-			"serve no language server, so the one .py file is the only vote cast", got)
+	if got := pool.extLangAt(dir); got != "typescript" {
+		t.Errorf("extLangAt = %q, want typescript — 20 .svelte files count toward typescript in census, "+
+			"outvoting the one .py file", got)
+	}
+
+	// When typescript is inactive, extLangAt must stay silent rather than
+	// letting the outvoted .py file win.
+	if got := goOnlyPool().extLangAt(dir); got != "" {
+		t.Errorf("extLangAt (typescript inactive) = %q, want \"\" — outvoted .py file must not win", got)
 	}
 }

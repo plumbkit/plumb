@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- **Single-file components (`.svelte`, `.vue`) now count in workspace content sniffing and marker tie-breaks (PLAN-427).** While `langsupport` recognized `.svelte` and `.vue`, `sniffCounts` gated file classification on whether an active language server owned the file (`fileLanguageIn`), causing single-file components to cast zero votes. In repositories with mixed frontend tooling (e.g. `package.json` and static `index.html`), `index.html` would win the tie and launch `vscode-html-language-server` for Svelte apps, and a single stray `.py` file could outvote dozens of Svelte components. Routing and census responsibilities are now separated: `sniffFileLanguage` counts `.svelte` and `.vue` toward the TypeScript/JavaScript ecosystem (`typescript`), allowing `package.json` to settle weak-marker ties against static markup, while `fileLanguage` continues to return `""` so `typescript-language-server` is not launched on files it cannot parse.
 - **`session_start(language: …)` was silently ignored for an agent on a shared
   connection.** The override was validated, stored on that agent's shard and
   persisted — and acquired nothing, because a primary language server is bound
