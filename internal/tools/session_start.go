@@ -25,7 +25,7 @@ var sessionStartSchema = json.RawMessage(`{
     },
     "session_id": {
       "type": "string",
-      "description": "A stable id for THIS agent: the client's conversation id, or '<conversation>/<agent>' for a subagent. Pass it every time: it scopes this agent's pin, read tracking and undo on a shared connection, keeps it addressable for mail, and inherits a resumed conversation's name. Claude Code's identity hook fills it."
+      "description": "A stable id for THIS agent: the client's conversation id, or 'conversation/agent' for a subagent. Pass it every time: it scopes this agent's pin, read tracking and undo when agents share a connection, and carries your session name across a restart (same id, ended under 24 h ago). Claude Code's identity hook fills it."
     },
     "language": {
       "type": "string",
