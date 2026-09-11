@@ -32,6 +32,20 @@
 
 ### Fixed
 
+- **`session_start(language: …)` was silently ignored for an agent on a shared
+  connection.** The override was validated, stored on that agent's shard and
+  persisted — and acquired nothing, because a primary language server is bound
+  per CONNECTION. The caller was then told its primary was whatever the
+  connection had attached. It is now refused, naming both remedies that exist:
+  omit the argument and keep the connection's primary, or run a dedicated
+  `plumb serve` for that agent. Asking for the primary the connection already
+  has is a no-op and is not refused.
+- **A same-root language switch no longer resets read, write and undo
+  tracking.** Switching a primary changes no file, so every recorded entry is
+  still valid; only a move to a different project starts clean. This bit
+  hardest on a shared connection, where an agent re-orienting with a bare
+  `session_start` after `plumb enable-lsp` lost its dirty-guard write state and
+  undo history.
 - **A shared connection refused every write after a subagent declared
   itself.** Claude Code's transport carries no per-call agent identity, so once
   a second `session_id` had been seen the daemon could attribute no later write
@@ -51,6 +65,23 @@
   name inheritance on resume) is now linked to the conversation half of a
   `<conversation>/<agent>` id, so a subagent declaring itself no longer makes
   its parent's mail stop resolving.
+
+### Changed
+
+- **Every surface that teaches `session_start` now teaches identity.** The
+  brief, the `session_id` schema description, the Claude Code / Codex / Gemini
+  instruction templates, the `/orient` prompt, three shipped skills and
+  `docs/getting-started.md` all said "call `session_start` first" without
+  saying to pass a stable per-agent id — the argument that keeps an agent's pin
+  and read-tracking its own on a shared connection.
+- **Two refusals lead with identity instead of `force: true`.** The sticky
+  re-pin remedy and the workspace-boundary error named force first; that is the
+  sentence both sides of the 2026-08-28 pin incident obeyed while a pin changed
+  hands fourteen times in thirty-five minutes. Both now name the identity
+  remedy first and demote force to "only if the agent that set the pin has
+  finished". The unlinked-session notice also says what still works — the
+  session has a name and peers can `leave_note` to it now — before the cost of
+  staying unlinked.
 
 ## 0.19.0 (2026-09-09)
 
