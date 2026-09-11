@@ -23,7 +23,11 @@ import (
 // returned to the caller and the HealthMessage recorded for the dashboard
 // (issue #358) — extracted into one const so a future edit to either surface
 // cannot silently leave the other stale.
-const repinStickyRemedy = "If several agents share this connection, identify each one — on Claude Code `plumb hooks install claude-code` stamps every call; otherwise pass a stable per-agent session_start.session_id — so each keeps its own pin, or run a dedicated plumb serve process per agent. If you are a new conversation deliberately switching this connection to a different project, or the agent that set the pin has finished, call session_start again with force: true."
+// It is kept SHORT on purpose: it is rendered into the dashboard's alert
+// widget, which elides the middle of a long message and keeps the tail — so a
+// remedy that runs on loses its own advice and preserves only the force
+// sentence, which is the one this wording exists to demote.
+const repinStickyRemedy = "If several agents share this connection, identify each one (session_start.session_id, or plumb's identity hook) so each keeps its own pin, or run one plumb serve per agent. Use force: true only if you are switching this connection deliberately, or the agent that set the pin has finished."
 
 // repinContestedRemedy replaces repinStickyRemedy once this connection's pin has
 // been force-taken between projects repeatedly (see conn_pin_contest.go).
@@ -164,6 +168,14 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// (issue #263) — which is what lets the sticky-pin guard below recognise a
 	// re-pin naming the SAME project by a different spelling as the no-op it is,
 	// rather than refusing it as a peer trying to steal the pin.
+	// A language override cannot be honoured per agent, so an agent with a shard
+	// is refused BEFORE the override is validated. Validating first would send it
+	// to `plumb enable-lsp` for a language no override on this connection can
+	// ever apply — work done on the strength of an error, only to be refused on
+	// the retry (PLAN-428).
+	if err := s.refuseShardLanguageOverride(ctx, langOverride); err != nil {
+		return "", err
+	}
 	langForced := false
 	if langOverride != "" {
 		if err := s.languageOverrideErr(root, langOverride); err != nil {
@@ -178,16 +190,6 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// actual issue #182 fix. The connection-level attachOrRepinTo below runs only
 	// for an unattributed re-pin (roots, restore) or a non-shared connection.
 	if s.repinShard(ctx) != nil {
-		// A language override cannot be honoured per agent: the primary language
-		// server binding — sessionProxy, the invalidator, session.Info — is
-		// connection-wide, so honouring it here would retarget every peer's
-		// primary (the inverse of what the shards exist for), and storing it on
-		// the shard alone would tell the caller it got a server it did not.
-		// Refuse honestly with the two real remedies (PLAN-428).
-		if langOverride != "" {
-			return "", fmt.Errorf("session_start: language %q cannot be honoured for logical agent %q: a primary language server is bound per connection, and this connection is shared by several agents, so switching it would retarget every peer. Omit the language argument to keep the connection's primary%s, or run a dedicated plumb serve for this agent and pass language there",
-				langOverride, mcp.LogicalAgentFromCtx(ctx), parenthesisedLanguage(s.acquiredLanguageName()))
-		}
 		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
 			return "", refused
 		}
@@ -392,14 +394,55 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 
 // logLanguageOverrideBreadcrumb emits the distinguishing signal for a same-root
 // language override on a sticky session_start pin (issue #182). The generic
-// "session re-pinned" line below also covers a project switch and cannot tell the
-// two apart, but this case tears down and re-acquires the language server —
-// resetting the read/write/undo trackers a peer on a multiplexed connection may
-// be relying on.
+// "session re-pinned" line below also covers a project switch and cannot tell
+// the two apart, and this case tears down and re-acquires the language server
+// under a peer on a multiplexed connection. The trackers are KEPT (PLAN-428):
+// switching a primary changes no file, so every recorded read, write and undo
+// entry is still valid, and the line says so — an operator debugging a
+// "has not been read" refusal must not be pointed at a reset that did not
+// happen.
 func (s *connSession) logLanguageOverrideBreadcrumb(v *sessionView, prev, root, language string, langForced bool) {
 	if root == prev && langForced && v.pinOrigin == sessionstate.PinSourceSessionStart {
-		s.log().Warn("daemon: primary language overridden on a sticky pin — read/write/undo trackers reset (issue #182)", "pinned", prev, "language", language, "previous", v.acquiredLanguage)
+		s.log().Warn("daemon: primary language overridden on a sticky pin — language server re-acquired, read/write/undo trackers kept (issue #182)", "pinned", prev, "language", language, "previous", v.acquiredLanguage)
 	}
+}
+
+// refuseShardLanguageOverride refuses a `language` argument from an agent that
+// holds its own shard, because the primary language server is bound per
+// CONNECTION — sessionProxy, the diagnostics invalidator and session.Info are
+// all connection-scoped. Honouring it would retarget every peer agent's
+// primary, the inverse of what the shards exist for; storing it on the shard
+// alone (what plumb did before PLAN-428) told the caller it had a server it
+// did not have.
+//
+// A request that asks for the primary the connection ALREADY has is not
+// refused: it changes nothing, and failing a no-op would make the guidance
+// this repo now gives every agent — pass session_id, get a shard — turn a
+// harmless re-orientation into an error.
+//
+// The wording claims only what is known. A shard exists as soon as a SECOND
+// identity is counted, and that can be one conversation that cleared and
+// minted a new id rather than two live agents, so the refusal says the
+// connection is shared BY IDENTITY rather than asserting several agents are
+// running.
+func (s *connSession) refuseShardLanguageOverride(ctx context.Context, langOverride string) error {
+	if langOverride == "" || s.repinShard(ctx) == nil {
+		return nil
+	}
+	return shardLanguageOverrideErr(mcp.LogicalAgentFromCtx(ctx), langOverride, s.acquiredLanguageName())
+}
+
+// shardLanguageOverrideErr builds that refusal from the three facts it needs,
+// so both of its branches are reachable from a test: a harness where no
+// primary is acquired at all cannot otherwise exercise the no-op case, and an
+// unexercised branch here is a refusal nobody notices firing on a request that
+// changes nothing.
+func shardLanguageOverrideErr(agent, langOverride, current string) error {
+	if langOverride == current {
+		return nil
+	}
+	return fmt.Errorf("session_start: language %q cannot be honoured for logical agent %q: a primary language server is bound per connection, and this connection has more than one declared identity, so switching it would retarget every other agent on it. Omit the language argument to keep the connection's primary%s, or run a dedicated plumb serve for this agent and pass language there",
+		langOverride, agent, parenthesisedLanguage(current))
 }
 
 // parenthesisedLanguage renders " (go)" for a refusal that names the primary

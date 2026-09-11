@@ -249,8 +249,12 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// drift on a SHARED connection is exactly the event an operator needs to
 		// find afterwards. The daemon log is the whole trace, deliberately — see
 		// the note on repinAgent.
+		// Not repinStickyRemedy: that one opens by telling the caller to identify
+		// itself, which an agent holding its own shard has already done. The
+		// refusal's own text carries the remedy that applies here.
 		s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
-			"agent", sh.id, "pinned", prev, "requested", root, "remedy", repinStickyRemedy)
+			"agent", sh.id, "pinned", prev, "requested", root,
+			"remedy", "call session_start again with force: true to move THIS agent, or run one plumb serve per agent")
 		return false, refused
 	}
 	if root == prev && language == sh.language {
@@ -265,9 +269,17 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.language = language
 	sh.pinOrigin = origin
 	sh.policy = s.buildAgentPolicy(root, language)
-	sh.readTracker.Reset()
-	sh.writeTracker.Reset()
-	sh.undoStore.Reset()
+	// Read/write/undo state is workspace-relative, so only a MOVE invalidates
+	// it. A same-root language switch changes no file — and it is reachable
+	// without an override at all, since repinWorkspaceFrom passes Detect's
+	// language, so a bare re-orienting session_start after `plumb enable-lsp`
+	// used to wipe an agent's dirty-guard writes and undo history (PLAN-428).
+	// The connection path keeps them under the same rule.
+	if root != prev {
+		sh.readTracker.Reset()
+		sh.writeTracker.Reset()
+		sh.undoStore.Reset()
+	}
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
