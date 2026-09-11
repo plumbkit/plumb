@@ -208,3 +208,134 @@ func TestSubagentAttachDoesNotResumeTwice(t *testing.T) {
 		t.Fatalf("linkage = %q, want conv-r", got)
 	}
 }
+
+// TestLinkageOwnerSeededWhenTheLinkageArrivesLast closes the ordering window
+// session_start actually produces: Execute re-pins (creating the caller's
+// shard, judged against an external id this very call has not written yet)
+// BEFORE it resolves linkage. Without the seed-on-link the parent's first
+// session_start — the one that also names a workspace — would cache an
+// unseeded shard and never revisit it, and every edit it had in flight would
+// fail "has not been read".
+func TestLinkageOwnerSeededWhenTheLinkageArrivesLast(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
+	t.Cleanup(s.close)
+
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	path := root + "/main.go"
+	when := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	s.readTracker.Record(path, when, "sha-1") // the parent read as the connection
+
+	// A subagent declares itself first, so the connection is already shared when
+	// the parent finally calls session_start.
+	s.recordLogicalAgentCall("conv/agent-1")
+
+	// session_start's order: re-pin (creates the shard, externalID still "") …
+	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
+	if _, err := s.repinWorkspace(ctxConv, "file://"+root, "", false); err != nil {
+		t.Fatalf("parent re-pin: %v", err)
+	}
+	if got := s.externalID(); got != "" {
+		t.Fatalf("precondition: linkage should still be empty at shard creation, got %q", got)
+	}
+	// … then link.
+	s.linkExternalID("conv")
+
+	if got := s.readTrackerFor(ctxConv).Mtime(path); !got.Equal(when) {
+		t.Fatalf("the linkage owner's shard was never seeded (mtime %v, want %v) — its shard predated the linkage", got, when)
+	}
+}
+
+// TestConnectionReadsNotSeededOntoAnAgentPinnedElsewhere pins the ROOT clause
+// at its call site, not just in isolation: a shard that restored its own
+// per-agent pin on another project must not inherit the connection's reads,
+// which are only ever valid for the root they were made under.
+func TestConnectionReadsNotSeededOntoAnAgentPinnedElsewhere(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	// Before: the linkage owner pins ITSELF to rootB, which persists a per-agent
+	// pin under (proxy, "conv").
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.recordLogicalAgentAttach("conv")
+	before.recordLogicalAgentCall("conv/agent-1")
+	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
+	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false); err != nil {
+		t.Fatalf("agent pin to rootB: %v", err)
+	}
+	before.close()
+
+	// After: the connection sits on rootA with a read recorded there, and is
+	// linked to the same conversation — so the id test passes and only the root
+	// test can refuse the seed.
+	after := newPersistSession(t, store, ss, "proxyX")
+	t.Cleanup(after.close)
+	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false); err != nil {
+		t.Fatalf("connection pin to rootA: %v", err)
+	}
+	session.SetExternalID(after.sessionID(), "conv")
+	path := rootA + "/main.go"
+	after.readTracker.Record(path, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC), "sha-1")
+	after.recordLogicalAgentAttach("conv")
+	after.recordLogicalAgentCall("conv/agent-1")
+
+	sh := after.shardFor(ctxConv)
+	if sh == nil {
+		t.Fatal("precondition: a shared connection must give the linkage owner a shard")
+	}
+	if sh.root != rootB {
+		t.Skipf("precondition: the shard restored %q, not the persisted %q — nothing to test", sh.root, rootB)
+	}
+	if got := sh.readTracker.Mtime(path); !got.IsZero() {
+		t.Fatalf("a shard pinned to %s inherited a read made under %s (mtime %v)", rootB, rootA, got)
+	}
+}
+
+// TestSeedOnLinkRespectsTheAgentsOwnRoot is the same rule on the other
+// ordering: here the shard is created BEFORE the linkage lands, so the seed is
+// attempted by seedShardOnLink rather than by shardFor — and must still refuse
+// a shard sitting on the agent's own project rather than the connection's.
+func TestSeedOnLinkRespectsTheAgentsOwnRoot(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	before := newPersistSession(t, store, ss, "proxyY")
+	before.recordLogicalAgentAttach("conv")
+	before.recordLogicalAgentCall("conv/agent-1")
+	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
+	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false); err != nil {
+		t.Fatalf("agent pin to rootB: %v", err)
+	}
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyY")
+	t.Cleanup(after.close)
+	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false); err != nil {
+		t.Fatalf("connection pin to rootA: %v", err)
+	}
+	path := rootA + "/main.go"
+	after.readTracker.Record(path, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC), "sha-1")
+	after.recordLogicalAgentCall("conv/agent-1")
+
+	// The shard exists before any linkage does.
+	sh := after.shardFor(ctxConv)
+	if sh == nil {
+		t.Fatal("precondition: a shared connection must give the caller a shard")
+	}
+	if sh.root != rootB {
+		t.Skipf("precondition: the shard restored %q, not the persisted %q — nothing to test", sh.root, rootB)
+	}
+	after.linkExternalID("conv")
+	if got := sh.readTracker.Mtime(path); !got.IsZero() {
+		t.Fatalf("seed-on-link gave a shard pinned to %s a read made under %s (mtime %v)", rootB, rootA, got)
+	}
+}

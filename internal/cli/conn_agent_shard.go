@@ -273,6 +273,37 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	return changed, nil
 }
 
+// seedShardOnLink hydrates the linkage owner's shard from the connection's
+// read tracker when the linkage was established AFTER that shard was created
+// — the one ordering session_start can produce, since its Execute re-pins
+// (creating the shard) before it resolves linkage. Without this the parent's
+// first session_start, if it also names a workspace, caches a shard that
+// seedsConnectionReads judged against an empty external id and never revisits.
+//
+// Only an EMPTY tracker is filled, and only for a shard sitting on the
+// connection's own root, so this can neither overwrite reads the agent has
+// since made nor resurrect reads for a project the shard is not pinned to.
+// Lock order is the documented one: shardsMu before sh.mu.
+func (s *connSession) seedShardOnLink(linkage string) {
+	if linkage == "" {
+		return
+	}
+	connRoot := s.view().acquiredRoot
+	s.shardsMu.Lock()
+	defer s.shardsMu.Unlock()
+	sh, ok := s.shards[linkage]
+	if !ok {
+		return
+	}
+	sh.mu.RLock()
+	root := sh.root
+	sh.mu.RUnlock()
+	if root != connRoot || len(sh.readTracker.Records()) > 0 {
+		return
+	}
+	sh.readTracker.Hydrate(s.readTracker.Records())
+}
+
 // followConnectionShards re-seeds every shard that never chose a workspace of
 // its own (!selfPinned) from the connection's NEW pin, after the connection
 // itself moved away from prevRoot. A shard is seeded from the connection pin at

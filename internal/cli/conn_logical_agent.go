@@ -85,8 +85,19 @@ func (l *logicalAgentState) record(id string) (shared, transition bool) {
 // Root too: a shard that restored a pin elsewhere (loadPinForAgent) must not
 // resurrect reads for a workspace it is not pinned to; ReadTracker.Reset
 // documents that a read is only ever valid for the root it was made under.
+//
+// KNOWN LIMIT, deliberately not closed by guessing: a connection that never
+// declares a linkage — a client that identifies every agent by per-call _meta
+// and never passes session_start.session_id, which sharedIdentityRemedy
+// sanctions — has no linkage owner, so nobody is seeded and its first agent
+// re-reads once at the flip. That is the behaviour every client had before the
+// identity channel existed. The alternative, falling back to "the first
+// identity this process saw", is the unsafe rule above wearing a narrower hat:
+// it would still hand a subagent the parent's rehydrated reads after a daemon
+// restart, and letting an agent edit in strict mode a file it never read is a
+// worse failure than making it read the file again.
 func (s *connSession) seedsConnectionReads(id, shardRoot, connRoot string) bool {
-	if id == "" || linkageIDOf(id) != id {
+	if id == "" {
 		return false
 	}
 	return id == s.externalID() && shardRoot == connRoot
@@ -315,6 +326,15 @@ func (s *connSession) linkExternalID(externalID string) string {
 	linkage := linkageIDOf(externalID)
 	alreadyLinked := linkage != "" && s.externalID() == linkage
 	session.SetExternalID(s.sessionID(), linkage)
+	// The linkage may arrive AFTER the shard it belongs to. session_start's
+	// Execute re-pins (creating the caller's shard, which seedsConnectionReads
+	// then judges against an external id this call has not written yet) before it
+	// resolves linkage, so a first session_start carrying a workspace argument
+	// would otherwise cache an unseeded shard and never revisit it. Seed it here
+	// instead of widening the rule.
+	if !alreadyLinked {
+		s.seedShardOnLink(linkage)
+	}
 	s.recordLogicalAgentAttach(externalID)
 	// Mirror the linkage into the durable identity record. Until PLAN-426 it
 	// lived only in the session JSON, which is collected 24 h after the session

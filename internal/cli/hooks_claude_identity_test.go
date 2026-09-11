@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,13 +241,53 @@ func TestIdentityHookSkewNote(t *testing.T) {
 		t.Errorf("an old daemon must be named with the restart remedy, got %q", got)
 	}
 	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, mute); !strings.Contains(got, "predates") || !strings.Contains(got, "plumb restart") {
-		t.Errorf("a daemon that cannot answer predates the channel, got %q", got)
+		t.Errorf("a daemon that answered without a version predates the channel, got %q", got)
+	}
+	// A failure that observed NEITHER fact must claim neither. A permission
+	// error on the socket and a wedged listener both land here; telling the
+	// reader to restart a daemon that is answering, or to wait for one that is
+	// already up, sends them to fix something that is not broken.
+	opaque := func() (string, error) { return "", errors.New("dialling the daemon control socket: permission denied") }
+	got := identityHookSkewNote(claudeCodeHooksTarget, installed, opaque)
+	if !strings.Contains(got, "permission denied") {
+		t.Errorf("an unclassified probe failure must quote what actually happened, got %q", got)
+	}
+	if strings.Contains(got, "predates") || strings.Contains(got, "plumb restart") || strings.Contains(got, "no daemon is running") {
+		t.Errorf("an unclassified probe failure must not assert a version or liveness fact it did not observe, got %q", got)
 	}
 	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, down); !strings.Contains(got, "no daemon is running") || strings.Contains(got, "restart") {
 		t.Errorf("a stopped daemon is not a skew and needs no restart, got %q", got)
 	}
 	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, nil); got != "" {
 		t.Errorf("no probe, no note; got %q", got)
+	}
+}
+
+// TestClassifyDialError: only a missing socket or a refused connection may be
+// reported as "no daemon is running". A permission error is something else
+// entirely, and flattening it sends the reader to wait for a start that is not
+// coming.
+func TestClassifyDialError(t *testing.T) {
+	for _, down := range []error{
+		fs.ErrNotExist, syscall.ECONNREFUSED,
+		&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED},
+		&net.OpError{Op: "dial", Err: &os.PathError{Op: "open", Err: fs.ErrNotExist}},
+	} {
+		if got := classifyDialError(down); !errors.Is(got, errDaemonNotRunning) {
+			t.Errorf("classifyDialError(%v) = %v, want errDaemonNotRunning", down, got)
+		}
+	}
+	for _, other := range []error{
+		syscall.EACCES, syscall.ETIMEDOUT, errors.New("boom"),
+		&net.OpError{Op: "dial", Err: syscall.EACCES},
+	} {
+		got := classifyDialError(other)
+		if errors.Is(got, errDaemonNotRunning) {
+			t.Errorf("classifyDialError(%v) claimed the daemon is not running", other)
+		}
+		if !errors.Is(got, other) {
+			t.Errorf("classifyDialError(%v) = %v, want it to wrap the cause", other, got)
+		}
 	}
 }
 
