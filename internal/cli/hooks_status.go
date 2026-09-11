@@ -68,8 +68,14 @@ func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (strin
 	switch {
 	case errors.Is(err, errDaemonNotRunning):
 		return "Claude Code — the identity hook is installed but no daemon is running; stamping starts by itself once one is (the next plumb serve starts it)."
-	case err != nil:
+	case errors.Is(err, errDaemonVersionUnknown):
 		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon predates the identity channel (needs %s or later). Run `plumb restart`.", identityChannelMinVersion)
+	case err != nil:
+		// Neither of the above was OBSERVED. Say what happened and stop
+		// there: a permission error on the socket and a wedged listener both
+		// land here, and naming either remedy would send the reader to fix
+		// something that is not broken.
+		return fmt.Sprintf("Claude Code — the identity hook is installed, but plumb could not ask the daemon whether it accepts the identity channel: %v. Stamping is off until it can.", err)
 	case !daemonVersionAcceptsStamp(version):
 		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon is %s, and the identity channel needs %s or later. Run `plumb restart`.", version, identityChannelMinVersion)
 	}

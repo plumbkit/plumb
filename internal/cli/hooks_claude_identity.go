@@ -5,11 +5,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/fsync"
@@ -253,21 +256,42 @@ func writeIdentityProbe(path string, rec identityProbeRecord) {
 // unknown-command error, which reads as "too old"). Bounded by a dial and a
 // read deadline so a wedged daemon cannot hold a tool call for the hook's
 // whole timeout.
+//
+// The failure is CLASSIFIED rather than flattened, because the two kinds have
+// opposite remedies and a third has neither. No socket (or one refusing
+// connections) is a daemon that is not running: it starts on the next `plumb
+// serve` and stamping resumes by itself. An answer that is not a version is a
+// daemon that predates the channel: it needs `plumb restart`. Anything else —
+// a permission error on the socket, a dial timeout against a wedged listener,
+// a short read — observed no version at all, and saying either of the first
+// two would be a guess dressed as a fact.
 func probeDaemonVersion() (string, error) {
 	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
 	if err != nil {
-		return "", errDaemonNotRunning
+		return "", classifyDialError(err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
 	if _, err := conn.Write([]byte("version\n")); err != nil {
-		return "", err
+		return "", fmt.Errorf("asking the daemon its version: %w", err)
 	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading the daemon's version reply: %w", err)
 	}
 	return parseDaemonVersionReply(line)
+}
+
+// classifyDialError separates "there is no daemon" from "there is something
+// there and plumb could not talk to it". Only a missing socket file and a
+// refused connection mean the daemon is down; a permission error, a dial
+// timeout against a wedged listener and anything else observed no such thing,
+// and the caller must not be told to wait for a start that already happened.
+func classifyDialError(err error) error {
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		return errDaemonNotRunning
+	}
+	return fmt.Errorf("dialling the daemon control socket: %w", err)
 }
 
 // parseDaemonVersionReply accepts the `version` command's `ok <version>` line
