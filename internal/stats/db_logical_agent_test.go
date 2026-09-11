@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // TestMigrateAddsLogicalAgentColumn: a v18 database gains the column through
@@ -129,19 +131,67 @@ func TestLogicalAgentRoundTrips(t *testing.T) {
 	}
 }
 
+// TestCallsForToolCarriesTheAgent: the TUI's detail pane reads this query, and
+// it is the drill-down for a History column too narrow to show a full label.
+// A query that does not select the column makes the pane answer "which agent?"
+// with the bare session name, forever.
+func TestCallsForToolCarriesTheAgent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	if err := db.Record(Call{SessionID: "s1", SessionName: "me-fox", Workspace: "/w", Tool: "write_file", CalledAt: now, Success: true, LogicalAgent: "conv-1/agent-7"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := db.CallsForTool("write_file", "/w", 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("CallsForTool: %d rows, %v", len(got), err)
+	}
+	if got[0].LogicalAgent != "conv-1/agent-7" {
+		t.Fatalf("CallsForTool dropped the agent: %q", got[0].LogicalAgent)
+	}
+}
+
 func TestAgentLabel(t *testing.T) {
-	cases := []struct{ name, ext, agent, want string }{
-		{"me-fox", "", "", "me-fox"},
-		{"me-fox", "conv-1", "", "me-fox"},
-		{"me-fox", "conv-1", "conv-1", "me-fox"},
-		{"me-fox", "conv-1", "conv-1/a1b2c3d4e5f6", "me-fox/agent-a1b2c3d4"},
-		{"me-fox", "", "conv-1/x", "me-fox/agent-x"},
-		{"me-fox", "conv-1", "agent-alpha", "me-fox/agent-al"},
-		{"me-fox", "", "conv-1", "me-fox/conv-1"},
+	cases := []struct{ name, agent, want string }{
+		{"me-fox", "", "me-fox"},
+		{"me-fox", "conv-1", "me-fox/conv-1"},
+		{"me-fox", "conv-1/a1b2c3d4e5f6", "me-fox/a1b2c3d…"},
+		{"me-fox", "conv-1/x", "me-fox/x"},
+		{"me-fox", "agent-alpha", "me-fox/agent-a…"},
+		// A trailing slash leaves no agent half to show, so the row is not
+		// qualified by an empty string.
+		{"me-fox", "conv-1/", "me-fox"},
 	}
 	for _, tc := range cases {
-		if got := AgentLabel(tc.name, tc.ext, tc.agent); got != tc.want {
-			t.Errorf("AgentLabel(%q, %q, %q) = %q, want %q", tc.name, tc.ext, tc.agent, got, tc.want)
+		if got := AgentLabel(tc.name, tc.agent); got != tc.want {
+			t.Errorf("AgentLabel(%q, %q) = %q, want %q", tc.name, tc.agent, got, tc.want)
 		}
+	}
+}
+
+// TestAgentLabelSanitisesAClientString: the id is client-supplied and the
+// label lands in a peer-facing feed, so a control character must not be able
+// to forge a row and a multi-byte id must not be cut into invalid UTF-8.
+func TestAgentLabelSanitisesAClientString(t *testing.T) {
+	if got := AgentLabel("me-fox", "x\nroot-agent"); strings.ContainsAny(got, "\n\r\t") {
+		t.Errorf("AgentLabel kept a control character: %q", got)
+	}
+	multi := AgentLabel("me-fox", "1234567€9abc")
+	if !utf8.ValidString(multi) {
+		t.Errorf("AgentLabel produced invalid UTF-8: %q", multi)
+	}
+	if got := SanitiseAgentID(strings.Repeat("a", 4096)); len(got) != AgentIDStorageBytes {
+		t.Errorf("SanitiseAgentID stored %d bytes, want the %d-byte cap", len(got), AgentIDStorageBytes)
+	}
+	if got := SanitiseAgentID("a\nb"); got != "ab" {
+		t.Errorf("SanitiseAgentID(%q) = %q, want the control character dropped", "a\nb", got)
+	}
+	if got := SanitiseAgentID(strings.Repeat("€", 100)); !utf8.ValidString(got) {
+		t.Errorf("SanitiseAgentID cut a rune in half: %q", got)
 	}
 }

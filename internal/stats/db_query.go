@@ -360,7 +360,7 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 	where, args := f.where()
 	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
-	             error_msg, input_bytes, output_bytes
+	             error_msg, input_bytes, output_bytes, logical_agent
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
 
@@ -377,7 +377,7 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 		var success int
 		if err := rows.Scan(
 			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
-			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.LogicalAgent,
 		); err != nil {
 			continue
 		}

@@ -16,7 +16,6 @@ import (
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/render"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/tui"
 )
@@ -276,16 +275,6 @@ func axisCell(tokens int64) string {
 	return "~" + stats.FormatSavings(int(tokens))
 }
 
-// recentCallWho is the Name column: the session, qualified by the logical
-// agent when the call carried one (PLAN-401). The external-id lookup is a
-// session-file read, bounded here by --limit rows.
-func recentCallWho(c stats.RecentCall) string {
-	if c.LogicalAgent == "" {
-		return c.SessionName
-	}
-	return stats.AgentLabel(c.SessionName, session.ExternalIDOf(c.SessionID), c.LogicalAgent)
-}
-
 func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {
 	wWhen = 8 // "When"
 	wTool = 4 // "Tool"
@@ -297,7 +286,7 @@ func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {
 		if l := len(c.Tool); l > wTool {
 			wTool = l
 		}
-		if l := len(recentCallWho(c)); l > wName {
+		if l := len(stats.AgentLabel(c.SessionName, c.LogicalAgent)); l > wName {
 			wName = l
 		}
 	}
@@ -310,7 +299,7 @@ func renderRecentCallRow(c stats.RecentCall, wWhen, wTool, wMs, wStatus, wSessID
 		ok = tui.WarnStyle.Render("✗")
 	}
 	sessID := render.PadRight(shortSessionID(c.SessionID), wSessID)
-	name := tui.MutedStyle.Render(recentCallWho(c))
+	name := tui.MutedStyle.Render(stats.AgentLabel(c.SessionName, c.LogicalAgent))
 	when := render.PadRight(render.HumanAge(c.CalledAt), wWhen)
 	tool := render.PadRight(c.Tool, wTool)
 	ms := render.PadRight(strconv.FormatInt(c.DurationMs, 10), wMs)

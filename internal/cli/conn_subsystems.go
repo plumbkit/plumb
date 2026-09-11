@@ -17,6 +17,7 @@ import (
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/quality"
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
@@ -362,9 +363,13 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 // the session's last-seen timestamp so idle detection stays accurate. Savings are
 // scored here, at write time: this is the single point where the tool name,
 // client identity, raw sizes and body-free collaboration telemetry all co-exist.
-// logicalAgent is the id the call carried on a shared connection ("" when it
-// carried none); it is recorded as-is so the row names the agent, not merely
-// the connection (PLAN-401).
+// logicalAgent is the id the call carried ("" when it carried none). It is
+// recorded only while the connection is SHARED, so the row names the agent
+// rather than merely the connection (PLAN-401) exactly when that distinction
+// exists — on a single-agent connection the session name already names the
+// writer, and stamping every row with the conversation id would add a column
+// of noise that says nothing. A row therefore means what it says forever:
+// blank = "one agent held this connection", set = "one of several".
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string) {
 	session.Touch(s.sessionID())
 	v := s.view()
@@ -402,6 +407,39 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		EfficiencyTokens:    saved.Efficiency,
 		SavingsModelVersion: clientcaps.ModelVersion,
 		Purpose:             v.purpose,
-		LogicalAgent:        logicalAgent,
+		LogicalAgent:        s.attributedAgent(logicalAgent),
 	}, failure))
+}
+
+// afterToolFromCtx is the OnAfterTool hook: it lifts the call's logical-agent
+// identity off the ctx and records it with the call.
+//
+// A named method rather than an inline closure so a test can drive the REAL
+// function — an inline closure is reachable only through a full registerAllTools
+// wiring, which is how the one line that makes per-agent attribution work went
+// unpinned while the suite stayed green.
+//
+// The ctx carries the per-call channel (_meta, or the argument a client runtime
+// stamps). session_start's own session_id reaches the shards through a ctx
+// derived INSIDE its Execute, which this hook never sees, so a session_start
+// row is attributed only when the call itself also carried an identity.
+func (s *connSession) afterToolFromCtx(ctx context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
+	s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure, mcp.LogicalAgentFromCtx(ctx))
+}
+
+// attributedAgent is the logical-agent id worth recording for this call: the
+// id itself while several agents share the connection, and "" otherwise. The
+// shared test is the in-memory identity set, so this costs the per-call
+// recording path no I/O — an external-id lookup here would be a session-file
+// read on every tool call.
+//
+// The id is a client-supplied string that reaches a peer-facing feed, so it is
+// sanitised and capped before it is stored rather than only before it is
+// rendered: a control character would forge a row, and an uncapped id is one
+// unbounded write per call.
+func (s *connSession) attributedAgent(logicalAgent string) string {
+	if logicalAgent == "" || !s.logicalAgents.sharedWith("") {
+		return ""
+	}
+	return stats.SanitiseAgentID(logicalAgent)
 }
