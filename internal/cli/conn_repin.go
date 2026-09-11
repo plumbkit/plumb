@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
@@ -22,7 +23,7 @@ import (
 // returned to the caller and the HealthMessage recorded for the dashboard
 // (issue #358) — extracted into one const so a future edit to either surface
 // cannot silently leave the other stale.
-const repinStickyRemedy = "If you are a new conversation deliberately switching this connection to a different project, call session_start again with force: true; if several agents share this connection, run a dedicated plumb serve process per agent instead."
+const repinStickyRemedy = "If several agents share this connection, identify each one — on Claude Code `plumb hooks install claude-code` stamps every call; otherwise pass a stable per-agent session_start.session_id — so each keeps its own pin, or run a dedicated plumb serve process per agent. If you are a new conversation deliberately switching this connection to a different project, or the agent that set the pin has finished, call session_start again with force: true."
 
 // repinContestedRemedy replaces repinStickyRemedy once this connection's pin has
 // been force-taken between projects repeatedly (see conn_pin_contest.go).
@@ -177,6 +178,16 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// actual issue #182 fix. The connection-level attachOrRepinTo below runs only
 	// for an unattributed re-pin (roots, restore) or a non-shared connection.
 	if s.repinShard(ctx) != nil {
+		// A language override cannot be honoured per agent: the primary language
+		// server binding — sessionProxy, the invalidator, session.Info — is
+		// connection-wide, so honouring it here would retarget every peer's
+		// primary (the inverse of what the shards exist for), and storing it on
+		// the shard alone would tell the caller it got a server it did not.
+		// Refuse honestly with the two real remedies (PLAN-428).
+		if langOverride != "" {
+			return "", fmt.Errorf("session_start: language %q cannot be honoured for logical agent %q: a primary language server is bound per connection, and this connection is shared by several agents, so switching it would retarget every peer. Omit the language argument to keep the connection's primary%s, or run a dedicated plumb serve for this agent and pass language there",
+				langOverride, mcp.LogicalAgentFromCtx(ctx), parenthesisedLanguage(s.acquiredLanguageName()))
+		}
 		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
 			return "", refused
 		}
@@ -320,10 +331,14 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		v.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
 		// Per-session read/write tracking is workspace-relative: plumb has read and
 		// written nothing in the new project yet, so the dirty-guard and strict-mode
-		// read check must start clean rather than inherit the old root's paths.
-		s.readTracker.Reset()
-		s.writeTracker.Reset()
-		s.undoStore.Reset()
+		// read check must start clean rather than inherit the old root's paths. A
+		// same-root language switch changes no file, so every read, write and undo
+		// record is still valid and stays (PLAN-428).
+		if root != prev {
+			s.readTracker.Reset()
+			s.writeTracker.Reset()
+			s.undoStore.Reset()
+		}
 		s.clearHintSeen()
 
 		lang, adapter, discovered, adapters := s.resolvePrimaryLSP(ctx, v, root, language, true)
@@ -385,4 +400,13 @@ func (s *connSession) logLanguageOverrideBreadcrumb(v *sessionView, prev, root, 
 	if root == prev && langForced && v.pinOrigin == sessionstate.PinSourceSessionStart {
 		s.log().Warn("daemon: primary language overridden on a sticky pin — read/write/undo trackers reset (issue #182)", "pinned", prev, "language", language, "previous", v.acquiredLanguage)
 	}
+}
+
+// parenthesisedLanguage renders " (go)" for a refusal that names the primary
+// the connection keeps, or "" when none is acquired.
+func parenthesisedLanguage(name string) string {
+	if name == "" {
+		return ""
+	}
+	return " (" + name + ")"
 }
