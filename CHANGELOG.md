@@ -21,6 +21,14 @@
   `updatedInput` requires `permissionDecision: "allow"`. **Re-run
   `plumb hooks install claude-code` after upgrading** — an older install shows
   the new hook as `missing`.
+- **`workspace_sessions` now says WHICH agent wrote.** With several logical
+  agents multiplexed over one connection, every recent-writes row carried the
+  connection's session name — four agents, one name. A row now records the
+  logical-agent id the call carried (stats schema 19) and renders as
+  `<session>/<agent>`; a bare name means the connection had a single agent when
+  the call was made, so the name identifies it exactly. The same label appears
+  in the TUI's History tab and its detail pane, and in `plumb stats`. Legacy
+  rows read back blank and render as they always did.
 
 ### Fixed
 
