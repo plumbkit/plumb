@@ -117,11 +117,14 @@ func (t *SessionStart) resumedNewIdentity() bool {
 // when the caller is genuinely unlinked — its persisted external id is empty.
 // Pinning the full string keeps the wording — and therefore the promise it
 // makes — stable. The promise changed with the linkage-state work (C5): the
-// line now states the future cost (a client restart forks the identity and
-// strands mail), not merely today's addressability gap.
-const unlinkedSessionNotice = "NOTE: this session has no external id — a client restart will start a NEW identity " +
-	"(new session ID), and mail or threads addressed to this one will not follow you. " +
-	"Pass session_id to session_start to link this conversation.\n"
+// line states the future cost (a client restart forks the identity and
+// strands mail) and, since PLAN-353, also what still WORKS — the session has
+// a name and is addressable by it — so an unlinked agent is not told its
+// collaboration is unavailable when only continuity is.
+const unlinkedSessionNotice = "NOTE: this session has no external id. It has a name and peers can leave_note to it now, " +
+	"but a client restart will start a NEW identity (new session ID), and mail or threads addressed to " +
+	"this one will not follow you. Pass a stable session_id to session_start to link this conversation " +
+	"(on Claude Code, `plumb hooks install claude-code` fills it on every call).\n"
 
 // linkageNote renders what the caller must know about its own linkage and
 // recovery state, keyed on the CONNECTION's persisted state rather than on

@@ -223,7 +223,7 @@ lint-cross:
 check-size:
 	./scripts/check-file-size.sh
 
-# check-brief fails if AGENTS.md grows past its budget (200 lines / 32 KiB) —
+# check-brief fails if AGENTS.md grows past its budget (150 lines / 20 KiB) —
 # the brief is rules + pointers; reference detail lives in docs/. See
 # scripts/check-agents-brief.sh.
 check-brief:

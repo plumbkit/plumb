@@ -6,6 +6,8 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **Peers.** If another agent may be working in this workspace, use `check_messages`/`leave_note` — delivery is poll-only, so silence is not refusal.
 
+**Identity.** Subagents share this connection: install the identity hook (`plumb hooks install claude-code`) or pass a stable per-agent `session_id` to `session_start`.
+
 **Subagents.** Call `session_start({detail:"brief"})` first for a short orientation packet.
 
 **Persisting this.** If this project already has an agent instruction file (`AGENTS.md`, or your client's own), these conventions are worth recording there — ask the user first; don't create the file just for this.

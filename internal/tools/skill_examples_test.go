@@ -50,7 +50,10 @@ type skillCounts struct {
 }
 
 var skillContentCounts = map[string]skillCounts{
-	"plumb-chat": {calls: 5, bullets: 3},
+	// 6, not 5: PLAN-353 added a session_start(session_id=…) example — the skill
+	// teaches addressing, and a session that never identifies itself is the one
+	// peers cannot address across a restart.
+	"plumb-chat": {calls: 6, bullets: 3},
 	// 7, not 6: PLAN-376 added a `diagnostics()` call-form example teaching the
 	// plain diagnostics() tool's separate INCOMPLETE label, alongside the
 	// existing await_diagnostics pair.

@@ -7,7 +7,7 @@ This is the always-loaded engineering contract for the public Plumb codebase. Ke
 ## Working contract
 
 - **Use Plumb's lane.** When Plumb exposes a capability, use its MCP tool instead of native file, search, shell, or Git tools. Native tools bypass Plumb's concurrency guards, diagnostics, and session tracking. Exceptions are capabilities Plumb does not cover and read-only commodity tools hidden by a lean profile.
-- **Bootstrap and guard writes.** Call `session_start` first. After `read_file`, use Plumb edits and pass its `mtime` or `sha256` as `expected_mtime` or `expected_sha` when a concurrent writer may intervene. Prefer configured `run_task` slots over raw build/test/lint commands.
+- **Bootstrap and guard writes.** Call `session_start` first, passing a stable per-agent `session_id` (on Claude Code the identity hook supplies it). After `read_file`, use Plumb edits and pass its `mtime` or `sha256` as `expected_mtime` or `expected_sha` when a concurrent writer may intervene. Prefer configured `run_task` slots over raw build/test/lint commands.
 - **Trust live descriptions.** Tool behaviour and schemas come from `tools/list`; `session_start` supplies client-specific guidance. This brief is orientation, not a second tool reference.
 - **Avoid version drift.** Read `VERSION` and `CHANGELOG.md` for the current version.
 

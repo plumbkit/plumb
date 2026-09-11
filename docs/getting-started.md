@@ -124,7 +124,9 @@ You want green checks under **Daemon**, **Language Servers**, **MCP Clients**,
 **Configuration**, and **Data**. The output names a fix for anything that fails.
 
 In your assistant, the first call each session should be `session_start` (Claude
-clients expose it as the `/orient` prompt). It returns an orientation packet:
+clients expose it as the `/orient` prompt), passing a stable id for the
+conversation as `session_id` — on Claude Code `plumb hooks install claude-code`
+fills it on every call. It returns an orientation packet:
 workspace, language, git branch, recent commits, recently-modified files,
 memories, top tool usage, and active diagnostics.
 
