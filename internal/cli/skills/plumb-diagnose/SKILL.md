@@ -71,6 +71,6 @@ Content-free, so it costs almost nothing: per path it reports whether the file i
 
 ## 5. Re-orient rather than infer
 
-    session_start(workspace="/abs/path/to/project")
+    session_start(workspace="/abs/path/to/project", session_id="<your stable per-agent id>")
 
-If the workspace, language, or git policy looks wrong, re-run `session_start` with an explicit absolute workspace. It re-attaches the language server, topology, and config, and prints the resolved state — cheaper and more reliable than inferring the environment from a sequence of failures.
+If the workspace, language, or git policy looks wrong, re-run `session_start` with an explicit absolute workspace, passing the same `session_id` you always pass (on Claude Code the identity hook fills it) so the re-pin lands on YOUR pin rather than the connection's. It re-attaches the language server, topology, and config, and prints the resolved state — cheaper and more reliable than inferring the environment from a sequence of failures.

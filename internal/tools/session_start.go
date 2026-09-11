@@ -25,7 +25,7 @@ var sessionStartSchema = json.RawMessage(`{
     },
     "session_id": {
       "type": "string",
-      "description": "Optional opaque identifier linking this plumb session to the caller's own session (e.g. a Claude Code conversation ID). When provided, plumb persists the ID and, if a recent session with the same ID ended within the last 24 h, inherits its name — so a resumed conversation keeps its session name in the TUI."
+      "description": "A stable id for THIS agent: the client's conversation id, or '<conversation>/<agent>' for a subagent. Pass it every time: it scopes this agent's pin, read tracking and undo on a shared connection, keeps it addressable for mail, and inherits a resumed conversation's name. Claude Code's identity hook fills it."
     },
     "language": {
       "type": "string",

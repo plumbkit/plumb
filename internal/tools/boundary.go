@@ -179,7 +179,9 @@ func (e WorkspaceBoundaryError) repinAdvice() string {
 			"session_start.session_id, or run one `plumb serve` per agent — use force: true only if " +
 			"you are certain no other agent is using this connection"
 	}
-	return "if the re-pin is refused because an explicit session_start pin already holds this connection, retry with force: true"
+	return "if the re-pin is refused because an explicit session_start pin already holds this connection, " +
+		"identify yourself first (session_start.session_id, or on Claude Code the identity hook) so a shared connection gives you a pin of your own, " +
+		"and retry with force: true only if the agent that set the pin has finished"
 }
 
 func (g BoundaryGuard) check(ctx context.Context, path string) error {
