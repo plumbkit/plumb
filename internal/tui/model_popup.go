@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func (m Model) popupLeftLines() []string {
@@ -85,7 +87,7 @@ func (m Model) popupRightAll(rw int) []string {
 	}
 	sessLabel := sID + "  " + sl
 	if c.SessionName != "" {
-		sessLabel = DetailStyle.Render(recentCallWho(c, m.sessionExternalIDs())) + "  " + sID + "  " + sl
+		sessLabel = DetailStyle.Render(stats.AgentLabel(c.SessionName, c.LogicalAgent)) + "  " + sID + "  " + sl
 	}
 	lines = append(lines,
 		detailRow("Tool", DetailStyle.Render(c.Tool)),

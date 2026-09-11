@@ -193,14 +193,19 @@ recent-write entries to return.
   `is_self=true` means you are the only agent here — your view of the workspace is
   authoritative.
 - `recent_writes` — the last N write/edit/rename/git/… operations by any
-  session on this workspace, showing the session name, tool, relative file path,
-  and age. Only operations that could modify the workspace are listed: read-only
-  git subcommands (`status`, `log`, `diff`, …) and dry-run previews never
-  appear, and a call that failed or was refused is kept but marked
-  `[failed — no change applied]` — evidence of peer activity, not a change to
-  re-read. A successful git commit is attributed in full: its line carries the
-  session name, the commit's short SHA and subject, and the repository; other
-  git writes are labelled with their subcommand (`git add`, `git push`). If a
+  session on this workspace, showing the writer, tool, relative file path,
+  and age. The writer is the session name, or `<session>/<agent>` for a write
+  made while several logical agents shared that connection — so four subagents
+  working through one `plumb serve` are four writers here rather than one. A
+  bare name means the connection had a single agent when the call was made, so
+  the name identifies it exactly. Only operations that could modify the
+  workspace are listed: read-only git subcommands (`status`, `log`, `diff`, …)
+  and dry-run previews never appear, and a call that failed or was refused is
+  kept but marked `[failed — no change applied]` — evidence of peer activity,
+  not a change to re-read. A successful git commit is attributed in full: its
+  line carries the writer, the commit's short SHA and subject, and the
+  repository; other git writes are labelled with their subcommand (`git add`,
+  `git push`). If a
   file you are about to edit appears here, re-read it first. When
   `[collab] peer_awareness` is on and the topology index has the file, each entry
   is annotated with its enclosing package/symbol (best-effort, `source=topology`).

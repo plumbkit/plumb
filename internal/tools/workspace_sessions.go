@@ -488,10 +488,9 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 	if len(annotations) > 0 {
 		sb.WriteString("  (symbol/package annotations are best-effort from the topology index)\n")
 	}
-	writer := newWriterLabels()
 	for _, w := range writes {
 		age := humaniseAge(now.Sub(w.CalledAt))
-		who := writer.label(w)
+		who := stats.AgentLabel(w.SessionName, w.LogicalAgent)
 		if w.Tool == "git" {
 			writeGitWriteEntry(sb, w, who, workspace, age)
 			continue
