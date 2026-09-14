@@ -36,13 +36,30 @@
   polled a probe that could never succeed for the whole window. Extending now
   requires a resolved session, so such a watcher never leaves the base window
   instead of becoming an hour-long orphan.
+- **A watcher keyed by conversation id no longer outlives the one that
+  supersedes it.** A turn ending while the daemon is down keys its lock by
+  conversation id; the next turn, with the daemon back, keys by the resolved
+  session name and arms a second watcher under a different lock. The first now
+  retires as soon as it sees a name that is not its key, instead of extending
+  alongside the second — which would have meant two wakes per message and two
+  independent re-arm chains.
 - **`~/.claude/plumb-wake` grew without bound.** Nothing ever removed a stamp, a
   lock, or a re-arm record; a long-running fleet accumulated one stamp per
   conversation forever, plus a lock for every watcher killed before it could
-  release one. Turn ends now sweep stamps and re-arm records older than seven days
-  and lock directories the existing reclaim ladder already judges dead, bounded
-  per run and ignoring every error. A lock another watcher is mid-acquire is left
-  alone, and the sweep never signals a process.
+  release one. Turn ends now sweep stamps and re-arm records older than seven
+  days, and lock directories older than the watch ceiling plus slack — the point
+  past which no watcher can still be running. The test is AGE alone, deliberately:
+  asking the reclaim ladder instead would have read a lock as dead whenever its
+  `ps` probe failed, and from a sweep that deletes a live watcher's lock belonging
+  to any session on the machine. The scan is bounded, every error is ignored, and
+  the sweep forks nothing and signals nothing.
+- **An unstamped lock is no longer unreclaimable for as long as the watch
+  window.** A watcher that died between creating its lock directory and recording
+  its pid leaves a lock the next turn must decide about, and that grace was
+  derived from the watch window — which would have made a session that lost that
+  race silently unwakeable for the full hour. The gap being covered is the
+  microseconds between two adjacent statements, so it is now a flat minute and
+  does not scale with the window at all.
 
 ## 0.19.1 (2026-09-14)
 

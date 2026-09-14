@@ -101,9 +101,8 @@ func reclaimableLock(lock, sessionID string, isPlumb func(int) bool) bool {
 		// let two watchers run for one session. But a watcher that DIED in that
 		// window leaves a lock nothing can ever claim, and a session that can
 		// never arm a watcher is silently unwakeable with nothing in any output
-		// saying so. No live watcher outlives its own window, so an unstamped
-		// lock older than one is debris, not a tenant.
-		return lockOutlivedAnyWatcher(lock)
+		// saying so.
+		return unstampedLockIsDebris(lock)
 	}
 	// A pid that is alive but is not a plumb cannot be our watcher: the lock
 	// outlived a crash or a reboot and something unrelated has taken the number.
@@ -121,23 +120,27 @@ func reclaimableLock(lock, sessionID string, isPlumb func(int) bool) bool {
 	return true
 }
 
-// lockOutlivedAnyWatcher reports whether a lock is older than the longest a live
-// watcher could still be holding it.
+// claudeUnstampedLockGrace is how long an unstamped lock is treated as a
+// watcher still mid-acquire rather than as debris.
 //
-// The bound is the MACHINE-wide ceiling, not this session's resolved window. The
-// watcher that left this lock may have been armed in another workspace under
-// another project config, and the only thing true of all of them is that project
-// config can narrow the window but never widen it past the global ceiling — the
-// same ceiling the installed handler's timeout is derived from. Using this
-// session's own (possibly narrowed) window here would reclaim a lock a longer-
-// windowed watcher was still legitimately holding, which is how a session ends
-// up with two watchers.
-func lockOutlivedAnyWatcher(lock string) bool {
+// The gap being covered is the one between acquireWakeLockWith's os.Mkdir and
+// the os.WriteFile that records the pid — adjacent statements, microseconds
+// apart. A minute is six orders of magnitude of slack over that, and nothing
+// about it should scale with the WATCH window: this lock's holder never lived
+// long enough to watch anything. Deriving it from the window was always
+// arbitrary, and once the ceiling became an hour it was actively harmful — a
+// session that lost the race would have been silently unwakeable for that hour
+// rather than for the few minutes it used to be.
+const claudeUnstampedLockGrace = 60 * time.Second
+
+// unstampedLockIsDebris reports whether a lock with no readable pid is old
+// enough that no watcher can still be mid-acquire behind it.
+func unstampedLockIsDebris(lock string) bool {
 	info, err := os.Stat(lock)
 	if err != nil {
 		return false
 	}
-	return time.Since(info.ModTime()) > globalWakeWindows().ceiling()+claudeStopTimeoutSlack
+	return time.Since(info.ModTime()) > claudeUnstampedLockGrace
 }
 
 // terminate asks a stale watcher to stop. Failure is ignored: the lock is

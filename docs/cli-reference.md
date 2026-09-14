@@ -349,6 +349,12 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   one base window of the last sighting, and a session whose probe never resolves
   never extends at all.
 
+  The hour is measured from the turn end that ARMED the watcher, not from the
+  last turn: while one watcher holds a session's lock, later turn ends arm
+  nothing (that is the one-watcher-per-session guarantee). A session that goes
+  quiet late in a watcher's hour therefore has the remainder of that hour, not a
+  fresh one — the same shape the fixed window always had, at a longer scale.
+
   The installed handler's `timeout` sits above the **ceiling** on purpose: a
   shorter one kills the watcher mid-watch, and nothing in any output would say
   so. Because that timeout is written at install time from the windows in effect

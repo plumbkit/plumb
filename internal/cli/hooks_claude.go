@@ -223,7 +223,7 @@ func claudeStopHook(input claudeHookInput, probe wakeProbe) *mailReport {
 	}
 	defer lock.release()
 
-	wake := watchForPeerMail(input, report, peers, ok, probe, windows)
+	wake := watchForPeerMail(input, key, report, peers, ok, probe, windows)
 	if wake == nil {
 		return nil
 	}
@@ -256,8 +256,18 @@ type wakeProbe func(sessionID, cwd string) (mailReport, int, bool)
 //     case merely wasted the base window; at the ceiling it would be an
 //     hour-long orphan holding this session's lock, since the stand-down below
 //     is unreachable while resolved is false.
+//
+// key is the wake key this watcher holds the lock under, and a watcher whose
+// session resolves to a DIFFERENT name retires. That happens on a real sequence:
+// a turn ending while the daemon is down keys by conversation id, and the next
+// turn, with the daemon back, keys by the resolved session name and arms a
+// second watcher under a lock the first one does not hold. Letting the first
+// extend would keep a duplicate alive to the ceiling — two wakes per message and
+// two independent chain counters — which is the same "resolve late" path that
+// makes the extension correct in every other respect.
 func watchForPeerMail(
 	input claudeHookInput,
+	key string,
 	report mailReport,
 	peers int,
 	ok bool,
@@ -284,6 +294,9 @@ func watchForPeerMail(
 		report, peers, ok = probe(input.SessionID, input.CWD)
 		if live.observe(ok) {
 			return nil
+		}
+		if ok && report.Session != "" && report.Session != key {
+			return nil // a watcher under the resolved name owns this session now
 		}
 		deadline = windows.slideDeadline(deadline, hardStop, time.Now(), live.resolved, peers)
 	}
@@ -437,42 +450,51 @@ func writeWakeStamp(dir, key string, report mailReport, input claudeHookInput) {
 // the reason to fix it now is that a watcher living to an hour makes leaked
 // locks both more likely and longer-lived.
 //
-// Debris is decided by reclaimableLock with an EMPTY session id, which is
-// precisely the question being asked here: not "may this session take the lock"
-// but "could any live watcher still hold it". An empty id also short-circuits
-// before the evict-a-previous-tenant branch, so a sweep never signals a process
-// — housekeeping must not be able to kill a watcher.
+// AGE is the only test applied, and deliberately so. The obvious alternative —
+// asking reclaimableLock whether each lock is dead — is unsafe here in a way it
+// is not at its own call site: it reads `!isPlumb(pid)` as reclaimable BEFORE it
+// reaches the owner check, and isPlumbProcess fails open, returning false
+// whenever its `ps` cannot run. At acquire time that costs the owning session a
+// contended reclaim of its own key. From a sweep it would delete a live
+// watcher's lock belonging to ANY session on the machine — one transient fork
+// failure and that session arms a second watcher, which is the exact invariant
+// this file has already had three defects in. Age cannot fail open: no watcher
+// outlives the ceiling its client kills it at, so a lock older than that is
+// debris whatever `ps` says. It also means the sweep forks nothing.
 //
-// Every failure is ignored and the work is capped: this runs on a turn-end path,
-// where no amount of tidiness is worth delaying a turn.
+// Dead-but-young locks are simply left: acquireWakeLock already reclaims those
+// lazily for the session that owns the key, which is the only session that cares.
+//
+// Every failure is ignored and the scan is bounded: this runs on a turn-end
+// path, where no amount of tidiness is worth delaying a turn.
 func sweepWakeDir(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	swept := 0
-	for _, entry := range entries {
-		if swept >= claudeWakeSweepMax {
+	// Resolved once for the whole sweep rather than per entry: it reads config.
+	maxLockLife := globalWakeWindows().ceiling() + claudeStopTimeoutSlack
+	for i, entry := range entries {
+		// Bounds the SCAN, not the deletions — a directory that somehow grew
+		// enormous is walked over several turns instead of one long one.
+		if i >= claudeWakeSweepMax {
 			return
 		}
 		name := entry.Name()
-		path := filepath.Join(dir, name)
+		var ttl time.Duration
 		switch {
 		case entry.IsDir() && strings.HasSuffix(name, ".lock"):
-			if reclaimableLock(path, "", isPlumbProcess) {
-				_ = os.RemoveAll(path)
-				swept++
-			}
+			ttl = maxLockLife
 		case strings.HasSuffix(name, ".stamp"), strings.HasSuffix(name, ".rearm"):
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if time.Since(info.ModTime()) > claudeWakeStampTTL {
-				_ = os.Remove(path)
-				swept++
-			}
+			ttl = claudeWakeStampTTL
+		default:
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil || time.Since(info.ModTime()) <= ttl {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(dir, name))
 	}
 }
 
