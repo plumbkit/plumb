@@ -161,32 +161,32 @@ func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
 	const deadPID = 0x7FFFFFFE // never alive; processAlive rejects it outright
 
 	for _, tc := range []struct {
-		name      string
-		lockPID   string // "" = no lock at all; "-" = lock dir with no pid file
-		isPlumb   bool
-		wantCalls int
-		why       string
+		name     string
+		lockPID  string // "" = no lock at all; "-" = lock dir with no pid file
+		isPlumb  bool
+		wantStop bool // retire on the first poll, rather than watch the window out
+		why      string
 	}{
 		{
-			name: "a live replacement holds the lock", lockPID: "self", isPlumb: true, wantCalls: 1,
+			name: "a live replacement holds the lock", lockPID: "self", isPlumb: true, wantStop: true,
 			why: "the second watcher owns this session; extending beside it means two " +
 				"wakes per message and two re-arm chains",
 		},
 		{
-			name: "renamed, but nothing replaced it", lockPID: "", wantCalls: 3,
+			name: "renamed, but nothing replaced it", lockPID: "",
 			why: "no other watcher exists, so retiring would leave the session unwatched",
 		},
 		{
-			name: "a leftover lock whose watcher is long dead", lockPID: "dead", isPlumb: true, wantCalls: 3,
+			name: "a leftover lock whose watcher is long dead", lockPID: "dead", isPlumb: true,
 			why: "locks are never swept, so a corpse would otherwise retire the only watcher " +
 				"an idle session has — with no next turn to re-arm one",
 		},
 		{
-			name: "the pid belongs to something that is not plumb", lockPID: "self", isPlumb: false, wantCalls: 3,
+			name: "the pid belongs to something that is not plumb", lockPID: "self", isPlumb: false,
 			why: "a reused pid number is not a watcher; an uncertain reading must keep watching",
 		},
 		{
-			name: "a replacement that has not recorded its pid yet", lockPID: "-", isPlumb: true, wantCalls: 3,
+			name: "a replacement that has not recorded its pid yet", lockPID: "-", isPlumb: true,
 			why: "unstamped is indistinguishable from debris; the next poll sees the pid",
 		},
 	} {
@@ -221,8 +221,16 @@ func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
 			if wake != nil {
 				t.Error("produced a wake with no mail waiting")
 			}
-			if *calls != tc.wantCalls {
-				t.Errorf("polled %d time(s), want %d — %s", *calls, tc.wantCalls, tc.why)
+			// Retiring is exactly one poll; not retiring is "more than one", not a
+			// specific count. Asserting the exact number would pin the deadline
+			// arithmetic a second time and go red on a runner that overshoots a 1s
+			// sleep — the discrimination here needs only the first poll.
+			if stopped := *calls == 1; stopped != tc.wantStop {
+				want := "more than 1 (keep watching)"
+				if tc.wantStop {
+					want = "exactly 1 (retire)"
+				}
+				t.Errorf("polled %d time(s), want %s — %s", *calls, want, tc.why)
 			}
 		})
 	}

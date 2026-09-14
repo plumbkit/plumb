@@ -363,7 +363,9 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   `plumb hooks` reports the mismatch as `stale`. A project's `.plumb/config.toml`
   may **narrow** either window and may not raise either one: each is bounded by
   its own global value, so a repository cannot lengthen the base window every
-  session pays whether or not a peer exists. `PLUMB_WAKE_DIR` (default
+  session pays whether or not a peer exists. An exported `PLUMB_WAKE_WINDOW` or
+  `PLUMB_WAKE_PEER_WINDOW` is read last and wins over both, which also means it
+  overrides a project's narrowing. `PLUMB_WAKE_DIR` (default
   `~/.claude/plumb-wake`) is where the watcher keeps its per-session stamp, lock
   and re-arm records. Stamps and re-arm records older than a week are swept on
   later turn ends; lock directories are not swept, and are reclaimed by the
