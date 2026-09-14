@@ -163,6 +163,30 @@ func (s *connSession) workspaceFor(ctx context.Context) string {
 	return s.workspace()
 }
 
+// recordedRootFor is the workspace a COMPLETED call by agentID ran against:
+// the root of that agent's shard, or "" when the agent has none (an
+// unattributed call, or a connection only one agent holds).
+//
+// Unlike workspaceFor it never creates a shard. It runs on the after-tool
+// recording path, after the work is done, where the only honest answer is the
+// root the call actually used — and where creating a shard would do the
+// sessionstate pin lookup shardFor does, on the response path, for an agent
+// whose call never needed one.
+func (s *connSession) recordedRootFor(agentID string) string {
+	if agentID == "" {
+		return ""
+	}
+	s.shardsMu.Lock()
+	sh := s.shards[agentID]
+	s.shardsMu.Unlock()
+	if sh == nil {
+		return ""
+	}
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return sh.root
+}
+
 // policyFor returns the PathPolicy for the logical agent in ctx, falling back
 // to the connection's policy when not shared.
 func (s *connSession) policyFor(ctx context.Context) *tools.PathPolicy {

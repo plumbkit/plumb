@@ -10,6 +10,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -137,4 +138,141 @@ func fileFromArgs(t *testing.T, inputJSON string) string {
 		return a.FilePath[i+1:]
 	}
 	return a.FilePath
+}
+
+// TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace: on a shared connection a
+// recorded call must name the workspace the call actually ran against — the
+// caller's shard root — not whichever project the CONNECTION last pinned.
+//
+// The two are the same on a single-agent connection, so the gap only opens when
+// several agents multiplex one `plumb serve` and one of them pins elsewhere. A
+// git commit is the case with teeth: its arguments carry no path for
+// workspaceFromArgs to re-attribute from, so the row took the connection's pin
+// wholesale. The repository's own workspace_sessions feed
+// (RecentWritesByWorkspace, keyed on workspace) then had no entry for the
+// commit, while the ref guard — keyed on the repository — still named the
+// session that made it. Three subsystems, three answers about one commit.
+func TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace(t *testing.T) {
+	store, ss := newOriginStore(t)
+	connRoot := freshTempDir(t)
+	mustGitDir(t, connRoot)
+	agentRoot := freshTempDir(t)
+	mustGitDir(t, agentRoot)
+
+	s := newPersistSession(t, store, ss, "proxy-audit-ws")
+	s.statsStore = newStatsStore()
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false); err != nil {
+		t.Fatalf("connection pin: %v", err)
+	}
+
+	// A second identity makes the connection shared, so declared calls route to
+	// their own shards.
+	s.recordLogicalAgentAttach("agent-here")
+	s.recordLogicalAgentCall("agent-elsewhere")
+	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
+	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
+	}
+	if got := s.workspaceFor(ctx); got != agentRoot {
+		t.Fatalf("precondition: the agent's calls resolve against %q, want %q", got, agentRoot)
+	}
+	if got := s.view().acquiredRoot; got != connRoot {
+		t.Fatalf("precondition: the connection must still hold %q, got %q", connRoot, got)
+	}
+
+	args, err := json.Marshal(map[string]any{"subcommand": "commit", "message": "audit me"})
+	if err != nil {
+		t.Fatalf("marshal git args: %v", err)
+	}
+	s.afterToolFromCtx(ctx, "git", args, "abc1234 audit me", "", time.Millisecond, false, nil)
+
+	s.statsStore.Close()
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.RecentWritesByWorkspace(agentRoot, []string{"git"}, 50)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace(agentRoot): %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("the repository that was committed to has %d audit rows, want 1 — "+
+			"its own feed cannot show a commit plumb itself mediated", len(rows))
+	}
+	stray, err := db.RecentWritesByWorkspace(connRoot, []string{"git"}, 50)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace(connRoot): %v", err)
+	}
+	if len(stray) != 0 {
+		t.Errorf("the connection's workspace has %d audit rows for a commit made in another project, want 0", len(stray))
+	}
+}
+
+// TestAfterToolPrefersThePathArgumentOverTheAgentsRoot pins the ORDER of the two
+// re-attributions in afterToolFromCtx, which nothing else can. The agent's shard
+// root corrects the connection's pin; a path argument is more specific still,
+// because it names the project this particular call reached into rather than the
+// one the caller sits in. Reversing the two blocks compiles and leaves the whole
+// suite green — on an unshared connection only one of them ever fires, so no
+// other test distinguishes them. Backwards it is the defect this file exists for,
+// mirrored: a call that reached into another project filed under the caller's own
+// workspace, leaving the project it touched with no record of it.
+func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
+	store, ss := newOriginStore(t)
+	connRoot := freshTempDir(t)
+	mustGitDir(t, connRoot)
+	agentRoot := freshTempDir(t)
+	mustGitDir(t, agentRoot)
+	reachedInto := freshTempDir(t)
+	mustGitDir(t, reachedInto)
+
+	s := newPersistSession(t, store, ss, "proxy-audit-order")
+	s.statsStore = newStatsStore()
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false); err != nil {
+		t.Fatalf("connection pin: %v", err)
+	}
+	s.recordLogicalAgentAttach("agent-here")
+	s.recordLogicalAgentCall("agent-elsewhere")
+	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
+	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
+	}
+	if got := s.workspaceFor(ctx); got != agentRoot {
+		t.Fatalf("precondition: the agent's calls resolve against %q, want %q", got, agentRoot)
+	}
+
+	target := reachedInto + "/touched.txt"
+	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed target file: %v", err)
+	}
+	args, err := json.Marshal(map[string]any{"file_path": target, "content": "x"})
+	if err != nil {
+		t.Fatalf("marshal write_file args: %v", err)
+	}
+	s.afterToolFromCtx(ctx, "write_file", args, "wrote "+target, "", time.Millisecond, false, nil)
+
+	s.statsStore.Close()
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.RecentWritesByWorkspace(reachedInto, []string{"write_file"}, 50)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace(reachedInto): %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("the project the call reached into has %d audit rows, want 1 — "+
+			"a path argument is more specific than the caller's own root", len(rows))
+	}
+	stray, err := db.RecentWritesByWorkspace(agentRoot, []string{"write_file"}, 50)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace(agentRoot): %v", err)
+	}
+	if len(stray) != 0 {
+		t.Errorf("the caller's own workspace has %d audit rows for a write into another project, want 0", len(stray))
+	}
 }

@@ -377,6 +377,17 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	sessionName := v.sessName
 	clientName := v.clientName
 	clientVersion := v.clientVersion
+	// On a shared connection the call ran against the CALLER's shard root, which
+	// is not the connection's pin once an agent pins elsewhere. Recording the
+	// connection's instead filed the row under a project the call never touched
+	// — and, worse, left the project it did touch with no record of it, so
+	// workspace_sessions' recent_writes (keyed on workspace) could not show a
+	// commit the repository-keyed ref guard still attributed by name.
+	if w := s.recordedRootFor(logicalAgent); w != "" {
+		root = w
+	}
+	// A path argument is more specific still: it names the project this
+	// particular call reached into, whichever workspace the caller sits in.
 	if w := workspaceFromArgs(s.pool, args); w != "" {
 		root = w
 	}
