@@ -227,9 +227,10 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
 	t.Cleanup(s.close)
 
-	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	rootA, rootB, rootC := freshTempDir(t), freshTempDir(t), freshTempDir(t)
 	mustGitDir(t, rootA)
 	mustGitDir(t, rootB)
+	mustGitDir(t, rootC)
 
 	// One agent has attached and pinned; a peer recorded a read against the
 	// connection's tracker, as every call on an unshared connection does.
@@ -240,13 +241,19 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 	read := filepath.Join(rootA, "peer.go")
 	s.readTrackerFor(context.Background()).Record(read, time.Unix(1_700_000_000, 0), "sha-peer")
 
-	// A second agent declares itself and asks for a project outside the pin. The
+	// A second agent declares itself, chooses a project of its own, and then
+	// asks for a THIRD — the ask the sticky guard refuses, since this agent has
+	// now genuinely pinned rootB (issue #468: a shard that chose nothing is not
+	// refused at all, so the refusal under test needs a chosen root first). The
 	// ctx is derived through declaredAgentCtx — the real channel session_start
 	// uses — because what is under test is precisely whether THAT step writes the
 	// declaration down. Building the ctx with mcp.WithLogicalAgent directly would
 	// bypass the mechanism and pass no matter what it does.
 	ctxB := s.declaredAgentCtx(context.Background(), "drifter")
-	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err != nil {
+		t.Fatalf("the declaring agent's own pin: %v", err)
+	}
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootC, "", false); err == nil {
 		t.Fatal("precondition: the cross-workspace re-pin should have been refused")
 	}
 

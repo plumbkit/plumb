@@ -242,7 +242,18 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	prev := sh.root
-	if !force && prev != "" && root != prev && sh.pinOrigin == sessionstate.PinSourceSessionStart {
+	// selfPinned, not pinOrigin alone: the guard must fire for a root this
+	// AGENT chose, and a seeded shard chose nothing. shardFor copies the
+	// CONNECTION's pin and its origin onto a new shard, so a connection whose
+	// origin a peer's same-root session_start had promoted handed every shard
+	// built afterwards a PinSourceSessionStart it never asked for — and the
+	// guard then refused that agent's FIRST explicit pin as a drift away from a
+	// workspace it had never held, with force: true, which displaces a peer on
+	// exactly the pooled connection where this arises, as the only remedy. Until
+	// the refused pin lands, the agent's workspace-relative calls keep resolving
+	// inside the seeded root (issue #468). PLAN-398 closed the half of this where
+	// the connection moved afterwards; this closes the half where it did not.
+	if !force && prev != "" && root != prev && sh.selfPinned && sh.pinOrigin == sessionstate.PinSourceSessionStart {
 		refused = fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root)
 		// Leave a trace on this past-vulnerability surface: the connection-level
 		// guard has always logged a refused steal, and a refused cross-workspace

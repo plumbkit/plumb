@@ -47,6 +47,26 @@
   was absent — the one state where identity is not degraded but entirely gone.
   It now covers that state too, and needs no daemon probe to do it, because the
   fact is in the config rather than the daemon.
+- **A logical agent's first explicit `session_start` is no longer refused off a
+  workspace it never chose (issue #468).** A shard built for an agent on a
+  shared connection is seeded from the connection's pin — and copied that pin's
+  ORIGIN too, so a connection whose origin some other caller's same-root
+  `session_start` had promoted handed every shard built afterwards a
+  `session_start` origin it had never asked for. The per-agent sticky guard then
+  refused that agent's first explicit pin as a drift away from a workspace it had
+  never held, offering `force: true`, which displaces a peer on exactly the
+  pooled connection where this arises, as the only way through. Meanwhile every
+  workspace-relative call kept resolving inside the seeded root — a silent
+  wrong-repository read whenever the two roots contain one another, as a git
+  worktree and its parent checkout do. The guard now fires only for a root the
+  agent actually chose (`selfPinned`, the same distinction
+  `followConnectionShards` already draws); an agent that did choose one is still
+  refused a non-forced move away from it. PLAN-398 closed the half of this where
+  the connection moved afterwards, so the seeded shard could follow; this closes
+  the half where it did not. Guarded by
+  `TestSeededShardDoesNotInheritAPeersStickiness` and
+  `TestChosenShardStaysSticky`.
+
 - **A wake watcher whose session never resolved could not stand down.** The
   stand-down check only applied once a session had been seen live, so a session
   with no linkage — or any session while the daemon was down — held its lock and

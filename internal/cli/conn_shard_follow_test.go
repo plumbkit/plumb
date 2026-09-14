@@ -2,12 +2,20 @@ package cli
 
 // conn_shard_follow_test.go — PLAN-398: a shard seeded from the connection pin
 // belongs to the connection until its agent deliberately re-pins it. shardFor
-// caches the shard BEFORE repinAgent can refuse, so one refused ask left the
-// agent cached at a stale root whose sticky seed then refused the agent's next,
-// entirely legitimate call — while a fresh agent asking the identical thing
-// succeeded. The fix: when the connection itself moves, every shard still
-// living where the connection seeded it follows; a shard whose agent chose its
-// own root does not.
+// caches the shard from the connection's CURRENT pin and never revisits it, so
+// an agent seeded before the connection moved was left resolving against a root
+// the connection had since left, while a fresh agent asking the identical thing
+// resolved correctly. The fix: when the connection itself moves, every shard
+// still living where the connection seeded it follows; a shard whose agent
+// chose its own root does not.
+//
+// The card's original reproduction seeded the shard by making an ask that the
+// per-agent sticky guard REFUSED, because the guard used to fire on a seeded
+// shard's inherited pin origin. It no longer does (issue #468: a shard that
+// chose nothing is not a deliberate pin, and offering force: true as the way
+// out of one displaces a peer). The seeding below is therefore an ordinary
+// workspace resolution, which is what creates the shard in production too, and
+// the fail-closed tail now runs against a shard whose agent really did choose.
 
 import (
 	"context"
@@ -18,9 +26,9 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 )
 
-// TestShardSeededBeforeRefusalFollowsTheConnection is the card's five-step
-// reproduction, verbatim.
-func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
+// TestShardSeededFromTheConnectionFollowsIt is the card's reproduction: a shard
+// seeded where the connection was must not be left behind when it moves.
+func TestShardSeededFromTheConnectionFollowsIt(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
 	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
@@ -43,12 +51,9 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 	s.recordLogicalAgentAttach("coordinator")
 	s.recordLogicalAgentAttach("sub")
 
-	// 2. sub asks for Y and is refused — but its shard is now cached at X.
-	if _, err := s.repinWorkspace(ctxSub, rootY, "", false); err == nil {
-		t.Fatal("precondition: sub's cross-workspace re-pin should have been refused")
-	}
+	// 2. sub resolves a workspace, which caches its shard at X.
 	if got := s.workspaceFor(ctxSub); got != rootX {
-		t.Fatalf("precondition: after the refusal sub resolves to %q, want the seeded %q", got, rootX)
+		t.Fatalf("precondition: sub's shard seeded at %q, want the connection's %q", got, rootX)
 	}
 
 	// 3. The connection legitimately moves to Z (force: the pin is sticky).
@@ -56,14 +61,13 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 		t.Fatalf("connection move to Z: %v", err)
 	}
 
-	// 4. THE CARD: sub now asks for Z — where the connection actually is — and
-	// must be ACCEPTED. Before the fix the stale cached shard's sticky seed at
-	// X refused the identical request its peer's fresh shard admitted.
-	if _, err := s.repinWorkspace(ctxSub, rootZ, "", false); err != nil {
-		t.Fatalf("a legitimate call for the root the connection moved to was refused off a stale seeded shard (PLAN-398): %v", err)
-	}
+	// 4. THE CARD: sub's seeded shard follows the connection rather than being
+	// stranded at X, so its next call resolves where the connection actually is.
 	if got := s.workspaceFor(ctxSub); got != rootZ {
-		t.Fatalf("sub resolves to %q, want %q", got, rootZ)
+		t.Fatalf("the seeded shard was stranded at %q after the connection moved to %q (PLAN-398)", got, rootZ)
+	}
+	if _, err := s.repinWorkspace(ctxSub, rootZ, "", false); err != nil {
+		t.Fatalf("a legitimate call for the root the connection moved to was refused: %v", err)
 	}
 
 	// 5. Control: a fresh agent asking the identical thing is accepted too.
@@ -71,11 +75,14 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 		t.Fatalf("control: a fresh agent's identical call must be accepted: %v", err)
 	}
 
-	// Fail-closed survives the follow: sub's shard now lives at Z, so a genuine
-	// cross-workspace ask is still refused, with the remedy.
-	_, driftErr := s.repinWorkspace(ctxSub, rootY, "", false)
+	// Fail-closed survives the follow: once sub has CHOSEN a root, a genuine
+	// cross-workspace drift is refused, with the diagnosis and remedy.
+	if _, err := s.repinWorkspace(ctxSub, rootY, "", false); err != nil {
+		t.Fatalf("sub's deliberate move to Y: %v", err)
+	}
+	_, driftErr := s.repinWorkspace(ctxSub, rootZ, "", false)
 	if driftErr == nil {
-		t.Fatal("after following the connection, a genuine cross-workspace drift must still be refused")
+		t.Fatal("after choosing a root, a genuine cross-workspace drift must be refused")
 	}
 	if !strings.Contains(driftErr.Error(), "force") && !strings.Contains(driftErr.Error(), "sticky") {
 		t.Errorf("the drift refusal lost its diagnosis and remedy: %v", driftErr)
@@ -107,12 +114,12 @@ func TestSelfPinnedShardDoesNotFollowTheConnection(t *testing.T) {
 	s.recordLogicalAgentAttach("coordinator")
 	s.recordLogicalAgentAttach("sub")
 
-	// sub's first ask is refused (shard seeded at X), then it CHOOSES W with force.
-	if _, err := s.repinWorkspace(ctxSub, rootW, "", false); err == nil {
-		t.Fatal("precondition: the cross-workspace ask should have been refused")
+	// sub's shard is seeded at X, then sub CHOOSES W.
+	if got := s.workspaceFor(ctxSub); got != rootX {
+		t.Fatalf("precondition: sub's shard seeded at %q, want %q", got, rootX)
 	}
-	if _, err := s.repinWorkspace(ctxSub, rootW, "", true); err != nil {
-		t.Fatalf("sub's forced pin to W: %v", err)
+	if _, err := s.repinWorkspace(ctxSub, rootW, "", false); err != nil {
+		t.Fatalf("sub's pin to W: %v", err)
 	}
 
 	// The connection moves to Z. sub's own choice must survive it.
