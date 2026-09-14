@@ -47,6 +47,19 @@
   was absent — the one state where identity is not degraded but entirely gone.
   It now covers that state too, and needs no daemon probe to do it, because the
   fact is in the config rather than the daemon.
+- **A commit made by one agent of a shared connection went missing from the
+  repository's own audit trail.** Every recorded tool call was filed under the
+  workspace the CONNECTION last pinned, but on a shared connection (several
+  logical agents multiplexing one `plumb serve`) the call ran against the
+  caller's own shard root. Once an agent pinned elsewhere, its writes were
+  recorded against a project it never touched, and the project it did touch kept
+  no record of them: `workspace_sessions`' `recent_writes` is keyed on workspace,
+  so a commit plumb itself mediated was absent from the repository's feed while
+  the repository-keyed ref guard still named the session that made it — three
+  subsystems, three answers about one commit. The row now names the workspace
+  the call actually ran against; a path argument still refines it, and a
+  single-agent connection is unchanged.
+
 - **A wake watcher whose session never resolved could not stand down.** The
   stand-down check only applied once a session had been seen live, so a session
   with no linkage — or any session while the daemon was down — held its lock and
