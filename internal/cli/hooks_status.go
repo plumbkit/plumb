@@ -47,11 +47,11 @@ func runHooksStatus(cmd *cobra.Command) error {
 	return nil
 }
 
-// identityHookSkewNote explains an identity hook that is stamping nothing, in
-// either direction of skew: hooks written by a plumb too old to install it, or
-// a running daemon that predates the argument channel. Without it the table
-// reads clean while every subagent write is still refused, and the reader has
-// no way to connect the two.
+// identityHookSkewNote explains an identity hook that is stamping nothing:
+// absent while plumb's other hooks are present, or installed against a daemon
+// that predates the argument channel. Without it the table reports a bare
+// "missing" or a confident "installed" while every subagent write is refused,
+// and the reader has no way to connect the two.
 func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (string, error)) string {
 	if t.use != claudeCodeHooksTarget.use {
 		return ""
@@ -68,14 +68,15 @@ func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (strin
 		others = true
 	}
 	if !installed {
-		// The older-install skew, and the mirror of the daemon cases below: a
-		// plumb that predates the identity channel writes every other hook and
-		// not this one, so nothing stamps and agents multiplexing one
-		// connection are filed under a single identity. The daemon is healthy
-		// in this state, so no note below fires; this fact lives in the config
-		// rather than the daemon, so it needs no probe to reach the reader.
+		// Plumb is set up on this client, but identity specifically is off —
+		// hooks are installed once and never re-validated, so a machine set up
+		// before the identity hook existed stays here indefinitely. A bare
+		// "missing" row reads like one absent convenience among three; it is
+		// the state where identity is not degraded but entirely gone. The
+		// daemon is healthy here, so no case below fires, and the fact lives in
+		// the config rather than the daemon — hence no probe.
 		if others {
-			return "Claude Code — the identity hook is missing while plumb's other hooks are installed: these were written by a plumb that predates it, so no per-agent identity is stamped and agents sharing one connection are filed under a single session. Run `plumb hooks install claude-code` from this binary."
+			return "Claude Code — the identity hook is missing while plumb's other hooks are installed, so nothing stamps a per-agent identity: agents sharing one connection are filed under a single session, their state-changing calls are refused, and mail reaches whichever of them polls first. Run `plumb hooks install claude-code` to add it."
 		}
 		return ""
 	}

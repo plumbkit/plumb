@@ -31,19 +31,21 @@
 
 ### Fixed
 
-- **`plumb hooks status` now says why agent identity is dead when the hooks were
-  written by an older plumb.** A plumb that predates the identity channel does
-  not install the `PreToolUse` hook at all, so a machine whose hooks it wrote —
-  while the daemon has since moved on — stamps no `dev.plumbkit/logical-agent`
-  on any call. Every agent multiplexing one `serve` connection is then filed
-  under a single identity: state-changing calls are refused for the whole
-  session with `shared connection: … no logical-agent identity`, and mail
-  addressed to that name reaches whichever agent polls first. The skew note
-  covered only the mirror case — a daemon older than the channel — and returned
-  early whenever the hook was absent, which is exactly the state an older
-  install leaves behind. It now names that install too, and needs no daemon
+- **`plumb hooks` now says what a missing identity hook actually costs.** The
+  status table reported `agent identity  missing` and stopped there, which reads
+  like one absent convenience among three. It is not: with no `PreToolUse` hook
+  nothing stamps `dev.plumbkit/logical-agent`, so every agent multiplexing one
+  `serve` connection is filed under a single session — state-changing calls are
+  refused for the whole session with `shared connection: … no logical-agent
+  identity`, and mail addressed to that shared name reaches whichever agent
+  polls first rather than the one it names. Hooks are installed once and never
+  re-validated, so a machine set up before the identity hook existed sits in
+  this state indefinitely, while the runtime refusal advises `plumb hooks
+  install claude-code` with nothing connecting that advice to the table. The
+  skew note covered only a daemon older than the identity channel and returned
+  early whenever the hook was absent — the one state where identity is not
+  degraded but entirely gone. It now covers that state too, and needs no daemon
   probe to do it, because the fact is in the config rather than the daemon.
-
 - **A wake watcher whose session never resolved could not stand down.** The
   stand-down check only applied once a session had been seen live, so a session
   with no linkage — or any session while the daemon was down — held its lock and
