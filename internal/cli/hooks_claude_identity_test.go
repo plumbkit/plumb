@@ -232,7 +232,7 @@ func TestIdentityHookSkewNote(t *testing.T) {
 		t.Errorf("a current daemon needs no note, got %q", got)
 	}
 	if got := identityHookSkewNote(claudeCodeHooksTarget, missing, old); got != "" {
-		t.Errorf("a hook that is not installed needs no note, got %q", got)
+		t.Errorf("a missing hook with no other plumb hooks beside it needs no note, got %q", got)
 	}
 	if got := identityHookSkewNote(codexHooksTarget, installed, old); got != "" {
 		t.Errorf("only the Claude Code target carries the identity hook, got %q", got)
@@ -485,15 +485,29 @@ func TestIdentityHookSkewNoteOlderInstall(t *testing.T) {
 		{entry: hookEntry{event: "Stop"}, state: hookStateStale},
 	}
 	got := identityHookSkewNote(claudeCodeHooksTarget, olderInstall, nil)
-	if !strings.Contains(got, "plumb hooks install claude-code") {
-		t.Errorf("the note must carry the remedy, got %q", got)
+	for _, want := range []string{"identity hook is missing", "one session", "refused", "plumb hooks install claude-code"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the note must carry %q — what is broken, what it costs, the remedy; got %q", want, got)
+		}
 	}
-	if !strings.Contains(got, "identity") {
-		t.Errorf("the note must say what is broken, got %q", got)
+	// "present", not "installed": others counts a stale entry too, and in the
+	// two-binary case the table above reads stale/stale/missing.
+	if !strings.Contains(got, "present") || strings.Contains(got, "installed") {
+		t.Errorf("the note must not claim the other hooks are installed when they may be stale, got %q", got)
+	}
+	// It must claim no daemon fact: it never probed one.
+	if strings.Contains(got, "predates") || strings.Contains(got, "plumb restart") {
+		t.Errorf("the note must not assert a daemon fact it did not observe, got %q", got)
+	}
+	// The config fact outranks every daemon case below it: with the hook
+	// absent there is nothing to stamp, so a restart would fix nothing.
+	if got := identityHookSkewNote(claudeCodeHooksTarget, olderInstall, func() (string, error) { return "0.19.0", nil }); !strings.Contains(got, "plumb hooks install claude-code") || strings.Contains(got, "plumb restart") {
+		t.Errorf("a missing hook outranks an old daemon, got %q", got)
 	}
 
-	// Nothing of plumb's on this client is not a skew: the table already reads
-	// unregistered, and a note about a hook nobody asked for is noise.
+	// Hooks are opt-in, so a client with none of plumb's is the ordinary state
+	// after `plumb setup` and not a skew. (The table renders three missing
+	// rows here; plumbRegisteredIn tests MCP registration, not hooks.)
 	nothing := []hookState{
 		{entry: hookEntry{event: "SessionStart"}, state: hookStateMissing},
 		{entry: hookEntry{event: "PreToolUse"}, state: hookStateMissing},

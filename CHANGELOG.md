@@ -38,10 +38,11 @@
   `serve` connection is filed under a single session — state-changing calls are
   refused for the whole session with `shared connection: … no logical-agent
   identity`, and mail addressed to that shared name reaches whichever agent
-  polls first rather than the one it names. Hooks are installed once and never
-  re-validated, so a machine set up before the identity hook existed sits in
-  this state indefinitely, while the runtime refusal advises `plumb hooks
-  install claude-code` with nothing connecting that advice to the table. The
+  polls first rather than the one it names. `plumb hooks install claude-code`
+  only gained that third hook in 0.19.1, and hooks are installed once and never
+  re-validated, so every machine whose hooks predate it sits in this state until
+  the install is re-run — while the runtime refusal advises exactly that, with
+  nothing connecting the advice to the table. The
   skew note covered only a daemon older than the identity channel and returned
   early whenever the hook was absent — the one state where identity is not
   degraded but entirely gone. It now covers that state too, and needs no daemon

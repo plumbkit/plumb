@@ -68,15 +68,18 @@ func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (strin
 		others = true
 	}
 	if !installed {
-		// Plumb is set up on this client, but identity specifically is off —
-		// hooks are installed once and never re-validated, so a machine set up
-		// before the identity hook existed stays here indefinitely. A bare
-		// "missing" row reads like one absent convenience among three; it is
-		// the state where identity is not degraded but entirely gone. The
-		// daemon is healthy here, so no case below fires, and the fact lives in
-		// the config rather than the daemon — hence no probe.
+		// Plumb is set up on this client, but identity specifically is off.
+		// Hooks are installed once and never re-validated, so an install that
+		// predates the third hook stays here indefinitely. A bare "missing" row
+		// reads like one absent convenience among three; it is the state where
+		// identity is not degraded but entirely gone. "present" rather than
+		// "installed" because others counts a stale entry too — in the
+		// two-binary case the rows read stale/stale/missing, and a note saying
+		// "installed" would contradict the table above it. The daemon is
+		// healthy here so no case below fires, and the fact lives in the config
+		// rather than the daemon — hence no probe.
 		if others {
-			return "Claude Code — the identity hook is missing while plumb's other hooks are installed, so nothing stamps a per-agent identity: agents sharing one connection are filed under a single session, their state-changing calls are refused, and mail reaches whichever of them polls first. Run `plumb hooks install claude-code` to add it."
+			return "Claude Code — the identity hook is missing while plumb's other hooks are present: nothing stamps a per-agent identity, so agents sharing one connection share one session and their writes are refused. Run `plumb hooks install claude-code`."
 		}
 		return ""
 	}
