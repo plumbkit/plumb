@@ -269,6 +269,14 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		return false, refused
 	}
 	if root == prev && language == sh.language {
+		// Nothing moves — but naming the root the shard already holds is still
+		// a CHOICE, which is what the comment below has always claimed
+		// ("even back to the seeded one"). Returning before selfPinned was set
+		// meant an agent that confirmed its seeded workspace kept FOLLOWING the
+		// connection, so a later connection move — a roots notification, or an
+		// anonymous forced re-pin — dragged it off a workspace it had
+		// explicitly named, with no call of its own in between (issue #468).
+		s.confirmShardPin(sh, root, language, origin)
 		return false, nil
 	}
 	changed = true
@@ -294,6 +302,30 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
+}
+
+// confirmShardPin records that this agent deliberately named the root its shard
+// already holds. The per-agent counterpart of attachOrRepinTo's same-root
+// promotion branch: no root moves, so the read/write/undo state and the pin
+// itself stand, and only the ownership facts are upgraded — the shard stops
+// following the connection, and the guard above starts protecting it.
+//
+// Persisted as well as set, because a shard is otherwise only written down when
+// repinAgent MOVES it: a choice held in memory alone would evaporate on the next
+// daemon restart, when the shard re-seeds from the connection and the agent is
+// back where it started.
+//
+// Only an explicit session_start confirms: no other origin reaches repinAgent
+// with an identified caller today, and gating it here keeps that true if one
+// ever does. Called with sh.mu held, so the persist runs in the documented lock
+// order (sh.mu outside, s.mu innermost) exactly as the move path's does.
+func (s *connSession) confirmShardPin(sh *agentShard, root, language string, origin sessionstate.PinSource) {
+	if origin != sessionstate.PinSourceSessionStart || sh.selfPinned {
+		return
+	}
+	sh.selfPinned = true
+	sh.pinOrigin = origin
+	s.persistPinForAgent(sh, root, language, origin)
 }
 
 // seedShardOnLink hydrates the linkage owner's shard from the connection's

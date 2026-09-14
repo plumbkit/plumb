@@ -75,14 +75,12 @@ func TestShardSeededFromTheConnectionFollowsIt(t *testing.T) {
 		t.Fatalf("control: a fresh agent's identical call must be accepted: %v", err)
 	}
 
-	// Fail-closed survives the follow: once sub has CHOSEN a root, a genuine
-	// cross-workspace drift is refused, with the diagnosis and remedy.
-	if _, err := s.repinWorkspace(ctxSub, rootY, "", false); err != nil {
-		t.Fatalf("sub's deliberate move to Y: %v", err)
-	}
-	_, driftErr := s.repinWorkspace(ctxSub, rootZ, "", false)
+	// Fail-closed survives the follow: sub's call above NAMED Z explicitly, and
+	// naming the root a shard already holds is a choice like any other, so a
+	// genuine cross-workspace drift is now refused with the diagnosis and remedy.
+	_, driftErr := s.repinWorkspace(ctxSub, rootY, "", false)
 	if driftErr == nil {
-		t.Fatal("after choosing a root, a genuine cross-workspace drift must be refused")
+		t.Fatal("after naming a root, a genuine cross-workspace drift must be refused")
 	}
 	if !strings.Contains(driftErr.Error(), "force") && !strings.Contains(driftErr.Error(), "sticky") {
 		t.Errorf("the drift refusal lost its diagnosis and remedy: %v", driftErr)

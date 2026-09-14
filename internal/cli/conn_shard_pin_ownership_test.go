@@ -1,8 +1,8 @@
 package cli
 
 // conn_shard_pin_ownership_test.go — a shard must be able to tell a workspace
-// its agent CHOSE from one it was merely SEEDED with (issue #468). Two defects
-// followed from it not being able to, and both are pinned here.
+// its agent CHOSE from one it was merely SEEDED with (issue #468). Three
+// defects followed from it not being able to, and all three are pinned here.
 //
 // 1. A shard is seeded from the connection's pin AND from that pin's origin, so
 //    a connection whose origin some other caller's same-root session_start had
@@ -20,8 +20,15 @@ package cli
 //    reconnect — a project the agent has since left — and that stale row
 //    outranks the pin the agent just made.
 //
-// Either way the agent's workspace-relative calls resolve inside a root it did
-// not choose, with nothing in the response saying so. The fixture is the
+// 3. repinAgent's same-root early return fires BEFORE selfPinned is set, so an
+//    agent whose explicit session_start names the root its shard was already
+//    seeded at never records that it chose one. Its shard keeps following the
+//    connection, and a later connection move drags it off a workspace it had
+//    explicitly named — with no call of its own in between. The comment under
+//    that early return has always claimed this case.
+//
+// In every case the agent's workspace-relative calls resolve inside a root it
+// did not choose, with nothing in the response saying so. The fixture is the
 // reported shape — a git worktree UNDER its parent checkout — because that
 // containment is why the drift stayed silent: the same relative path exists in
 // both roots, so the wrong root returned a plausible file instead of a boundary
@@ -241,5 +248,82 @@ func TestUnattributedPinIsNotAttributedToAnAgent(t *testing.T) {
 	root, _, _, ok, err := ss.LoadPin("proxy-anon")
 	if err != nil || !ok || root != parent {
 		t.Fatalf("connection-level pin = %q ok=%v err=%v, want %q", root, ok, err, parent)
+	}
+}
+
+// TestConfirmingASeededWorkspaceStopsTheShardFollowing is the third defect
+// (issue #468): repinAgent's same-root early return fires BEFORE selfPinned is
+// set, so an agent whose explicit session_start names the root its shard was
+// already seeded at never records that it chose one. Its shard keeps following
+// the connection, and a later connection move — a roots notification, or an
+// anonymous forced re-pin — drags the agent off a workspace it had explicitly
+// named, with no call of its own in between.
+//
+// The comment sitting under that early return has always claimed this case:
+// "the agent has CHOSEN this root (even back to the seeded one, via a
+// deliberate re-pin)". TestSelfPinnedShardDoesNotFollowTheConnection only ever
+// exercised the CHANGED-root path, which is why the contradiction survived.
+func TestConfirmingASeededWorkspaceStopsTheShardFollowing(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+
+	s := newPersistSession(t, store, ss, "proxy-confirm")
+	// The connection pins the worktree, and the agent's shard is seeded there.
+	if _, err := s.repinWorkspace(context.Background(), worktree, "", false); err != nil {
+		t.Fatalf("connection pin to the worktree: %v", err)
+	}
+	s.recordLogicalAgentAttach("coordinator")
+	s.recordLogicalAgentAttach("agent-A")
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+	if got := s.workspaceFor(ctxAgent); got != worktree {
+		t.Fatalf("precondition: the shard seeded at %q, want %q", got, worktree)
+	}
+
+	// The agent names that workspace explicitly — a deliberate choice, even
+	// though nothing moves.
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+		t.Fatalf("the agent's same-root session_start: %v", err)
+	}
+
+	// The connection now moves elsewhere without the agent being involved.
+	if _, err := s.repinWorkspace(context.Background(), parent, "", true); err != nil {
+		t.Fatalf("connection move to the parent checkout: %v", err)
+	}
+
+	if got := s.workspaceFor(ctxAgent); got != worktree {
+		t.Errorf("the connection's move dragged the agent to %q; it explicitly named %q, so a workspace-relative read now returns %q",
+			got, worktree, filepath.Join(got, "notes.md"))
+	}
+}
+
+// TestConfirmedWorkspaceIsPersisted: a shard is only persisted when repinAgent
+// moves it, so a choice recorded solely in memory evaporates on the next daemon
+// restart — the shard re-seeds from the connection and the fix above evaporates
+// with it.
+func TestConfirmedWorkspaceIsPersisted(t *testing.T) {
+	store, ss := newOriginStore(t)
+	_, worktree := worktreeUnderParent(t)
+
+	s := newPersistSession(t, store, ss, "proxy-confirm-persist")
+	if _, err := s.repinWorkspace(context.Background(), worktree, "", false); err != nil {
+		t.Fatalf("connection pin: %v", err)
+	}
+	s.recordLogicalAgentAttach("coordinator")
+	s.recordLogicalAgentAttach("agent-A")
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+	_ = s.workspaceFor(ctxAgent) // seed the shard
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+		t.Fatalf("the agent's same-root session_start: %v", err)
+	}
+
+	root, _, origin, ok, err := ss.LoadPinForAgent("proxy-confirm-persist", "agent-A")
+	if err != nil {
+		t.Fatalf("LoadPinForAgent: %v", err)
+	}
+	if !ok || root != worktree {
+		t.Fatalf("per-agent pin = %q ok=%v, want %q — a confirmed workspace must survive a restart", root, ok, worktree)
+	}
+	if origin != sessionstate.PinSourceSessionStart {
+		t.Errorf("per-agent pin origin = %q, want %q", origin, sessionstate.PinSourceSessionStart)
 	}
 }

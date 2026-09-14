@@ -47,6 +47,24 @@
   was absent — the one state where identity is not degraded but entirely gone.
   It now covers that state too, and needs no daemon probe to do it, because the
   fact is in the config rather than the daemon.
+- **Naming the workspace an agent is already on now counts as choosing it
+  (issue #468).** `repinAgent`'s same-root early return fired before the shard
+  was marked as self-pinned, so an agent whose explicit `session_start` named
+  the root its shard had been *seeded* at never recorded that it had chosen one.
+  The shard kept following the connection, and a later connection move — a roots
+  notification, or an anonymous forced re-pin — dragged the agent off a
+  workspace it had explicitly named, with no call of its own in between; from
+  there its workspace-relative calls resolved in the new root, silently. The
+  comment under that early return had always claimed the case ("even back to the
+  seeded one, via a deliberate re-pin"), and the existing regression test only
+  ever exercised the changed-root path, which is how the contradiction survived.
+  Such a confirmation now marks the shard self-pinned, upgrades its pin origin
+  the way the connection-level same-root branch already does, and is persisted —
+  a choice held only in memory evaporated on the next daemon restart, when the
+  shard re-seeds from the connection. Guarded by
+  `TestConfirmingASeededWorkspaceStopsTheShardFollowing` and
+  `TestConfirmedWorkspaceIsPersisted`.
+
 - **A logical agent's first explicit `session_start` is no longer refused off a
   workspace it never chose (issue #468).** A shard built for an agent on a
   shared connection is seeded from the connection's pin — and copied that pin's
