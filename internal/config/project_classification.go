@@ -262,13 +262,18 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// Budgets, expiries and the passive, observed-facts layer stay per-project.
 	// max_wait_seconds only bounds how long check_messages blocks, and is capped
 	// below the client's own call timeout at the point of use.
-	"collab.peer_awareness":     ClassPreference,
-	"collab.hint_budget_bytes":  ClassPreference,
-	"collab.max_exchanges":      ClassPreference,
-	"collab.chat_budget_bytes":  ClassPreference,
-	"collab.max_wait_seconds":   ClassPreference,
-	"collab.intent_ttl_minutes": ClassPreference,
-	"collab.note_ttl_minutes":   ClassPreference,
+	"collab.peer_awareness":    ClassPreference,
+	"collab.hint_budget_bytes": ClassPreference,
+	"collab.max_exchanges":     ClassPreference,
+	"collab.chat_budget_bytes": ClassPreference,
+	"collab.max_wait_seconds":  ClassPreference,
+	// The wake windows are tuning too. A project can only ever NARROW them: the
+	// installed Stop handler carries one machine-wide timeout, so the hook clamps
+	// a project value to the global ceiling at the point of use.
+	"collab.wake_window_seconds":      ClassPreference,
+	"collab.wake_peer_window_seconds": ClassPreference,
+	"collab.intent_ttl_minutes":       ClassPreference,
+	"collab.note_ttl_minutes":         ClassPreference,
 
 	// Retention, not a channel: how long mail is kept decides nothing about who
 	// can send or read it. keep_delivered_notes is the recipient's choice at

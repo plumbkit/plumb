@@ -150,6 +150,8 @@ var numberMetaTable = map[settingKey]struct {
 	skCollabMaxExchanges:         {1, "collab max exchanges"},
 	skCollabChatBudgetBytes:      {256, "collab chat budget (B)"},
 	skCollabMaxWaitSec:           {5, "collab max wait (s)"},
+	skCollabWakeWindowSec:        {30, "collab wake window (s)"},
+	skCollabWakePeerWindowSec:    {300, "collab wake peer max (s)"},
 }
 
 // numberMeta returns the adjust step and status label for a numeric setting.
@@ -237,6 +239,10 @@ func intFieldCollab(c *config.Config, key settingKey) *int {
 		return &c.Collab.ChatBudgetBytes
 	case skCollabMaxWaitSec:
 		return &c.Collab.MaxWaitSeconds
+	case skCollabWakeWindowSec:
+		return &c.Collab.WakeWindowSeconds
+	case skCollabWakePeerWindowSec:
+		return &c.Collab.WakePeerWindowSeconds
 	default:
 		return nil
 	}

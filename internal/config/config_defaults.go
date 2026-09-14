@@ -90,6 +90,12 @@ var defaults = Config{
 		IntentTTLMinutes: 120,
 		KnowledgeHandoff: false,
 
+		// Idle-wake windows for the Claude Code Stop hook. 300s is what every
+		// session cost before the ceiling existed; the hour only applies while a
+		// live peer shares the workspace and could actually write to this mailbox.
+		WakeWindowSeconds:     300,
+		WakePeerWindowSeconds: 3600,
+
 		// Note retention: a zero note_ttl_minutes follows intent_ttl_minutes —
 		// the expiry notes always had before the key existed — and delivered
 		// notes keep expiring with it until a workspace opts into keeping its

@@ -265,6 +265,10 @@ var policyCollabFreeFields = map[string]bool{
 	"peer_awareness": true, "hint_budget_bytes": true, "intent_ttl_minutes": true,
 	"note_ttl_minutes": true, "keep_delivered_notes": true,
 	"max_exchanges": true, "chat_budget_bytes": true, "max_wait_seconds": true,
+	// Tuning, and clamped to the global ceiling by the wake hook itself: a project
+	// may shorten its own watch but cannot make this machine hold a watcher process
+	// for longer than the user's own config allows.
+	"wake_window_seconds": true, "wake_peer_window_seconds": true,
 }
 
 // policyTopologyFreeFields are the [topology] keys NOT gated on trust: sizes,

@@ -1,0 +1,468 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/session"
+)
+
+// How long a watcher watches, and everything that decides it: the watch loop's
+// own rules, the window pair behind them, the peer count that extends them, and
+// the installed timeout that must outlive the lot. The companion to
+// hooks_claude_window.go; the handlers, stamps, locks and sweep are tested in
+// hooks_claude_test.go.
+
+// watchForPeerMail had no direct test at all before the adaptive window: only
+// its definition and its single call site existed, so the stand-down state
+// machine and the window-expiry path were both entirely uncovered — and they
+// are exactly the code a longer window stresses.
+//
+// Each case asserts the PROBE COUNT, which is what the rule under test actually
+// decides. watchForPeerMail sleeps in real time, so the windows here are kept
+// small; the counts stay correct on a slow runner because every rule is
+// evaluated per poll rather than against the clock.
+func TestWatchForPeerMail(t *testing.T) {
+	const mail = 1
+
+	for _, tc := range []struct {
+		name      string
+		windows   wakeWindowPair
+		peers     int // what the probe that armed the watcher saw
+		ok        bool
+		steps     []probeStep
+		wantCalls int
+		wantWake  bool
+		why       string
+	}{
+		{
+			name:      "expires with no mail",
+			windows:   wakeWindowPair{base: time.Second},
+			ok:        true,
+			steps:     []probeStep{{ok: true}},
+			wantCalls: 1,
+			why:       "a quiet mailbox must end the watch at the base window",
+		},
+		{
+			name:      "a peer extends past the base window",
+			windows:   wakeWindowPair{base: time.Second, peak: 3 * time.Second},
+			peers:     1,
+			ok:        true,
+			steps:     []probeStep{{peers: 1, ok: true}},
+			wantCalls: 3,
+			why:       "a live peer can still send, so the watch runs to the ceiling",
+		},
+		{
+			name:      "no peer keeps the base window",
+			windows:   wakeWindowPair{base: time.Second, peak: 10 * time.Second},
+			peers:     0,
+			ok:        true,
+			steps:     []probeStep{{ok: true}},
+			wantCalls: 1,
+			why:       "nobody can write to this mailbox, so the ceiling must not be paid for",
+		},
+		{
+			name:      "a departed peer ends the watch one base window later",
+			windows:   wakeWindowPair{base: time.Second, peak: 10 * time.Second},
+			peers:     1,
+			ok:        true,
+			steps:     []probeStep{{peers: 1, ok: true}, {ok: true}},
+			wantCalls: 2,
+			why:       "the deadline stops sliding when the peer goes, rather than running to the ceiling",
+		},
+		{
+			name:      "a zero ceiling restores the single fixed window",
+			windows:   wakeWindowPair{base: time.Second, peak: 0},
+			peers:     5,
+			ok:        true,
+			steps:     []probeStep{{peers: 5, ok: true}},
+			wantCalls: 1,
+			why:       "peak=0 is the documented opt-out and must ignore peers entirely",
+		},
+		{
+			name:      "an unresolved session never extends",
+			windows:   wakeWindowPair{base: time.Second, peak: 60 * time.Second},
+			peers:     3, // a stale count from before the session stopped resolving
+			ok:        false,
+			steps:     []probeStep{{peers: 3, ok: false}},
+			wantCalls: 1,
+			why: "a probe that cannot resolve has no mailbox to wake for; extending would " +
+				"hold this session's lock for the whole ceiling with no way to stand down",
+		},
+		{
+			name:    "two consecutive misses stand the watcher down",
+			windows: wakeWindowPair{base: 5 * time.Second, peak: 60 * time.Second},
+			peers:   1,
+			ok:      true,
+			steps: []probeStep{
+				{peers: 1, ok: true}, // extends the deadline to ~6s
+				{ok: false},          // gone = 1
+				{ok: false},          // gone = 2 — stand down well before the deadline
+			},
+			wantCalls: 3,
+			why:       "the client exited; nothing kills a reparented watcher but this check",
+		},
+		{
+			name:    "a single missed poll does not retire a live watcher",
+			windows: wakeWindowPair{base: 5 * time.Second},
+			peers:   1,
+			ok:      true,
+			steps: []probeStep{
+				{peers: 1, ok: true},
+				{ok: false}, // a daemon blip, not a dead session
+				{report: mailReport{Count: mail}, peers: 1, ok: true},
+			},
+			wantCalls: 3,
+			wantWake:  true,
+			why:       "one miss is why the stand-down needs TWO consecutive misses",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+			probe, calls := scriptedProbe(tc.steps...)
+			// Every probe step here resolves an EMPTY session name, so
+			// supersededBy short-circuits and the retire-when-superseded rule is
+			// out of the way of all of these cases. The key is named only so the
+			// call reads honestly.
+			wake := watchForPeerMail(
+				claudeHookInput{SessionID: "conv-1"}, "grey-lynx",
+				mailReport{}, tc.peers, tc.ok, probe, tc.windows,
+				func(int) bool { return true })
+
+			if got := wake != nil; got != tc.wantWake {
+				t.Errorf("woke = %v, want %v — %s", got, tc.wantWake, tc.why)
+			}
+			if *calls != tc.wantCalls {
+				t.Errorf("polled %d time(s), want %d — %s", *calls, tc.wantCalls, tc.why)
+			}
+		})
+	}
+}
+
+// TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded: a turn ending while the
+// daemon is down keys by conversation id; the next turn, with the daemon back,
+// keys by the resolved session name and arms a SECOND watcher under a different
+// lock. Without this the first one would extend to the ceiling alongside it —
+// two wakes per message and two independent chain counters.
+//
+// Retiring needs a LIVE replacement, and each of the three negative cases here
+// is a way a session would otherwise be left with no watcher at all:
+//
+//   - Renamed mid-watch, or relabelled by a daemon restart: the probe resolves
+//     the right session under a new name and nothing has replaced this watcher.
+//   - A leftover lock whose process is gone. Lock directories are never swept,
+//     so one from a watcher killed by `plumb restart` or a reboot sits there
+//     forever — a corpse must not be able to retire the session's only watcher.
+//   - A lock a replacement has created but not yet stamped with its pid.
+func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
+	const deadPID = 0x7FFFFFFE // never alive; processAlive rejects it outright
+
+	for _, tc := range []struct {
+		name     string
+		lockPID  string // "" = no lock at all; "-" = lock dir with no pid file
+		isPlumb  bool
+		wantStop bool // retire on the first poll, rather than watch the window out
+		why      string
+	}{
+		{
+			name: "a live replacement holds the lock", lockPID: "self", isPlumb: true, wantStop: true,
+			why: "the second watcher owns this session; extending beside it means two " +
+				"wakes per message and two re-arm chains",
+		},
+		{
+			name: "renamed, but nothing replaced it", lockPID: "",
+			why: "no other watcher exists, so retiring would leave the session unwatched",
+		},
+		{
+			name: "a leftover lock whose watcher is long dead", lockPID: "dead", isPlumb: true,
+			why: "locks are never swept, so a corpse would otherwise retire the only watcher " +
+				"an idle session has — with no next turn to re-arm one",
+		},
+		{
+			name: "the pid belongs to something that is not plumb", lockPID: "self", isPlumb: false,
+			why: "a reused pid number is not a watcher; an uncertain reading must keep watching",
+		},
+		{
+			name: "a replacement that has not recorded its pid yet", lockPID: "-", isPlumb: true,
+			why: "unstamped is indistinguishable from debris; the next poll sees the pid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PLUMB_WAKE_DIR", dir)
+			t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+			if tc.lockPID != "" {
+				lock := filepath.Join(dir, "grey-lynx.lock")
+				if err := os.Mkdir(lock, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if tc.lockPID != "-" {
+					pid := strconv.Itoa(os.Getpid())
+					if tc.lockPID == "dead" {
+						pid = strconv.Itoa(deadPID)
+					}
+					if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(pid), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, peers: 1, ok: true})
+
+			wake := watchForPeerMail(
+				claudeHookInput{SessionID: "conv-1"},
+				"conv-1", // armed before linkage resolved, so keyed by conversation id
+				mailReport{}, 0, false, probe,
+				wakeWindowPair{base: time.Second, peak: 3 * time.Second},
+				func(int) bool { return tc.isPlumb })
+
+			if wake != nil {
+				t.Error("produced a wake with no mail waiting")
+			}
+			// Retiring is exactly one poll; not retiring is "more than one", not a
+			// specific count. Asserting the exact number would pin the deadline
+			// arithmetic a second time and go red on a runner that overshoots a 1s
+			// sleep — the discrimination here needs only the first poll.
+			if stopped := *calls == 1; stopped != tc.wantStop {
+				want := "more than 1 (keep watching)"
+				if tc.wantStop {
+					want = "exactly 1 (retire)"
+				}
+				t.Errorf("polled %d time(s), want %s — %s", *calls, want, tc.why)
+			}
+		})
+	}
+}
+
+// TestHookPeerCount is the real-session-store half of the adaptive window: the
+// watcher extends only while this count is above zero, so a count that were
+// always 0 would silently restore the old fixed window, and one that were always
+// positive would hold a watcher process for the full ceiling on every solo
+// session on the machine.
+func TestHookPeerCount(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	const here, elsewhere = "/tmp/plumb-peer-here", "/tmp/plumb-peer-elsewhere"
+	register := func(name, folder string) {
+		t.Helper()
+		info, err := session.Register(session.Info{Name: name, Folder: folder})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { session.Unregister(info.ID) })
+	}
+	register("grey-lynx", here)
+	register("swift-heron", here)
+	register("calm-stag", elsewhere)
+
+	for _, tc := range []struct {
+		name      string
+		workspace string
+		self      string
+		want      int
+		why       string
+	}{
+		{"excludes self", here, "grey-lynx", 1, "a session is not its own peer; counting itself would extend every solo watch"},
+		{"counts both when self is unknown", here, "", 2, ""},
+		{
+			"a different root is not a peer", elsewhere, "calm-stag", 0,
+			"mail is workspace-scoped, so a session that cannot send here must not extend the watch",
+		},
+		{"an unclean path still matches", here + "/", "grey-lynx", 1, "roots are compared cleaned"},
+		{"no workspace", "", "", 0, "an unresolved probe must read as no peers, not as all of them"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hookPeerCount(tc.workspace, tc.self); got != tc.want {
+				t.Errorf("hookPeerCount(%q, %q) = %d, want %d — %s", tc.workspace, tc.self, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestRuntimeWakeWindows_ProjectMayNarrowNotWiden pins the asymmetry the whole
+// config story rests on.
+//
+// Each field is bounded by its OWN global counterpart, not by the ceiling. The
+// base is the window every session pays whether or not a peer exists, so letting
+// a project raise it to the peak would hand a cloned repository an hour-long
+// resident process per turn end — which is exactly what these keys being
+// classified as preferences promises they cannot do. Narrowing is always safe:
+// a shorter watch simply ends before the installed timeout.
+func TestRuntimeWakeWindows_ProjectMayNarrowNotWiden(t *testing.T) {
+	cfgHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgHome)
+	// The env overrides are applied to global and project alike, so they would
+	// mask the very difference under test.
+	t.Setenv("PLUMB_WAKE_WINDOW", "")
+	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "")
+
+	if err := os.MkdirAll(filepath.Join(cfgHome, "plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgHome, "plumb", "config.toml"),
+		[]byte("[collab]\nwake_window_seconds = 100\nwake_peer_window_seconds = 1000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A precondition, asserted rather than skipped on. If the global config ever
+	// stops resolving through XDG_CONFIG_HOME this test would otherwise go quietly
+	// green while asserting nothing — the clamp cases below compare against the
+	// ceiling this line establishes.
+	if got := globalWakeWindows(); got.base != 100*time.Second || got.peak != 1000*time.Second {
+		t.Fatalf("global config did not resolve through XDG_CONFIG_HOME: windows = %v, want 100s/1000s", got)
+	}
+
+	project := func(t *testing.T, body string) string {
+		t.Helper()
+		ws := plumbWorkspace(t)
+		if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return ws
+	}
+
+	t.Run("narrowing is honoured", func(t *testing.T) {
+		ws := project(t, "[collab]\nwake_window_seconds = 10\nwake_peer_window_seconds = 50\n")
+		got := runtimeWakeWindows(ws)
+		if got.base != 10*time.Second || got.peak != 50*time.Second {
+			t.Errorf("windows = %v, want the project's own 10s/50s", got)
+		}
+	})
+
+	// Each field is clamped to its OWN global counterpart. Clamping both to the
+	// global CEILING instead reads as "narrowing" but is not: it lets a project
+	// raise the BASE — the window every session pays with no peer present — from
+	// 100s to the 1000s peak, so one line in a cloned repository holds a watcher
+	// process for that long on every turn end. An earlier version of this test
+	// asserted exactly that and called it correct.
+	t.Run("widening is clamped per field", func(t *testing.T) {
+		ws := project(t, "[collab]\nwake_window_seconds = 8000\nwake_peer_window_seconds = 9000\n")
+		got := runtimeWakeWindows(ws)
+		if got.base != 100*time.Second {
+			t.Errorf("base = %v, want the 100s GLOBAL BASE — a project must not raise the "+
+				"window every session pays whether or not a peer exists", got.base)
+		}
+		if got.peak != 1000*time.Second {
+			t.Errorf("peak = %v, want the 1000s global peak", got.peak)
+		}
+	})
+
+	// The narrow case that the per-field clamp must not break: a project raising
+	// only its ceiling, still under the global one, is a legitimate narrowing of
+	// nothing and stays honoured.
+	t.Run("a project may still lower one field and keep the other", func(t *testing.T) {
+		ws := project(t, "[collab]\nwake_window_seconds = 5\n")
+		got := runtimeWakeWindows(ws)
+		if got.base != 5*time.Second || got.peak != 1000*time.Second {
+			t.Errorf("windows = %v, want 5s base with the global 1000s peak", got)
+		}
+	})
+
+	t.Run("no project config keeps the global pair", func(t *testing.T) {
+		got := runtimeWakeWindows(plumbWorkspace(t))
+		if got.base != 100*time.Second || got.peak != 1000*time.Second {
+			t.Errorf("windows = %v, want the global 100s/1000s", got)
+		}
+	})
+}
+
+// TestHookWakeProbe_ReportsLivePeers is the composition hookPeerCount's own test
+// cannot reach: that hookWakeProbe actually asks for a peer count and returns
+// it. A probe hardcoded to 0 peers passes every other test in this file, and
+// silently restores the fixed window this change exists to replace.
+func TestHookWakeProbe_ReportsLivePeers(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+
+	me, err := session.Register(session.Info{Name: "grey-lynx", Folder: ws, ExternalID: "conv-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Unregister(me.ID) })
+
+	report, peers, ok := hookWakeProbe("conv-1", ws)
+	if !ok || report.Session != "grey-lynx" {
+		t.Fatalf("probe = (%+v, ok=%v), want the linked session resolved", report, ok)
+	}
+	if peers != 0 {
+		t.Errorf("peers = %d with nobody else on this workspace, want 0 — a solo session "+
+			"must not pay for the extended window", peers)
+	}
+
+	peer, err := session.Register(session.Info{Name: "swift-heron", Folder: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Unregister(peer.ID) })
+
+	if _, peers, _ := hookWakeProbe("conv-1", ws); peers != 1 {
+		t.Errorf("peers = %d with one live peer on this workspace, want 1 — the watcher "+
+			"never extends, so the long window is dead code", peers)
+	}
+}
+
+// TestWakeInterval_ClampedToWindow: an interval longer than the window would
+// park the watcher past its own deadline still holding the session's lock,
+// since the loop re-checks the deadline only after sleeping.
+func TestWakeInterval_ClampedToWindow(t *testing.T) {
+	t.Setenv("PLUMB_WAKE_INTERVAL", "100000")
+	if got := wakeInterval(10 * time.Second); got != 10*time.Second {
+		t.Errorf("wakeInterval = %v, want it clamped to the 10s window", got)
+	}
+	t.Setenv("PLUMB_WAKE_INTERVAL", "3")
+	if got := wakeInterval(10 * time.Second); got != 3*time.Second {
+		t.Errorf("wakeInterval = %v, want the configured 3s", got)
+	}
+}
+
+// TestClaudeHookEntries_TimeoutTracksATunedWindow: the entry's timeout is
+// derived from the window this process would watch for, so tuning the window
+// and re-installing keeps the client's cancel above the watcher's deadline.
+// It must track the CEILING, not the base window: a timeout covering only the
+// base would kill exactly the peer-extended watch the ceiling exists to allow,
+// and kill it with nothing in any output saying so.
+func TestClaudeHookEntries_TimeoutTracksATunedWindow(t *testing.T) {
+	stopTimeout := func(t *testing.T) float64 {
+		t.Helper()
+		for _, e := range claudeHookEntries("/opt/plumb") {
+			if e.event != "Stop" {
+				continue
+			}
+			timeout, ok := e.handler["timeout"].(float64)
+			if !ok {
+				t.Fatalf("Stop timeout = %v, want a number", e.handler["timeout"])
+			}
+			return timeout
+		}
+		t.Fatal("no Stop entry in the Claude Code pack")
+		return 0
+	}
+
+	t.Run("no peer extension", func(t *testing.T) {
+		t.Setenv("PLUMB_WAKE_WINDOW", "900")
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "0")
+		if got := stopTimeout(t); got != 900+claudeStopTimeoutSlack.Seconds() {
+			t.Errorf("Stop timeout = %.0fs, want the 900s window plus slack", got)
+		}
+	})
+
+	t.Run("ceiling outlives the base window", func(t *testing.T) {
+		t.Setenv("PLUMB_WAKE_WINDOW", "900")
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "4000")
+		if got := stopTimeout(t); got != 4000+claudeStopTimeoutSlack.Seconds() {
+			t.Errorf("Stop timeout = %.0fs, want the 4000s CEILING plus slack — a timeout "+
+				"derived from the base window kills every peer-extended watch", got)
+		}
+	})
+
+	// A ceiling below the base is not a shorter watch: the base is always
+	// watched, so the timeout must still cover it.
+	t.Run("ceiling below the base window", func(t *testing.T) {
+		t.Setenv("PLUMB_WAKE_WINDOW", "900")
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "10")
+		if got := stopTimeout(t); got != 900+claudeStopTimeoutSlack.Seconds() {
+			t.Errorf("Stop timeout = %.0fs, want the 900s base plus slack", got)
+		}
+	})
+}

@@ -271,6 +271,8 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"max_exchanges", strconv.Itoa(col.MaxExchanges), sourceFor("max_exchanges", dcol.MaxExchanges, gcol.MaxExchanges, col.MaxExchanges)},
 		{"chat_budget_bytes", strconv.Itoa(col.ChatBudgetBytes), sourceFor("chat_budget_bytes", dcol.ChatBudgetBytes, gcol.ChatBudgetBytes, col.ChatBudgetBytes)},
 		{"max_wait_seconds", strconv.Itoa(col.MaxWaitSeconds), sourceFor("max_wait_seconds", dcol.MaxWaitSeconds, gcol.MaxWaitSeconds, col.MaxWaitSeconds)},
+		{"wake_window_seconds", strconv.Itoa(col.WakeWindowSeconds), sourceFor("wake_window_seconds", dcol.WakeWindowSeconds, gcol.WakeWindowSeconds, col.WakeWindowSeconds)},
+		{"wake_peer_window_seconds", strconv.Itoa(col.WakePeerWindowSeconds), sourceFor("wake_peer_window_seconds", dcol.WakePeerWindowSeconds, gcol.WakePeerWindowSeconds, col.WakePeerWindowSeconds)},
 		{"knowledge_handoff", strconv.FormatBool(col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
 		{"intent_ttl_minutes", strconv.Itoa(col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
 		{"note_ttl_minutes", strconv.Itoa(col.NoteTTLMinutes), sourceFor("note_ttl_minutes", dcol.NoteTTLMinutes, gcol.NoteTTLMinutes, col.NoteTTLMinutes)},

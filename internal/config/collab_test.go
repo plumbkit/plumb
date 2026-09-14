@@ -52,6 +52,84 @@ func TestCollab_Defaults(t *testing.T) {
 	if d.Collab.KnowledgeHandoff {
 		t.Error("collab.knowledge_handoff should default to false (opt-in)")
 	}
+	// 300 is what every session cost before the peer ceiling existed; changing it
+	// changes the cost of EVERY idle session on the machine, not just a
+	// multi-agent one.
+	if d.Collab.WakeWindowSeconds != 300 {
+		t.Errorf("collab.wake_window_seconds default = %d, want 300", d.Collab.WakeWindowSeconds)
+	}
+	if d.Collab.WakePeerWindowSeconds != 3600 {
+		t.Errorf("collab.wake_peer_window_seconds default = %d, want 3600", d.Collab.WakePeerWindowSeconds)
+	}
+}
+
+// TestValidateCollab_WakeWindowsAreBounded: unlike the other collab budgets a
+// wake window buys a RESIDENT process for its whole duration, so an unbounded
+// value — in a project config a user merely cloned, especially — is a resource
+// the repository gets to spend.
+func TestValidateCollab_WakeWindowsAreBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*CollabConfig)
+		wantErr bool
+	}{
+		{"defaults are valid", func(*CollabConfig) {}, false},
+		{"zero base means the default", func(c *CollabConfig) { c.WakeWindowSeconds = 0 }, false},
+		{"zero ceiling disables the extension", func(c *CollabConfig) { c.WakePeerWindowSeconds = 0 }, false},
+		{"negative base", func(c *CollabConfig) { c.WakeWindowSeconds = -1 }, true},
+		{"negative ceiling", func(c *CollabConfig) { c.WakePeerWindowSeconds = -1 }, true},
+		{"base past the bound", func(c *CollabConfig) { c.WakeWindowSeconds = maxCollabWakeWindowSeconds + 1 }, true},
+		{"ceiling past the bound", func(c *CollabConfig) { c.WakePeerWindowSeconds = maxCollabWakeWindowSeconds + 1 }, true},
+		{"at the bound", func(c *CollabConfig) { c.WakePeerWindowSeconds = maxCollabWakeWindowSeconds }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Defaults().Collab
+			tc.mutate(&c)
+			if err := validateCollab(c); (err != nil) != tc.wantErr {
+				t.Errorf("validateCollab err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestWakeWindows_AreNotACapabilityRequest covers the two halves of "tuning",
+// which are decided in different places and are easy to confuse.
+//
+// forceCapabilityFieldsToBase resets the four [collab] CHANNEL switches by name,
+// so a key it does not name is honoured whatever the trust state — that is the
+// first subtest. policyCollabFreeFields is the separate question of whether a
+// key enters the project POLICY SPEC: the disclosure a user is asked to approve,
+// and the content the trust grant is hashed over. A key left out of that list is
+// disclosed as a capability request, so merely shortening a watch would lapse an
+// existing grant and re-prompt — which is the second subtest, and the reason
+// these two keys are enumerated there.
+func TestWakeWindows_AreNotACapabilityRequest(t *testing.T) {
+	const body = "[collab]\nwake_window_seconds = 30\nwake_peer_window_seconds = 90\n"
+
+	t.Run("honoured with nothing trusted", func(t *testing.T) {
+		tempTrustStore(t) // an empty store: nothing is trusted
+		got, err := LoadProject(Defaults(), writeCollabProject(t, body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Collab.WakeWindowSeconds != 30 || got.Collab.WakePeerWindowSeconds != 90 {
+			t.Errorf("windows = %ds/%ds, want the project's own 30s/90s — narrowing a watch "+
+				"grants nothing and must not need `plumb trust`",
+				got.Collab.WakeWindowSeconds, got.Collab.WakePeerWindowSeconds)
+		}
+	})
+
+	t.Run("absent from the policy spec", func(t *testing.T) {
+		spec, err := ProjectPolicySpecFor(writeCollabProject(t, body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if keys := spec.Keys(); len(keys) != 0 {
+			t.Errorf("spec = %v, want empty — a wake window opens nothing, and disclosing "+
+				"it as a capability request would lapse the user's trust grant every time "+
+				"a project tuned its own watch", keys)
+		}
+	})
 }
 
 // TestLoadProject_CollabChannelSwitchesNeedTrust is the untrusted half of the
@@ -122,7 +200,8 @@ func TestLoadProject_CollabChannelSwitchesNeedTrust(t *testing.T) {
 func TestLoadProject_CollabTuningStaysProjectOverridable(t *testing.T) {
 	base := Defaults()
 	ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 30\nhint_budget_bytes = 256\n"+
-		"max_exchanges = 3\nchat_budget_bytes = 512\nmax_wait_seconds = 10\npeer_awareness = false\n")
+		"max_exchanges = 3\nchat_budget_bytes = 512\nmax_wait_seconds = 10\npeer_awareness = false\n"+
+		"wake_window_seconds = 60\nwake_peer_window_seconds = 120\n")
 	got, err := LoadProject(base, ws)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +216,13 @@ func TestLoadProject_CollabTuningStaysProjectOverridable(t *testing.T) {
 		{"max_exchanges", got.Collab.MaxExchanges, 3},
 		{"chat_budget_bytes", got.Collab.ChatBudgetBytes, 512},
 		{"max_wait_seconds", got.Collab.MaxWaitSeconds, 10},
+		// The wake windows are tuning too, and a project narrowing them is the
+		// direction that always works: the installed Stop handler's timeout is
+		// machine-wide, so a SHORTER window simply ends the watch early. Widening
+		// past the global ceiling is what the hook clamps, and it clamps there
+		// rather than here because only the hook knows the ceiling in force.
+		{"wake_window_seconds", got.Collab.WakeWindowSeconds, 60},
+		{"wake_peer_window_seconds", got.Collab.WakePeerWindowSeconds, 120},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %d, want %d — tuning must stay project-overridable", c.name, c.got, c.want)

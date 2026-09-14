@@ -279,7 +279,7 @@ cannot reach.
 
 | Client | Config | Hooks installed |
 |---|---|---|
-| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 330s) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
+| `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 3630s by default — the wake ceiling plus slack) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
 
 Both clients get the `SessionStart`/`Stop` pair. **`SessionStart`** states the
@@ -316,7 +316,7 @@ What `plumb hooks install claude-code` writes, in full:
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 5 }] }],
-    "Stop":         [{ "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 330, "async": true, "asyncRewake": true }] }],
+    "Stop":         [{ "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 3630, "async": true, "asyncRewake": true }] }],
     "PreToolUse":   [{ "matcher": "mcp__plumb__.*", "hooks": [{ "type": "command", "command": "\"/opt/homebrew/bin/plumb\" hooks run-claude", "timeout": 5 }] }]
   }
 }
@@ -326,17 +326,51 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
 
 - **Claude Code wakes.** The handler installs as a background watcher (`async` +
   `asyncRewake`), which is the pair that lets a hook reach a session with **no
-  turn in flight**. It polls `plumb mail` for up to `PLUMB_WAKE_WINDOW` seconds
-  (default 300, every `PLUMB_WAKE_INTERVAL`, default 7 and never longer than the
-  window) and exits 2 with one line on stderr the moment mail is waiting — that
-  pair is the wake payload. The installed handler's `timeout` sits above the
-  window on purpose: a shorter one kills the watcher mid-watch, and nothing in
-  any output would say so. Because that timeout is written at install time from
-  the window in effect *then*, **re-tune and re-install together** — exporting a
-  larger `PLUMB_WAKE_WINDOW` without re-running `plumb hooks install` leaves the
-  client cancelling the watcher early. `plumb hooks` reports the mismatch as
-  `stale`. `PLUMB_WAKE_DIR` (default `~/.claude/plumb-wake`) is where the watcher
-  keeps its per-session stamp, lock and re-arm records.
+  turn in flight**. It polls `plumb mail` every `PLUMB_WAKE_INTERVAL` seconds
+  (default 7, never longer than the base window) and exits 2 with one line on
+  stderr the moment mail is waiting — that pair is the wake payload.
+
+  **How long it watches depends on whether anyone could write to it.** The
+  deadline starts one *base* window out and slides forward by another base window
+  on every poll that sees another live session on the same workspace, capped at
+  the *peer* ceiling:
+
+  | Setting | Env override | Default | Meaning |
+  |---|---|---|---|
+  | `[collab] wake_window_seconds` | `PLUMB_WAKE_WINDOW` | 300 | base window; what a session with no peer costs |
+  | `[collab] wake_peer_window_seconds` | `PLUMB_WAKE_PEER_WINDOW` | 3600 | ceiling while a live peer shares the workspace; `0` disables the extension |
+
+  Nobody outside the workspace can write to that mailbox uninvited, so a solo
+  session keeps the short window — and the one resident watcher process it costs
+  — exactly as before. A session with a peer stays reachable for up to an hour,
+  which is the case the mechanism exists for: mail landing six minutes into an
+  idle stretch used to wake nothing until that session's next turn ended, and for
+  an idle agent that may be never. A watcher whose peer goes away exits within
+  one base window of the last sighting, and a session whose probe never resolves
+  never extends at all.
+
+  The hour is measured from the turn end that ARMED the watcher, not from the
+  last turn: while one watcher holds a session's lock, later turn ends arm
+  nothing (that is the one-watcher-per-session guarantee). A session that goes
+  quiet late in a watcher's hour therefore has the remainder of that hour, not a
+  fresh one — the same shape the fixed window always had, at a longer scale.
+
+  The installed handler's `timeout` sits above the **ceiling** on purpose: a
+  shorter one kills the watcher mid-watch, and nothing in any output would say
+  so. Because that timeout is written at install time from the windows in effect
+  *then*, **re-tune and re-install together** — raising either window without
+  re-running `plumb hooks install` leaves the client cancelling the watcher early.
+  `plumb hooks` reports the mismatch as `stale`. A project's `.plumb/config.toml`
+  may **narrow** either window and may not raise either one: each is bounded by
+  its own global value, so a repository cannot lengthen the base window every
+  session pays whether or not a peer exists. An exported `PLUMB_WAKE_WINDOW` or
+  `PLUMB_WAKE_PEER_WINDOW` is read last and wins over both, which also means it
+  overrides a project's narrowing. `PLUMB_WAKE_DIR` (default
+  `~/.claude/plumb-wake`) is where the watcher keeps its per-session stamp, lock
+  and re-arm records. Stamps and re-arm records older than a week are swept on
+  later turn ends; lock directories are not swept, and are reclaimed by the
+  session that owns the key — nothing a sweep could measure is an upper bound on
+  a live watcher, and deleting one would give that session two.
 - **Codex checks.** Codex has no background-wake mechanism, so its handler makes
   one read-only probe as the turn ends and keeps the turn going only when mail
   is pending. That narrows the end-of-turn race; it is **not** push delivery.
@@ -366,6 +400,10 @@ Properties both hooks hold, and that the tests pin:
 - **Bounded continuation.** A woken turn re-arms only when it provably consumed
   mail (the pending count dropped), capped at `PLUMB_WAKE_CHAIN_MAX` (default
   10) wakes per chain; any ambiguity stands the chain down.
+- **Paid for only where it buys something.** The long window is spent only while
+  another live session shares the workspace, because that is the only case where
+  a message can arrive at all. A peer count is all the watcher learns — no name,
+  and nothing about what any peer is doing.
 
 Writing is conservative in both directions. An install **merges**: hooks the
 user wrote on the same events keep their place, the file is backed up before it

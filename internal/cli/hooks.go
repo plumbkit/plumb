@@ -3,11 +3,13 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
@@ -231,6 +233,55 @@ func hookMailReport(sessionID, cwd string) (mailReport, bool) {
 		}
 	}
 	return mailReport{}, false
+}
+
+// hookWakeProbe is hookMailReport plus the one extra fact an adaptive wake
+// window needs: how many OTHER live sessions share this session's workspace.
+//
+// Peer presence is what justifies holding a watcher open past the base window.
+// Nobody outside this workspace can write to this mailbox uninvited, so a
+// session with no peer has nothing to wait for and keeps the short window and
+// its cost; only a workspace where a peer could actually send pays for the long
+// one. Like the mail report, the answer is a COUNT: it names no peer and
+// discloses nothing about one beyond existence.
+//
+// Kept separate from hookMailReport because Codex's hook shares that probe and
+// has no adaptive window, and because mailReport's field set is a deliberate
+// disclosure surface serialised by `plumb mail --json` — widening it here would
+// change a published shape for a caller that never asked.
+func hookWakeProbe(sessionID, cwd string) (mailReport, int, bool) {
+	report, ok := hookMailReport(sessionID, cwd)
+	if !ok {
+		return report, 0, false
+	}
+	return report, hookPeerCount(report.Workspace, report.Session), true
+}
+
+// hookPeerCount counts the live sessions rooted at exactly this workspace, other
+// than self. Exact-root equality rather than the nearest-root rule mailReportFor
+// resolves with: a session on a parent or child root is a different workspace
+// for mail purposes, and counting it would extend a watcher for a peer that
+// cannot reach it. Every failure reads as zero peers, which costs only the
+// extension — the fail-open direction this whole path is built on.
+func hookPeerCount(workspace, self string) int {
+	if strings.TrimSpace(workspace) == "" {
+		return 0
+	}
+	all, err := session.List()
+	if err != nil {
+		return 0
+	}
+	root := filepath.Clean(workspace)
+	n := 0
+	for _, s := range all {
+		if s.Folder == "" || (self != "" && s.Name == self) {
+			continue
+		}
+		if filepath.Clean(s.Folder) == root {
+			n++
+		}
+	}
+	return n
 }
 
 // sessionLinkageSentence states the conversation id as a fact and names the

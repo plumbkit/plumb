@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.19.2 (unreleased)
+
+### Changed
+
+- **The Claude Code idle-wake watcher now watches for as long as a peer could
+  actually write to you.** The Stop hook used to poll for a fixed 300s after a
+  turn ended and then exit, so a message landing six minutes into an idle stretch
+  woke nothing until that session's next turn ended — which, for an idle agent,
+  may be never. The window is now a pair: a base window that is always watched,
+  and a ceiling the deadline slides toward, one base window per poll, for as long
+  as another live session shares the workspace. Nobody outside a workspace can
+  write to its mailbox uninvited, so a solo session keeps the old short window and
+  the single resident watcher process it costs, while a session working beside a
+  peer stays reachable for up to an hour. A watcher whose peer goes away exits
+  within one base window of the last sighting.
+
+  Two new `[collab]` keys, `wake_window_seconds` (default 300) and
+  `wake_peer_window_seconds` (default 3600, `0` disables the extension), with
+  `PLUMB_WAKE_WINDOW` and the new `PLUMB_WAKE_PEER_WINDOW` as overrides. A
+  project's `.plumb/config.toml` may **narrow** either window and may not raise
+  either one: each is bounded by its own global value, so a cloned repository
+  cannot lengthen the base window every session pays whether or not a peer
+  exists. An exported `PLUMB_WAKE_*` is read last and wins over both.
+
+  **Re-run `plumb hooks install claude-code`.** The installed `Stop` timeout is
+  derived from the ceiling (330 → 3630 by default) and an existing install shows
+  as `stale` until it is rewritten — left alone, the client cancels every
+  peer-extended watch early, with nothing in any output saying so.
+
+### Fixed
+
+- **A wake watcher whose session never resolved could not stand down.** The
+  stand-down check only applied once a session had been seen live, so a session
+  with no linkage — or any session while the daemon was down — held its lock and
+  polled a probe that could never succeed for the whole window. Extending now
+  requires a resolved session, so such a watcher never leaves the base window
+  instead of becoming an hour-long orphan.
+- **A watcher keyed by conversation id no longer outlives the one that
+  supersedes it.** A turn ending while the daemon is down keys its lock by
+  conversation id; the next turn, with the daemon back, keys by the resolved
+  session name and arms a second watcher under a different lock. The first now
+  retires once a lock exists under the resolved name, instead of extending
+  alongside the second — which would have meant two wakes per message and two
+  independent re-arm chains. The lock has to be there: a session can be renamed
+  mid-watch, and a daemon restart can relabel one, and retiring on the changed
+  name alone would strand a session nothing had replaced.
+- **`~/.claude/plumb-wake` grew without bound.** Nothing ever removed a stamp or
+  a re-arm record, so a long-running fleet accumulated one per conversation
+  forever. Turn ends now sweep both once they are older than seven days — a live
+  session rewrites its stamp every turn, so that age means the session is gone.
+  Deletions are capped rather than the scan, so a directory whose first entries
+  are all fresh cannot starve what sits behind them; every error is ignored.
+
+  **Lock directories are deliberately not swept**, and are still reclaimed lazily
+  by the session that owns the key. Nothing a sweep could measure is an upper
+  bound on a live watcher: the reclaim ladder reads a lock as dead whenever its
+  `ps` probe fails, and age is wall-clock while a watcher's deadline is monotonic
+  — a laptop asleep mid-watch leaves an arbitrarily old lock whose watcher still
+  has its window left. Either mistake gives one session two watchers; a leaked
+  lock costs one near-empty directory.
+- **An unstamped lock is no longer unreclaimable for as long as the watch
+  window.** A watcher that died between creating its lock directory and recording
+  its pid leaves a lock the next turn must decide about, and that grace was
+  derived from the watch window — which would have made a session that lost that
+  race silently unwakeable for the full hour. The gap being covered is the
+  microseconds between two adjacent statements, so it is now a flat minute and
+  does not scale with the window at all.
+
 ## 0.19.1 (2026-09-14)
 
 ### Added

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,36 @@ func wakeSandbox(t *testing.T) string {
 	t.Setenv("PLUMB_WAKE_DIR", dir)
 	t.Setenv("PLUMB_WAKE_WINDOW", "1")
 	t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+	// Pin the peer ceiling too. Without it these tests read whatever
+	// [collab] wake_peer_window_seconds the developer's own global config
+	// happens to carry, and a watch that should end in a second would run for
+	// the configured hour. 0 is also the pre-extension behaviour, which is what
+	// every test written before the ceiling existed still means to assert.
+	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "0")
 	return dir
+}
+
+// probeStep is one scripted answer from a fake wakeProbe.
+type probeStep struct {
+	report mailReport
+	peers  int
+	ok     bool
+}
+
+// scriptedProbe answers from steps in order and repeats the last one forever,
+// returning a pointer to the call count.
+//
+// The watcher's behaviour is asserted through that COUNT rather than through
+// elapsed time: how many polls it took before standing down is exactly what
+// each of these rules decides, and it stays sharp on a loaded CI runner where
+// wall-clock assertions would not.
+func scriptedProbe(steps ...probeStep) (wakeProbe, *int) {
+	calls := 0
+	return func(_, _ string) (mailReport, int, bool) {
+		step := steps[min(calls, len(steps)-1)]
+		calls++
+		return step.report, step.peers, step.ok
+	}, &calls
 }
 
 // plumbWorkspace builds a directory that passes the .plumb marker test.
@@ -56,8 +86,8 @@ func TestClaudeStopHook_WakesOnPendingMail(t *testing.T) {
 
 	wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws},
-		func(_, _ string) (mailReport, bool) {
-			return mailReport{Session: "grey-lynx", Count: 2, AgesSeconds: []int{31, 4}}, true
+		func(_, _ string) (mailReport, int, bool) {
+			return mailReport{Session: "grey-lynx", Count: 2, AgesSeconds: []int{31, 4}}, 0, true
 		})
 	if wake == nil {
 		t.Fatal("pending mail did not produce a wake")
@@ -87,8 +117,8 @@ func TestClaudeStopHook_StampFormat(t *testing.T) {
 
 	claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws, StopHookActive: true},
-		func(_, _ string) (mailReport, bool) {
-			return mailReport{Session: "grey-lynx"}, true
+		func(_, _ string) (mailReport, int, bool) {
+			return mailReport{Session: "grey-lynx"}, 0, true
 		})
 
 	data, err := os.ReadFile(filepath.Join(dir, "grey-lynx.stamp"))
@@ -112,7 +142,7 @@ func TestClaudeStopHook_UnlinkedSessionStampsByConversation(t *testing.T) {
 
 	claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-9", CWD: ws},
-		func(_, _ string) (mailReport, bool) { return mailReport{}, false })
+		func(_, _ string) (mailReport, int, bool) { return mailReport{}, 0, false })
 
 	if _, err := os.Stat(filepath.Join(dir, "conv-9.stamp")); err != nil {
 		t.Errorf("no conversation-keyed stamp for an unresolved session: %v", err)
@@ -128,9 +158,9 @@ func TestClaudeStopHook_OutsidePlumbWorkspace(t *testing.T) {
 
 	wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: nonWorkspaceDir(t)},
-		func(_, _ string) (mailReport, bool) {
+		func(_, _ string) (mailReport, int, bool) {
 			probed = true
-			return mailReport{Session: "grey-lynx", Count: 5}, true
+			return mailReport{Session: "grey-lynx", Count: 5}, 0, true
 		})
 
 	if wake != nil {
@@ -156,7 +186,7 @@ func TestClaudeStopHook_FailsOpen(t *testing.T) {
 
 	if wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws},
-		func(_, _ string) (mailReport, bool) { return mailReport{}, false }); wake != nil {
+		func(_, _ string) (mailReport, int, bool) { return mailReport{}, 0, false }); wake != nil {
 		t.Error("a failing probe produced a wake")
 	}
 	if wake := claudeStopHook(claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws}, nil); wake != nil {
@@ -219,8 +249,8 @@ func TestClaudeStopHook_WokenTurnStandsDown(t *testing.T) {
 
 	wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws, StopHookActive: true},
-		func(_, _ string) (mailReport, bool) {
-			return mailReport{Session: "grey-lynx", Count: 1}, true // unchanged: not consumed
+		func(_, _ string) (mailReport, int, bool) {
+			return mailReport{Session: "grey-lynx", Count: 1}, 0, true // unchanged: not consumed
 		})
 	if wake != nil {
 		t.Fatal("an unconsumed wake chained into another")
@@ -243,8 +273,8 @@ func TestClaudeStopHook_WokenTurnRearmsAfterConsumption(t *testing.T) {
 
 	wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws, StopHookActive: true},
-		func(_, _ string) (mailReport, bool) {
-			return mailReport{Session: "grey-lynx", Count: 1, AgesSeconds: []int{9}}, true
+		func(_, _ string) (mailReport, int, bool) {
+			return mailReport{Session: "grey-lynx", Count: 1, AgesSeconds: []int{9}}, 0, true
 		})
 	if wake == nil {
 		t.Fatal("a consumed wake did not re-arm")
@@ -294,19 +324,238 @@ func TestAcquireWakeLock(t *testing.T) {
 	third.release()
 }
 
-func TestInsidePlumbWorkspace(t *testing.T) {
+// TestClaudeStopHook_Seams closes the gap an independent review found: every
+// piece of this change was tested in isolation, and the WIRING between them was
+// not. Four separate mutations at the call sites in claudeStopHook and
+// hookWakeProbe left the whole suite green, because every other test either
+// calls the pieces directly or injects a fake in place of them.
+//
+// Each subtest therefore drives the real claudeStopHook and asserts an effect
+// that is only reachable through the seam under test.
+func TestClaudeStopHook_Seams(t *testing.T) {
+	// A workspace whose PROJECT config narrows the window to something far
+	// shorter than the global one, so "which config did the Stop path use?" is
+	// answerable from the number of polls alone.
+	narrowWorkspace := func(t *testing.T) string {
+		t.Helper()
+		cfgHome := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", cfgHome)
+		t.Setenv("PLUMB_WAKE_WINDOW", "") // env would mask the difference
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "")
+		t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+		if err := os.MkdirAll(filepath.Join(cfgHome, "plumb"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfgHome, "plumb", "config.toml"),
+			[]byte("[collab]\nwake_window_seconds = 60\nwake_peer_window_seconds = 0\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ws := plumbWorkspace(t)
+		if err := os.WriteFile(filepath.Join(ws, ".plumb", "config.toml"),
+			[]byte("[collab]\nwake_window_seconds = 1\nwake_peer_window_seconds = 0\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return ws
+	}
+
+	t.Run("the watch window comes from the WORKSPACE, not the machine", func(t *testing.T) {
+		t.Setenv("PLUMB_WAKE_DIR", t.TempDir())
+		ws := narrowWorkspace(t)
+		probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, ok: true})
+
+		claudeStopHook(claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws}, probe)
+
+		// One probe to decide the key, then a 1s project window at a 1s interval
+		// = one more. The 60s global window would be ~61. This is the only
+		// assertion that the root plumbWorkspaceRoot finds is fed to
+		// runtimeWakeWindows.
+		if *calls != 2 {
+			t.Errorf("polled %d time(s), want 2 — the Stop path resolved its window from the "+
+				"machine config instead of this workspace's", *calls)
+		}
+	})
+
+	t.Run("the peer count reaches the watcher", func(t *testing.T) {
+		t.Setenv("PLUMB_WAKE_DIR", t.TempDir())
+		t.Setenv("PLUMB_WAKE_WINDOW", "1")
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "3")
+		t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+		ws := plumbWorkspace(t)
+		probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, peers: 1, ok: true})
+
+		claudeStopHook(claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws}, probe)
+
+		// One probe to decide the key, then three more extending to the 3s
+		// ceiling. A peer count dropped between the probe and the watcher would
+		// stop at the 1s base, for two.
+		if *calls != 4 {
+			t.Errorf("polled %d time(s), want 4 — the probe's peer count never reached the watcher", *calls)
+		}
+	})
+
+	t.Run("a turn end sweeps the wake directory", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("PLUMB_WAKE_DIR", dir)
+		t.Setenv("PLUMB_WAKE_WINDOW", "1")
+		t.Setenv("PLUMB_WAKE_PEER_WINDOW", "0")
+		t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+		ws := plumbWorkspace(t)
+
+		ancient := filepath.Join(dir, "long-gone.stamp")
+		if err := os.WriteFile(ancient, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-claudeWakeStampTTL - time.Hour)
+		if err := os.Chtimes(ancient, when, when); err != nil {
+			t.Fatal(err)
+		}
+
+		probe, _ := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, ok: true})
+		claudeStopHook(claudeHookInput{Event: "Stop", SessionID: "conv-1", CWD: ws}, probe)
+
+		if _, err := os.Stat(ancient); !os.IsNotExist(err) {
+			t.Error("a turn end left week-old debris behind — the Stop path never sweeps")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "grey-lynx.stamp")); err != nil {
+			t.Errorf("the sweep ate this turn's own stamp: %v", err)
+		}
+	})
+}
+
+// TestSweepWakeDir: nothing ever cleaned the wake directory, so it grew a stamp
+// per conversation forever and a lock per watcher that died before releasing
+// one. The sweep must remove that debris WITHOUT touching anything a live
+// session still depends on.
+func TestSweepWakeDir(t *testing.T) {
+	dir := t.TempDir()
+	// The shipped windows, because a lock's bound is the ceiling and these cases
+	// are about which side of it an age falls on.
+	t.Setenv("PLUMB_WAKE_WINDOW", "300")
+	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "3600")
+
+	write := func(name string, age time.Duration) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Now().Add(-age)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	lock := func(name string, age time.Duration) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// A live watcher's lock records a pid. Whether the sweep looks at it is
+		// the point: it must not, because the only way to ask is isPlumbProcess,
+		// which fails open and would delete this directory whenever `ps` hiccups.
+		if err := os.WriteFile(filepath.Join(path, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-age)
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	stale := write("gone-otter.stamp", claudeWakeStampTTL+time.Hour)
+	staleRearm := write("gone-otter.rearm", claudeWakeStampTTL+time.Hour)
+	fresh := write("live-otter.stamp", time.Minute)
+
+	// Locks are NOT the sweep's business, at any age. Nothing it could measure is
+	// an upper bound on a live watcher's life: a lock's mtime is wall-clock while
+	// the watcher's deadline is monotonic, so a laptop asleep mid-watch leaves an
+	// arbitrarily old lock whose watcher still has its window left — and the sweep
+	// runs BEFORE this session takes its own lock, so it would delete its own live
+	// watcher's and arm a duplicate in the same hook run.
+	ancientLock := lock("gone-otter.lock", 30*24*time.Hour)
+	workingLock := lock("busy-otter.lock", 10*time.Minute)
+
+	// An EMPTY lock directory, which is what a watcher holds for the instant
+	// between os.Mkdir and recording its pid. It is the only lock os.Remove could
+	// actually delete, so it is the one that proves directories are filtered out
+	// rather than merely protected by os.Remove refusing a non-empty one.
+	bareLock := filepath.Join(dir, "bare-otter.lock")
+	if err := os.Mkdir(bareLock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancient := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(bareLock, ancient, ancient); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepWakeDir(dir)
+
+	for _, gone := range []string{stale, staleRearm} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sweep", filepath.Base(gone))
+		}
+	}
+	for _, kept := range []string{fresh, ancientLock, workingLock, bareLock} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s was swept: %v — a lock is reclaimed by its own key, never swept",
+				filepath.Base(kept), err)
+		}
+	}
+}
+
+// TestSweepWakeDir_MakesProgressBehindFreshEntries: os.ReadDir returns sorted
+// names and live sessions rewrite the stamps at the front of the directory on
+// every turn end, so a cap on the SCAN would let those fresh entries starve
+// everything behind them — forever, not just for a turn. The cap is on
+// deletions, which always makes progress.
+func TestSweepWakeDir_MakesProgressBehindFreshEntries(t *testing.T) {
+	dir := t.TempDir()
+	for i := range claudeWakeSweepMax + 8 {
+		name := filepath.Join(dir, fmt.Sprintf("a%03d.stamp", i))
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	debris := filepath.Join(dir, "z-long-gone.stamp")
+	if err := os.WriteFile(debris, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-claudeWakeStampTTL - time.Hour)
+	if err := os.Chtimes(debris, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepWakeDir(dir)
+
+	if _, err := os.Stat(debris); !os.IsNotExist(err) {
+		t.Error("week-old debris sorted behind a directory full of fresh stamps was " +
+			"never reached — a scan cap starves it permanently")
+	}
+}
+
+func TestPlumbWorkspaceRoot(t *testing.T) {
 	ws := plumbWorkspace(t)
 	nested := filepath.Join(ws, "a", "b")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !insidePlumbWorkspace(nested) {
+	// The ROOT, not merely "inside": it is where this workspace's project config
+	// is read from, so returning the nested directory would silently resolve the
+	// wake windows from the wrong file (or from none at all).
+	got, ok := plumbWorkspaceRoot(nested)
+	if !ok {
 		t.Error("a directory below the marker did not resolve as inside the workspace")
 	}
-	if insidePlumbWorkspace(nonWorkspaceDir(t)) {
+	if got != ws {
+		t.Errorf("plumbWorkspaceRoot(nested) = %q, want the marker root %q", got, ws)
+	}
+	if _, ok := plumbWorkspaceRoot(nonWorkspaceDir(t)); ok {
 		t.Error("an unrelated directory resolved as inside a plumb workspace")
 	}
-	if insidePlumbWorkspace("") {
+	if _, ok := plumbWorkspaceRoot(""); ok {
 		t.Error("an empty cwd resolved as inside a plumb workspace")
 	}
 }
@@ -350,7 +599,7 @@ func TestClaudeStopHook_RefusedKeyWritesNothing(t *testing.T) {
 
 	wake := claudeStopHook(
 		claudeHookInput{Event: "Stop", SessionID: "../../../../tmp/plumb-escape", CWD: ws},
-		func(_, _ string) (mailReport, bool) { return mailReport{Count: 3}, true })
+		func(_, _ string) (mailReport, int, bool) { return mailReport{Count: 3}, 0, true })
 
 	if wake != nil {
 		t.Error("a session whose key was refused still produced a wake")
@@ -364,47 +613,20 @@ func TestClaudeStopHook_RefusedKeyWritesNothing(t *testing.T) {
 	}
 }
 
-// TestWakeInterval_ClampedToWindow: an interval longer than the window would
-// park the watcher past its own deadline still holding the session's lock,
-// since the loop re-checks the deadline only after sleeping.
-func TestWakeInterval_ClampedToWindow(t *testing.T) {
-	t.Setenv("PLUMB_WAKE_WINDOW", "10")
-	t.Setenv("PLUMB_WAKE_INTERVAL", "100000")
-	if got := wakeInterval(); got != 10*time.Second {
-		t.Errorf("wakeInterval = %v, want it clamped to the 10s window", got)
-	}
-	t.Setenv("PLUMB_WAKE_INTERVAL", "3")
-	if got := wakeInterval(); got != 3*time.Second {
-		t.Errorf("wakeInterval = %v, want the configured 3s", got)
-	}
-}
-
-// TestClaudeHookEntries_TimeoutTracksATunedWindow: the entry's timeout is
-// derived from the window this process would watch for, so tuning the window
-// and re-installing keeps the client's cancel above the watcher's deadline.
-func TestClaudeHookEntries_TimeoutTracksATunedWindow(t *testing.T) {
-	t.Setenv("PLUMB_WAKE_WINDOW", "900")
-	for _, e := range claudeHookEntries("/opt/plumb") {
-		if e.event != "Stop" {
-			continue
-		}
-		timeout, _ := e.handler["timeout"].(float64)
-		if timeout <= 900 {
-			t.Errorf("Stop timeout %.0fs does not outlive a tuned 900s window", timeout)
-		}
-		return
-	}
-	t.Fatal("no Stop entry in the Claude Code pack")
-}
-
 // TestAcquireWakeLock_UnstampedLockIsReclaimedByAge: standing down on a lock
 // with no readable pid stops two watchers racing — but a watcher that died in
 // that window would otherwise leave a lock nothing can ever claim, and a
-// session that can never arm a watcher is silently unwakeable. No live watcher
-// outlives its own window, so an unstamped lock older than one is debris.
+// session that can never arm a watcher is silently unwakeable.
+//
+// The bound is claudeUnstampedLockGrace and deliberately NOT the watch window:
+// the gap being covered is the microseconds between os.Mkdir and writing the
+// pid, so scaling it with an hour-long ceiling would leave a session that lost
+// that race unwakeable for the hour.
 func TestAcquireWakeLock_UnstampedLockIsReclaimedByAge(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PLUMB_WAKE_WINDOW", "1")
+	// Deliberately a LONG ceiling: the grace must not follow it.
+	t.Setenv("PLUMB_WAKE_WINDOW", "300")
+	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "3600")
 	lock := filepath.Join(dir, "grey-lynx.lock")
 	if err := os.Mkdir(lock, 0o755); err != nil {
 		t.Fatal(err)
@@ -415,8 +637,9 @@ func TestAcquireWakeLock_UnstampedLockIsReclaimedByAge(t *testing.T) {
 		t.Error("stole a lock another watcher may have just taken")
 	}
 
-	// Older than any window a live watcher could still be inside: debris.
-	old := time.Now().Add(-2 * (time.Second + claudeStopTimeoutSlack))
+	// Past the grace, but far INSIDE the hour-long ceiling: still debris. Tying
+	// this bound to the ceiling is what this case exists to catch.
+	old := time.Now().Add(-2 * claudeUnstampedLockGrace)
 	if err := os.Chtimes(lock, old, old); err != nil {
 		t.Fatal(err)
 	}
