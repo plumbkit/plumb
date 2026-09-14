@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -128,7 +129,8 @@ func TestWatchForPeerMail(t *testing.T) {
 			// call reads honestly.
 			wake := watchForPeerMail(
 				claudeHookInput{SessionID: "conv-1"}, "grey-lynx",
-				mailReport{}, tc.peers, tc.ok, probe, tc.windows)
+				mailReport{}, tc.peers, tc.ok, probe, tc.windows,
+				func(int) bool { return true })
 
 			if got := wake != nil; got != tc.wantWake {
 				t.Errorf("woke = %v, want %v — %s", got, tc.wantWake, tc.why)
@@ -144,39 +146,67 @@ func TestWatchForPeerMail(t *testing.T) {
 // daemon is down keys by conversation id; the next turn, with the daemon back,
 // keys by the resolved session name and arms a SECOND watcher under a different
 // lock. Without this the first one would extend to the ceiling alongside it —
-// two wakes per message and two independent chain counters — and the longer the
-// ceiling, the longer that duplicate lives.
-// The name alone is NOT the signal, and both halves are asserted: a session can
-// be renamed mid-watch (plumb's own self-test tells an agent to rename and
-// rename back) and a daemon restart can relabel one, and in both the probe
-// resolves the RIGHT session under a new name with nothing having replaced this
-// watcher. Retiring on the name alone would leave those sessions unwatched until
-// their next turn end for no reason at all.
+// two wakes per message and two independent chain counters.
+//
+// Retiring needs a LIVE replacement, and each of the three negative cases here
+// is a way a session would otherwise be left with no watcher at all:
+//
+//   - Renamed mid-watch, or relabelled by a daemon restart: the probe resolves
+//     the right session under a new name and nothing has replaced this watcher.
+//   - A leftover lock whose process is gone. Lock directories are never swept,
+//     so one from a watcher killed by `plumb restart` or a reboot sits there
+//     forever — a corpse must not be able to retire the session's only watcher.
+//   - A lock a replacement has created but not yet stamped with its pid.
 func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
+	const deadPID = 0x7FFFFFFE // never alive; processAlive rejects it outright
+
 	for _, tc := range []struct {
-		name        string
-		replacement bool // a lock exists under the resolved name
-		wantCalls   int
-		why         string
+		name      string
+		lockPID   string // "" = no lock at all; "-" = lock dir with no pid file
+		isPlumb   bool
+		wantCalls int
+		why       string
 	}{
 		{
-			name: "a replacement holds the lock", replacement: true, wantCalls: 1,
+			name: "a live replacement holds the lock", lockPID: "self", isPlumb: true, wantCalls: 1,
 			why: "the second watcher owns this session; extending beside it means two " +
 				"wakes per message and two re-arm chains",
 		},
 		{
-			name: "renamed, but nothing replaced it", replacement: false, wantCalls: 3,
-			why: "no other watcher exists, so retiring would leave the session unwatched " +
-				"until its next turn end for no reason",
+			name: "renamed, but nothing replaced it", lockPID: "", wantCalls: 3,
+			why: "no other watcher exists, so retiring would leave the session unwatched",
+		},
+		{
+			name: "a leftover lock whose watcher is long dead", lockPID: "dead", isPlumb: true, wantCalls: 3,
+			why: "locks are never swept, so a corpse would otherwise retire the only watcher " +
+				"an idle session has — with no next turn to re-arm one",
+		},
+		{
+			name: "the pid belongs to something that is not plumb", lockPID: "self", isPlumb: false, wantCalls: 3,
+			why: "a reused pid number is not a watcher; an uncertain reading must keep watching",
+		},
+		{
+			name: "a replacement that has not recorded its pid yet", lockPID: "-", isPlumb: true, wantCalls: 3,
+			why: "unstamped is indistinguishable from debris; the next poll sees the pid",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("PLUMB_WAKE_DIR", dir)
 			t.Setenv("PLUMB_WAKE_INTERVAL", "1")
-			if tc.replacement {
-				if err := os.Mkdir(filepath.Join(dir, "grey-lynx.lock"), 0o755); err != nil {
+			if tc.lockPID != "" {
+				lock := filepath.Join(dir, "grey-lynx.lock")
+				if err := os.Mkdir(lock, 0o755); err != nil {
 					t.Fatal(err)
+				}
+				if tc.lockPID != "-" {
+					pid := strconv.Itoa(os.Getpid())
+					if tc.lockPID == "dead" {
+						pid = strconv.Itoa(deadPID)
+					}
+					if err := os.WriteFile(filepath.Join(lock, "pid"), []byte(pid), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, peers: 1, ok: true})
@@ -185,7 +215,8 @@ func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
 				claudeHookInput{SessionID: "conv-1"},
 				"conv-1", // armed before linkage resolved, so keyed by conversation id
 				mailReport{}, 0, false, probe,
-				wakeWindowPair{base: time.Second, peak: 3 * time.Second})
+				wakeWindowPair{base: time.Second, peak: 3 * time.Second},
+				func(int) bool { return tc.isPlumb })
 
 			if wake != nil {
 				t.Error("produced a wake with no mail waiting")
@@ -245,12 +276,12 @@ func TestHookPeerCount(t *testing.T) {
 // TestRuntimeWakeWindows_ProjectMayNarrowNotWiden pins the asymmetry the whole
 // config story rests on.
 //
-// The Stop handler is installed once, machine-wide, with ONE timeout derived
-// from the global ceiling. A project asking for a longer window would not get
-// one — the client would kill the watcher at that timeout mid-watch, with
-// nothing in any output saying so. Clamping is the honest version of a limit
-// that exists whether or not plumb enforces it; narrowing is always safe,
-// because a shorter watch simply ends early.
+// Each field is bounded by its OWN global counterpart, not by the ceiling. The
+// base is the window every session pays whether or not a peer exists, so letting
+// a project raise it to the peak would hand a cloned repository an hour-long
+// resident process per turn end — which is exactly what these keys being
+// classified as preferences promises they cannot do. Narrowing is always safe:
+// a shorter watch simply ends before the installed timeout.
 func TestRuntimeWakeWindows_ProjectMayNarrowNotWiden(t *testing.T) {
 	cfgHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgHome)

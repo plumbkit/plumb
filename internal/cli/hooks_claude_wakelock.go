@@ -143,6 +143,60 @@ func unstampedLockIsDebris(lock string) bool {
 	return time.Since(info.ModTime()) > claudeUnstampedLockGrace
 }
 
+// supersededBy reports whether a LIVE watcher has taken over this session.
+//
+// A name that differs from this watcher's key is necessary but nowhere near
+// sufficient, and each extra condition is load-bearing:
+//
+//   - A session can be renamed mid-watch (plumb's own self-test tells an agent to
+//     rename and rename back) and a daemon restart can relabel one. The probe
+//     then resolves the RIGHT session under a new name with nothing having
+//     replaced this watcher, so retiring on the name alone strands it.
+//   - The lock existing is not proof either, and in THIS file that is a trap
+//     rather than a technicality: lock directories are deliberately never swept
+//     (see sweepWakeDir), so one left by a watcher that was killed before it
+//     could release — `plumb restart`, a SIGKILL, a reboot — sits there forever.
+//     Trusting it would let a corpse retire the session's ONLY watcher: keyed by
+//     conversation id because the daemon was down, resolving to a name whose
+//     stale lock outlived its process, standing down, and leaving an idle session
+//     with nothing watching and no next turn to re-arm.
+//
+// So the lock must be held by a live plumb. Every uncertain reading resolves to
+// "not superseded", which keeps this watcher alive: the worst case is a transient
+// duplicate, against a silently lost wake. That is why isPlumb's fail-open
+// behaviour is safe here and was not in the sweep — there a failed `ps` deleted a
+// live lock, here it merely keeps watching.
+//
+// The resolved name is run through wakeStampKey rather than used raw: it reaches
+// here from the daemon and is about to be joined onto a path.
+//
+// supersededByWith takes the process-identity test as a parameter for the same
+// reason acquireWakeLockWith does: a test binary is never a plumb process, so
+// with the real check wired in the "a live plumb holds it" branch — the one that
+// decides whether a watcher retires — could not be reached from a test at all.
+func supersededByWith(report mailReport, key string, isPlumb func(int) bool) bool {
+	name := wakeStampKey(report, "")
+	if name == "" || name == key {
+		return false
+	}
+	lock := filepath.Join(wakeDir(), name+".lock")
+	if info, err := os.Stat(lock); err != nil || !info.IsDir() {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(lock, "pid")) //nolint:gosec // G304: inside plumb's own wake dir
+	if err != nil {
+		// Unstamped: either a replacement mid-acquire, or debris. Both read as
+		// "keep watching" — a replacement that really is arming will have its pid
+		// recorded by the next poll.
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return false
+	}
+	return processAlive(pid) && isPlumb(pid)
+}
+
 // terminate asks a stale watcher to stop. Failure is ignored: the lock is
 // reclaimed either way, and a watcher that outlives its signal only polls a
 // mailbox it can no longer wake anyone for.

@@ -223,7 +223,7 @@ func claudeStopHook(input claudeHookInput, probe wakeProbe) *mailReport {
 	}
 	defer lock.release()
 
-	wake := watchForPeerMail(input, key, report, peers, ok, probe, windows)
+	wake := watchForPeerMail(input, key, report, peers, ok, probe, windows, isPlumbProcess)
 	if wake == nil {
 		return nil
 	}
@@ -274,6 +274,7 @@ func watchForPeerMail(
 	ok bool,
 	probe wakeProbe,
 	windows wakeWindowPair,
+	isPlumb func(int) bool, // threaded for supersededByWith; see there
 ) *mailReport {
 	interval := wakeInterval(windows.base)
 	start := time.Now()
@@ -296,7 +297,7 @@ func watchForPeerMail(
 		if live.observe(ok) {
 			return nil
 		}
-		if ok && supersededBy(report, key) {
+		if ok && supersededByWith(report, key, isPlumb) {
 			return nil // a watcher under the resolved name owns this session now
 		}
 		deadline = windows.slideDeadline(deadline, hardStop, time.Now(), live.resolved, peers)
@@ -333,28 +334,6 @@ func (l *watchLiveness) observe(ok bool) (standDown bool) {
 		l.gone = 0
 	}
 	return false
-}
-
-// supersededBy reports whether another watcher has taken over this session.
-//
-// A name that differs from this watcher's key is necessary but NOT sufficient,
-// and the difference matters: a session can be renamed mid-watch (plumb's own
-// self-test tells an agent to rename and rename back), and a daemon restart can
-// hand the same conversation a new name. In both the probe resolves the RIGHT
-// session under a new label, nothing has armed a replacement, and retiring would
-// leave the session unwatched until its next turn end for no reason. So the
-// lock under the resolved name has to actually exist — that lock is the
-// replacement, and its absence means there is nothing to stand down for.
-//
-// The resolved name is run through wakeStampKey rather than used raw: it reaches
-// here from the daemon and is about to be joined onto a path.
-func supersededBy(report mailReport, key string) bool {
-	name := wakeStampKey(report, "")
-	if name == "" || name == key {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(wakeDir(), name+".lock"))
-	return err == nil && info.IsDir()
 }
 
 // wakeSentence is the stderr payload. It reports a count and an age, never a
@@ -495,9 +474,10 @@ func writeWakeStamp(dir, key string, report mailReport, input claudeHookInput) {
 //
 // Either way the failure is a second watcher for one session — two wakes per
 // message and two re-arm chains — which is the invariant this file has already
-// had three defects in. A leaked lock costs one near-empty directory, is
-// reclaimed the moment its own key returns, and reads as "not watching" to peer
-// tooling meanwhile. That is the cheaper failure, so it is the one taken.
+// had three defects in. A leaked lock costs one near-empty directory and is
+// reclaimed the moment its own key returns. It is not free: supersededBy has to
+// check that a lock's holder is ALIVE precisely because these corpses persist.
+// It is still the cheaper failure, so it is the one taken.
 //
 // A stamp carries no such risk: a live session rewrites its own on every turn
 // end, so one a week old belongs to a session that is long gone, and nothing

@@ -19,9 +19,10 @@
   Two new `[collab]` keys, `wake_window_seconds` (default 300) and
   `wake_peer_window_seconds` (default 3600, `0` disables the extension), with
   `PLUMB_WAKE_WINDOW` and the new `PLUMB_WAKE_PEER_WINDOW` as overrides. A
-  project's `.plumb/config.toml` may **narrow** both and may not widen them past
-  the global ceiling: the installed handler carries one machine-wide timeout, so a
-  longer project window would be killed mid-watch rather than honoured.
+  project's `.plumb/config.toml` may **narrow** either window and may not raise
+  either one: each is bounded by its own global value, so a cloned repository
+  cannot lengthen the base window every session pays whether or not a peer
+  exists. An exported `PLUMB_WAKE_*` is read last and wins over both.
 
   **Re-run `plumb hooks install claude-code`.** The installed `Stop` timeout is
   derived from the ceiling (330 → 3630 by default) and an existing install shows
