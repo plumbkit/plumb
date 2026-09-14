@@ -471,3 +471,48 @@ func jsonEqual(a, b any) bool {
 	y, _ := json.Marshal(b)
 	return bytes.Equal(x, y)
 }
+
+// TestIdentityHookSkewNoteOlderInstall: hooks written by a plumb that predates
+// the identity channel leave the PreToolUse entry absent while the rest are
+// present. Nothing stamps in that state, so every agent multiplexing one
+// connection is filed under a single identity — and the daemon is healthy, so
+// no other note fires. The fact lives in the config, not the daemon, so this
+// note must not need a probe to reach the reader.
+func TestIdentityHookSkewNoteOlderInstall(t *testing.T) {
+	olderInstall := []hookState{
+		{entry: hookEntry{event: "SessionStart"}, state: hookStateStale},
+		{entry: hookEntry{event: "PreToolUse"}, state: hookStateMissing},
+		{entry: hookEntry{event: "Stop"}, state: hookStateStale},
+	}
+	got := identityHookSkewNote(claudeCodeHooksTarget, olderInstall, nil)
+	if !strings.Contains(got, "plumb hooks install claude-code") {
+		t.Errorf("the note must carry the remedy, got %q", got)
+	}
+	if !strings.Contains(got, "identity") {
+		t.Errorf("the note must say what is broken, got %q", got)
+	}
+
+	// Nothing of plumb's on this client is not a skew: the table already reads
+	// unregistered, and a note about a hook nobody asked for is noise.
+	nothing := []hookState{
+		{entry: hookEntry{event: "SessionStart"}, state: hookStateMissing},
+		{entry: hookEntry{event: "PreToolUse"}, state: hookStateMissing},
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, nothing, nil); got != "" {
+		t.Errorf("no plumb hooks at all is not a skew, got %q", got)
+	}
+
+	// Only Claude Code carries the identity hook.
+	if got := identityHookSkewNote(codexHooksTarget, olderInstall, nil); got != "" {
+		t.Errorf("only the Claude Code target carries the identity hook, got %q", got)
+	}
+
+	// A complete install is not a skew, whatever the daemon says.
+	complete := []hookState{
+		{entry: hookEntry{event: "SessionStart"}, state: hookStateInstalled},
+		{entry: hookEntry{event: "PreToolUse"}, state: hookStateInstalled},
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, complete, nil); got != "" {
+		t.Errorf("a complete install with no probe needs no note, got %q", got)
+	}
+}

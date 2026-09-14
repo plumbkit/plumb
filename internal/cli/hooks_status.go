@@ -47,21 +47,39 @@ func runHooksStatus(cmd *cobra.Command) error {
 	return nil
 }
 
-// identityHookSkewNote explains an installed identity hook that is stamping
-// nothing: the running daemon predates the argument channel. Without it the
-// table reads "installed" while every subagent write is still refused, and
-// the reader has no way to connect the two.
+// identityHookSkewNote explains an identity hook that is stamping nothing, in
+// either direction of skew: hooks written by a plumb too old to install it, or
+// a running daemon that predates the argument channel. Without it the table
+// reads clean while every subagent write is still refused, and the reader has
+// no way to connect the two.
 func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (string, error)) string {
-	if t.use != claudeCodeHooksTarget.use || probe == nil {
+	if t.use != claudeCodeHooksTarget.use {
 		return ""
 	}
-	installed := false
+	installed, others := false, false
 	for _, s := range states {
-		if s.entry.event == "PreToolUse" && s.state != hookStateMissing {
-			installed = true
+		if s.state == hookStateMissing {
+			continue
 		}
+		if s.entry.event == "PreToolUse" {
+			installed = true
+			continue
+		}
+		others = true
 	}
 	if !installed {
+		// The older-install skew, and the mirror of the daemon cases below: a
+		// plumb that predates the identity channel writes every other hook and
+		// not this one, so nothing stamps and agents multiplexing one
+		// connection are filed under a single identity. The daemon is healthy
+		// in this state, so no note below fires; this fact lives in the config
+		// rather than the daemon, so it needs no probe to reach the reader.
+		if others {
+			return "Claude Code — the identity hook is missing while plumb's other hooks are installed: these were written by a plumb that predates it, so no per-agent identity is stamped and agents sharing one connection are filed under a single session. Run `plumb hooks install claude-code` from this binary."
+		}
+		return ""
+	}
+	if probe == nil {
 		return ""
 	}
 	version, err := probe()

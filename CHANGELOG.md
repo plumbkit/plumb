@@ -31,6 +31,19 @@
 
 ### Fixed
 
+- **`plumb hooks status` now says why agent identity is dead when the hooks were
+  written by an older plumb.** A plumb that predates the identity channel does
+  not install the `PreToolUse` hook at all, so a machine whose hooks it wrote —
+  while the daemon has since moved on — stamps no `dev.plumbkit/logical-agent`
+  on any call. Every agent multiplexing one `serve` connection is then filed
+  under a single identity: state-changing calls are refused for the whole
+  session with `shared connection: … no logical-agent identity`, and mail
+  addressed to that name reaches whichever agent polls first. The skew note
+  covered only the mirror case — a daemon older than the channel — and returned
+  early whenever the hook was absent, which is exactly the state an older
+  install leaves behind. It now names that install too, and needs no daemon
+  probe to do it, because the fact is in the config rather than the daemon.
+
 - **A wake watcher whose session never resolved could not stand down.** The
   stand-down check only applied once a session had been seen live, so a session
   with no linkage — or any session while the daemon was down — held its lock and
