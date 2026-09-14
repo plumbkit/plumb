@@ -487,3 +487,54 @@ func TestSeededShardMayCorrectOutwardToItsParentCheckout(t *testing.T) {
 		t.Errorf("the peer moved to %q; it must keep %q", got, worktree)
 	}
 }
+
+// TestOnlyALiveExplicitPinIsAttributedToItsAgent pins attributeConnectionPin's
+// trigger/origin guard itself, with an IDENTIFIED caller — the only way to
+// reach it. TestUnattributedPinIsNotAttributedToAnAgent exercises the same
+// invariant through an anonymous call, which persistPinForAgentID already
+// declines on the empty id, so the guard could be deleted outright and that
+// test would still pass.
+//
+// What the guard keeps out is the pin a caller did not CHOOSE: the client's
+// roots answer, and the replay of a persisted pin on reconnect. Filing either
+// under the caller's logical-agent id would record the connection's own
+// resolution as that agent's deliberate workspace, and shardFor treats a
+// per-agent row as outranking the connection's current pin — so the wrong row
+// would win precisely when the agent had moved on.
+func TestOnlyALiveExplicitPinIsAttributedToItsAgent(t *testing.T) {
+	cases := []struct {
+		name    string
+		origin  sessionstate.PinSource
+		trigger pinTrigger
+		want    bool
+	}{
+		{"live session_start is the agent's own choice", sessionstate.PinSourceSessionStart, pinTriggerLive, true},
+		{"a roots notification is the client's, not the agent's", sessionstate.PinSourceRoots, pinTriggerLive, false},
+		{"a reconnect replay re-states a pin nobody made now", sessionstate.PinSourceSessionStart, pinTriggerRestore, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, ss := newOriginStore(t)
+			_, worktree := worktreeUnderParent(t)
+			s := newPersistSession(t, store, ss, "proxy-attrib-guard")
+			ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+
+			if _, err := s.repinWorkspaceFrom(ctxAgent, worktree, "", tc.origin, tc.trigger, false); err != nil {
+				t.Fatalf("pin: %v", err)
+			}
+
+			root, _, _, ok, err := ss.LoadPinForAgent("proxy-attrib-guard", "agent-A")
+			if err != nil {
+				t.Fatalf("LoadPinForAgent: %v", err)
+			}
+			if ok != tc.want {
+				t.Fatalf("per-agent pin recorded = %v (root %q), want %v", ok, root, tc.want)
+			}
+			// The connection-level pin is recorded either way: what the guard
+			// decides is WHO it is attributed to, never whether it lands.
+			if got, _, _, ok, err := ss.LoadPin("proxy-attrib-guard"); err != nil || !ok || got != worktree {
+				t.Fatalf("connection-level pin = %q ok=%v err=%v, want %q", got, ok, err, worktree)
+			}
+		})
+	}
+}

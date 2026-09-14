@@ -115,7 +115,8 @@
   that agent chose. A roots notification or a reconnect replay carries no
   caller and is still recorded against the connection alone. Guarded by
   `TestAgentPinSurvivesItsShardMaterialising`,
-  `TestExplicitConnectionPinIsAttributedToItsAgent` and
+  `TestExplicitConnectionPinIsAttributedToItsAgent`,
+  `TestOnlyALiveExplicitPinIsAttributedToItsAgent` and
   `TestUnattributedPinIsNotAttributedToAnAgent`, whose fixture is the shape
   that kept the drift silent: a git worktree nested under its parent
   checkout, so the same relative path resolves in both.
