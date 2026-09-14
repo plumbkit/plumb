@@ -257,14 +257,15 @@ type wakeProbe func(sessionID, cwd string) (mailReport, int, bool)
 //     hour-long orphan holding this session's lock, since the stand-down below
 //     is unreachable while resolved is false.
 //
-// key is the wake key this watcher holds the lock under, and a watcher whose
-// session resolves to a DIFFERENT name retires. That happens on a real sequence:
-// a turn ending while the daemon is down keys by conversation id, and the next
-// turn, with the daemon back, keys by the resolved session name and arms a
-// second watcher under a lock the first one does not hold. Letting the first
+// key is the wake key this watcher holds the lock under, and a watcher retires
+// once another one demonstrably owns its session. That happens on a real
+// sequence: a turn ending while the daemon is down keys by conversation id, and
+// the next turn, with the daemon back, keys by the resolved session name and arms
+// a second watcher under a lock the first one does not hold. Letting the first
 // extend would keep a duplicate alive to the ceiling — two wakes per message and
 // two independent chain counters — which is the same "resolve late" path that
-// makes the extension correct in every other respect.
+// makes the extension correct in every other respect. See supersededBy for why
+// a name mismatch alone is not enough to retire on.
 func watchForPeerMail(
 	input claudeHookInput,
 	key string,
@@ -295,7 +296,7 @@ func watchForPeerMail(
 		if live.observe(ok) {
 			return nil
 		}
-		if ok && report.Session != "" && report.Session != key {
+		if ok && supersededBy(report, key) {
 			return nil // a watcher under the resolved name owns this session now
 		}
 		deadline = windows.slideDeadline(deadline, hardStop, time.Now(), live.resolved, peers)
@@ -332,6 +333,28 @@ func (l *watchLiveness) observe(ok bool) (standDown bool) {
 		l.gone = 0
 	}
 	return false
+}
+
+// supersededBy reports whether another watcher has taken over this session.
+//
+// A name that differs from this watcher's key is necessary but NOT sufficient,
+// and the difference matters: a session can be renamed mid-watch (plumb's own
+// self-test tells an agent to rename and rename back), and a daemon restart can
+// hand the same conversation a new name. In both the probe resolves the RIGHT
+// session under a new label, nothing has armed a replacement, and retiring would
+// leave the session unwatched until its next turn end for no reason. So the
+// lock under the resolved name has to actually exist — that lock is the
+// replacement, and its absence means there is nothing to stand down for.
+//
+// The resolved name is run through wakeStampKey rather than used raw: it reaches
+// here from the daemon and is about to be joined onto a path.
+func supersededBy(report mailReport, key string) bool {
+	name := wakeStampKey(report, "")
+	if name == "" || name == key {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(wakeDir(), name+".lock"))
+	return err == nil && info.IsDir()
 }
 
 // wakeSentence is the stderr payload. It reports a count and an age, never a
@@ -450,51 +473,64 @@ func writeWakeStamp(dir, key string, report mailReport, input claudeHookInput) {
 // the reason to fix it now is that a watcher living to an hour makes leaked
 // locks both more likely and longer-lived.
 //
-// AGE is the only test applied, and deliberately so. The obvious alternative —
-// asking reclaimableLock whether each lock is dead — is unsafe here in a way it
-// is not at its own call site: it reads `!isPlumb(pid)` as reclaimable BEFORE it
-// reaches the owner check, and isPlumbProcess fails open, returning false
-// whenever its `ps` cannot run. At acquire time that costs the owning session a
-// contended reclaim of its own key. From a sweep it would delete a live
-// watcher's lock belonging to ANY session on the machine — one transient fork
-// failure and that session arms a second watcher, which is the exact invariant
-// this file has already had three defects in. Age cannot fail open: no watcher
-// outlives the ceiling its client kills it at, so a lock older than that is
-// debris whatever `ps` says. It also means the sweep forks nothing.
+// It sweeps STAMPS AND RE-ARM RECORDS ONLY. Locks are deliberately left to
+// acquireWakeLock's lazy reclaim, because no test this function could apply to a
+// lock is sound:
 //
-// Dead-but-young locks are simply left: acquireWakeLock already reclaims those
-// lazily for the session that owns the key, which is the only session that cares.
+//   - Asking reclaimableLock is unsafe here in a way it is not at its own call
+//     site. It reads `!isPlumb(pid)` as reclaimable BEFORE reaching the owner
+//     check, and isPlumbProcess fails open whenever its `ps` cannot run. At
+//     acquire time that costs the owning session a contended reclaim of its own
+//     key; from a sweep it deletes a LIVE watcher's lock belonging to any
+//     session on the machine.
+//   - Age is no better, because it is not an upper bound on a watcher's life.
+//     A lock's mtime is wall-clock while the watcher's deadline is monotonic, and
+//     Go's darwin monotonic clock stops while the machine sleeps — so a laptop
+//     closed for two hours mid-watch leaves a two-hour-old lock whose watcher has
+//     most of its window left. The sweep runs BEFORE this session takes its own
+//     lock, so that session would delete its own live watcher's lock and arm a
+//     duplicate in the same hook run. Two clients disagreeing about the ceiling
+//     (a different PLUMB_WAKE_PEER_WINDOW in one shell) and a lowered global
+//     config reach the same place without any clock trick.
 //
-// Every failure is ignored and the scan is bounded: this runs on a turn-end
-// path, where no amount of tidiness is worth delaying a turn.
+// Either way the failure is a second watcher for one session — two wakes per
+// message and two re-arm chains — which is the invariant this file has already
+// had three defects in. A leaked lock costs one near-empty directory, is
+// reclaimed the moment its own key returns, and reads as "not watching" to peer
+// tooling meanwhile. That is the cheaper failure, so it is the one taken.
+//
+// A stamp carries no such risk: a live session rewrites its own on every turn
+// end, so one a week old belongs to a session that is long gone, and nothing
+// reads a stamp to decide whether a watcher may run.
+//
+// Every failure is ignored and DELETIONS are capped: capping the scan instead
+// would let a directory whose first entries are all fresh starve everything
+// behind them forever, since os.ReadDir returns sorted names and live sessions
+// keep rewriting the stamps at the front.
 func sweepWakeDir(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	// Resolved once for the whole sweep rather than per entry: it reads config.
-	maxLockLife := globalWakeWindows().ceiling() + claudeStopTimeoutSlack
-	for i, entry := range entries {
-		// Bounds the SCAN, not the deletions — a directory that somehow grew
-		// enormous is walked over several turns instead of one long one.
-		if i >= claudeWakeSweepMax {
+	swept := 0
+	for _, entry := range entries {
+		if swept >= claudeWakeSweepMax {
 			return
 		}
+		// Stamps and re-arm records only. This suffix test is also what excludes
+		// every `.lock` directory, which is the point rather than a side effect —
+		// see above for why a sweep must never delete one.
 		name := entry.Name()
-		var ttl time.Duration
-		switch {
-		case entry.IsDir() && strings.HasSuffix(name, ".lock"):
-			ttl = maxLockLife
-		case strings.HasSuffix(name, ".stamp"), strings.HasSuffix(name, ".rearm"):
-			ttl = claudeWakeStampTTL
-		default:
+		if !strings.HasSuffix(name, ".stamp") && !strings.HasSuffix(name, ".rearm") {
 			continue
 		}
 		info, err := entry.Info()
-		if err != nil || time.Since(info.ModTime()) <= ttl {
+		if err != nil || time.Since(info.ModTime()) <= claudeWakeStampTTL {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(dir, name))
+		if os.Remove(filepath.Join(dir, name)) == nil {
+			swept++
+		}
 	}
 }
 

@@ -360,12 +360,15 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   so. Because that timeout is written at install time from the windows in effect
   *then*, **re-tune and re-install together** — raising either window without
   re-running `plumb hooks install` leaves the client cancelling the watcher early.
-  `plumb hooks` reports the mismatch as `stale`. For the same reason a project's
-  `.plumb/config.toml` may **narrow** these two windows but not widen them past
-  the global ceiling: that one installed timeout is machine-wide and knows
-  nothing about any one workspace. `PLUMB_WAKE_DIR` (default
+  `plumb hooks` reports the mismatch as `stale`. A project's `.plumb/config.toml`
+  may **narrow** either window and may not raise either one: each is bounded by
+  its own global value, so a repository cannot lengthen the base window every
+  session pays whether or not a peer exists. `PLUMB_WAKE_DIR` (default
   `~/.claude/plumb-wake`) is where the watcher keeps its per-session stamp, lock
-  and re-arm records; stale ones are swept on later turn ends.
+  and re-arm records. Stamps and re-arm records older than a week are swept on
+  later turn ends; lock directories are not swept, and are reclaimed by the
+  session that owns the key — nothing a sweep could measure is an upper bound on
+  a live watcher, and deleting one would give that session two.
 - **Codex checks.** Codex has no background-wake mechanism, so its handler makes
   one read-only probe as the turn ends and keeps the turn going only when mail
   is pending. That narrows the end-of-turn race; it is **not** push delivery.

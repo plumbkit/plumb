@@ -40,19 +40,25 @@
   supersedes it.** A turn ending while the daemon is down keys its lock by
   conversation id; the next turn, with the daemon back, keys by the resolved
   session name and arms a second watcher under a different lock. The first now
-  retires as soon as it sees a name that is not its key, instead of extending
+  retires once a lock exists under the resolved name, instead of extending
   alongside the second — which would have meant two wakes per message and two
-  independent re-arm chains.
-- **`~/.claude/plumb-wake` grew without bound.** Nothing ever removed a stamp, a
-  lock, or a re-arm record; a long-running fleet accumulated one stamp per
-  conversation forever, plus a lock for every watcher killed before it could
-  release one. Turn ends now sweep stamps and re-arm records older than seven
-  days, and lock directories older than the watch ceiling plus slack — the point
-  past which no watcher can still be running. The test is AGE alone, deliberately:
-  asking the reclaim ladder instead would have read a lock as dead whenever its
-  `ps` probe failed, and from a sweep that deletes a live watcher's lock belonging
-  to any session on the machine. The scan is bounded, every error is ignored, and
-  the sweep forks nothing and signals nothing.
+  independent re-arm chains. The lock has to be there: a session can be renamed
+  mid-watch, and a daemon restart can relabel one, and retiring on the changed
+  name alone would strand a session nothing had replaced.
+- **`~/.claude/plumb-wake` grew without bound.** Nothing ever removed a stamp or
+  a re-arm record, so a long-running fleet accumulated one per conversation
+  forever. Turn ends now sweep both once they are older than seven days — a live
+  session rewrites its stamp every turn, so that age means the session is gone.
+  Deletions are capped rather than the scan, so a directory whose first entries
+  are all fresh cannot starve what sits behind them; every error is ignored.
+
+  **Lock directories are deliberately not swept**, and are still reclaimed lazily
+  by the session that owns the key. Nothing a sweep could measure is an upper
+  bound on a live watcher: the reclaim ladder reads a lock as dead whenever its
+  `ps` probe fails, and age is wall-clock while a watcher's deadline is monotonic
+  — a laptop asleep mid-watch leaves an arbitrarily old lock whose watcher still
+  has its window left. Either mistake gives one session two watchers; a leaked
+  lock costs one near-empty directory.
 - **An unstamped lock is no longer unreclaimable for as long as the watch
   window.** A watcher that died between creating its lock directory and recording
   its pid leaves a lock the next turn must decide about, and that grace was

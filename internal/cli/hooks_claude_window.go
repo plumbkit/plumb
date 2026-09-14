@@ -116,11 +116,18 @@ func globalWakeWindows() wakeWindowPair {
 
 // runtimeWakeWindows resolves the pair for one workspace.
 //
-// A project may NARROW its windows and may not widen them. The handler that
-// runs this hook is installed once, machine-wide, with one timeout derived from
-// the global ceiling; a project asking for longer would simply be killed at that
-// timeout mid-watch, with nothing in any output saying so. Clamping is the
-// honest version of a limit that exists whether or not plumb enforces it.
+// A project may NARROW its windows and may not widen them. Each field is bounded
+// by its OWN global counterpart, which is the whole of the rule and is easy to
+// get subtly wrong: clamping both fields to the global CEILING instead lets a
+// project raise the base — the window every session pays whether or not a peer
+// exists — all the way to the peak, so one line in a cloned repository's
+// .plumb/config.toml would hold a watcher process for an hour on every turn end,
+// solo or not. These keys are classified as preferences precisely because they
+// cannot do that.
+//
+// Narrowing needs no such care in the other direction: the handler that runs this
+// hook is installed once, machine-wide, with one timeout derived from the global
+// ceiling, and a shorter watch simply ends before it.
 func runtimeWakeWindows(root string) wakeWindowPair {
 	cfg, err := config.Load()
 	if err != nil {
@@ -135,12 +142,11 @@ func runtimeWakeWindows(root string) wakeWindowPair {
 		return global
 	}
 	w := collabWakeWindows(proj.Collab).withEnv()
-	ceiling := global.ceiling()
-	if w.base > ceiling {
-		w.base = ceiling
+	if w.base > global.base {
+		w.base = global.base
 	}
-	if w.peak > ceiling {
-		w.peak = ceiling
+	if w.peak > global.peak {
+		w.peak = global.peak
 	}
 	return w
 }

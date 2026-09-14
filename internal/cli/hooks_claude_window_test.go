@@ -122,8 +122,10 @@ func TestWatchForPeerMail(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PLUMB_WAKE_INTERVAL", "1")
 			probe, calls := scriptedProbe(tc.steps...)
-			// The key matches what the probe resolves, so the superseded-key
-			// stand-down is out of the way of every case here.
+			// Every probe step here resolves an EMPTY session name, so
+			// supersededBy short-circuits and the retire-when-superseded rule is
+			// out of the way of all of these cases. The key is named only so the
+			// call reads honestly.
 			wake := watchForPeerMail(
 				claudeHookInput{SessionID: "conv-1"}, "grey-lynx",
 				mailReport{}, tc.peers, tc.ok, probe, tc.windows)
@@ -144,22 +146,54 @@ func TestWatchForPeerMail(t *testing.T) {
 // lock. Without this the first one would extend to the ceiling alongside it —
 // two wakes per message and two independent chain counters — and the longer the
 // ceiling, the longer that duplicate lives.
+// The name alone is NOT the signal, and both halves are asserted: a session can
+// be renamed mid-watch (plumb's own self-test tells an agent to rename and
+// rename back) and a daemon restart can relabel one, and in both the probe
+// resolves the RIGHT session under a new name with nothing having replaced this
+// watcher. Retiring on the name alone would leave those sessions unwatched until
+// their next turn end for no reason at all.
 func TestWatchForPeerMail_RetiresWhenItsKeyIsSuperseded(t *testing.T) {
-	t.Setenv("PLUMB_WAKE_INTERVAL", "1")
-	probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, peers: 1, ok: true})
+	for _, tc := range []struct {
+		name        string
+		replacement bool // a lock exists under the resolved name
+		wantCalls   int
+		why         string
+	}{
+		{
+			name: "a replacement holds the lock", replacement: true, wantCalls: 1,
+			why: "the second watcher owns this session; extending beside it means two " +
+				"wakes per message and two re-arm chains",
+		},
+		{
+			name: "renamed, but nothing replaced it", replacement: false, wantCalls: 3,
+			why: "no other watcher exists, so retiring would leave the session unwatched " +
+				"until its next turn end for no reason",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PLUMB_WAKE_DIR", dir)
+			t.Setenv("PLUMB_WAKE_INTERVAL", "1")
+			if tc.replacement {
+				if err := os.Mkdir(filepath.Join(dir, "grey-lynx.lock"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			probe, calls := scriptedProbe(probeStep{report: mailReport{Session: "grey-lynx"}, peers: 1, ok: true})
 
-	wake := watchForPeerMail(
-		claudeHookInput{SessionID: "conv-1"},
-		"conv-1", // armed before linkage resolved, so keyed by conversation id
-		mailReport{}, 0, false, probe,
-		wakeWindowPair{base: time.Second, peak: 60 * time.Second})
+			wake := watchForPeerMail(
+				claudeHookInput{SessionID: "conv-1"},
+				"conv-1", // armed before linkage resolved, so keyed by conversation id
+				mailReport{}, 0, false, probe,
+				wakeWindowPair{base: time.Second, peak: 3 * time.Second})
 
-	if wake != nil {
-		t.Error("a superseded watcher produced a wake")
-	}
-	if *calls != 1 {
-		t.Errorf("polled %d time(s), want 1 — a watcher that learns it is keyed by the wrong "+
-			"name must retire, not extend to the ceiling beside the watcher that owns that name", *calls)
+			if wake != nil {
+				t.Error("produced a wake with no mail waiting")
+			}
+			if *calls != tc.wantCalls {
+				t.Errorf("polled %d time(s), want %d — %s", *calls, tc.wantCalls, tc.why)
+			}
+		})
 	}
 }
 
@@ -257,12 +291,32 @@ func TestRuntimeWakeWindows_ProjectMayNarrowNotWiden(t *testing.T) {
 		}
 	})
 
-	t.Run("widening is clamped to the global ceiling", func(t *testing.T) {
+	// Each field is clamped to its OWN global counterpart. Clamping both to the
+	// global CEILING instead reads as "narrowing" but is not: it lets a project
+	// raise the BASE — the window every session pays with no peer present — from
+	// 100s to the 1000s peak, so one line in a cloned repository holds a watcher
+	// process for that long on every turn end. An earlier version of this test
+	// asserted exactly that and called it correct.
+	t.Run("widening is clamped per field", func(t *testing.T) {
 		ws := project(t, "[collab]\nwake_window_seconds = 8000\nwake_peer_window_seconds = 9000\n")
 		got := runtimeWakeWindows(ws)
-		if got.base != 1000*time.Second || got.peak != 1000*time.Second {
-			t.Errorf("windows = %v, want both clamped to the 1000s global ceiling — "+
-				"a longer watch is killed by the installed timeout, not honoured", got)
+		if got.base != 100*time.Second {
+			t.Errorf("base = %v, want the 100s GLOBAL BASE — a project must not raise the "+
+				"window every session pays whether or not a peer exists", got.base)
+		}
+		if got.peak != 1000*time.Second {
+			t.Errorf("peak = %v, want the 1000s global peak", got.peak)
+		}
+	})
+
+	// The narrow case that the per-field clamp must not break: a project raising
+	// only its ceiling, still under the global one, is a legitimate narrowing of
+	// nothing and stays honoured.
+	t.Run("a project may still lower one field and keep the other", func(t *testing.T) {
+		ws := project(t, "[collab]\nwake_window_seconds = 5\n")
+		got := runtimeWakeWindows(ws)
+		if got.base != 5*time.Second || got.peak != 1000*time.Second {
+			t.Errorf("windows = %v, want 5s base with the global 1000s peak", got)
 		}
 	})
 

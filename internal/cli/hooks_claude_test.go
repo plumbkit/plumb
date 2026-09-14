@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -468,52 +469,70 @@ func TestSweepWakeDir(t *testing.T) {
 	staleRearm := write("gone-otter.rearm", claudeWakeStampTTL+time.Hour)
 	fresh := write("live-otter.stamp", time.Minute)
 
-	// Older than any watcher the installed timeout would have let run: debris.
-	abandoned := lock("gone-otter.lock", 2*time.Hour)
-	// Inside the hour-long ceiling. A watcher armed under it may well still be
-	// running, and a sweep from ANOTHER session's turn end must not touch it —
-	// deleting it lets this session arm a second watcher.
-	working := lock("busy-otter.lock", 10*time.Minute)
+	// Locks are NOT the sweep's business, at any age. Nothing it could measure is
+	// an upper bound on a live watcher's life: a lock's mtime is wall-clock while
+	// the watcher's deadline is monotonic, so a laptop asleep mid-watch leaves an
+	// arbitrarily old lock whose watcher still has its window left — and the sweep
+	// runs BEFORE this session takes its own lock, so it would delete its own live
+	// watcher's and arm a duplicate in the same hook run.
+	ancientLock := lock("gone-otter.lock", 30*24*time.Hour)
+	workingLock := lock("busy-otter.lock", 10*time.Minute)
+
+	// An EMPTY lock directory, which is what a watcher holds for the instant
+	// between os.Mkdir and recording its pid. It is the only lock os.Remove could
+	// actually delete, so it is the one that proves directories are filtered out
+	// rather than merely protected by os.Remove refusing a non-empty one.
+	bareLock := filepath.Join(dir, "bare-otter.lock")
+	if err := os.Mkdir(bareLock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancient := time.Now().Add(-30 * 24 * time.Hour)
+	if err := os.Chtimes(bareLock, ancient, ancient); err != nil {
+		t.Fatal(err)
+	}
 
 	sweepWakeDir(dir)
 
-	for _, gone := range []string{stale, staleRearm, abandoned} {
+	for _, gone := range []string{stale, staleRearm} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("%s survived the sweep", filepath.Base(gone))
 		}
 	}
-	for _, kept := range []string{fresh, working} {
+	for _, kept := range []string{fresh, ancientLock, workingLock, bareLock} {
 		if _, err := os.Stat(kept); err != nil {
-			t.Errorf("%s was swept but may still be in use: %v", filepath.Base(kept), err)
+			t.Errorf("%s was swept: %v — a lock is reclaimed by its own key, never swept",
+				filepath.Base(kept), err)
 		}
 	}
 }
 
-// TestSweepWakeDir_LockLifetimeFollowsTheCeiling: the bound on a lock is the
-// longest a watcher could run, so it has to track the CEILING. Bounding by the
-// base window would delete the lock of every peer-extended watcher on the
-// machine, which is the two-watchers-for-one-session defect this file has
-// already had three times.
-func TestSweepWakeDir_LockLifetimeFollowsTheCeiling(t *testing.T) {
-	t.Setenv("PLUMB_WAKE_WINDOW", "60")
-	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "3600")
-
-	// Comfortably past the 60s base, comfortably inside the 3600s ceiling.
+// TestSweepWakeDir_MakesProgressBehindFreshEntries: os.ReadDir returns sorted
+// names and live sessions rewrite the stamps at the front of the directory on
+// every turn end, so a cap on the SCAN would let those fresh entries starve
+// everything behind them — forever, not just for a turn. The cap is on
+// deletions, which always makes progress.
+func TestSweepWakeDir_MakesProgressBehindFreshEntries(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "busy-otter.lock")
-	if err := os.Mkdir(path, 0o755); err != nil {
+	for i := range claudeWakeSweepMax + 8 {
+		name := filepath.Join(dir, fmt.Sprintf("a%03d.stamp", i))
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	debris := filepath.Join(dir, "z-long-gone.stamp")
+	if err := os.WriteFile(debris, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	when := time.Now().Add(-30 * time.Minute)
-	if err := os.Chtimes(path, when, when); err != nil {
+	when := time.Now().Add(-claudeWakeStampTTL - time.Hour)
+	if err := os.Chtimes(debris, when, when); err != nil {
 		t.Fatal(err)
 	}
 
 	sweepWakeDir(dir)
 
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("a 30m-old lock was swept under an hour-long ceiling: %v — its watcher "+
-			"may still be running, and the session would arm a second one", err)
+	if _, err := os.Stat(debris); !os.IsNotExist(err) {
+		t.Error("week-old debris sorted behind a directory full of fresh stamps was " +
+			"never reached — a scan cap starves it permanently")
 	}
 }
 
