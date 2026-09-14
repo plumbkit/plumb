@@ -47,21 +47,43 @@ func runHooksStatus(cmd *cobra.Command) error {
 	return nil
 }
 
-// identityHookSkewNote explains an installed identity hook that is stamping
-// nothing: the running daemon predates the argument channel. Without it the
-// table reads "installed" while every subagent write is still refused, and
-// the reader has no way to connect the two.
+// identityHookSkewNote explains an identity hook that is stamping nothing:
+// absent while plumb's other hooks are present, or installed against a daemon
+// that predates the argument channel. Without it the table reports a bare
+// "missing" or a confident "installed" while every subagent write is refused,
+// and the reader has no way to connect the two.
 func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (string, error)) string {
-	if t.use != claudeCodeHooksTarget.use || probe == nil {
+	if t.use != claudeCodeHooksTarget.use {
 		return ""
 	}
-	installed := false
+	installed, others := false, false
 	for _, s := range states {
-		if s.entry.event == "PreToolUse" && s.state != hookStateMissing {
-			installed = true
+		if s.state == hookStateMissing {
+			continue
 		}
+		if s.entry.event == "PreToolUse" {
+			installed = true
+			continue
+		}
+		others = true
 	}
 	if !installed {
+		// Plumb is set up on this client, but identity specifically is off.
+		// Hooks are installed once and never re-validated, so an install that
+		// predates the third hook stays here indefinitely. A bare "missing" row
+		// reads like one absent convenience among three; it is the state where
+		// identity is not degraded but entirely gone. "present" rather than
+		// "installed" because others counts a stale entry too — in the
+		// two-binary case the rows read stale/stale/missing, and a note saying
+		// "installed" would contradict the table above it. The daemon is
+		// healthy here so no case below fires, and the fact lives in the config
+		// rather than the daemon — hence no probe.
+		if others {
+			return "Claude Code — the identity hook is missing while plumb's other hooks are present: nothing stamps a per-agent identity, so agents sharing one connection share one session and their writes are refused. Run `plumb hooks install claude-code`."
+		}
+		return ""
+	}
+	if probe == nil {
 		return ""
 	}
 	version, err := probe()

@@ -308,7 +308,9 @@ Code gets a third:
   `permissionDecision: "allow"`, a permission side-effect plumb will not take
   silently. **After upgrading, re-run `plumb hooks install claude-code`** — an
   older install has only the first two hooks, and the table shows the third as
-  `missing` until it does.
+  `missing` until it does, with a note beneath saying what that costs: nothing
+  stamps a per-agent identity, so agents sharing one connection share one
+  session and their writes are refused.
 
 What `plumb hooks install claude-code` writes, in full:
 
