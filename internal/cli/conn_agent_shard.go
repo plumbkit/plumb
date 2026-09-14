@@ -242,18 +242,26 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	prev := sh.root
-	// selfPinned, not pinOrigin alone: the guard must fire for a root this
-	// AGENT chose, and a seeded shard chose nothing. shardFor copies the
-	// CONNECTION's pin and its origin onto a new shard, so a connection whose
-	// origin a peer's same-root session_start had promoted handed every shard
-	// built afterwards a PinSourceSessionStart it never asked for — and the
-	// guard then refused that agent's FIRST explicit pin as a drift away from a
-	// workspace it had never held, with force: true, which displaces a peer on
-	// exactly the pooled connection where this arises, as the only remedy. Until
-	// the refused pin lands, the agent's workspace-relative calls keep resolving
-	// inside the seeded root (issue #468). PLAN-398 closed the half of this where
-	// the connection moved afterwards; this closes the half where it did not.
-	if !force && prev != "" && root != prev && sh.selfPinned && sh.pinOrigin == sessionstate.PinSourceSessionStart {
+	// The guard keys on the pin ORIGIN, which a seeded shard inherits wholesale:
+	// shardFor copies the CONNECTION's pin and its origin onto a new shard, and
+	// attachOrRepinTo's same-root promotion branch upgrades a roots-held pin to
+	// PinSourceSessionStart whenever any caller names the current root — silently,
+	// since no root moves. Every shard built afterwards therefore carried a
+	// session_start origin nobody had set on its behalf, and the guard refused
+	// that agent's FIRST explicit pin as a drift away from a workspace it had
+	// never held, offering force: true — which displaces a peer on exactly the
+	// pooled connection where this arises — as the only remedy (issue #468).
+	//
+	// correctsSeededRoot, not !selfPinned alone, is the exemption: an agent that
+	// chose nothing may correct its root only WITHIN the tree it was seeded in.
+	// A move to an UNRELATED workspace stays refused however the shard got its
+	// root — that is the fail-closed #182/PLAN-395 guarantee, and relaxing it
+	// would be worse than the drift being fixed here. PLAN-398 closed the half of
+	// this where the connection moved afterwards; this closes the half where it
+	// did not.
+	if !force && prev != "" && root != prev &&
+		!correctsSeededRoot(sh.selfPinned, prev, root) &&
+		sh.pinOrigin == sessionstate.PinSourceSessionStart {
 		refused = fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root)
 		// Leave a trace on this past-vulnerability surface: the connection-level
 		// guard has always logged a refused steal, and a refused cross-workspace
@@ -302,6 +310,30 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
+}
+
+// correctsSeededRoot reports whether a re-pin from prev to root is an agent
+// CORRECTING a workspace it never chose, rather than drifting off one it did.
+//
+// Two conditions, and both are load-bearing. The shard must not be self-pinned:
+// a root the agent actually named is its own choice, and moving off one still
+// takes force: true. And the two roots must be the same tree — one contains the
+// other — which is the reported shape, a git worktree at .claude/worktrees/<name>
+// inside its parent checkout. That containment is also why the drift was SILENT:
+// the same relative path exists in both roots, so a workspace-relative call
+// resolving against the wrong one returned a plausible file rather than a
+// boundary error. An unrelated workspace has neither property and is refused.
+//
+// Called with sh.mu held, hence the plain bool rather than a shard method.
+//
+// Both roots are canonical by the time they reach repinAgent — Detect and
+// SynthesiseRoot resolve symlinks (issue #263), and a shard's root came through
+// the same lane — so the lexical prefix test in withinRoot is sound here.
+func correctsSeededRoot(selfPinned bool, prev, root string) bool {
+	if selfPinned {
+		return false
+	}
+	return withinRoot(root, prev) || withinRoot(prev, root)
 }
 
 // confirmShardPin records that this agent deliberately named the root its shard

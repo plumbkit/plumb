@@ -43,6 +43,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // worktreeUnderParent builds a parent checkout and a git worktree nested inside
@@ -325,5 +326,164 @@ func TestConfirmedWorkspaceIsPersisted(t *testing.T) {
 	}
 	if origin != sessionstate.PinSourceSessionStart {
 		t.Errorf("per-agent pin origin = %q, want %q", origin, sessionstate.PinSourceSessionStart)
+	}
+}
+
+// TestSeededShardStillRefusesAnUnrelatedWorkspace is the fail-closed half of the
+// exemption TestSeededShardDoesNotInheritAPeersStickiness asks for, and the one
+// that makes it safe: "this agent chose nothing" is NOT on its own a licence to
+// re-pin anywhere. Only a root in the same tree as the seeded one is a
+// correction; an unrelated workspace is the #182 drift the guard exists for, and
+// stays refused with the diagnosis and the remedy.
+//
+// Setup is TestSeededShardDoesNotInheritAPeersStickiness's, step for step — a
+// peer's same-root session_start promoting the connection's pin origin, the
+// reporting agent's shard seeded from it — with only the requested root changed.
+func TestSeededShardStillRefusesAnUnrelatedWorkspace(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, _ := worktreeUnderParent(t)
+	elsewhere := freshTempDir(t)
+	mustGitDir(t, elsewhere)
+
+	s := newPersistSession(t, store, ss, "proxy-seeded-unrelated")
+	s.attachWorkspace(context.Background(), "file://"+parent)
+
+	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
+	if _, err := s.repinWorkspace(ctxPeer, parent, "", false); err != nil {
+		t.Fatalf("the peer's same-root session_start: %v", err)
+	}
+	s.recordLogicalAgentAttach("peer")
+
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+	_, err := s.repinWorkspace(ctxAgent, elsewhere, "", false)
+	if err == nil {
+		t.Fatal("a seeded shard re-pinning to a workspace outside the connection's project was accepted — the #182 guard is fail-open")
+	}
+	if !strings.Contains(err.Error(), "sticky") || !strings.Contains(err.Error(), "force") {
+		t.Errorf("the refusal lost its diagnosis or its remedy: %v", err)
+	}
+	if got := s.workspaceFor(ctxAgent); got != parent {
+		t.Errorf("the refused re-pin moved the shard to %q; it must stay at %q", got, parent)
+	}
+	if _, err := s.policyFor(ctxAgent).Check(filepath.Join(elsewhere, "x.go"), tools.AccessReadWrite); err == nil {
+		t.Error("the refused agent's boundary admits a path in the workspace it was refused — fail-open")
+	}
+}
+
+// TestChosenWorkspaceIsStickyEvenWithinItsOwnTree pins the other condition on the
+// exemption: containment is what makes a SEEDED root correctable, not what makes
+// any root moveable. An agent that chose the parent checkout and then asks for
+// the worktree nested inside it is asking to move a pin it set itself, which is
+// what force: true is for — and forcing moves only this agent's shard, so
+// offering it here costs a peer nothing.
+func TestChosenWorkspaceIsStickyEvenWithinItsOwnTree(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+	other := freshTempDir(t)
+	mustGitDir(t, other)
+
+	s := newPersistSession(t, store, ss, "proxy-chosen-tree")
+	// The connection sits somewhere else entirely, so the agent's pin below is
+	// a move it makes itself rather than a seed it inherits.
+	s.attachWorkspace(context.Background(), "file://"+other)
+	s.recordLogicalAgentAttach("peer")
+
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+	if _, err := s.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+		t.Fatalf("the agent's own pin: %v", err)
+	}
+
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err == nil {
+		t.Fatal("a move off a workspace this agent chose was accepted because the target was nested inside it — the exemption is for a SEEDED root, not any root")
+	}
+	if got := s.workspaceFor(ctxAgent); got != parent {
+		t.Errorf("the refused re-pin moved the shard to %q; it must stay at %q", got, parent)
+	}
+	// force: true is the advertised remedy and must land, on this agent alone.
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", true); err != nil {
+		t.Fatalf("force: true is the named remedy and must land: %v", err)
+	}
+	if got := s.workspace(); got != other {
+		t.Errorf("a per-agent forced re-pin moved the CONNECTION pin to %q, want %q", got, other)
+	}
+}
+
+// TestRestoredShardStaysStickyAcrossARestart is the restart case, which the
+// shard's in-memory selfPinned flag cannot answer: shardFor restores the pin
+// from the per-agent row, which carries the ORIGIN but no record of whether the
+// agent chose that root or merely followed the connection to it. A guard keyed
+// on selfPinned alone therefore stopped firing entirely for a restored shard —
+// including one whose root the agent really had chosen. Keying on the origin,
+// with containment as the only exemption, restores the refusal a cross-workspace
+// drift has to meet.
+func TestRestoredShardStaysStickyAcrossARestart(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+	elsewhere := freshTempDir(t)
+	mustGitDir(t, elsewhere)
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+
+	// Before the restart the agent chose the worktree on a shared connection.
+	first := newPersistSession(t, store, ss, "proxy-restart")
+	first.attachWorkspace(context.Background(), "file://"+parent)
+	first.recordLogicalAgentAttach("peer")
+	first.recordLogicalAgentAttach("agent-A")
+	if _, err := first.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+		t.Fatalf("setup: the agent's own pin: %v", err)
+	}
+	first.close()
+
+	// The daemon restarts. The shard re-seeds from the persisted per-agent row.
+	second := newPersistSession(t, store, ss, "proxy-restart")
+	second.attachWorkspace(context.Background(), "file://"+parent)
+	second.recordLogicalAgentAttach("peer")
+	second.recordLogicalAgentAttach("agent-A")
+	if got := second.workspaceFor(ctxAgent); got != worktree {
+		t.Fatalf("precondition: the restored shard sits at %q, want the persisted %q", got, worktree)
+	}
+
+	_, err := second.repinWorkspace(ctxAgent, elsewhere, "", false)
+	if err == nil {
+		t.Fatal("a restored shard accepted a cross-workspace re-pin — the sticky guard does not survive a restart")
+	}
+	if !strings.Contains(err.Error(), "sticky") {
+		t.Errorf("the refusal lost its diagnosis: %v", err)
+	}
+	if got := second.workspaceFor(ctxAgent); got != worktree {
+		t.Errorf("the refused re-pin moved the restored shard to %q; it must stay at %q", got, worktree)
+	}
+}
+
+// TestSeededShardMayCorrectOutwardToItsParentCheckout is the mirror of the
+// incident, and the reason the exemption tests containment in BOTH directions.
+// When the client's reported root is the worktree rather than the checkout
+// around it, an agent that wants the whole repository is asking for a root that
+// CONTAINS the seeded one. The drift is silent in exactly the same way — the
+// same relative path exists on both sides — and the same force: true it would
+// otherwise be pushed towards is the one that displaces a peer.
+func TestSeededShardMayCorrectOutwardToItsParentCheckout(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+
+	s := newPersistSession(t, store, ss, "proxy-seeded-outward")
+	// The connection attaches to the WORKTREE from the client's roots.
+	s.attachWorkspace(context.Background(), "file://"+worktree)
+
+	// A peer names that same root explicitly, promoting the pin origin.
+	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
+	if _, err := s.repinWorkspace(ctxPeer, worktree, "", false); err != nil {
+		t.Fatalf("the peer's same-root session_start: %v", err)
+	}
+	s.recordLogicalAgentAttach("peer")
+
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+	if _, err := s.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+		t.Fatalf("an agent's first explicit pin outward to the checkout around a root it never chose was refused: %v", err)
+	}
+	if got := s.workspaceFor(ctxAgent); got != parent {
+		t.Errorf("the agent resolves to %q, want %q", got, parent)
+	}
+	if got := s.workspaceFor(ctxPeer); got != worktree {
+		t.Errorf("the peer moved to %q; it must keep %q", got, worktree)
 	}
 }

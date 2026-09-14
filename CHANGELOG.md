@@ -66,24 +66,37 @@
   `TestConfirmedWorkspaceIsPersisted`.
 
 - **A logical agent's first explicit `session_start` is no longer refused off a
-  workspace it never chose (issue #468).** A shard built for an agent on a
-  shared connection is seeded from the connection's pin — and copied that pin's
-  ORIGIN too, so a connection whose origin some other caller's same-root
-  `session_start` had promoted handed every shard built afterwards a
-  `session_start` origin it had never asked for. The per-agent sticky guard then
-  refused that agent's first explicit pin as a drift away from a workspace it had
-  never held, offering `force: true`, which displaces a peer on exactly the
-  pooled connection where this arises, as the only way through. Meanwhile every
-  workspace-relative call kept resolving inside the seeded root — a silent
-  wrong-repository read whenever the two roots contain one another, as a git
-  worktree and its parent checkout do. The guard now fires only for a root the
-  agent actually chose (`selfPinned`, the same distinction
-  `followConnectionShards` already draws); an agent that did choose one is still
-  refused a non-forced move away from it. PLAN-398 closed the half of this where
-  the connection moved afterwards, so the seeded shard could follow; this closes
-  the half where it did not. Guarded by
-  `TestSeededShardDoesNotInheritAPeersStickiness` and
-  `TestChosenShardStaysSticky`.
+  workspace it never chose, when the workspace it asks for is in the same tree
+  (issue #468).** A shard built for an agent on a shared connection is seeded
+  from the connection's pin — and copied that pin's ORIGIN too, so a connection
+  whose origin some other caller's same-root `session_start` had promoted handed
+  every shard built afterwards a `session_start` origin it had never asked for.
+  The per-agent sticky guard then refused that agent's first explicit pin as a
+  drift away from a workspace it had never held, offering `force: true`, which
+  displaces a peer on exactly the pooled connection where this arises, as the
+  only way through. Meanwhile every workspace-relative call kept resolving inside
+  the seeded root — and that is a silent wrong-repository read precisely because
+  the two roots contain one another, as a git worktree at
+  `.claude/worktrees/<name>` and the checkout around it do: the same relative
+  path exists on both sides, so the wrong root returned a plausible file instead
+  of a boundary error.
+
+  Containment is therefore both the symptom and the fix. A shard that chose
+  nothing may now correct its root to one that contains, or is contained by, the
+  root it was seeded at — and nowhere else. A move to an **unrelated** workspace
+  is refused exactly as before, whether the shard was seeded or chosen, which is
+  the fail-closed `#182`/PLAN-395 guarantee: `selfPinned` alone as the gate would
+  have turned it off for every seeded shard, and for every shard restored after a
+  daemon restart, since a restored pin carries its origin but no record of who
+  chose it. PLAN-398 closed the half of this where the connection moved
+  afterwards, so the seeded shard could follow; this closes the half where it did
+  not. Guarded by `TestSeededShardDoesNotInheritAPeersStickiness`,
+  `TestSeededShardMayCorrectOutwardToItsParentCheckout`,
+  `TestSeededShardStillRefusesAnUnrelatedWorkspace`,
+  `TestChosenWorkspaceIsStickyEvenWithinItsOwnTree`,
+  `TestRestoredShardStaysStickyAcrossARestart` and
+  `TestMultiAgentPin`'s `CrossWorkspaceSubagentRefusedWithRemedy` and
+  `DeclaredFirstContactDefersToExecute`.
 
 - **An agent's explicit `session_start` pin no longer drifts to another
   checkout mid-session (issue #468).** When a caller declares an identity on a
