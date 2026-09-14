@@ -67,6 +67,28 @@
   `TestSeededShardDoesNotInheritAPeersStickiness` and
   `TestChosenShardStaysSticky`.
 
+- **An agent's explicit `session_start` pin no longer drifts to another
+  checkout mid-session (issue #468).** When a caller declares an identity on a
+  connection that is not yet shared, its `session_start` is routed to the connection-level
+  pin — and, until now, recorded only under the connection-level agent id, so
+  nothing remembered which agent had chosen it. As soon as a peer declared
+  itself the connection turned shared, that agent's shard was built, and the
+  shard was seeded from the per-agent pin left over from before the proxy last
+  reconnected: a project the agent had since left. The stale row outranked the
+  pin the agent had just made, so every workspace-relative call silently
+  resolved against the wrong checkout — a wrong-repository read with nothing in
+  the response to say so — and the re-pin back was then refused as sticky
+  (issue #182) with `force: true` as the only remedy, which is unsafe on
+  precisely the pooled connection where this arises. A live explicit pin is now
+  attributed to the agent that made it, so the shard restores the workspace
+  that agent chose. A roots notification or a reconnect replay carries no
+  caller and is still recorded against the connection alone. Guarded by
+  `TestAgentPinSurvivesItsShardMaterialising`,
+  `TestExplicitConnectionPinIsAttributedToItsAgent` and
+  `TestUnattributedPinIsNotAttributedToAnAgent`, whose fixture is the shape
+  that kept the drift silent: a git worktree nested under its parent
+  checkout, so the same relative path resolves in both.
+
 - **A wake watcher whose session never resolved could not stand down.** The
   stand-down check only applied once a session had been seen live, so a session
   with no linkage — or any session while the daemon was down — held its lock and

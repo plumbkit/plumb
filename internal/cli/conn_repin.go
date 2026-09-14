@@ -205,6 +205,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	if err != nil {
 		return "", err
 	}
+	s.attributeConnectionPin(ctx, root, origin, trigger)
 	if changed {
 		s.applyProjectConfig(root)
 		// PLAN-398: shards seeded from the old connection pin follow the move,
@@ -213,6 +214,41 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		s.followConnectionShards(prevConnRoot)
 	}
 	return root, nil
+}
+
+// attributeConnectionPin records a pin that landed on the CONNECTION under the
+// logical agent that asked for it, so that agent's shard — built later, once a
+// peer turns the connection shared — restores the workspace it actually chose
+// (issue #468).
+//
+// The pin lands on the connection whenever the caller is the only identity the
+// connection has seen (sharedWith counts one, so repinShard declines), and
+// persistPin then files it under the connection-level agent id alone: nothing
+// remembers WHO made it. logicalAgentState.seen lives on the connection, so a
+// proxy reconnect empties it while proxySessionID — and every persisted
+// per-agent row — survives. The moment a peer declares itself, shardFor seeds
+// this agent's new shard from loadPinForAgent: a row left from before the
+// reconnect, naming a project the agent has since left, which overrides the
+// connection's current pin. That stale row outranked the live pin the agent had
+// just made, so every workspace-relative call silently resolved against the
+// wrong checkout, and the re-pin back was refused as sticky with force: true —
+// unsafe on exactly the pooled connection where this arises — as the only
+// remedy.
+//
+// Only a LIVE EXPLICIT session_start is attributed: a roots notification or a
+// reconnect replay carries no caller, and writing either into an agent's row
+// would file the connection's own resolution as that agent's deliberate choice.
+// An unidentified caller is a no-op inside persistPinForAgentID.
+//
+// The language recorded is the one actually ACQUIRED, not Detect's raw value —
+// the rule the connection-level persist already follows, because the two differ
+// on a failed acquire or a monorepo root electing a child primary, and a shard
+// seeded from this row must not claim a server the connection never got.
+func (s *connSession) attributeConnectionPin(ctx context.Context, root string, origin sessionstate.PinSource, trigger pinTrigger) {
+	if trigger != pinTriggerLive || origin != sessionstate.PinSourceSessionStart {
+		return
+	}
+	s.persistPinForAgentID(mcp.LogicalAgentFromCtx(ctx), root, s.view().acquiredLanguage, origin)
 }
 
 // attachOrRepinTo points the connection at root, tearing down any previous

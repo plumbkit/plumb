@@ -1,22 +1,31 @@
 package cli
 
 // conn_shard_pin_ownership_test.go — a shard must be able to tell a workspace
-// its agent CHOSE from one it was merely SEEDED with (issue #468).
+// its agent CHOSE from one it was merely SEEDED with (issue #468). Two defects
+// followed from it not being able to, and both are pinned here.
 //
-// A shard is seeded from the connection's pin AND from that pin's origin, so a
-// connection whose origin some other caller's same-root session_start had
-// promoted handed every shard built afterwards a PinSourceSessionStart it never
-// asked for. The per-agent sticky guard then refused that agent's FIRST
-// explicit pin as a drift away from a workspace it had never held, with
-// force: true — which displaces a peer on a pooled connection — as the only way
-// through. This is the path the reported session took.
+// 1. A shard is seeded from the connection's pin AND from that pin's origin, so
+//    a connection whose origin some other caller's same-root session_start had
+//    promoted handed every shard built afterwards a PinSourceSessionStart it
+//    never asked for. The per-agent sticky guard then refused that agent's
+//    FIRST explicit pin as a drift away from a workspace it had never held,
+//    with force: true — which displaces a peer on a pooled connection — as the
+//    only way through. This is the path the reported session took.
 //
-// Until the refused pin lands, the agent's workspace-relative calls keep
-// resolving inside the seeded root, with nothing in the response saying so. The
-// fixture is the reported shape — a git worktree UNDER its parent checkout —
-// because that containment is why the drift stayed silent: the same relative
-// path exists in both roots, so the wrong root returned a plausible file
-// instead of a boundary error.
+// 2. An explicit session_start that lands on the CONNECTION (the caller is the
+//    only identity the connection has seen, so no shard exists yet) is recorded
+//    only under the connection-level agent id. Nothing remembers who chose it,
+//    so when a peer later turns the connection shared and the agent's shard is
+//    built, shardFor restores whatever per-agent row survived the last proxy
+//    reconnect — a project the agent has since left — and that stale row
+//    outranks the pin the agent just made.
+//
+// Either way the agent's workspace-relative calls resolve inside a root it did
+// not choose, with nothing in the response saying so. The fixture is the
+// reported shape — a git worktree UNDER its parent checkout — because that
+// containment is why the drift stayed silent: the same relative path exists in
+// both roots, so the wrong root returned a plausible file instead of a boundary
+// error.
 
 import (
 	"context"
@@ -26,6 +35,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // worktreeUnderParent builds a parent checkout and a git worktree nested inside
@@ -128,5 +138,108 @@ func TestChosenShardStaysSticky(t *testing.T) {
 	}
 	if got := s.workspaceFor(ctxAgent); got != worktree {
 		t.Errorf("the refused re-pin moved the shard to %q; it must stay at %q", got, worktree)
+	}
+}
+
+// TestAgentPinSurvivesItsShardMaterialising is the incident, reproduced: an
+// agent explicitly pins its worktree, a peer then declares itself, and the
+// agent's next workspace-relative call must still resolve inside the worktree.
+func TestAgentPinSurvivesItsShardMaterialising(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+
+	// Earlier in the client session this agent worked in the parent checkout,
+	// on a connection that was already shared — so the pin was recorded under
+	// its own logical-agent id.
+	first := newPersistSession(t, store, ss, "proxy-drift")
+	first.recordLogicalAgentAttach("agent-A")
+	first.recordLogicalAgentAttach("peer")
+	if _, err := first.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+		t.Fatalf("setup: pinning the parent checkout: %v", err)
+	}
+	first.close()
+
+	// The proxy reconnects (a daemon restart, or plumb restart after a
+	// rebuild): same proxy session, a fresh connection whose observed-identity
+	// set starts empty, so this agent is once again the only identity known.
+	second := newPersistSession(t, store, ss, "proxy-drift")
+	root, err := second.repinWorkspace(ctxAgent, worktree, "", false)
+	if err != nil {
+		t.Fatalf("the agent's explicit session_start: %v", err)
+	}
+	if root != worktree {
+		t.Fatalf("session_start echoed %q, want %q", root, worktree)
+	}
+	second.recordLogicalAgentAttach("agent-A")
+	if got := second.workspaceFor(ctxAgent); got != worktree {
+		t.Fatalf("precondition: the agent resolves to %q straight after its own pin, want %q", got, worktree)
+	}
+
+	// A peer declares itself. Nothing about this agent changed — but the
+	// declaration is what turns the connection shared, so the agent's shard is
+	// built on its very next call.
+	second.recordLogicalAgentAttach("peer")
+
+	if got := second.workspaceFor(ctxAgent); got != worktree {
+		t.Errorf("the agent's workspace drifted to %q after a peer declared itself; a workspace-relative read would have returned %q instead of the worktree's copy, with no signal",
+			got, filepath.Join(got, "notes.md"))
+	}
+
+	// Naming its own workspace again must not be refused: an agent that never
+	// left is not a peer trying to steal a pin, and force: true is not a remedy
+	// it can safely reach for on a connection it shares.
+	if _, err := second.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+		t.Errorf("re-pinning to the workspace the agent already chose was refused: %v", err)
+	}
+}
+
+// TestExplicitConnectionPinIsAttributedToItsAgent is the narrow invariant behind
+// the test above: when an identified caller's explicit session_start lands on
+// the connection-level pin, it is recorded under that caller's logical-agent id
+// as well, so the shard built later restores the pin the agent actually chose.
+func TestExplicitConnectionPinIsAttributedToItsAgent(t *testing.T) {
+	store, ss := newOriginStore(t)
+	_, worktree := worktreeUnderParent(t)
+	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
+
+	s := newPersistSession(t, store, ss, "proxy-attrib")
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+		t.Fatalf("explicit pin: %v", err)
+	}
+
+	root, _, origin, ok, err := ss.LoadPinForAgent("proxy-attrib", "agent-A")
+	if err != nil {
+		t.Fatalf("LoadPinForAgent: %v", err)
+	}
+	if !ok {
+		t.Fatal("an explicit session_start naming a workspace left no per-agent pin, so the agent's own shard cannot restore it later")
+	}
+	if root != worktree {
+		t.Errorf("per-agent pin = %q, want %q", root, worktree)
+	}
+	if origin != sessionstate.PinSourceSessionStart {
+		t.Errorf("per-agent pin origin = %q, want %q", origin, sessionstate.PinSourceSessionStart)
+	}
+}
+
+// TestUnattributedPinIsNotAttributedToAnAgent is the other half: a roots
+// notification or a reconnect replay carries no caller identity, and must not
+// be written into any agent's per-agent pin row.
+func TestUnattributedPinIsNotAttributedToAnAgent(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, _ := worktreeUnderParent(t)
+
+	s := newPersistSession(t, store, ss, "proxy-anon")
+	if _, err := s.repinWorkspace(context.Background(), parent, "", false); err != nil {
+		t.Fatalf("unattributed pin: %v", err)
+	}
+
+	if _, _, _, ok, err := ss.LoadPinForAgent("proxy-anon", "agent-A"); err != nil || ok {
+		t.Fatalf("an unattributed pin was attributed to an agent (ok=%v err=%v)", ok, err)
+	}
+	root, _, _, ok, err := ss.LoadPin("proxy-anon")
+	if err != nil || !ok || root != parent {
+		t.Fatalf("connection-level pin = %q ok=%v err=%v, want %q", root, ok, err, parent)
 	}
 }

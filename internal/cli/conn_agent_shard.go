@@ -428,14 +428,24 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 // agent), so a shared connection's per-agent workspace survives a daemon restart
 // (PLAN-286). Mirrors persistPin, scoped to the agent.
 func (s *connSession) persistPinForAgent(sh *agentShard, root, language string, origin sessionstate.PinSource) {
-	if origin == sessionstate.PinSourceUnknown {
+	s.persistPinForAgentID(sh.id, root, language, origin)
+}
+
+// persistPinForAgentID is persistPinForAgent keyed on the id alone, for the
+// caller that has an identity but no shard yet: an agent whose explicit
+// session_start was routed to the CONNECTION because it is the only identity
+// the connection has seen. Attributing that pin is what lets the shard built
+// later — once a peer declares itself and the connection turns shared — restore
+// the workspace the agent actually chose.
+func (s *connSession) persistPinForAgentID(id, root, language string, origin sessionstate.PinSource) {
+	if id == "" || origin == sessionstate.PinSourceUnknown {
 		return
 	}
 	v := s.view()
 	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
 		return
 	}
-	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, sh.id, root, language, origin); err != nil {
+	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, id, root, language, origin); err != nil {
 		s.log().Debug("daemon: persist agent pin failed", "err", err)
 	}
 }
