@@ -248,6 +248,7 @@ func TestClaudeHookEntries_StopOutlivesItsWatcher(t *testing.T) {
 	// developer or runner with PLUMB_WAKE_WINDOW exported would otherwise get a
 	// red suite on correct code.
 	t.Setenv("PLUMB_WAKE_WINDOW", "300")
+	t.Setenv("PLUMB_WAKE_PEER_WINDOW", "0") // and the ceiling the timeout is derived from
 	for _, e := range claudeHookEntries("/opt/plumb") {
 		if e.event != "Stop" {
 			continue

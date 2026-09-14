@@ -117,6 +117,8 @@ const (
 	skCollabMaxExchanges
 	skCollabChatBudgetBytes
 	skCollabMaxWaitSec
+	skCollabWakeWindowSec
+	skCollabWakePeerWindowSec
 	skCollabKnowledgeHandoff
 	skCollabIntentTTLMin
 	skCollabNoteTTLMin
@@ -336,6 +338,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Collab", label: "Max exchanges", kind: settingNumber, key: skCollabMaxExchanges, value: itoa(cfg.Collab.MaxExchanges)},
 		{group: "Collab", label: "Chat budget (B)", kind: settingNumber, key: skCollabChatBudgetBytes, value: itoa(cfg.Collab.ChatBudgetBytes)},
 		{group: "Collab", label: "Max wait (s)", kind: settingNumber, key: skCollabMaxWaitSec, value: itoa(cfg.Collab.MaxWaitSeconds)},
+		{group: "Collab", label: "Wake window (s)", kind: settingNumber, key: skCollabWakeWindowSec, value: itoa(cfg.Collab.WakeWindowSeconds)},
+		{group: "Collab", label: "Wake peer max (s)", kind: settingNumber, key: skCollabWakePeerWindowSec, value: itoa(cfg.Collab.WakePeerWindowSeconds)},
 		{group: "Collab", label: "Knowledge handoff", kind: settingToggle, key: skCollabKnowledgeHandoff, value: onOff(cfg.Collab.KnowledgeHandoff)},
 		{group: "Collab", label: "Intent TTL (min)", kind: settingNumber, key: skCollabIntentTTLMin, value: itoa(cfg.Collab.IntentTTLMinutes)},
 		{group: "Collab", label: "Note TTL (min)", kind: settingNumber, key: skCollabNoteTTLMin, value: itoa(cfg.Collab.NoteTTLMinutes)},

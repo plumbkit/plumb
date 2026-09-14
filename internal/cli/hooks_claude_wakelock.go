@@ -123,12 +123,21 @@ func reclaimableLock(lock, sessionID string, isPlumb func(int) bool) bool {
 
 // lockOutlivedAnyWatcher reports whether a lock is older than the longest a live
 // watcher could still be holding it.
+//
+// The bound is the MACHINE-wide ceiling, not this session's resolved window. The
+// watcher that left this lock may have been armed in another workspace under
+// another project config, and the only thing true of all of them is that project
+// config can narrow the window but never widen it past the global ceiling — the
+// same ceiling the installed handler's timeout is derived from. Using this
+// session's own (possibly narrowed) window here would reclaim a lock a longer-
+// windowed watcher was still legitimately holding, which is how a session ends
+// up with two watchers.
 func lockOutlivedAnyWatcher(lock string) bool {
 	info, err := os.Stat(lock)
 	if err != nil {
 		return false
 	}
-	return time.Since(info.ModTime()) > wakeWindow()+claudeStopTimeoutSlack
+	return time.Since(info.ModTime()) > globalWakeWindows().ceiling()+claudeStopTimeoutSlack
 }
 
 // terminate asks a stale watcher to stop. Failure is ignored: the lock is

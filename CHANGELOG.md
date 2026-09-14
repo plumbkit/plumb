@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.19.2 (unreleased)
+
+### Changed
+
+- **The Claude Code idle-wake watcher now watches for as long as a peer could
+  actually write to you.** The Stop hook used to poll for a fixed 300s after a
+  turn ended and then exit, so a message landing six minutes into an idle stretch
+  woke nothing until that session's next turn ended — which, for an idle agent,
+  may be never. The window is now a pair: a base window that is always watched,
+  and a ceiling the deadline slides toward, one base window per poll, for as long
+  as another live session shares the workspace. Nobody outside a workspace can
+  write to its mailbox uninvited, so a solo session keeps the old short window and
+  the single resident watcher process it costs, while a session working beside a
+  peer stays reachable for up to an hour. A watcher whose peer goes away exits
+  within one base window of the last sighting.
+
+  Two new `[collab]` keys, `wake_window_seconds` (default 300) and
+  `wake_peer_window_seconds` (default 3600, `0` disables the extension), with
+  `PLUMB_WAKE_WINDOW` and the new `PLUMB_WAKE_PEER_WINDOW` as overrides. A
+  project's `.plumb/config.toml` may **narrow** both and may not widen them past
+  the global ceiling: the installed handler carries one machine-wide timeout, so a
+  longer project window would be killed mid-watch rather than honoured.
+
+  **Re-run `plumb hooks install claude-code`.** The installed `Stop` timeout is
+  derived from the ceiling (330 → 3630 by default) and an existing install shows
+  as `stale` until it is rewritten — left alone, the client cancels every
+  peer-extended watch early, with nothing in any output saying so.
+
+### Fixed
+
+- **A wake watcher whose session never resolved could not stand down.** The
+  stand-down check only applied once a session had been seen live, so a session
+  with no linkage — or any session while the daemon was down — held its lock and
+  polled a probe that could never succeed for the whole window. Extending now
+  requires a resolved session, so such a watcher never leaves the base window
+  instead of becoming an hour-long orphan.
+- **`~/.claude/plumb-wake` grew without bound.** Nothing ever removed a stamp, a
+  lock, or a re-arm record; a long-running fleet accumulated one stamp per
+  conversation forever, plus a lock for every watcher killed before it could
+  release one. Turn ends now sweep stamps and re-arm records older than seven days
+  and lock directories the existing reclaim ladder already judges dead, bounded
+  per run and ignoring every error. A lock another watcher is mid-acquire is left
+  alone, and the sweep never signals a process.
+
 ## 0.19.1 (2026-09-14)
 
 ### Added

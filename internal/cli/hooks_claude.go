@@ -46,15 +46,19 @@ import (
 // poll; the stamp files it writes keep the shell recipe's format because they
 // are a published interface (peer-reachability tooling parses them).
 
+// The watch WINDOWS — how long a watcher polls, and the config behind that —
+// live in hooks_claude_window.go.
 const (
-	claudeWakeWindowDefault   = 300 * time.Second
-	claudeWakeIntervalDefault = 7 * time.Second
 	claudeWakeChainMaxDefault = 10
 	claudeWakeExitCode        = 2
-	// claudeStopTimeoutSlack keeps the client's own hook timeout above the
-	// watcher's window: a timeout at or below it would kill the watcher before
-	// it finished watching, which looks exactly like a wake that never fires.
-	claudeStopTimeoutSlack = 30 * time.Second
+	// claudeWakeStampTTL is how long a stamp or re-arm record may sit unrewritten
+	// before the sweep treats it as debris. A stamp is rewritten on EVERY turn
+	// end, so a week without one means the session it belonged to is long gone.
+	claudeWakeStampTTL = 7 * 24 * time.Hour
+	// claudeWakeSweepMax bounds one sweep. Housekeeping runs on a turn-end path
+	// and must never be the reason a turn is slow, so a directory that somehow
+	// grew enormous is cleaned over several turns instead of one long one.
+	claudeWakeSweepMax = 64
 )
 
 // claudeHookEntries renders Claude Code's two handlers.
@@ -64,12 +68,17 @@ const (
 // context the linkage sentence belongs in — and Stop has no matcher support at
 // all.
 //
-// Stop's timeout is derived from the watch window IN THIS PROCESS, so a tuned
-// PLUMB_WAKE_WINDOW writes an entry that outlives its own watcher. The window is
-// therefore read at install time for the entry and at run time for the watcher:
-// re-tune and re-install together, or the client cancels the watcher mid-watch
-// and the wake is lost with nothing to see. `plumb hooks` reports the mismatch
-// as `stale`, which is the intended way to notice.
+// Stop's timeout is derived from the watch CEILING in this process — the
+// longest a watcher could run, which is the peer-extended window rather than
+// the base one. A timeout covering only the base would kill exactly the
+// long-idle watch the ceiling exists to allow, and kill it invisibly.
+//
+// The windows are therefore read at install time for the entry and at run time
+// for the watcher: re-tune and re-install together, or the client cancels the
+// watcher mid-watch and the wake is lost with nothing to see. `plumb hooks`
+// reports the mismatch as `stale`, which is the intended way to notice. The
+// same asymmetry is why project config may only NARROW its windows: this entry
+// is machine-wide and knows nothing about any one workspace.
 func claudeHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, claudeHookVerb)
 	return []hookEntry{
@@ -81,7 +90,7 @@ func claudeHookEntries(plumbBin string) []hookEntry {
 		{event: "Stop", label: "mailbox wake", handler: map[string]any{
 			"type":        "command",
 			"command":     command,
-			"timeout":     float64((wakeWindow() + claudeStopTimeoutSlack) / time.Second),
+			"timeout":     float64((globalWakeWindows().ceiling() + claudeStopTimeoutSlack) / time.Second),
 			"async":       true,
 			"asyncRewake": true,
 		}},
@@ -146,7 +155,7 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 		}
 		return nil
 	case "Stop":
-		wake := claudeStopHook(input, hookMailReport)
+		wake := claudeStopHook(input, hookWakeProbe)
 		if wake == nil {
 			return nil
 		}
@@ -162,26 +171,32 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 // claudeStopHook runs the whole Stop path and returns the report to wake for,
 // or nil to allow the stop. It is separated from the command body so tests can
 // drive every branch — including a real wake — without exiting the process.
-func claudeStopHook(input claudeHookInput, probe func(string, string) (mailReport, bool)) *mailReport {
+func claudeStopHook(input claudeHookInput, probe wakeProbe) *mailReport {
 	// PLAN-338: settings.json is user-scoped, so this hook runs for EVERY
 	// Claude Code session on the machine. A session outside a plumb workspace
 	// has no plumb mailbox to wake for — stand down before writing a stamp or
 	// arming a watcher, so a global install only ever changes plumb sessions.
 	// The .plumb marker walk is cheap and needs no daemon.
-	if !insidePlumbWorkspace(input.CWD) {
+	root, inside := plumbWorkspaceRoot(input.CWD)
+	if !inside {
 		return nil
 	}
 	if probe == nil {
 		return nil
 	}
 
-	report, ok := probe(input.SessionID, input.CWD)
+	report, peers, ok := probe(input.SessionID, input.CWD)
 	key := wakeStampKey(report, input.SessionID)
 	if key == "" {
 		return nil
 	}
 	dir := wakeDir()
 	writeWakeStamp(dir, key, report, input)
+	windows := runtimeWakeWindows(root)
+	// Housekeeping, here because this is the one point every turn end reaches
+	// with the directory already open and the wake decision not yet made. It is
+	// bounded and every failure is ignored; see sweepWakeDir.
+	sweepWakeDir(dir)
 
 	rearm := filepath.Join(dir, key+".rearm")
 	if input.StopHookActive {
@@ -208,7 +223,7 @@ func claudeStopHook(input claudeHookInput, probe func(string, string) (mailRepor
 	}
 	defer lock.release()
 
-	wake := watchForPeerMail(input, report, ok, probe)
+	wake := watchForPeerMail(input, report, peers, ok, probe, windows)
 	if wake == nil {
 		return nil
 	}
@@ -219,18 +234,43 @@ func claudeStopHook(input claudeHookInput, probe func(string, string) (mailRepor
 	return wake
 }
 
+// wakeProbe is one poll: this session's mail, how many live peers share its
+// workspace, and whether the session resolved at all. The peer count travels
+// with the mail report because both come from the same look at the session
+// list, and because the watcher has to re-decide the extension on every poll.
+type wakeProbe func(sessionID, cwd string) (mailReport, int, bool)
+
 // watchForPeerMail polls until mail appears, the window closes, or the session
 // it is watching for stops existing. It returns the report to wake for, or nil.
+//
+// The deadline is not fixed. It starts one base window out and slides forward by
+// another base window on every poll that sees a live peer, capped at the
+// ceiling. Two properties follow, and both are the point:
+//
+//   - A session whose peer goes away exits within one base window of the last
+//     sighting, rather than holding a resident process to the ceiling for a peer
+//     that is no longer there.
+//   - A session that never RESOLVED never extends. Its probe cannot succeed — no
+//     linkage, or a daemon that is down — so it has no peer count to trust and
+//     no mailbox anyone could wake it for. Before the extension existed this
+//     case merely wasted the base window; at the ceiling it would be an
+//     hour-long orphan holding this session's lock, since the stand-down below
+//     is unreachable while resolved is false.
 func watchForPeerMail(
 	input claudeHookInput,
 	report mailReport,
+	peers int,
 	ok bool,
-	probe func(string, string) (mailReport, bool),
+	probe wakeProbe,
+	windows wakeWindowPair,
 ) *mailReport {
-	interval := wakeInterval()
-	deadline := time.Now().Add(wakeWindow())
-	resolved := ok // have we ever seen this session live?
-	gone := 0
+	interval := wakeInterval(windows.base)
+	start := time.Now()
+	hardStop := start.Add(windows.ceiling())
+	live := watchLiveness{resolved: ok}
+	// The probe that armed this watcher already counted the peers, so the first
+	// extension is decided before the first sleep.
+	deadline := windows.slideDeadline(start.Add(windows.base), hardStop, start, live.resolved, peers)
 
 	for {
 		if ok && report.Count > 0 {
@@ -241,28 +281,44 @@ func watchForPeerMail(
 			return nil
 		}
 		time.Sleep(interval)
-		report, ok = probe(input.SessionID, input.CWD)
-
-		// Stand down when the session we are watching for stops existing. An
-		// async hook is reparented to init and keeps its own process group, so
-		// nothing kills this watcher when its client exits — it would otherwise
-		// hold the lock, and poll for a mailbox nobody can read, for the rest
-		// of the window. Only applies once the session HAS resolved: a session
-		// that never linked never resolves, and must keep watching rather than
-		// exit on its first poll. Two consecutive misses, so a transient daemon
-		// blip does not retire a live watcher.
-		switch {
-		case !resolved && ok:
-			resolved = true
-		case resolved && !ok:
-			gone++
-			if gone >= 2 {
-				return nil
-			}
-		case resolved && ok:
-			gone = 0
+		report, peers, ok = probe(input.SessionID, input.CWD)
+		if live.observe(ok) {
+			return nil
 		}
+		deadline = windows.slideDeadline(deadline, hardStop, time.Now(), live.resolved, peers)
 	}
+}
+
+// claudeWakeGoneMisses is how many CONSECUTIVE unresolved polls retire a
+// watcher. More than one, so a transient daemon blip does not kill a live watch.
+const claudeWakeGoneMisses = 2
+
+// watchLiveness tracks whether the session a watcher is watching for still
+// exists.
+//
+// An async hook is reparented to init and keeps its own process group, so
+// nothing kills this watcher when its client exits — without this it would hold
+// the session's lock, and poll for a mailbox nobody can read, for the rest of
+// the window. It only applies once the session HAS resolved: a session that
+// never linked never resolves, and must keep watching rather than exit on its
+// first poll.
+type watchLiveness struct {
+	resolved bool // have we ever seen this session live?
+	gone     int
+}
+
+// observe folds one poll's outcome in and reports whether to stand down.
+func (l *watchLiveness) observe(ok bool) (standDown bool) {
+	switch {
+	case !l.resolved && ok:
+		l.resolved = true
+	case l.resolved && !ok:
+		l.gone++
+		return l.gone >= claudeWakeGoneMisses
+	case l.resolved && ok:
+		l.gone = 0
+	}
+	return false
 }
 
 // wakeSentence is the stderr payload. It reports a count and an age, never a
@@ -279,20 +335,22 @@ func wakeSentence(report mailReport) string {
 		report.Count, oldest)
 }
 
-// insidePlumbWorkspace reports whether dir, or any ancestor, holds a .plumb
-// marker directory.
-func insidePlumbWorkspace(dir string) bool {
+// plumbWorkspaceRoot returns the nearest ancestor of dir (or dir itself) holding
+// a .plumb marker directory. It returns the ROOT rather than a bare bool because
+// that path is also where this workspace's project config lives, and the walk
+// that finds one has already found the other.
+func plumbWorkspaceRoot(dir string) (string, bool) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
-		return false
+		return "", false
 	}
 	for {
 		if info, err := os.Stat(filepath.Join(dir, ".plumb")); err == nil && info.IsDir() {
-			return true
+			return dir, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return false
+			return "", false
 		}
 		dir = parent
 	}
@@ -332,33 +390,6 @@ func wakeDir() string {
 	return filepath.Join(home, ".claude", "plumb-wake")
 }
 
-func wakeWindow() time.Duration {
-	return envSeconds("PLUMB_WAKE_WINDOW", claudeWakeWindowDefault)
-}
-
-// wakeInterval is clamped to the window: a poll gap longer than the watch it
-// paces would park the watcher — holding this session's lock, so the session
-// cannot arm another — well past its own deadline, since the loop re-checks the
-// deadline only after sleeping.
-func wakeInterval() time.Duration {
-	interval := envSeconds("PLUMB_WAKE_INTERVAL", claudeWakeIntervalDefault)
-	if window := wakeWindow(); interval > window {
-		return window
-	}
-	return interval
-}
-
-// envSeconds reads a whole-second duration override, ignoring anything that is
-// not a positive integer — a malformed tuning value must not disable the hook.
-func envSeconds(name string, fallback time.Duration) time.Duration {
-	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			return time.Duration(n) * time.Second
-		}
-	}
-	return fallback
-}
-
 // isPlumbProcess reports whether pid is a running plumb. It shells out to ps
 // for the same reason the daemon's own liveness check does: there is no
 // portable way to read another process's name, and the alternative is
@@ -394,6 +425,55 @@ func writeWakeStamp(dir, key string, report mailReport, input claudeHookInput) {
 		orDash(input.SessionID),
 		orDash(input.CWD))
 	_ = os.WriteFile(filepath.Join(dir, key+".stamp"), []byte(body), 0o600)
+}
+
+// sweepWakeDir removes debris from the wake directory: stamps and re-arm records
+// nothing has rewritten in claudeWakeStampTTL, and lock directories the existing
+// reclaim ladder already judges dead.
+//
+// Nothing else ever cleaned this directory, so it grew without bound — a
+// long-running fleet accumulates one stamp per conversation forever, plus a lock
+// for every watcher killed before it could release one. Harmless individually;
+// the reason to fix it now is that a watcher living to an hour makes leaked
+// locks both more likely and longer-lived.
+//
+// Debris is decided by reclaimableLock with an EMPTY session id, which is
+// precisely the question being asked here: not "may this session take the lock"
+// but "could any live watcher still hold it". An empty id also short-circuits
+// before the evict-a-previous-tenant branch, so a sweep never signals a process
+// — housekeeping must not be able to kill a watcher.
+//
+// Every failure is ignored and the work is capped: this runs on a turn-end path,
+// where no amount of tidiness is worth delaying a turn.
+func sweepWakeDir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	swept := 0
+	for _, entry := range entries {
+		if swept >= claudeWakeSweepMax {
+			return
+		}
+		name := entry.Name()
+		path := filepath.Join(dir, name)
+		switch {
+		case entry.IsDir() && strings.HasSuffix(name, ".lock"):
+			if reclaimableLock(path, "", isPlumbProcess) {
+				_ = os.RemoveAll(path)
+				swept++
+			}
+		case strings.HasSuffix(name, ".stamp"), strings.HasSuffix(name, ".rearm"):
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if time.Since(info.ModTime()) > claudeWakeStampTTL {
+				_ = os.Remove(path)
+				swept++
+			}
+		}
+	}
 }
 
 func orDash(s string) string {

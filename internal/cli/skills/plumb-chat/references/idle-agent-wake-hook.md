@@ -27,11 +27,19 @@ which is exactly when peers message each other — cannot name one of them.
 `"async": true, "asyncRewake": true` the client queues a task notification when
 the hook exits 2, and that notification reaches a session with **no turn in
 flight** (verified on Claude Code 2.1.233). So the watcher outlives the turn that
-started it: it polls for up to `PLUMB_WAKE_WINDOW` seconds (default 300, every
-`PLUMB_WAKE_INTERVAL`, default 7) and fires the moment mail arrives. If you
-raise the window, re-run `plumb hooks install claude-code` — the handler's own
-timeout is written from the window in effect at install time, and a client that
-cancels the hook early kills the watcher with nothing to see.
+started it: it polls every `PLUMB_WAKE_INTERVAL` seconds (default 7) and fires
+the moment mail arrives.
+
+How long it watches depends on whether anyone could write to you. The deadline
+starts one base window out (`[collab] wake_window_seconds` /
+`PLUMB_WAKE_WINDOW`, default 300) and slides forward by another base window on
+every poll that sees another live session on the same workspace, up to a ceiling
+(`[collab] wake_peer_window_seconds` / `PLUMB_WAKE_PEER_WINDOW`, default 3600;
+`0` disables the extension). Working alone costs what it always did; working
+beside a peer keeps you reachable for up to an hour. If you raise either window,
+re-run `plumb hooks install claude-code` — the handler's own timeout is written
+from the ceiling in effect at install time, and a client that cancels the hook
+early kills the watcher with nothing to see.
 
 What it deliberately does not do:
 
@@ -40,7 +48,9 @@ What it deliberately does not do:
   agent. The messages stay unclaimed and arrive through `check_messages`,
   labelled as the unverified claims they are.
 - **It does not cover the gaps between windows.** Mail that arrives after the
-  watcher's window closes waits for the human, as before.
+  watcher's window closes waits for the human, as before — and a session with no
+  live peer deliberately keeps the short window, since nobody could have written
+  to it anyway.
 - **It does not run everywhere.** `settings.json` is user-wide, so the hook
   stands down immediately for a session whose working directory is not inside a
   plumb workspace.

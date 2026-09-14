@@ -11,6 +11,10 @@ package config
 
 var minZero = int64(0)
 
+// maxWakeWindow mirrors maxCollabWakeWindowSeconds so the Settings screen refuses
+// a value validateCollab would reject on save.
+var maxWakeWindow = int64(maxCollabWakeWindowSeconds)
+
 var registryData = []Field{
 	// --- Appearance / Logging ---
 	{
@@ -259,6 +263,16 @@ var registryData = []Field{
 	{
 		Key: "collab.max_wait_seconds", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Ceiling on how long check_messages will block waiting for a message.",
+	},
+	{
+		Key: "collab.wake_window_seconds", Type: FieldInt, ReloadTier: ReloadNextSession,
+		Min: &minZero, Max: &maxWakeWindow,
+		Description: "Base window the Claude Code wake hook watches the mailbox for after a turn ends. Re-run `plumb hooks install` after changing it.",
+	},
+	{
+		Key: "collab.wake_peer_window_seconds", Type: FieldInt, ReloadTier: ReloadNextSession,
+		Min: &minZero, Max: &maxWakeWindow,
+		Description: "Ceiling that window extends to while a live peer shares the workspace; 0 disables the extension. Re-run `plumb hooks install` after changing it.",
 	},
 	{
 		Key: "collab.knowledge_handoff", Type: FieldBool, ReloadTier: ReloadLive,

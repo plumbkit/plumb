@@ -62,6 +62,23 @@ type CollabConfig struct {
 	// MaxWaitSeconds caps how long check_messages blocks waiting for a message,
 	// below the client's own MCP call timeout so a wait expires cleanly. Default 55.
 	MaxWaitSeconds int `toml:"max_wait_seconds"`
+	// WakeWindowSeconds is the BASE window the Claude Code Stop-hook watcher polls
+	// this session's mailbox for after a turn ends. It is what a session with no
+	// live peer costs: one detached plumb process, polling, for this long. Default
+	// 300. Read by `plumb hooks run-claude`, not by the daemon.
+	//
+	// The installed handler's own timeout is derived from the CEILING below, so a
+	// change here or below is only live once `plumb hooks install claude-code` has
+	// rewritten it — `plumb hooks` reports the mismatch as stale.
+	WakeWindowSeconds int `toml:"wake_window_seconds"`
+	// WakePeerWindowSeconds is the ceiling that window may extend to while another
+	// live session shares this workspace — the only case where a peer can write to
+	// this mailbox at all. The watcher slides its deadline forward by one base
+	// window per poll for as long as a peer is there, so a solo session keeps the
+	// base window and its cost, and a real multi-agent session stays reachable for
+	// up to this long. Default 3600. Set 0 to disable the extension, which restores
+	// the single fixed window this key replaced.
+	WakePeerWindowSeconds int `toml:"wake_peer_window_seconds"`
 	// IntentTTLMinutes is the expiry (in minutes) applied to a new intent or note.
 	// Rows past expiry are pruned on the daemon session-reaper tick and filtered
 	// from every read regardless. Default 120. A non-positive value falls back to

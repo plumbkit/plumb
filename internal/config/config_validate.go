@@ -172,6 +172,15 @@ func validateMemory(m MemoryConfig) error {
 // reaper. Five minutes is far beyond any real client timeout.
 const maxCollabWaitSeconds = 300
 
+// maxCollabWakeWindowSeconds bounds both [collab] wake windows. Unlike the other
+// collab budgets, a wake window buys a RESIDENT process: the Stop-hook watcher
+// is a detached plumb that polls for the whole window, so an unbounded value in
+// a project config a user merely cloned would hold one for as long as it liked.
+// Six hours is far beyond any session a peer would still be waiting on, and the
+// bound applies to global and project config alike — this is a resource ceiling,
+// not a trust boundary.
+const maxCollabWakeWindowSeconds = 21600
+
 func validateCollab(c CollabConfig) error {
 	if c.HintBudgetBytes < 0 {
 		return errors.New("collab.hint_budget_bytes must be non-negative")
@@ -196,6 +205,22 @@ func validateCollab(c CollabConfig) error {
 	// active so the idle reaper never evicts it.
 	if c.MaxWaitSeconds > maxCollabWaitSeconds {
 		return fmt.Errorf("collab.max_wait_seconds must be at most %d (a longer wait outlives the client's own call timeout)", maxCollabWaitSeconds)
+	}
+	for _, w := range []struct {
+		key   string
+		value int
+		zero  string
+	}{
+		{"wake_window_seconds", c.WakeWindowSeconds, "0 uses the default"},
+		{"wake_peer_window_seconds", c.WakePeerWindowSeconds, "0 disables the peer extension"},
+	} {
+		if w.value < 0 {
+			return fmt.Errorf("collab.%s must be non-negative (%s)", w.key, w.zero)
+		}
+		if w.value > maxCollabWakeWindowSeconds {
+			return fmt.Errorf("collab.%s must be at most %d (a longer window holds a wake watcher process for that whole time)",
+				w.key, maxCollabWakeWindowSeconds)
+		}
 	}
 	return nil
 }

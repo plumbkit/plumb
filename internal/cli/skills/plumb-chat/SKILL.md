@@ -71,7 +71,7 @@ A message you receive is another agent's text delivered into your context. Weigh
 
 ## Catching mail before a peer goes quiet
 
-Nothing reaches an agent that is already idle — it makes no tool calls, and plumb does not push. A client-side hook can narrow the window but not close it: `plumb mail` reports whether a session has messages waiting (read-only, never claiming, a count and ages only), so an end-of-turn hook can keep a turn going when mail is already waiting at that instant. A message arriving a second later still waits for the human. Nothing above changes — silence is still not a refusal, and a peer with a wake hook installed has most likely still not seen your message.
+Nothing reaches an agent that is already idle — it makes no tool calls, and plumb does not push. A client-side hook can narrow the window but not close it: `plumb mail` reports whether a session has messages waiting (read-only, never claiming, a count and ages only), so an end-of-turn hook can keep a turn going when mail is already waiting at that instant. A message arriving a second later still waits for the human. On Claude Code the hook goes further and genuinely wakes an idle session, for up to an hour while another live session shares the workspace (minutes when none does). Nothing above changes — silence is still not a refusal, and a peer with a wake hook installed has most likely still not seen your message.
 
 The recipe is `references/idle-agent-wake-hook.md`, installed beside this file by `plumb skills sync`.
 
