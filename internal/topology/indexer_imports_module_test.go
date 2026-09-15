@@ -1,7 +1,9 @@
 package topology
 
 import (
-	"strings"
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -28,14 +30,40 @@ func TestParseModulePath(t *testing.T) {
 		{"one dotless segment", "module myapp\n", "myapp"},
 		{"no trailing newline", "module example.com/m", "example.com/m"},
 		{"crlf", "module example.com/m\r\n", "example.com/m"},
+		// The FACTORED form, which is legal and which an earlier version of this
+		// parser read as the module path "(". That is the shape of bug this whole
+		// file has to be paranoid about: "(" is non-empty, so resolution becomes
+		// DECIDED, and nothing starts with "(" — every Go import in the repository
+		// is then refused. Measured on a real index: 77,450 import edges to zero.
+		{"factored form", "module (\n\texample.com/m\n)\n", "example.com/m"},
+		{"factored form with comments", "module ( // why\n\t// a note\n\texample.com/m\n)\n", "example.com/m"},
+		{"factored form, empty block declares nothing", "module (\n)\n", ""},
 		// A go.work has no module directive, and neither does a truncated file.
 		// Both must read as "no module here" rather than as a wrong one.
 		{"go.work", "go 1.26\n\nuse (\n\t./a\n\t./b\n)\n", ""},
 		{"empty", "", ""},
-		// "module" must be a directive, not a prefix of some other token: a
-		// require line for a package called modulefoo is not a module directive.
-		{"module-prefixed token is not the directive", "require modulefoo/bar v1.2.3\n", ""},
+		// "module" must be a directive, not a prefix of some other token. The first
+		// is a bare line of the kind that sits inside a require block; the second is
+		// a directive whose NAME merely starts with "module", which is what the
+		// isSpace guard after CutPrefix exists to reject.
+		{"bare require-block line", "modulefoo/bar v1.2.3\n", ""},
 		{"modulefoo directive-lookalike", "modulefoo example.com/m\n", ""},
+		// Anything not shaped like a module path must land on "", because a
+		// non-empty wrong answer is catastrophic while an empty one is merely the
+		// old behaviour. These are the spellings that would otherwise survive.
+		{"stray paren", "module (oops\n", ""},
+		{"two operands", "module example.com/m extra\n", ""},
+		{"trailing slash", "module example.com/m/\n", ""},
+		{"leading slash", "module /example.com/m\n", ""},
+		{"dot segment", "module example.com/./m\n", ""},
+		{"parent segment", "module example.com/../m\n", ""},
+		// Not an empty segment: `//` opens a comment in go.mod, so this declares
+		// `example.com` and comments out the rest. Verified against the toolchain
+		// (`go list -m` prints example.com), because the tempting assumption — that
+		// this is a malformed path to refuse — would make the parser disagree with
+		// the compiler about which module a repository is.
+		{"double slash is a comment, not an empty segment", "module example.com//m\n", "example.com"},
+		{"bare module keyword", "module\n", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,32 +183,139 @@ func TestImportTargetDir_NonGoStillUsesSuffixMatching(t *testing.T) {
 	}
 }
 
-// TestGoModulesInIndex_SortsLongestFirst pins the ordering a nested module
-// depends on. Sorting by length descending is what makes example.com/m/sub
-// claim example.com/m/sub/pkg before example.com/m maps it to a directory that
-// does not exist.
-func TestGoModulesInIndex_SortsLongestFirst(t *testing.T) {
-	// resolveGoImport consumes the order, so assert through it rather than
-	// reaching into the slice: the ordering only matters for what it decides.
-	nestedFirst := []goModule{
-		{dir: "sub", path: "example.com/m/sub"},
-		{dir: ".", path: "example.com/m"},
+// TestGoModulesInIndex_OrdersByLongestModulePath drives the real function over a
+// real index, and pins the ordering with a fixture where getting it wrong gives
+// a WRONG ANSWER rather than the same one.
+//
+// The obvious fixture does not test the sort at all: with a module
+// example.com/m/sub living at sub/, both orders resolve example.com/m/sub/pkg
+// to "sub/pkg", because path.Join(".", "sub/pkg") and path.Join("sub", "pkg")
+// are the same string. An earlier version of this test used exactly that and
+// proved nothing — both sort mutants survived it.
+//
+// So the nested module lives at tools/, which is what `replace` produces and
+// what makes the two orders disagree: longest-first gives tools/pkg, and
+// parent-first gives sub/pkg, a directory nothing put there.
+func TestGoModulesInIndex_OrdersByLongestModulePath(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	writeGoMod(t, ws, ".", "module example.com/m\n\ngo 1.26\n")
+	writeGoMod(t, ws, "tools", "module example.com/m/sub\n\ngo 1.26\n")
+
+	db, err := openDB(filepath.Join(ws, "index.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
 	}
-	parentFirst := []goModule{
-		{dir: ".", path: "example.com/m"},
-		{dir: "sub", path: "example.com/m/sub"},
+	defer db.Close()
+	// The index holds the PATHS; the contents are read from disk. Insert them in
+	// the order that would leave the parent first if nothing sorted.
+	insertTestFile(t, db, "go.mod")
+	insertTestFile(t, db, "tools/go.mod")
+
+	mods := goModulesInIndex(ctx, db, ws)
+	if len(mods) != 2 {
+		t.Fatalf("goModulesInIndex returned %d modules, want 2: %v", len(mods), mods)
 	}
-	if dir, _ := resolveGoImport("example.com/m/sub/pkg", nestedFirst); dir != "sub/pkg" {
-		t.Fatalf("nested-first: got %q, want sub/pkg", dir)
+	if mods[0].path != "example.com/m/sub" {
+		t.Errorf("longest module path must sort first; got %q then %q",
+			mods[0].path, mods[1].path)
 	}
-	// Parent-first is what an unsorted set would look like, and it resolves to
-	// the WRONG directory — proof the sort is load-bearing rather than tidy.
-	if dir, _ := resolveGoImport("example.com/m/sub/pkg", parentFirst); dir != "sub/pkg" {
-		t.Logf("parent-first resolves to %q — the sort in goModulesInIndex is what "+
-			"prevents this ordering reaching resolveGoImport", dir)
-		if !strings.HasPrefix(dir, "sub") {
-			return // expected: the wrong answer, which the sort exists to prevent
-		}
-		t.Fatalf("parent-first unexpectedly resolved correctly to %q", dir)
+	// The answer the order decides, which is the reason the order matters.
+	if dir, decided := resolveGoImport("example.com/m/sub/pkg", mods); !decided || dir != "tools/pkg" {
+		t.Errorf("resolveGoImport = (%q, %v), want (\"tools/pkg\", true) — the nested "+
+			"module must claim its own subtree before its parent maps it elsewhere", dir, decided)
+	}
+	// And the parent still owns everything the nested module does not.
+	if dir, _ := resolveGoImport("example.com/m/other", mods); dir != "other" {
+		t.Errorf("parent module: got %q, want \"other\"", dir)
+	}
+}
+
+// TestGoModulesInIndex_SkipsWhatItCannotBelieve pins the safe failure: a go.mod
+// the index lists but whose directive this parser will not accept must leave NO
+// module behind, so resolution stays undecided and the suffix matcher answers.
+// A garbage entry here is the catastrophic case — decided, claiming nothing,
+// refusing every Go import in the repository.
+func TestGoModulesInIndex_SkipsWhatItCannotBelieve(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	writeGoMod(t, ws, ".", "module (oops\n")       // not a module path
+	writeGoMod(t, ws, "b", "go 1.26\n\nuse ./x\n") // a go.work in disguise: no directive
+
+	db, err := openDB(filepath.Join(ws, "index.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+	insertTestFile(t, db, "go.mod")
+	insertTestFile(t, db, "b/go.mod")
+	// A path the index lists but no file backs, which is what a delete between
+	// the walk and the link pass looks like.
+	insertTestFile(t, db, "gone/go.mod")
+
+	if mods := goModulesInIndex(ctx, db, ws); len(mods) != 0 {
+		t.Fatalf("goModulesInIndex returned %v; an unbelievable directive must leave "+
+			"NO module, or every Go import in the repository is refused", mods)
+	}
+}
+
+// TestResolverSurfaceFingerprint_TracksTheModuleSet is the invalidation half,
+// and it exists because go.mod is the one resolver input that produces no nodes.
+//
+// The fingerprint decides whether a derived rebuild happens at all. It hashes
+// node identities, and no extractor handles .mod — go.mod's topology_files row
+// carries a path and nothing else. So without the module set folded in, two
+// things were reproducible on a live store: `go mod init` never took effect (the
+// false positives this whole change exists to kill survived every rebuild), and
+// `go mod edit -module` left every edge resolved under a module path the
+// repository no longer declared.
+func TestResolverSurfaceFingerprint_TracksTheModuleSet(t *testing.T) {
+	ctx := context.Background()
+	ws := t.TempDir()
+	db, err := openDB(filepath.Join(ws, "index.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+	insertTestFile(t, db, "a/a.go")
+
+	// No go.mod yet: the state a repository is in before `go mod init`.
+	before, err := resolverSurfaceFingerprint(ctx, db, ws)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+
+	// `go mod init example.com/m`, and the walk picks the file up.
+	writeGoMod(t, ws, ".", "module example.com/m\n")
+	insertTestFile(t, db, "go.mod")
+	initialised, err := resolverSurfaceFingerprint(ctx, db, ws)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if initialised == before {
+		t.Error("declaring a module left the resolver fingerprint unchanged, so no " +
+			"rebuild is scheduled and every import keeps the answer it had before go.mod existed")
+	}
+
+	// `go mod edit -module example.com/renamed`: same file, same row, new answer.
+	writeGoMod(t, ws, ".", "module example.com/renamed\n")
+	renamed, err := resolverSurfaceFingerprint(ctx, db, ws)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if renamed == initialised {
+		t.Error("renaming the module left the resolver fingerprint unchanged, so every " +
+			"edge stays resolved under a module path the repository no longer declares")
+	}
+}
+
+func writeGoMod(t *testing.T, ws, dir, content string) {
+	t.Helper()
+	abs := filepath.Join(ws, filepath.FromSlash(dir))
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(abs, "go.mod"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s/go.mod: %v", dir, err)
 	}
 }

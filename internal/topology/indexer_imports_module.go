@@ -33,16 +33,28 @@ import (
 //
 // Two deliberate properties:
 //
-//   - The module set comes from the INDEX, not from a filesystem walk. go.mod
-//     already has a topology_files row (every walked file does), so this is one
-//     query plus a handful of small reads, it costs nothing on the scoped
-//     rebuild path that never walks, and it cannot disagree with what the
-//     indexer actually saw.
+//   - The set of go.mod PATHS comes from the index — a walked go.mod gets a
+//     topology_files row — so finding them is one query rather than a walk, on
+//     both the full and the scoped rebuild path. Their CONTENTS are read from
+//     disk here, because no extractor handles .mod: the row carries the path and
+//     nothing else, no language, no content hash, no nodes. That split is why
+//     the module set has to be folded into resolverSurfaceFingerprint by hand
+//     (indexer_derived.go) — the fingerprint hashes nodes, and go.mod has none,
+//     so without that a `go mod init` would never take effect and a renamed
+//     module would leave every edge resolved under the old path.
 //   - A workspace with no declared module leaves every import undecided, and
 //     the suffix matcher answers as it does today. That is what keeps this safe:
-//     the failure mode of module resolution is "I don't know", never "no local
-//     package exists", so a repository whose go.mod is excluded from the index
-//     loses no edges it has now.
+//     the failure mode of module resolution must be "I don't know", never "no
+//     local package exists", so a repository whose go.mod is excluded from the
+//     index loses no edges it has now. plausibleModulePath is what holds that
+//     line when parsing goes wrong.
+
+// rowQuerier is the read half shared by *sql.DB and *sql.Tx. The module set is
+// needed in both: inside the link transaction, and outside it by
+// resolverSurfaceFingerprint, which runs before one is open.
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
 
 // goModule is one module directive the index has seen: where its go.mod sits,
 // and what it calls itself.
@@ -65,8 +77,8 @@ const maxGoModBytes = 1 << 20
 // read or parsed is skipped with a debug line rather than failing the link. The
 // cost of skipping one is that its imports fall back to suffix matching — the
 // behaviour they had before this existed.
-func goModulesInIndex(ctx context.Context, tx *sql.Tx, workspace string) []goModule {
-	rows, err := tx.QueryContext(ctx,
+func goModulesInIndex(ctx context.Context, q rowQuerier, workspace string) []goModule {
+	rows, err := q.QueryContext(ctx,
 		`SELECT path FROM topology_files WHERE path = 'go.mod' OR path LIKE '%/go.mod'`)
 	if err != nil {
 		slog.Debug("topology: link imports: go.mod lookup failed", "err", err)
@@ -91,11 +103,18 @@ func goModulesInIndex(ctx context.Context, tx *sql.Tx, workspace string) []goMod
 		slog.Debug("topology: link imports: go.mod rows failed", "err", err)
 		return nil
 	}
+	// Longest path first, and fully ordered below that: two go.mod files can
+	// declare the SAME module path (a repository containing a second checkout of
+	// itself somewhere the walk does not prune), and an unstable sort would then
+	// resolve that path to a different directory from one rebuild to the next.
 	sort.Slice(out, func(i, j int) bool {
 		if len(out[i].path) != len(out[j].path) {
 			return len(out[i].path) > len(out[j].path)
 		}
-		return out[i].path < out[j].path // stable for equal lengths
+		if out[i].path != out[j].path {
+			return out[i].path < out[j].path
+		}
+		return out[i].dir < out[j].dir
 	})
 	return out
 }
@@ -114,34 +133,93 @@ func readModulePath(abs string) string {
 	return parseModulePath(string(src))
 }
 
-// parseModulePath extracts the module directive's path from go.mod source.
+// parseModulePath extracts the module directive's path from go.mod source, or
+// returns "" when it cannot find one it believes.
 //
 // Hand-parsed rather than taken from golang.org/x/mod: this needs one directive
-// out of a file the indexer has already read once, and the module line is the
-// one piece of go.mod syntax that has never changed. A dependency for it would
-// buy nothing and bind the topology layer to the module toolchain's release
-// cycle.
+// out of a file the indexer already walked, and a dependency for it would bind
+// the topology layer to the module toolchain's release cycle. The cost of that
+// choice is that a spelling this parser does not know must land on "" — see
+// plausibleModulePath, which is what enforces it.
 //
-// Handles the forms that occur: a leading comment block, an inline comment after
-// the path, and the quoted spelling the grammar permits. Returns "" for a file
-// with no module directive, which is how a go.work or a malformed file lands
-// here.
+// Handles every form `go` itself accepts: a leading comment block, an inline
+// comment, the quoted spelling, and the FACTORED form
+//
+//	module (
+//		example.com/m
+//	)
+//
+// which is legal and which an earlier version of this parser turned into the
+// module path "(". That was not a cosmetic bug: a non-empty path nothing can
+// match makes every Go import in the repository "decided and refused", which
+// took a real index from 77,450 import edges to zero, silently. Hence the rule
+// below that anything not shaped like a module path is no module path at all.
 func parseModulePath(src string) string {
+	inBlock := false
 	for line := range strings.Lines(src) {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "//") {
+		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), "\r"))
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		if line == "" {
 			continue
+		}
+		if inBlock {
+			if line == ")" {
+				return "" // an empty block declares nothing
+			}
+			return cleanModulePath(line)
 		}
 		rest, ok := strings.CutPrefix(line, "module")
 		if !ok || (rest != "" && !isSpace(rest[0])) {
 			continue
 		}
-		if i := strings.Index(rest, "//"); i >= 0 {
-			rest = rest[:i]
+		rest = strings.TrimSpace(rest)
+		if rest == "(" {
+			inBlock = true
+			continue
 		}
-		return strings.Trim(strings.TrimSpace(rest), `"`)
+		return cleanModulePath(rest)
 	}
 	return ""
+}
+
+// cleanModulePath unquotes a directive's operand and refuses it unless it is
+// shaped like a module path.
+func cleanModulePath(s string) string {
+	s = strings.Trim(strings.TrimSpace(s), "`\"")
+	if !plausibleModulePath(s) {
+		return ""
+	}
+	return s
+}
+
+// plausibleModulePath is the guard that keeps a misparse SAFE.
+//
+// The design's whole safety argument is that an unknown module set means "I
+// don't know" — undecided, so the suffix matcher still answers — rather than
+// "no local package exists". A garbage path breaks that argument at its root:
+// it is non-empty, so resolution is decided, and it claims nothing, so every
+// import is refused. One misparse is then the difference between a working
+// index and an empty one.
+//
+// So this is deliberately stricter than the module grammar: it does not try to
+// decide which paths `go` would accept, only to reject anything that cannot be
+// one. A spelling this parser mishandles in future fails the shape test, lands
+// on "", and gets the old behaviour instead of a silent zero.
+func plausibleModulePath(s string) bool {
+	if s == "" || strings.ContainsAny(s, " \t()[]{}\"'`\\") {
+		return false
+	}
+	if strings.HasPrefix(s, "/") || strings.HasSuffix(s, "/") {
+		return false
+	}
+	for seg := range strings.SplitSeq(s, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func isSpace(b byte) bool { return b == ' ' || b == '\t' }

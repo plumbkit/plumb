@@ -272,7 +272,7 @@ func TestPlanRebuild_TargetPackageAdditionAndRemovalReconcilesImporter(t *testin
 	if edges != 0 {
 		t.Fatalf("importer edges before target package exists = %d, want 0", edges)
 	}
-	fp, err := resolverSurfaceFingerprint(ctx, db)
+	fp, err := resolverSurfaceFingerprint(ctx, db, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestPlanRebuild_TargetPackageAdditionAndRemovalReconcilesImporter(t *testin
 	if edges != 1 {
 		t.Fatalf("importer edge after package target addition = %d, want 1", edges)
 	}
-	fp, err = resolverSurfaceFingerprint(ctx, db)
+	fp, err = resolverSurfaceFingerprint(ctx, db, "")
 	if err != nil {
 		t.Fatal(err)
 	}

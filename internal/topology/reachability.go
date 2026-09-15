@@ -31,11 +31,13 @@ type PackageInfo struct {
 // exactly the edges the import resolver validated, and inherits its limits
 // exactly — which now differ by language.
 //
-// For Go in a workspace that declares a module, the guarantee is absolute: an
-// import is linked only when a declared module path claims it, so no stdlib or
-// third-party import produces an edge here, whatever its shape or length. For
-// every other language, and for Go in a workspace with no go.mod the index has
-// seen, the resolver falls back to suffix matching bounded by a segment count —
+// For Go in a workspace whose go.mod the index has RESOLVED, the guarantee is
+// absolute: an import is linked only when a declared module path claims it, so
+// no stdlib or third-party import produces an edge here, whatever its shape or
+// length. "Resolved" is the operative word — a go.mod the index never saw, or
+// one whose module directive the parser declined, leaves Go in the fallback
+// below rather than in the guarantee above. For every other language, and for
+// Go in that state, the resolver uses suffix matching bounded by a segment count —
 // a heuristic, not a statement of provenance: a stdlib path of three segments or
 // more (`net/http/httptest`) can reach a local directory of the same tail, as
 // can a third-party path (`github.com/boltdb/store` → a local store/).

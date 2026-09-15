@@ -655,7 +655,7 @@ func TestPlanRebuild_TargetSurfaceAdditionForcesFullResolution(t *testing.T) {
 		t.Fatalf("initial full resolve: %v", err)
 	}
 	beforeQualified := callMeta(t, f.db, metaCallQualifiedSites)
-	fp, err := resolverSurfaceFingerprint(ctx, f.db)
+	fp, err := resolverSurfaceFingerprint(ctx, f.db, "")
 	if err != nil {
 		t.Fatalf("initial resolver surface fingerprint: %v", err)
 	}

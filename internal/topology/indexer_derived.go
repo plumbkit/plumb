@@ -91,13 +91,13 @@ func (idx *Indexer) planRebuild(ctx context.Context, c indexChanges) (rebuildMod
 		return rebuildFull, "", err
 	}
 	if !ok || idx.forceFullRebuild || c.full {
-		fp, fpErr := resolverSurfaceFingerprint(ctx, idx.db)
+		fp, fpErr := resolverSurfaceFingerprint(ctx, idx.db, idx.workspace)
 		return rebuildFull, fp, fpErr
 	}
 	if c.none() {
 		return rebuildSkip, stored, nil
 	}
-	fp, err := resolverSurfaceFingerprint(ctx, idx.db)
+	fp, err := resolverSurfaceFingerprint(ctx, idx.db, idx.workspace)
 	if err != nil {
 		return rebuildFull, "", err
 	}
@@ -111,7 +111,16 @@ func (idx *Indexer) planRebuild(ctx context.Context, c indexChanges) (rebuildMod
 // surface. Package nodes affect import resolution for every language; exported
 // top-level Go functions affect the call resolver. File paths plus qualified/name
 // are identity, while rowids, bodies, signatures and other mutable fields are not.
-func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB) (string, error) {
+//
+// The declared Go MODULE SET is folded in by hand, and has to be. Every other
+// input here is a node, and go.mod produces none — no extractor handles .mod, so
+// its topology_files row carries a path and nothing else. Without this, go.mod
+// would be the one resolver input nothing invalidates on: `go mod init` would
+// never take effect (the false positives it exists to kill would survive every
+// rebuild), and `go mod edit -module` would leave every edge resolved under a
+// module path the repository no longer declares. Both were reproduced on a live
+// store before this clause existed.
+func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace string) (string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT n.kind, n.language, f.path, n.qualified, n.name
            FROM topology_nodes n
@@ -139,6 +148,9 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB) (string, error)
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("topology: resolver surface fingerprint rows: %w", err)
+	}
+	for _, m := range goModulesInIndex(ctx, db, workspace) {
+		seen["gomod\x00"+m.dir+"\x00"+m.path] = struct{}{}
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {
