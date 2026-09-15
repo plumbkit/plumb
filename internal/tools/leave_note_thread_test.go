@@ -145,7 +145,10 @@ func TestLeaveNote_InThreadReplyReachesTheOtherParticipant(t *testing.T) {
 		t.Errorf("in-thread reply was re-addressed to the next arrival: %q", out)
 	}
 
-	pending, err := store.PendingNotes(context.Background(), collab.Claimant{Name: "alice"}, time.Now())
+	// The reply is BOUND to the peer's recorded session ID, so the claimant must
+	// present it: that is what stops a later session drawing the name "alice"
+	// from claiming a reply meant for the peer.
+	pending, err := store.PendingNotes(context.Background(), collab.Claimant{Name: "alice", ID: "sess-alice"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,8 +191,9 @@ func TestLeaveNote_InThreadReplyIsNeverClaimedByItsAuthor(t *testing.T) {
 		}
 	}
 
-	// And the peer can still collect it afterwards.
-	pending, err := store.PendingNotes(context.Background(), collab.Claimant{Name: "alice"}, time.Now())
+	// And the peer can still collect it afterwards — presenting the ID the thread
+	// recorded for it, which is what the reply is bound to.
+	pending, err := store.PendingNotes(context.Background(), collab.Claimant{Name: "alice", ID: "sess-alice"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
