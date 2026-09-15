@@ -598,8 +598,9 @@ const indexSettleTimeout = 30 * time.Second
 //   - Importer directories are TWO segments deep. This was once load-bearing for
 //     a second reason: matchImportDir applied its minimum to every candidate, so
 //     a fixture whose packages sat one level deep got no import edges at all and
-//     every assertion here passed vacuously. PLAN-386 confined that minimum to
-//     the whole-path candidate, so depth no longer decides whether edges exist —
+//     every assertion here passed vacuously. PLAN-386 made the minimum apply at
+//     both ends of a candidate (short candidates need a long stripped prefix),
+//     so depth alone no longer decides whether edges exist —
 //     the fixture keeps it only because there is no reason to churn it. If you do
 //     flatten it, assert the edges exist rather than trusting that they do.
 //   - Inward NODES must exceed max_results while PACKAGES stay under it. That is

@@ -41,14 +41,25 @@
   layouts (`internal/…`, which is why plumb's own repository never showed it)
   were unaffected.
 
-  The minimum now guards only the candidate that consumed nothing — the whole
-  import path. A suffix formed by stripping a module prefix has already proved
-  it had one, and a stdlib import has none, so `import "strings"` is still
-  refused however shallow the workspace is. The cost, stated rather than left to
-  be discovered: a third-party import whose last segment matches a top-level
-  local package now binds to it, where before it needed two segments to match.
-  That is the recall-biased trade this resolver is built on — an extra package in
-  the affected set costs a test run; a missing one costs a regression.
+  The two-segment minimum now applies at both ends of a candidate: a candidate
+  shorter than that must have had at least two segments stripped to form it. The
+  shortest Go module path is `host.tld/name`, so reaching a top-level package
+  spends two; a standard-library path's prefix is one bare root. `import
+  "strings"` (nothing to strip) and `import "net/http"` (one root stripped) are
+  therefore both still refused, while `example.com/m/store` reaches `store/`.
+
+  What the segment count cannot separate, stated rather than left to be
+  discovered — none of it new, all of it the suffix-matching class that already
+  existed: a third-party import can reach a local package sharing its last
+  segment (`github.com/boltdb/store` → `store/`), and so can a stdlib path of
+  three segments or more (`net/http/httptest` → `httptest/`). In the other
+  direction, a module path of one dotless segment (`module myapp`) is not
+  separable from a stdlib root, so `myapp/stats` stays refused and a repository
+  laid out that way keeps the behaviour it had before rather than gaining the
+  fix. Resolving the module path from `go.mod` settles all of these exactly for
+  Go, and is the next step; until then the resolver stays recall-biased, because
+  an extra package in the affected set costs a test run while a missing one
+  costs a regression.
 
 - **A mailbox message could be marked read by a tool result nobody ever saw.**
   Three paths could hand an agent a message, and all three claimed it: the block
