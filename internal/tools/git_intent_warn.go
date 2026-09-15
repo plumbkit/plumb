@@ -133,7 +133,34 @@ func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, 
 		fmt.Fprintf(&sb, "#   peer %s claimed: %q (expires in %s)\n",
 			r.AuthorSession, textfmt.Ellipsis(r.Body, maxPeerIntentBodyRunes), humaniseTTL(r.ExpiresAt.Sub(now)))
 	}
-	return textfmt.ClampBytes(sb.String(), budgetBytes)
+
+	// The clamp must not eat the final line break. runGit returns
+	// `warning + processed` (git_exec.go), so this block is joined DIRECTLY onto
+	// the command's own output — and ClampBytes ends its cut with an ellipsis, not
+	// a newline. A clamped warning therefore welded git's first line onto its own
+	// last one:
+	//
+	//   #   peer arctic-wolf claimed: "rebasing ops m…On branch main
+	//
+	// Reachable on default settings rather than in theory: the header is 97 bytes
+	// and each quoted line runs to 209 at the 160-rune body cap, so TWO matching
+	// peer intents make 515 against a 512-byte hint_budget_bytes default. A
+	// four-session workspace hits it.
+	//
+	// One byte of the budget is therefore reserved for the break rather than spent
+	// on content, which keeps the block inside hint_budget_bytes — raising the
+	// budget instead would have left the same weld one intent further out.
+	out := sb.String()
+	if budgetBytes > 0 && len(out) > budgetBytes {
+		if budgetBytes < 2 {
+			return "" // no room for even a terminated fragment
+		}
+		out = textfmt.ClampBytes(out, budgetBytes-1)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out
 }
 
 // intentCoversRepo reports whether a peer intent's claim reaches the

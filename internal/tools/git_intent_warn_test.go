@@ -405,6 +405,63 @@ func TestFormatRepoIntentWarning_HonoursHintBudget(t *testing.T) {
 	}
 }
 
+// TestFormatRepoIntentWarning_ClampKeepsTheFinalNewline is the weld this block
+// could produce, and it is deliberately asserted in the CLAMPED state — the only
+// state where it breaks.
+//
+// runGit returns `warning + processed`, so this block is joined directly onto
+// git's own output, and ClampBytes ends its cut with an ellipsis rather than a
+// line break. A clamped warning therefore ran git's first line onto its last:
+//
+//	#   peer blue-heron claimed: "rebasing ops m…On branch main
+//
+// An unclamped warning already ends in "\n", so a test that did not force the
+// clamp would have passed both before and after the fix and proved nothing. It
+// is reachable on defaults: two matching intents at the 160-rune body cap come
+// to 515 bytes against a 512-byte hint_budget_bytes.
+func TestFormatRepoIntentWarning_ClampKeepsTheFinalNewline(t *testing.T) {
+	now := time.Now()
+	ws := t.TempDir()
+	long := strings.Repeat("rebasing the ops branch and everything under it, ", 8)
+	intents := []collab.Row{
+		{
+			Kind: collab.KindIntent, AuthorID: "sess-b", AuthorSession: "blue-heron",
+			Body: long, CreatedAt: now, ExpiresAt: now.Add(40 * time.Minute),
+		},
+		{
+			Kind: collab.KindIntent, AuthorID: "sess-c", AuthorSession: "calm-crow",
+			Body: long, CreatedAt: now, ExpiresAt: now.Add(40 * time.Minute),
+		},
+	}
+
+	// 512 is the shipped [collab] hint_budget_bytes default, so this is the real
+	// configuration rather than a contrived one.
+	for _, budget := range []int{512, 200, 80} {
+		out := formatRepoIntentWarning(intents, ws, ws, "self", now, tierDestructive, budget)
+		if out == "" {
+			t.Fatalf("budget %d: expected a clamped warning, got nothing", budget)
+		}
+		if len(out) >= len(formatRepoIntentWarning(intents, ws, ws, "self", now, tierDestructive, 0)) {
+			t.Fatalf("test setup: budget %d did not actually clamp", budget)
+		}
+		if !strings.HasSuffix(out, "\n") {
+			t.Errorf("budget %d: clamped warning must still end in a newline, or git's "+
+				"output welds onto its last line; got %q", budget, out)
+		}
+		// The reserved byte must come out of the budget, not be added to it.
+		if len(out) > budget {
+			t.Errorf("budget %d: warning is %d bytes — the newline must be reserved "+
+				"from the budget, not appended past it", budget, len(out))
+		}
+		// The join itself, asserted the way the caller performs it.
+		for _, line := range strings.Split(out+"On branch main", "\n") {
+			if strings.Contains(line, "claimed:") && strings.Contains(line, "On branch main") {
+				t.Errorf("budget %d: git output shares a line with the warning: %q", budget, line)
+			}
+		}
+	}
+}
+
 func TestRepoStateVerb(t *testing.T) {
 	cases := []struct {
 		sub  string
