@@ -40,14 +40,13 @@ func (*CheckMessages) Description() string {
 		"A positive wait_seconds BLOCKS until a message arrives or the wait " +
 		"expires — hand your turn to a peer instead of polling. Capped by " +
 		"[collab] max_wait_seconds, kept below the client's own call timeout.\n\n" +
-		"Each message is delivered exactly ONCE, to whichever path sees it first " +
-		"— this tool, the block appended to any tool result, or session_start. " +
-		"Re-calling will not redeliver it. Every message carries a " +
-		"conversation_id; quote it in leave_note to reply in thread.\n\n" +
-		"Also reports your OWN unread mail — any message you sent that nobody has " +
-		"read yet, with its age, since plumb does not push and cannot otherwise " +
-		"tell \"read, no answer yet\" from \"never read\". Listing is a read; it " +
-		"never consumes the message on the recipient's behalf.\n\n" +
+		"Each message is handed over exactly ONCE, by this tool or session_start; " +
+		"re-calling will not redeliver it. The block on other tool results only PREVIEWS " +
+		"a message — it marks nothing read, so a client that hides it loses nothing. " +
+		"Every message carries a conversation_id; quote it in leave_note to reply in thread.\n\n" +
+		"Also reports your OWN unread mail — anything you sent that nobody has taken " +
+		"delivery of yet, with its age. Listing is a read; it never consumes the " +
+		"message on the recipient's behalf.\n\n" +
 		"Requires [collab] mailbox = true.\n\n" +
 		"Parameters: wait_seconds — block up to this long for a message (default " +
 		"0, no wait)."
@@ -145,18 +144,19 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	if rows := inbox.Claim(ctx); len(rows) > 0 {
 		return t.render(ctx, rows, policy, inbox)
 	}
-	// Woken but nothing to claim. The legitimate cause is a race inside THIS
-	// session: another delivery path (a tool-result block, or session_start) got
-	// there first, which is the watermark doing its job. But a wake-up is not
-	// evidence that a message for us exists — a session name is a daemon-wide
-	// notifier key, so a send to a same-named peer in another project wakes us
-	// too, and one this project has not opted in to read is invisible here.
-	// Announcing an arrival would then be both false and a disclosure of
-	// something the agent may not read, so the reply states only what is
-	// certainly true and offers the race as a possibility.
+	// Woken but nothing to claim. One legitimate cause is a race: a session_start
+	// in this session, or — for a note left to "next" — a peer, got there first,
+	// which is the watermark doing its job. The piggybacked block is no longer a
+	// candidate: it previews without claiming, so it cannot be what emptied this.
+	// But a wake-up is not evidence that a message for us exists either — a session
+	// name is a daemon-wide notifier key, so a send to a same-named peer in another
+	// project wakes us too, and one this project has not opted in to read is
+	// invisible here. Announcing an arrival would then be both false and a
+	// disclosure of something the agent may not read, so the reply states only what
+	// is certainly true and offers the race as a possibility.
 	return t.empty(policy) +
-		"  If a peer did write to you during the wait, another call in this session claimed it " +
-		"first — each message is delivered exactly once.\n" + notice
+		"  If a peer did write to you during the wait, something claimed it first — a " +
+		"session_start here, or another session if it was addressed to \"next\".\n" + notice
 }
 
 // inheritedIDs are the predecessor identities this session may also read for,
@@ -260,7 +260,14 @@ func renderReceipt(unread []collab.Row, now time.Time) string {
 		// number the query cannot support.
 		fmt.Fprintf(&sb, "  …and at least %d more.\n", n)
 	}
-	sb.WriteString("  Unread means the peer has made no tool call since — it is idle, not refusing. ")
+	// "Unread" is a statement about the watermark, and since the piggybacked block
+	// previews without claiming, it no longer implies the peer has done nothing. It
+	// may have seen the preview on a tool result and not yet taken delivery. Both
+	// readings share the conclusion the sender needs — that no answer is owed yet —
+	// but "has made no tool call" would now be a guess stated as a fact, and this
+	// line exists precisely to stop the sender guessing.
+	sb.WriteString("  Unread means nobody has taken delivery: the peer is idle, or has seen a " +
+		"preview and not read it properly yet. Either way it is not a refusal. ")
 	if bound {
 		sb.WriteString("A message bound to a session that has since ended will expire unread rather " +
 			"than pass to a later session of the same name, so re-send if you need it read. ")

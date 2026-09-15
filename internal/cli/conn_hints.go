@@ -61,9 +61,14 @@ func memoriesDirSig(ws string) int64 {
 
 // mailboxSilentTools are the tools that must never carry a piggybacked message
 // block, because each already surfaces the same messages itself and appending
-// the claimed bodies underneath would show them twice in one response:
-// check_messages claims and renders, session_start renders its own "## Messages"
-// section, and workspace_sessions lists the unread ones.
+// the bodies underneath would show them twice in one response: check_messages
+// claims and renders, session_start renders its own "## Messages" section, and
+// workspace_sessions lists the unread ones.
+//
+// The two claiming tools are also the only ones that DO deliver. The block
+// appended everywhere else previews without claiming, so this list is no longer
+// protecting a watermark from being spent twice — only a response from saying
+// the same thing twice.
 //
 // leave_note is deliberately NOT here, despite being the other half of the
 // mailbox. It surfaces nothing — it holds no Inbox, claims no row and calls no
@@ -93,21 +98,20 @@ var mailboxSilentTools = map[string]bool{
 // check short-circuits on an in-process generation counter and touches the
 // database only when a peer has actually written something (see conn_chat.go).
 func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
-	// Order matters for correctness, not presentation. Delivery is the only enrich
-	// step that MUTATES state — claiming marks a row delivered for good — while
-	// runHookSafely discards this entire string if anything here panics. So the
-	// read-only hints run first and delivery is an ordinary statement after them:
-	// a panic in a hint aborts the function before anything is claimed, costing a
-	// hint rather than a message that can never be offered again.
+	// The ordering below was load-bearing while this path claimed: claiming marked
+	// a row delivered for good, runHookSafely discards this entire string if
+	// anything here panics, and a panic after the claim therefore destroyed a
+	// message. Running the read-only hints first, with no defer (a deferred call
+	// runs DURING unwinding, which is the same bug), kept that window shut.
 	//
-	// This deliberately does NOT use defer. A deferred call runs DURING panic
-	// unwinding, so deferring the delivery would claim the message on exactly the
-	// path the ordering exists to protect — the earlier attempt at this fix did
-	// precisely that and was no better than delivering first.
+	// The preview claims nothing, so the worst a panic here now costs is one
+	// repeated preview — the note is still in the store and check_messages still
+	// delivers it. The order is kept anyway: it costs nothing, and it is the shape
+	// to restore if anything on this path ever mutates again.
 	//
-	// Extracting the hints is what lets delivery sit after their early returns, so
-	// a message still arrives on EVERY tool call rather than only the path-bearing
-	// ones the hints are restricted to.
+	// Extracting the hints is what lets the message block sit after their early
+	// returns, so it still rides on EVERY tool call rather than only the
+	// path-bearing ones the hints are restricted to.
 	text += s.pathHints(ctx, name, args)
 	// A collaboration-policy change (PLAN-414) reaches the agent on its next
 	// result — including session_start, which the mailbox block below skips.
@@ -124,10 +128,11 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 }
 
 // Deliberately NOT gated on the size of the result, though it looks like it
-// should be. Delivery claims the row, so appending to a 200 KiB read does bet
-// the message on the agent reading that far — and a size guard skipping delivery
-// on oversized results was tried here and reverted. Three reasons, in order of
-// how badly the guard failed on them:
+// should be. A size guard skipping the block on oversized results was tried here
+// and reverted. Three reasons, in order of how badly the guard failed on them
+// — and note that the burial risk they weigh against is now mostly moot, since a
+// block buried in a 200 KiB read costs an early look, not the message: it stays
+// claimable, and check_messages still has it.
 //
 // 1. The correlation runs the WRONG WAY for the message that matters most. This
 //    append is the fast path for "stop what you are doing" — it reaches a peer on
@@ -146,7 +151,11 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 //
 // If burial is ever seen in practice, fix it where it happens — make the block
 // harder to skim past, or exclude the single pathological payload — never by
-// making delivery conditional.
+// making it conditional.
+//
+// The general form of that rule is what the preview settles for good: a client
+// deciding not to show this block is not plumb's to detect, so plumb stopped
+// betting a message on it rather than trying to guess when the bet is safe.
 
 // pathHints returns the three path-derived advisory blocks, or "" when this tool
 // carries no usable path. Each is self-gated on its own config: the

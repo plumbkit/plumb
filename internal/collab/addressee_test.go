@@ -358,7 +358,7 @@ func TestClaimableNotes_ListsWhatTheClaimWouldHandOver(t *testing.T) {
 
 	// The "next" arm: visible to any non-author through the probe…
 	stranger := Claimant{Name: "carol", ID: "sess-carol"}
-	listed, err := s.ClaimableNotes(ctx, stranger, now)
+	listed, err := s.ClaimableNotes(ctx, stranger, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestClaimableNotes_ListsWhatTheClaimWouldHandOver(t *testing.T) {
 
 	// The author exclusion: the note's writer can never claim it, so the probe
 	// must not count it for them either.
-	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "bob", ID: "id-bob"}, now)
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "bob", ID: "id-bob"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestClaimableNotes_ListsWhatTheClaimWouldHandOver(t *testing.T) {
 
 	// Ordinary addressed mail still counts for its recipient — alongside the
 	// "next" note, which she too could claim.
-	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "alice", ID: "sess-alice"}, now)
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "alice", ID: "sess-alice"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestClaimableNotes_ListsWhatTheClaimWouldHandOver(t *testing.T) {
 	if _, err := s.ClaimNotes(ctx, stranger, now, 0); err != nil {
 		t.Fatal(err)
 	}
-	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "dan", ID: "sess-dan"}, now)
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "dan", ID: "sess-dan"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A mailbox message could be marked read by a tool result nobody ever saw.**
+  Three paths could hand an agent a message, and all three claimed it: the block
+  plumb appends to an ordinary tool result claimed the row at the instant it
+  appended it — with no evidence the client would ever show that text to the
+  model. For most clients it does. For a harness whose agent calls plumb's tools
+  from inside a sandboxed program, and whose runtime surfaces only what that
+  program prints, it does not: the block landed in a discarded value and the
+  message was gone. `check_messages` then reported an empty mailbox, correctly,
+  and the sender's outbox showed it as delivered. Reproduced end to end.
+
+  Delivery now belongs to the two calls whose result the model asked for —
+  `check_messages` and `session_start`. The block appended to other tool results
+  is a **preview**: it still shows the message on the very next call, with no
+  round trip, but it marks nothing read, so a client that hides it costs a look
+  rather than the message. `check_messages` is authoritative again: if it says
+  the mailbox is empty, nothing was silently consumed.
+
+  Two consequences worth knowing. A message may now be shown twice — once as the
+  preview, once when `check_messages` delivers it; the preview says so, and
+  withholds the reply handle so a reply cannot be sent against a note still
+  logged as unread. And notes addressed to `next` are previewed as a **count**
+  only, never a body: every session in the workspace is a candidate and exactly
+  one wins the claim, so showing the text to all of them would invite two agents
+  to act on one instruction. Under `[collab] keep_delivered_notes`, permanence is
+  stamped by the claim rather than the preview, so a previewed-but-unread note
+  keeps its ordinary unread TTL.
+
 ## 0.19.2 (2026-09-15)
 
 ### Changed

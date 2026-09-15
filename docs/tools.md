@@ -281,16 +281,24 @@ a new `conversation_id` starts a fresh budget, which nothing prevents. It is a
 speed bump that makes continuing a deliberate act, not an enforced ceiling on
 how long two agents may talk.
 
-Each message is delivered **exactly once**, to whichever path reads it first:
-the block appended to an ordinary tool result, `check_messages`, or the
-recipient's next `session_start`. A delivered message stays in the store until
-its TTL, which is what gives a conversation its transcript and its exchange
-count — or, with `[collab] keep_delivered_notes = true`, past it: claiming
-stamps the row far-future, so the read flag is the permanence trigger and only
-unclaimed mail ages out. One delivery hands over at most **three** messages,
-oldest first; when a batch fills that cap the block also states how many more
-were waiting at that moment and points at `check_messages` (no wait) to drain
-them before replying.
+Each message is delivered **exactly once**, by `check_messages` or the
+recipient's next `session_start` — the two calls whose result the model asked
+for. The block appended to an ordinary tool result is a **preview**: it shows
+the message early and marks nothing read, because whether a client surfaces text
+the model never requested is the client's business, not plumb's. A harness that
+runs plumb's tools inside a sandboxed program discards those results, and while
+the block claimed, that silently consumed the message. A previewed note is still
+waiting; the sender still sees it unread until the recipient takes delivery.
+Notes addressed to `next` are previewed as a count only, never a body — every
+session in the workspace is a candidate and exactly one wins the claim.
+
+A delivered message stays in the store until its TTL, which is what gives a
+conversation its transcript and its exchange count — or, with `[collab]
+keep_delivered_notes = true`, past it: claiming stamps the row far-future, so the
+read flag is the permanence trigger and only unclaimed mail ages out. One
+delivery hands over at most **three** messages, oldest first; when a batch fills
+that cap the block also states how many more were waiting at that moment and
+points at `check_messages` (no wait) to drain them before replying.
 
 A message is addressed to a **session**, not to a name. When the peer you name
 is connected, the message is bound to that exact session and only it can ever
