@@ -287,11 +287,16 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 
 // ClaimableNotes returns the notes ClaimNotes would hand this claimant right
 // now — the claimable predicate as a pure read, OLDEST FIRST, claiming nothing.
-// Unlike the claim it carries no LIMIT, so it may count a note an
-// exchange-capped claim would defer; the probe only ever wakes, the claim
-// decides. Its caller is `plumb mail` (internal/cli/mail.go), the wake probe a
+// limit caps the scan (non-positive means no cap); unlike the claim's, this
+// limit costs nothing, because a row left behind by a pure read is still there.
+//
+// Two callers. `plumb mail` (internal/cli/mail.go) is the wake probe a
 // client-side hook runs from OUTSIDE any session when an agent finishes its
-// turn, which needs the count and ages of what a claim would deliver.
+// turn: it needs the count and ages of what a claim would deliver, so it passes
+// no cap. Inbox.Peek (internal/tools/chat.go) is the in-session read behind the
+// preview appended to a tool result, and bounds itself — it shows a handful of
+// bodies and states the rest as a number, and it repeats while a note stays
+// unclaimed, so an unbounded sort there would be a standing cost.
 //
 // PendingNotes cannot answer that. It omits "next" notes for the listing's
 // sake, and "next" is leave_note's default addressee, so a probe built on it is
@@ -302,19 +307,24 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 // lost message. What MUST carry over from the claim is the author exclusion —
 // a session woken for a note it wrote itself can never claim that note, so the
 // hook would fire, deliver nothing, and fire again at the next turn end.
-func (s *Store) ClaimableNotes(ctx context.Context, who Claimant, now time.Time) ([]Row, error) {
+func (s *Store) ClaimableNotes(ctx context.Context, who Claimant, now time.Time, limit int) ([]Row, error) {
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
 	where, args := claimable(who, now)
+	limitSQL := ""
+	if limit > 0 {
+		limitSQL = " LIMIT ?"
+		args = append(args, limit)
+	}
 	//nolint:gosec // G202: the statement is built from claimable, whose only variable
 	// part is a generated "?" list — no caller data reaches the text and every identity
-	// is bound. TestAddresseeMatch_InterpolatesNoData enforces that.
+	// is bound, the limit included. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
 		 WHERE `+where+`
-		 ORDER BY created_at ASC`, args...)
+		 ORDER BY created_at ASC`+limitSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("collab: list claimable notes: %w", err)
 	}

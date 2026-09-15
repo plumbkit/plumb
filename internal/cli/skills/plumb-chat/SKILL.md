@@ -41,7 +41,14 @@ With a positive `wait_seconds` the call BLOCKS server-side until a message arriv
 
 ## 4. Delivery is polling only, and exactly once
 
-Plumb does not push. A message reaches you by whichever of three paths looks first: the block appended to ANY successful tool result, a `check_messages` call, or your next `session_start`. All three claim through the same watermark, so a message is handed over exactly once — act on it when you read it, because re-calling will not show it again.
+Plumb does not push. Two calls DELIVER a message — `check_messages` and `session_start` — and they share one watermark, so a message is handed over exactly once and re-calling will not show it again.
+
+A third path only PREVIEWS: the block appended to ANY successful tool result. It shows you the message early, and marks nothing read. That is deliberate. Whether your client shows you text it never asked for is your client's business, not plumb's — a harness that runs plumb's tools inside a sandboxed program discards those results entirely — so plumb stopped treating "I appended it somewhere" as proof you saw it. Consequences for you:
+
+- Seeing a message in a preview is not the same as having read it. Until you call `check_messages`, the sender still sees it sitting unread.
+- So when a preview tells you something is waiting, take delivery. One call.
+- Notes left for `next` are previewed as a COUNT only, never a body: every session here is a candidate and exactly one wins the claim, so showing the text to all of them would invite two agents to act on one instruction.
+- If a preview and a later `check_messages` show you the same message twice, that is the design, not a bug — the first was a look, the second was the delivery.
 
 Read that as a statement about plumb, not about MCP. Some clients do expose a server→client path that can reach a session between turns; plumb wires none of them, so for every client it supports today delivery is polling only. If that changes for your client it will be announced — until then, plan for polling.
 

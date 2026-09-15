@@ -121,8 +121,14 @@ func TestMessageHint_NoStoreDoesNotCreateOne(t *testing.T) {
 	}
 }
 
-// TestMessageHint_DeliveredOnceAcrossCalls: the watermark holds on the hot path
-// too, so a message does not repeat on every subsequent tool call.
+// TestMessageHint_DeliveredOnceAcrossCalls: a message is shown once on the hot
+// path and does not repeat on every subsequent tool call.
+//
+// What holds that is now the connection's previewed set rather than the store's
+// watermark — the preview claims nothing. The guarantee an agent sees is the
+// same; what changed is that silence here no longer means the message is spent.
+// TestMessageHint_PreviewIsOfferedOnceNotEveryCall covers the other half: still
+// claimable afterwards.
 func TestMessageHint_DeliveredOnceAcrossCalls(t *testing.T) {
 	ws := t.TempDir()
 	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})
@@ -130,7 +136,7 @@ func TestMessageHint_DeliveredOnceAcrossCalls(t *testing.T) {
 
 	first := s.messageHint(context.Background())
 	if !strings.Contains(first, "only once please") {
-		t.Fatalf("first call should deliver; got %q", first)
+		t.Fatalf("first call should show the message; got %q", first)
 	}
 	if second := s.messageHint(context.Background()); second != "" {
 		t.Errorf("second call must be silent; got %q", second)
@@ -157,11 +163,11 @@ func TestMessageHint_SilentForMailboxTools(t *testing.T) {
 // TestMessageHint_DeliveredOnALeaveNoteResult is the fan-out case that leaving
 // leave_note in mailboxSilentTools lost outright.
 //
-// leave_note surfaces nothing of its own — no Inbox, no claim, no
-// RenderMessages — so it cannot double-deliver; the only effect of its silence
-// was to skip delivery on the call an exchange most often makes next. An agent
-// messaging alice, then bob, then carol never renders alice's reply at all: each
-// leave_note suppresses it and the next call is another leave_note.
+// leave_note surfaces nothing of its own — no Inbox, no claim, no rendered
+// messages — so it cannot show the same thing twice; the only effect of its
+// silence was to skip the block on the call an exchange most often makes next.
+// An agent messaging alice, then bob, then carol never renders alice's reply at
+// all: each leave_note suppresses it and the next call is another leave_note.
 func TestMessageHint_DeliveredOnALeaveNoteResult(t *testing.T) {
 	ws := t.TempDir()
 	s := newChatTestSession(t, ws, "alice", config.CollabConfig{Mailbox: true, ChatBudgetBytes: 512})

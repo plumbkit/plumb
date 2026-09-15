@@ -353,7 +353,7 @@ func mailWaiting(who collab.Claimant) ([]int, error) {
 	defer cancel()
 
 	now := time.Now()
-	rows, err := store.ClaimableNotes(ctx, who, now)
+	rows, err := store.ClaimableNotes(ctx, who, now, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading the mailbox: %w", err)
 	}

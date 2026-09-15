@@ -6,12 +6,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
-// conn_chat.go — the connection-side delivery of agent-to-agent messages
+// conn_chat.go — the connection-side PREVIEW of agent-to-agent messages
 // ([collab] mailbox): the block appended to a tool result when a peer has
 // written to this session.
+//
+// It shows messages; it does not deliver them. Delivery — setting the read
+// watermark — belongs to check_messages and session_start, the two tools the
+// model itself calls. This block rides on whatever tool the agent happened to
+// call, and no client promises to show the model text it never asked for: a
+// harness that runs plumb's tools inside a sandboxed program discards the whole
+// result. While this path claimed, that silently consumed the message. See
+// internal/tools/chat.go for the full account.
 //
 // Unlike the memory, peer-activity and intent hints, this runs on EVERY tool
 // call rather than only path-bearing ones — a message is about the agent, not
@@ -42,12 +51,22 @@ import (
 // because neither trigger is evidence that it is: the backstop fires
 // unconditionally, and a session name is a daemon-wide notifier key, so a send
 // to a same-named peer in another project bumps this one too. Only a probe hit
-// runs the claim.
+// reads the mailbox.
 //
 // The counters are a fast path, not the truth. They reset when the daemon
 // restarts, and a message may have been written by a previous daemon, so the
-// periodic full check backstops them: a missed bump costs delivery latency,
-// never a message.
+// periodic full check backstops them: a missed bump costs preview latency, never
+// a message — and now, not even delivery, since the message stays claimable
+// either way.
+//
+// What the preview changed about that cost model: a probe hit now runs
+// Inbox.Peek (a bounded SELECT, no writer lock) rather than the claim whose
+// query plan the paragraphs above are about, so the expensive case is cheaper
+// than it was. The new cost is at the other end — an unclaimed note keeps the
+// probe answering yes, so a session that never calls check_messages re-runs
+// probe-plus-peek once per backstop interval instead of settling at zero after
+// one claim. Two indexed reads per 30s per connection, and only while mail is
+// genuinely waiting: the empty-mailbox path every call takes is untouched.
 
 // chatFullCheckInterval is how often the database is probed even when the
 // notifier reports nothing new. It bounds the worst-case delivery delay after a
@@ -57,15 +76,62 @@ import (
 // write-locked statement that updates nothing.
 const chatFullCheckInterval = 30 * time.Second
 
+// maxPreviewedTracked bounds the previewed-key set. It is only ever as large as
+// the number of notes sitting unread for one session, so the bound is a guard
+// against pathology rather than a working limit — and when it trips, the whole
+// set is dropped instead of being evicted entry by entry. Forgetting that a note
+// was previewed costs one repeated preview; it cannot cost a message, because the
+// note is still in the store and check_messages is still what delivers it.
+const maxPreviewedTracked = 512
+
 // chatWatch caches this connection's view of the notifier generations, so the
-// steady state costs no I/O.
+// steady state costs no I/O, and remembers which notes it has already previewed,
+// so an unread one is not pasted onto every subsequent tool result.
+//
+// The previewed set lives in memory on purpose. It is not a read watermark and
+// must never be mistaken for one: the watermark is a column in the store, set
+// only by check_messages and session_start. This is presentation state — "have I
+// already shown this to the agent on a result it may or may not have seen" — and
+// losing it on a reconnect is harmless.
 //
 // Concurrency: safe for concurrent use; tool calls on one connection can overlap.
 type chatWatch struct {
-	mu       sync.Mutex
-	keys     []string
-	gens     []uint64
-	lastFull time.Time
+	mu        sync.Mutex
+	keys      []string
+	gens      []uint64
+	lastFull  time.Time
+	previewed map[string]bool
+}
+
+// unpreviewed returns the notes in pending this connection has not shown yet,
+// in order and uncapped. It records NOTHING: marking is markPreviewed's job,
+// and the split exists because the two must not be the same step. A note marked
+// here but then dropped by the caller's cap would never be previewed again —
+// silently un-shown rather than merely deferred, which is a smaller version of
+// the bug this whole change is about.
+func (w *chatWatch) unpreviewed(pending []tools.Preview) []tools.Preview {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []tools.Preview
+	for _, p := range pending {
+		if !w.previewed[p.Key] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// markPreviewed records the notes actually shown, so they are not pasted onto
+// every subsequent tool result.
+func (w *chatWatch) markPreviewed(shown []tools.Preview) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.previewed == nil || len(w.previewed)+len(shown) > maxPreviewedTracked {
+		w.previewed = make(map[string]bool, len(shown))
+	}
+	for _, p := range shown {
+		w.previewed[p.Key] = true
+	}
 }
 
 // due reports whether the store should be consulted, and records the decision.
@@ -106,19 +172,36 @@ func (w *chatWatch) invalidate() {
 
 // reset clears the cached generations, so the next call re-checks the store.
 // Called on a workspace re-pin: the new project has a different collab.db, and
-// the previous project's counters say nothing about it.
+// the previous project's counters say nothing about it. The previewed keys go
+// with them for the same reason — they name rows in a store this connection has
+// stopped reading, and a row id there says nothing about a row id here.
 func (w *chatWatch) reset() {
 	w.mu.Lock()
 	w.keys, w.gens = nil, nil
 	w.lastFull = time.Time{}
+	w.previewed = nil
 	w.mu.Unlock()
 }
 
-// messageHint returns the block of messages waiting for this session, claiming
-// them so they are never delivered twice, or "" when there are none. Gated on
-// [collab] mailbox. Advisory: it never affects the tool's own result, and every
-// error is swallowed — a mailbox problem must not turn a successful tool call
-// into a failure.
+// messageHint returns a PREVIEW of the messages waiting for this session, or ""
+// when there are none or they have all been previewed already. Gated on [collab]
+// mailbox. Advisory: it never affects the tool's own result, and every error is
+// swallowed — a mailbox problem must not turn a successful tool call into a
+// failure.
+//
+// It claims nothing, and that is the correctness property rather than an
+// optimisation. This block is appended to the result of whatever tool the agent
+// happened to call, and no client owes plumb any promise to show the model text
+// it did not ask for. A harness that runs plumb's tools inside a sandboxed
+// program discards the whole result; when this path claimed, that discarded the
+// message with it — check_messages went on to report an empty mailbox, correctly,
+// because the row really had been marked read. Reproduced end-to-end, and the
+// reason the watermark now belongs to check_messages and session_start alone.
+//
+// What is left here is worth keeping: on a client that does surface the text,
+// the agent learns about the message on its very next call with no round trip.
+// It just is not evidence of anything, so it is rendered as a preview and
+// suppressed per note so it cannot become a banner on every result.
 func (s *connSession) messageHint(ctx context.Context) string {
 	if s.chatWatch == nil {
 		return ""
@@ -146,18 +229,57 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	if !inbox.HasPending(ctx) {
 		return ""
 	}
-	rows := inbox.Claim(ctx)
-	if len(rows) == 0 {
-		return ""
+	fresh := s.chatWatch.unpreviewed(inbox.Peek(ctx))
+	named, next := splitNextNotes(fresh)
+
+	// Cap the bodies, and count what the cap deferred. The count has to come from
+	// what is left of THIS slice, not from the whole pending set: notes already
+	// previewed are not a backlog, and reporting them as one both lies to the
+	// agent and re-invalidates the generation cache on every call, putting a query
+	// back on the hot path the cache exists to keep clear.
+	more := 0
+	if len(named) > tools.MaxPreviewedPerCall {
+		more = len(named) - tools.MaxPreviewedPerCall
+		named = named[:tools.MaxPreviewedPerCall]
 	}
-	block := tools.RenderMessages(rows, inbox.Policy.ChatBudget(), time.Now())
-	if tools.AtCap(rows) {
+	if len(named) == 0 && len(next) == 0 {
+		return "" // everything waiting has already been shown once
+	}
+
+	block := tools.RenderMessagePreview(tools.PreviewRows(named), inbox.Policy.ChatBudget(), time.Now())
+	block += tools.RenderNextWaiting(len(next))
+	if more > 0 {
 		s.chatWatch.invalidate() // the remainder must arrive on the next call, not in 30s
-		// And the recipient must KNOW the remainder exists — "3 new" alone
-		// cannot say three-of-three rather than three-of-more, and an agent
-		// that goes idle here believes it has read everything. One count read,
-		// only on this rare path; the miss path every call takes is untouched.
-		block += tools.RenderBacklog(inbox.PendingCount(ctx))
+		// And the recipient must KNOW the remainder exists — "3 waiting" alone
+		// cannot say three-of-three rather than three-of-more, and an agent that
+		// goes idle here believes it has seen everything. Peek already returned
+		// the claimable set, so this is arithmetic on what we hold; the separate
+		// counting query this used to run is gone.
+		block += tools.RenderBacklog(more)
 	}
+	s.chatWatch.markPreviewed(append(named, next...))
 	return strings.TrimRight(block, "\n")
+}
+
+// splitNextNotes separates notes addressed to this session by NAME from those
+// left for "whoever attaches next".
+//
+// They cannot be previewed the same way. A named note has exactly one possible
+// recipient, so showing its body early is free. A "next" note has as many
+// candidates as there are sessions here and exactly one winner, decided by the
+// atomic claim — so printing its body to each of them invites two agents to act
+// on one instruction while the store records a single recipient. The listing in
+// workspace_sessions refuses to show "next" notes for this exact reason
+// (collab.Store.PendingNotes), and a preview is a listing with the body
+// attached. What this path may honestly say is that one is waiting; taking
+// delivery, and finding out whether it was yours, is check_messages' job.
+func splitNextNotes(pending []tools.Preview) (named, next []tools.Preview) {
+	for _, p := range pending {
+		if p.Row.Addressee == collab.AddresseeNext {
+			next = append(next, p)
+		} else {
+			named = append(named, p)
+		}
+	}
+	return named, next
 }

@@ -12,9 +12,20 @@ import (
 // only; plumb does not push — a fact about plumb, which wires no server→client
 // wake path, not about MCP, where some clients offer one.
 //
-// It shares the Inbox claim with check_messages and the tool-result block, which
-// is what makes "delivered exactly once" hold across all three: the read
-// watermark lives in the store, and every reader goes through the same claim.
+// It shares the Inbox claim with check_messages — the two tools that DELIVER,
+// because each returns a result the model asked for. The block appended to other
+// tool results previews without claiming, so the watermark is spent here or in
+// check_messages and nowhere else, which is what makes "delivered exactly once"
+// hold rather than merely being asserted.
+//
+// Of the two this is the weaker channel, and the difference is worth knowing.
+// check_messages returns the mailbox and nothing else; this section sits near
+// the tail of a long orientation packet, so a client that summarises or truncates
+// that packet can drop it after the claim. If that is ever observed, the answer
+// is the same one taken for the tool-result block: preview here and let
+// check_messages deliver. It has not been observed, and a session_start whose
+// packet is being dropped has larger problems than its mail.
+//
 // Messages are agent-authored, so they render as received messages, distinct
 // from the daemon-observed peer digest above them.
 

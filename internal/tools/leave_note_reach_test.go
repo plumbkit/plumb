@@ -26,8 +26,14 @@ func TestLeaveNote_ReplyHintNamesBothDeliveryPaths(t *testing.T) {
 	// The PASSIVE path, which is what actually fires for an agent that carries on
 	// working. Naming only the active one implied a reply needed a call the agent
 	// might never make.
-	if !strings.Contains(out, "otherwise it is appended to the result of your next tool call") {
-		t.Errorf("the no-action delivery path must be named too; got %q", out)
+	if !strings.Contains(out, "otherwise it is previewed on the result of your next tool call") {
+		t.Errorf("the no-action path must be named too; got %q", out)
+	}
+	// And it must not read as a DELIVERY. The passive path previews without
+	// claiming, so an agent that acts on it and stops leaves the note unread and
+	// its sender watching an unanswered outbox.
+	if !strings.Contains(out, "check_messages is what takes delivery") {
+		t.Errorf("the passive path must say it is a preview, not a delivery; got %q", out)
 	}
 }
 
@@ -67,9 +73,9 @@ func TestMailboxPairIsReachableTogether(t *testing.T) {
 //
 // The two checks are deliberately different claims, and both are needed. The
 // first pins the pairing sentence ("there is a receive half, and it is called
-// this"); the second pins the DELIVERY enumeration, where check_messages
-// appears as one of the three paths a message travels. Collapsing the second to
-// a bare "check_messages" would make it vacuous — the first substring already
+// this"); the second pins the DELIVERY sentence, where check_messages appears as
+// one of the two calls that actually hand a message over. Collapsing the second
+// to a bare "check_messages" would make it vacuous — the first substring already
 // contains that token, so it would pass on the pairing sentence alone while the
 // delivery paragraph silently lost the name.
 func TestLeaveNote_DescriptionNamesTheReceiveHalf(t *testing.T) {
@@ -77,7 +83,7 @@ func TestLeaveNote_DescriptionNamesTheReceiveHalf(t *testing.T) {
 	if !strings.Contains(got, "check_messages is the receive half") {
 		t.Errorf("description must name the receive half; got %q", got)
 	}
-	if !strings.Contains(got, "check_messages, or session_start") {
+	if !strings.Contains(got, "check_messages or session_start hands it over") {
 		t.Errorf("description must name check_messages as a peer's delivery path; got %q", got)
 	}
 }

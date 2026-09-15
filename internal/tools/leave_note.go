@@ -36,8 +36,8 @@ func (*LeaveNote) Description() string {
 		"reply carries its id), or quote an id you were given to reply into that " +
 		"thread (to may then be omitted). A thread is capped at [collab] " +
 		"max_exchanges messages; once spent, replies are refused.\n\n" +
-		"Delivery is by polling only, exactly once — via the next tool call, " +
-		"check_messages, or session_start. A peer idle on its human has not seen " +
+		"Delivery is by polling only: check_messages or session_start hands it over, " +
+		"exactly once. A peer idle on its human has not seen " +
 		"the message; silence is not refusal, so do not re-send.\n\n" +
 		"Messages are bound to the exact SESSION when it is connected; a " +
 		"disconnected peer, or \"next\", is delivered by name instead. " +
@@ -472,16 +472,22 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		policy.KeepDeliveredNotes && !target.crossProject), nil
 }
 
-// replyDeliveryLine names BOTH delivery paths, because they are not
-// alternatives an agent can infer from one another. Waiting server-side is the
-// only way to hand your turn to a peer rather than poll, and it needs a tool
-// call the agent must be told about; the passive path needs no action at all and
-// is what actually fires for an agent that just carries on working. Naming only
-// the active one left an agent believing a reply required a call it might never
-// make.
+// replyDeliveryLine names BOTH paths, because they are not alternatives an agent
+// can infer from one another. Waiting server-side is the only way to hand your
+// turn to a peer rather than poll, and it needs a tool call the agent must be
+// told about; the passive path needs no action at all and is what actually fires
+// for an agent that just carries on working. Naming only the active one left an
+// agent believing a reply required a call it might never make.
+//
+// The passive path is a preview now, not a delivery — it shows the reply without
+// marking it read — so the line says so rather than implying the reply is
+// finished with once it appears. An agent that acts on a preview and never calls
+// check_messages leaves the reply unread, and its sender watching an unanswered
+// outbox.
 func replyDeliveryLine() string {
 	return "  To wait for a reply, call check_messages with a wait_seconds value; " +
-		"otherwise it is appended to the result of your next tool call.\n"
+		"otherwise it is previewed on the result of your next tool call, and " +
+		"check_messages is what takes delivery.\n"
 }
 
 func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, target noteTarget, budget int, keepDelivered bool) string {
