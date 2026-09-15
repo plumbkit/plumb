@@ -368,24 +368,19 @@ func TestSymbolTools_WarmLSPUnchanged(t *testing.T) {
 			"content": "func Alpha() int {\n\treturn 99\n}", "dry_run": false,
 		})
 
-		start := time.Now()
 		out, err := tool.Execute(context.Background(), args)
-		elapsed := time.Since(start)
-
 		if err != nil {
 			t.Fatalf("warm server: %v", err)
 		}
 		if strings.Contains(out, "topology fallback") {
 			t.Errorf("an answering server must resolve the symbol itself, with no fallback banner:\n%s", out)
 		}
-		// A twentieth of the budget (100ms at the current 2s) is still ~5x the
-		// observed ~20ms for a mock-backed in-memory apply. The previous quarter
-		// would not have caught a 400ms regression, which is the whole point of
-		// the assertion.
-		if elapsed > slowFallbackBudget/20 {
-			t.Errorf("warm path took %v; bounding the attempt must add no latency when the "+
-				"server answers", elapsed)
-		}
+		// The wall-clock bound that used to live here moved to
+		// TestWarmPath_NeverWaitsOnBudget (warm_budget_wait_test.go): a
+		// millisecond duration measured on a shared runner flaked at 119.9ms and
+		// 152.6ms against a 100ms bound (issue #483). The mechanism under it — the
+		// warm path must not block on a budget — is now asserted by counting reads
+		// of both budget contexts' Done channels, with no clock.
 		requireFileHas(t, fpath, "return 99")
 	})
 

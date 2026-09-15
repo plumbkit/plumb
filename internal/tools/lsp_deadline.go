@@ -30,6 +30,52 @@ func withLSPDeadline(ctx context.Context, timeout time.Duration) (context.Contex
 // the server still gets the larger practical share of a realistic budget.
 const lspAttemptDivisor = 2
 
+// budgetWaitHook is invoked once for every read of a fallback-capable tool's
+// budget context Done channel. TWO contexts carry a budget: the tool's own
+// (toolCtx, the [lsp_query] bound a write also runs under) and the shorter
+// language-server attempt (lspCtx). Production installs a no-op; an internal
+// test substitutes a counter and drives the real tool paths, so the warm-path
+// guard asserts the MECHANISM ("did anything block on a budget?") with no
+// clock, and cannot flake on a loaded runner.
+//
+// What is observed is a READ of Done, a deliberate over-approximation of a wait:
+// every way of blocking on a budget channel goes through Done — a bare
+// `<-ctx.Done()` and a bounded `select` with a time.After escape both read it —
+// but a read can also happen without any wait. context.WithTimeout(child) reads
+// its parent's Done while registering for cancellation, which is exactly why the
+// wrapper is installed on the OUTPUT of the context constructors and is never
+// handed back in as a parent (see budgetContext).
+//
+// OUTSIDE this mechanism, and NOT caught: a delay that never touches a budget
+// channel at all — a plain time.Sleep, or time.Sleep(time.Until(ctx.Deadline()))
+// derived from the deadline rather than from Done. The wall-clock bound this
+// replaced would have caught those; this guard does not claim to.
+//
+// Package-level and mutable, so it has the same contract as syncFileHook: not
+// safe for parallel tests. Production never writes it after init.
+var budgetWaitHook = func() {}
+
+// budgetContext reports reads of Done to budgetWaitHook. It embeds the real
+// budget context and returns that context's own Done channel, so Deadline, Err,
+// Value and cancellation are unchanged; only the observation is added.
+//
+// The wrap happens on the OUTPUT of the context constructors, deliberately:
+// passing the wrapper back in as a parent would make the context package read
+// Done during cancellation registration, reporting a wait that never happened.
+type budgetContext struct{ context.Context }
+
+func (c budgetContext) Done() <-chan struct{} {
+	budgetWaitHook()
+	return c.Context.Done()
+}
+
+// observeBudgetWait wraps a budget context so reads of its Done channel reach
+// budgetWaitHook. Apply it LAST: every context derived from the budget must be
+// constructed before the wrap, or the derivation itself is observed.
+func observeBudgetWait(ctx context.Context) context.Context {
+	return budgetContext{Context: ctx}
+}
+
 // withFallbackLSPDeadline bounds the language-server attempt of a tool that has
 // a local tree-sitter fallback, and reports the budget it granted so the tool
 // can name it in a timeout message.
@@ -69,7 +115,7 @@ func withFallbackLSPDeadline(ctx context.Context, timeout time.Duration) (contex
 	}
 	budget := avail / lspAttemptDivisor
 	lspCtx, cancel := context.WithTimeout(ctx, budget)
-	return lspCtx, cancel, budget
+	return observeBudgetWait(lspCtx), cancel, budget
 }
 
 // attemptExpired is the budget withFallbackLSPDeadline reports when the CALLER's
@@ -133,7 +179,11 @@ func attemptBudget(granted, configured time.Duration) time.Duration {
 // message, already resolved through attemptBudget — zero when there was no wait
 // to name.
 func fallbackDeadlines(ctx context.Context, timeout time.Duration) (toolCtx, lspCtx context.Context, cancel context.CancelFunc, waited time.Duration) {
-	toolCtx, cancelTool := withLSPDeadline(ctx, timeout)
-	lspCtx, cancelLSP, granted := withFallbackLSPDeadline(toolCtx, timeout)
-	return toolCtx, lspCtx, func() { cancelLSP(); cancelTool() }, attemptBudget(granted, timeout)
+	rawToolCtx, cancelTool := withLSPDeadline(ctx, timeout)
+	// The attempt is derived from the UNWRAPPED tool budget: deriving it from
+	// the observer below would read Done during cancellation registration and
+	// report a phantom wait, the same reason withFallbackLSPDeadline wraps only
+	// its output.
+	lspCtx, cancelLSP, granted := withFallbackLSPDeadline(rawToolCtx, timeout)
+	return observeBudgetWait(rawToolCtx), lspCtx, func() { cancelLSP(); cancelTool() }, attemptBudget(granted, timeout)
 }

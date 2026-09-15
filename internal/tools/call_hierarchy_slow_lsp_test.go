@@ -89,10 +89,7 @@ func TestCallHierarchy_WarmLSPUnchanged(t *testing.T) {
 		"uri": uri, "line": midDeclLine, "character": 5, "direction": "incoming",
 	})
 
-	start := time.Now()
 	out, err := tool.Execute(context.Background(), args)
-	elapsed := time.Since(start)
-
 	if err != nil {
 		t.Fatalf("warm server: %v", err)
 	}
@@ -102,8 +99,7 @@ func TestCallHierarchy_WarmLSPUnchanged(t *testing.T) {
 	if !strings.Contains(out, "ServerSaysTop") {
 		t.Errorf("expected the server's own callers, not the index's:\n%s", out)
 	}
-	if elapsed > slowFallbackBudget/20 {
-		t.Errorf("warm path took %v; bounding the attempt must add no latency when the "+
-			"server answers", elapsed)
-	}
+	// The wall-clock bound that used to live here moved to
+	// TestWarmPath_NeverWaitsOnBudget (warm_budget_wait_test.go); see there
+	// for why a measured duration flaked (issue #483) and what replaced it.
 }
