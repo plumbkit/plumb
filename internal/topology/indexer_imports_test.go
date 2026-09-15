@@ -13,6 +13,10 @@ func TestMatchImportDir(t *testing.T) {
 		"lib/format":     {3},
 		"strings":        {4}, // a local dir that shadows a stdlib name
 		"store":          {5}, // a package at the top level, one segment deep
+		"http":           {6}, // shadows the TAIL of net/http, not a whole stdlib name
+		"json":           {9}, // ditto for encoding/json — without it that case is vacuous
+		"httptest":       {7}, // shadows the tail of a THREE-segment stdlib path
+		"stats":          {8}, // top-level, and also the tail of internal/stats above
 	}
 	cases := []struct {
 		name      string
@@ -31,6 +35,27 @@ func TestMatchImportDir(t *testing.T) {
 		// it. PLAN-380 owns this false-positive class for longer suffixes; the
 		// resolver is recall-biased, so an extra package costs a test run.
 		{"third-party import reaching a local package of the same name", "github.com/boltdb/store", "store", true},
+		// The regression an independent review caught before this shipped. net/http
+		// HAS a segment to strip, so a rule that only guarded the whole-path candidate
+		// let one stripped segment reach a local http/ — and then every file importing
+		// net/http depends on it, which in a web service is most of the repository.
+		// A module path spends at least two segments (host.tld/name) getting to its
+		// first package; a stdlib root spends one.
+		{"two-segment stdlib import does not reach its tail", "net/http", "", false},
+		{"two-segment stdlib import, second root", "encoding/json", "", false},
+		// What the segment count cannot separate, pinned so it is a known residue
+		// rather than a surprise: a stdlib path of three segments has finally spent
+		// enough prefix to pass. PLAN-380 (resolve the module path from go.mod) is
+		// what closes this exactly; flip this case when it lands.
+		{"three-segment stdlib import still reaches its tail", "net/http/httptest", "httptest", true},
+		// And the cost on the other side: a ONE-segment dotless module path
+		// (`module myapp`) cannot be told from a stdlib root, so a repository laid out
+		// that way keeps the no-edges behaviour it had before — not fixed, rather than
+		// newly broken. PLAN-380 fixes this one too.
+		{"one-segment module path is not separable from a stdlib root", "myapp/stats", "", false},
+		// Longest suffix still wins: internal/stats is preferred over the top-level
+		// stats/ that also sits in the map.
+		{"longest match wins over a shorter top-level shadow", "example.com/m/internal/stats", "internal/stats", true},
 		{"relative TypeScript style", "./lib/format", "lib/format", true},
 		{"parent-relative", "../lib/format", "lib/format", true},
 		{"stdlib single segment is never matched", "strings", "", false},

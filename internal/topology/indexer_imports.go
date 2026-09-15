@@ -11,11 +11,13 @@ import (
 const (
 	importResolverSource = "import-resolver"
 	importEdgeConfidence = 0.9
-	// minImportSegments is the shortest candidate directory an import path may be
-	// matched to WHOLE — that is, with no leading segment stripped. It stops
-	// `import "strings"` binding to a local strings/ directory, which would turn
-	// every file's stdlib imports into false dependency edges. See matchImportDir
-	// for why it applies only to the whole-path case.
+	// minImportSegments is the collision floor, and matchImportDir applies it at
+	// both ends of a candidate: a candidate shorter than this must have had at
+	// least this many segments stripped to form it. That is what keeps a local
+	// strings/ directory out of every file's `import "strings"` (nothing to strip)
+	// and a local http/ out of `net/http` (one bare root stripped, where a module
+	// path would have spent two). Two, because the shortest Go module path is
+	// host.tld/name. See matchImportDir for what it does not separate.
 	minImportSegments = 2
 )
 
@@ -160,27 +162,42 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 	}
 	segs := strings.Split(cleaned, "/")
 	for start := range segs {
-		// The minimum guards the candidate that consumed NOTHING. A suffix formed by
-		// stripping at least one leading segment has already proved it had a module
-		// prefix to strip, and a stdlib import has none — `strings` can only ever be
-		// tried whole, so it stays refused however shallow the workspace is.
+		// A candidate is admissible when it is long enough on its own, OR when
+		// enough was stripped to form it. Both halves are the same collision rule
+		// applied at the two ends, and it takes both to separate a local package
+		// from a standard-library path.
 		//
-		// Applying the minimum to every candidate instead made it a rule about how
-		// deep the INDEXED DIRECTORY sits, because pkgsByDir is keyed on the
-		// workspace-relative directory. A package one level down could then never be
-		// matched by anything: for example.com/m/stats the loop formed only
-		// example.com/m/stats and m/stats, never stats. Every repository whose
-		// packages live at the top level — api/, store/, cli/ — got zero import
-		// edges, and topology_affected silently degraded to co-located tests.
+		// Requiring only the first half made the rule a statement about how deep the
+		// INDEXED DIRECTORY sits, because pkgsByDir is keyed on the workspace-relative
+		// directory: for example.com/m/stats the loop formed only example.com/m/stats
+		// and m/stats, never stats, so a repository whose packages live at the top
+		// level — api/, store/, cli/ — got no import edges at all.
 		//
-		// The cost is that a THIRD-PARTY import can now reach a single-segment local
-		// directory (github.com/pkg/errors → a local errors/) where before it needed
-		// two. That is the same false positive PLAN-380 already owns for longer
-		// suffixes, it only fires when a local package genuinely shares the import's
-		// last segment, and this resolver is deliberately recall-biased: an extra
-		// package in the affected set costs a test run, a missing one costs a
-		// regression.
-		if start == 0 && len(segs) < minImportSegments {
+		// Requiring only the second half binds the standard library. `net/http` has a
+		// segment to strip, so one stripped segment would reach a local http/, and
+		// every file importing net/http would depend on it. A Go module path is at
+		// minimum host.tld/name — two segments — while a stdlib path's prefix is one
+		// bare root (net/, encoding/, database/, path/), so counting the stripped
+		// segments is what tells them apart.
+		//
+		// What this does NOT separate, all of it the suffix-matching class PLAN-380
+		// owns and none of it new here:
+		//
+		//   - a THIRD-PARTY import reaching a local package of the same name
+		//     (github.com/boltdb/store → a local store/);
+		//   - a stdlib path of three segments or more, whose prefix is finally long
+		//     enough to pass (net/http/httptest → a local httptest/,
+		//     database/sql/driver → a local driver/);
+		//   - a module path of ONE dotless segment (`module myapp`), where myapp/stats
+		//     is refused and such a repository keeps the no-edges behaviour it had
+		//     before. Not fixed rather than newly broken.
+		//
+		// Resolving the module path from go.mod and requiring the import to start
+		// with it settles every line above exactly, for Go. That is PLAN-380, and it
+		// is the reason this pass tolerates a heuristic in the meantime: the resolver
+		// is recall-biased, so an extra package in the affected set costs a test run
+		// while a missing one costs a regression.
+		if len(segs)-start < minImportSegments && start < minImportSegments {
 			continue
 		}
 		cand := strings.Join(segs[start:], "/")

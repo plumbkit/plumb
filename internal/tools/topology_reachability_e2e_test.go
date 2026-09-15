@@ -429,10 +429,15 @@ func TestReachabilityGoOnlyRefusal(t *testing.T) {
 
 // buildStdlibOnlyFixture is round-2 review's B1: three real Go package
 // directories whose only imports are stdlib. Before HasGoSignal, this
-// workspace had TotalEdges()==0 (stdlib imports are never linked to a local
-// directory — matchImportDir's whole point) and len(g.Dirs)>1, so the
-// Go-only guard fired on a genuine Go workspace and told its user it
-// "wasn't Go".
+// workspace had TotalEdges()==0 and len(g.Dirs)>1, so the Go-only guard fired
+// on a genuine Go workspace and told its user it "wasn't Go".
+//
+// The zero rests on the fixture's import SHAPES, not on a blanket rule, and
+// that is worth keeping straight if you edit it. matchImportDir refuses a
+// stdlib path of one or two segments (`fmt`, `strings`, `errors` here, and
+// `net/http`), but a path of three or more can reach a local directory sharing
+// its tail — so adding `net/http/httptest` plus a top-level httptest/ would
+// produce an edge and fire the t.Fatalf below, correctly and confusingly.
 func buildStdlibOnlyFixture(t *testing.T) *topology.Store {
 	t.Helper()
 	ws := t.TempDir()
