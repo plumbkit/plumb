@@ -174,6 +174,67 @@ func (s *Store) RepairExternalID(proxySessionID, sessionID, externalID string) (
 	return n > 0, nil
 }
 
+// claim is one retained row's claim on a name, with enough of the record to order
+// it against that conversation's other generations.
+type claim struct {
+	Name       string
+	ProxyID    string
+	SessionID  string
+	ExternalID string
+	UpdatedAt  int64
+}
+
+// independentClaims drops every row a NEWER row of the same conversation and name
+// has superseded, keeping only the newest of each such group.
+//
+// This is the whole of this package's "retirement", and it deliberately retires
+// the claim rather than the row. A superseded row is still the durable proof of
+// which plumb session a reconnecting `plumb serve` is, and "a newer row exists" is
+// not proof that the older serve died: a serve whose socket dropped is
+// unregistered while its process stays alive and its proxy secret stays valid,
+// and Store.Prune's own comment states the rule this obeys — "Age is no evidence
+// that a serve process died; only the serve itself knows that". Deleting or
+// blanking the row would turn that serve's next reconnect into first contact: a
+// new session ID and a new name, with every note bound to the old ID stranded.
+//
+// So a superseded generation is retired from the ANSWERS — the name it holds, and
+// the ambiguity it reports — and not from the table.
+//
+// What is proven is deliberately the conservative half: a NON-BLANK external_id
+// on both rows (a blank linkage is UNKNOWN, not a conversation) and the same name
+// compared case-insensitively, because that is how name uniqueness itself is
+// compared. A name held by two DIFFERENT conversations keeps both claims: the
+// database holds no evidence of which should win, and choosing would hand one
+// session's reserved name — and the mail bound to it — to another.
+//
+// "Newest" is (updated_at, proxy session ID). SaveIdentity refreshes updated_at on
+// every save, so the survivor is the row whose serve was seen most recently, and
+// the proxy-ID tie-break keeps the outcome deterministic when two rows share a
+// millisecond rather than depending on the order rows happen to come back in.
+func independentClaims(rows []claim) []claim {
+	newest := make(map[string]claim, len(rows))
+	key := func(r claim) string { return strings.ToLower(r.Name) + "\x00" + r.ExternalID }
+	for _, r := range rows {
+		if r.Name == "" || r.ExternalID == "" {
+			continue
+		}
+		cur, ok := newest[key(r)]
+		if !ok || r.UpdatedAt > cur.UpdatedAt || (r.UpdatedAt == cur.UpdatedAt && r.ProxyID > cur.ProxyID) {
+			newest[key(r)] = r
+		}
+	}
+	out := make([]claim, 0, len(rows))
+	for _, r := range rows {
+		if r.Name == "" {
+			continue
+		}
+		if r.ExternalID == "" || newest[key(r)].ProxyID == r.ProxyID {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Reservation is one retained identity's claim on a name: the name itself, the
 // plumb session ID that holds it, and the external conversation it is linked to.
 //
@@ -206,6 +267,12 @@ type Reservation struct {
 // is orphaned. Reserving here closes that window for as long as the identity
 // stays recoverable.
 //
+// A conversation's own superseded generations are collapsed: when several rows
+// share a name AND a non-blank external ID, only the newest holds the claim (see
+// independentClaims). The name is then held for the conversation that owns it,
+// the answer does not depend on the order rows come back in, and every row stays
+// intact as the proof of which session a reconnecting proxy is.
+//
 // Rows with no plumb_session_id are skipped: such a row reserves a name that no
 // session could ever claim as its own, which locks the name out permanently
 // rather than holding it for someone.
@@ -216,25 +283,30 @@ func (s *Store) Reservations() ([]Reservation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT name, plumb_session_id, external_id FROM session_names WHERE plumb_session_id != ''`,
+		`SELECT name, plumb_session_id, external_id, proxy_session_id, updated_at
+		   FROM session_names WHERE plumb_session_id != ''`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sessionstate: reservations: %w", err)
 	}
 	defer rows.Close()
-	var out []Reservation
+	var claims []claim
 	for rows.Next() {
-		var r Reservation
-		if err := rows.Scan(&r.Name, &r.SessionID, &r.ExternalID); err != nil {
+		var c claim
+		if err := rows.Scan(&c.Name, &c.SessionID, &c.ExternalID, &c.ProxyID, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("sessionstate: scan reservation: %w", err)
 		}
-		if r.Name == "" {
+		if c.Name == "" {
 			continue
 		}
-		out = append(out, r)
+		claims = append(claims, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sessionstate: reservations: %w", err)
+	}
+	out := make([]Reservation, 0, len(claims))
+	for _, c := range independentClaims(claims) {
+		out = append(out, Reservation{Name: c.Name, SessionID: c.SessionID, ExternalID: c.ExternalID})
 	}
 	return out, nil
 }
@@ -249,22 +321,29 @@ type NameConflict struct {
 	ProxySessionIDs []string
 }
 
-// LegacyNameConflicts reports names claimed by more than one retained identity.
-// nil-safe (returns nil).
+// LegacyNameConflicts reports names whose claim cannot be shown to belong to one
+// conversation. nil-safe (returns nil).
 //
-// Such rows are a legacy artefact, not a bug this release can fix. Before
-// retention, a name was unique only among LIVE sessions: a pruned row's name
-// could legitimately be redrawn by another proxy, and both rows are now
-// retained. There is no evidence in the database saying which claim came first
-// in any meaningful sense, and the candidate repairs are all worse than the
-// ambiguity — renaming a row would break notes addressed to it, deleting one
-// would fork the identity it proves, and picking by updated_at would silently
-// hand one session's mailbox to another.
+// What it reports is a name held by rows that share no conversation: two
+// different external IDs, or a linkage that is blank and therefore unknown. The
+// database holds no evidence of which claim should win, and the candidate
+// repairs are all worse than the ambiguity — renaming a row leaves notes with no
+// bound identity following the name, deleting one forks the identity it proves,
+// and picking by updated_at would silently hand one session's name and mailbox to
+// another.
 //
-// So this REPORTS rather than repairs: the daemon logs the conflict once at
+// A conversation's own superseded generations are NOT reported: they share a
+// non-blank linkage and a name, so independentClaims keeps only the newest of
+// them. Retention never prevented those generations being written — a
+// `plumb serve` restart mints a second row for a name its predecessor still held —
+// so calling them a pre-retention artefact was wrong twice over, and the warning
+// that named them at every daemon start buried the genuinely ambiguous names this
+// function exists to surface.
+//
+// So this REPORTS rather than repairs: the daemon logs the residue once at
 // startup, every unaffected identity migrates and recovers normally, and an
-// operator who cares can resolve it deliberately. The new contract prevents new
-// collisions; an ambiguous history is not safely repairable from names alone.
+// operator who cares can resolve it deliberately. An ambiguous history is not
+// safely repairable from names alone.
 func (s *Store) LegacyNameConflicts() ([]NameConflict, error) {
 	if s == nil {
 		return nil, nil
@@ -272,7 +351,8 @@ func (s *Store) LegacyNameConflicts() ([]NameConflict, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT name, proxy_session_id FROM session_names
+		`SELECT name, proxy_session_id, plumb_session_id, external_id, updated_at
+		   FROM session_names
 		  WHERE plumb_session_id != ''
 		  ORDER BY name, proxy_session_id`,
 	)
@@ -280,24 +360,28 @@ func (s *Store) LegacyNameConflicts() ([]NameConflict, error) {
 		return nil, fmt.Errorf("sessionstate: legacy name conflicts: %w", err)
 	}
 	defer rows.Close()
-	byName := map[string][]string{}
-	spelling := map[string]string{}
+	var claims []claim
 	for rows.Next() {
-		var name, proxyID string
-		if err := rows.Scan(&name, &proxyID); err != nil {
+		var c claim
+		if err := rows.Scan(&c.Name, &c.ProxyID, &c.SessionID, &c.ExternalID, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("sessionstate: scan name conflict: %w", err)
 		}
-		if name == "" {
+		if c.Name == "" {
 			continue
 		}
-		key := strings.ToLower(name)
-		if _, seen := spelling[key]; !seen {
-			spelling[key] = name
-		}
-		byName[key] = append(byName[key], proxyID)
+		claims = append(claims, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sessionstate: legacy name conflicts: %w", err)
+	}
+	byName := map[string][]string{}
+	spelling := map[string]string{}
+	for _, c := range independentClaims(claims) {
+		key := strings.ToLower(c.Name)
+		if _, seen := spelling[key]; !seen {
+			spelling[key] = c.Name
+		}
+		byName[key] = append(byName[key], c.ProxyID)
 	}
 	var out []NameConflict
 	for key, ids := range byName {
