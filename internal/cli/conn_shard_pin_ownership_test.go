@@ -538,3 +538,44 @@ func TestOnlyALiveExplicitPinIsAttributedToItsAgent(t *testing.T) {
 		})
 	}
 }
+
+// TestCorrectsSeededRootBoundary pins the sibling boundary directly, because it
+// is the whole safety carve-out and nothing else holds it. correctsSeededRoot
+// lets a seeded shard correct itself only when the two roots contain one
+// another; every other case must stay refused, which is what keeps issue #182's
+// cross-workspace guarantee and PLAN-395's fail-closed first contact intact.
+//
+// That boundary rests entirely on withinRoot's root+"/" — swap it for a naive
+// strings.HasPrefix and "/tmp/proj-other" becomes "inside" "/tmp/proj", opening
+// the exemption to an unrelated workspace that merely shares a name prefix.
+// Every behavioural test still passed under that mutation: they use temp dirs
+// whose names do not collide, so none of them can see it.
+func TestCorrectsSeededRootBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		selfPinned bool
+		prev, root string
+		want       bool
+	}{
+		{"same root is trivially contained", false, "/tmp/proj", "/tmp/proj", true},
+		{"worktree nested under its checkout", false, "/tmp/proj", "/tmp/proj/.claude/worktrees/wt", true},
+		{"the mirror: checkout around the worktree", false, "/tmp/proj/.claude/worktrees/wt", "/tmp/proj", true},
+
+		// The mutation killers. A sibling shares a prefix but no containment,
+		// and letting one through is the fail-open this carve-out must not have.
+		{"sibling sharing a name prefix is NOT contained", false, "/tmp/proj", "/tmp/proj-other", false},
+		{"the mirror sibling is NOT contained either", false, "/tmp/proj-other", "/tmp/proj", false},
+		{"a longer shared prefix is still a sibling", false, "/tmp/plumb", "/tmp/plumb2/nested", false},
+
+		{"unrelated workspaces are refused", false, "/tmp/proj", "/var/other", false},
+		{"an agent that chose its root is never exempt", true, "/tmp/proj", "/tmp/proj/wt", false},
+		{"an empty seeded root exempts nothing", false, "", "/tmp/proj", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := correctsSeededRoot(tc.selfPinned, tc.prev, tc.root); got != tc.want {
+				t.Errorf("correctsSeededRoot(%v, %q, %q) = %v, want %v",
+					tc.selfPinned, tc.prev, tc.root, got, tc.want)
+			}
+		})
+	}
+}
