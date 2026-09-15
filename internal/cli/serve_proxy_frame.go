@@ -249,15 +249,26 @@ func serverInfoVersion(frame []byte) string {
 // The clause itself reports the lag without prescribing an action an
 // autonomous agent cannot take. An unknown daemon version falls back to the
 // proxy's.
+//
+// It carries its own leading blank line, and that is not cosmetic. The note
+// travels as a SEPARATE content item (injectReconnectNote appends one rather
+// than editing the tool's text), which is correct MCP — but a client is free to
+// concatenate content items with nothing between them, and the ones agents
+// actually run do. Observed on a real client: a mailbox preview ending "...get
+// the reply handle." ran straight into "# plumb-note: plumb daemon process
+// restarted", putting a markdown heading marker mid-sentence and reading as one
+// run-on. A block that is appended after arbitrary text cannot assume it starts
+// a line; it has to say so itself. Leading whitespace is inert for a client that
+// renders items separately, so this is safe in both directions.
 func reconnectNoteText(daemonVersion, proxyVersion string, warnMismatch bool, outcome reconnectOutcome) string {
 	if daemonVersion == "" || daemonVersion == proxyVersion || !warnMismatch {
 		v := daemonVersion
 		if v == "" {
 			v = proxyVersion
 		}
-		return fmt.Sprintf("# plumb-note: %s (daemon %s)%s", outcome.cause(), v, outcome.tail())
+		return fmt.Sprintf("\n\n# plumb-note: %s (daemon %s)%s", outcome.cause(), v, outcome.tail())
 	}
-	return fmt.Sprintf("# plumb-note: %s (daemon now %s; this serve proxy is still %s — the mismatch is harmless; restart `plumb serve` when convenient to match versions)%s",
+	return fmt.Sprintf("\n\n# plumb-note: %s (daemon now %s; this serve proxy is still %s — the mismatch is harmless; restart `plumb serve` when convenient to match versions)%s",
 		outcome.cause(), daemonVersion, proxyVersion, outcome.tail())
 }
 
