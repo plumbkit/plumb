@@ -53,6 +53,10 @@ type sessionView struct {
 	// several language servers.
 	lsRefLang                 string
 	clientName, clientVersion string
+	// proxyVersion is the version of the `plumb serve` binary this connection
+	// arrived through, as it declared at initialize. Empty means nobody said — a
+	// direct client, or a proxy older than the key — never "it matches ours".
+	proxyVersion string
 	// protocolOffered/protocolAnswered and clientCaps are the initialize-time
 	// MCP protocol negotiation snapshot (see onProtocolNegotiated).
 	protocolOffered, protocolAnswered string

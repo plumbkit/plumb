@@ -87,7 +87,7 @@ func FuzzProxyFrameRewrite(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, frame string) {
 		in := []byte(frame)
-		kv := buildInitMeta(proxyDirs, "proxy-session-1", "/proxy/cwd")
+		kv := buildInitMeta(proxyDirs, "proxy-session-1", "/proxy/cwd", "")
 
 		out := injectInitMeta(in, kv)
 		checkEnvelopePreserved(t, in, out)
@@ -361,7 +361,7 @@ func TestInjectInitMeta_DeclinedFrameKeepsClientMeta(t *testing.T) {
 		mcp.MetaAllowDirsKey + `":["/","/etc"]}}}`)
 
 	// No grant: buildInitMeta returns nil, so the injector declines.
-	out := injectInitMeta(frame, buildInitMeta(nil, "", ""))
+	out := injectInitMeta(frame, buildInitMeta(nil, "", "", ""))
 	if !bytes.Equal(out, frame) {
 		t.Fatalf("a declining injector rewrote the frame\n in: %s\nout: %s", frame, out)
 	}
@@ -375,7 +375,7 @@ func TestInjectInitMeta_DeclinedFrameKeepsClientMeta(t *testing.T) {
 
 	// And the property that DOES hold: once the proxy has a grant, its value wins
 	// over the client's, whatever the client wrote.
-	withGrant := injectInitMeta(frame, buildInitMeta(proxyDirs, "", ""))
+	withGrant := injectInitMeta(frame, buildInitMeta(proxyDirs, "", "", ""))
 	got, ok = metaValue(withGrant, mcp.MetaAllowDirsKey)
 	if !ok {
 		t.Fatal("the proxy's grant is absent after injection")

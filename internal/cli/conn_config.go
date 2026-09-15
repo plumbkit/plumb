@@ -368,6 +368,23 @@ func (s *connSession) checkAndReloadConfig() {
 	s.log().Info("daemon: project config hot-reloaded", "workspace", workspace)
 }
 
+// onProxyVersion records the version of the serve proxy this connection came
+// through. Distinct from the daemon's own Version, and that is the entire
+// point: the two diverge whenever the daemon restarts under a live proxy, and
+// until now nothing but a reconnect note ever said so.
+func (s *connSession) onProxyVersion(version string) {
+	s.mutate(func(v *sessionView) { v.proxyVersion = version })
+	if version != Version {
+		s.log().Info("daemon: serve proxy version differs from this daemon",
+			"proxy", version, "daemon", Version)
+	}
+}
+
+// proxyVersion returns the serve proxy's version, or "" when none was declared.
+func (s *connSession) proxyVersion() string {
+	return s.view().proxyVersion
+}
+
 // onClientInfo handles the MCP clientInfo notification: stores client identity,
 // updates the session record, and links the shared client rate-limiter budget.
 func (s *connSession) onClientInfo(name, version string) {

@@ -59,7 +59,7 @@ func TestServeWorkspaceFlag_InjectsFlagPath(t *testing.T) {
 	}
 
 	frame := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
-	out := injectInitMeta(frame, buildInitMeta(nil, "", resolved))
+	out := injectInitMeta(frame, buildInitMeta(nil, "", resolved, ""))
 
 	var ws string
 	if err := json.Unmarshal(initMeta(t, out)[mcp.MetaWorkspaceKey], &ws); err != nil {
@@ -80,7 +80,7 @@ func TestServeWorkspaceHint_EnvFallbackInjected(t *testing.T) {
 
 	resolved := resolveWorkspaceHint("", env)
 	out := injectInitMeta([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`),
-		buildInitMeta(nil, "", resolved))
+		buildInitMeta(nil, "", resolved, ""))
 
 	var ws string
 	if err := json.Unmarshal(initMeta(t, out)[mcp.MetaWorkspaceKey], &ws); err != nil {
@@ -107,7 +107,7 @@ func TestServeWorkspaceHint_NoFlagNoEnvStartsUnattached(t *testing.T) {
 		t.Fatalf("resolveWorkspaceHint with neither flag nor env = %q, want \"\" (cwd is not a pre-pin)", resolved)
 	}
 	out := injectInitMeta([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`),
-		buildInitMeta(nil, "", ""))
+		buildInitMeta(nil, "", "", ""))
 	if _, ok := initMeta(t, out)[mcp.MetaWorkspaceKey]; ok {
 		t.Fatal("workspace key transported with no flag and no env — the serve must start unattached")
 	}

@@ -61,6 +61,7 @@ type daemonInfo struct {
 	pinProvenance func() PinProvenance                               // optional; nil when no provenance accessor is wired
 	protocol      func() ProtocolStatus                              // optional; nil when no protocol accessor is wired
 	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
+	proxyVersion  func() string                                      // optional; nil when no serve proxy declared one
 }
 
 // sourceRevision is the build-time provenance of the running daemon binary: the
@@ -100,6 +101,48 @@ func (s sourceRevision) String() string {
 func (t *daemonInfo) WithSourceRevision(revision string, dirty, dirtyKnown bool) *daemonInfo {
 	t.sourceRev = sourceRevision{revision: revision, dirty: dirty, dirtyKnown: dirtyKnown}
 	return t
+}
+
+// proxyVersionOrEmpty reads the wired accessor, or "" when none is wired. Nil
+// and empty deliberately collapse: both mean nobody declared a proxy version,
+// and neither may be reported as agreement with the daemon.
+func (t *daemonInfo) proxyVersionOrEmpty() string {
+	if t.proxyVersion == nil {
+		return ""
+	}
+	return t.proxyVersion()
+}
+
+// WithProxyVersion wires an accessor returning the version of the `plumb serve`
+// proxy this session arrived through, which the proxy declares at initialize.
+// Nil or empty means nobody said, and the row says so rather than going quiet.
+// Returns the receiver for chaining.
+func (t *daemonInfo) WithProxyVersion(fn func() string) *daemonInfo {
+	t.proxyVersion = fn
+	return t
+}
+
+// proxyVersionRow renders the proxy row, and it is the reason this tool has one
+// at all: "which version am I running?" has TWO answers and daemon_info used to
+// give only the daemon's. A proxy keeps the binary it launched with across
+// daemon restarts, so a change in the proxy half can be merged, released,
+// installed, and running in the daemon while this session still executes the old
+// code. Three sessions on one machine concluded a proxy-side fix was live when it
+// was not; one of them had cut the release and verified the tap.
+//
+// The mismatch clause is the whole value, so it is stated as an instruction
+// rather than a fact: knowing the numbers differ is useless without knowing that
+// restarting the DAEMON will not change it.
+func proxyVersionRow(proxy, daemon string) string {
+	switch proxy {
+	case "":
+		return "unknown — no serve proxy declared one (a direct client, or a proxy older than this field)"
+	case daemon:
+		return proxy + " (matches this daemon)"
+	default:
+		return proxy + " — DIFFERS from this daemon. A proxy-side change is not live in this " +
+			"session until `plumb serve` restarts, which a daemon restart does not do."
+	}
 }
 
 // WithLSPStatus wires an accessor returning the session's live language-server
@@ -180,7 +223,9 @@ func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. swift-falcon), session ID, daemon version, the source commit the binary " +
+		"session name (e.g. swift-falcon), session ID, daemon version, the version of the serve " +
+		"proxy this session arrived through (a DIFFERENT binary, which a daemon restart does not " +
+		"update — check it before concluding a proxy-side fix is live), the source commit the binary " +
 		"was built from (with a dirty marker, or an explicit unknown), Go runtime, OS/arch, " +
 		"start timestamp, and uptime, " +
 		"plus the MCP protocol revision negotiated with this client (and, on a mismatch, " +
@@ -227,10 +272,11 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 	// running daemon was built from — and is likewise unconditional, so an
 	// unstamped build says "unknown" out loud instead of omitting the row.
 	out := fmt.Sprintf(
-		"session name:   %s\nsession id:     %s\ndaemon version: %s\nsource commit:  %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
+		"session name:   %s\nsession id:     %s\ndaemon version: %s\nproxy version:  %s\nsource commit:  %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
 		t.sessID(),
 		t.daemonVersion,
+		proxyVersionRow(t.proxyVersionOrEmpty(), t.daemonVersion),
 		t.sourceRev,
 		runtime.Version(),
 		runtime.GOOS,

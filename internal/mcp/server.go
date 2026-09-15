@@ -207,6 +207,14 @@ type Server struct {
 	// not called.
 	OnProxySession func(ctx context.Context, id string)
 
+	// OnProxyVersion is called once during the initialize exchange with the
+	// version of the `plumb serve` binary on the other end
+	// (_meta[MetaProxyVersionKey]). That is a different binary from this daemon's,
+	// and the difference is invisible everywhere else: a proxy keeps running the
+	// version it launched with across daemon restarts. Empty/absent ⇒ not called,
+	// which is what a direct client or an older proxy looks like.
+	OnProxyVersion func(ctx context.Context, version string)
+
 	// OnWorkspaceHint is called once during initialize with the serve proxy's
 	// explicit workspace pre-pin (_meta[MetaWorkspaceKey] — --workspace or
 	// PLUMB_WORKSPACE; without either, no key is sent and serve starts unattached) — advisory, not an authoritative root. Absent/empty ⇒ never called.

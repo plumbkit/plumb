@@ -341,7 +341,8 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	e := parseEnvelope(frame)
 	switch {
 	case e.Method == "initialize" && e.hasID():
-		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace))
+		// Version is this PROXY's, not the daemon's (see mcp.MetaProxyVersionKey).
+		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace, Version))
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)

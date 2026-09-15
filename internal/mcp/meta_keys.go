@@ -27,6 +27,26 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaProxyVersionKey is the MCP initialize-params `_meta` key under which
+// `plumb serve` transports its OWN version — the binary the proxy is running,
+// which is not the binary the daemon is running.
+//
+// The distinction has no obvious surface and has repeatedly been got wrong.
+// `plumb restart` replaces the daemon; each session's proxy keeps the binary it
+// was launched with until its client restarts. So a change in the proxy half
+// (internal/cli/serve_proxy_*.go) can be merged, released, installed and
+// running in the daemon while every attached session still executes the old
+// code. Three sessions on one machine concluded a proxy-side fix was live when
+// it was not, on a day when one of them had also cut the release.
+//
+// Carrying it here rather than annotating a tool result is what makes it exact:
+// the value travels inside the captured initialize frame, so the handshake
+// replay re-applies it on every reconnect, and the daemon can answer "which
+// proxy is this?" from state it already holds — no frame to single out, no
+// request id to correlate against a response that can outrun its own tracking.
+// Reverse-DNS namespaced per the MCP convention.
+const MetaProxyVersionKey = "dev.plumbkit/proxy-version"
+
 // MetaSessionIDKey is the session_start-result `_meta` key under which the
 // daemon echoes its plumb session ID, so the serve proxy can hold it and replay
 // it in the initialize `_meta` after a daemon restart — the stable session ID

@@ -111,24 +111,28 @@ func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage)
 			s.OnAllowDirs(ctx, dirs)
 		}
 	}
-	if s.OnProxySession != nil {
-		if id := proxySessionFromParams(params); id != "" {
-			s.OnProxySession(ctx, id)
-		}
+	// The string-valued keys share one shape, so they share one helper. Written
+	// out, each was two branches, and the seventh took this function past the
+	// complexity limit — which is the limit doing its job: a list of identical
+	// clauses is a list, not control flow.
+	fireStringHook(ctx, s.OnProxySession, func() string { return proxySessionFromParams(params) })
+	fireStringHook(ctx, s.OnProxyVersion, func() string { return proxyVersionFromParams(params) })
+	fireStringHook(ctx, s.OnWorkspaceHint, func() string { return workspaceHintFromParams(params) })
+	fireStringHook(ctx, s.OnPinnedWorkspace, func() string { return pinnedWorkspaceFromParams(params) })
+	fireStringHook(ctx, s.OnSessionID, func() string { return stringFromMeta(params, MetaSessionIDKey) })
+}
+
+// fireStringHook calls hook with extract()'s value when both a hook and a
+// non-empty value are present.
+//
+// extract is a thunk rather than a value so an unset hook still costs nothing:
+// each of these parses the params afresh, and evaluating them eagerly would put
+// a JSON decode per key on every handshake for hooks nobody wired.
+func fireStringHook(ctx context.Context, hook func(context.Context, string), extract func() string) {
+	if hook == nil {
+		return
 	}
-	if s.OnWorkspaceHint != nil {
-		if dir := workspaceHintFromParams(params); dir != "" {
-			s.OnWorkspaceHint(ctx, dir)
-		}
-	}
-	if s.OnPinnedWorkspace != nil {
-		if dir := pinnedWorkspaceFromParams(params); dir != "" {
-			s.OnPinnedWorkspace(ctx, dir)
-		}
-	}
-	if s.OnSessionID != nil {
-		if id := stringFromMeta(params, MetaSessionIDKey); id != "" {
-			s.OnSessionID(ctx, id)
-		}
+	if v := extract(); v != "" {
+		hook(ctx, v)
 	}
 }

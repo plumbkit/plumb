@@ -114,6 +114,15 @@ func proxySessionFromParams(params json.RawMessage) string {
 	return stringFromMeta(params, MetaProxySessionKey)
 }
 
+// proxyVersionFromParams extracts the version of the `plumb serve` binary on
+// the other end from the initialize params' _meta[MetaProxyVersionKey] field.
+// Fail-safe like proxySessionFromParams: any shape mismatch yields "", which is
+// also what a direct client and any proxy older than this key look like — all
+// three mean "nobody told me", never "the proxy matches".
+func proxyVersionFromParams(params json.RawMessage) string {
+	return stringFromMeta(params, MetaProxyVersionKey)
+}
+
 // workspaceHintFromParams extracts the serve proxy's explicit workspace pre-pin
 // (--workspace/PLUMB_WORKSPACE; a serve without one sends no key — it starts
 // unattached) from the initialize params' _meta[MetaWorkspaceKey] field.
