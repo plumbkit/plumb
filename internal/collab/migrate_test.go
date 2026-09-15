@@ -307,3 +307,54 @@ func raceOpens(t *testing.T, ws, wantBody string) {
 		t.Fatalf("the seeded note was lost to the concurrent migration: %v", got)
 	}
 }
+
+// TestMigrate_DeliveryIndexReachesAnExistingDatabase is the guard for the way an
+// index fix usually fails: added to the initial CREATE block only, it lands on
+// databases created afterwards and never on the ones already on disk. Every test
+// would pass, and every existing user would keep the unindexed scan the index was
+// added to remove — invisibly, because an index changes no result, only a plan.
+//
+// idx_collab_inbox_id is what keeps the delivery probe indexed once a row is
+// addressed by identity rather than by name (see chatIndexes). This asserts it
+// arrives on a v1 database — the oldest shape plumb ever shipped — and that the
+// name-leading index it does not replace is still there.
+func TestMigrate_DeliveryIndexReachesAnExistingDatabase(t *testing.T) {
+	ws := openV1WithNote(t, "written long before addressee_id existed", "alice")
+
+	// Opening through the production path is what runs the migration.
+	s, err := Open(ws)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	have := map[string]bool{}
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type='index'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		have[n] = true
+	}
+	rows.Close()
+
+	for _, want := range []string{"idx_collab_inbox_id", "idx_collab_inbox"} {
+		if !have[want] {
+			t.Errorf("%s missing after migrating a v1 database; indexes present: %v", want, have)
+		}
+	}
+
+	// And the row itself still delivers by name, so the migration did not trade
+	// the plan for the data.
+	got, err := s.ClaimNotes(context.Background(), Claimant{Name: "alice", ID: "sess-alice"}, time.Now(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the migrated v1 note did not deliver: %v", bodies(got))
+	}
+}
