@@ -16,8 +16,11 @@ const (
 	// least this many segments stripped to form it. That is what keeps a local
 	// strings/ directory out of every file's `import "strings"` (nothing to strip)
 	// and a local http/ out of `net/http` (one bare root stripped, where a module
-	// path would have spent two). Two, because the shortest Go module path is
-	// host.tld/name. See matchImportDir for what it does not separate.
+	// path would have spent two). Two, because the shortest module path the module
+	// PROXY can resolve is host.tld/name — not because every legal module path has
+	// two segments. `module myapp` is legal Go and spends one, which is why
+	// matchImportDir lists it as a case this cannot separate rather than as one it
+	// handles. See there for the rest of what it does not separate.
 	minImportSegments = 2
 )
 
@@ -175,10 +178,12 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 		//
 		// Requiring only the second half binds the standard library. `net/http` has a
 		// segment to strip, so one stripped segment would reach a local http/, and
-		// every file importing net/http would depend on it. A Go module path is at
-		// minimum host.tld/name — two segments — while a stdlib path's prefix is one
-		// bare root (net/, encoding/, database/, path/), so counting the stripped
-		// segments is what tells them apart.
+		// every file importing net/http would depend on it. What separates them is how
+		// much prefix each spends before its tail: a stdlib path reaches its tail after
+		// one bare root (net/http, encoding/json, path/filepath), while a module path
+		// the proxy can resolve spends at least host.tld/name. Counting the stripped
+		// segments is therefore a proxy for provenance — a good one at two segments,
+		// and no more than that, which is what the list below is about.
 		//
 		// What this does NOT separate, all of it the suffix-matching class PLAN-380
 		// owns and none of it new here:

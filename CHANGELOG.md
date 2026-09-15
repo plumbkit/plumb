@@ -42,11 +42,13 @@
   were unaffected.
 
   The two-segment minimum now applies at both ends of a candidate: a candidate
-  shorter than that must have had at least two segments stripped to form it. The
-  shortest Go module path is `host.tld/name`, so reaching a top-level package
-  spends two; a standard-library path's prefix is one bare root. `import
-  "strings"` (nothing to strip) and `import "net/http"` (one root stripped) are
-  therefore both still refused, while `example.com/m/store` reaches `store/`.
+  shorter than that must have had at least two segments stripped to form it. A
+  standard-library path reaches its tail after one bare root (`net/http`,
+  `encoding/json`), while a module path the proxy can resolve spends at least
+  `host.tld/name` — so counting the stripped segments stands in for where the
+  import came from. `import "strings"` (nothing to strip) and `import "net/http"`
+  (one root stripped) are therefore both still refused, while
+  `example.com/m/store` reaches `store/`.
 
   What the segment count cannot separate, stated rather than left to be
   discovered — none of it new, all of it the suffix-matching class that already

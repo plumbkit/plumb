@@ -56,6 +56,11 @@ func TestMatchImportDir(t *testing.T) {
 		// Longest suffix still wins: internal/stats is preferred over the top-level
 		// stats/ that also sits in the map.
 		{"longest match wins over a shorter top-level shadow", "example.com/m/internal/stats", "internal/stats", true},
+		// These two match the WHOLE cleaned path, which is why they are unaffected by
+		// the stripped-segment rule. A relative path's single-segment candidate is now
+		// refused (`../store` no longer reaches a top-level store/), and that is
+		// unreachable rather than a loss: pkgsByDir is keyed on KindPackage nodes, and
+		// no TypeScript or JavaScript extractor emits one.
 		{"relative TypeScript style", "./lib/format", "lib/format", true},
 		{"parent-relative", "../lib/format", "lib/format", true},
 		{"stdlib single segment is never matched", "strings", "", false},
@@ -82,7 +87,8 @@ func TestMatchImportDir(t *testing.T) {
 func TestMatchImportDir_SingleSegmentShadowIsNotLinked(t *testing.T) {
 	pkgs := map[string][]int64{"strings": {1}}
 	if got, ok := matchImportDir("strings", pkgs); ok {
-		t.Errorf("stdlib import linked to local dir %q; single-segment matches must be refused", got)
+		t.Errorf("stdlib import linked to local dir %q; a single-segment candidate with "+
+			"nothing stripped to form it must be refused", got)
 	}
 }
 

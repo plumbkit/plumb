@@ -26,11 +26,16 @@ import (
 // topology_affected silently fell back to co-located tests with nothing in its
 // output saying the dependency arm had found nothing.
 //
-// This is driven through a real Open plus the real Go extractor on purpose. The
-// unit test over matchImportDir picks its own two-segment directory keys and
-// cannot see this; neither can the end-to-end test that inserts nodes by hand
-// with those same keys. Only an indexer walking a real tree decides how deep the
+// This is driven through a real Open plus the real Go extractor on purpose. When
+// the defect was found, NOTHING could see it: the unit test over matchImportDir
+// picked its own two-segment directory keys, and so did the end-to-end test that
+// inserts nodes by hand. Only an indexer walking a real tree decides how deep the
 // packages are.
+//
+// The unit table now carries one-segment keys and sees it too — faster, and it is
+// the first thing to fail. This tier still earns its place: it is the only one
+// that proves the edge reaches PackageGraph.Edges, which is what topology_affected
+// actually reads, rather than proving a function returned a string.
 
 // writeSourceTree writes each rel → content under root, creating directories.
 func writeSourceTree(t *testing.T, root string, files map[string]string) {

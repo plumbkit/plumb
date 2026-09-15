@@ -437,7 +437,8 @@ func TestReachabilityGoOnlyRefusal(t *testing.T) {
 // stdlib path of one or two segments (`fmt`, `strings`, `errors` here, and
 // `net/http`), but a path of three or more can reach a local directory sharing
 // its tail — so adding `net/http/httptest` plus a top-level httptest/ would
-// produce an edge and fire the t.Fatalf below, correctly and confusingly.
+// produce an edge and break the zero-edge expectation this fixture exists to
+// create, correctly and confusingly.
 func buildStdlibOnlyFixture(t *testing.T) *topology.Store {
 	t.Helper()
 	ws := t.TempDir()
