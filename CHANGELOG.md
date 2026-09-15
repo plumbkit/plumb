@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`make verify` no longer passes silently while it only compiles the
+  integration suite.** The target is documented across the repo as the definition
+  of "ready to commit", but it ran `build-integration` (`go vet -tags=integration
+  ./...`) and never `integration-test`. A change that inverted a fail-closed
+  guarantee held by an integration test therefore came back green from both
+  checks a contributor is told to run, and was written up, reviewed and submitted
+  on the strength of that green before CI caught it.
+
+  `verify` now prints, on success, that the suite was compiled and not run, and
+  names `make integration-test`. A new `verify-full` target is the same gates
+  plus the suite, run once rather than twice, and the docs name it as the
+  pre-submit gate. `verify` stays fast on purpose rather than gaining the suite
+  as a prerequisite: the suite needs language servers and would add its whole
+  runtime to every local loop, while CI already runs it in the separate
+  `integration` job, which installs gopls and pyright. Note that
+  `make integration-test` SKIPS tests whose language server is absent — a green
+  `verify-full` on a machine without them is not the whole suite.
+
 ## 0.19.4 (2026-09-16)
 
 ### Added

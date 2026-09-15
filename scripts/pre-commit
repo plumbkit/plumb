@@ -1,6 +1,6 @@
 #!/bin/sh
 # Pre-commit: build + format + lint.
-# For the full sweep (including tests) run: make verify
+# For the full sweep (including tests) run: make verify-full
 set -e
 go build ./...
 
@@ -26,7 +26,7 @@ fi
 if [ -z "$GOLANGCI_LINT" ]; then
 	echo "pre-commit: golangci-lint not found on PATH, in \$GOBIN, or in \$GOPATH/bin." >&2
 	echo "  install it (https://golangci-lint.run/welcome/install/), or set GOBIN," >&2
-	echo "  or commit with --no-verify if you must and run 'make verify' before pushing." >&2
+	echo "  or commit with --no-verify if you must and run 'make verify-full' before pushing." >&2
 	exit 1
 fi
 

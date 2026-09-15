@@ -76,12 +76,12 @@ Detailed rules and exceptions live in [`docs/contributing.md`](docs/contributing
 - Keep tests beside code and table-driven where appropriate. `internal/lsp`, `internal/cache`, and `internal/tools` require meaningful coverage; write-tool tests use `WriteDeps{}` and session-isolation tests stay with the package they protect.
 - Internal tool-to-tool `Execute` calls use canonical parameter names because aliases resolve only at the MCP dispatch boundary.
 - Gate tests needing external binaries with `//go:build integration`; do not chase TUI coverage.
-- Use `topology_affected` during the edit loop. Before delivery run `make verify`; run `make lint-cross` after platform-constrained or linter-config changes. `make cover` and `make vuln` remain separate CI/on-demand gates.
+- Use `topology_affected` during the edit loop. Before delivery run `make verify-full`; run `make lint-cross` after platform-constrained or linter-config changes. `make cover` and `make vuln` remain separate CI/on-demand gates.
 - `make test` puts `t.TempDir()` under repository `.testcache`; tests must not assume a system-temp ancestry.
 
 ## Delivery and risk
 
-- `make install-hooks` is required after cloning; `make verify` defines ready to commit. `make help` and [`docs/contributing.md`](docs/contributing.md) own the full command matrix.
+- `make install-hooks` is required after cloning; `make verify-full` (verify + the integration suite) defines ready to commit. `make help` and [`docs/contributing.md`](docs/contributing.md) own the full command matrix.
 - Version resolution is exact tag → `VERSION` → short commit. After rebuilding, run `plumb restart`; source changes do not activate in an old daemon.
 - Use conventional commit types (`feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `chore`). Keep changes bisectable and add a `CHANGELOG.md` entry for each discrete change.
 - Treat concurrency, the rate limiter, read tracking, and the stats schema as high-risk invariants; inspect their tests and architecture before editing.
