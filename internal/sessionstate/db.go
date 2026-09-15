@@ -311,12 +311,16 @@ func migrateV7(db *sql.DB) error {
 		return fmt.Errorf("sessionstate: migrate v7 (session_names.name_revision): %w", err)
 	}
 	// The name index serves the reservation lookup, which now runs on every
-	// name draw. It is deliberately NOT unique: legacy rows can already hold
-	// the same name twice (before this release a name was only unique among
-	// LIVE sessions, and a pruned row's name could be redrawn by another
-	// proxy), and a unique index would fail the migration on exactly the
-	// databases that most need it. LegacyNameConflicts reports those rows
-	// instead of silently choosing an owner.
+	// name draw. It is deliberately NOT unique, and that is not only about
+	// history: a name was once unique only among LIVE sessions, and a serve
+	// RESTART minted a second row for a name the first still held, so duplicates
+	// could be written at any time. A unique index would fail the migration on
+	// exactly the databases that most need it, and a name held by two different
+	// conversations is a standing ambiguity rather than a thing to be resolved on
+	// migration. Every one of those rows is legitimate history — the durable proof
+	// of which session a reconnecting proxy is — so a conversation's own
+	// superseded rows are collapsed when the name is READ (see independentClaims)
+	// and never deleted.
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
 		return fmt.Errorf("sessionstate: migrate v7 (idx_sn_name): %w", err)
 	}
