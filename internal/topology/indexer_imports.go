@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"path"
 	"strings"
 )
@@ -70,8 +71,12 @@ func (idx *Indexer) linkImportsContext(ctx context.Context, mode rebuildMode, ch
 		return tx.Commit()
 	}
 	pkgIDs := packageIDsByDir(pkgsByDir)
+	// Resolved once per pass, not per import: one query plus a handful of small
+	// reads, against a set that cannot change while this transaction is open.
+	mods := goModulesInIndex(ctx, tx, idx.workspace)
+	slog.Debug("topology: link imports: modules", "count", len(mods), "modules", describeModules(mods))
 	//nolint:gosec // G202: where is an internal fixed SQL fragment
-	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified
+	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified, n.language
 		FROM topology_nodes n
 		WHERE n.kind = ? AND n.qualified <> ''`+where, string(KindImport))
 	if err != nil {
@@ -84,12 +89,12 @@ func (idx *Indexer) linkImportsContext(ctx context.Context, mode rebuildMode, ch
 	var links []link
 	for rows.Next() {
 		var id int64
-		var qualified string
-		if err := rows.Scan(&id, &qualified); err != nil {
+		var qualified, language string
+		if err := rows.Scan(&id, &qualified, &language); err != nil {
 			rows.Close()
 			return fmt.Errorf("topology: link imports: scan: %w", err)
 		}
-		dir, ok := matchImportDir(qualified, pkgIDs)
+		dir, ok := importTargetDir(qualified, language, pkgIDs, mods)
 		if !ok {
 			continue
 		}
@@ -158,6 +163,34 @@ func packageIDsByDir(in map[string][]packageNode) map[string][]int64 {
 	return out
 }
 
+// importTargetDir resolves one import node to the workspace-relative directory
+// it names, or reports that it names none.
+//
+// Go goes through its declared modules (indexer_imports_module.go) and, once
+// they have decided, STOPS there. That is the load-bearing line: a Go import
+// the module set does not claim is stdlib or third-party, and falling through
+// to the suffix matcher is exactly how such an import reaches a local directory
+// that happens to share its tail. Only an undecided answer — no module declared
+// anywhere in this workspace — reaches the fallback.
+//
+// Every other language reaches it unconditionally, because none of them has a
+// manifest this pass reads. Their import nodes are also mostly single-segment
+// or file-shaped (see matchImportDir), so the suffix matcher is doing very
+// little for them; making it exact is per-language work, one manifest at a
+// time, and none of it is in scope here.
+func importTargetDir(qualified, language string, pkgsByDir map[string][]int64, mods []goModule) (string, bool) {
+	if language == "go" {
+		if dir, decided := resolveGoImport(qualified, mods); decided {
+			if dir == "" {
+				return "", false
+			}
+			_, indexed := pkgsByDir[dir]
+			return dir, indexed
+		}
+	}
+	return matchImportDir(qualified, pkgsByDir)
+}
+
 func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, bool) {
 	cleaned := strings.Trim(path.Clean(strings.TrimSpace(qualified)), "/")
 	if cleaned == "" || cleaned == "." {
@@ -185,8 +218,7 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 		// segments is therefore a proxy for provenance — a good one at two segments,
 		// and no more than that, which is what the list below is about.
 		//
-		// What this does NOT separate, all of it the suffix-matching class PLAN-380
-		// owns and none of it new here:
+		// What this does NOT separate — and, for Go, no longer has to:
 		//
 		//   - a THIRD-PARTY import reaching a local package of the same name
 		//     (github.com/boltdb/store → a local store/);
@@ -194,14 +226,21 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 		//     enough to pass (net/http/httptest → a local httptest/,
 		//     database/sql/driver → a local driver/);
 		//   - a module path of ONE dotless segment (`module myapp`), where myapp/stats
-		//     is refused and such a repository keeps the no-edges behaviour it had
-		//     before. Not fixed rather than newly broken.
+		//     is refused because no count can tell it from a stdlib root.
 		//
-		// Resolving the module path from go.mod and requiring the import to start
-		// with it settles every line above exactly, for Go. That is PLAN-380, and it
-		// is the reason this pass tolerates a heuristic in the meantime: the resolver
-		// is recall-biased, so an extra package in the affected set costs a test run
-		// while a missing one costs a regression.
+		// All three are settled for Go by the module path in go.mod, which
+		// importTargetDir consults first and which never falls through to here
+		// (indexer_imports_module.go). A Go import reaches this matcher in exactly
+		// one case: the workspace declares no module at all, and then the list above
+		// is the behaviour it gets. Every other language reaches it always, so the
+		// list is still live for them — and still the best available, since none of
+		// them has a manifest this pass reads.
+		//
+		// Where it is still live, it stays deliberately recall-biased: an extra
+		// package in the affected set costs a test run, a missing one costs a
+		// regression. That is the right bias for a matcher with no manifest behind
+		// it, and the wrong one to keep once there is a manifest — which is why Go
+		// no longer arrives here.
 		if len(segs)-start < minImportSegments && start < minImportSegments {
 			continue
 		}

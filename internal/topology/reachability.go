@@ -28,15 +28,17 @@ type PackageInfo struct {
 // (extractor-owned), followed by that import node's imports edge to a package
 // node in the target directory (import-resolver-owned) — into direct
 // Dir -> Dir edges. This is package-level identity by construction: it reuses
-// exactly the edges matchImportDir/minImportSegments already validated, and
-// inherits their limits exactly. Those limits are a SEGMENT-COUNT heuristic, not
-// a guarantee about where an import came from: a stdlib path of one or two
-// segments (`strings`, `net/http`) never produces an edge here, while one of
-// three or more (`net/http/httptest`) can reach a local directory of the same
-// tail, as can a third-party path (`github.com/boltdb/store` → a local store/).
-// Both are the same suffix-matching class, and PLAN-380 — resolve the module
-// path from go.mod and require the import to start with it — is what would make
-// this paragraph an absolute statement rather than a qualified one.
+// exactly the edges the import resolver validated, and inherits its limits
+// exactly — which now differ by language.
+//
+// For Go in a workspace that declares a module, the guarantee is absolute: an
+// import is linked only when a declared module path claims it, so no stdlib or
+// third-party import produces an edge here, whatever its shape or length. For
+// every other language, and for Go in a workspace with no go.mod the index has
+// seen, the resolver falls back to suffix matching bounded by a segment count —
+// a heuristic, not a statement of provenance: a stdlib path of three segments or
+// more (`net/http/httptest`) can reach a local directory of the same tail, as
+// can a third-party path (`github.com/boltdb/store` → a local store/).
 //
 // PRODUCTION ONLY: an edge whose importing file is a Go `_test.go` file is
 // deliberately excluded. Go forbids real import cycles, so every cycle this

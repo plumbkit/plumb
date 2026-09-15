@@ -432,13 +432,14 @@ func TestReachabilityGoOnlyRefusal(t *testing.T) {
 // workspace had TotalEdges()==0 and len(g.Dirs)>1, so the Go-only guard fired
 // on a genuine Go workspace and told its user it "wasn't Go".
 //
-// The zero rests on the fixture's import SHAPES, not on a blanket rule, and
-// that is worth keeping straight if you edit it. matchImportDir refuses a
-// stdlib path of one or two segments (`fmt`, `strings`, `errors` here, and
-// `net/http`), but a path of three or more can reach a local directory sharing
-// its tail — so adding `net/http/httptest` plus a top-level httptest/ would
-// produce an edge and break the zero-edge expectation this fixture exists to
-// create, correctly and confusingly.
+// The zero rests on this fixture writing NO go.mod, and that is worth keeping
+// straight if you edit it. With a module declared, the resolver refuses every
+// stdlib import outright and the zero is guaranteed. Without one it falls back
+// to suffix matching, which refuses a stdlib path of one or two segments (`fmt`,
+// `strings`, `errors` here) but lets one of three or more reach a local
+// directory sharing its tail — so adding `net/http/httptest` plus a top-level
+// httptest/, and still no go.mod, would produce an edge and break the zero-edge
+// expectation this fixture exists to create, correctly and confusingly.
 func buildStdlibOnlyFixture(t *testing.T) *topology.Store {
 	t.Helper()
 	ws := t.TempDir()
