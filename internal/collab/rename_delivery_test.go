@@ -163,7 +163,7 @@ func TestClaimableNotes_CountsBoundMailAfterARename(t *testing.T) {
 		Addressee: "gentle-mink", AddresseeID: id,
 	}, now)
 
-	listed, err := s.ClaimableNotes(ctx, Claimant{Name: "icy-beaver", ID: id}, now)
+	listed, err := s.ClaimableNotes(ctx, Claimant{Name: "icy-beaver", ID: id}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestClaimableNotes_CountsBoundMailAfterARename(t *testing.T) {
 
 	// And it stays closed to a stranger holding the addressee's name, so the
 	// widening the preview inherits is the owner's alone.
-	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "gentle-mink", ID: "sess-stranger"}, now)
+	listed, err = s.ClaimableNotes(ctx, Claimant{Name: "gentle-mink", ID: "sess-stranger"}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
