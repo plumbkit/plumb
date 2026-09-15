@@ -243,7 +243,9 @@ func writeSessionFileAtomic(path string, info Info) error {
 // holds the name string — so two sessions under one name make delivery
 // ambiguous: ClaimNotes' atomic claim hands the message to whichever asks first
 // and the intended recipient never sees it. Renaming to the name you already
-// hold is allowed. An ended session reserves its name only while its durable
+// hold is allowed, INCLUDING when a reservation claims it: the name is already
+// this session's, and a reservation exists to keep a name for the identity
+// entitled to it. An ended session reserves its name only while its durable
 // identity is still recoverable; plain Rename passes no reservations and so
 // checks live sessions alone, exactly as it always did.
 //
@@ -281,7 +283,13 @@ func rename(id, name string, reserved Reserved) (string, error) {
 		if err != nil {
 			return err
 		}
-		if nameTaken(live, name, id) || reserved.taken(name, id) {
+		// A reservation for the name this session already holds is not a collision —
+		// the name is already its own, and the contract above (and docs/tools.md)
+		// promises this no-op rename is allowed. Without the second clause a stale
+		// claim, such as an older generation of the same conversation that
+		// sessionstate collapses only in its ANSWERS, refuses it. Case-insensitive
+		// because every other name comparison here is.
+		if nameTaken(live, name, id) || (!strings.EqualFold(name, info.Name) && reserved.taken(name, id)) {
 			return fmt.Errorf("%w: %q", ErrNameTaken, name)
 		}
 		info.Name = name
