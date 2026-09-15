@@ -27,11 +27,15 @@
   the module containing it can.
 
   The suffix matcher remains for every other language, none of which has a
-  manifest this pass reads, and for Go in a workspace where no `go.mod` reached
-  the index — module resolution's failure mode is "I don't know", never "no local
-  package exists", so a repository whose `go.mod` is excluded loses no edges it
-  had. Verified against plumb's own tree: the same 55 distinct import paths
-  resolve before and after, with no path lost and none gained.
+  manifest this pass reads, and for Go wherever the module set is not known to be
+  whole — no `go.mod` reached the index, or one of them declared nothing this
+  parser would accept. That second case matters as much as the first: a module
+  plumb could not read is still a module, so refusing an import it might have
+  claimed would turn "I could not read that" into "no local package exists".
+  Module resolution's failure mode is "I don't know", so a repository whose
+  `go.mod` is excluded, oversized or oddly spelled loses no edges it had.
+  Verified against plumb's own tree: the same 55 distinct import paths resolve
+  before and after, with no path lost and none gained.
 
 - **A repository whose packages live at the top level got no import edges at
   all.** The import resolver keys packages by their workspace-relative

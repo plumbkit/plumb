@@ -149,8 +149,16 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace strin
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("topology: resolver surface fingerprint rows: %w", err)
 	}
-	for _, m := range goModulesInIndex(ctx, db, workspace) {
+	mods := goModulesInIndex(ctx, db, workspace)
+	for _, m := range mods.mods {
 		seen["gomod\x00"+m.dir+"\x00"+m.path] = struct{}{}
+	}
+	if !mods.complete {
+		// Completeness decides whether an unclaimed Go import is refused or handed
+		// to the suffix matcher, so it changes edges on its own — deleting a go.mod
+		// nothing could parse restores the refusals without adding or removing a
+		// single module entry above.
+		seen["gomod\x00incomplete"] = struct{}{}
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {

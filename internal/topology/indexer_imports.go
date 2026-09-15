@@ -72,10 +72,15 @@ func (idx *Indexer) linkImportsContext(ctx context.Context, mode rebuildMode, ch
 	}
 	pkgIDs := packageIDsByDir(pkgsByDir)
 	// Resolved once per pass, not per import: one query plus a handful of small
-	// reads, against a set that cannot change while this transaction is open.
+	// reads. The transaction fixes the list of go.mod PATHS; their contents are
+	// ordinary filesystem reads with no isolation, so a go.mod written mid-pass
+	// may or may not be seen. That self-heals rather than sticking: the same write
+	// produces a file event, and the next cycle's fingerprint disagrees with the
+	// stored one and rebuilds.
 	mods := goModulesInIndex(ctx, tx, idx.workspace)
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.Debug("topology: link imports: modules", "count", len(mods), "modules", describeModules(mods))
+		slog.Debug("topology: link imports: modules",
+			"count", len(mods.mods), "complete", mods.complete, "modules", describeModules(mods))
 	}
 	//nolint:gosec // G202: where is an internal fixed SQL fragment
 	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified, n.language
@@ -180,9 +185,9 @@ func packageIDsByDir(in map[string][]packageNode) map[string][]int64 {
 // or file-shaped (see matchImportDir), so the suffix matcher is doing very
 // little for them; making it exact is per-language work, one manifest at a
 // time, and none of it is in scope here.
-func importTargetDir(qualified, language string, pkgsByDir map[string][]int64, mods []goModule) (string, bool) {
+func importTargetDir(qualified, language string, pkgsByDir map[string][]int64, set goModuleSet) (string, bool) {
 	if language == "go" {
-		if dir, decided := resolveGoImport(qualified, mods); decided {
+		if dir, decided := resolveGoImport(qualified, set); decided {
 			if dir == "" {
 				return "", false
 			}
