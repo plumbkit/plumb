@@ -74,7 +74,9 @@ func (idx *Indexer) linkImportsContext(ctx context.Context, mode rebuildMode, ch
 	// Resolved once per pass, not per import: one query plus a handful of small
 	// reads, against a set that cannot change while this transaction is open.
 	mods := goModulesInIndex(ctx, tx, idx.workspace)
-	slog.Debug("topology: link imports: modules", "count", len(mods), "modules", describeModules(mods))
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.Debug("topology: link imports: modules", "count", len(mods), "modules", describeModules(mods))
+	}
 	//nolint:gosec // G202: where is an internal fixed SQL fragment
 	rows, err := tx.QueryContext(ctx, `SELECT n.id, n.qualified, n.language
 		FROM topology_nodes n
@@ -230,11 +232,14 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 		//
 		// All three are settled for Go by the module path in go.mod, which
 		// importTargetDir consults first and which never falls through to here
-		// (indexer_imports_module.go). A Go import reaches this matcher in exactly
-		// one case: the workspace declares no module at all, and then the list above
-		// is the behaviour it gets. Every other language reaches it always, so the
-		// list is still live for them — and still the best available, since none of
-		// them has a manifest this pass reads.
+		// (indexer_imports_module.go). A Go import reaches this matcher only when no
+		// go.mod the INDEX holds yields a module path it believes — which is not the
+		// same as "the repository declares no module": a go.mod excluded by
+		// [topology] exclude_patterns, or one spelled in a way parseModulePath
+		// refuses, both land here, and the list above is the behaviour they get.
+		// Every other language reaches it always, so the list is still live for them
+		// — and still the best available, since none of them has a manifest this pass
+		// reads.
 		//
 		// Where it is still live, it stays deliberately recall-biased: an extra
 		// package in the affected set costs a test run, a missing one costs a
