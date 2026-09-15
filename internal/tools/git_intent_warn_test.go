@@ -453,11 +453,16 @@ func TestFormatRepoIntentWarning_ClampKeepsTheFinalNewline(t *testing.T) {
 			t.Errorf("budget %d: warning is %d bytes — the newline must be reserved "+
 				"from the budget, not appended past it", budget, len(out))
 		}
-		// The join itself, asserted the way the caller performs it.
-		for _, line := range strings.Split(out+"On branch main", "\n") {
-			if strings.Contains(line, "claimed:") && strings.Contains(line, "On branch main") {
-				t.Errorf("budget %d: git output shares a line with the warning: %q", budget, line)
-			}
+		// The join itself, asserted the way runGit performs it.
+		//
+		// Phrased as "the git text starts a line" rather than "no line holds both
+		// the warning's vocabulary and the git text", because the clamp does not
+		// always leave that vocabulary behind: at budget 80 the cut lands inside
+		// the 97-byte header, so "claimed:" is absent and a vocabulary scan would
+		// pass a weld it never looked at. This holds wherever the cut lands.
+		if !strings.Contains(out+"On branch main", "\nOn branch main") {
+			t.Errorf("budget %d: git output must start its own line; joined tail was %q",
+				budget, (out + "On branch main")[max(0, len(out)-40):])
 		}
 	}
 }
