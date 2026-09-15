@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+// TestMatchImportDir covers the FALLBACK matcher. Since PLAN-380 a Go import
+// reaches it only in a workspace that declares no module the index has seen;
+// every other language reaches it always. The residue cases below are therefore
+// still true of this function, and no longer true of Go in an ordinary
+// repository — see TestImportTargetDir_GoDoesNotFallBack for the dispatch that
+// decides which one answers.
 func TestMatchImportDir(t *testing.T) {
 	pkgs := map[string][]int64{
 		"internal/stats": {1},
@@ -31,9 +37,11 @@ func TestMatchImportDir(t *testing.T) {
 		// every repository whose packages live at the root got no edges at all.
 		{"package one directory deep", "example.com/m/store", "store", true},
 		// The cost of the line above, stated rather than discovered: a third-party
-		// import whose last segment matches a top-level local package now binds to
-		// it. PLAN-380 owns this false-positive class for longer suffixes; the
-		// resolver is recall-biased, so an extra package costs a test run.
+		// import whose last segment matches a top-level local package binds to it.
+		// For Go this is now unreachable wherever a go.mod is indexed — the module
+		// path refuses it before this matcher is consulted — so what remains here is
+		// the no-manifest case, where the resolver stays recall-biased and an extra
+		// package costs a test run.
 		{"third-party import reaching a local package of the same name", "github.com/boltdb/store", "store", true},
 		// The regression an independent review caught before this shipped. net/http
 		// HAS a segment to strip, so a rule that only guarded the whole-path candidate
@@ -45,13 +53,13 @@ func TestMatchImportDir(t *testing.T) {
 		{"two-segment stdlib import, second root", "encoding/json", "", false},
 		// What the segment count cannot separate, pinned so it is a known residue
 		// rather than a surprise: a stdlib path of three segments has finally spent
-		// enough prefix to pass. PLAN-380 (resolve the module path from go.mod) is
-		// what closes this exactly; flip this case when it lands.
+		// enough prefix to pass. Closed for Go by module resolution, which is why
+		// this case describes the fallback and not what a Go repository experiences.
 		{"three-segment stdlib import still reaches its tail", "net/http/httptest", "httptest", true},
-		// And the cost on the other side: a ONE-segment dotless module path
-		// (`module myapp`) cannot be told from a stdlib root, so a repository laid out
-		// that way keeps the no-edges behaviour it had before — not fixed, rather than
-		// newly broken. PLAN-380 fixes this one too.
+		// And the cost on the other side: by counting alone a ONE-segment dotless
+		// module path (`module myapp`) cannot be told from a stdlib root. go.mod can,
+		// and does — TestResolveGoImport_OneSegmentModuleIsResolvable pins that
+		// myapp/stats resolves once the module is declared.
 		{"one-segment module path is not separable from a stdlib root", "myapp/stats", "", false},
 		// Longest suffix still wins: internal/stats is preferred over the top-level
 		// stats/ that also sits in the map.

@@ -4,6 +4,35 @@
 
 ### Fixed
 
+- **A Go import is now resolved by what `go.mod` declares, not by matching the
+  end of its path.** The import resolver linked an import to a local package by
+  matching the longest suffix of the import path that named an indexed
+  directory, with a segment count standing in for "did this have a module prefix
+  in front of it". That is a proxy for where an import came from, and it cannot
+  settle the cases where it matters: `github.com/boltdb/store` was
+  indistinguishable from `example.com/m/store` in a repository with a top-level
+  `store/`, a standard-library path of three segments or more reached a local
+  directory sharing its tail (`net/http/httptest` → `httptest/`), and a module
+  path of one dotless segment (`module myapp`, legal Go) could not be told from
+  a standard-library root at all, so `myapp/stats` was refused.
+
+  plumb now reads the `module` directive from every `go.mod` the index has
+  already seen, and a Go import is linked only when a declared module path
+  claims it — in which case the remainder of the import path *is* its directory,
+  relative to that module's own root, exactly. An import no module claims is
+  standard-library or third-party and names no local package, so it links to
+  nothing; it is never handed to the suffix matcher as a second chance, which is
+  what made the false positives above possible. Nested modules work: the longest
+  matching module path wins, so a module at `sub/` claims its own subtree before
+  the module containing it can.
+
+  The suffix matcher remains for every other language, none of which has a
+  manifest this pass reads, and for Go in a workspace where no `go.mod` reached
+  the index — module resolution's failure mode is "I don't know", never "no local
+  package exists", so a repository whose `go.mod` is excluded loses no edges it
+  had. Verified against plumb's own tree: the same 55 distinct import paths
+  resolve before and after, with no path lost and none gained.
+
 - **A repository whose packages live at the top level got no import edges at
   all.** The import resolver keys packages by their workspace-relative
   directory, and refused to match any candidate shorter than two path segments
