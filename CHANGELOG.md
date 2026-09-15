@@ -94,9 +94,6 @@
   to act on one instruction. Under `[collab] keep_delivered_notes`, permanence is
   stamped by the claim rather than the preview, so a previewed-but-unread note
   keeps its ordinary unread TTL.
-## 0.19.3 (unreleased)
-
-### Fixed
 
 - **Mail now reaches the session it was written for, even when that session comes
   back under a different name.** A note records the session it is bound to in
