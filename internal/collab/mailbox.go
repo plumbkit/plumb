@@ -79,28 +79,64 @@ func (c Claimant) identities() []string {
 	return out
 }
 
-// addresseeMatch builds the identity half of the delivery predicate together
-// with its arguments, so the placeholder count and the values bound to them
-// cannot disagree — the failure a separate SQL constant and args function
-// invites once the number of identities stops being fixed.
+// addresseeMatch builds the WHOLE addressing predicate — "is this row addressed
+// to this claimant?" — together with its arguments, so the placeholder count and
+// the values bound to them cannot disagree: the failure a separate SQL constant
+// and args function invites once the number of identities stops being fixed.
 //
-// A row with an empty addressee_id is unbound and keeps the historical
-// name-only semantics; a bound one is readable only by a session presenting the
-// ID it names.
+// The two arms answer that question in the only two forms a row can carry it:
 //
-// This is what stops a session name being an identity. Names come from a small
-// pool, an ended session does not reserve its name, and rename_session lets a
-// session pick one — so a note left for a peer that exits before reading it
-// would otherwise be handed to whoever next answers to that name, with the
-// sender told it was delivered to the peer it meant.
-func addresseeMatch(who Claimant) (string, []any) {
+//   - BOUND (addressee_id set): the row names the session it belongs to, and the
+//     identity decides. The name is not consulted at all.
+//   - UNBOUND (addressee_id empty): there is no identity on the row, so the name
+//     is all there is — every pre-v3 row, every note to a peer that was not live
+//     when it was sent, and every "next" row, which is unbound by construction.
+//
+// The name arm used to be a SEPARATE, mandatory term: a row had to match the
+// claimant's current name AND then survive the identity check. That made a
+// session's display name a precondition for reading mail the row already proved
+// was its own, and a name is not stable — an identity recovery that cannot
+// reapply the stored name leaves the session running under a generated one
+// (internal/cli/conn_restore.go). A note bound to that session's ID then became
+// permanently unreadable by the only session entitled to it, while the sender
+// saw a successful send. It was not a delivery delay: mail bound to a session
+// expires unread rather than passing to a later holder of the name, so the
+// message was silently lost.
+//
+// Asking the identity question first is also what makes delivery agree with
+// membershipPredicate, which has always keyed on identity with a name fallback
+// for unbound rows. While the two disagreed, workspace_sessions' conversation
+// volume could report an unread note that no receive path would ever hand over.
+//
+// This still stops a session name being an identity, which is the property
+// addressee_id was added for. Names come from a small pool, an ended session
+// does not reserve its name, and rename_session lets a session pick one — so a
+// bound row is readable ONLY by a session presenting the ID it names, and a
+// stranger answering to the addressee's name reads nothing. The change widens
+// delivery to the row's rightful owner and to nobody else.
+//
+// includeNext admits the reserved "next" address, which is a first-claimer race
+// rather than a mailbox. Callers that list rather than claim pass false: see
+// PendingNotes.
+func addresseeMatch(who Claimant, includeNext bool) (string, []any) {
 	ids := who.identities()
 	marks := make([]string, len(ids))
-	args := make([]any, len(ids))
+	args := make([]any, 0, len(ids)+2)
 	for i, id := range ids {
-		marks[i], args[i] = "?", id
+		marks[i] = "?"
+		args = append(args, id)
 	}
-	return `AND (addressee_id = '' OR addressee_id IN (` + strings.Join(marks, ", ") + `))`, args
+	// An anonymous claimant (empty ID, no inheritance) yields `addressee_id IN
+	// ('')`, which the `addressee_id != ''` guard in front of it makes
+	// unsatisfiable — so it matches unbound rows by name alone, exactly as before.
+	name := `addressee = ?`
+	args = append(args, who.Name)
+	if includeNext {
+		name = `(addressee = ? OR addressee = ?)`
+		args = append(args, AddresseeNext)
+	}
+	return `AND ((addressee_id != '' AND addressee_id IN (` + strings.Join(marks, ", ") + `))
+			    OR (addressee_id = '' AND ` + name + `))`, args
 }
 
 // notAuthoredBy builds the sender-exclusion half of the delivery predicate,
@@ -152,13 +188,13 @@ func notAuthoredBy(who Claimant) (string, []any) {
 // identities widens it. target_workspace is its own AND term, so an inherited ID
 // never reaches another project's mail. Both remain exactly as strict as before.
 func claimable(who Claimant, now time.Time) (string, []any) {
-	idSQL, idArgs := addresseeMatch(who)
+	idSQL, idArgs := addresseeMatch(who, true)
 	authorSQL, authorArgs := notAuthoredBy(who)
 	where := `kind = ? AND delivered_at = 0 AND expires_at > ?
-			   AND (addressee = ? OR addressee = ?) ` + idSQL + `
+			   ` + idSQL + `
 			   ` + authorSQL + `
 			   AND (target_workspace = '' OR target_workspace = ?)`
-	args := append([]any{string(KindNote), now.UnixNano(), who.Name, AddresseeNext}, idArgs...)
+	args := append([]any{string(KindNote), now.UnixNano()}, idArgs...)
 	args = append(args, authorArgs...)
 	return where, append(args, who.Workspace)
 }
@@ -265,15 +301,20 @@ func (s *Store) PendingNotes(ctx context.Context, who Claimant, now time.Time) (
 	if s == nil || s.db == nil || who.Name == "" {
 		return nil, nil
 	}
-	idSQL, idArgs := addresseeMatch(who)
-	args := append([]any{string(KindNote), who.Name, now.UnixNano()}, idArgs...)
+	// includeNext=false is this listing's own narrowing (see the doc comment), and
+	// it is now the ONLY thing separating it from claimable's addressing rule —
+	// the name arm it used to carry as a second, mandatory term is gone, so a note
+	// bound to this session reaches the listing even when the session is answering
+	// to a regenerated name.
+	idSQL, idArgs := addresseeMatch(who, false)
+	args := append([]any{string(KindNote), now.UnixNano()}, idArgs...)
 	//nolint:gosec // G202: idSQL is generated by addresseeMatch from a count, not from
 	// caller data — it contains only "?" placeholders and fixed SQL, and every identity
 	// is bound as a parameter. TestAddresseeMatch_InterpolatesNoData enforces that.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
-		 WHERE kind = ? AND addressee = ? AND delivered_at = 0 AND expires_at > ?
+		 WHERE kind = ? AND delivered_at = 0 AND expires_at > ?
 		   `+idSQL+`
 		   AND (target_workspace = '' OR target_workspace = ?)
 		 ORDER BY created_at DESC`,

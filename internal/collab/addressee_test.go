@@ -2,6 +2,7 @@ package collab
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -428,7 +429,16 @@ func TestClaimant_InheritedIDsReadTheirPredecessorAndNothingWider(t *testing.T) 
 		{"bound to this session itself", NoteInput{Addressee: "alice", AddresseeID: "sess-alice-2"}, true},
 		{"unbound", NoteInput{Addressee: "alice"}, true},
 		{"bound to a session it never was", NoteInput{Addressee: "alice", AddresseeID: "sess-someone-else"}, false},
-		{"addressed to another name", NoteInput{Addressee: "bob", AddresseeID: "sess-alice-1"}, false},
+		// Bound to the predecessor, but carrying the name that session answered to
+		// when the note was written rather than the one its heir answers to now.
+		// leave_note sets addressee_id to "the one live session that answered to the
+		// addressee's name", so on a BOUND row the name is a historical label and the
+		// ID is the identity — which makes this the same row as the case above it,
+		// seen after a rename. It used to be refused, and that refusal is the defect
+		// this predicate fixes: an identity recovery that cannot reapply the stored
+		// name leaves the session renamed, and its bound mail then expires unread
+		// rather than passing to anyone, while the sender is told it was delivered.
+		{"bound to the predecessor under the name it then held", NoteInput{Addressee: "bob", AddresseeID: "sess-alice-1"}, true},
 		{
 			"cross-project to another workspace, bound to the predecessor",
 			NoteInput{Addressee: "alice", AddresseeID: "sess-alice-1", TargetWorkspace: otherWS, OriginWorkspace: myWS},
@@ -563,17 +573,35 @@ func TestAddresseeMatch_InterpolatesNoData(t *testing.T) {
 	// so a blanket "no quotes" check would be testing the wrong thing.
 	values := append([]string{hostile.ID, hostile.Name}, hostile.InheritedIDs...)
 
-	idSQL, args := addresseeMatch(hostile)
-	for _, v := range values {
-		if strings.Contains(idSQL, v) {
-			t.Fatalf("generated SQL carries the caller value %q: %q", v, idSQL)
+	// Both arities, because the name arm's placeholder count varies with
+	// includeNext and a shape checked in only one of them is half-checked.
+	for _, tc := range []struct {
+		includeNext bool
+		wantArgs    int // 3 identities + the name, plus "next" when admitted
+	}{
+		{true, 5},
+		{false, 4},
+	} {
+		idSQL, args := addresseeMatch(hostile, tc.includeNext)
+		for _, v := range values {
+			if strings.Contains(idSQL, v) {
+				t.Fatalf("generated SQL carries the caller value %q: %q", v, idSQL)
+			}
 		}
-	}
-	if got, want := strings.Count(idSQL, "?"), len(args); got != want {
-		t.Fatalf("%d placeholders for %d arguments — a mismatch binds the wrong values", got, want)
-	}
-	if len(args) != 3 {
-		t.Fatalf("args = %v, want all three identities bound as parameters", args)
+		if got, want := strings.Count(idSQL, "?"), len(args); got != want {
+			t.Fatalf("%d placeholders for %d arguments — a mismatch binds the wrong values", got, want)
+		}
+		if len(args) != tc.wantArgs {
+			t.Fatalf("includeNext=%v: args = %v, want %d — every identity AND the name bound as parameters",
+				tc.includeNext, args, tc.wantArgs)
+		}
+		// The identities must actually be among the bound values, not merely counted:
+		// an arity that matches while the values are wrong is the silent direction.
+		for _, id := range append([]string{hostile.ID}, hostile.InheritedIDs...) {
+			if !slices.Contains(args, any(id)) {
+				t.Fatalf("includeNext=%v: identity %q is not bound: %v", tc.includeNext, id, args)
+			}
+		}
 	}
 
 	// And the whole predicate composes the same way.
