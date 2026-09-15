@@ -60,8 +60,9 @@ type PackageGraph struct {
 	// Go workspace: at least one KindPackage node with Language=="go". It
 	// exists to break a real ambiguity TotalEdges()==0 cannot resolve on its
 	// own: a genuine Go workspace can legitimately have zero FOLDABLE edges —
-	// every cross-package import might be stdlib-only (no local directory to
-	// link to), or the only cross-package import might live in a _test.go
+	// every cross-package import might be stdlib-only (usually no local directory
+	// to link to — see the segment-count limits above, which a three-segment stdlib
+	// path can still pass), or the only cross-package import might live in a _test.go
 	// file, which isTestGoImporter now deliberately excludes. Gating the
 	// Go-only refusal on TotalEdges() alone therefore told a real, small Go
 	// workspace it "wasn't Go"; HasGoSignal lets the refusal fire only when
