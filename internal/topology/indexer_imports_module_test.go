@@ -79,14 +79,14 @@ func TestParseModulePath(t *testing.T) {
 // answers, and collapsing them is how a third-party import reaches a local
 // directory that shares its tail.
 func TestResolveGoImport_ThreeOutcomes(t *testing.T) {
-	mods := []goModule{
+	mods := goModuleSet{complete: true, mods: []goModule{
 		{dir: "sub", path: "example.com/m/sub"}, // nested, longest first
 		{dir: ".", path: "example.com/m"},
-	}
+	}}
 	cases := []struct {
 		name        string
 		qualified   string
-		mods        []goModule
+		mods        goModuleSet
 		wantDir     string
 		wantDecided bool
 	}{
@@ -107,7 +107,7 @@ func TestResolveGoImport_ThreeOutcomes(t *testing.T) {
 		// separator would claim this and hand back "ools" as a directory.
 		{"module path is a string prefix but not a path prefix", "example.com/mtools/x", mods, "", true},
 		// Undecided: no module declared, so the suffix matcher still answers.
-		{"no modules known", "example.com/m/internal/stats", nil, "", false},
+		{"no modules known", "example.com/m/internal/stats", goModuleSet{complete: true}, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,7 +124,7 @@ func TestResolveGoImport_ThreeOutcomes(t *testing.T) {
 // document as unfixable: `module myapp` spends one segment, so no count can
 // tell myapp/stats from a stdlib root. go.mod settles it outright.
 func TestResolveGoImport_OneSegmentModuleIsResolvable(t *testing.T) {
-	mods := []goModule{{dir: ".", path: "myapp"}}
+	mods := goModuleSet{complete: true, mods: []goModule{{dir: ".", path: "myapp"}}}
 	if dir, decided := resolveGoImport("myapp/stats", mods); !decided || dir != "stats" {
 		t.Errorf("resolveGoImport(\"myapp/stats\") = (%q, %v), want (\"stats\", true) — a "+
 			"dotless single-segment module path is legal Go and its packages are local", dir, decided)
@@ -147,7 +147,7 @@ func TestImportTargetDir_GoDoesNotFallBack(t *testing.T) {
 		"httptest":       {2},
 		"internal/stats": {3},
 	}
-	mods := []goModule{{dir: ".", path: "example.com/m"}}
+	mods := goModuleSet{complete: true, mods: []goModule{{dir: ".", path: "example.com/m"}}}
 
 	for _, q := range []string{"github.com/boltdb/store", "net/http/httptest"} {
 		if dir, ok := importTargetDir(q, "go", pkgs, mods); ok {
@@ -171,7 +171,7 @@ func TestImportTargetDir_GoDoesNotFallBack(t *testing.T) {
 // the state in which a language check could be skipped by accident.
 func TestImportTargetDir_NonGoStillUsesSuffixMatching(t *testing.T) {
 	pkgs := map[string][]int64{"lib/format": {1}}
-	mods := []goModule{{dir: ".", path: "example.com/m"}}
+	mods := goModuleSet{complete: true, mods: []goModule{{dir: ".", path: "example.com/m"}}}
 
 	if dir, ok := importTargetDir("./lib/format", "typescript", pkgs, mods); !ok || dir != "lib/format" {
 		t.Errorf("importTargetDir(relative TS import) = (%q, %v), want (\"lib/format\", true)", dir, ok)
@@ -213,12 +213,15 @@ func TestGoModulesInIndex_OrdersByLongestModulePath(t *testing.T) {
 	insertTestFile(t, db, "tools/go.mod")
 
 	mods := goModulesInIndex(ctx, db, ws)
-	if len(mods) != 2 {
-		t.Fatalf("goModulesInIndex returned %d modules, want 2: %v", len(mods), mods)
+	if len(mods.mods) != 2 {
+		t.Fatalf("goModulesInIndex returned %d modules, want 2: %v", len(mods.mods), mods.mods)
 	}
-	if mods[0].path != "example.com/m/sub" {
+	if !mods.complete {
+		t.Error("both go.mod files parsed, so the set must be complete")
+	}
+	if mods.mods[0].path != "example.com/m/sub" {
 		t.Errorf("longest module path must sort first; got %q then %q",
-			mods[0].path, mods[1].path)
+			mods.mods[0].path, mods.mods[1].path)
 	}
 	// The answer the order decides, which is the reason the order matters.
 	if dir, decided := resolveGoImport("example.com/m/sub/pkg", mods); !decided || dir != "tools/pkg" {
@@ -253,9 +256,14 @@ func TestGoModulesInIndex_SkipsWhatItCannotBelieve(t *testing.T) {
 	// the walk and the link pass looks like.
 	insertTestFile(t, db, "gone/go.mod")
 
-	if mods := goModulesInIndex(ctx, db, ws); len(mods) != 0 {
+	mods := goModulesInIndex(ctx, db, ws)
+	if len(mods.mods) != 0 {
 		t.Fatalf("goModulesInIndex returned %v; an unbelievable directive must leave "+
-			"NO module, or every Go import in the repository is refused", mods)
+			"NO module, or every Go import in the repository is refused", mods.mods)
+	}
+	if mods.complete {
+		t.Error("a go.mod the parser declined must mark the set INCOMPLETE; a complete " +
+			"empty set would licence refusing every Go import in the workspace")
 	}
 }
 
@@ -306,6 +314,47 @@ func TestResolverSurfaceFingerprint_TracksTheModuleSet(t *testing.T) {
 	if renamed == initialised {
 		t.Error("renaming the module left the resolver fingerprint unchanged, so every " +
 			"edge stays resolved under a module path the repository no longer declares")
+	}
+}
+
+// TestResolveGoImport_IncompleteSetWithdrawsTheRefusal is the recall regression
+// an independent review found in the first version of this change, reproduced
+// live before it was fixed.
+//
+// With one go.mod parsed and another declined, the set was silently short a
+// module. An import into the UNPARSED module then matched nothing — and
+// "matched nothing" was read as "is not local", so the edge was refused and
+// lost, where before this change the suffix matcher would have found it.
+//
+// The refusal is only sound when the module set is known to be whole. An
+// incomplete set still resolves what it can, and is undecided about the rest.
+func TestResolveGoImport_IncompleteSetWithdrawsTheRefusal(t *testing.T) {
+	known := goModule{dir: ".", path: "example.com/m"}
+
+	complete := goModuleSet{complete: true, mods: []goModule{known}}
+	partial := goModuleSet{complete: false, mods: []goModule{known}}
+
+	// What a resolved module claims is unaffected by the gap elsewhere.
+	if dir, decided := resolveGoImport("example.com/m/a", partial); !decided || dir != "a" {
+		t.Errorf("a module that DID parse must still resolve its own imports; got (%q, %v)", dir, decided)
+	}
+	// What nothing claims is the difference, and it is the whole point.
+	if dir, decided := resolveGoImport("example.com/other/pkg", complete); !decided || dir != "" {
+		t.Errorf("complete set: an unclaimed import must be refused; got (%q, %v)", dir, decided)
+	}
+	if dir, decided := resolveGoImport("example.com/other/pkg", partial); decided {
+		t.Errorf("incomplete set: an unclaimed import must stay UNDECIDED so the suffix "+
+			"matcher answers; got (%q, decided) — refusing here turns \"a module I could "+
+			"not read\" into \"no local package exists\"", dir)
+	}
+	// And the dispatcher carries it through: with the gap, a Go import falls back
+	// and can reach a directory again, exactly as it did before this change.
+	pkgs := map[string][]int64{"other/pkg": {1}}
+	if dir, ok := importTargetDir("example.com/other/pkg", "go", pkgs, partial); !ok || dir != "other/pkg" {
+		t.Errorf("importTargetDir with an incomplete set = (%q, %v), want (\"other/pkg\", true)", dir, ok)
+	}
+	if _, ok := importTargetDir("example.com/other/pkg", "go", pkgs, complete); ok {
+		t.Error("importTargetDir with a complete set must refuse, not fall back")
 	}
 }
 
