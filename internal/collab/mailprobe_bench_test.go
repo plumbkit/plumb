@@ -272,6 +272,24 @@ const benchInsert = `INSERT INTO collab_rows
 	  expires_at, conversation_id, delivered_at, delivered_to, origin_workspace, target_workspace)
 	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, '', '')`
 
+// benchInsertBound is benchInsert with addressee_id set, so a fixture can hold a
+// row that is BOUND to a session rather than addressed by name alone.
+//
+// It exists because benchInsert cannot express one, and that gap was not
+// cosmetic: every row the mirror test seeded was unbound, so the bound arm of
+// the delivery predicate was never executed on either side of the comparison.
+// The two statements agree trivially on unbound rows; the bound arm is the half
+// that can actually drift.
+// boundFixtureBody marks the one fixture row that is bound to the claimant under
+// a name it does not answer to — the row the mirror test asserts it claimed.
+const boundFixtureBody = "bound under an older name"
+
+const benchInsertBound = `INSERT INTO collab_rows
+	 (kind, author_session, author_id, body, path_globs, addressee, created_at,
+	  expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
+	  target_workspace, addressee_id)
+	 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, '', '', ?)`
+
 // seedBackground fills the table with already-delivered notes for other
 // sessions, so no variant is measured against an empty table where SQLite's
 // plans are unrepresentatively cheap.
@@ -697,6 +715,31 @@ func TestMailprobePreparedClaim_MirrorsClaimNotes(t *testing.T) {
 			now.UnixNano(), now.Add(-time.Hour).UnixNano(), "ce", 0, ""); err != nil {
 			t.Fatalf("seed expired: %v", err)
 		}
+		// A BOUND row, deliberately carrying a name this claimant does NOT answer
+		// to. Delivery keys on the identity for such a row, so it must be claimed —
+		// and it is the only row here that distinguishes the current addressing rule
+		// from the one it replaced. Without it the mirror compares two statements on
+		// inputs they cannot disagree about.
+		//
+		// Seeded OLDEST so it survives ORDER BY created_at ASC LIMIT benchClaimLimit.
+		// A bound row added at the end of the fixture is inert: the limit cuts it
+		// before either statement sees it, and the guard goes quietly back to
+		// comparing unbound rows. boundFixtureBody below asserts it actually lands.
+		if _, err := s.db.ExecContext(ctx, benchInsertBound,
+			string(KindNote), "peer", "peer-id", boundFixtureBody, "some-other-name",
+			now.Add(-2*time.Second).UnixNano(), now.Add(time.Hour).UnixNano(), "cf", 0, "",
+			benchClaimant(me, "").ID); err != nil {
+			t.Fatalf("seed bound: %v", err)
+		}
+		// And one bound to somebody else, so the mirror also has to agree about a
+		// row neither statement may hand over. Also early, so exclusion is decided
+		// by the predicate rather than by the limit.
+		if _, err := s.db.ExecContext(ctx, benchInsertBound,
+			string(KindNote), "peer", "peer-id", "bound elsewhere", me,
+			now.Add(-time.Second).UnixNano(), now.Add(time.Hour).UnixNano(), "cg", 0, "",
+			"sess-not-mine"); err != nil {
+			t.Fatalf("seed bound elsewhere: %v", err)
+		}
 		return s
 	}
 
@@ -709,6 +752,21 @@ func TestMailprobePreparedClaim_MirrorsClaimNotes(t *testing.T) {
 	}
 	if len(want) == 0 {
 		t.Fatal("ClaimNotes claimed nothing; the fixture is not exercising the statement")
+	}
+	// The bound row must actually be among the claimed rows, not merely present in
+	// the table. It is the ONLY row that can tell the two statements apart, and the
+	// claim limit silently cuts whatever sorts last — so without this the guard
+	// degrades to comparing rows both statements agree about, and a prepared copy
+	// carrying a stale addressing rule passes. Verified by mutation.
+	var sawBound bool
+	for _, r := range want {
+		if r.Body == boundFixtureBody {
+			sawBound = true
+		}
+	}
+	if !sawBound {
+		t.Fatalf("the bound row never reached the claim (%d rows claimed); the mirror is no "+
+			"longer exercising the identity arm it exists to protect", len(want))
 	}
 
 	st, err := bStore.db.PrepareContext(ctx, preparedClaimSQL())
