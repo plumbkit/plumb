@@ -39,6 +39,31 @@
   Go, and is the next step; until then the resolver stays recall-biased, because
   an extra package in the affected set costs a test run while a missing one
   costs a regression.
+- **Mail now reaches the session it was written for, even when that session comes
+  back under a different name.** A note records the session it is bound to in
+  `addressee_id`, but delivery also required the row's addressee NAME to match the
+  claimant — the identity check could only narrow, never speak on its own. So a
+  session whose display name changed could not read mail the row already proved
+  was its own.
+
+  That is not hypothetical. When identity recovery cannot reapply a session's
+  stored name it runs under a generated one with its internal session ID
+  unchanged; every note bound to that session then became unreachable by every
+  receive path, while the sender saw a successful send. Because mail bound to a
+  session expires unread rather than passing to a later holder of the name, the
+  message was lost rather than delayed — and nothing in the exchange said so.
+
+  It also made two views of one row disagree: the membership predicate behind
+  `workspace_sessions`' conversation volume has always keyed on identity, so it
+  reported an unread note that no receive path would ever hand over.
+
+  A BOUND row is now matched on identity alone; the name on it is the label the
+  session answered to when the note was written, which `leave_note` resolves the
+  id from. An UNBOUND row keeps exact name semantics — every pre-v3 row, every
+  note to a peer that was not live, and every `next` row, which is unbound by
+  construction. This widens delivery to the row's rightful owner and to nobody
+  else: a stranger answering to the addressee's name still reads nothing, and so
+  does a claimant presenting no identity.
 
 ## 0.19.3 (2026-09-15)
 
@@ -94,32 +119,6 @@
   to act on one instruction. Under `[collab] keep_delivered_notes`, permanence is
   stamped by the claim rather than the preview, so a previewed-but-unread note
   keeps its ordinary unread TTL.
-
-- **Mail now reaches the session it was written for, even when that session comes
-  back under a different name.** A note records the session it is bound to in
-  `addressee_id`, but delivery also required the row's addressee NAME to match the
-  claimant — the identity check could only narrow, never speak on its own. So a
-  session whose display name changed could not read mail the row already proved
-  was its own.
-
-  That is not hypothetical. When identity recovery cannot reapply a session's
-  stored name it runs under a generated one with its internal session ID
-  unchanged; every note bound to that session then became unreachable by every
-  receive path, while the sender saw a successful send. Because mail bound to a
-  session expires unread rather than passing to a later holder of the name, the
-  message was lost rather than delayed — and nothing in the exchange said so.
-
-  It also made two views of one row disagree: the membership predicate behind
-  `workspace_sessions`' conversation volume has always keyed on identity, so it
-  reported an unread note that no receive path would ever hand over.
-
-  A BOUND row is now matched on identity alone; the name on it is the label the
-  session answered to when the note was written, which `leave_note` resolves the
-  id from. An UNBOUND row keeps exact name semantics — every pre-v3 row, every
-  note to a peer that was not live, and every `next` row, which is unbound by
-  construction. This widens delivery to the row's rightful owner and to nobody
-  else: a stranger answering to the addressee's name still reads nothing, and so
-  does a claimant presenting no identity.
 
 ## 0.19.2 (2026-09-15)
 

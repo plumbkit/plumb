@@ -182,3 +182,52 @@ func TestClaimableNotes_CountsBoundMailAfterARename(t *testing.T) {
 		t.Fatalf("the probe counted a stranger's view of a bound note: %v", bodies(listed))
 	}
 }
+
+// TestClaimableNotes_LimitDoesNotHideBoundMailBehindNewerUnboundMail is the
+// interaction between this predicate and the cap Peek passes it.
+//
+// The probe orders ORDER BY created_at ASC and applies LIMIT, so what survives a
+// cap is decided by AGE, not by how a row is addressed. That is the property
+// worth pinning: widening delivery to bound rows would be hollow if a cap then
+// preferred newer unbound rows and the bound one — the older, and the one whose
+// loss is silent and permanent — were the row that got cut.
+//
+// It is the same shape that silently disarmed the probe/claim mirror fixture,
+// where a bound row appended last was cut by benchClaimLimit before either
+// statement saw it.
+func TestClaimableNotes_LimitDoesNotHideBoundMailBehindNewerUnboundMail(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, now := context.Background(), time.Now()
+
+	const id = "sess-gentle-mink"
+	// Oldest: bound to this session under the name it answered to back then.
+	mustPut(t, s, NoteInput{
+		AuthorSession: "ancient-stag", AuthorID: "id-stag", Body: "bound and oldest",
+		Addressee: "gentle-mink", AddresseeID: id,
+	}, now.Add(-3*time.Minute))
+	// Newer, unbound, addressed to the name it answers to NOW.
+	for i, age := range []time.Duration{-2 * time.Minute, -time.Minute} {
+		mustPut(t, s, NoteInput{
+			AuthorID: "id-stag", Body: string(rune('a'+i)) + " newer unbound", Addressee: "icy-beaver",
+		}, now.Add(age))
+	}
+
+	renamed := Claimant{Name: "icy-beaver", ID: id}
+	capped, err := s.ClaimableNotes(ctx, renamed, now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 1 || capped[0].Body != "bound and oldest" {
+		t.Fatalf("a cap of 1 returned %v, want the oldest row — which is the bound one. A cap "+
+			"that prefers newer unbound mail hides the row whose loss is permanent", bodies(capped))
+	}
+
+	// Uncapped, everything the session is entitled to is there.
+	all, err := s.ClaimableNotes(ctx, renamed, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("uncapped = %v, want all three", bodies(all))
+	}
+}
