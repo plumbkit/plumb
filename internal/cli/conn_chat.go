@@ -247,7 +247,10 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	}
 
 	block := tools.RenderMessagePreview(tools.PreviewRows(named), inbox.Policy.ChatBudget(), time.Now())
-	block += tools.RenderNextWaiting(len(next))
+	// block == "" means no named note framed this with the "[Messages" header, so the
+	// "next" line has to carry its own or it lands glued to the end of the tool's own
+	// output. That is the common shape, not a corner: "next" is leave_note's default.
+	block += tools.RenderNextWaiting(len(next), block == "")
 	if more > 0 {
 		s.chatWatch.invalidate() // the remainder must arrive on the next call, not in 30s
 		// And the recipient must KNOW the remainder exists — "3 waiting" alone
@@ -257,7 +260,13 @@ func (s *connSession) messageHint(ctx context.Context) string {
 		// counting query this used to run is gone.
 		block += tools.RenderBacklog(more)
 	}
-	s.chatWatch.markPreviewed(append(named, next...))
+	// A fresh slice rather than append(named, next...): the cap above re-sliced
+	// named, so appending in place would write over the deferred notes still sitting
+	// in that backing array. Nothing reads them after this today, which is the only
+	// reason that was harmless — not a property to leave the next edit depending on.
+	shown := make([]tools.Preview, 0, len(named)+len(next))
+	shown = append(append(shown, named...), next...)
+	s.chatWatch.markPreviewed(shown)
 	return strings.TrimRight(block, "\n")
 }
 

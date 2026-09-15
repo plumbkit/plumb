@@ -97,6 +97,14 @@ func TestMessageHint_NextNoteIsCountedNotShown(t *testing.T) {
 	if !strings.Contains(got, "whoever attaches next") {
 		t.Errorf("the agent must still learn one is waiting; got %q", got)
 	}
+	// And it must be legible as plumb speaking. A "next" note is the only kind that
+	// renders no bodies, so nothing else supplies the separator and the "[Messages"
+	// marker here — without them the count is appended straight onto the end of the
+	// tool's own output and reads as part of it. "next" is leave_note's DEFAULT
+	// addressee, so this is the common shape rather than an edge of one.
+	if !strings.Contains(got, "\n\n[Messages —") {
+		t.Errorf("a count-only preview must carry its own separator and header; got %q", got)
+	}
 	// And it is still there for the claim, which is what picks the one winner.
 	if rows := s.inbox().Claim(context.Background()); len(rows) != 1 {
 		t.Errorf("the \"next\" note must remain claimable; claimed %d", len(rows))

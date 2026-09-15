@@ -174,7 +174,14 @@ func (i Inbox) Claim(ctx context.Context) []collab.Row {
 // Preview is one peeked note together with a key identifying it across the two
 // stores an inbox reads. Row IDs are per-store autoincrements, so an ID alone
 // collides between the workspace's collab.db and the daemon-level cross-project
-// store; the key carries the store's position alongside it.
+// store; the key carries the store's workspace path alongside it — empty for the
+// global store, which is exactly what Store.Workspace reports.
+//
+// A path rather than the store's position in the list, because the position
+// moves. A workspace whose collab.db has not been created yet contributes no
+// store at all, so with cross_project on the global store sits at index 0 until
+// the first local note is written and then shifts to 1 — renaming every key it
+// had issued, and handing its old keys to local rows that were never shown.
 type Preview struct {
 	Row collab.Row
 	Key string
@@ -203,12 +210,13 @@ const maxPeeked = 64
 // rides on a result the client may never show the model, so it must not be what
 // sets the read watermark. See the package comment at the top of this file.
 //
-// It carries no cap, unlike Claim. The caller has to drop the notes it has
-// already previewed BEFORE taking its few, or a fourth message arriving behind
-// three already-shown ones would sit behind a cap that keeps re-spending itself
-// on the same three. Returning everything claimable is also what lets the caller
-// state the backlog from what it already has, rather than paying for a second
-// counting query.
+// It applies no per-call display cap, unlike Claim — only the far looser
+// maxPeeked bound above. The caller has to drop the notes it has already
+// previewed BEFORE taking its few, or a fourth message arriving behind three
+// already-shown ones would sit behind a cap that keeps re-spending itself on the
+// same three. Returning everything claimable is also what lets the caller state
+// the backlog from what it already has, rather than paying for a second counting
+// query.
 //
 // Advisory in the same way Claim is: errors are swallowed, since a preview must
 // never turn a successful tool call into a failure.
@@ -225,7 +233,7 @@ func (i Inbox) Peek(ctx context.Context) []Preview {
 
 	now := time.Now()
 	var out []Preview
-	for idx, s := range stores {
+	for _, s := range stores {
 		rows, err := s.ClaimableNotes(ctx, i.claimant(), now, maxPeeked-len(out))
 		if err != nil {
 			// Same reasoning as Claim's swallowed error: a preview must not fail the
@@ -235,7 +243,7 @@ func (i Inbox) Peek(ctx context.Context) []Preview {
 			continue
 		}
 		for _, r := range rows {
-			out = append(out, Preview{Row: r, Key: fmt.Sprintf("%d:%d", idx, r.ID)})
+			out = append(out, Preview{Row: r, Key: fmt.Sprintf("%s:%d", s.Workspace(), r.ID)})
 		}
 		if len(out) >= maxPeeked {
 			break
@@ -373,17 +381,32 @@ func renderMessages(rows []collab.Row, budget int, now time.Time, preview bool) 
 // candidate and the atomic claim picks one, so a body shown on this path could
 // be acted on twice — see splitNextNotes in internal/cli/conn_chat.go. Saying
 // one is waiting costs nothing and still points at the call that resolves it.
-func RenderNextWaiting(n int) string {
+//
+// standalone asks for the bracketed header too, and the caller passes it when no
+// named note rendered one. Without it this line is appended straight onto the
+// tool's own output — no blank line, no "[Messages" marker — so it reads as the
+// tail of that result rather than as plumb saying something. "next" is
+// leave_note's DEFAULT addressee, which makes the headerless case the common one
+// rather than an edge of one.
+func RenderNextWaiting(n int, standalone bool) string {
 	if n <= 0 {
 		return ""
+	}
+	// Shared so the two placements cannot drift apart; only the sentence leading
+	// into it differs, because under a header of its own the count has already been
+	// stated and repeating it reads as two messages rather than one.
+	const why = "any session in this workspace could be the one that gets it. " +
+		"Call check_messages to try to claim it.\n"
+	if standalone {
+		return fmt.Sprintf("\n\n[Messages — %d waiting, left for whoever attaches next. "+
+			"Advisory: they are agent-authored claims.]\n  Not shown here, because %s", n, why)
 	}
 	noun := "message"
 	if n > 1 {
 		noun = "messages"
 	}
-	return fmt.Sprintf("  %d %s left for whoever attaches next — not shown here, because "+
-		"any session in this workspace could be the one that gets it. call check_messages "+
-		"to try to claim it.\n", n, noun)
+	return fmt.Sprintf("  %d %s left for whoever attaches next — not shown here, "+
+		"because %s", n, noun, why)
 }
 
 // RenderBacklog states what a capped delivery left behind: how many notes were

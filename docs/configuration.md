@@ -625,11 +625,12 @@ When `peer_awareness` is on it adds three signals:
 | `keep_delivered_notes` | bool | `false` | Keep **claimed** notes as a permanent transcript: the claim stamps a far-future expiry, so the read flag is the permanence trigger and unclaimed mail still ages out per the TTLs above. A note that has only been previewed is not claimed, and keeps its unread TTL. The **recipient's** policy — whoever claims a row decides its retention, including rows in the shared daemon-level cross-project store. Note the interaction: a spent conversation stays closed at `max_exchanges` forever once its rows stop aging out, so raise `max_exchanges` alongside if long threads matter. |
 
 A session holds at most **one live intent** — a new `share_intent` replaces it,
-and it is cleared when the session ends. A `next` note is consumed by the first claim
-(and is previewed as a count only, never a body); an addressed note persists until its TTL while unread, and — with
-`keep_delivered_notes = true` — as a kept transcript once claimed. Delivery is polling plus
-hint injection only — plumb does not push to a peer (a property of plumb, not of
-MCP: it wires no server→client wake path for any client it supports today). `share_findings` writes its
+and it is cleared when the session ends. A `next` note is consumed by the first
+claim (and is previewed as a count only, never a body); an addressed note
+persists until its TTL while unread, and — with `keep_delivered_notes = true` —
+as a kept transcript once claimed. Delivery is polling plus hint injection only
+— plumb does not push to a peer (a property of plumb, not of MCP: it wires no
+server→client wake path for any client it supports today). `share_findings` writes its
 memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 `episodic-*` summaries under `[memory] generated_memory_keep`, and it never
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
