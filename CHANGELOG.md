@@ -1,32 +1,9 @@
 # Changelog
 
-## 0.19.3 (2026-09-15)
+## Unreleased
 
 ### Fixed
 
-- **A clamped peer-intent warning welded git's output onto its own last line.**
-  `formatRepoIntentWarning` ends its block with `textfmt.ClampBytes`, which cuts
-  with an ellipsis rather than a line break, and `runGit` returns
-  `warning + processed` — so once the warning was long enough to clamp, git's
-  first line continued the warning's last one: `#   peer x claimed: "rebasing
-  ops m…On branch main`. Reachable on shipped defaults rather than in theory:
-  the header is 97 bytes and each quoted claim runs to 209 at the 160-rune body
-  cap, so two matching peer intents make 515 against the 512-byte
-  `[collab] hint_budget_bytes` default. One byte of the budget is now reserved
-  for the line break instead of spent on content, so the block still fits the
-  budget it is given. Found by auditing every emitter of this shape after the
-  reconnect-note fix below — same class, different join.
-
-- **The daemon-reconnect note ran into whatever text preceded it.** The note is
-  appended as its own MCP content item — correct protocol — but a client is free
-  to concatenate content items with nothing between them, and the ones agents run
-  do. Observed on a real client: a mailbox preview ending "...get the reply
-  handle." ran straight into "# plumb-note: plumb daemon process restarted",
-  putting a markdown heading marker mid-sentence and making two messages read as
-  one. The note now opens its own block. Found by an independent agent session
-  exercising the mailbox end to end, which is the only place it was visible: the
-  block and the note were each correct on their own, and every test that checked
-  both strings were present passed throughout.
 - **A repository whose packages live at the top level got no import edges at
   all.** The import resolver keys packages by their workspace-relative
   directory, and refused to match any candidate shorter than two path segments
@@ -62,6 +39,34 @@
   Go, and is the next step; until then the resolver stays recall-biased, because
   an extra package in the affected set costs a test run while a missing one
   costs a regression.
+
+## 0.19.3 (2026-09-15)
+
+### Fixed
+
+- **A clamped peer-intent warning welded git's output onto its own last line.**
+  `formatRepoIntentWarning` ends its block with `textfmt.ClampBytes`, which cuts
+  with an ellipsis rather than a line break, and `runGit` returns
+  `warning + processed` — so once the warning was long enough to clamp, git's
+  first line continued the warning's last one: `#   peer x claimed: "rebasing
+  ops m…On branch main`. Reachable on shipped defaults rather than in theory:
+  the header is 97 bytes and each quoted claim runs to 209 at the 160-rune body
+  cap, so two matching peer intents make 515 against the 512-byte
+  `[collab] hint_budget_bytes` default. One byte of the budget is now reserved
+  for the line break instead of spent on content, so the block still fits the
+  budget it is given. Found by auditing every emitter of this shape after the
+  reconnect-note fix below — same class, different join.
+
+- **The daemon-reconnect note ran into whatever text preceded it.** The note is
+  appended as its own MCP content item — correct protocol — but a client is free
+  to concatenate content items with nothing between them, and the ones agents run
+  do. Observed on a real client: a mailbox preview ending "...get the reply
+  handle." ran straight into "# plumb-note: plumb daemon process restarted",
+  putting a markdown heading marker mid-sentence and making two messages read as
+  one. The note now opens its own block. Found by an independent agent session
+  exercising the mailbox end to end, which is the only place it was visible: the
+  block and the note were each correct on their own, and every test that checked
+  both strings were present passed throughout.
 
 - **A mailbox message could be marked read by a tool result nobody ever saw.**
   Three paths could hand an agent a message, and all three claimed it: the block
