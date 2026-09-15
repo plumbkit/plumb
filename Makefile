@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -243,6 +243,15 @@ check-changelog:
 check-site-claims:
 	./scripts/check-site-claims.sh
 
+# check-verify-disclosure fails if the `verify` recipe stops naming the suite it
+# compiles but does not run (`make integration-test`) and the target that runs it
+# (`verify-full`), or if verify-full stops depending on the suite. It pins those
+# tokens, not the wording, so a reworded disclosure still passes. The disclosure
+# is the fix for #473, and one nothing checks is one edit from silent removal. See
+# scripts/check-verify-disclosure.sh.
+check-verify-disclosure:
+	./scripts/check-verify-disclosure.sh
+
 # check-changelog-placement is check-changelog's diff-shape complement: it fails when
 # a change ADDS lines under any heading other than the one that was unreleased at the
 # merge-base. Deliberately NOT in `verify` and not in the pre-commit hook — unlike
@@ -363,12 +372,37 @@ site: blog
 blog:
 	python3 scripts/build-blog.py
 
-# verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) + the file-size, brief,
-# changelog and site-claims guards + go.mod tidiness. Coverage (`make cover`) and
-# vulnerabilities (`make vuln`) are deliberately NOT here — the first doubles
-# the suite runtime, the second needs the network; CI runs both on every push.
-verify: build test lint build-integration build-clients check-size check-brief check-changelog check-site-claims tidy-check
+# verify is the fast gate: build + test + lint + an integration-tag COMPILE pass
+# (build-integration) + the file-size, brief, changelog, site-claims and
+# disclosure guards + go.mod tidiness. Coverage (`make cover`) and vulnerabilities
+# (`make vuln`) are deliberately NOT here — the first doubles the suite runtime,
+# the second needs the network; CI runs both on every push.
+#
+# verify does NOT run the integration suite, and says so on success. It stays fast
+# on purpose: the suite needs language servers (gopls, pyright) and would add its
+# whole runtime to every local loop, while CI already runs it in the separate
+# `integration` job — itself a required check that installs those servers.
+# `verify-full` is the same gates plus the suite, run once. A green `make verify`
+# does not mean the integration suite passed.
+#
+# VERIFY_CHECKS is the check list verify and verify-full share. verify-full omits
+# `test` because `go test -tags=integration ./...` already runs every non-tagged
+# test too, so listing both would run the unit suite twice.
+VERIFY_CHECKS := lint build-integration build-clients check-size check-brief check-changelog check-site-claims check-verify-disclosure tidy-check
+verify: build test $(VERIFY_CHECKS)
+	@printf '\n%s\n%s\n%s\n%s\n%s\n\n' \
+		'verify: PASSED — but the //go:build integration suite was COMPILED, not RUN.' \
+		'        A failing integration test does not fail this target.' \
+		'        Run it before submitting:  make integration-test' \
+		'        (skips tests whose language server is absent; install gopls and pyright)' \
+		'        Whole gate in one command:  make verify-full'
+
+# verify-full is verify's gates plus the integration suite that verify only
+# compiles. It runs the suite once, without verify's separate `test` step, because
+# `-tags=integration ./...` already runs every non-tagged test. `integration-test`
+# SKIPS tests whose language server is absent, so install gopls and pyright to run
+# all of it. Use it as the pre-submit gate.
+verify-full: build $(VERIFY_CHECKS) integration-test
 
 # hooks is an alias for install-hooks — the ops-root Makefile uses `hooks-ops`
 # for its own hook, and the asymmetry is a recurring stumble.
@@ -379,4 +413,4 @@ install-hooks:
 	mkdir -p "$$hooks"; \
 	cp scripts/pre-commit "$$hooks/pre-commit"; \
 	chmod +x "$$hooks/pre-commit"; \
-	echo "Pre-commit hook installed at $$hooks/pre-commit. Run 'make verify' before every push."
+	echo "Pre-commit hook installed at $$hooks/pre-commit. Run 'make verify' before every push — and 'make verify-full' when the change touches integration-tagged code."

@@ -39,7 +39,8 @@ they reach the tree.
 | `make test` | `go test ./...` |
 | `make test-race` | `go test -race ./...` |
 | `make lint` | `golangci-lint run` via `scripts/lint-with-retry.sh` — retries with bounded backoff on the shared-cache lock ("parallel golangci-lint is running"), so a peer agent's lint does not read as a failure of this one. |
-| `make verify` | Build, test, lint, compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the **definition of "ready to commit"**. |
+| `make verify` | Build, test, lint, compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the fast gate CI runs on every pull request. It does not RUN the integration suite, and prints that on success. |
+| `make verify-full` | The same checks as `make verify` plus `make integration-test` — the full **"ready to commit"** gate, with the unit tests run once. `integration-test` SKIPS tests whose language server is absent, so install gopls and pyright to run all of it. |
 | `make lint-cross` | Statically lint and vet the other supported OS; required after platform-constrained or linter-config changes. |
 | `make cover` | Enforce the whole-tree statement floor from `scripts/check-coverage.sh`. |
 | `make vuln` | Run `govulncheck`; requires network access. |

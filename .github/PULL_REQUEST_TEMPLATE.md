@@ -13,7 +13,7 @@ See CONTRIBUTING.md for the full guide.
 
 ## Checklist
 
-- [ ] `make verify` is green (build + test + lint)
+- [ ] `make verify` is green; `make verify-full` if the change touches `//go:build integration` code
 - [ ] `CHANGELOG.md` entry added
 - [ ] Prose is in Australian English (-ise/-isation, behaviour, …); spec identifiers left canonical
 - [ ] New/changed behaviour is covered by tests (integration tests gated with `//go:build integration`)
