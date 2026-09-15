@@ -12,6 +12,7 @@ func TestMatchImportDir(t *testing.T) {
 		"internal/cli":   {2},
 		"lib/format":     {3},
 		"strings":        {4}, // a local dir that shadows a stdlib name
+		"store":          {5}, // a package at the top level, one segment deep
 	}
 	cases := []struct {
 		name      string
@@ -21,6 +22,15 @@ func TestMatchImportDir(t *testing.T) {
 	}{
 		{"go module-internal import", "github.com/plumbkit/plumb/internal/stats", "internal/stats", true},
 		{"already repo-relative", "internal/cli", "internal/cli", true},
+		// A top-level package is reachable once a module prefix has been stripped.
+		// Refusing it made the minimum a rule about how deep the DIRECTORY sits, and
+		// every repository whose packages live at the root got no edges at all.
+		{"package one directory deep", "example.com/m/store", "store", true},
+		// The cost of the line above, stated rather than discovered: a third-party
+		// import whose last segment matches a top-level local package now binds to
+		// it. PLAN-380 owns this false-positive class for longer suffixes; the
+		// resolver is recall-biased, so an extra package costs a test run.
+		{"third-party import reaching a local package of the same name", "github.com/boltdb/store", "store", true},
 		{"relative TypeScript style", "./lib/format", "lib/format", true},
 		{"parent-relative", "../lib/format", "lib/format", true},
 		{"stdlib single segment is never matched", "strings", "", false},

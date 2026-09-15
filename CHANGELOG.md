@@ -27,6 +27,28 @@
   exercising the mailbox end to end, which is the only place it was visible: the
   block and the note were each correct on their own, and every test that checked
   both strings were present passed throughout.
+- **A repository whose packages live at the top level got no import edges at
+  all.** The import resolver keys packages by their workspace-relative
+  directory, and refused to match any candidate shorter than two path segments
+  so that `import "strings"` could not bind to a local `strings/` directory.
+  Applied to the directory rather than to the import name, that rule also
+  refused every package sitting one directory deep: for `example.com/m/stats`
+  the resolver only ever tried `example.com/m/stats` and `m/stats`, never
+  `stats`. So a module laid out as `api/`, `store/`, `cli/` — the ordinary shape
+  for a small project, and the norm outside Go — produced **zero** cross-package
+  import edges, and `topology_affected` silently degraded to co-located tests
+  with nothing in its output saying the dependency arm had found nothing. Deeper
+  layouts (`internal/…`, which is why plumb's own repository never showed it)
+  were unaffected.
+
+  The minimum now guards only the candidate that consumed nothing — the whole
+  import path. A suffix formed by stripping a module prefix has already proved
+  it had one, and a stdlib import has none, so `import "strings"` is still
+  refused however shallow the workspace is. The cost, stated rather than left to
+  be discovered: a third-party import whose last segment matches a top-level
+  local package now binds to it, where before it needed two segments to match.
+  That is the recall-biased trade this resolver is built on — an extra package in
+  the affected set costs a test run; a missing one costs a regression.
 
 - **A mailbox message could be marked read by a tool result nobody ever saw.**
   Three paths could hand an agent a message, and all three claimed it: the block

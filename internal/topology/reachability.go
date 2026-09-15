@@ -29,8 +29,11 @@ type PackageInfo struct {
 // node in the target directory (import-resolver-owned) — into direct
 // Dir -> Dir edges. This is package-level identity by construction: it reuses
 // exactly the edges matchImportDir/minImportSegments already validated, so a
-// stdlib or third-party import (never linked to a local directory) never
-// produces an edge here either.
+// stdlib import — which has no module prefix to strip and is therefore only ever
+// tried whole — never produces an edge here either. A third-party import is a
+// weaker guarantee, not an absolute one: it is refused unless a local directory
+// genuinely matches one of its suffixes, which is the false positive PLAN-380
+// owns.
 //
 // PRODUCTION ONLY: an edge whose importing file is a Go `_test.go` file is
 // deliberately excluded. Go forbids real import cycles, so every cycle this
