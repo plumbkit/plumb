@@ -16,13 +16,21 @@ import (
 // the actual MCP transport.
 //
 // The unit tests in internal/cli and internal/tools cover each rule in
-// isolation. What they cannot cover is the property the whole design turns on —
-// that a message survives a client which never shows the appended block to its
-// model — because in-process they call messageHint and read its return value,
-// which IS the surfacing. Here the block goes out over the wire and the test
-// simply throws it away, exactly as a harness that runs plumb's tools inside a
-// sandboxed program does. Only then does check_messages get asked whether the
-// message is still there.
+// isolation, calling messageHint and reading its return value. What this tier
+// adds is the WIRE: the block is serialised by the daemon, carried as MCP
+// content, and reassembled by a real serve proxy before anything asserts on it.
+// That is not a formality — the one defect this contract has shipped since
+// (a reconnect note welding onto the preview's last line, with no separator
+// between two correct content items) existed only in that assembly step and was
+// invisible to every in-process test.
+//
+// A note on what these tests do NOT prove, because the obvious claim is wrong
+// and worth writing down before someone repeats it: they do not "discard" the
+// block the way a sandboxed-program harness does. A Go test cannot un-see a
+// string. What makes the delivery assertion valid is narrower and sufficient —
+// check_messages is not called until after the preview has gone out, so if the
+// preview had claimed, the message would be gone by then regardless of who read
+// what.
 //
 // The "next" race needs four sessions and cannot be staged with fewer. A note
 // addressed to "next" has one winner and several candidates, and the hazard a
@@ -79,14 +87,16 @@ func TestSmoke_Mailbox_PreviewDoesNotConsume(t *testing.T) {
 	sent := sender.call(t, "leave_note", map[string]any{"to": names[1], "body": body}, toolTimeout)
 	assertContains(t, "leave_note", sent, "Message sent")
 
-	// B's next call is an ordinary tool. Its result carries the preview; this
-	// test discards it, which is the whole scenario.
-	t.Log("B: read_file (result discarded, as a sandboxed-program harness does)")
-	discarded := recipient.call(t, "read_file", map[string]any{"file_path": shared}, toolTimeout)
-	assertContains(t, "preview rides on the result", discarded, body)
-	assertContains(t, "preview says what it is", discarded, "Preview:")
-	if strings.Contains(discarded, "reply: leave_note") {
-		t.Errorf("a preview must withhold the reply handle — replying would leave the note unread:\n%s", discarded)
+	// B's next call is an ordinary tool, and the preview rides its result across
+	// the wire. Nothing here takes delivery: check_messages is not called until
+	// after these assertions, which is what makes the survival check below mean
+	// something.
+	t.Log("B: read_file (the preview rides this result)")
+	previewed := recipient.call(t, "read_file", map[string]any{"file_path": shared}, toolTimeout)
+	assertContains(t, "preview rides on the result", previewed, body)
+	assertContains(t, "preview says what it is", previewed, "Preview:")
+	if strings.Contains(previewed, "reply: leave_note") {
+		t.Errorf("a preview must withhold the reply handle — replying would leave the note unread:\n%s", previewed)
 	}
 
 	// The sender must still see it unread: nothing has taken delivery.

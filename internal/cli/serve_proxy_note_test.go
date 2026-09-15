@@ -109,8 +109,12 @@ func TestReconnectNoteText_StartsItsOwnBlock(t *testing.T) {
 		"version mismatch":    reconnectNoteText("2.0.0", "1.2.3", true, reconnectOutcome{}),
 		"mismatch suppressed": reconnectNoteText("2.0.0", "1.2.3", false, reconnectOutcome{}),
 	}
+	// The subject here is the SEPARATOR, so that is all this pins. The marker
+	// wording belongs to the table above and is shared with read_file,
+	// read_symbol, read_file_search and git_classify; re-pinning it here would
+	// make a reasonable rewording of any of those fail in an unrelated test.
 	for name, note := range cases {
-		if !strings.HasPrefix(note, "\n\n# plumb-note:") {
+		if !strings.HasPrefix(note, "\n\n") {
 			t.Errorf("%s: the note must open its own block, or it welds onto whatever "+
 				"content item precedes it; got %q", name, note)
 		}

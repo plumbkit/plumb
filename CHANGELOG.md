@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A clamped peer-intent warning welded git's output onto its own last line.**
+  `formatRepoIntentWarning` ends its block with `textfmt.ClampBytes`, which cuts
+  with an ellipsis rather than a line break, and `runGit` returns
+  `warning + processed` — so once the warning was long enough to clamp, git's
+  first line continued the warning's last one: `#   peer x claimed: "rebasing
+  ops m…On branch main`. Reachable on shipped defaults rather than in theory:
+  the header is 97 bytes and each quoted claim runs to 209 at the 160-rune body
+  cap, so two matching peer intents make 515 against the 512-byte
+  `[collab] hint_budget_bytes` default. One byte of the budget is now reserved
+  for the line break instead of spent on content, so the block still fits the
+  budget it is given. Found by auditing every emitter of this shape after the
+  reconnect-note fix below — same class, different join.
+
 - **The daemon-reconnect note ran into whatever text preceded it.** The note is
   appended as its own MCP content item — correct protocol — but a client is free
   to concatenate content items with nothing between them, and the ones agents run
