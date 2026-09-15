@@ -595,10 +595,13 @@ const indexSettleTimeout = 30 * time.Second
 // Two fixture properties are load-bearing, and both were missing from the
 // earlier attempts that left this untested. Do not shrink either one:
 //
-//   - Importer directories are TWO segments deep. matchImportDir refuses a
-//     suffix shorter than minImportSegments (2) so that `import "strings"` cannot
-//     bind to a local strings/ directory. A fixture whose packages sit one level
-//     deep gets no import edges at all, and every assertion here passes vacuously.
+//   - Importer directories are TWO segments deep. This was once load-bearing for
+//     a second reason: matchImportDir applied its minimum to every candidate, so
+//     a fixture whose packages sat one level deep got no import edges at all and
+//     every assertion here passed vacuously. PLAN-386 confined that minimum to
+//     the whole-path candidate, so depth no longer decides whether edges exist —
+//     the fixture keeps it only because there is no reason to churn it. If you do
+//     flatten it, assert the edges exist rather than trusting that they do.
 //   - Inward NODES must exceed max_results while PACKAGES stay under it. That is
 //     what separates the two cuts: fromColocation legitimately caps packages at
 //     the same number, so a fixture that raises both together truncates under the

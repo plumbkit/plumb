@@ -11,7 +11,12 @@ import (
 const (
 	importResolverSource = "import-resolver"
 	importEdgeConfidence = 0.9
-	minImportSegments    = 2
+	// minImportSegments is the shortest candidate directory an import path may be
+	// matched to WHOLE — that is, with no leading segment stripped. It stops
+	// `import "strings"` binding to a local strings/ directory, which would turn
+	// every file's stdlib imports into false dependency edges. See matchImportDir
+	// for why it applies only to the whole-path case.
+	minImportSegments = 2
 )
 
 func (idx *Indexer) linkImports() error {
@@ -154,7 +159,30 @@ func matchImportDir(qualified string, pkgsByDir map[string][]int64) (string, boo
 		return "", false
 	}
 	segs := strings.Split(cleaned, "/")
-	for start := 0; start+minImportSegments <= len(segs); start++ {
+	for start := range segs {
+		// The minimum guards the candidate that consumed NOTHING. A suffix formed by
+		// stripping at least one leading segment has already proved it had a module
+		// prefix to strip, and a stdlib import has none — `strings` can only ever be
+		// tried whole, so it stays refused however shallow the workspace is.
+		//
+		// Applying the minimum to every candidate instead made it a rule about how
+		// deep the INDEXED DIRECTORY sits, because pkgsByDir is keyed on the
+		// workspace-relative directory. A package one level down could then never be
+		// matched by anything: for example.com/m/stats the loop formed only
+		// example.com/m/stats and m/stats, never stats. Every repository whose
+		// packages live at the top level — api/, store/, cli/ — got zero import
+		// edges, and topology_affected silently degraded to co-located tests.
+		//
+		// The cost is that a THIRD-PARTY import can now reach a single-segment local
+		// directory (github.com/pkg/errors → a local errors/) where before it needed
+		// two. That is the same false positive PLAN-380 already owns for longer
+		// suffixes, it only fires when a local package genuinely shares the import's
+		// last segment, and this resolver is deliberately recall-biased: an extra
+		// package in the affected set costs a test run, a missing one costs a
+		// regression.
+		if start == 0 && len(segs) < minImportSegments {
+			continue
+		}
 		cand := strings.Join(segs[start:], "/")
 		if _, ok := pkgsByDir[cand]; ok {
 			return cand, true
