@@ -47,6 +47,79 @@
   was absent — the one state where identity is not degraded but entirely gone.
   It now covers that state too, and needs no daemon probe to do it, because the
   fact is in the config rather than the daemon.
+- **Naming the workspace an agent is already on now counts as choosing it
+  (issue #468).** `repinAgent`'s same-root early return fired before the shard
+  was marked as self-pinned, so an agent whose explicit `session_start` named
+  the root its shard had been *seeded* at never recorded that it had chosen one.
+  The shard kept following the connection, and a later connection move — a roots
+  notification, or an anonymous forced re-pin — dragged the agent off a
+  workspace it had explicitly named, with no call of its own in between; from
+  there its workspace-relative calls resolved in the new root, silently. The
+  comment under that early return had always claimed the case ("even back to the
+  seeded one, via a deliberate re-pin"), and the existing regression test only
+  ever exercised the changed-root path, which is how the contradiction survived.
+  Such a confirmation now marks the shard self-pinned, upgrades its pin origin
+  the way the connection-level same-root branch already does, and is persisted —
+  a choice held only in memory evaporated on the next daemon restart, when the
+  shard re-seeds from the connection. Guarded by
+  `TestConfirmingASeededWorkspaceStopsTheShardFollowing` and
+  `TestConfirmedWorkspaceIsPersisted`.
+
+- **A logical agent's first explicit `session_start` is no longer refused off a
+  workspace it never chose, when the workspace it asks for is in the same tree
+  (issue #468).** A shard built for an agent on a shared connection is seeded
+  from the connection's pin — and copied that pin's ORIGIN too, so a connection
+  whose origin some other caller's same-root `session_start` had promoted handed
+  every shard built afterwards a `session_start` origin it had never asked for.
+  The per-agent sticky guard then refused that agent's first explicit pin as a
+  drift away from a workspace it had never held, offering `force: true`, which
+  displaces a peer on exactly the pooled connection where this arises, as the
+  only way through. Meanwhile every workspace-relative call kept resolving inside
+  the seeded root — and that is a silent wrong-repository read precisely because
+  the two roots contain one another, as a git worktree at
+  `.claude/worktrees/<name>` and the checkout around it do: the same relative
+  path exists on both sides, so the wrong root returned a plausible file instead
+  of a boundary error.
+
+  Containment is therefore both the symptom and the fix. A shard that chose
+  nothing may now correct its root to one that contains, or is contained by, the
+  root it was seeded at — and nowhere else. A move to an **unrelated** workspace
+  is refused exactly as before, whether the shard was seeded or chosen, which is
+  the fail-closed `#182`/PLAN-395 guarantee: `selfPinned` alone as the gate would
+  have turned it off for every seeded shard, and for every shard restored after a
+  daemon restart, since a restored pin carries its origin but no record of who
+  chose it. PLAN-398 closed the half of this where the connection moved
+  afterwards, so the seeded shard could follow; this closes the half where it did
+  not. Guarded by `TestSeededShardDoesNotInheritAPeersStickiness`,
+  `TestSeededShardMayCorrectOutwardToItsParentCheckout`,
+  `TestSeededShardStillRefusesAnUnrelatedWorkspace`,
+  `TestChosenWorkspaceIsStickyEvenWithinItsOwnTree`,
+  `TestRestoredShardStaysStickyAcrossARestart` and
+  `TestMultiAgentPin`'s `CrossWorkspaceSubagentRefusedWithRemedy` and
+  `DeclaredFirstContactDefersToExecute`.
+
+- **An agent's explicit `session_start` pin no longer drifts to another
+  checkout mid-session (issue #468).** When a caller declares an identity on a
+  connection that is not yet shared, its `session_start` is routed to the connection-level
+  pin — and, until now, recorded only under the connection-level agent id, so
+  nothing remembered which agent had chosen it. As soon as a peer declared
+  itself the connection turned shared, that agent's shard was built, and the
+  shard was seeded from the per-agent pin left over from before the proxy last
+  reconnected: a project the agent had since left. The stale row outranked the
+  pin the agent had just made, so every workspace-relative call silently
+  resolved against the wrong checkout — a wrong-repository read with nothing in
+  the response to say so — and the re-pin back was then refused as sticky
+  (issue #182) with `force: true` as the only remedy, which is unsafe on
+  precisely the pooled connection where this arises. A live explicit pin is now
+  attributed to the agent that made it, so the shard restores the workspace
+  that agent chose. A roots notification or a reconnect replay carries no
+  caller and is still recorded against the connection alone. Guarded by
+  `TestAgentPinSurvivesItsShardMaterialising`,
+  `TestExplicitConnectionPinIsAttributedToItsAgent`,
+  `TestOnlyALiveExplicitPinIsAttributedToItsAgent` and
+  `TestUnattributedPinIsNotAttributedToAnAgent`, whose fixture is the shape
+  that kept the drift silent: a git worktree nested under its parent
+  checkout, so the same relative path resolves in both.
 - **A commit made by one agent of a shared connection went missing from the
   repository's own audit trail.** Every recorded tool call was filed under the
   workspace the CONNECTION last pinned, but on a shared connection (several

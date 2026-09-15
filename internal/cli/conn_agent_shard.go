@@ -266,7 +266,26 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	prev := sh.root
-	if !force && prev != "" && root != prev && sh.pinOrigin == sessionstate.PinSourceSessionStart {
+	// The guard keys on the pin ORIGIN, which a seeded shard inherits wholesale:
+	// shardFor copies the CONNECTION's pin and its origin onto a new shard, and
+	// attachOrRepinTo's same-root promotion branch upgrades a roots-held pin to
+	// PinSourceSessionStart whenever any caller names the current root — silently,
+	// since no root moves. Every shard built afterwards therefore carried a
+	// session_start origin nobody had set on its behalf, and the guard refused
+	// that agent's FIRST explicit pin as a drift away from a workspace it had
+	// never held, offering force: true — which displaces a peer on exactly the
+	// pooled connection where this arises — as the only remedy (issue #468).
+	//
+	// correctsSeededRoot, not !selfPinned alone, is the exemption: an agent that
+	// chose nothing may correct its root only WITHIN the tree it was seeded in.
+	// A move to an UNRELATED workspace stays refused however the shard got its
+	// root — that is the fail-closed #182/PLAN-395 guarantee, and relaxing it
+	// would be worse than the drift being fixed here. PLAN-398 closed the half of
+	// this where the connection moved afterwards; this closes the half where it
+	// did not.
+	if !force && prev != "" && root != prev &&
+		!correctsSeededRoot(sh.selfPinned, prev, root) &&
+		sh.pinOrigin == sessionstate.PinSourceSessionStart {
 		refused = fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root)
 		// Leave a trace on this past-vulnerability surface: the connection-level
 		// guard has always logged a refused steal, and a refused cross-workspace
@@ -282,6 +301,14 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		return false, refused
 	}
 	if root == prev && language == sh.language {
+		// Nothing moves — but naming the root the shard already holds is still
+		// a CHOICE, which is what the comment below has always claimed
+		// ("even back to the seeded one"). Returning before selfPinned was set
+		// meant an agent that confirmed its seeded workspace kept FOLLOWING the
+		// connection, so a later connection move — a roots notification, or an
+		// anonymous forced re-pin — dragged it off a workspace it had
+		// explicitly named, with no call of its own in between (issue #468).
+		s.confirmShardPin(sh, root, language, origin)
 		return false, nil
 	}
 	changed = true
@@ -307,6 +334,54 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
+}
+
+// correctsSeededRoot reports whether a re-pin from prev to root is an agent
+// CORRECTING a workspace it never chose, rather than drifting off one it did.
+//
+// Two conditions, and both are load-bearing. The shard must not be self-pinned:
+// a root the agent actually named is its own choice, and moving off one still
+// takes force: true. And the two roots must be the same tree — one contains the
+// other — which is the reported shape, a git worktree at .claude/worktrees/<name>
+// inside its parent checkout. That containment is also why the drift was SILENT:
+// the same relative path exists in both roots, so a workspace-relative call
+// resolving against the wrong one returned a plausible file rather than a
+// boundary error. An unrelated workspace has neither property and is refused.
+//
+// Called with sh.mu held, hence the plain bool rather than a shard method.
+//
+// Both roots are canonical by the time they reach repinAgent — Detect and
+// SynthesiseRoot resolve symlinks (issue #263), and a shard's root came through
+// the same lane — so the lexical prefix test in withinRoot is sound here.
+func correctsSeededRoot(selfPinned bool, prev, root string) bool {
+	if selfPinned {
+		return false
+	}
+	return withinRoot(root, prev) || withinRoot(prev, root)
+}
+
+// confirmShardPin records that this agent deliberately named the root its shard
+// already holds. The per-agent counterpart of attachOrRepinTo's same-root
+// promotion branch: no root moves, so the read/write/undo state and the pin
+// itself stand, and only the ownership facts are upgraded — the shard stops
+// following the connection, and the guard above starts protecting it.
+//
+// Persisted as well as set, because a shard is otherwise only written down when
+// repinAgent MOVES it: a choice held in memory alone would evaporate on the next
+// daemon restart, when the shard re-seeds from the connection and the agent is
+// back where it started.
+//
+// Only an explicit session_start confirms: no other origin reaches repinAgent
+// with an identified caller today, and gating it here keeps that true if one
+// ever does. Called with sh.mu held, so the persist runs in the documented lock
+// order (sh.mu outside, s.mu innermost) exactly as the move path's does.
+func (s *connSession) confirmShardPin(sh *agentShard, root, language string, origin sessionstate.PinSource) {
+	if origin != sessionstate.PinSourceSessionStart || sh.selfPinned {
+		return
+	}
+	sh.selfPinned = true
+	sh.pinOrigin = origin
+	s.persistPinForAgent(sh, root, language, origin)
 }
 
 // seedShardOnLink hydrates the linkage owner's shard from the connection's
@@ -441,14 +516,24 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 // agent), so a shared connection's per-agent workspace survives a daemon restart
 // (PLAN-286). Mirrors persistPin, scoped to the agent.
 func (s *connSession) persistPinForAgent(sh *agentShard, root, language string, origin sessionstate.PinSource) {
-	if origin == sessionstate.PinSourceUnknown {
+	s.persistPinForAgentID(sh.id, root, language, origin)
+}
+
+// persistPinForAgentID is persistPinForAgent keyed on the id alone, for the
+// caller that has an identity but no shard yet: an agent whose explicit
+// session_start was routed to the CONNECTION because it is the only identity
+// the connection has seen. Attributing that pin is what lets the shard built
+// later — once a peer declares itself and the connection turns shared — restore
+// the workspace the agent actually chose.
+func (s *connSession) persistPinForAgentID(id, root, language string, origin sessionstate.PinSource) {
+	if id == "" || origin == sessionstate.PinSourceUnknown {
 		return
 	}
 	v := s.view()
 	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
 		return
 	}
-	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, sh.id, root, language, origin); err != nil {
+	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, id, root, language, origin); err != nil {
 		s.log().Debug("daemon: persist agent pin failed", "err", err)
 	}
 }
