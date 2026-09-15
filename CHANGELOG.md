@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **The daemon-reconnect note ran into whatever text preceded it.** The note is
+  appended as its own MCP content item — correct protocol — but a client is free
+  to concatenate content items with nothing between them, and the ones agents run
+  do. Observed on a real client: a mailbox preview ending "...get the reply
+  handle." ran straight into "# plumb-note: plumb daemon process restarted",
+  putting a markdown heading marker mid-sentence and making two messages read as
+  one. The note now opens its own block. Found by an independent agent session
+  exercising the mailbox end to end, which is the only place it was visible: the
+  block and the note were each correct on their own, and every test that checked
+  both strings were present passed throughout.
+
 - **A mailbox message could be marked read by a tool result nobody ever saw.**
   Three paths could hand an agent a message, and all three claimed it: the block
   plumb appends to an ordinary tool result claimed the row at the instant it

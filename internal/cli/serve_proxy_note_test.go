@@ -87,6 +87,44 @@ func TestReconnectNoteText(t *testing.T) {
 	}
 }
 
+// TestReconnectNoteText_StartsItsOwnBlock is a real-client field report, and the
+// reason it asserts a SEPARATOR rather than the presence of two strings.
+//
+// The note is appended as its own MCP content item, which is correct — but a
+// client may concatenate content items with nothing between them, and the ones
+// agents actually run do. Observed verbatim on Claude Code: a mailbox preview
+// ending "...get the reply handle." ran straight into "# plumb-note: plumb
+// daemon process restarted", so a markdown heading marker landed mid-sentence
+// and the two messages read as one. A test that only checked both strings were
+// present passed throughout.
+//
+// Every branch is covered because the bug is per-format-string: fixing the one
+// that happened to be observed would leave the other welded to its predecessor.
+func TestReconnectNoteText_StartsItsOwnBlock(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"same version":        reconnectNoteText("1.2.3", "1.2.3", true, reconnectOutcome{}),
+		"unknown daemon":      reconnectNoteText("", "1.2.3", true, reconnectOutcome{}),
+		"version mismatch":    reconnectNoteText("2.0.0", "1.2.3", true, reconnectOutcome{}),
+		"mismatch suppressed": reconnectNoteText("2.0.0", "1.2.3", false, reconnectOutcome{}),
+	}
+	for name, note := range cases {
+		if !strings.HasPrefix(note, "\n\n# plumb-note:") {
+			t.Errorf("%s: the note must open its own block, or it welds onto whatever "+
+				"content item precedes it; got %q", name, note)
+		}
+		// The concatenation a client actually performs, asserted directly: no
+		// preceding text may end up on the same line as the heading marker.
+		joined := "Call check_messages to take delivery and get the reply handle." + note
+		for _, line := range strings.Split(joined, "\n") {
+			if strings.Contains(line, "# plumb-note:") && !strings.HasPrefix(line, "# plumb-note:") {
+				t.Errorf("%s: note shares a line with preceding output: %q", name, line)
+			}
+		}
+	}
+}
+
 // TestReconnectNoteText_ReportsObservedFactsOnly is the PLAN-426 half: the note
 // may state only what the proxy actually established.
 //
