@@ -22,6 +22,51 @@
   `make integration-test` SKIPS tests whose language server is absent — a green
   `verify-full` on a machine without them is not the whole suite.
 
+- **A conversation's own superseded identity rows no longer hold its name, and
+  no longer read as a conflict nobody can resolve.** The durable identity table
+  is keyed by the proxy session ID — a secret each `plumb serve` mints for
+  itself — so a restart INSERTed a new row instead of updating the old one, and
+  `session_start`'s resume path then renamed the new row onto the name its
+  predecessor held. Both rows claimed that name, and identity records are never
+  expired by age, so the daemon log named 16 conflicting names at one startup on
+  the machine this was measured on, growing from 7 over nine days — 11 of them a
+  single conversation's own restart churn, burying the 5 that were genuinely
+  ambiguous.
+
+  Those rows were called a pre-retention artefact in two comments and in the
+  startup warning itself. They were not: retention never stopped them being
+  written, because a restart minting a second row is the ordinary path, and the
+  duplicates kept accumulating. The claim is now retired where it is READ. A
+  name held by several rows of one non-blank external conversation resolves to
+  the newest of them — ordered by `updated_at`, tie-broken on the proxy session
+  ID, so the answer does not depend on the order rows come back in — and
+  `LegacyNameConflicts` reports only what cannot be shown to be one
+  conversation: two different external IDs, or a linkage that is blank and
+  therefore unknown. The startup warning that names those rows now carries the
+  ambiguous names instead of burying them.
+
+  Nothing is deleted or rewritten. A superseded row is still the durable proof of
+  which plumb session a reconnecting `plumb serve` is, and "a newer row exists"
+  is not proof that the older serve died: a serve whose socket dropped is
+  unregistered while its process and its proxy secret stay alive, and `Prune`'s
+  own comment is explicit that only the serve knows when it is gone. Deleting the
+  row would turn that serve's next reconnect into first contact — a new session
+  ID, a new name, and every note bound to the old ID stranded — so the record is
+  kept and only its claim is retired. A name held by two DIFFERENT conversations
+  is left exactly as it was, for the same reason: the database holds no evidence
+  of which claim should win.
+
+- **Renaming a session to the name it already holds no longer fails because
+  another identity record claims it.** `Rename`'s own doc, and `docs/tools.md`,
+  has always promised that a rename to the name you already hold is allowed, but
+  the reservation check ran regardless — so a stale claim, such as an older
+  generation of the same conversation, refused that no-op rename and returned
+  "already in use" for the name the session was already answering to. A
+  reservation for a name the session already holds is not a collision: the name
+  is already its own, and a claim exists to keep a name *for* the identity
+  entitled to it. The comparison is case-insensitive, as every other name
+  comparison here is, and a DIFFERENT reserved name is still refused.
+
 ## 0.19.4 (2026-09-16)
 
 ### Added

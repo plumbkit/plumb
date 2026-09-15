@@ -32,16 +32,24 @@ func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...st
 	}
 }
 
-// reportLegacyNameConflicts logs identity records that claim the same name.
+// reportLegacyNameConflicts logs identity records whose claim on a name cannot be
+// shown to belong to one conversation.
 //
-// It reports rather than repairs, and that is a decision rather than an
-// omission. Before names were retained (PLAN-426) a name was unique only among
-// LIVE sessions, so a pruned row's name could legitimately be redrawn by
-// another proxy — both rows are now kept, and the database holds no evidence of
-// which claim should win. Every candidate repair is worse than the ambiguity:
-// renaming a record breaks the notes addressed to it, deleting one forks the
-// identity it proves, and choosing by updated_at silently hands one session's
-// mailbox to another.
+// It reports rather than repairs, and that is a decision rather than an omission:
+// the database holds no evidence of which claim should win, and every candidate
+// repair is worse than the ambiguity. Renaming a record leaves the notes with no
+// bound identity following the name, deleting one forks the identity it proves,
+// and choosing by updated_at silently hands one session's name and mailbox to
+// another.
+//
+// What it no longer reports is a conversation's own superseded generations — the
+// rows a `plumb serve` RESTART leaves behind under the name its predecessor held.
+// Those share a non-blank linkage and a name, so Store.LegacyNameConflicts keeps
+// only the newest of them (see independentClaims). They were never a
+// pre-retention artefact: retention did not stop them being written, and naming
+// them at every daemon start buried the genuinely ambiguous names this warning
+// exists to surface. The rows themselves are kept, because each is the durable
+// proof of which session a reconnecting proxy is.
 //
 // Unaffected identities migrate and recover normally either way, so the cost of
 // leaving this alone is bounded to the conflicting names themselves. Logged at
@@ -56,7 +64,7 @@ func reportLegacyNameConflicts(sessState *sessionstate.Store) {
 		return
 	}
 	for _, c := range conflicts {
-		slog.Warn("daemon: more than one retained session identity claims the same name — a pre-retention artefact plumb will not resolve on your behalf, since every automatic choice would either break mail addressed to a name or fork an identity; the affected sessions keep their records and reconnect normally, but that name is ambiguous as an address",
+		slog.Warn("daemon: more than one retained session identity holds the same name and they cannot be shown to be one conversation — plumb will not choose between claims it cannot prove apart, since deleting one forks the identity it proves and choosing by recency hands one agent's name to another on no evidence; the affected sessions keep their records and reconnect normally, but that name is ambiguous as an address",
 			"name", c.Name, "claims", len(c.ProxySessionIDs))
 	}
 }

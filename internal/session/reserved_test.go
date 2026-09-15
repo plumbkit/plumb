@@ -100,6 +100,40 @@ func TestRenameReserved_RefusesAReservedNameAndAllowsTheOwner(t *testing.T) {
 	}
 }
 
+// TestRenameReserved_AllowsTheNameTheSessionAlreadyHolds: Rename's doc promises
+// that renaming to the name you already hold is allowed, and a reservation for
+// that name is not a collision — it is this session's own name, and a reservation
+// exists to keep a name for the identity entitled to it.
+//
+// Found by review of the identity-claim collapse: a stale claim held by an older
+// generation of the same conversation refused that no-op rename and answered
+// "already in use" for the name the session was already answering to.
+func TestRenameReserved_AllowsTheNameTheSessionAlreadyHolds(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	mine, err := Register(Info{Name: "velvet-bison"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { Unregister(mine.ID) })
+
+	// Another identity's claim on the name this session already holds.
+	if got, err := RenameReserved(mine.ID, "velvet-bison", Reserved{"velvet-bison": "id-absent"}); err != nil || got != "velvet-bison" {
+		t.Fatalf("re-renaming to the name the session already holds = (%q, %v), want (velvet-bison, nil) — "+
+			"a reservation for a name that is already this session's cannot be a collision", got, err)
+	}
+	// Names are compared case-insensitively everywhere else (nameTaken uses
+	// EqualFold, Reserved keys are lower-cased), so a case variant of the name the
+	// session already holds is the same no-op and must be allowed too.
+	if got, err := RenameReserved(mine.ID, "Velvet-Bison", Reserved{"velvet-bison": "id-absent"}); err != nil || got != "Velvet-Bison" {
+		t.Fatalf("case-variant self-rename = (%q, %v), want (Velvet-Bison, nil)", got, err)
+	}
+	// The allowance is narrow: a DIFFERENT name reserved for another session is
+	// still refused, which is the guard the clause above must not weaken.
+	if _, err := RenameReserved(mine.ID, "calm-stag", Reserved{"calm-stag": "id-absent"}); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("rename to a different reserved name = %v, want ErrNameTaken", err)
+	}
+}
+
 // TestFreeName_TerminatesWhenEveryDrawIsReserved is the bound stated in
 // freeName's comment, exercised rather than assumed.
 //
