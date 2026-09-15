@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **`daemon_info` now reports the serve proxy's version beside the daemon's.**
+  "Which version am I running?" has two answers and the tool gave one. `plumb
+  restart` replaces the daemon; each session's `plumb serve` proxy keeps the
+  binary it was launched with until its *client* restarts. So a change in the
+  proxy half can be merged, released, installed and running in the daemon while
+  every attached session still executes the old code — and an agent doing the
+  responsible thing, asking the tool what it is running, was told the daemon's
+  version and reasonably concluded the fix was live.
+
+  On one machine in one day, three sessions concluded exactly that about a
+  proxy-side fix; one of them had cut the release and verified the tap. Nothing
+  surfaced the difference except the reconnect note, which only appears if you
+  happen to reconnect — not when you ask.
+
+  The proxy now declares its version in the initialize `_meta`, so it travels
+  with the captured handshake frame and is re-applied on every reconnect by
+  construction. A mismatch is reported with the remedy rather than as a bare
+  number, because knowing the versions differ is useless without knowing that
+  restarting the *daemon* will not change it. A session whose proxy declares
+  nothing — a direct client, or a proxy older than this field — reads `unknown`,
+  never agreement.
+
 ### Fixed
 
 - **A Go import is now resolved by what `go.mod` declares, not by matching the

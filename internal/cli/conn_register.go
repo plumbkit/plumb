@@ -168,6 +168,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	prov := Provenance()
 	srv.Register(tools.NewDaemonInfoFunc(s.sessionID, s.sessionName, Version, daemonStartedAt).
 		WithSourceRevision(prov.Revision, prov.Dirty, prov.DirtyKnown).
+		WithProxyVersion(s.proxyVersion).
 		WithConfigStatus(func() tools.ConfigStatus {
 			return tools.ConfigStatus{
 				Generation:    s.store.Generation(),
@@ -312,6 +313,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.OnProxySession = func(_ context.Context, id string) {
 		s.onProxySession(id)
+	}
+	srv.OnProxyVersion = func(_ context.Context, version string) {
+		s.onProxyVersion(version)
 	}
 	srv.OnWorkspaceHint = func(_ context.Context, dir string) {
 		s.onWorkspaceHint(dir)

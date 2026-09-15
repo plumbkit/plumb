@@ -143,16 +143,29 @@ func TestAllowDir_SurvivesHandshakeReplay(t *testing.T) {
 	t.Parallel()
 	const grant = "/granted/dir"
 
+	// Decoded the way the daemon decodes it — map[string]json.RawMessage, then the
+	// one key — rather than as map[string][]string. _meta is a SHARED object whose
+	// values have different types (allow-dirs is an array, the proxy session id and
+	// proxy version are strings), so a typed map fails the whole unmarshal the
+	// moment a non-array key is added and reports it as "the grant is missing".
+	// Every production reader already does it this way; only this test did not.
 	carriesGrant := func(frame []byte) bool {
 		var p struct {
 			Params struct {
-				Meta map[string][]string `json:"_meta"`
+				Meta map[string]json.RawMessage `json:"_meta"`
 			} `json:"params"`
 		}
 		if err := json.Unmarshal(frame, &p); err != nil {
 			return false
 		}
-		dirs := p.Params.Meta[mcp.MetaAllowDirsKey]
+		raw, ok := p.Params.Meta[mcp.MetaAllowDirsKey]
+		if !ok {
+			return false
+		}
+		var dirs []string
+		if err := json.Unmarshal(raw, &dirs); err != nil {
+			return false
+		}
 		return len(dirs) == 1 && dirs[0] == grant
 	}
 

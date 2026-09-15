@@ -172,8 +172,13 @@ func sameEnvelope(before, after []byte) bool {
 // serve started without one sends no workspace key at all, so the frame stays
 // byte-identical (nil return) and the daemon has nothing to auto-attach from —
 // session_start is then the sole workspace-pin authority.
-func buildInitMeta(dirs []string, proxySessionID, workspace string) map[string]json.RawMessage {
+func buildInitMeta(dirs []string, proxySessionID, workspace, proxyVersion string) map[string]json.RawMessage {
 	meta := map[string]json.RawMessage{}
+	if proxyVersion != "" {
+		if raw, err := json.Marshal(proxyVersion); err == nil {
+			meta[mcp.MetaProxyVersionKey] = raw
+		}
+	}
 	if len(dirs) > 0 {
 		if raw, err := json.Marshal(dirs); err == nil {
 			meta[mcp.MetaAllowDirsKey] = raw
@@ -200,7 +205,7 @@ func buildInitMeta(dirs []string, proxySessionID, workspace string) map[string]j
 // wrapper over injectInitMeta retained for the direct allow-dir tests; an empty
 // dirs slice or a non-object frame is returned unchanged.
 func injectAllowDirs(frame []byte, dirs []string) []byte {
-	return injectInitMeta(frame, buildInitMeta(dirs, "", ""))
+	return injectInitMeta(frame, buildInitMeta(dirs, "", "", ""))
 }
 
 // encodeInto marshals child and stores it under key in parent, reporting
