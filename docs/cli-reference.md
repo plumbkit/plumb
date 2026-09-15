@@ -606,9 +606,10 @@ without reading or consuming them.
 It exists for a client-side hook that keeps a turn going when mail is waiting.
 Plumb's mailbox ([`[collab] mailbox`](configuration.md)) delivers by polling — a
 message is handed over by a `check_messages` call or `session_start`, and
-previewed (without being consumed) on an ordinary tool result — so an agent that has finished its turn and is waiting on its
-human never learns that a peer wrote to it. Nothing server-side can reach it;
-this lets the client ask the question from outside any session.
+previewed (without being consumed) on an ordinary tool result — so an agent that
+has finished its turn and is waiting on its human never learns that a peer wrote
+to it. Nothing server-side can reach it; this lets the client ask the question
+from outside any session.
 
 It narrows that window rather than closing it. An agent that is *already* idle
 cannot be reached at all: its end-of-turn hook has run and allowed, and nothing
