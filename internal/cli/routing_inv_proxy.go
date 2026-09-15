@@ -29,6 +29,10 @@ type routingInvProxy struct {
 	primaryLang string
 	primary     *cache.Invalidator
 	guard       func(string) error
+	// workspaceFn resolves the CALLING logical agent's pinned workspace, or "".
+	// The whole-workspace (URI-less) aggregate uses it to scope the result to the
+	// calling agent's project instead of the connection's attach-time primary.
+	workspaceFn func(context.Context) string
 }
 
 func newRoutingInvProxy(pool *workspacePool) *routingInvProxy {
@@ -43,6 +47,14 @@ func (r *routingInvProxy) setBoundaryGuard(guard func(string) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = guard
+}
+
+// setWorkspaceFn wires the per-call workspace accessor for the URI-less
+// whole-workspace aggregate. Nil-safe.
+func (r *routingInvProxy) setWorkspaceFn(fn func(context.Context) string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workspaceFn = fn
 }
 
 // checkURI applies the boundary guard to uri's path. Empty uri is allowed
@@ -261,6 +273,80 @@ func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
 	}
 	if root == "" {
 		return merged
+	}
+	out := make(map[string]time.Time, len(merged))
+	for uri, t := range merged {
+		if uriUnderRoot(uri, root) {
+			out[uri] = t
+		}
+	}
+	return out
+}
+
+// AllDiagnosticsFor is the whole-workspace aggregate scoped to the CALLING
+// agent's project. A URI-less diagnostics query used to answer from the
+// connection's attach-time primary, so an agent pinned elsewhere was shown
+// another project's (usually empty) report rather than its own.
+func (r *routingInvProxy) AllDiagnosticsFor(ctx context.Context) map[string][]protocol.Diagnostic {
+	root := r.agentWorkspace(ctx)
+	if root == "" || root == r.connectionRoot() {
+		return r.AllDiagnostics()
+	}
+	return aggregateDiagnosticsUnder(r.pool.entriesUnderRoot(root), root)
+}
+
+// AllDiagnosticTimesFor is the timestamp half of AllDiagnosticsFor.
+func (r *routingInvProxy) AllDiagnosticTimesFor(ctx context.Context) map[string]time.Time {
+	root := r.agentWorkspace(ctx)
+	if root == "" || root == r.connectionRoot() {
+		return r.AllDiagnosticTimes()
+	}
+	return aggregateTimesUnder(r.pool.entriesUnderRoot(root), root)
+}
+
+func (r *routingInvProxy) connectionRoot() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.primaryRoot
+}
+
+func (r *routingInvProxy) agentWorkspace(ctx context.Context) string {
+	r.mu.RLock()
+	fn := r.workspaceFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn(ctx)
+}
+
+// aggregateDiagnosticsUnder merges the diagnostics of every server attached
+// under root and keeps only URIs inside it.
+func aggregateDiagnosticsUnder(entries []*poolEntry, root string) map[string][]protocol.Diagnostic {
+	merged := make(map[string][]protocol.Diagnostic)
+	for _, e := range entries {
+		if e == nil || e.inv == nil {
+			continue
+		}
+		maps.Copy(merged, e.inv.AllDiagnostics())
+	}
+	out := make(map[string][]protocol.Diagnostic, len(merged))
+	for uri, diags := range merged {
+		if uriUnderRoot(uri, root) {
+			out[uri] = diags
+		}
+	}
+	return out
+}
+
+// aggregateTimesUnder is the timestamp half of aggregateDiagnosticsUnder.
+func aggregateTimesUnder(entries []*poolEntry, root string) map[string]time.Time {
+	merged := make(map[string]time.Time)
+	for _, e := range entries {
+		if e == nil || e.inv == nil {
+			continue
+		}
+		maps.Copy(merged, e.inv.AllDiagnosticTimes())
 	}
 	out := make(map[string]time.Time, len(merged))
 	for uri, t := range merged {

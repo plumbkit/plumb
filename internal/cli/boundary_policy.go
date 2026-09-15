@@ -118,6 +118,44 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 	return s.view().policy
 }
 
+// pinnedRootsGuard refuses a path under NO workspace root pinned on this
+// connection — neither the connection's own root nor any logical agent's shard
+// root.
+//
+// It is the diagnostics routing INV proxy's guard, and it is deliberately
+// weaker than a per-agent policy. That proxy sits BEHIND the diagnostics tool's
+// ctx-aware entry boundary, which has already checked every requested URI
+// against the CALLING agent's policy, so its own check is defence in depth. A
+// plain connection-policy guard here is what made a declared agent's own
+// diagnostics query fail with "this connection is pinned to <another project>"
+// whenever the connection's default pin named a different root. The union keeps
+// the refusal for a path under no pinned root without re-refusing a root some
+// agent on this connection legitimately owns.
+//
+// The ctx-less pull-recording methods (RecordPullResult and friends) are the
+// reason this is not ctx-aware: their interface carries no context, and
+// threading one through internal/cache would be a far larger change for a
+// defence-in-depth check the entry guard already makes.
+func (s *connSession) pinnedRootsGuard(path string) error {
+	if path == "" {
+		return nil
+	}
+	roots := []string{s.workspace()}
+	s.shardsMu.Lock()
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		roots = append(roots, sh.root)
+		sh.mu.RUnlock()
+	}
+	s.shardsMu.Unlock()
+	for _, root := range roots {
+		if root != "" && tools.PathWithinWorkspace(root, path) {
+			return nil
+		}
+	}
+	return tools.ClassifyPathRefusal(tools.WorkspaceBoundaryError{Workspace: s.workspace(), Path: path})
+}
+
 // policyRootRefused reports whether a path policy may NOT be built on the
 // pinned root, for either of two reasons.
 //

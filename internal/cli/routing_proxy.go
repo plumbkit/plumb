@@ -34,7 +34,12 @@ type routingProxy struct {
 	primaryRoot string
 	primaryLang string
 	primary     *clientProxy
-	guard       func(string) error
+	guard       func(context.Context, string) error
+	// workspaceFn resolves the CALLING logical agent's pinned workspace, or ""
+	// when there is no per-agent accessor or the call carries no identity. It is
+	// consulted only by URI-less queries, which otherwise fall back to the
+	// connection's attach-time root.
+	workspaceFn func(context.Context) string
 	// onActivate, when set, is invoked the first time a secondary language
 	// server under the primary root serves a request, so the session can list
 	// every active LSP. Guarded by mu; nil-safe.
@@ -66,10 +71,30 @@ func newRoutingProxy(pool *workspacePool) *routingProxy {
 	}
 }
 
-func (r *routingProxy) setBoundaryGuard(guard func(string) error) {
+// setBoundaryGuard wires the ctx-aware workspace boundary guard.
+//
+// It MUST be ctx-aware rather than a bare func(path). This proxy is shared by
+// every logical agent multiplexing a connection, and several LSP-backed tools
+// (get_definition, find_references, call_hierarchy, type_hierarchy,
+// explain_symbol) carry no boundary guard of their own — this is their ONLY
+// guard. A ctx-less guard therefore resolves the connection's pin, so when that
+// pin named a different project every one of those tools refused a declared
+// agent's own workspace. Passing the per-agent guard keeps the proxy's routing
+// decision keyed on the CALLING agent, which is also what stops one agent
+// reaching another's adapter.
+func (r *routingProxy) setBoundaryGuard(guard func(context.Context, string) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = guard
+}
+
+// setWorkspaceFn wires the per-call workspace accessor so a URI-less query
+// resolves the CALLING agent's project instead of the connection's own root.
+// Nil-safe.
+func (r *routingProxy) setWorkspaceFn(fn func(context.Context) string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workspaceFn = fn
 }
 
 // setDiscovered records the connection's workspace root and the child language
@@ -168,7 +193,7 @@ func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Cl
 	guard := r.guard
 	r.mu.RUnlock()
 	if guard != nil {
-		if err := guard(path); err != nil {
+		if err := guard(ctx, path); err != nil {
 			return nil, err
 		}
 	}
@@ -254,7 +279,20 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 	r.mu.RLock()
 	discovered := r.discovered
 	wsRoot := r.wsRoot
+	fn := r.workspaceFn
 	r.mu.RUnlock()
+
+	// A declared agent pinned away from the connection's own root gets ITS
+	// workspace's symbols. The pool is already daemon-wide and keyed by
+	// (root, language), so the only wrong thing was which root this URI-less
+	// query chose: it used the connection's attach-time primary, and a symbol a
+	// URI-scoped query finds was reported missing.
+	if fn != nil {
+		if agentRoot := fn(ctx); agentRoot != "" && agentRoot != wsRoot {
+			return r.agentWorkspaceSymbols(ctx, params, agentRoot)
+		}
+	}
+
 	// Single-language root: keep the primary-only behaviour.
 	if len(discovered) == 0 {
 		c, err := r.primaryClient(ctx)
@@ -264,6 +302,24 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 		return c.WorkspaceSymbols(ctx, params)
 	}
 	return r.fanOutWorkspaceSymbols(ctx, params, wsRoot, discovered)
+}
+
+// agentWorkspaceSymbols answers a URI-less symbol query for the calling agent's
+// own root. It acquires that root's language first — a no-op once a URI-scoped
+// call has done so — because the fan-out only visits servers already attached
+// under the root, and an agent whose first call is the URI-less one would
+// otherwise be told its own symbols do not exist.
+//
+// BOTH the acquire and the fan-out are scoped to the AGENT'S root, never to an
+// ancestor Detect may have walked up to. A module root above the workspace can
+// cover a sibling project — on a shared connection, the connection's own root —
+// and querying it would answer with that project's symbols, which is the
+// connection-versus-agent leak this whole path exists to fix.
+func (r *routingProxy) agentWorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams, root string) ([]protocol.SymbolInformation, error) {
+	if _, language, err := r.pool.Detect(root); err == nil && language != "" && language != LanguageNone {
+		_, _ = r.pool.acquireLang(ctx, root, language, false)
+	}
+	return r.fanOutWorkspaceSymbols(ctx, params, root, nil)
 }
 
 // lsTarget is a (root, language) pair to query during workspace-symbol fan-out.
