@@ -146,6 +146,25 @@ func TestClaimNotes_RenameDoesNotWidenPastTheBinding(t *testing.T) {
 			t.Fatalf("claimant %+v read a note bound to another session: %v", impostor, bodies(got))
 		}
 	}
+
+	// THE POSITIVE CONTROL, and it is not decoration. Every assertion above is of
+	// the form "got nothing", which a universally-empty result satisfies — a
+	// predicate typo, a fixture that never inserted, a misconfigured store. Without
+	// a claimant that MUST receive, this test passes just as happily when delivery
+	// is broken for everyone, and it is the test the PR description offers as the
+	// proof that the widening is safe.
+	//
+	// The control is the headline case itself: the rightful owner under a
+	// regenerated name. So the same loop proves the guard holds and the feature
+	// works, and neither can be true vacuously while the other is asserted.
+	owner, err := s.ClaimNotes(ctx, Claimant{Name: "icy-beaver", ID: "sess-gentle-mink"}, now, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owner) != 1 || owner[0].Body != "secret" {
+		t.Fatalf("the rightful owner claimed %v, want the one note bound to it — without this the "+
+			"three refusals above are satisfied by delivery being broken for everybody", bodies(owner))
+	}
 }
 
 // TestClaimableNotes_CountsBoundMailAfterARename is the probe surface the idle

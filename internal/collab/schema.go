@@ -70,8 +70,29 @@ var chatColumns = []struct{ name, ddl string }{
 // chatIndexes accelerate the two hot chat queries: "what is unread for me" and
 // "how many exchanges has this conversation had". Created after the columns
 // exist, so they are separate from the base schema above.
+//
+// idx_collab_inbox_id is what keeps the delivery probe indexed now that a row is
+// addressed EITHER by identity or, when unbound, by name. The addressing
+// predicate is a disjunction over addressee_id (see addresseeMatch), and a name
+// no longer sits in a top-level AND — so idx_collab_inbox, whose leading column
+// is `addressee`, stops being usable and SQLite falls back to idx_collab_kind,
+// i.e. `kind = 'note'`, which selects every row in the table.
+//
+// Verified with EXPLAIN QUERY PLAN on a real collab.db rather than reasoned
+// about: without this index the plan is SEARCH ... USING INDEX idx_collab_kind;
+// with it, MULTI-INDEX OR with BOTH arms served by idx_collab_inbox_id — the
+// bound arm matches addressee_id = <id> and the unbound arm addressee_id = ”,
+// which is an equality on the same leading column, so one index covers both.
+//
+// It matters most where it is least visible. This is the probe on every tool
+// call and every turn-end wake, and under [collab] keep_delivered_notes the
+// delivered rows are retained indefinitely: the predicate still filters them
+// with delivered_at = 0, but unindexed the scan visits every one of them while
+// the result stays tiny. idx_collab_inbox is kept — PendingNotes and the
+// membership queries still lead with the name.
 const chatIndexes = `
 CREATE INDEX IF NOT EXISTS idx_collab_inbox ON collab_rows(addressee, delivered_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_collab_inbox_id ON collab_rows(addressee_id, delivered_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
 `
 
