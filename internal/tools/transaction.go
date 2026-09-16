@@ -184,7 +184,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 
 	// Baselines must predate the writes, so the per-file differential can tell an
 	// error this transaction introduced from one already there.
-	baselines := t.txCaptureBaselines(a, prepared)
+	baselines := t.txCaptureBaselines(ctx, a, prepared)
 
 	written, txl, err := t.txPhase2Write(ctx, prepared)
 	if err != nil {
@@ -201,7 +201,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 
 	notifyFailed := t.txPhase3Notify(ctx, written)
-	diag := t.txPostWriteDiagnostics(a, written, baselines, notifyFailed)
+	diag := t.txPostWriteDiagnostics(ctx, a, written, baselines, notifyFailed)
 	if a.FailOnNewErrors {
 		if diag.anyNewErrors() {
 			// Still holding every per-path lock: write, analysis and rollback are

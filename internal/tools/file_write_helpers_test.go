@@ -75,7 +75,7 @@ func errDiag(msg string) []protocol.Diagnostic {
 }
 
 func TestAwaitDiagnosticsRefresh_NilSource(t *testing.T) {
-	got, _ := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond, nil)
+	got, _ := awaitDiagnosticsRefresh(context.Background(), nil, "file:///foo.go", 50*time.Millisecond, nil)
 	if got != nil {
 		t.Errorf("nil source: want nil, got %v", got)
 	}
@@ -86,7 +86,7 @@ func TestAwaitDiagnosticsRefresh_Disabled(t *testing.T) {
 	src.set(errDiag("old error"))
 
 	start := time.Now()
-	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", -1, nil)
+	got, _ := awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", -1, nil)
 	elapsed := time.Since(start)
 
 	if elapsed > 20*time.Millisecond {
@@ -108,7 +108,7 @@ func TestAwaitDiagnosticsRefresh_FeedsEstimator(t *testing.T) {
 	}()
 
 	ceiling := 500 * time.Millisecond
-	_, _ = awaitDiagnosticsRefresh(src, "file:///foo.go", ceiling, est)
+	_, _ = awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", ceiling, est)
 
 	// A publish was observed, so the estimator now holds a sample and bounds the
 	// next effective window below the ceiling.
@@ -129,7 +129,7 @@ func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) 
 	base := newStubDiag()
 	base.set(errDiag("unchanged"))
 	start := time.Now()
-	_, _ = awaitDiagnosticsRefresh(base, "file:///foo.go", ceiling, nil)
+	_, _ = awaitDiagnosticsRefresh(context.Background(), base, "file:///foo.go", ceiling, nil)
 	baseline := time.Since(start)
 	if baseline < ceiling {
 		t.Fatalf("nil estimator returned in %v, expected the full %v ceiling", baseline, ceiling)
@@ -145,7 +145,7 @@ func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) 
 	warm := newStubDiag()
 	warm.set(errDiag("unchanged"))
 	start = time.Now()
-	_, _ = awaitDiagnosticsRefresh(warm, "file:///foo.go", ceiling, est)
+	_, _ = awaitDiagnosticsRefresh(context.Background(), warm, "file:///foo.go", ceiling, est)
 	adaptive := time.Since(start)
 	if adaptive >= 200*time.Millisecond {
 		t.Fatalf("warmed estimator waited %v, expected well under the %v ceiling", adaptive, ceiling)
@@ -163,19 +163,19 @@ func TestAwaitDiagnosticsRefresh_FreshFlag(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		src.set(errDiag("after"))
 	}()
-	if _, fresh := awaitDiagnosticsRefresh(src, "file:///foo.go", 500*time.Millisecond, nil); !fresh {
+	if _, fresh := awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", 500*time.Millisecond, nil); !fresh {
 		t.Fatalf("expected fresh=true when the server publishes during the wait")
 	}
 
 	// Timeout with no publish → not fresh.
 	quiet := newStubDiag()
 	quiet.set(errDiag("unchanged"))
-	if _, fresh := awaitDiagnosticsRefresh(quiet, "file:///foo.go", 40*time.Millisecond, nil); fresh {
+	if _, fresh := awaitDiagnosticsRefresh(context.Background(), quiet, "file:///foo.go", 40*time.Millisecond, nil); fresh {
 		t.Fatalf("expected fresh=false on timeout with no publish")
 	}
 
 	// Disabled wait → not fresh (returned without waiting).
-	if _, fresh := awaitDiagnosticsRefresh(quiet, "file:///foo.go", -1, nil); fresh {
+	if _, fresh := awaitDiagnosticsRefresh(context.Background(), quiet, "file:///foo.go", -1, nil); fresh {
 		t.Fatalf("expected fresh=false when the wait is disabled")
 	}
 }
@@ -227,7 +227,7 @@ func TestAwaitDiagnosticsRefresh_TimesOut(t *testing.T) {
 
 	window := 60 * time.Millisecond
 	start := time.Now()
-	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
+	got, _ := awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed < window {
@@ -250,7 +250,7 @@ func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
 
 	window := 500 * time.Millisecond
 	start := time.Now()
-	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
+	got, _ := awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed >= window {
@@ -274,7 +274,7 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 		close(changed)
 	}()
 
-	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", 0, nil)
+	got, _ := awaitDiagnosticsRefresh(context.Background(), src, "file:///foo.go", 0, nil)
 
 	// Deterministic wait for the goroutine to finish signalling. The old
 	// non-blocking select{…default:t.Fatal} raced the goroutine's

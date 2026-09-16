@@ -314,6 +314,18 @@ type connSession struct {
 	shardsMu sync.Mutex
 	shards   map[string]*agentShard
 
+	// pendingDecl records, per logical-agent ID, a workspace the agent named in
+	// an explicit session_start that the daemon REFUSED, while its shard still
+	// sat on a root the agent never chose. Until the declaration is settled the
+	// agent's path-bearing calls are refused by name rather than resolved into
+	// that root; see declarationRefusedErr.
+	//
+	// pendingDeclMu is a LEAF lock: nothing else is acquired while it is held,
+	// because repinAgent takes it underneath sh.mu. Anything needing a shard
+	// fact must therefore carry it in the value (sittingOn), not look it up.
+	pendingDeclMu sync.Mutex
+	pendingDecl   map[string]pendingDeclaration
+
 	ctx context.Context
 	// restoreRetryBackoff is the injectable wait schedule for the bounded
 	// degraded-recovery retry (C3). Nil ⇒ the production 5s/15s/45s ladder.

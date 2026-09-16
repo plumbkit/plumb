@@ -238,13 +238,13 @@ func (d WriteDeps) crossFileSettleWindow() time.Duration {
 // sweep is enabled and the source can serve one. Returns nil only when no Diag
 // source is wired. Callers MUST invoke this BEFORE the write mutates the file, so
 // the baseline reflects the pre-edit language-server state.
-func (d WriteDeps) capturePreWriteBaseline(uri string) *diagBaseline {
+func (d WriteDeps) capturePreWriteBaseline(ctx context.Context, uri string) *diagBaseline {
 	if d.Diag == nil {
 		return nil
 	}
 	var b *diagBaseline
 	if d.crossFileEnabled() {
-		b = newDiagBaseline(d.Diag) // nil when the source cannot serve a whole-workspace snapshot
+		b = newDiagBaseline(ctx, d.Diag) // nil when the source cannot serve a whole-workspace snapshot
 	}
 	if b == nil {
 		b = &diagBaseline{at: time.Now()}

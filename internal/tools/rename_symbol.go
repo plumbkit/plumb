@@ -385,7 +385,7 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	verb := "would change"
 	var diagOut strings.Builder
 	if !a.DryRun {
-		baselines := t.captureRenameBaselines(files)
+		baselines := t.captureRenameBaselines(ctx, files)
 		modified, plans, applyErr := applyWorkspaceEditDetailed(we, func(plans []workspaceEditPlan) {
 			t.recordRenameWrites(ctx, plans)
 		})
@@ -478,7 +478,7 @@ func capReportFiles[T any](s []T) []T {
 // one costs a whole-workspace diagnostics snapshot, so capturing one per
 // modified file would pay for reports that are never rendered. files must be
 // sorted: postWriteRename reports the same prefix.
-func (t *RenameSymbol) captureRenameBaselines(files []string) map[string]*diagBaseline {
+func (t *RenameSymbol) captureRenameBaselines(ctx context.Context, files []string) map[string]*diagBaseline {
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
 	if deps == nil {
 		return nil
@@ -486,7 +486,7 @@ func (t *RenameSymbol) captureRenameBaselines(files []string) map[string]*diagBa
 	out := make(map[string]*diagBaseline, len(files))
 	for _, f := range capReportFiles(files) {
 		uri := protocol.FileURI(f)
-		out[uri] = deps.capturePreWriteBaseline(uri)
+		out[uri] = deps.capturePreWriteBaseline(ctx, uri)
 	}
 	return out
 }

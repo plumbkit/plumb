@@ -10,6 +10,7 @@ package tools
 // server actually re-analysed after this write are attributed).
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,32 @@ import (
 type crossFileDiagSource interface {
 	AllDiagnostics() map[string][]protocol.Diagnostic
 	AllDiagnosticTimes() map[string]time.Time
+}
+
+// crossFileDiagSourceFor is the ctx-aware upgrade of crossFileDiagSource. The
+// session's diagnostics routing proxy implements it so a logical agent's
+// cross-file sweep covers ITS workspace; without it a sharded agent's sweep
+// diffs the CONNECTION's attach-time primary, reporting another project's
+// breakage against a write that never touched it. Optional on purpose: a narrow
+// test double keeps compiling and simply stays unscoped.
+type crossFileDiagSourceFor interface {
+	AllDiagnosticsFor(ctx context.Context) map[string][]protocol.Diagnostic
+	AllDiagnosticTimesFor(ctx context.Context) map[string]time.Time
+}
+
+// crossFileSnapshot returns the whole-workspace diagnostics and their publish
+// times, scoped to the CALLING agent when the source can do it. ok is false when
+// the source cannot serve a whole-workspace snapshot at all, which the callers
+// treat as "cross-file sweep not checked".
+func crossFileSnapshot(ctx context.Context, src postWriteDiagSource) (all map[string][]protocol.Diagnostic, times map[string]time.Time, ok bool) {
+	cf, ok := src.(crossFileDiagSource)
+	if !ok {
+		return nil, nil, false
+	}
+	if scoped, canScope := src.(crossFileDiagSourceFor); canScope {
+		return scoped.AllDiagnosticsFor(ctx), scoped.AllDiagnosticTimesFor(ctx), true
+	}
+	return cf.AllDiagnostics(), cf.AllDiagnosticTimes(), true
 }
 
 // diagBaseline is a pre-write snapshot of per-URI error state, captured before a
@@ -48,12 +75,11 @@ type diagBaseline struct {
 // newDiagBaseline snapshots the current workspace error state. Returns nil (a
 // cheap no-op the sweep skips) when the source cannot serve a whole-workspace
 // snapshot — e.g. a narrow test double.
-func newDiagBaseline(src postWriteDiagSource) *diagBaseline {
-	cf, ok := src.(crossFileDiagSource)
+func newDiagBaseline(ctx context.Context, src postWriteDiagSource) *diagBaseline {
+	all, _, ok := crossFileSnapshot(ctx, src)
 	if !ok {
 		return nil
 	}
-	all := cf.AllDiagnostics()
 	b := &diagBaseline{
 		at:       time.Now(),
 		errCount: make(map[string]int, len(all)),

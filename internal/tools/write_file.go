@@ -153,7 +153,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	// Baseline must be captured before the bytes change so the cross-file sweep
 	// can tell errors this write introduced from ones already present.
-	baseline := t.deps.capturePreWriteBaseline(uri)
+	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
@@ -173,7 +173,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	// Still inside the per-path lock taken in Execute: write, analysis and
 	// rollback decision are one critical section.
-	diag := t.deps.postWriteDiagnostics(uri, diagBefore, a.Content, a.diagOpts(notifyFailed), baseline)
+	diag := t.deps.postWriteDiagnostics(ctx, uri, diagBefore, a.Content, a.diagOpts(notifyFailed), baseline)
 	if a.FailOnNewErrors && diag.delta.hasNewErrors() {
 		return "", t.deps.rollbackNewErrors(ctx, rollbackRequest{
 			tool: "write_file", path: path, uri: uri,

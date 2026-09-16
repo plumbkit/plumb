@@ -87,6 +87,16 @@ const (
 	// KindWorkspaceBoundary is a path outside the connection's allowed roots,
 	// or a path-bearing call on a connection with nothing pinned.
 	KindWorkspaceBoundary Kind = "workspace_boundary"
+	// KindPinRefused is session_start refusing to move a workspace pin — either
+	// the connection's pin or one logical agent's own shard. It is not a path
+	// rejection (that is KindWorkspaceBoundary): the PIN is what would move, and
+	// the caller's remedy depends entirely on WHICH pin, which Details["scope"]
+	// carries as "agent" or "connection". The distinction is load-bearing for a
+	// client that recovers automatically: force: true moves only the calling
+	// agent's shard at "agent" scope, but moves the pin every agent on the
+	// connection resolves against at "connection" scope — where a peer's restored
+	// pin can be displaced. A client must read the scope, never the class alone.
+	KindPinRefused Kind = "pin_refused"
 	// KindRateLimited is the per-session write-rate budget refusing an operation.
 	KindRateLimited Kind = "rate_limited"
 	// KindGitPolicy is plumb refusing a git operation by policy: a disabled
@@ -132,6 +142,7 @@ var allKinds = []Kind{
 	KindInvalidArguments,
 	KindLSPTimeout,
 	KindLSPUnavailable,
+	KindPinRefused,
 	KindRateLimited,
 	KindUnreadOrStale,
 	KindWorkspaceBoundary,

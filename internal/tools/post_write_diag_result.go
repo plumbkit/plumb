@@ -57,7 +57,7 @@ type postWriteDiagResult struct {
 // distinguished rather than blurred, because they call for different responses:
 // no diagnostics source at all, a failed post-write notification, and a wait
 // that expired (or was disabled).
-func (d WriteDeps) postWriteDiagnostics(uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline) postWriteDiagResult {
+func (d WriteDeps) postWriteDiagnostics(ctx context.Context, uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline) postWriteDiagResult {
 	if d.Diag == nil {
 		// No language server for this file (or none attached). Historically this
 		// printed nothing, and silence elsewhere in the block means "clean" — so
@@ -69,7 +69,7 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, opt postWri
 		return notAnalysedResult(opt, diagScopeUnconfirmed,
 			"diagnostics: not analysed — the language server could not be told this file changed, so any result would describe the previous content; call diagnostics() to confirm")
 	}
-	if r, handled := d.pullPostWriteDiagnostics(uri, before, content, opt, baseline); handled {
+	if r, handled := d.pullPostWriteDiagnostics(ctx, uri, before, content, opt, baseline); handled {
 		return r
 	}
 	ceiling := d.postWriteDiagWindow()
@@ -77,11 +77,11 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, opt postWri
 	if opt.awaitFresh && !disabled && ceiling < longPostWriteDiagWindow {
 		ceiling = longPostWriteDiagWindow
 	}
-	diags, fresh := awaitDiagnosticsRefresh(d.Diag, uri, ceiling, d.DiagWait)
+	diags, fresh := awaitDiagnosticsRefresh(ctx, d.Diag, uri, ceiling, d.DiagWait)
 	if !fresh {
 		return staleDiagResult(diags, opt, disabled)
 	}
-	return d.freshDiagResult(uri, before, content, opt, baseline, diags)
+	return d.freshDiagResult(ctx, uri, before, content, opt, baseline, diags)
 }
 
 // notAnalysedResult is the answer when no post-write analysis was even
@@ -135,7 +135,7 @@ func staleDiagResult(diags []protocol.Diagnostic, opt postWriteDiagOpts, disable
 
 // freshDiagResult builds the confirmed-fresh answer: the differential block, the
 // cross-file sweep, the standing pre-existing note, and the structured delta.
-func (d WriteDeps) freshDiagResult(uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline, diags []protocol.Diagnostic) postWriteDiagResult {
+func (d WriteDeps) freshDiagResult(ctx context.Context, uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline, diags []protocol.Diagnostic) postWriteDiagResult {
 	var pre []protocol.Diagnostic
 	if baseline != nil {
 		pre = baseline.editedPre
@@ -145,7 +145,7 @@ func (d WriteDeps) freshDiagResult(uri, before, content string, opt postWriteDia
 	errs, warns, stale := splitDifferential(freshNew, likelyStale, lineCount(content))
 
 	out := renderDifferential(errs, warns, stale)
-	crossText, breaks, crossScope := d.crossFileDiagnostics(uri, true, baseline)
+	crossText, breaks, crossScope := d.crossFileDiagnostics(ctx, uri, true, baseline)
 	out += crossText
 	if opt.awaitFresh && out == "" {
 		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
@@ -201,18 +201,18 @@ func buildDelta(uri string, newErrs, pre, post []protocol.Diagnostic, breaks []c
 // The push sweep is never "fresh": it attributes only files the server happened
 // to re-publish after the baseline, so a dependent file still being analysed is
 // invisible to it. It reports diagScopeIncomplete when it ran at all.
-func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *diagBaseline) (string, []crossFileBreak, string) {
+func (d WriteDeps) crossFileDiagnostics(ctx context.Context, editedURI string, fresh bool, baseline *diagBaseline) (string, []crossFileBreak, string) {
 	if baseline == nil || !fresh || !d.crossFileEnabled() {
-		return "", nil, diagScopeNotChecked
-	}
-	cf, ok := d.Diag.(crossFileDiagSource)
-	if !ok {
 		return "", nil, diagScopeNotChecked
 	}
 	if settle := d.crossFileSettleWindow(); settle > 0 {
 		waitForCrossFileSettle(d.Diag, settle)
 	}
-	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
+	post, postTimes, ok := crossFileSnapshot(ctx, d.Diag)
+	if !ok {
+		return "", nil, diagScopeNotChecked
+	}
+	breaks := computeCrossFileDelta(baseline, post, postTimes, editedURI)
 	return formatCrossFileDiagnostics(breaks, d.workspaceRoot()), breaks, diagScopeIncomplete
 }
 

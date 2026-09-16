@@ -77,13 +77,13 @@ func (a transactionApplyArgs) txDiagOpts(lspNotifyFailed bool) postWriteDiagOpts
 // txCaptureBaselines snapshots the pre-write language-server state for every
 // operation, BEFORE the write phase mutates anything. Only taken when the caller
 // asked for a confirmed answer — the default transaction pays nothing.
-func (t *TransactionApply) txCaptureBaselines(a transactionApplyArgs, prepared []txPrepared) map[string]*diagBaseline {
+func (t *TransactionApply) txCaptureBaselines(ctx context.Context, a transactionApplyArgs, prepared []txPrepared) map[string]*diagBaseline {
 	if !a.AwaitDiagnostics && !a.FailOnNewErrors {
 		return nil
 	}
 	out := make(map[string]*diagBaseline, len(prepared))
 	for _, p := range prepared {
-		out[p.path] = t.deps.capturePreWriteBaseline("file://" + p.path)
+		out[p.path] = t.deps.capturePreWriteBaseline(ctx, "file://"+p.path)
 	}
 	return out
 }
@@ -91,7 +91,7 @@ func (t *TransactionApply) txCaptureBaselines(a transactionApplyArgs, prepared [
 // txPostWriteDiagnostics runs the post-write pass over every written file. It is
 // serial and each file may wait for the language server, so it runs only when
 // the caller asked for it.
-func (t *TransactionApply) txPostWriteDiagnostics(a transactionApplyArgs, written []txPrepared, baselines map[string]*diagBaseline, notifyFailed map[string]bool) txDiagReport {
+func (t *TransactionApply) txPostWriteDiagnostics(ctx context.Context, a transactionApplyArgs, written []txPrepared, baselines map[string]*diagBaseline, notifyFailed map[string]bool) txDiagReport {
 	if !a.AwaitDiagnostics && !a.FailOnNewErrors {
 		return txDiagReport{}
 	}
@@ -100,7 +100,7 @@ func (t *TransactionApply) txPostWriteDiagnostics(a transactionApplyArgs, writte
 		uri := "file://" + p.path
 		rep.files = append(rep.files, txFileDiag{
 			path: p.path,
-			diag: t.deps.postWriteDiagnostics(uri, p.before, p.after, a.txDiagOpts(notifyFailed[p.path]), baselines[p.path]),
+			diag: t.deps.postWriteDiagnostics(ctx, uri, p.before, p.after, a.txDiagOpts(notifyFailed[p.path]), baselines[p.path]),
 		})
 	}
 	return rep

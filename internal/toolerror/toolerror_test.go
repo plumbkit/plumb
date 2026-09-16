@@ -10,8 +10,8 @@ import (
 
 func TestAllKinds_SortedCompleteAndValid(t *testing.T) {
 	kinds := AllKinds()
-	if len(kinds) != 13 {
-		t.Fatalf("AllKinds() returned %d kinds, want 13 (add the new kind to allKinds and update this pin)", len(kinds))
+	if len(kinds) != 14 {
+		t.Fatalf("AllKinds() returned %d kinds, want 14 (add the new kind to allKinds and update this pin)", len(kinds))
 	}
 	if !slices.IsSorted(kinds) {
 		t.Errorf("AllKinds() is not sorted: %v", kinds)

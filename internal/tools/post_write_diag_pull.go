@@ -45,7 +45,7 @@ type postWriteWorkspacePuller interface {
 // machinery: the client is not mode-aware, the mode is not pull/hybrid, the
 // post-write window is disabled, or the connection was downgraded (-32601)
 // mid-call.
-func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline) (out postWriteDiagResult, handled bool) {
+func (d WriteDeps) pullPostWriteDiagnostics(ctx context.Context, uri, before, content string, opt postWriteDiagOpts, baseline *diagBaseline) (out postWriteDiagResult, handled bool) {
 	pp, ok := d.Client.(postWritePuller)
 	if !ok || !pullModeActive(pp.DiagnosticsMode(uri)) {
 		return postWriteDiagResult{}, false
@@ -60,10 +60,13 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, opt pos
 	if opt.awaitFresh && ceiling < longPostWriteDiagWindow {
 		ceiling = longPostWriteDiagWindow
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ceiling)
+	// The pull goes through the session's ROUTING proxy, whose boundary guard is
+	// ctx-aware; a Background context would resolve the CONNECTION's pin, so a
+	// sharded agent's own file was refused. Inherit the caller's identity.
+	wctx, cancel := context.WithTimeout(ctx, ceiling)
 	defer cancel()
 
-	pulled, unresolved, err := d.pullEdited(ctx, pp, uri)
+	pulled, unresolved, err := d.pullEdited(wctx, pp, uri)
 	if err != nil {
 		if !pullModeActive(pp.DiagnosticsMode(uri)) {
 			// Downgraded (-32601 on a negotiated pull): this is a push
@@ -72,7 +75,7 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, opt pos
 		}
 		return pullFailureResult(opt, err), true
 	}
-	return d.pullDifferentialResult(ctx, uri, before, content, opt, baseline, pulled, unresolved), true
+	return d.pullDifferentialResult(wctx, uri, before, content, opt, baseline, pulled, unresolved), true
 }
 
 // pullFailureResult renders a failed post-write pull.
@@ -165,8 +168,12 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 	if baseline == nil || !d.crossFileEnabled() {
 		return "", nil, diagScopeNotChecked
 	}
-	cf, ok := d.Diag.(crossFileDiagSource)
-	if !ok {
+	// The capability check comes FIRST, but the SNAPSHOT comes after the
+	// workspace pull below: the pull is what refreshes the invalidator's cache
+	// for the other files, and a snapshot taken before it would diff the
+	// baseline against the very state the baseline was captured from — the
+	// sweep would report nothing at all.
+	if _, ok := d.Diag.(crossFileDiagSource); !ok {
 		return "", nil, diagScopeNotChecked
 	}
 	exhaustive := false
@@ -180,7 +187,11 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 			}
 		}
 	}
-	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
+	post, postTimes, ok := crossFileSnapshot(ctx, d.Diag)
+	if !ok {
+		return "", nil, diagScopeNotChecked
+	}
+	breaks := computeCrossFileDelta(baseline, post, postTimes, editedURI)
 	out := formatCrossFileDiagnostics(breaks, d.workspaceRoot())
 	scope := diagScopeIncomplete
 	if exhaustive {

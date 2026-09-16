@@ -362,8 +362,16 @@ func TestSeededShardStillRefusesAnUnrelatedWorkspace(t *testing.T) {
 	if !strings.Contains(err.Error(), "sticky") || !strings.Contains(err.Error(), "force") {
 		t.Errorf("the refusal lost its diagnosis or its remedy: %v", err)
 	}
-	if got := s.workspaceFor(ctxAgent); got != parent {
+	if got := shardRoot(t, s, ctxAgent); got != parent {
 		t.Errorf("the refused re-pin moved the shard to %q; it must stay at %q", got, parent)
+	}
+	// The resolver, by contrast, must refuse to anchor at all while the
+	// declaration stands refused: the seeded root is another conversation's
+	// project, and resolving a relative path into it is the silent retarget the
+	// refusal exists to stop. "" is what makes git's default repository,
+	// orientation and every implicit root refuse alongside the boundary guard.
+	if got := s.workspaceFor(ctxAgent); got != "" {
+		t.Errorf("workspaceFor = %q, want \"\" — implicit resolution must not anchor to a refused agent's seeded root", got)
 	}
 	if _, err := s.policyFor(ctxAgent).Check(filepath.Join(elsewhere, "x.go"), tools.AccessReadWrite); err == nil {
 		t.Error("the refused agent's boundary admits a path in the workspace it was refused — fail-open")
