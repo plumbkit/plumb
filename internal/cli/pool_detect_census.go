@@ -46,10 +46,19 @@ const (
 	// code rather than on it.
 	censusScanDepth = 4
 	// Larger than extScanMaxFiles because the census MEASURES a remainder where
-	// the sniff samples a prefix — a share is only meaningful against a
-	// reasonably complete count. Still well under tieScanMaxFiles: pruning the
-	// claimed roots, plus skipChildDir, plus .gitignore, has already removed the
-	// trees that make a repo large.
+	// the sniff samples a prefix, and a share read off a truncated count is a
+	// share of whatever the walk reached first. Still well under tieScanMaxFiles:
+	// pruning the claimed roots, plus skipChildDir, plus .gitignore, has already
+	// removed the trees that make a repo large.
+	//
+	// Raising the budget makes truncation rarer; it does not make it impossible,
+	// and a truncated count is ACCEPTED rather than discarded. That is the choice
+	// extLangAtIn documents, for the same reason — the alternative here is
+	// nominating nothing, so a coarse answer beats silence — and it is a weaker
+	// guarantee than resolveMarkerTie's, which discards a partial count because
+	// there the alternative is a neutral fallback rather than nothing. The
+	// outcome is logged so a surprising nomination on a huge tree can be traced
+	// to the cap.
 	censusScanMaxFiles = 5000
 
 	// censusMinFiles and censusMinShare are BOTH required, and each exists
@@ -60,8 +69,14 @@ const (
 	// there costs a process, its memory, and a badge that misdescribes the
 	// project.
 	//
-	// A share alone: a repo holding one .py beside two .md files gives python
-	// 100% of the counted remainder. One stray file must never start a server.
+	// A share alone: a scripts repo holding one .py and two .ts files gives
+	// python a third of the counted remainder on the strength of a single file,
+	// and a lone .py in an otherwise codeless directory gives it 100%. One stray
+	// file must never start a server. (Stated in terms of files that COUNT: the
+	// denominator is restricted to nominatable languages, so .md and .json
+	// neighbours are not what holds such a share down — an earlier draft of this
+	// comment claimed they were, which was wrong in the direction that makes the
+	// floor look better justified than it is.)
 	//
 	// Five is the smallest count that cannot be a single incidental file plus
 	// the __init__.py / conftest.py scaffolding that travels with it. The repo
@@ -102,23 +117,40 @@ func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discove
 	if len(langs) == 0 {
 		return nil
 	}
+	// Canonicalised ONCE, here, rather than per directory inside the walk. Both
+	// sides of the prune comparison have to agree on a spelling — a discovered
+	// root can arrive by another one (a symlinked checkout, the macOS /tmp
+	// firmlink) and a raw string compare would then fail to prune exactly the
+	// subtree that is already served. Canonicalising the ROOT gives that
+	// agreement for every path the walk builds from it: paths are joined onto it
+	// and symlinked entries are skipped outright, so each `abs` is canonical by
+	// construction. Doing it per directory instead cost an lstat chain per path
+	// component per directory — about a fifth of the walk on a 1700-directory
+	// tree — to re-derive what the root already guarantees.
+	root = paths.Canonical(root)
 	claimedPaths := make(map[string]bool, len(claimed))
 	for _, d := range claimed {
-		// Canonical on both sides of the comparison — the walk builds child
-		// paths from root, which Detect has already canonicalised, but a
-		// discovered root can reach the map by another spelling (a symlinked
-		// checkout, the macOS /tmp firmlink). Comparing raw strings would fail
-		// to prune exactly the subtree that is already served.
 		claimedPaths[paths.Canonical(d.root)] = true
 	}
 	claimedLangs := distinctLanguages(claimed)
 
 	counts, truncated := p.sniffCountsIn(langs, root, censusScanDepth, censusScanMaxFiles, nil, skipChildDir,
-		func(abs string) bool { return claimedPaths[paths.Canonical(abs)] })
+		func(abs string) bool { return claimedPaths[abs] })
 
+	// The denominator counts only languages that could themselves be nominated,
+	// and that restriction is load-bearing rather than tidying. sniffCountsIn
+	// classifies through langsupport.ByPath, which recognises json, yaml,
+	// markdown, css and more — file types with no language server, which can never
+	// pass the install -> on gate below. Counted in the denominator they only
+	// dilute: 40 .py files beside a 400-file JSON fixture tree put python at 9%
+	// and suppressed the very nomination this census exists to make. A share is
+	// meant to say "this language is a material part of the CODE here", so the
+	// comparison is against the code, not against everything on disk.
 	total := 0
-	for _, n := range counts {
-		total += n
+	for lang, n := range counts {
+		if _, ok := cfgAmong(langs, lang); ok {
+			total += n
+		}
 	}
 	if total == 0 {
 		return nil
@@ -149,7 +181,7 @@ func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discove
 		if counts[lang] < censusMinFiles || float64(counts[lang]) < censusMinShare*float64(total) {
 			continue
 		}
-		out = append(out, discoveredRoot{root: root, language: lang, sniffed: true})
+		out = append(out, discoveredRoot{root: root, language: lang, sniffed: true, files: counts[lang]})
 	}
 	if len(out) > 0 {
 		slog.Debug("daemon: census nominated markerless languages",
