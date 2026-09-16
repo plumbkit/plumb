@@ -346,15 +346,24 @@ func (r *routingProxy) fanOutWorkspaceSymbols(ctx context.Context, params protoc
 	// discovered is non-empty, and symbolTargets adds every discovered root before
 	// it adds anything else.
 	targets := r.symbolTargets(wsRoot, discovered)
-	// ONE deadline for the whole fan-out, not warmCap per target. symbolsFrom now
-	// waits for a warming server, and a workspace can have several — a monorepo
-	// with four child roots would otherwise block 4×warmCap on a cold daemon,
-	// turning one slow query into a stall. Sharing the budget means the answer is
-	// late by at most the same bound a single-language root already accepts.
-	ctx, cancel := context.WithTimeout(ctx, r.warmCap)
+	// ONE budget for WAITING, shared across targets, and it bounds only the wait.
+	// A workspace can have several cold servers, and warmCap each would block
+	// 4×warmCap on a cold daemon; one shared bound keeps the answer late by at
+	// most what a single-language root already accepts.
+	//
+	// It is deliberately NOT the context the queries run on, and the first version
+	// of this got that wrong: bounding the whole fan-out meant a cold target
+	// ordered first consumed the budget, and every warm target after it then
+	// issued its query on an ALREADY-EXPIRED context and failed with "context
+	// deadline exceeded". Their symbols were lost — results this fan-out returned
+	// instantly before the change — and the call surfaced that error instead. Since
+	// symbolTargets lists discovered child roots before the attached entries, one
+	// cold lazily-discovered child starved the primary, which is the commonest
+	// monorepo shape. A warm target must cost nothing but its own query.
+	waitCtx, cancel := context.WithTimeout(ctx, r.warmCap)
 	defer cancel()
 	for _, t := range targets {
-		syms, ready, err := r.symbolsFrom(ctx, t, params)
+		syms, ready, err := r.symbolsFrom(ctx, waitCtx, t, params)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -441,15 +450,21 @@ func (r *routingProxy) symbolTargets(wsRoot string, discovered []discoveredRoot)
 // A URI-less query is the one call that cannot be retried usefully by the
 // caller — an agent asking "where is Foo defined?" gets an empty answer and
 // concludes the symbol does not exist — so the fan-out must not report a cold
-// server as an empty workspace. The bound is the fan-out's shared deadline (see
-// fanOutWorkspaceSymbols), not warmCap per target, so N targets cannot stack
-// N×warmCap.
-func (r *routingProxy) symbolsFrom(ctx context.Context, t lsTarget, params protocol.WorkspaceSymbolParams) (syms []protocol.SymbolInformation, ready bool, err error) {
+// server as an empty workspace.
+//
+// TWO contexts, and the split is the whole point. waitCtx carries the fan-out's
+// shared warm-up budget, so N cold targets cannot stack N×warmCap; ctx is the
+// caller's own, and the QUERY runs on it. Running the query on waitCtx instead
+// — the first version of this — meant a target reached after an earlier one had
+// spent the budget issued its query on an expired context and failed, losing the
+// symbols of a server that was warm and ready all along. A warm target costs its
+// own query and nothing else, whatever preceded it.
+func (r *routingProxy) symbolsFrom(ctx, waitCtx context.Context, t lsTarget, params protocol.WorkspaceSymbolParams) (syms []protocol.SymbolInformation, ready bool, err error) {
 	e, err := r.pool.acquireLang(ctx, t.root, t.language, false)
 	if err != nil {
 		return nil, false, err
 	}
-	c := r.entryClient(ctx, e, true)
+	c := r.entryClient(waitCtx, e, true)
 	if c == nil {
 		return nil, false, nil
 	}
