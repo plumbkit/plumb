@@ -22,11 +22,6 @@ func writeN(t *testing.T, dir, sub, stem, ext string, n int) {
 	}
 }
 
-// orderedLangs names the languages of a discovered set IN THE ORDER RETURNED,
-// where the shared langsOf sorts. The census's own ordering is a property under
-// test — it reaches the session's language label — so the determinism assertion
-// needs a view that a sort would hide.
-
 // TestCensusMarkerlessLanguages_PythonBesideClaimedTypescript is the reported
 // shape: a TypeScript app with its own tsconfig.json under a root whose Python
 // sources are spread across sibling directories with no manifest anywhere. Before
@@ -133,9 +128,13 @@ func TestCensusMarkerlessLanguages_BelowShareFloor(t *testing.T) {
 // undoes the first. Review found exactly that — the sniffed tier was ordered
 // alphabetically, so this repo elected html.
 //
-// It also pins the no-silent-change property against the path this replaces:
-// before the census a markerless root went through extLangAt, so whatever
-// extLangAt answers here is what the workspace used to get, and must still get.
+// It also compares against the path this replaces: before the census a
+// markerless root went through extLangAt, so extLangAt's answer is what this
+// workspace used to get. That comparison is FIXTURE-LOCAL and deliberately not
+// claimed as a general property — the census walks deeper and counts more files
+// than extLangAt (4/5000 against 2/2000), so a repo with 30 .html at depth 1 and
+// 500 .py at depth 3 legitimately changes answer, in the better direction. What
+// this pins is that the two agree where they see the same evidence.
 func TestCensusThenElect_MarkerlessPolyglotKeepsTheDominantLanguage(t *testing.T) {
 	dir := freshTempDir(t)
 	writeN(t, dir, "svc", "a", ".py", 100)
@@ -308,6 +307,10 @@ func TestSniffCountsIn_SkipPathNilIsUnchanged(t *testing.T) {
 	}
 }
 
+// orderedLangs names the languages of a discovered set IN THE ORDER RETURNED,
+// where the shared langsOf sorts. The census's own ordering is a property under
+// test — it reaches the session's language label — so the determinism assertion
+// needs a view that a sort would hide.
 func orderedLangs(ds []discoveredRoot) []string {
 	out := make([]string, len(ds))
 	for i, d := range ds {

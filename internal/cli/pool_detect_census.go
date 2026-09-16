@@ -59,6 +59,14 @@ const (
 	// there the alternative is a neutral fallback rather than nothing. The
 	// outcome is logged so a surprising nomination on a huge tree can be traced
 	// to the cap.
+	//
+	// The cost of accepting one has risen since: files now orders the sniffed
+	// tier, so above this cap a markerless repo elects its PRIMARY from a
+	// walk-order prefix rather than from its whole remainder. Deterministic — the
+	// walk is a LIFO over sorted ReadDir — but deterministic is not the same as
+	// representative, and it is a weaker position than resolveMarkerTie's, which
+	// discards a partial count outright. Consulting truncated here is the obvious
+	// next move if a repo is ever seen electing the wrong server at this size.
 	censusScanMaxFiles = 5000
 
 	// censusMinFiles and censusMinShare are BOTH required, and each exists
@@ -109,14 +117,6 @@ const (
 // paths therefore name the same (root, language) pool key and share one server,
 // where a synthesised subroot would start a second one serving the same files.
 func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discoveredRoot) []discoveredRoot {
-	// Resolved ONCE for the whole walk, the discipline extLangAtIn documents: a
-	// project's .plumb/config.toml is parsed at most once here, never once per
-	// file, which keeps the file budget a filesystem cost rather than a
-	// config-parsing one.
-	langs := p.effectiveLanguages(root)
-	if len(langs) == 0 {
-		return nil
-	}
 	// Canonicalised ONCE, here, rather than per directory inside the walk. Both
 	// sides of the prune comparison have to agree on a spelling — a discovered
 	// root can arrive by another one (a symlinked checkout, the macOS /tmp
@@ -127,7 +127,18 @@ func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discove
 	// construction. Doing it per directory instead cost an lstat chain per path
 	// component per directory — about a fifth of the walk on a 1700-directory
 	// tree — to re-derive what the root already guarantees.
+	// Ahead of everything else that reads root, so one spelling is authoritative
+	// for the whole function — the policy lookup below included, which would
+	// otherwise key off a different string from the walk.
 	root = paths.Canonical(root)
+	// Resolved ONCE for the whole walk, the discipline extLangAtIn documents: a
+	// project's .plumb/config.toml is parsed at most once here, never once per
+	// file, which keeps the file budget a filesystem cost rather than a
+	// config-parsing one.
+	langs := p.effectiveLanguages(root)
+	if len(langs) == 0 {
+		return nil
+	}
 	claimedPaths := make(map[string]bool, len(claimed))
 	for _, d := range claimed {
 		claimedPaths[paths.Canonical(d.root)] = true
@@ -146,6 +157,13 @@ func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discove
 	// and suppressed the very nomination this census exists to make. A share is
 	// meant to say "this language is a material part of the CODE here", so the
 	// comparison is against the code, not against everything on disk.
+	//
+	// One consequence worth naming: the denominator is therefore relative to the
+	// EFFECTIVE set, which is machine-dependent. The same repo of 40 .py beside
+	// 400 .ts puts python at 9% where tsserver is installed and at 100% where it
+	// is not. That is the intended reading — a share against servers that could
+	// actually run is the one that decides whether starting another is worth it —
+	// but it does mean two machines can legitimately nominate differently.
 	total := 0
 	for lang, n := range counts {
 		if _, ok := cfgAmong(langs, lang); ok {
