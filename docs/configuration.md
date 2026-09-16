@@ -220,6 +220,7 @@ project.
 | `allow_dependency_reads` | bool | `true` | — | Allow read/search (never write) to reach the session language's toolchain stdlib + dependency cache read-only (Go: GOMODCACHE/GOROOT; Zig: stdlib + cache; Rust: rust-src + cargo registry; Python: stdlib + site-packages; Swift: SDK; JVM: Gradle/Maven caches). TypeScript is intentionally excluded (node_modules is in-workspace). |
 | `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). Honoured from **global** config only (see below). |
 | `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). Honoured from **global** config only (see below). |
+| `discover_siblings` | bool | `true` | — | Also discover the OTHER languages of a root that has one of its own — a `go.mod` repo with `web/tsconfig.json` and a manifest-less `tools/` Python tree reports all three, not Go alone. The root's own language stays the primary; siblings are surfaced, fan out and route. Set `false` for the older single-language attach, which buys back a child walk and a markerless census on every attach. See [Architecture → Workspace detection](architecture.md#workspace-detection). |
 | `child_scan_depth` | int | `2` | — | Levels below a markerless `.plumb/` root to scan for language markers in subdirectories (multi-language monorepo). `0` disables. Applies to **marker** discovery only: the markerless-language census is independent of this knob and is not disabled by `0`, because "do not hunt for subproject markers" and "do not look at what this root is written in" are different questions. See [Architecture → Workspace detection](architecture.md#workspace-detection). |
 
 ### Per-workspace roots (trusted grants)
@@ -1226,10 +1227,15 @@ enabled = true   # gopls stays primary; the HTML server handles .html files
 ```
 
 `workspace_symbols` consults the primary for a single-language root but **fans
-out** across every server for a multi-language monorepo root (the child-marker
-discovery case — see [Architecture → Workspace
+out** across every server for a multi-language root (child markers or the
+markerless census — see [Architecture → Workspace
 detection](architecture.md#workspace-detection)), merging and deduplicating
-results; the call/type hierarchies are URI-bearing and route per-file.
+results; the call/type hierarchies are URI-bearing and route per-file. Both
+paths treat a **still-warming** server the same way: the query waits for it, and
+if no server can answer yet the call reports that it is still warming rather
+than returning an empty result — "no symbols here" and "nothing could answer
+yet" are opposite facts and an empty list cannot distinguish them. The wait is
+bounded once for the whole fan-out, not per server.
 `diagnostics` aggregates across every server bound to the root.
 
 ---

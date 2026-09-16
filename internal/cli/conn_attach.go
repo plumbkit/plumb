@@ -387,9 +387,29 @@ func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, fol
 			return LanguageNone, "", nil, nil
 		}
 		s.bindPrimary(v, folder, language, e, repin)
-		s.sessionProxy.setDiscovered(folder, nil)
+		// The root's own marker decided the PRIMARY; it does not decide what else
+		// the workspace is written in. Discovery used to stop here, so a go.mod
+		// repo with web/tsconfig.json and a tools/ Python tree reported "Go" and
+		// nothing else — the same attach-time invisibility the markerless census
+		// fixed for a root with no marker, mirrored onto a root that has one. Its
+		// siblings reached no identity line, no badge, no workspace_symbols fan-out
+		// and no run_task reachability, although per-file routing served them.
+		//
+		// electPrimary is deliberately NOT called: the primary is already bound to
+		// the root's own marker-backed language, and re-electing could hand it to a
+		// sibling, which would be a silent server swap for every workspace on
+		// upgrade. Siblings are surfaced, fan out, and route — they do not compete.
+		// discoveredWithPrimary, not the sibling set alone: this slice feeds the
+		// identity line, the badge, the adapter list and the fan-out, all of which
+		// describe the WHOLE workspace. Returning siblings only would have listed
+		// every language except the one actually bound as primary.
+		discovered = discoveredWithPrimary(folder, language, s.siblingLanguages(folder, language))
+		s.sessionProxy.setDiscovered(folder, discovered)
 		adp := adapterForLanguage(language)
-		return language, adp, nil, adaptersFor(adp)
+		if len(discovered) == 0 {
+			return language, adp, nil, adaptersFor(adp)
+		}
+		return language, adp, discovered, adaptersForDiscovered(discovered)
 	}
 	// LanguageNone: look for language roots in child subdirectories. Never scan
 	// $HOME (a stray ~/.plumb must not trigger a full-home descent).
