@@ -120,6 +120,7 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"workspace.auto_attach":         ClassInert,
 	"workspace.auto_attach_persist": ClassInert,
 	"workspace.child_scan_depth":    ClassInert,
+	"workspace.discover_siblings":   ClassInert,
 
 	// --- Git: the tiered safety policy in its entirety. See project_policy.go.
 	"git.allow_writes":       ClassTrustGated,
