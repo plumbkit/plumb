@@ -67,6 +67,24 @@
   entitled to it. The comparison is case-insensitive, as every other name
   comparison here is, and a DIFFERENT reserved name is still refused.
 
+- **The Xcode single-flight integration test no longer fails a machine that is
+  merely slow.** It waited three seconds — the budget its stubbed siblings use,
+  where a state change that has not happened almost immediately is a bug — for a
+  transition that runs the real `xcodebuild -list` and `xcode-build-server
+  config` (this test's SourceKit-LSP restart is stubbed, so none of the time is a
+  restart). That path is seconds when the toolchain is warm and can be tens of
+  seconds when it is cold: 16s measured cold here, then 5.3s cold and 1.9-2.3s
+  warm once each command had run, with the two commands at 4.3s and 2.6s on their
+  first run. The old budget was therefore a machine-state-dependent flake rather
+  than a verdict on the code. The wait helper now takes the caller's budget and
+  the integration test passes the pool's own configure timeout; it also stops
+  waiting as soon as the pool reaches a terminal state, and reports the Detail
+  that names it, instead of spending the whole budget on a failure it could
+  already see. The budget is a WAIT bound, not a bound on the work — the pool's
+  per-subprocess timeouts bound that. Worth knowing when reading a green
+  integration job: CI installs no `xcode-build-server`, so this test SKIPS there and
+  runs only on a machine with the Xcode toolchain.
+
 ## 0.19.4 (2026-09-16)
 
 ### Added
