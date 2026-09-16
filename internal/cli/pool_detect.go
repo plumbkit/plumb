@@ -460,8 +460,15 @@ func lessDiscovered(a, b discoveredRoot) bool {
 	// leaving its sources unserved. That is the defect weakLangAt's own doc comment
 	// records as already fixed once, arriving by a new route, and it was also a
 	// silent behaviour change: before the census this path was extLangAt, which
-	// picks the DOMINANT language. Marker-backed entries never reach this clause,
-	// their files being 0 and their tier already decided.
+	// picks the DOMINANT language.
+	//
+	// The a.sniffed guard is DEFENSIVE, not load-bearing: the census is the only
+	// thing that sets files, and it sets sniffed at the same time, so today every
+	// marker-backed entry has files == 0 and dropping the guard would change no
+	// answer — mutation confirms that mutant survives, and it survives because it
+	// is equivalent, not because the clause is untested. It stays because the
+	// clause is about the census's evidence, and a later marker-backed entry that
+	// carried a count for some other purpose must not start competing on it.
 	if a.sniffed && a.files != b.files {
 		return a.files > b.files
 	}
