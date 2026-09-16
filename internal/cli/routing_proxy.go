@@ -342,7 +342,18 @@ func (r *routingProxy) fanOutWorkspaceSymbols(ctx context.Context, params protoc
 		firstErr error
 		gotAny   bool
 	)
-	for _, t := range r.symbolTargets(wsRoot, discovered) {
+	// Non-empty by construction: WorkspaceSymbols only reaches the fan-out when
+	// discovered is non-empty, and symbolTargets adds every discovered root before
+	// it adds anything else.
+	targets := r.symbolTargets(wsRoot, discovered)
+	// ONE deadline for the whole fan-out, not warmCap per target. symbolsFrom now
+	// waits for a warming server, and a workspace can have several — a monorepo
+	// with four child roots would otherwise block 4×warmCap on a cold daemon,
+	// turning one slow query into a stall. Sharing the budget means the answer is
+	// late by at most the same bound a single-language root already accepts.
+	ctx, cancel := context.WithTimeout(ctx, r.warmCap)
+	defer cancel()
+	for _, t := range targets {
 		syms, ready, err := r.symbolsFrom(ctx, t, params)
 		if err != nil {
 			if firstErr == nil {
@@ -363,10 +374,39 @@ func (r *routingProxy) fanOutWorkspaceSymbols(ctx context.Context, params protoc
 			merged = append(merged, sym)
 		}
 	}
-	if !gotAny && firstErr != nil {
-		return nil, firstErr
+	if !gotAny {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		// No target was ready and none failed: every server is still warming.
+		// Reporting that as an empty SUCCESS is the defect this branch exists to
+		// close — "no symbols in this workspace" and "no server could answer yet"
+		// are opposite facts, and the caller cannot tell them apart. The primary
+		// path has always said so through warmingErr; the fan-out said nothing and
+		// returned an empty slice.
+		//
+		// Unconditional, with no len(targets) > 0 guard: such a guard reads as
+		// defence but is unreachable, since the fan-out is only entered with a
+		// non-empty discovered set. Mutation confirmed it — removing it changed no
+		// test — and a guard nothing can trip is a claim about a state that does not
+		// exist. TestSymbolTargets_EveryDiscoveredRootBecomesATarget pins the
+		// invariant it was standing in for.
+		return nil, warmingErr(r.longestWarmup(targets), wsRoot)
 	}
 	return merged, nil
+}
+
+// longestWarmup reports how long the slowest of these targets has been warming,
+// for the warming error's "(N elapsed)" hint. Zero when the pool knows of no
+// warmup, which warmingErr renders as the plain not-yet-ready message.
+func (r *routingProxy) longestWarmup(targets []lsTarget) time.Duration {
+	var longest time.Duration
+	for _, t := range targets {
+		if _, elapsed := r.pool.warmupFor(t.root, t.language); elapsed > longest {
+			longest = elapsed
+		}
+	}
+	return longest
 }
 
 // symbolTargets is the deduplicated (root, language) set to query for a
@@ -395,12 +435,21 @@ func (r *routingProxy) symbolTargets(wsRoot string, discovered []discoveredRoot)
 // symbolsFrom acquires (without pinning) the server for one target and queries
 // it. ready is false when the server is not yet warm (treat as no results, not
 // an error); err is the query/acquire failure.
+//
+// It WAITS for a warming server, through the same entryClient(wait=true) policy
+// the primary path uses, rather than taking a single non-blocking handle check.
+// A URI-less query is the one call that cannot be retried usefully by the
+// caller — an agent asking "where is Foo defined?" gets an empty answer and
+// concludes the symbol does not exist — so the fan-out must not report a cold
+// server as an empty workspace. The bound is the fan-out's shared deadline (see
+// fanOutWorkspaceSymbols), not warmCap per target, so N targets cannot stack
+// N×warmCap.
 func (r *routingProxy) symbolsFrom(ctx context.Context, t lsTarget, params protocol.WorkspaceSymbolParams) (syms []protocol.SymbolInformation, ready bool, err error) {
 	e, err := r.pool.acquireLang(ctx, t.root, t.language, false)
 	if err != nil {
 		return nil, false, err
 	}
-	c := e.proxy.get()
+	c := r.entryClient(ctx, e, true)
 	if c == nil {
 		return nil, false, nil
 	}
