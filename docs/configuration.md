@@ -1226,10 +1226,15 @@ enabled = true   # gopls stays primary; the HTML server handles .html files
 ```
 
 `workspace_symbols` consults the primary for a single-language root but **fans
-out** across every server for a multi-language monorepo root (the child-marker
-discovery case — see [Architecture → Workspace
+out** across every server for a multi-language root (child markers or the
+markerless census — see [Architecture → Workspace
 detection](architecture.md#workspace-detection)), merging and deduplicating
-results; the call/type hierarchies are URI-bearing and route per-file.
+results; the call/type hierarchies are URI-bearing and route per-file. Both
+paths treat a **still-warming** server the same way: the query waits for it, and
+if no server can answer yet the call reports that it is still warming rather
+than returning an empty result — "no symbols here" and "nothing could answer
+yet" are opposite facts and an empty list cannot distinguish them. The wait is
+bounded once for the whole fan-out, not per server.
 `diagnostics` aggregates across every server bound to the root.
 
 ---
