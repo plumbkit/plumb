@@ -321,6 +321,8 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Workspace.AutoAttachPersist
 	case skAllowDependencyReads:
 		return &c.Workspace.AllowDependencyReads
+	case skDiscoverSiblings:
+		return &c.Workspace.DiscoverSiblings
 	case skAgentConfigWrites:
 		return &c.AgentConfigWrites
 	case skAutoAttach:
@@ -494,6 +496,8 @@ func toggleLabel(key settingKey) string {
 		return "auto_attach_persist"
 	case skAllowDependencyReads:
 		return "allow_dependency_reads"
+	case skDiscoverSiblings:
+		return "discover_siblings"
 	case skAutoAttach:
 		return "workspace auto-attach"
 	case skSemEnabled:

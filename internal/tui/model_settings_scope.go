@@ -452,6 +452,7 @@ var settingTOMLPaths = map[settingKey][]string{
 	skAutoAttach:           {"workspace", "auto_attach"},
 	skAutoAttachPersist:    {"workspace", "auto_attach_persist"},
 	skAllowDependencyReads: {"workspace", "allow_dependency_reads"},
+	skDiscoverSiblings:     {"workspace", "discover_siblings"},
 	skChildScanDepth:       {"workspace", "child_scan_depth"},
 	// extra_roots/read_roots are global-only: LoadProject forces them back to base
 	// from an (untrusted) project config, so a workspace-scope override would never
@@ -575,6 +576,7 @@ var settingDottedKeys = map[settingKey]string{
 	skAutoAttach:                 "workspace.auto_attach",
 	skAutoAttachPersist:          "workspace.auto_attach_persist",
 	skAllowDependencyReads:       "workspace.allow_dependency_reads",
+	skDiscoverSiblings:           "workspace.discover_siblings",
 	skChildScanDepth:             "workspace.child_scan_depth",
 	skExtraRoots:                 "workspace.extra_roots",
 	skReadRoots:                  "workspace.read_roots",
