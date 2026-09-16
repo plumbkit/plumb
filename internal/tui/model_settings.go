@@ -72,6 +72,7 @@ const (
 	skAutoAttach
 	skAutoAttachPersist
 	skAllowDependencyReads
+	skDiscoverSiblings
 	skChildScanDepth
 	skExtraRoots
 	skReadRoots
@@ -355,6 +356,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},
 		{group: "Workspace", label: "Allow dependency reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads)},
+		{group: "Workspace", label: "Discover siblings", kind: settingToggle, key: skDiscoverSiblings, value: onOff(cfg.Workspace.DiscoverSiblings)},
 		{group: "Workspace", label: "Child scan depth", kind: settingNumber, key: skChildScanDepth, value: itoa(cfg.Workspace.ChildScanDepth)},
 		{group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots, path: true},
 		{group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots, path: true},

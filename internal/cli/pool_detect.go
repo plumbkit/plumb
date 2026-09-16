@@ -391,13 +391,27 @@ func (p *workspacePool) discoverChildLanguages(root string, maxDepth int) []disc
 
 // skipChildDir reports whether a directory name should be pruned from the child
 // language scan: any dotdir (.git, .plumb, .build, .zig-cache, …) plus common
-// dependency and build-output dirs that never hold a project's own root marker.
+// dependency, build-output and FIXTURE dirs that never hold a project's own root
+// marker.
+//
+// The fixture names are the ones a marker inside would be a test asset rather
+// than a project: `testdata` is defined by the Go toolchain as ignored, and
+// `fixtures`/`testdata`/`third_party` hold code that exists to be read by tests
+// or vendored, not served to the person editing the repo. Without them plumb's
+// OWN repository nominated python and typescript from
+// internal/.../testdata/*-fixture, so attaching to it started pyright and
+// tsserver against test fixtures and merged fixture symbols into
+// workspace_symbols results. That was latent while this walk ran only for a
+// markerless root; sibling discovery made it the common path, which is how
+// review caught it.
 func skipChildDir(name string) bool {
 	if strings.HasPrefix(name, ".") {
 		return true
 	}
 	switch name {
 	case "node_modules", "vendor", "dist", "build", "zig-cache", "zig-out", "target":
+		return true
+	case "testdata", "fixtures", "third_party":
 		return true
 	}
 	return false

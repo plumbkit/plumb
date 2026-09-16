@@ -333,6 +333,10 @@ var registryData = []Field{
 		Description: "Levels below the root to scan for language markers in subdirs (monorepo). 0 disables.",
 	},
 	{
+		Key: "workspace.discover_siblings", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Also discover other languages at a root that has its own (go.mod beside web/). Default on.",
+	},
+	{
 		Key: "workspace.extra_roots", Type: FieldList, ReloadTier: ReloadNextSession,
 		Description: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
 	},

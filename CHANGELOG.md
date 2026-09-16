@@ -1,8 +1,46 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 (2026-09-17)
 
 ### Fixed
+
+- **`workspace_symbols` no longer reports a still-starting workspace as an empty
+  one.** A URI-less symbol query that fanned out across a multi-language
+  workspace took a single non-blocking handle check per server, skipped every
+  one that was not yet warm, and — with nothing ready and nothing failed —
+  returned an empty result as a **success**. An agent asking where a symbol is
+  defined was told it does not exist, with no error to retry on and nothing to
+  say the servers were cold. The primary-only path never behaved that way: it
+  waits, then reports "still warming". Which path a workspace took depended only
+  on whether it had a discovered set.
+
+  The fan-out now waits through the same policy the primary path uses, and
+  reports the warming error when no server could answer and none failed. The
+  wait is bounded once for the whole fan-out rather than per target, so a
+  monorepo with four child roots cannot stack four warm-up windows into what
+  reads as a hang, and a cold server never suppresses results from a ready one.
+- **A root that has a language of its own now discovers its other languages
+  too.** A `go.mod` repo with `web/tsconfig.json` and a manifest-less `tools/`
+  Python tree reported `Go` and nothing else: its siblings reached no
+  `session_start` identity line, no TUI badge, no `workspace_symbols` fan-out and
+  no `run_task` reachability, although per-file routing had been serving them
+  lazily throughout. This is the mirror of the markerless-language gap fixed
+  earlier in this release — discovery had two halves, and this was the one that
+  still stopped as soon as the root's own marker answered.
+
+  Child-marker discovery and the markerless census now run beneath a
+  marker-carrying root as well (`siblingLanguages`). The root's own language
+  stays the **primary**: `electPrimary` is deliberately not called here, since
+  re-electing could hand the primary to a sibling and silently swap the server of
+  every workspace that gains one on upgrade. Siblings are surfaced, fan out and
+  route; they do not compete. A child root in the primary's own language is
+  dropped, being covered by that server already, and a root with no siblings
+  keeps a nil discovered set — so a single-language repo keeps its one-word label
+  and the primary-only symbol path.
+
+  New `[workspace] discover_siblings`, default `true`. Set it `false` for the
+  older single-language attach, which buys back a child walk and a census on
+  every attach.
 
 - **A language with no manifest is no longer invisible in a workspace that has
   one.** A repo with `app/tsconfig.json` and forty `.py` files across five
