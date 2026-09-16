@@ -25,8 +25,8 @@ func TestPullPostWrite_UnknownRelatedUnchangedNeverEmitsCleanPass(t *testing.T) 
 	}
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
-	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
+	baseline := d.capturePreWriteBaseline(context.Background(), pwURI)
+	out := d.postWriteDiagnostics(context.Background(), pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if strings.Contains(out, "✓ fresh diagnostics pass") {
 		t.Fatalf("an unvalidated related report must suppress the clean pass:\n%s", out)
 	}
@@ -54,8 +54,8 @@ func TestPullPostWrite_UnknownWorkspaceUnchangedIsNotExhaustive(t *testing.T) {
 		CrossFileDiag: true, WorkspaceFn: func(context.Context) string { return "/ws" },
 	}
 
-	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
+	baseline := d.capturePreWriteBaseline(context.Background(), pwURI)
+	out := d.postWriteDiagnostics(context.Background(), pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 	if strings.Contains(out, "✓ fresh diagnostics pass") {
 		t.Fatalf("an unvalidated workspace report must suppress the clean pass:\n%s", out)
 	}

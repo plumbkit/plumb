@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
@@ -81,8 +83,47 @@ func (s *connSession) checkBoundary(path string, want tools.Access) error {
 
 // checkBoundaryFor is checkBoundary against the logical agent in ctx's policy
 // (the connection policy when the connection is not shared).
+//
+// A logical agent whose explicit workspace declaration was REFUSED is refused
+// here first, whatever its policy says: its shard still sits on a root the agent
+// never chose, so a path-bearing call would otherwise land inside another
+// conversation's project. An EMPTY path is exempt, matching boundaryCheck's own
+// contract that it names no location — refusing it would lock the agent out of
+// the very tools that describe its state.
 func (s *connSession) checkBoundaryFor(ctx context.Context, path string, want tools.Access) error {
+	if path != "" {
+		if err := s.declarationRefusedErr(ctx); err != nil {
+			return err
+		}
+	}
 	return s.boundaryCheck(s.policyFor(ctx), path, want)
+}
+
+// declarationRefusedErr is the classified refusal for an agent whose workspace
+// declaration is still refused, or nil when it has none.
+//
+// It is deliberately not markBoundaryViolation'd: the condition is transient and
+// self-healing (one session_start clears it), whereas the violation flag is
+// sticky and would leave the session showing "Health: blocked" afterwards —
+// the same reasoning checkBoundary records for the unattached refusal.
+//
+// session_start is registered WITHOUT a boundary guard (conn_register.go), so
+// this can never block the call that clears it.
+func (s *connSession) declarationRefusedErr(ctx context.Context) error {
+	id := mcp.LogicalAgentFromCtx(ctx)
+	p, ok := s.pendingDeclarationFor(id)
+	if !ok {
+		return nil
+	}
+	return toolerror.Wrap(
+		fmt.Errorf("refusing this call for logical agent %q: its session_start naming %s was refused, so the agent is still on %s — a workspace it never chose, and possibly another conversation's. A path-bearing call here would quietly operate on that project. Re-issue session_start with workspace + session_id + force: true (on a shared connection force moves only THIS agent's shard), then retry", id, p.requested, p.sittingOn),
+		toolerror.KindWorkspaceBoundary,
+		toolerror.ClassPassForce,
+		toolerror.WithTool("session_start"),
+		toolerror.WithDetail("scope", "agent"),
+		toolerror.WithDetail("reason", "declaration_refused"),
+		toolerror.WithDetail("requested", p.requested),
+	)
 }
 
 // boundaryCheck is the shared body: an empty path is a no-op, a nil policy fails
@@ -116,6 +157,44 @@ func (s *connSession) outsideWorkspaceLabel(path string) string {
 // then refuses every path — fail closed).
 func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 	return s.view().policy
+}
+
+// pinnedRootsGuard refuses a path under NO workspace root pinned on this
+// connection — neither the connection's own root nor any logical agent's shard
+// root.
+//
+// It is the diagnostics routing INV proxy's guard, and it is deliberately
+// weaker than a per-agent policy. That proxy sits BEHIND the diagnostics tool's
+// ctx-aware entry boundary, which has already checked every requested URI
+// against the CALLING agent's policy, so its own check is defence in depth. A
+// plain connection-policy guard here is what made a declared agent's own
+// diagnostics query fail with "this connection is pinned to <another project>"
+// whenever the connection's default pin named a different root. The union keeps
+// the refusal for a path under no pinned root without re-refusing a root some
+// agent on this connection legitimately owns.
+//
+// The ctx-less pull-recording methods (RecordPullResult and friends) are the
+// reason this is not ctx-aware: their interface carries no context, and
+// threading one through internal/cache would be a far larger change for a
+// defence-in-depth check the entry guard already makes.
+func (s *connSession) pinnedRootsGuard(path string) error {
+	if path == "" {
+		return nil
+	}
+	roots := []string{s.workspace()}
+	s.shardsMu.Lock()
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		roots = append(roots, sh.root)
+		sh.mu.RUnlock()
+	}
+	s.shardsMu.Unlock()
+	for _, root := range roots {
+		if root != "" && tools.PathWithinWorkspace(root, path) {
+			return nil
+		}
+	}
+	return tools.ClassifyPathRefusal(tools.WorkspaceBoundaryError{Workspace: s.workspace(), Path: path})
 }
 
 // policyRootRefused reports whether a path policy may NOT be built on the

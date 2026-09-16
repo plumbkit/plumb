@@ -15,6 +15,7 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -193,6 +194,11 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
 			return "", refused
 		}
+		// The agent's workspace question is settled, so drop any pending-refusal
+		// marker an earlier attempt left. Both this branch and the connection
+		// branch below are settling paths for the CALLER, whichever scope the
+		// pin landed on.
+		s.clearDeclarationRefused(mcp.LogicalAgentFromCtx(ctx))
 		return root, nil
 	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
@@ -213,6 +219,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		// stale sticky root.
 		s.followConnectionShards(prevConnRoot)
 	}
+	s.clearDeclarationRefused(mcp.LogicalAgentFromCtx(ctx))
 	return root, nil
 }
 
@@ -293,7 +300,22 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				// renders HealthMessage directly, so a message with no next step
 				// left the operator with nothing actionable but a loop.
 				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182). %s", prev, root, remedy))
-				refused = fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), remedy)
+				// Classified at "connection" scope: unlike the per-agent refusal in
+				// conn_agent_shard.go, force: true here moves the pin EVERY agent on
+				// this connection resolves against — and the pin may have been
+				// restored from persistence for another conversation entirely. A
+				// client must therefore surface this rather than retry it
+				// automatically; the scope in Details is what lets it tell the two
+				// apart without parsing the sentence.
+				refused = toolerror.Wrap(
+					fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), remedy),
+					toolerror.KindPinRefused,
+					toolerror.ClassRepinWorkspace,
+					toolerror.WithTool("session_start"),
+					toolerror.WithDetail("scope", "connection"),
+					toolerror.WithDetail("pinned", prev),
+					toolerror.WithDetail("requested", root),
+				)
 				return
 			}
 			// A roots-driven re-pin (the client dropped our root from its

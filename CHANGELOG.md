@@ -28,6 +28,78 @@
 
 ### Fixed
 
+- **A refused per-agent workspace declaration no longer leaves the agent quietly working in
+  someone else's project.** On a shared connection a new agent's shard is seeded from the
+  connection's pin — another conversation's workspace — and its own `session_start` is then
+  refused by the sticky guard (deliberately, fail-closed). The shard stayed where it was seeded,
+  so every relative path, defaulted `git` repository and implicit search root resolved inside a
+  project the agent had explicitly tried to leave, with nothing in the response saying so. The
+  refusal is now recorded against the agent and its path-bearing calls are refused by name, with
+  the remedy, until the declaration lands; `session_start` is deliberately not behind that gate,
+  so the remedy is always reachable. An agent that never declared, and one refused a move away
+  from a workspace it chose, are unaffected.
+
+- **A pin refusal now says WHICH pin it refused, in a form a client can branch on.**
+  `toolerror` gains `KindPinRefused`, and both refusal sites carry
+  `details.scope = "agent" | "connection"` (with the pinned and requested roots) in the existing
+  `_meta` failure envelope. The scope IS the recovery: at `agent` scope `force: true` moves the
+  caller's own shard, so an automatic retry is safe; at `connection` scope it moves the pin every
+  agent on the connection resolves against — including one restored for another conversation — so
+  a client must surface it instead of retrying. A client that could not tell the two apart either
+  refused to recover at all or recovered by displacing a peer.
+
+- **Post-write diagnostics now inherit the caller's context rather than starting a fresh one.**
+  `awaitDiagnosticsRefresh` and the pull path both derived their deadline from
+  `context.Background()`, which carries no logical-agent identity, so on a shared connection a
+  sharded agent's own file was refused by the ctx-aware LSP guard and its diagnostics degraded
+  silently. Both now inherit the calling tool's context, and the cross-file sweep prefers the
+  ctx-aware aggregate so "edit A broke B" is diffed against the CALLING agent's workspace instead
+  of the connection's attach-time primary.
+
+- **A URI-less LSP query now searches the CALLING agent's workspace.** `workspace_symbols`
+  with no `uri` and the whole-workspace `diagnostics` query both answered from the
+  connection's attach-time primary, so an agent pinned elsewhere was told its own symbols did
+  not exist and was shown another project's (usually empty) diagnostics. Both now resolve the
+  calling agent's root: the routing proxy fans `workspace_symbols` out over that root's
+  attached servers, and the diagnostics aggregate gains a ctx-aware `AllDiagnosticsFor` that
+  the tool prefers when the source provides one. Unattributed calls keep the connection's
+  behaviour, and connection-lifecycle methods (`Initialize`, `Capabilities`, `Subscribe`) stay
+  connection-scoped, which is what they are.
+
+- **An LSP-backed tool now resolves its workspace boundary against the CALLING logical
+  agent's pin, not the connection's.** On a shared connection the LSP routing proxy was
+  guarded by the connection-level policy, so whenever the connection's default pin named one
+  project and a declared agent another, `file_outline`, `diagnostics`, `get_definition`,
+  `find_references`, `explain_symbol`, `call_hierarchy` and `type_hierarchy` all refused the
+  agent's own workspace with "this connection is pinned to <the other project>". Several of
+  those tools carry no boundary guard of their own, so the proxy guard is their only one.
+  The proxy now takes the ctx-aware guard, which resolves the calling agent's shard policy.
+  The diagnostics inv-proxy, which sits behind the diagnostics tool's ctx-aware entry guard
+  and whose pull-recording path carries no context, takes a guard that admits a path under
+  any root pinned on the connection and still refuses a path under none.
+
+- **Duplicate session identities left by a `plumb serve` restart are now
+  superseded, so a name does not stay permanently double-claimed.** A restart
+  gets a fresh proxy secret, so `SaveIdentity` inserts a new row under the new
+  proxy session instead of updating the old one, and `Prune` deliberately never
+  ages an identity row out. The predecessor row can never present its secret
+  again, so when a newer row carries the SAME conversation and name the older
+  one is retired at daemon start. Rows that share only a name while naming
+  DIFFERENT conversations are left alone: that ambiguity is real, and every
+  automatic tie-break would risk handing one session's mail to another. The
+  source comments that called all such rows a "pre-retention artefact" now say
+  what the data shows.
+
+- **An in-thread reply now binds to the peer's recorded session ID, and a bound
+  message wakes its recipient by that ID.** A thread identifies the other party
+  by identity but returned only their name, so a reply was re-resolved by name;
+  once the peer renamed, that resolution found nothing and the reply was written
+  unbound — claimable by whoever later drew the name. The reply now carries the
+  thread's ID, and the notifier is bumped on the addressee ID as well as the
+  name. Without the ID key, a bound message — exactly the kind delivery matches
+  by ID — is the one kind no wake reaches, and because `check_messages` with a
+  wait blocks, a missed wake reads as "No messages" rather than as latency.
+
 - **A Go import is now resolved by what `go.mod` declares, not by matching the
   end of its path.** The import resolver linked an import to a local package by
   matching the longest suffix of the import path that named an indexed

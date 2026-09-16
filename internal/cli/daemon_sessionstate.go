@@ -32,16 +32,42 @@ func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...st
 	}
 }
 
-// reportLegacyNameConflicts logs identity records that claim the same name.
+// supersedeDuplicateIdentities retires identity rows a newer row for the same
+// conversation and name has provably replaced, so a `plumb serve` RESTART does
+// not leave a name permanently double-claimed.
+//
+// The safety argument lives on Store.SupersedeDuplicateIdentities; this is only
+// the daemon-start call site and its log line. Best-effort: a failure is logged
+// and the daemon starts anyway, because the repair is idempotent and the next
+// start retries it.
+func supersedeDuplicateIdentities(sessState *sessionstate.Store) {
+	if sessState == nil {
+		return
+	}
+	removed, err := sessState.SupersedeDuplicateIdentities()
+	if err != nil {
+		slog.Debug("daemon: could not supersede duplicate session identities", "err", err)
+		return
+	}
+	if removed > 0 {
+		slog.Info("daemon: superseded stale duplicate session identities left by a `plumb serve` RESTART — a newer row for the same conversation and name proves the older one's serve is gone",
+			"removed", removed)
+	}
+}
+
+// reportLegacyNameConflicts logs names still claimed by more than one retained
+// identity AFTER supersedeDuplicateIdentities has run.
 //
 // It reports rather than repairs, and that is a decision rather than an
-// omission. Before names were retained (PLAN-426) a name was unique only among
-// LIVE sessions, so a pruned row's name could legitimately be redrawn by
-// another proxy — both rows are now kept, and the database holds no evidence of
-// which claim should win. Every candidate repair is worse than the ambiguity:
-// renaming a record breaks the notes addressed to it, deleting one forks the
-// identity it proves, and choosing by updated_at silently hands one session's
-// mailbox to another.
+// omission. What remains here shares only a NAME while naming DIFFERENT
+// conversations, so the database holds no evidence of which claim should win.
+// Every candidate repair is worse than the ambiguity: renaming a record breaks
+// the notes addressed to it, deleting one forks the identity it proves, and
+// choosing by updated_at silently hands one session's mailbox to another.
+//
+// The same-conversation duplicates that used to dominate this set are not left
+// to the operator; they are retired by proof, not by choice. Only the genuinely
+// cross-conversation residue reaches this report.
 //
 // Unaffected identities migrate and recover normally either way, so the cost of
 // leaving this alone is bounded to the conflicting names themselves. Logged at
@@ -56,7 +82,7 @@ func reportLegacyNameConflicts(sessState *sessionstate.Store) {
 		return
 	}
 	for _, c := range conflicts {
-		slog.Warn("daemon: more than one retained session identity claims the same name — a pre-retention artefact plumb will not resolve on your behalf, since every automatic choice would either break mail addressed to a name or fork an identity; the affected sessions keep their records and reconnect normally, but that name is ambiguous as an address",
+		slog.Warn("daemon: more than one retained session identity claims the same name for DIFFERENT conversations — a name collision that outlived retention and that plumb will not resolve on your behalf, since every automatic choice would either break mail addressed to a name or fork an identity; the affected sessions keep their records and reconnect normally, but that name is ambiguous as an address",
 			"name", c.Name, "claims", len(c.ProxySessionIDs))
 	}
 }

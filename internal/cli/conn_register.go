@@ -110,10 +110,15 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	boundary := s.readBoundaryGuard
 	readBoundaryFor := s.readBoundaryGuardFor
 	writeBoundary := s.writeBoundaryGuardFor
-	// The LSP routing proxies guard cross-workspace diagnostics queries, which
-	// are reads.
-	s.sessionProxy.setBoundaryGuard(boundary)
-	s.sessionInv.setBoundaryGuard(boundary)
+	// The LSP routing proxies guard cross-workspace queries, which are reads.
+	s.sessionProxy.setBoundaryGuard(readBoundaryFor)
+	s.sessionProxy.setWorkspaceFn(s.workspaceFor)
+	// The diagnostics inv proxy sits behind the diagnostics tool's ctx-aware
+	// entry boundary, but the pull-recording path has no ctx to offer, so it gets
+	// the pinned-union guard: it must not re-refuse a declared agent's own root
+	// just because the connection's default pin names another project.
+	s.sessionInv.setBoundaryGuard(s.pinnedRootsGuard)
+	s.sessionInv.setWorkspaceFn(s.workspaceFor)
 	// The warm-up probe lets the topology-fallback notes distinguish a server
 	// that is still completing its handshake from one that is genuinely absent.
 	warmupFn := s.sessionProxy.WarmupStatus

@@ -34,7 +34,7 @@ func TestPostWriteDiagLabel_StalePathCarriesSnapshotLabel(t *testing.T) {
 	src.set(errDiag("possibly stale error")) // present before the write; the stub never re-publishes
 
 	d := WriteDeps{Diag: src, PostWriteDiagWindow: 20 * time.Millisecond}
-	out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
+	out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
 
 	if !strings.HasPrefix(out, snapshotLabelLine) {
 		t.Fatalf("expected the block to start with the fixed snapshot label, got:\n%q", out)
@@ -52,13 +52,13 @@ func TestPostWriteDiagLabel_FreshPathCarriesAuthoritativeLabel(t *testing.T) {
 	edited := "file:///foo.go"
 	f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{edited: {}}, times: map[string]time.Time{}}
 	d := WriteDeps{Diag: f}
-	baseline := d.capturePreWriteBaseline(edited) // pre-write: clean
+	baseline := d.capturePreWriteBaseline(context.Background(), edited) // pre-write: clean
 
 	// Simulate the language server re-publishing after the write with a new
 	// finding on the touched line (mirrors fakeCrossDiag's documented usage).
 	f.all[edited] = []protocol.Diagnostic{errAt("new break", 1)}
 
-	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
+	out := d.postWriteDiagnostics(context.Background(), edited, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected the block to start with the fixed authoritative label, got:\n%q", out)
@@ -78,9 +78,9 @@ func TestPostWriteDiagLabel_FreshCleanPassCarriesAuthoritativeLabel(t *testing.T
 	edited := "file:///foo.go"
 	f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{}, times: map[string]time.Time{}}
 	d := WriteDeps{Diag: f}
-	baseline := d.capturePreWriteBaseline(edited)
+	baseline := d.capturePreWriteBaseline(context.Background(), edited)
 
-	out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", postWriteDiagOpts{awaitFresh: true}, baseline).text
+	out := d.postWriteDiagnostics(context.Background(), edited, "a\nb", "a\nB", postWriteDiagOpts{awaitFresh: true}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected the clean-pass block to start with the fixed authoritative label, got:\n%q", out)
@@ -96,7 +96,7 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 	t.Run("awaitFresh=false: nothing to report renders nothing", func(t *testing.T) {
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
+		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
 		if out != "" {
 			t.Fatalf("nothing to report must render nothing, got:\n%q", out)
 		}
@@ -110,7 +110,7 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 	t.Run("awaitFresh=true: timeout still surfaces the labelled snapshot line", func(t *testing.T) {
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
+		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
 		if !strings.HasPrefix(out, snapshotLabelLine) {
 			t.Fatalf("expected the block to start with the fixed snapshot label, got:\n%q", out)
 		}
@@ -128,7 +128,7 @@ func TestPostWriteDiagLabel_DisabledWindowNeverBlamesAWait(t *testing.T) {
 	t.Run("nothing cached", func(t *testing.T) {
 		src := newStubDiag()
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: -1}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
+		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
 		if !strings.HasPrefix(out, snapshotLabelLine) {
 			t.Fatalf("expected the snapshot label, got:\n%q", out)
 		}
@@ -144,7 +144,7 @@ func TestPostWriteDiagLabel_DisabledWindowNeverBlamesAWait(t *testing.T) {
 		src := newStubDiag()
 		src.set(errDiag("older error"))
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: -1}
-		out := d.postWriteDiagnostics("file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
+		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text
 		if !strings.HasPrefix(out, snapshotLabelLine) {
 			t.Fatalf("expected the snapshot label, got:\n%q", out)
 		}
@@ -161,11 +161,11 @@ func TestPostWriteDiagLabel_DisabledWindowNeverBlamesAWait(t *testing.T) {
 func TestPostWriteDiagLabel_NoDiagnosticsSourceIsSaidOutLoud(t *testing.T) {
 	d := WriteDeps{} // no Diag source wired at all
 
-	if out := d.postWriteDiagnostics("file:///foo.go", "a", "b", postWriteDiagOpts{}, nil).text; out != "" {
+	if out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "a", "b", postWriteDiagOpts{}, nil).text; out != "" {
 		t.Fatalf("the default path must stay silent, got:\n%q", out)
 	}
 
-	r := d.postWriteDiagnostics("file:///foo.go", "a", "b", postWriteDiagOpts{awaitFresh: true, structured: true}, nil)
+	r := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "a", "b", postWriteDiagOpts{awaitFresh: true, structured: true}, nil)
 	if !strings.HasPrefix(r.text, "\n[diagnostics: "+postWriteDiagLabelNotAnalysed+"]") {
 		t.Fatalf("expected the not-analysed label, got:\n%q", r.text)
 	}
@@ -193,8 +193,8 @@ func TestPostWriteDiagLabel_PullModeAlwaysAuthoritative(t *testing.T) {
 	}
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
-	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
+	baseline := d.capturePreWriteBaseline(context.Background(), pwURI)
+	out := d.postWriteDiagnostics(context.Background(), pwURI, "a\nb", "a\nB", postWriteDiagOpts{}, baseline).text
 
 	if !strings.HasPrefix(out, authoritativeLabelLine) {
 		t.Fatalf("expected a successful pull to carry the fixed authoritative label, got:\n%q", out)
@@ -217,8 +217,8 @@ func TestPostWriteDiagLabel_PullFailureNeverAuthoritative(t *testing.T) {
 	}
 	d := WriteDeps{Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond}
 
-	baseline := d.capturePreWriteBaseline(pwURI)
-	out := d.postWriteDiagnostics(pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
+	baseline := d.capturePreWriteBaseline(context.Background(), pwURI)
+	out := d.postWriteDiagnostics(context.Background(), pwURI, "a", "b", postWriteDiagOpts{awaitFresh: true}, baseline).text
 
 	if !strings.HasPrefix(out, unverifiedLabelLine) {
 		t.Fatalf("expected the block to start with the fixed unverified label, got:\n%q", out)

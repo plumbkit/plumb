@@ -47,8 +47,15 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 	if _, err := s.repinWorkspace(ctxSub, rootY, "", false); err == nil {
 		t.Fatal("precondition: sub's cross-workspace re-pin should have been refused")
 	}
-	if got := s.workspaceFor(ctxSub); got != rootX {
-		t.Fatalf("precondition: after the refusal sub resolves to %q, want the seeded %q", got, rootX)
+	if got := shardRoot(t, s, ctxSub); got != rootX {
+		t.Fatalf("precondition: after the refusal sub's shard sits at %q, want the seeded %q", got, rootX)
+	}
+	// The REFUSAL is recorded against sub, so it resolves to nothing until the
+	// disagreement is settled: a relative path must not be anchored inside the
+	// seeded root, which is the connection's project and not sub's choice. The
+	// shard still holds rootX, and the steps below still exercise the follow.
+	if got := s.workspaceFor(ctxSub); got != "" {
+		t.Fatalf("precondition: a refused agent resolves to %q, want \"\"", got)
 	}
 
 	// 3. The connection legitimately moves to Z (force: the pin is sticky).

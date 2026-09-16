@@ -16,7 +16,7 @@ import (
 func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string) (string, error) {
 	// Captured before any write attempt so the cross-file sweep compares against
 	// the pre-edit language-server state.
-	baseline := t.deps.capturePreWriteBaseline(uri)
+	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, notes, err := t.tryEdit(ctx, path, a.Edits)
@@ -60,7 +60,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 		// Still inside the per-path lock taken in Execute: the write, the
 		// analysis and the rollback decision are one critical section, so no
 		// other plumb writer can land between them.
-		diag := t.deps.postWriteDiagnostics(uri, before, content, a.diagOpts(notifyFailed), baseline)
+		diag := t.deps.postWriteDiagnostics(ctx, uri, before, content, a.diagOpts(notifyFailed), baseline)
 		if a.FailOnNewErrors && diag.delta.hasNewErrors() {
 			return "", t.deps.rollbackNewErrors(ctx, rollbackRequest{
 				tool: "edit_file", path: path, uri: uri,

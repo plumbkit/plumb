@@ -33,6 +33,7 @@ type wireEnvelope struct {
 	Remediation struct {
 		Class string `json:"class"`
 	} `json:"remediation"`
+	Details map[string]string `json:"details"`
 }
 
 // callFailingTool runs one real tools/call against a server whose only tool

@@ -249,22 +249,81 @@ type NameConflict struct {
 	ProxySessionIDs []string
 }
 
-// LegacyNameConflicts reports names claimed by more than one retained identity.
-// nil-safe (returns nil).
+// SupersedeDuplicateIdentities retires identity rows that a NEWER row for the
+// same conversation and name has provably replaced, returning how many it
+// removed. nil-safe.
 //
-// Such rows are a legacy artefact, not a bug this release can fix. Before
-// retention, a name was unique only among LIVE sessions: a pruned row's name
-// could legitimately be redrawn by another proxy, and both rows are now
-// retained. There is no evidence in the database saying which claim came first
-// in any meaningful sense, and the candidate repairs are all worse than the
-// ambiguity — renaming a row would break notes addressed to it, deleting one
-// would fork the identity it proves, and picking by updated_at would silently
-// hand one session's mailbox to another.
+// Prune's doc comment says an identity row needs explicit retirement semantics
+// rather than age, and this is the one case the database can prove. A `plumb
+// serve` RESTART gets a fresh proxy secret, so SaveIdentity INSERTs a new row
+// under the new proxy_session_id instead of updating the old one, and the old
+// row can never present its secret again. When the two rows share an
+// external_id they are the SAME conversation: the newer row proves it is still
+// live, so the older is dead weight — keeping it reserves nothing and only
+// makes the name ambiguous as an address. Recency is the proof here, not a
+// guess from elapsed time.
 //
-// So this REPORTS rather than repairs: the daemon logs the conflict once at
+// The discrimination is by data. Only rows sharing a non-empty external_id AND
+// a name (compared case-insensitively) are superseded, and only the older rows
+// in each such group. Rows that share only a NAME while naming DIFFERENT
+// conversations are left untouched: their collision predates retention, no
+// evidence orders their claims, and every automatic tie-break would risk
+// handing one session's mailbox to another. They remain in LegacyNameConflicts
+// for deliberate resolution.
+//
+// Ordering is (updated_at, name_revision, rowid), so a later save wins and a
+// same-millisecond tie resolves deterministically to the later insert.
+func (s *Store) SupersedeDuplicateIdentities() (int, error) {
+	if s == nil {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`
+DELETE FROM session_names
+ WHERE rowid IN (
+   SELECT rowid FROM (
+     SELECT rowid,
+            ROW_NUMBER() OVER (
+              PARTITION BY lower(name), external_id
+              ORDER BY updated_at DESC, name_revision DESC, rowid DESC
+            ) AS rn
+       FROM session_names
+      WHERE external_id != '' AND name != ''
+   )
+    WHERE rn > 1
+ )`)
+	if err != nil {
+		return 0, fmt.Errorf("sessionstate: supersede duplicate identities: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sessionstate: supersede duplicate identities: %w", err)
+	}
+	return int(n), nil
+}
+
+// LegacyNameConflicts reports names still claimed by more than one retained
+// identity. nil-safe (returns nil).
+//
+// This is the RESIDUE, not a legacy-only artefact. Two distinct sources mint
+// duplicate claims under the current release: a `plumb serve` RESTART re-keys
+// the same conversation under a fresh proxy secret, and a session_start that
+// declares a DIFFERENT conversation re-homes an existing row. The first leaves
+// rows that share an external_id, and SupersedeDuplicateIdentities retires
+// those before this runs. What survives to here is the genuinely ambiguous
+// case: rows that share only a NAME while naming DIFFERENT conversations,
+// whose collision predates retention. The database holds no evidence of which
+// claim should win, and the candidate repairs are all worse than the ambiguity
+// — renaming a row would break notes addressed to it, deleting one would fork
+// the identity it proves, and picking by updated_at would silently hand one
+// session's mailbox to another.
+//
+// So this REPORTS rather than repairs: the daemon logs the residue once at
 // startup, every unaffected identity migrates and recovers normally, and an
-// operator who cares can resolve it deliberately. The new contract prevents new
-// collisions; an ambiguous history is not safely repairable from names alone.
+// operator who cares can resolve it deliberately. Automatic repair is limited
+// to the same-conversation case the data can prove; a cross-conversation
+// collision is not safely repairable from names alone.
 func (s *Store) LegacyNameConflicts() ([]NameConflict, error) {
 	if s == nil {
 		return nil, nil

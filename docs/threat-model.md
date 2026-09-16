@@ -594,18 +594,37 @@ Tracked, not hidden. Each is real today.
 1. **Logical-agent isolation.** State is per MCP *connection* unless the
    client identifies each logical agent. With an identity — per-call `_meta`,
    the `dev.plumbkit/logical-agent` key a client runtime stamps into
-   `arguments` (Claude Code's PreToolUse hook), or `session_start.session_id`
-   — the pin, read tracker, write budget and undo history are per agent; the
-   primary language selection is still per connection. Two limits stay. The
-   daemon cannot tell a runtime-injected stamp from one the model typed, so a
-   model can misattribute its own call or claim a peer's id on the same
-   connection: the identity is a routing key, and the trust boundary remains
-   the connection (one client process, one user), exactly as for `_meta`. This
-   differs from the model-typed token the design rejected only in that a
-   runtime stamp is deterministic per frame and cannot be forgotten. And a
-   client that sends no identity at all still shares one pin, with anonymous
-   state-changing calls refused once two identities have been seen; for it the
-   honest ceiling is still one `plumb serve` per logical agent.
+   `arguments` (Claude Code's PreToolUse hook, the DeepSeek Harness identity
+   plugin), or `session_start.session_id` — the pin, read tracker, write
+   tracker, undo history, write budget, **LSP routing, and the workspace-wide
+   diagnostics/symbol aggregates** are per agent. Still per connection: the
+   primary language selection, the mailbox name and session record, and the
+   ctx-less pull-recording guard (a union over every pinned root, defence in
+   depth behind the ctx-aware entry guard).
+
+   Three limits stay. The daemon cannot tell a runtime-injected stamp from one
+   the model typed, so a model can misattribute its own call or claim a peer's
+   id on the same connection: the identity is a routing key, and the trust
+   boundary remains the connection (one client process, one user), exactly as
+   for `_meta`. A client that sends no identity at all still shares one pin,
+   with anonymous state-changing calls refused once two identities have been
+   seen; for it the honest ceiling is still one `plumb serve` per logical
+   agent. And identity can be LOST for individual calls: an MCP reconnect
+   generation that issues a call before it re-stamps is anonymous for that
+   call, which then resolves against the connection's pin. Measured
+   2026-09-16 — a call attributed to its agent before a daemon restart arrived
+   unattributed after it and resolved into another workspace.
+
+   Two guards stop a refused declaration from becoming a silent wrong-repo
+   write. A per-agent declaration the sticky guard refuses is RECORDED, and
+   that agent's path-bearing calls are refused by name (kind
+   `workspace_boundary`, remediation `pass_force`) until its declaration
+   lands — instead of resolving relative paths, or git's default repository,
+   inside the seeded root, which is another conversation's workspace. And every
+   pin refusal carries `kind: pin_refused` with
+   `details.scope = "agent" | "connection"`, so a client can retry
+   automatically only where `force: true` moves the caller's own shard, never
+   where it would move the pin every agent on the connection resolves against.
 2. **Support-bundle redaction.** `plumb doctor --bundle` does not exist yet.
    When it does, it aggregates config, logs, session state and failure data into
    one shareable object — the single artefact most likely to leak, and the one

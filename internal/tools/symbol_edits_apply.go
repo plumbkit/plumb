@@ -131,7 +131,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 		}
 		return "", err
 	}
-	baseline := captureSemanticBaseline(deps, uri)
+	baseline := captureSemanticBaseline(ctx, deps, uri)
 	before, after, mode, err := prepareTextEditsLocked(path, []protocol.TextEdit{edit})
 	if err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
@@ -196,11 +196,11 @@ func semanticStrictGate(ctx context.Context, deps *WriteDeps, toolName, path str
 	return requireStrictRead(deps.reads(ctx), toolName, path)
 }
 
-func captureSemanticBaseline(deps *WriteDeps, uri string) *diagBaseline {
+func captureSemanticBaseline(ctx context.Context, deps *WriteDeps, uri string) *diagBaseline {
 	if deps == nil {
 		return nil
 	}
-	return deps.capturePreWriteBaseline(uri)
+	return deps.capturePreWriteBaseline(ctx, uri)
 }
 
 // semanticPostWrite is the full post-write pipeline for callers still holding
@@ -258,7 +258,7 @@ func semanticNotifyWritten(ctx context.Context, deps *WriteDeps, client lsp.Clie
 // modified files must bound how many times it calls this (see
 // maxRenameReportFiles).
 func semanticPostWriteReport(ctx context.Context, deps *WriteDeps, path, uri, before, after string, baseline *diagBaseline) string {
-	return deps.postWriteDiagnostics(uri, before, after, postWriteDiagOpts{}, baseline).text + deps.reportQuality(ctx, path)
+	return deps.postWriteDiagnostics(ctx, uri, before, after, postWriteDiagOpts{}, baseline).text + deps.reportQuality(ctx, path)
 }
 
 // notifySymbolEditWritten performs the post-write housekeeping shared by the

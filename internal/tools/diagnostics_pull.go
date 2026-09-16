@@ -423,16 +423,17 @@ func (t *Diagnostics) allFiles(ctx context.Context) string {
 	if pullModeActive(t.modeFor("")) {
 		return t.allFilesPull(ctx)
 	}
-	return t.allFilesCached()
+	return t.allFilesCached(ctx)
 }
 
-// allFilesCached is the push-mode no-URI body — byte-identical to the
-// historical behaviour.
-func (t *Diagnostics) allFilesCached() string {
-	if ts, ok := t.inv.(timedDiagnosticsSource); ok {
-		return formatDiagnosticsWithTimes(t.inv.AllDiagnostics(), ts.AllDiagnosticTimes())
+// allFilesCached is the push-mode no-URI body. It takes ctx because the
+// whole-workspace aggregate is per-agent: a shared connection's URI-less query
+// must answer from the CALLING agent's workspace, not the connection's primary.
+func (t *Diagnostics) allFilesCached(ctx context.Context) string {
+	if _, ok := t.inv.(timedDiagnosticsSource); ok {
+		return formatDiagnosticsWithTimes(allDiagnosticsAt(ctx, t.inv), allDiagnosticTimesAt(ctx, t.inv))
 	}
-	return formatDiagnostics(t.inv.AllDiagnostics())
+	return formatDiagnostics(allDiagnosticsAt(ctx, t.inv))
 }
 
 // allFilesPull serves the whole-workspace query under pull/hybrid mode. A
@@ -444,26 +445,26 @@ func (t *Diagnostics) allFilesPull(ctx context.Context) string {
 	wp, ok := t.opener.(workspacePuller)
 	rec, okRec := t.inv.(pullStateSource)
 	if !ok || !okRec {
-		return t.allFilesCachedHonest()
+		return t.allFilesCachedHonest(ctx)
 	}
 	if _, wsPull := wp.DiagnosticCapabilities(""); !wsPull {
-		return t.allFilesCachedHonest()
+		return t.allFilesCachedHonest(ctx)
 	}
 	rep, err := wp.WorkspaceDiagnostic(ctx, "", protocol.WorkspaceDiagnosticParams{
 		PreviousResultIDs: rec.AllPullResultIDs(),
 	})
 	if err != nil {
 		if t.modeFor("") == diagModePush {
-			return t.allFilesCached()
+			return t.allFilesCached(ctx)
 		}
 		return "workspace diagnostics pull failed: " + err.Error() +
 			"\nShowing cached diagnostics — POSSIBLY INCOMPLETE; files not listed are NOT verified.\n" +
-			t.allFilesCached()
+			t.allFilesCached(ctx)
 	}
 	if rep == nil {
 		return "workspace diagnostics pull failed: language server returned an empty response" +
 			"\nShowing cached diagnostics — POSSIBLY INCOMPLETE; files not listed are NOT verified.\n" +
-			t.allFilesCached()
+			t.allFilesCached(ctx)
 	}
 	var unresolved []string
 	for _, item := range rep.Items {
@@ -476,10 +477,10 @@ func (t *Diagnostics) allFilesPull(ctx context.Context) string {
 	}
 	unresolved = uniqueSortedURIs(unresolved)
 	if len(unresolved) > 0 {
-		return formatPullIncomplete(t.inv.AllDiagnostics(), nil, unresolved) +
+		return formatPullIncomplete(allDiagnosticsAt(ctx, t.inv), nil, unresolved) +
 			"\n(workspace pull incomplete)"
 	}
-	out := t.allFilesCached()
+	out := t.allFilesCached(ctx)
 	if strings.HasPrefix(out, "No diagnostics received yet") {
 		return "No issues found — a workspace pull returned no diagnostics."
 	}
@@ -488,7 +489,7 @@ func (t *Diagnostics) allFilesPull(ctx context.Context) string {
 
 // allFilesCachedHonest is the cached view plus the one honest note for a
 // pull-mode connection whose server cannot answer workspace-wide queries.
-func (t *Diagnostics) allFilesCachedHonest() string {
-	return t.allFilesCached() +
+func (t *Diagnostics) allFilesCachedHonest(ctx context.Context) string {
+	return t.allFilesCached(ctx) +
 		"\nnote: this language server provides diagnostics per file on demand (pull mode) and does not support workspace-wide queries — results above cover only files already analysed or pulled; files not listed are NOT verified. Pass uris to check specific files."
 }

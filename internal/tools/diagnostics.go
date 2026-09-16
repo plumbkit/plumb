@@ -34,6 +34,36 @@ type waitableDiagnosticsSource interface {
 	WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error)
 }
 
+// ctxDiagnosticsSource is the ctx-aware extension of diagnosticsSource, used by
+// the WHOLE-WORKSPACE (URI-less) query. The daemon's routing inv proxy
+// implements it so the aggregate is scoped to the CALLING agent's workspace; a
+// *cache.Invalidator has no routing and needs nothing here.
+type ctxDiagnosticsSource interface {
+	AllDiagnosticsFor(ctx context.Context) map[string][]protocol.Diagnostic
+	AllDiagnosticTimesFor(ctx context.Context) map[string]time.Time
+}
+
+// allDiagnosticsAt prefers the ctx-aware aggregate when the source has one. A
+// URI-less query on a shared connection must answer from the calling agent's
+// project, not the connection's attach-time primary.
+func allDiagnosticsAt(ctx context.Context, src diagnosticsSource) map[string][]protocol.Diagnostic {
+	if c, ok := src.(ctxDiagnosticsSource); ok {
+		return c.AllDiagnosticsFor(ctx)
+	}
+	return src.AllDiagnostics()
+}
+
+// allDiagnosticTimesAt is the timestamp half of allDiagnosticsAt.
+func allDiagnosticTimesAt(ctx context.Context, src diagnosticsSource) map[string]time.Time {
+	if c, ok := src.(ctxDiagnosticsSource); ok {
+		return c.AllDiagnosticTimesFor(ctx)
+	}
+	if ts, ok := src.(timedDiagnosticsSource); ok {
+		return ts.AllDiagnosticTimes()
+	}
+	return nil
+}
+
 // fileOpener triggers language-server analysis for a single file.
 type fileOpener interface {
 	DidOpen(ctx context.Context, params protocol.DidOpenTextDocumentParams) error

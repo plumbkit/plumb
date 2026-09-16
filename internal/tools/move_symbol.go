@@ -261,7 +261,7 @@ func (t *MoveSymbol) applyMove(ctx, lspCtx context.Context, waited time.Duration
 	baselines := make(map[string]*diagBaseline, len(plans))
 	if deps != nil {
 		for _, p := range plans {
-			baselines[p.path] = deps.capturePreWriteBaseline(protocol.FileURI(p.path))
+			baselines[p.path] = deps.capturePreWriteBaseline(ctx, protocol.FileURI(p.path))
 		}
 	}
 	onApplied := func() {

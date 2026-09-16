@@ -31,7 +31,7 @@ func (t *EditFile) executePartial(
 	uri string,
 	awaitFresh bool,
 ) string {
-	baseline := t.deps.capturePreWriteBaseline(uri)
+	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
 	var sb strings.Builder
@@ -125,7 +125,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, befor
 	// apply_partial cannot request fail_on_new_errors (the preconditions refuse
 	// the combination), so this path only ever reports.
 	opt := postWriteDiagOpts{awaitFresh: awaitFresh, structured: awaitFresh, lspNotifyFailed: notifyFailed}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, opt, baseline).text)
+	sb.WriteString(t.deps.postWriteDiagnostics(ctx, uri, before, content, opt, baseline).text)
 }
 
 // applyPartialEdit applies a single edit to content and returns the (possibly

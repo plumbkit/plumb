@@ -21,6 +21,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -47,6 +48,14 @@ type agentShard struct {
 	// defect where a fresh agent's identical request succeeded. Set only under
 	// sh.mu; never cleared.
 	selfPinned bool
+	// restored records that this shard's root came from the agent's OWN
+	// persisted pin rather than from the connection's seed. It is a distinct
+	// fact from selfPinned, which is in-memory only: after a daemon restart the
+	// shard is built by shardFor and selfPinned starts false even though the row
+	// it restored was written by that agent's own session_start. Code asking
+	// "did this agent choose its root?" must accept either — see the
+	// declaration-refusal marker in repinAgent.
+	restored bool
 
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
@@ -105,6 +114,10 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 			sh.root = resolved
 			sh.language = language
 			sh.pinOrigin = origin
+			// A persisted per-agent row is a root this agent DECLARED (only
+			// repinAgent's move path and confirmShardPin write one), so the
+			// declaration-refusal marker must not treat it as a seed.
+			sh.restored = true
 		}
 	}
 	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
@@ -155,6 +168,15 @@ func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy 
 // back to the connection's pin when the connection is not shared (or the call is
 // unattributed). workspace() stays the ctx-less default for background goroutines.
 func (s *connSession) workspaceFor(ctx context.Context) string {
+	if _, pending := s.pendingDeclarationFor(mcp.LogicalAgentFromCtx(ctx)); pending {
+		// A refused declaration leaves nothing trustworthy to anchor to: the
+		// shard's root is one this agent explicitly tried to leave. "" makes the
+		// implicit resolvers — relative paths, git's default repository,
+		// orientation — refuse rather than resolve inside it, and the boundary
+		// guard's own error names the remedy. Without this the agent keeps
+		// working in the seeded root and only a human notices.
+		return ""
+	}
 	if sh := s.shardFor(ctx); sh != nil {
 		sh.mu.RLock()
 		defer sh.mu.RUnlock()
@@ -286,7 +308,20 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	if !force && prev != "" && root != prev &&
 		!correctsSeededRoot(sh.selfPinned, prev, root) &&
 		sh.pinOrigin == sessionstate.PinSourceSessionStart {
-		refused = fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root)
+		// Classified with the scope the caller needs to choose a recovery: at
+		// "agent" scope force: true moves only THIS agent's shard, so an automatic
+		// retry is safe here (and is not at connection scope, conn_repin.go).
+		// Error() stays byte-identical — the classification is a side-car.
+		refused = toolerror.Wrap(
+			fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root),
+			toolerror.KindPinRefused,
+			toolerror.ClassPassForce,
+			toolerror.WithTool("session_start"),
+			toolerror.WithDetail("scope", "agent"),
+			toolerror.WithDetail("agent", sh.id),
+			toolerror.WithDetail("pinned", prev),
+			toolerror.WithDetail("requested", root),
+		)
 		// Leave a trace on this past-vulnerability surface: the connection-level
 		// guard has always logged a refused steal, and a refused cross-workspace
 		// drift on a SHARED connection is exactly the event an operator needs to
@@ -295,6 +330,14 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// Not repinStickyRemedy: that one opens by telling the caller to identify
 		// itself, which an agent holding its own shard has already done. The
 		// refusal's own text carries the remedy that applies here.
+		// Only a shard that never CHOSE a root can reach here with an unrelated
+		// target (a self-pinned shard is exempt from correctsSeededRoot above),
+		// which is exactly the case where the root it keeps is someone else's.
+		// Record it so the agent's next path-bearing call is refused with the
+		// remedy instead of being resolved into that root.
+		if !sh.selfPinned && !sh.restored {
+			s.markDeclarationRefused(mcp.LogicalAgentFromCtx(ctx), root, prev)
+		}
 		s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
 			"agent", sh.id, "pinned", prev, "requested", root,
 			"remedy", "call session_start again with force: true to move THIS agent, or run one plumb serve per agent")
@@ -334,54 +377,6 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	return changed, nil
-}
-
-// correctsSeededRoot reports whether a re-pin from prev to root is an agent
-// CORRECTING a workspace it never chose, rather than drifting off one it did.
-//
-// Two conditions, and both are load-bearing. The shard must not be self-pinned:
-// a root the agent actually named is its own choice, and moving off one still
-// takes force: true. And the two roots must be the same tree — one contains the
-// other — which is the reported shape, a git worktree at .claude/worktrees/<name>
-// inside its parent checkout. That containment is also why the drift was SILENT:
-// the same relative path exists in both roots, so a workspace-relative call
-// resolving against the wrong one returned a plausible file rather than a
-// boundary error. An unrelated workspace has neither property and is refused.
-//
-// Called with sh.mu held, hence the plain bool rather than a shard method.
-//
-// Both roots are canonical by the time they reach repinAgent — Detect and
-// SynthesiseRoot resolve symlinks (issue #263), and a shard's root came through
-// the same lane — so the lexical prefix test in withinRoot is sound here.
-func correctsSeededRoot(selfPinned bool, prev, root string) bool {
-	if selfPinned {
-		return false
-	}
-	return withinRoot(root, prev) || withinRoot(prev, root)
-}
-
-// confirmShardPin records that this agent deliberately named the root its shard
-// already holds. The per-agent counterpart of attachOrRepinTo's same-root
-// promotion branch: no root moves, so the read/write/undo state and the pin
-// itself stand, and only the ownership facts are upgraded — the shard stops
-// following the connection, and the guard above starts protecting it.
-//
-// Persisted as well as set, because a shard is otherwise only written down when
-// repinAgent MOVES it: a choice held in memory alone would evaporate on the next
-// daemon restart, when the shard re-seeds from the connection and the agent is
-// back where it started.
-//
-// Only an explicit session_start confirms: no other origin reaches repinAgent
-// with an identified caller today, and gating it here keeps that true if one
-// ever does. Called with sh.mu held, so the persist runs in the documented lock
-// order (sh.mu outside, s.mu innermost) exactly as the move path's does.
-func (s *connSession) confirmShardPin(sh *agentShard, root, language string, origin sessionstate.PinSource) {
-	if origin != sessionstate.PinSourceSessionStart || sh.selfPinned {
-		return
-	}
-	sh.selfPinned = true
-	sh.pinOrigin = origin
-	s.persistPinForAgent(sh, root, language, origin)
 }
 
 // seedShardOnLink hydrates the linkage owner's shard from the connection's
@@ -449,6 +444,12 @@ func (s *connSession) followConnectionShards(prevRoot string) {
 		sh.root = v.acquiredRoot
 		sh.language = v.acquiredLanguage
 		sh.pinOrigin = v.pinOrigin
+		// The connection landed on the root this agent asked for, so what its
+		// refusal was about is now simply true; holding the gate would refuse
+		// calls that are safe again.
+		if p, ok := s.pendingDeclarationFor(sh.id); ok && p.requested == sh.root {
+			s.clearDeclarationRefused(sh.id)
+		}
 		sh.policy = s.buildAgentPolicy(sh.root, sh.language)
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()

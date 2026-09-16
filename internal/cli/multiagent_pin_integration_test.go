@@ -58,6 +58,7 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -196,6 +197,14 @@ func testUndeclaredAgentsForcePingPongIsContested(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "force: true") {
 		t.Fatalf("the first refusal no longer offers force; the incident's premise has changed: %v", err)
+	}
+	// The SCOPE, not just the kind: an undeclared agent's refusal is
+	// connection-level, where force: true moves the pin every agent on this
+	// connection resolves against. A client that recovers automatically must be
+	// able to tell this apart from the per-agent case below by machine, not by
+	// reading either sentence — see testDeclaredFirstContactDefersToExecute.
+	if te, ok := toolerror.Classify(err); !ok || te.Kind != toolerror.KindPinRefused || te.Details["scope"] != "connection" {
+		t.Errorf("connection-level pin refusal must classify as %s with scope=connection, got %+v (classified=%v)", toolerror.KindPinRefused, te, ok)
 	}
 
 	// B does as it was told. One displacement is still an ordinary switch.
@@ -375,9 +384,16 @@ func testCrossWorkspaceRefusedWithRemedy(t *testing.T) {
 			t.Errorf("refusal does not name the remedy (missing %q): %s", want, msg)
 		}
 	}
-	// The refusal left every surface where it was.
-	if got := m.s.workspaceFor(agentCtx("drifter")); got != ws {
-		t.Errorf("refused agent workspace = %q, want the inherited %q — a refused re-pin must not move anything", got, ws)
+	// The refusal left every surface where it was: the shard still sits on the
+	// inherited root (nothing moved)...
+	if got := shardRoot(t, m.s, agentCtx("drifter")); got != ws {
+		t.Errorf("refused agent's shard = %q, want the inherited %q — a refused re-pin must not move anything", got, ws)
+	}
+	// ...and the RESOLVER now refuses for that agent, because the root it sits on
+	// is one it never chose: a relative path here would land in the
+	// coordinator's project. The remedy (session_start with force) clears it.
+	if got := m.s.workspaceFor(agentCtx("drifter")); got != "" {
+		t.Errorf("refused agent resolves to %q, want \"\" — implicit resolution must not anchor to a root the agent never chose", got)
 	}
 	if got := m.s.workspaceFor(agentCtx("coordinator")); got != ws {
 		t.Errorf("coordinator workspace = %q, want %q", got, ws)
@@ -724,6 +740,12 @@ func testDeclaredFirstContactDefersToExecute(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "force: true") {
 		t.Errorf("the per-agent refusal lost its remedy: %v", err)
+	}
+	// scope=agent is the ONLY scope at which an automatic forced retry is safe:
+	// it moves this agent's shard alone, leaving the connection pin and every
+	// peer untouched. The scope is what makes that decision mechanical.
+	if te, ok := toolerror.Classify(err); !ok || te.Kind != toolerror.KindPinRefused || te.Details["scope"] != "agent" {
+		t.Errorf("per-agent pin refusal must classify as %s with scope=agent, got %+v (classified=%v)", toolerror.KindPinRefused, te, ok)
 	}
 }
 

@@ -311,12 +311,14 @@ func migrateV7(db *sql.DB) error {
 		return fmt.Errorf("sessionstate: migrate v7 (session_names.name_revision): %w", err)
 	}
 	// The name index serves the reservation lookup, which now runs on every
-	// name draw. It is deliberately NOT unique: legacy rows can already hold
-	// the same name twice (before this release a name was only unique among
-	// LIVE sessions, and a pruned row's name could be redrawn by another
-	// proxy), and a unique index would fail the migration on exactly the
-	// databases that most need it. LegacyNameConflicts reports those rows
-	// instead of silently choosing an owner.
+	// name draw. It is deliberately NOT unique: duplicate claims already exist
+	// and are still minted (a `plumb serve` RESTART re-keys the same
+	// conversation under a fresh proxy session, and a name collision can
+	// outlive retention), and a unique index would fail the migration on
+	// exactly the databases that most need it. The same-conversation duplicates
+	// are retired by SupersedeDuplicateIdentities; the genuinely ambiguous
+	// residue is reported by LegacyNameConflicts. Neither is silently resolved
+	// by choosing an owner here.
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
 		return fmt.Errorf("sessionstate: migrate v7 (idx_sn_name): %w", err)
 	}
@@ -536,7 +538,11 @@ func liveExemption(cutoff int64, live []string) (string, []any) {
 // The cost is bounded and documented: one small row per proxy session, kept
 // indefinitely, whose name stays reserved (see Reservations). Reclaiming one
 // needs explicit retirement semantics — proof that the serve is gone, not a
-// guess from elapsed time — which this deliberately does not invent.
+// guess from elapsed time — which this deliberately does not invent. One case
+// the database CAN prove is supplied elsewhere: a newer row for the same
+// conversation and name proves the older row's serve is gone, and
+// SupersedeDuplicateIdentities retires it there. Age alone still reclaims
+// nothing here.
 //
 // Rows belonging to a proxy session in live are kept regardless of age. Without
 // that exemption the sweep reclaims state from sessions that are still

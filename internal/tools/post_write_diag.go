@@ -88,7 +88,7 @@ func postWriteDiagLabel(label string) string {
 // wait — i.e. the returned diagnostics reflect this write. When false (timeout,
 // or the wait was disabled) the diagnostics may predate the write, and callers
 // annotate their output accordingly.
-func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.Duration, est *DiagWaitEstimator) (diags []protocol.Diagnostic, fresh bool) {
+func awaitDiagnosticsRefresh(ctx context.Context, diag postWriteDiagSource, uri string, ceiling time.Duration, est *DiagWaitEstimator) (diags []protocol.Diagnostic, fresh bool) {
 	if diag == nil {
 		return nil, false
 	}
@@ -100,10 +100,14 @@ func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.
 	if ceiling == 0 {
 		ceiling = defaultPostWriteDiagWindow
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), est.window(ceiling))
+	// Inherit the CALLER's context rather than Background: this wait reaches
+	// the daemon's per-agent boundary guard through the diagnostics proxy, and a
+	// fresh Background context carries no logical-agent identity, so a sharded
+	// agent's own workspace was refused as "pinned to <another project>".
+	wctx, cancel := context.WithTimeout(ctx, est.window(ceiling))
 	defer cancel()
 	start := time.Now()
-	d, err := diag.WaitNextDiagnostics(ctx, uri)
+	d, err := diag.WaitNextDiagnostics(wctx, uri)
 	if err == nil {
 		// A publish landed during the wait, so it reflects this write.
 		est.record(time.Since(start))

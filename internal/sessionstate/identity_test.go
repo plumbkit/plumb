@@ -298,3 +298,85 @@ func TestRepairExternalID_FillsOnlyABlankRowThatStillNamesTheSession(t *testing.
 		t.Fatal("a repair reported success against a row that does not exist")
 	}
 }
+
+// TestSupersedeDuplicateIdentities_RetiresOnlyTheSameConversation pins the
+// discrimination the repair is built on: a newer row for the SAME conversation
+// proves the older row's serve is gone and retires it, while a name shared by a
+// DIFFERENT conversation is left alone.
+//
+// The first shape is what a `plumb serve` RESTART mints — a fresh proxy secret
+// re-keys the same conversation as a new row, and the old row can never present
+// its secret again. The second is the pre-retention name collision the report
+// exists for, and choosing between its claims automatically would silently hand
+// one session's mailbox to another.
+func TestSupersedeDuplicateIdentities_RetiresOnlyTheSameConversation(t *testing.T) {
+	s := newTestStore(t)
+	// The predecessor: same conversation and name, older proxy session.
+	if err := s.SaveIdentity("old-proxy", Identity{Name: "calm-stag", SessionID: "id-1", ExternalID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Age it, so the ordering is by recency rather than insertion order alone.
+	if _, err := s.db.Exec(
+		`UPDATE session_names SET updated_at=? WHERE proxy_session_id='old-proxy'`,
+		time.Now().Add(-time.Hour).UnixMilli(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The restart: same conversation and name, new proxy session.
+	if err := s.SaveIdentity("new-proxy", Identity{Name: "calm-stag", SessionID: "id-2", ExternalID: "conv-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// A DIFFERENT conversation that collided on the name before retention.
+	if err := s.SaveIdentity("other-proxy", Identity{Name: "calm-stag", SessionID: "id-3", ExternalID: "conv-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := s.SupersedeDuplicateIdentities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("superseded %d rows, want exactly the one older same-conversation row", removed)
+	}
+	if _, ok, _ := s.LoadIdentity("old-proxy"); ok {
+		t.Error("the superseded same-conversation row survived; its serve can never present its proxy secret again")
+	}
+	keep, ok, err := s.LoadIdentity("new-proxy")
+	if err != nil || !ok || keep.SessionID != "id-2" {
+		t.Errorf("the newer same-conversation row must survive as the owner: got (%+v, ok=%v, err=%v)", keep, ok, err)
+	}
+	if _, ok, err := s.LoadIdentity("other-proxy"); err != nil || !ok {
+		t.Errorf("a DIFFERENT conversation's claim was removed (ok=%v, err=%v); only same-conversation rows may be superseded", ok, err)
+	}
+
+	// What remains is exactly the cross-conversation ambiguity, and only it.
+	conflicts, err := s.LegacyNameConflicts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("conflicts = %+v, want only the cross-conversation collision left to report", conflicts)
+	}
+
+	// Idempotent: a second sweep removes nothing.
+	again, err := s.SupersedeDuplicateIdentities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != 0 {
+		t.Fatalf("a second supersede removed %d rows, want 0", again)
+	}
+}
+
+// TestSupersedeDuplicateIdentities_EmptyAndNilAreSafe pins the two no-op paths
+// the daemon-start call site relies on: nothing to drain, and no store at all.
+func TestSupersedeDuplicateIdentities_EmptyAndNilAreSafe(t *testing.T) {
+	s := newTestStore(t)
+	if removed, err := s.SupersedeDuplicateIdentities(); err != nil || removed != 0 {
+		t.Fatalf("supersede on an empty database = (%d, %v), want (0, nil)", removed, err)
+	}
+	var nilStore *Store
+	if removed, err := nilStore.SupersedeDuplicateIdentities(); err != nil || removed != 0 {
+		t.Fatalf("supersede on a nil store = (%d, %v), want (0, nil)", removed, err)
+	}
+}
