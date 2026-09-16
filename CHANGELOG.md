@@ -112,6 +112,36 @@
   entitled to it. The comparison is case-insensitive, as every other name
   comparison here is, and a DIFFERENT reserved name is still refused.
 
+- **An LSP-backed tool now resolves its workspace boundary against the CALLING logical
+  agent's pin, not the connection's.** On a shared connection the LSP routing proxy was
+  guarded by the connection-level policy, so whenever the connection's default pin named one
+  project and a declared agent another, `file_outline`, `diagnostics`, `get_definition`,
+  `find_references`, `explain_symbol`, `call_hierarchy` and `type_hierarchy` all refused the
+  agent's own workspace with "this connection is pinned to <the other project>". Several of
+  those tools carry no boundary guard of their own, so the proxy guard is their only one.
+  The proxy now takes the ctx-aware guard, which resolves the calling agent's shard policy.
+  The diagnostics inv proxy, which sits behind the diagnostics tool's ctx-aware entry guard
+  and whose pull-recording path carries no context, takes a guard that admits a path under
+  any root pinned on the connection and still refuses a path under none.
+
+- **A URI-less LSP query now searches the CALLING agent's workspace.** `workspace_symbols`
+  with no `uri` and the whole-workspace `diagnostics` query both answered from the
+  connection's attach-time primary, so an agent pinned elsewhere was told its own symbols did
+  not exist and was shown another project's (usually empty) diagnostics. Both now resolve the
+  calling agent's root: the routing proxy fans `workspace_symbols` out over that root's
+  attached servers, and the diagnostics aggregate gains a ctx-aware `AllDiagnosticsFor` that
+  the tool prefers when the source provides one. Unattributed calls keep the connection's
+  behaviour, and connection-lifecycle methods (`Initialize`, `Capabilities`, `Subscribe`) stay
+  connection-scoped, which is what they are.
+
+- **An in-thread reply now binds to the peer's recorded session ID, and a bound message
+  wakes its recipient by that ID.** A thread identifies the other party by identity but
+  returned only their name, so a reply was re-resolved by name; once the peer renamed, that
+  resolution found nothing and the reply was written unbound — claimable by whoever later
+  drew the name. The reply now carries the thread's ID, and the notifier is bumped on the
+  addressee ID as well as the name. Without the ID key, a bound message — exactly the kind
+  delivery matches by ID — is the one kind no wake reaches, and because `check_messages`
+  with a wait blocks, a missed wake reads as "No messages" rather than as latency.
 - **The Xcode single-flight integration test no longer fails a machine that is
   merely slow.** It waited three seconds — the budget its stubbed siblings use,
   where a state change that has not happened almost immediately is a bug — for a

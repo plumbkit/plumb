@@ -88,17 +88,30 @@ type Inbox struct {
 	Global func() *collab.Store
 }
 
-// Keys are the notifier keys this inbox is woken by: its own name, plus the
-// "next arrival" address of ITS OWN workspace. Cross-project messages are
-// addressed by name, so they share the name key and need no separate wake-up;
-// "next" has to be scoped, or a note left for the next arrival in any project in
-// the daemon would wake every session in every other project (see
-// collab.NotifyKey). Senders must derive the key the same way.
+// Keys are the notifier keys this inbox is woken by: its own name, its stable
+// session ID (and the predecessor IDs it continues), plus the "next arrival"
+// address of ITS OWN workspace.
+//
+// The name key covers a note addressed by name. The ID keys cover a note BOUND
+// to this session: delivery matches on the ID, so a bound note is claimable
+// even when the sender recorded a name this session no longer answers to (a
+// peer that renamed after its last note is the common case). A name-only key
+// would leave exactly those rows un-woken, and because check_messages with a
+// wait blocks, the recipient would be told "No messages" rather than merely
+// delayed. "next" has to be scoped, or a note left for the next arrival in any
+// project in the daemon would wake every session in every other project (see
+// collab.NotifyKey). Senders must derive the keys the same way.
 func (i Inbox) Keys() []string {
 	if i.Self == "" {
 		return nil
 	}
-	return []string{i.Self, collab.NotifyKey(i.Root, collab.AddresseeNext)}
+	keys := make([]string, 0, 3+len(i.InheritedIDs))
+	keys = append(keys, i.Self)
+	if i.SelfID != "" {
+		keys = append(keys, i.SelfID)
+	}
+	keys = append(keys, i.InheritedIDs...)
+	return append(keys, collab.NotifyKey(i.Root, collab.AddresseeNext))
 }
 
 // claimant is what the store matches a row against: this session's name, its
