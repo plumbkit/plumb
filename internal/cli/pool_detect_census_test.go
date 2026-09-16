@@ -175,18 +175,27 @@ func TestCensusMarkerlessLanguages_DepthBound(t *testing.T) {
 // TestCensusMarkerlessLanguages_Deterministic guards the map iteration. The
 // result reaches the session's language label and adapter list, so two attaches
 // of one unchanged workspace must not disagree about their order.
+//
+// THREE languages, with counts that contradict alphabetical order in both
+// directions, and the exact expected order asserted. Two would not do it: with
+// html and python alone, "most files first" and plain reverse-alphabetical
+// produce the SAME sequence, so a mutant that sorted by name instead of by count
+// survived the assertion — the test proved only that the order was stable, never
+// that it was the right order. Counted 30/20/10 against an alphabetical
+// html/python/typescript, no sort by name in either direction can reproduce
+// html/typescript/python.
 func TestCensusMarkerlessLanguages_Deterministic(t *testing.T) {
 	dir := freshTempDir(t)
-	writeN(t, dir, "svc", "a", ".py", 30)
-	writeN(t, dir, "site", "p", ".html", 10)
+	writeN(t, dir, "site", "p", ".html", 30)
+	writeN(t, dir, "web", "m", ".ts", 20)
+	writeN(t, dir, "svc", "a", ".py", 10)
+	want := []string{"html", "typescript", "python"}
 
 	p := defaultsPool(t, "python", "html", "typescript")
 	first := orderedLangs(p.censusMarkerlessLanguages(dir, nil))
-	if len(first) != 2 {
-		t.Fatalf("census = %v, want both python and html to qualify", first)
-	}
-	if first[0] != "python" {
-		t.Errorf("census order = %v, want the dominant language first", first)
+	if !equalStrings(first, want) {
+		t.Fatalf("census order = %v, want %v — most files first, which is neither "+
+			"alphabetical nor reverse-alphabetical for this fixture", first, want)
 	}
 	for range 12 {
 		if got := orderedLangs(p.censusMarkerlessLanguages(dir, nil)); !equalStrings(got, first) {

@@ -4,6 +4,41 @@
 
 ### Fixed
 
+- **A language with no manifest is no longer invisible in a workspace that has
+  one.** A repo with `app/tsconfig.json` and forty `.py` files across five
+  sibling directories, and no `pyproject.toml`/`setup.py`/`pyrightconfig.json`
+  anywhere, resolved TypeScript and nothing else: Python reached no
+  `session_start` identity line, no TUI badge, no `workspace_symbols` fan-out and
+  no `run_task` reachability. Per-file routing had been serving those `.py` files
+  the whole time — it resolves a language from the file's own extension — so the
+  defect was one of attach-time visibility, not of routing.
+
+  Detection had two contributors that each stood down when the other had
+  answered. `discoverChildLanguages` matches strong markers in subdirectories;
+  the last-resort content sniff fires only when nothing else resolved, and it was
+  written inside an already-existing `len(discovered) == 0` branch. One
+  marker-carrying child therefore locked the sniff out of the whole workspace,
+  and a markerless language was nominated by nothing.
+
+  A new census (`censusMarkerlessLanguages`) now runs after child discovery over
+  the part of the root **no discovered marker claims** — the claimed subtrees are
+  pruned from the walk through a new nil-able `skipPath` predicate that prunes by
+  absolute path where `skipDir` prunes by base name — and nominates any active
+  language holding both at least 5 source files and at least 10% of that
+  remainder. Both floors are required: a floor alone admits eight `.py` helpers
+  in a 30k-file TypeScript monorepo, a share alone gives one stray `.py` beside
+  two `.md` files a 100% share. Nominated languages are rooted at the workspace
+  root, which is the root per-file routing already resolves for those files, so
+  discovery and routing share one server instead of starting two.
+
+  **Election order is unchanged by construction.** `discoveredRoot` gains a
+  `sniffed` flag and `lessDiscovered` puts marker-backed roots ahead of sniffed
+  ones, so no existing workspace changes its primary — without that tier a
+  sniffed `python` would outrank a marker-backed `typescript` purely
+  alphabetically. The census is independent of `child_scan_depth`, which asks a
+  different question, and the unthresholded last-resort sniff is unchanged, so a
+  small single-language markerless repo attaches exactly as before.
+
 - **`make verify` no longer passes silently while it only compiles the
   integration suite.** The target is documented across the repo as the definition
   of "ready to commit", but it ran `build-integration` (`go vet -tags=integration
