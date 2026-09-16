@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,6 +79,51 @@ func TestSiblingLanguages_ClaimedRootDoesNotPruneTheWholeTree(t *testing.T) {
 	if !contains(got, "python") {
 		t.Fatalf("siblings = %v, want python — passing the root as claimed must prune only "+
 			"that entry's own subtree matches, never the tree the walk starts from", got)
+	}
+}
+
+// TestSiblingLanguages_TheMotivatingCase is the shape the whole feature is for,
+// as written in the commit message, the CHANGELOG and both docs: a Go repo whose
+// Python lives in a tools/ tree with no manifest. It nominated NOTHING, because
+// the census denominator counted the primary's own 400 .go files and put python
+// at 9% — the documented case rejected by its own threshold. Review caught it;
+// no test here had a realistic ratio of primary sources to sibling sources.
+func TestSiblingLanguages_TheMotivatingCase(t *testing.T) {
+	pool := censusPool("go", "python")
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	writeN(t, root, "", "m", ".go", 400)
+	writeN(t, root, "tools", "t", ".py", 40)
+
+	got := langsOf(siblingSession(t, pool, true).siblingLanguages(root, "go"))
+
+	if !contains(got, "python") {
+		t.Fatalf("siblings = %v, want python — a language that already has a server is not "+
+			"part of the remainder that decides whether to start another", got)
+	}
+}
+
+// TestSiblingLanguages_FixtureTreesAreNotLanguages: plumb's own repository has
+// testdata/*-fixture directories carrying real manifests, and before this was
+// pruned attaching to plumb itself nominated python and typescript from them —
+// starting pyright and tsserver against test assets and merging fixture symbols
+// into workspace_symbols results. Latent while this walk ran only for markerless
+// roots; sibling discovery made it the common path.
+func TestSiblingLanguages_FixtureTreesAreNotLanguages(t *testing.T) {
+	pool := censusPool("go", "typescript", "python")
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	writeN(t, root, "", "m", ".go", 200)
+	for _, dir := range []string{"testdata", "fixtures", "third_party"} {
+		mustWrite(t, filepath.Join(root, dir, "proj", "pyproject.toml"), "")
+		writeN(t, root, dir+"/proj", "f", ".py", 20)
+	}
+
+	got := langsOf(siblingSession(t, pool, true).siblingLanguages(root, "go"))
+
+	if len(got) != 0 {
+		t.Errorf("siblings = %v, want none — a manifest inside testdata/fixtures/third_party "+
+			"is a test asset, not a project to serve", got)
 	}
 }
 
@@ -205,9 +251,18 @@ func TestResolvePrimaryLSP_SingleLanguageRootStillReportsOneLanguage(t *testing.
 	if got := s.acquiredLanguageName(); got != "go" {
 		t.Fatalf("primary = %q, want go", got)
 	}
-	if info := sessionRecord(t, s.sessID); info.DetectedLanguage != "go" {
+	info := sessionRecord(t, s.sessID)
+	if info.DetectedLanguage != "go" {
 		t.Errorf("DetectedLanguage = %q, want exactly %q — a single-language repo must not "+
 			"gain a comma-joined label", info.DetectedLanguage, "go")
+	}
+	// Adapters as well as the label. Mutation showed the single-language
+	// early-return could be deleted with no test noticing: adaptersFor("gopls")
+	// returns [gopls] where adaptersForDiscovered(nil) returns nil, so every
+	// single-language workspace would have silently reported no LSP at all.
+	if !slices.Contains(info.Adapters, "gopls") {
+		t.Errorf("Adapters = %v, want gopls listed — the session drives one and must say so",
+			info.Adapters)
 	}
 }
 

@@ -158,14 +158,35 @@ func (p *workspacePool) censusMarkerlessLanguages(root string, claimed []discove
 	// meant to say "this language is a material part of the CODE here", so the
 	// comparison is against the code, not against everything on disk.
 	//
+	// CLAIMED languages are out of the denominator too, and that is what makes
+	// "the unclaimed remainder" true rather than aspirational. Pruning claimed
+	// ROOTS removes a subtree; it does nothing about a claimed language whose
+	// files are spread through the tree the walk starts from — which is exactly
+	// the shape of a root that has a language of its own. Counting them, a Go repo
+	// of 400 .go files beside a 40-file tools/ Python tree put python at 9% and
+	// nominated NOTHING: the motivating case for sibling discovery, rejected by
+	// its own threshold, with the docs claiming the opposite. A language that
+	// already has a server is not part of the remainder that decides whether to
+	// start another.
+	//
+	// The floor does more of the work under this denominator, and that is the
+	// honest trade: 8 .py helpers in a 30k-file TypeScript monorepo are now 100%
+	// of the UNSERVED code and qualify on 8 >= censusMinFiles, where the old
+	// whole-tree share would have rejected them. The share still bites when
+	// several languages are unserved — 6 .py against 500 unserved .rb is 1.2% —
+	// which is the question it can actually answer.
+	//
 	// One consequence worth naming: the denominator is therefore relative to the
 	// EFFECTIVE set, which is machine-dependent. The same repo of 40 .py beside
-	// 400 .ts puts python at 9% where tsserver is installed and at 100% where it
-	// is not. That is the intended reading — a share against servers that could
-	// actually run is the one that decides whether starting another is worth it —
-	// but it does mean two machines can legitimately nominate differently.
+	// 400 unclaimed .ts puts python at 9% where tsserver is installed and at 100%
+	// where it is not. That is the intended reading — a share against servers that
+	// could actually run is the one that decides whether starting another is worth
+	// it — but it does mean two machines can legitimately nominate differently.
 	total := 0
 	for lang, n := range counts {
+		if slices.Contains(claimedLangs, lang) {
+			continue
+		}
 		if _, ok := cfgAmong(langs, lang); ok {
 			total += n
 		}
