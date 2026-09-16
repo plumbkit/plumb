@@ -416,7 +416,7 @@ func TestExtLangAt_StillAnswersFromATruncatedScan(t *testing.T) {
 	writeFiles(t, dir, "a.py", "b.py", "c.py")
 	manyFiles(t, dir, "assets", "blob", ".bin", extScanMaxFiles+500)
 
-	counts, truncated := contestedPool(t, "python").sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
+	counts, truncated := contestedPool(t, "python").sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir, nil)
 	if !truncated {
 		t.Fatalf("precondition: scan was not truncated (counts=%v) — the fixture no "+
 			"longer exceeds the %d-file cap, so this test proves nothing", counts, extScanMaxFiles)
