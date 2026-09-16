@@ -83,7 +83,7 @@ func (p *workspacePool) extLangAtIn(dir string, langs []langConfig) string {
 	// guess off the first 2000 files beats no language at all; the tie-break is
 	// choosing between two specific candidates, where a partial count is not a
 	// weaker answer but a differently-wrong one.
-	counts, _ := p.sniffCountsIn(langs, dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
+	counts, _ := p.sniffCountsIn(langs, dir, extScanDepth, extScanMaxFiles, nil, skipChildDir, nil)
 	best := bestSniffedLang(counts)
 	if _, ok := cfgAmong(langs, best); !ok {
 		return ""
@@ -146,8 +146,19 @@ func (p *workspacePool) extLangAtIn(dir string, langs []langConfig) string {
 // measured: charging it would let an ignored tree exhaust the budget and set
 // truncated without contributing a single count, which is the same defect in a
 // quieter form.
-func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
-	return p.sniffCountsIn(p.effectiveLanguages(dir), dir, maxDepth, maxFiles, ignoreMarkers, skipDir)
+// skipPath prunes by ABSOLUTE path where skipDir prunes by base name, and the
+// two are not interchangeable: the census has to exclude one specific subtree
+// (<root>/app, already claimed by a marker) while keeping its siblings, and a
+// base-name predicate cannot tell <root>/app from <root>/vendor/app. nil means
+// never prune by path, which is what every caller but the census passes.
+//
+// Like skipDir it PRUNES the subtree and is never consulted for files — the same
+// prune-don't-filter property the .gitignore handling above documents, and for
+// the same reason: a file below an excluded directory is a question the walk
+// never has to ask, and asking it per-file would charge the excluded tree
+// against maxFiles.
+func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir, skipPath func(string) bool) (counts map[string]int, truncated bool) {
+	return p.sniffCountsIn(p.effectiveLanguages(dir), dir, maxDepth, maxFiles, ignoreMarkers, skipDir, skipPath)
 }
 
 // sniffCountsIn is sniffCounts against an already-resolved effective language
@@ -155,7 +166,7 @@ func (p *workspacePool) sniffCounts(dir string, maxDepth, maxFiles int, ignoreMa
 // counted AGAINST: every entry is classified by fileLanguageIn over this exact
 // slice, so the answer describes one project's enablement rather than drifting
 // as the walk crosses directories.
-func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir func(string) bool) (counts map[string]int, truncated bool) {
+func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, maxFiles int, ignoreMarkers []string, skipDir, skipPath func(string) bool) (counts map[string]int, truncated bool) {
 	counts = map[string]int{}
 	if len(langs) == 0 {
 		return counts, false
@@ -188,7 +199,7 @@ func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, 
 				continue
 			}
 			if de.IsDir() {
-				if it.depth < maxDepth && !skipDir(de.Name()) {
+				if descendInto(it.depth, maxDepth, de.Name(), abs, skipDir, skipPath) {
 					stack = append(stack, item{dir: abs, depth: it.depth + 1, st: st})
 				}
 				continue
@@ -212,6 +223,18 @@ func (p *workspacePool) sniffCountsIn(langs []langConfig, dir string, maxDepth, 
 	// maxFiles files reports truncated with nothing actually missed,
 	// which costs only a fall back to the deterministic order.
 	return counts, scanned >= maxFiles
+}
+
+// descendInto reports whether the walk should enter a child directory: within
+// the depth bound, not pruned by name, not pruned by path. Extracted from the
+// walk rather than inlined because all three questions are one decision, and
+// keeping them together is what lets a reader check the prune rules without
+// holding the stack machinery in their head at the same time.
+func descendInto(depth, maxDepth int, name, abs string, skipDir, skipPath func(string) bool) bool {
+	if depth >= maxDepth || skipDir(name) {
+		return false
+	}
+	return skipPath == nil || !skipPath(abs)
 }
 
 // bestSniffedLang picks the dominant language from a sniff count map with a

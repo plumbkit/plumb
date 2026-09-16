@@ -398,12 +398,27 @@ func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, fol
 		return LanguageNone, "", nil, nil
 	}
 	discovered = s.pool.discoverChildLanguages(folder, s.store.Current().Workspace.ChildScanDepth)
+	// A language no marker speaks for joins the set on the evidence of its own
+	// sources. Deliberately NOT gated on len(discovered) == 0, which is the gate
+	// that made the last-resort sniff below unreachable for any workspace with a
+	// single marker-carrying child: one app/tsconfig.json hid a whole Python tree.
+	// Deliberately NOT gated on ChildScanDepth either — child_scan_depth = 0 says
+	// "do not hunt for subproject markers", which is a different question from
+	// whether this root's own files name a language.
+	discovered = append(discovered, s.pool.censusMarkerlessLanguages(folder, discovered)...)
 	if len(discovered) == 0 {
-		// No strong-marker child roots. Last resort: content-sniff the root for a
+		// No strong-marker child roots and nothing the census would nominate.
+		// Last resort: content-sniff the root for a
 		// language whose source files dominate (a .py repo with no manifest) and
 		// attach it rooted at folder. Gated on the server being installed
 		// (extLangAt → the effective p.langs set); a failed acquire degrades to
 		// LanguageNone like any other.
+		//
+		// Kept as its own branch rather than folded into the census, and that is
+		// load-bearing: extLangAt applies NO threshold, so a three-file .py repo
+		// attaches python today. The census floors gate only the new "join a set
+		// someone else already populated" path, where a stray file would start a
+		// second server; the single-language repo keeps the answer it has now.
 		if sniffed := s.pool.extLangAt(folder); sniffed != "" {
 			e, err := s.pool.acquireLang(ctx, folder, sniffed, true)
 			if err == nil {
