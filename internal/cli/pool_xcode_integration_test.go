@@ -276,7 +276,9 @@ func TestIntegrationXcodeConcurrentAttachSingleflight(t *testing.T) {
 		}()
 	}
 	callers.Wait()
-	waitXcodeState(t, pool, root, xcodebsp.StateWarming)
+	// The REAL runner is driven here, so the budget is the pool's own configure
+	// timeout rather than the stubbed tests' 3s (see waitXcodeStateFor).
+	waitXcodeStateFor(t, pool, root, xcodebsp.StateWarming, cfg.Timeout.Duration)
 
 	runner.mu.Lock()
 	calls := runner.calls

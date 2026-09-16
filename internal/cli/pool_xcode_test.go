@@ -61,16 +61,114 @@ func (r *blockingXcodeRunner) snapshot() [][]string {
 
 func waitXcodeState(t *testing.T, pool *workspacePool, root string, want xcodebsp.State) xcodebsp.Status {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// Three seconds is calibrated for a STUBBED pool, where a state change that has
+	// not happened almost immediately is a bug. A test that drives the real
+	// xcodebuild / xcode-build-server path needs waitXcodeStateFor with a budget of
+	// its own — see that function.
+	return waitXcodeStateFor(t, pool, root, want, 3*time.Second)
+}
+
+// waitXcodeStateFor is waitXcodeState with a caller-chosen budget. The budget is
+// how long to WAIT, not a bound on the work: the pool's own per-subprocess
+// timeouts bound that, once per command, and the configure path runs two.
+//
+// It exists because the real configure path is not fast, and the difference is
+// machine state rather than code. The transition runs `xcodebuild -list` and
+// `xcode-build-server config` (this test's SourceKit-LSP restart is STUBBED, so no
+// restart time is in it). On the machine this was found on it took 16s cold;
+// measured again later it was 5.3s cold and 1.9-2.3s warm, with the two commands
+// at 4.3s and 2.6s on their first run. The stubbed tests' 3s was therefore a
+// machine-state-dependent flake on that path, not a verdict on the implementation
+// — and CI does not even run this test: no `xcode-build-server` is installed
+// there, so it SKIPS.
+//
+// A terminal state ends the wait immediately rather than at the deadline, so a
+// genuine failure is reported in the time the pool took to fail, with the Detail
+// that names it.
+func waitXcodeStateFor(t *testing.T, pool *workspacePool, root string, want xcodebsp.State, budget time.Duration) xcodebsp.Status {
+	t.Helper()
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		status := pool.xcodeStatus(root)
-		if status.State == want {
+		switch xcodeWaitVerdictOf(status.State, want) {
+		case xcodeWaitSatisfied:
 			return status
+		case xcodeWaitStopped:
+			t.Fatalf("Xcode state = %q (%s), want %q — the pool does not leave %q on its own",
+				status.State, status.Detail, want, status.State)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("Xcode state = %q, want %q", pool.xcodeStatus(root).State, want)
+	t.Fatalf("Xcode state = %q, want %q within %s", pool.xcodeStatus(root).State, want, budget)
 	return xcodebsp.Status{}
+}
+
+// xcodeWaitVerdict is what a wait should do with the state it just read.
+type xcodeWaitVerdict int
+
+const (
+	// xcodeWaitAgain: the pool is still working towards a state it can reach.
+	xcodeWaitAgain xcodeWaitVerdict = iota
+	// xcodeWaitSatisfied: the wanted state arrived.
+	xcodeWaitSatisfied
+	// xcodeWaitStopped: the pool has stopped somewhere else and will not move.
+	xcodeWaitStopped
+)
+
+// xcodeWaitVerdictOf answers whether a wait for want should return, fail, or keep
+// polling. It is a pure function so the decision is table-testable: a wait that
+// fails does so through t.Fatalf, which cannot be asserted from inside the test
+// that is failing.
+//
+// The WANTED state is matched first, so a test waiting FOR a terminal state
+// (StateDisabled, StateUntrusted) still gets it. StateConfigured is a stopped
+// state and not a waypoint: it is what a valid existing buildServer.json reports,
+// and only configured_needs_build_data is promoted to the restart and warm steps.
+// StateSemanticProven is the resting state after warming.
+func xcodeWaitVerdictOf(current, want xcodebsp.State) xcodeWaitVerdict {
+	if current == want {
+		return xcodeWaitSatisfied
+	}
+	switch current {
+	case xcodebsp.StateDisabled, xcodebsp.StateUntrusted, xcodebsp.StateFailed,
+		xcodebsp.StateNotApplicable, xcodebsp.StateAmbiguous,
+		xcodebsp.StateConfigured, xcodebsp.StateSemanticProven:
+		return xcodeWaitStopped
+	}
+	return xcodeWaitAgain
+}
+
+// TestXcodeWaitVerdict is the table behind waitXcodeStateFor, and it exists
+// because the stopped branch had no coverage at all: every wait in this package
+// targets the state the pool actually settles in, so the branch that reports a
+// stopped pool never ran in the suite. A mutation that emptied the stopped set
+// left everything green before this test.
+func TestXcodeWaitVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current xcodebsp.State
+		want    xcodebsp.State
+		verdict xcodeWaitVerdict
+	}{
+		{"settled", xcodebsp.StateWarming, xcodebsp.StateWarming, xcodeWaitSatisfied},
+		{"configuring is a waypoint", xcodebsp.StateConfiguring, xcodebsp.StateWarming, xcodeWaitAgain},
+		{"build data is a waypoint", xcodebsp.StateConfiguredNeedsBuildData, xcodebsp.StateWarming, xcodeWaitAgain},
+		{"restarting is a waypoint", xcodebsp.StateRestarting, xcodebsp.StateWarming, xcodeWaitAgain},
+		{"failed stops the wait", xcodebsp.StateFailed, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"configured and resting stops the wait", xcodebsp.StateConfigured, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"opted out stops the wait", xcodebsp.StateDisabled, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"untrusted stops the wait", xcodebsp.StateUntrusted, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"nothing to configure stops the wait", xcodebsp.StateNotApplicable, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"ambiguous project stops the wait", xcodebsp.StateAmbiguous, xcodebsp.StateWarming, xcodeWaitStopped},
+		{"semantic proof is a resting state", xcodebsp.StateSemanticProven, xcodebsp.StateWarming, xcodeWaitStopped},
+		// Waiting FOR a stopped state still gets it: the match runs first.
+		{"wanted disabled", xcodebsp.StateDisabled, xcodebsp.StateDisabled, xcodeWaitSatisfied},
+		{"wanted untrusted", xcodebsp.StateUntrusted, xcodebsp.StateUntrusted, xcodeWaitSatisfied},
+	} {
+		if got := xcodeWaitVerdictOf(tc.current, tc.want); got != tc.verdict {
+			t.Errorf("%s: verdictOf(%q, %q) = %d, want %d", tc.name, tc.current, tc.want, got, tc.verdict)
+		}
+	}
 }
 
 func TestPoolXcodeSingleflightUsesSafeArgvAndOneRestart(t *testing.T) {
