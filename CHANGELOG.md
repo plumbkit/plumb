@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **`workspace_symbols` no longer reports a still-starting workspace as an empty
+  one.** A URI-less symbol query that fanned out across a multi-language
+  workspace took a single non-blocking handle check per server, skipped every
+  one that was not yet warm, and — with nothing ready and nothing failed —
+  returned an empty result as a **success**. An agent asking where a symbol is
+  defined was told it does not exist, with no error to retry on and nothing to
+  say the servers were cold. The primary-only path never behaved that way: it
+  waits, then reports "still warming". Which path a workspace took depended only
+  on whether it had a discovered set.
+
+  The fan-out now waits through the same policy the primary path uses, and
+  reports the warming error when no server could answer and none failed. The
+  wait is bounded once for the whole fan-out rather than per target, so a
+  monorepo with four child roots cannot stack four warm-up windows into what
+  reads as a hang, and a cold server never suppresses results from a ready one.
+
 - **A language with no manifest is no longer invisible in a workspace that has
   one.** A repo with `app/tsconfig.json` and forty `.py` files across five
   sibling directories, and no `pyproject.toml`/`setup.py`/`pyrightconfig.json`
