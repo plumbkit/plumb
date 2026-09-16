@@ -59,6 +59,28 @@ func TestSiblingLanguages_MarkerRootSurfacesItsOtherLanguages(t *testing.T) {
 	}
 }
 
+// TestSiblingLanguages_ClaimedRootDoesNotPruneTheWholeTree is a positive control
+// for the riskiest assumption in siblingLanguages: it passes the WORKSPACE ROOT
+// itself as a claimed root, and the census prunes claimed roots from its walk.
+// If the root were tested against that prune the entire tree would be excluded,
+// the census would always answer nothing, and every other test here would still
+// pass on the strength of discoverChildLanguages alone — the failure would be
+// silent and total. The fixture therefore has NO marker-carrying child, so only
+// the census can produce this answer.
+func TestSiblingLanguages_ClaimedRootDoesNotPruneTheWholeTree(t *testing.T) {
+	pool := censusPool("go", "python")
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	writeN(t, root, "tools", "t", ".py", 30)
+
+	got := langsOf(siblingSession(t, pool, true).siblingLanguages(root, "go"))
+
+	if !contains(got, "python") {
+		t.Fatalf("siblings = %v, want python — passing the root as claimed must prune only "+
+			"that entry's own subtree matches, never the tree the walk starts from", got)
+	}
+}
+
 // TestSiblingLanguages_DefaultsToOn pins the DEFAULT, which the other tests
 // cannot: they set the flag explicitly, so flipping config.Defaults() changed no
 // assertion and the shipped behaviour was unguarded. Mutation found this.
