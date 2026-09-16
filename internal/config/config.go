@@ -179,6 +179,20 @@ type WorkspaceConfig struct {
 	// 0 disables the descent. Strong markers only; .git/.plumb/node_modules/build
 	// dirs are pruned. Default 2.
 	ChildScanDepth int `toml:"child_scan_depth"`
+	// DiscoverSiblings extends language discovery to a root that HAS a language
+	// of its own — a go.mod repo with web/tsconfig.json and a tools/ Python tree.
+	// Such a root previously acquired one server and returned, so its other
+	// languages reached no session_start line, no TUI badge, no workspace_symbols
+	// fan-out and no run_task reachability, although per-file routing served them
+	// lazily all along. The root's own marker-backed language stays the primary;
+	// the siblings are surfaced and fan out.
+	//
+	// Default true, because multi-language discovery is the documented behaviour
+	// and this was the half of it that never ran. Set false to keep the older
+	// single-language attach — the cost it buys back is a child walk plus a
+	// markerless census on every attach, which a very large single-language repo
+	// may not want to pay.
+	DiscoverSiblings bool `toml:"discover_siblings"`
 }
 
 // EditsConfig controls safety behaviour for write/edit tools. Both fields

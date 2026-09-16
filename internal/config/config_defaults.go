@@ -32,6 +32,7 @@ var defaults = Config{
 	Workspace: WorkspaceConfig{
 		AllowDependencyReads: true,
 		ChildScanDepth:       2,
+		DiscoverSiblings:     true,
 	},
 	Git: GitConfig{
 		AllowWrites:       true,
