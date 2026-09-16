@@ -315,6 +315,12 @@ type discoveredRoot struct {
 	// lessDiscovered. The zero value is false, so every marker-backed
 	// construction site keeps its meaning without naming the field.
 	sniffed bool
+	// files is how many source files the census counted for a SNIFFED entry,
+	// and is what orders one sniffed entry against another. Meaningless for a
+	// marker-backed entry, which is why election consults it only inside the
+	// sniffed tier. Carried on the entry rather than recomputed because the
+	// census has already paid for the walk and election runs after it.
+	files int
 }
 
 // discoverChildLanguages descends up to maxDepth levels below root looking for
@@ -445,6 +451,19 @@ func lessDiscovered(a, b discoveredRoot) bool {
 	// that elects a primary today.
 	if a.sniffed != b.sniffed {
 		return !a.sniffed
+	}
+	// WITHIN the sniffed tier the file count decides, and dropping it here was a
+	// regression caught in review. Language order is alphabetical, so a root whose
+	// languages are ALL sniffed — a markerless polyglot repo, exactly the shape the
+	// census exists for — elected "html" over a "python" owning three times as many
+	// files, starting vscode-html-language-server for a Django-shaped repo and
+	// leaving its sources unserved. That is the defect weakLangAt's own doc comment
+	// records as already fixed once, arriving by a new route, and it was also a
+	// silent behaviour change: before the census this path was extLangAt, which
+	// picks the DOMINANT language. Marker-backed entries never reach this clause,
+	// their files being 0 and their tier already decided.
+	if a.sniffed && a.files != b.files {
+		return a.files > b.files
 	}
 	if a.language != b.language {
 		if a.language == "go" {

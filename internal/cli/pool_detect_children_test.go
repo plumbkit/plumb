@@ -207,18 +207,53 @@ func TestElectPrimary_MarkerBeatsSniffed(t *testing.T) {
 	}
 }
 
-// TestElectPrimary_AllSniffedFallsBackToLanguageOrder: the tier decides only
-// BETWEEN tiers. With nothing marker-backed — a root whose languages were all
-// censused — the usual go-first-then-alphabetical order still picks, or the new
-// clause would have made the choice arbitrary for that workspace.
-func TestElectPrimary_AllSniffedFallsBackToLanguageOrder(t *testing.T) {
+// TestElectPrimary_AllSniffedFollowsFileCount is the regression pin for a defect
+// review caught in the first version of the census: with NO marker anywhere,
+// every entry is sniffed, and ordering the tier alphabetically elected "html"
+// over a "python" owning three times as many files — vscode-html-language-server
+// started for a Django-shaped repo, its sources unserved. That is the defect
+// weakLangAt's doc comment records as already fixed once, and it was also a
+// silent behaviour change: this path used to be extLangAt, which picks the
+// dominant language.
+//
+// Counts contradict alphabetical order deliberately, so the assertion cannot be
+// satisfied by the order it is meant to rule out.
+func TestElectPrimary_AllSniffedFollowsFileCount(t *testing.T) {
 	in := []discoveredRoot{
-		{root: "/w", language: "typescript", sniffed: true},
-		{root: "/w", language: "python", sniffed: true},
+		{root: "/w", language: "html", sniffed: true, files: 30},
+		{root: "/w", language: "python", sniffed: true, files: 100},
 	}
-	want := discoveredRoot{root: "/w", language: "python", sniffed: true}
-	if got := electPrimary(in); got != want {
-		t.Errorf("electPrimary = %+v, want %+v — within one tier the language order stands", got, want)
+	want := in[1]
+	for _, order := range [][]discoveredRoot{in, {in[1], in[0]}} {
+		if got := electPrimary(order); got != want {
+			t.Errorf("electPrimary = %+v, want the dominant python — \"html\" sorts first "+
+				"alphabetically and must not win on that", got)
+		}
+	}
+}
+
+// TestElectPrimary_SniffedTieFallsBackToLanguageOrder: the count decides only
+// when the counts DIFFER. On an equal count the usual go-first-then-alphabetical
+// order still picks, or the choice would be arbitrary for that workspace.
+func TestElectPrimary_SniffedTieFallsBackToLanguageOrder(t *testing.T) {
+	in := []discoveredRoot{
+		{root: "/w", language: "typescript", sniffed: true, files: 12},
+		{root: "/w", language: "python", sniffed: true, files: 12},
+	}
+	if got := electPrimary(in); got != in[1] {
+		t.Errorf("electPrimary = %+v, want python — on an equal count the language order stands", got)
+	}
+}
+
+// TestElectPrimary_MarkerBeatsSniffedRegardlessOfCount: the tier outranks the
+// count, not the other way round. A sniffed language owning far more files than
+// the marker-backed one still does not take the primary — otherwise the count
+// clause would quietly undo the compatibility guarantee the tier exists for.
+func TestElectPrimary_MarkerBeatsSniffedRegardlessOfCount(t *testing.T) {
+	marker := discoveredRoot{root: "/w/app", language: "typescript"}
+	sniffed := discoveredRoot{root: "/w", language: "python", sniffed: true, files: 5000}
+	if got := electPrimary([]discoveredRoot{sniffed, marker}); got != marker {
+		t.Errorf("electPrimary = %+v, want the marker-backed typescript root", got)
 	}
 }
 

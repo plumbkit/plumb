@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -123,6 +124,95 @@ func TestCensusMarkerlessLanguages_BelowShareFloor(t *testing.T) {
 	if langs := langsOf(got); contains(langs, "python") {
 		t.Fatalf("census = %v, want no python — 6 of 206 counted files is under the share "+
 			"floor, and the absolute floor alone would have admitted it", langs)
+	}
+}
+
+// TestCensusThenElect_MarkerlessPolyglotKeepsTheDominantLanguage joins the
+// census to election, which the unit tests either side of it do not: the census
+// orders by count, election re-orders, and a regression in the second silently
+// undoes the first. Review found exactly that — the sniffed tier was ordered
+// alphabetically, so this repo elected html.
+//
+// It also pins the no-silent-change property against the path this replaces:
+// before the census a markerless root went through extLangAt, so whatever
+// extLangAt answers here is what the workspace used to get, and must still get.
+func TestCensusThenElect_MarkerlessPolyglotKeepsTheDominantLanguage(t *testing.T) {
+	dir := freshTempDir(t)
+	writeN(t, dir, "svc", "a", ".py", 100)
+	writeN(t, dir, "templates", "p", ".html", 30)
+
+	p := defaultsPool(t, "python", "html")
+	before := p.extLangAt(dir)
+	if before != "python" {
+		t.Fatalf("precondition: extLangAt = %q, want python — the fixture is meant to have "+
+			"an unambiguous dominant language", before)
+	}
+
+	got := electPrimary(p.censusMarkerlessLanguages(dir, nil))
+
+	if got.language != before {
+		t.Errorf("elected %q, want %q — a markerless root must not change the language it "+
+			"attaches just because the census now nominates more than one", got.language, before)
+	}
+}
+
+// TestCensusMarkerlessLanguages_AtTheFloors pins both thresholds from ABOVE,
+// which the below-the-floor tests cannot do: they bound the constants loosely
+// from one side, so raising either would have gone unnoticed. Exactly
+// censusMinFiles files at exactly censusMinShare of the remainder must qualify.
+// 5 python files against 45 typescript ones is 5/50 — the boundary itself.
+func TestCensusMarkerlessLanguages_AtTheFloors(t *testing.T) {
+	dir := freshTempDir(t)
+	writeN(t, dir, "web", "m", ".ts", 45)
+	writeN(t, dir, "scripts", "s", ".py", 5)
+
+	got := defaultsPool(t, "typescript", "python").censusMarkerlessLanguages(dir, nil)
+
+	if !contains(langsOf(got), "python") {
+		t.Fatalf("census = %v, want python — 5 files is exactly censusMinFiles and 5/50 is "+
+			"exactly censusMinShare; the floors are inclusive", langsOf(got))
+	}
+}
+
+// TestCensusMarkerlessLanguages_UncountedFileTypesDoNotDilute: the denominator is
+// restricted to languages that could themselves be nominated. langsupport
+// recognises json/yaml/markdown, none of which has a language server, so counting
+// them would let a fixture tree veto a real nomination — 40 .py beside 400 .json
+// is 9% of everything and 100% of the code.
+func TestCensusMarkerlessLanguages_UncountedFileTypesDoNotDilute(t *testing.T) {
+	dir := freshTempDir(t)
+	writeN(t, dir, "ism", "a", ".py", 40)
+	writeN(t, dir, "fixtures", "f", ".json", 400)
+
+	got := defaultsPool(t, "python", "typescript").censusMarkerlessLanguages(dir, nil)
+
+	if !contains(langsOf(got), "python") {
+		t.Fatalf("census = %v, want python — a JSON fixture tree has no language server "+
+			"and must not dilute the share of the code", langsOf(got))
+	}
+}
+
+// TestCensusMarkerlessLanguages_PrunesClaimedSubtreeViaNonCanonicalRoot: the
+// prune compares a claimed root against paths built from the census root, so the
+// two have to agree on a spelling. Canonicalising the root once is what gives
+// that agreement; a caller reaching the census through a symlinked spelling must
+// still prune the subtree a server already covers.
+func TestCensusMarkerlessLanguages_PrunesClaimedSubtreeViaNonCanonicalRoot(t *testing.T) {
+	actual := freshTempDir(t)
+	mustWrite(t, filepath.Join(actual, "app", "tsconfig.json"), "{}")
+	writeN(t, actual, "app/scripts", "gen", ".py", 40)
+
+	link := filepath.Join(freshTempDir(t), "alias")
+	if err := os.Symlink(actual, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	claimed := []discoveredRoot{{root: filepath.Join(link, "app"), language: "typescript"}}
+	got := defaultsPool(t, "typescript", "python").censusMarkerlessLanguages(link, claimed)
+
+	if len(got) != 0 {
+		t.Fatalf("census = %v, want none — every .py sits under the claimed app/, reached "+
+			"here by a symlinked spelling of the root", langsOf(got))
 	}
 }
 
