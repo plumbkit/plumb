@@ -21,6 +21,10 @@ import (
 // threadPeer is one other participant in a thread: the stable session ID the
 // rows carry for it, plus the name a reply would address it by. The ID is the
 // binding; the name is only the address a fallback delivery uses.
+//
+// The ID is empty when every row naming this peer predates attribution, so the
+// peer is known by name alone and the reply is written unbound — the most the
+// thread can support for it.
 type threadPeer struct {
 	id   string
 	name string
@@ -103,9 +107,14 @@ func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (
 // name recorded here, and a reply bound only when the name happens to resolve
 // is written UNBOUND — claimable by whoever later draws that name. The caller
 // binds from the ID, so a rename between notes does not unpin the address.
+//
+// A peer is counted ONCE however its rows straddle attribution: an ID-bearing
+// row adopts the name-only entry already standing for that peer. Two peers that
+// genuinely share a name keep two IDs and stay two participants, which is the
+// ambiguity the caller is still told about.
 func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (participant bool, others []threadPeer) {
 	isSelf := t.selfMatcher()
-	seen := map[string]int{} // identity key -> index in others
+	byID := map[string]int{} // session ID -> index in others
 	consider := func(id, name string) {
 		name = strings.TrimSpace(name)
 		if name == "" || name == collab.AddresseeNext {
@@ -115,22 +124,7 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 			participant = true
 			return
 		}
-		// Key on the ID when there is one, so two rows for a peer that renamed
-		// collapse to one participant rather than reading as a two-peer thread.
-		key := name
-		if id != "" {
-			key = "id:" + id
-		}
-		if at, ok := seen[key]; ok {
-			// A later row carries the peer's more recent name; keep it as the
-			// address while the ID remains the binding.
-			if name != "" {
-				others[at].name = name
-			}
-			return
-		}
-		seen[key] = len(others)
-		others = append(others, threadPeer{id: id, name: name})
+		others = mergeThreadPeer(others, byID, id, name)
 	}
 
 	// A cross-project thread lives in the daemon-level store, a same-project one
@@ -166,6 +160,51 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 		}
 	}
 	return participant, others
+}
+
+// mergeThreadPeer files one row's (id, name) under the participant it belongs
+// to, returning the updated list.
+//
+// A row that predates attribution carries a name and no ID. It is the only
+// trace of a peer not yet identified, and is already accounted for otherwise —
+// so it adds a participant only when the name is new to the thread, and where
+// two peers share that name it cannot say which one it is. An ID-bearing row
+// whose peer is listed by name alone ADOPTS that entry: keyed on its own ID it
+// counted the peer twice, once by name and once by ID, and refused a reply
+// whose only other participant it was.
+func mergeThreadPeer(peers []threadPeer, byID map[string]int, id, name string) []threadPeer {
+	if id == "" {
+		if len(threadPeerIndexes(peers, name)) == 0 {
+			peers = append(peers, threadPeer{name: name})
+		}
+		return peers
+	}
+	if at, ok := byID[id]; ok {
+		// A later row carries the peer's more recent name; keep it as the
+		// address while the ID remains the binding.
+		peers[at].name = name
+		return peers
+	}
+	if at := threadPeerIndexes(peers, name); len(at) == 1 && peers[at[0]].id == "" {
+		peers[at[0]].id = id
+		peers[at[0]].name = name
+		byID[id] = at[0]
+		return peers
+	}
+	byID[id] = len(peers)
+	return append(peers, threadPeer{id: id, name: name})
+}
+
+// threadPeerIndexes names the participants currently answering to name. Two of
+// them sharing one is name reuse — a real ambiguity, not a duplicate.
+func threadPeerIndexes(peers []threadPeer, name string) []int {
+	var at []int
+	for i, peer := range peers {
+		if peer.name == name {
+			at = append(at, i)
+		}
+	}
+	return at
 }
 
 // selfMatcher answers "is this row me?" for one row's (id, name) pair.
