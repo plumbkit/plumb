@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"sort"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -39,6 +40,12 @@ func (r *routingInvProxy) owningInv(uri string) *cache.Invalidator {
 	return nil
 }
 
+// The ...For methods are the ctx-aware half of the pull-state surface, and the
+// only half the pull path uses: ctx names the CALLING logical agent, so the
+// boundary guard resolves that agent's policy rather than the pinned-root union.
+// The ctx-less methods below remain for the read surface and for sources that
+// call them without an agent to attribute (and for interface compliance).
+
 // PullResultID returns the previousResultId to send on the next
 // textDocument/diagnostic request for uri, routed to the owning workspace's
 // cache. ok is false when no result ID is known (or the URI is out of bounds).
@@ -46,6 +53,19 @@ func (r *routingInvProxy) PullResultID(uri string) (string, bool) {
 	if err := r.checkURI(uri); err != nil {
 		return "", false
 	}
+	return r.pullResultID(uri)
+}
+
+// PullResultIDFor is PullResultID for an ATTRIBUTED call: the ctx names the
+// calling agent, whose policy alone decides whether uri is in bounds.
+func (r *routingInvProxy) PullResultIDFor(ctx context.Context, uri string) (string, bool) {
+	if err := r.checkURIFor(ctx, uri); err != nil {
+		return "", false
+	}
+	return r.pullResultID(uri)
+}
+
+func (r *routingInvProxy) pullResultID(uri string) (string, bool) {
 	inv := r.owningInv(uri)
 	if inv == nil {
 		return "", false
@@ -77,6 +97,20 @@ func (r *routingInvProxy) PullGeneration(uri string) uint64 {
 	if err := r.checkURI(uri); err != nil {
 		return 0
 	}
+	return r.pullGeneration(uri)
+}
+
+// PullGenerationFor is PullGeneration for an ATTRIBUTED call. An out-of-bounds
+// uri yields 0, which mismatches every real generation and drops the record —
+// the safe direction, and it cannot smuggle state across roots.
+func (r *routingInvProxy) PullGenerationFor(ctx context.Context, uri string) uint64 {
+	if err := r.checkURIFor(ctx, uri); err != nil {
+		return 0
+	}
+	return r.pullGeneration(uri)
+}
+
+func (r *routingInvProxy) pullGeneration(uri string) uint64 {
 	inv := r.owningInv(uri)
 	if inv == nil {
 		return 0
@@ -89,8 +123,21 @@ func (r *routingInvProxy) PullGeneration(uri string) uint64 {
 // checks before reaching a cache, so a server response cannot smuggle state
 // across roots. Rejected or unroutable related URIs are intentionally omitted
 // from both returned lists and therefore cannot be rendered to the connection.
+//
+// The ctx-less form is the union-guarded fallback; the pull path uses
+// RecordPullResultFor, whose ctx names the calling agent (see
+// ctxPullStateSource in internal/tools).
 func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
-	return r.recordPullResult(uri, report, false, 0)
+	return r.recordPullResult(context.Background(), uri, report, false, 0)
+}
+
+// RecordPullResultFor is RecordPullResult for an ATTRIBUTED call. This is the
+// form the diagnostics tool and the post-write pull use, and it is what stops a
+// server-supplied relatedDocuments key under a PEER agent's shard root from
+// being recorded into that peer's cache: the calling agent's own policy does
+// not admit it, so there is no live ctx-free root it can hide behind.
+func (r *routingInvProxy) RecordPullResultFor(ctx context.Context, uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
+	return r.recordPullResult(ctx, uri, report, false, 0)
 }
 
 // RecordPullResultAt is RecordPullResult with the primary URI's record guarded
@@ -101,14 +148,19 @@ func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentD
 // keep the best-effort plain record; the primary URI (the file the query is
 // about, the one that would render clean) is what the guard protects.
 func (r *routingInvProxy) RecordPullResultAt(uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string) {
-	return r.recordPullResult(uri, report, true, gen)
+	return r.recordPullResult(context.Background(), uri, report, true, gen)
 }
 
-func (r *routingInvProxy) recordPullResult(uri string, report protocol.DocumentDiagnosticReport, checkGen bool, gen uint64) (applied, unresolved []string) {
+// RecordPullResultAtFor is the ATTRIBUTED form of RecordPullResultAt.
+func (r *routingInvProxy) RecordPullResultAtFor(ctx context.Context, uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string) {
+	return r.recordPullResult(ctx, uri, report, true, gen)
+}
+
+func (r *routingInvProxy) recordPullResult(ctx context.Context, uri string, report protocol.DocumentDiagnosticReport, checkGen bool, gen uint64) (applied, unresolved []string) {
 	appliedSet := make(map[string]struct{})
 	unresolvedSet := make(map[string]struct{})
 	record := func(uri string, report protocol.DocumentDiagnosticReport, guard bool) {
-		if err := r.checkURI(uri); err != nil {
+		if err := r.checkURIFor(ctx, uri); err != nil {
 			return
 		}
 		inv := r.owningInv(uri)

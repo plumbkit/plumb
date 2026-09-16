@@ -225,11 +225,14 @@ func (d WriteDeps) workspacePullInto(ctx context.Context, wp postWriteWorkspaceP
 	}
 	var unresolved []string
 	for _, item := range rep.Items {
-		_, itemUnresolved := rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
+		// ctx-carrying record: the write's own ctx names the logical agent, so a
+		// workspace report item lands only where THAT agent's policy admits it
+		// (see ctxPullStateSource).
+		_, itemUnresolved := recordPullResult(ctx, rec, item.URI, protocol.DocumentDiagnosticReport{
 			Kind:     item.Kind,
 			ResultID: item.ResultID,
 			Items:    item.Items,
-		})
+		}, 0, false)
 		unresolved = append(unresolved, itemUnresolved...)
 	}
 	unresolved = uniqueSortedURIs(unresolved)
