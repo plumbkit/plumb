@@ -26,18 +26,28 @@
   absolute path where `skipDir` prunes by base name — and nominates any active
   language holding both at least 5 source files and at least 10% of that
   remainder. Both floors are required: a floor alone admits eight `.py` helpers
-  in a 30k-file TypeScript monorepo, a share alone gives one stray `.py` beside
-  two `.md` files a 100% share. Nominated languages are rooted at the workspace
-  root, which is the root per-file routing already resolves for those files, so
-  discovery and routing share one server instead of starting two.
+  in a 30k-file TypeScript monorepo, a share alone lets a single `.py` file
+  qualify on the strength of the directory it sits in. The share's denominator
+  counts only languages that could themselves be nominated — `json`, `yaml` and
+  `markdown` are recognised file types with no language server, and counting
+  them let a fixture tree veto a real nomination (40 `.py` beside 400 `.json` is
+  9% of everything and 100% of the code). Nominated languages are rooted at the
+  workspace root, which is the root per-file routing already resolves for those
+  files, so discovery and routing share one server instead of starting two.
 
-  **Election order is unchanged by construction.** `discoveredRoot` gains a
-  `sniffed` flag and `lessDiscovered` puts marker-backed roots ahead of sniffed
-  ones, so no existing workspace changes its primary — without that tier a
-  sniffed `python` would outrank a marker-backed `typescript` purely
-  alphabetically. The census is independent of `child_scan_depth`, which asks a
-  different question, and the unthresholded last-resort sniff is unchanged, so a
-  small single-language markerless repo attaches exactly as before.
+  **Election order is unchanged for a workspace that has a marker.**
+  `discoveredRoot` gains a `sniffed` flag and `lessDiscovered` puts marker-backed
+  roots ahead of sniffed ones, so no existing workspace changes its primary —
+  without that tier a sniffed `python` would outrank a marker-backed `typescript`
+  purely alphabetically. Within the sniffed tier the file count decides, falling
+  back to language order only on an equal count: ordering that tier
+  alphabetically elected `html` for a markerless repo of 100 `.py` files and 30
+  `.html` templates, which is both a failure this codebase had fixed once before
+  and a silent change to what a markerless root attaches, since that path was
+  previously `extLangAt` and `extLangAt` picks the dominant language. The census
+  is independent of `child_scan_depth`, which asks a different question, and the
+  unthresholded last-resort sniff is unchanged, so a small single-language
+  markerless repo attaches exactly as before.
 
 - **`make verify` no longer passes silently while it only compiles the
   integration suite.** The target is documented across the repo as the definition
