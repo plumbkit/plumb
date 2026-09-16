@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -273,10 +274,37 @@ func TestWorkspaceSymbols_FanOutSharesOneDeadlineAcrossTargets(t *testing.T) {
 	}
 }
 
-// TestSymbolTargets_EveryDiscoveredRootBecomesATarget pins the invariant that
-// lets the warming return above be unconditional: the fan-out is only entered
-// with a non-empty discovered set, and every entry in it becomes a target, so
-// "no targets" cannot occur there.
+// TestWorkspaceSymbols_AgentRootWithNothingAttachedAnswersEmpty covers the
+// caller that makes "no targets" reachable. agentWorkspaceSymbols fans out over
+// a declared agent's own root with discovered = nil, so an agent whose root has
+// no attached server queries nothing — and must be told its workspace is empty,
+// not that it is "still warming", because there is no server to wait for.
+//
+// This case arrived from main while this branch was open: the guard it needs had
+// been removed here as unreachable, on reasoning that was true of the only
+// caller that existed at the time.
+func TestWorkspaceSymbols_AgentRootWithNothingAttachedAnswersEmpty(t *testing.T) {
+	base := t.TempDir()
+	agentRoot := filepath.Join(base, "agent")
+	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rp := newRoutingProxy(newTestPool()) // nothing attached anywhere
+
+	got, err := rp.fanOutWorkspaceSymbols(context.Background(),
+		protocol.WorkspaceSymbolParams{Query: "Fn"}, agentRoot, nil)
+	if err != nil {
+		t.Fatalf("fanOutWorkspaceSymbols: %v — with no target to query there is nothing "+
+			"warming, and an empty answer is the honest one", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("symbols = %v, want empty", stubSymNames(got))
+	}
+}
+
+// TestSymbolTargets_EveryDiscoveredRootBecomesATarget: every discovered root
+// becomes a target, so a workspace that discovered languages always has
+// something to query.
 //
 // This replaces a test that claimed to cover the no-targets case and could not:
 // it built an EMPTY discovered set, which takes the primary-only path and never
