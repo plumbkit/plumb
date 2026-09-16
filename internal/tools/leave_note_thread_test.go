@@ -267,6 +267,115 @@ func TestLeaveNote_InThreadReplyRefusesWhenAmbiguous(t *testing.T) {
 	}
 }
 
+// TestLeaveNote_ThreadReplyMergesAPeersUnattributedRows: one peer's rows can
+// straddle attribution — a note written before the ID columns existed carries
+// no AuthorID, a later one does — and both are the SAME participant.
+//
+// Keying the unattributed row on its bare name while the attributed row was
+// keyed on its session ID counted that peer twice, so a thread whose only
+// other participant it was reported two candidates and refused a reply that
+// had exactly one possible recipient.
+func TestLeaveNote_ThreadReplyMergesAPeersUnattributedRows(t *testing.T) {
+	for _, order := range []string{"unattributed first", "attributed first"} {
+		t.Run(order, func(t *testing.T) {
+			deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+			ctx := context.Background()
+			now := time.Now()
+
+			attributed := collab.NoteInput{
+				AuthorSession: "alice", AuthorID: "sess-alice",
+				Body: "opening question", Addressee: deps.SessionName(), TTL: time.Hour,
+			}
+			unattributed := collab.NoteInput{
+				AuthorSession: "alice", Body: "an older question",
+				Addressee: deps.SessionName(), TTL: time.Hour,
+			}
+			first, second := unattributed, attributed
+			if order == "attributed first" {
+				// Rows can also be READ in this order: a thread spanning the workspace
+				// store and the daemon-level one is read store by store. The guard
+				// admits this row only because the session inherits that ID, but what
+				// gets written is still an unattributed row — the shape under test.
+				unattributed.AuthorInheritedIDs = []string{"sess-alice"}
+				first, second = attributed, unattributed
+			}
+
+			conv, err := store.PutNote(ctx, first, now)
+			if err != nil {
+				t.Fatalf("seed the thread: %v", err)
+			}
+			second.ConversationID = conv
+			if _, err := store.PutNote(ctx, second, now); err != nil {
+				t.Fatalf("seed the peer's other row: %v", err)
+			}
+
+			out, err := NewLeaveNote(deps).Execute(ctx,
+				json.RawMessage(`{"body":"answering you","conversation_id":`+jsonStr(conv)+`}`))
+			if err != nil {
+				t.Fatalf("a thread reply should not error: %v", err)
+			}
+			if strings.Contains(out, "Not sent") {
+				t.Fatalf("one peer's own rows read as two participants: %q", out)
+			}
+
+			// And the reply is BOUND to that peer, not left claimable by name.
+			pending, err := store.PendingNotes(ctx,
+				collab.Claimant{Name: "alice", ID: "sess-alice"}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var found bool
+			for _, r := range pending {
+				if strings.Contains(r.Body, "answering you") {
+					found = true
+					if r.AddresseeID != "sess-alice" {
+						t.Errorf("stored AddresseeID = %q, want sess-alice; an unbound reply is claimable by a name reuser", r.AddresseeID)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("the reply never reached the peer")
+			}
+		})
+	}
+}
+
+// TestLeaveNote_ThreadReplyRefusesWhenTwoPeersShareAName guards the other side
+// of that merge: rows carrying two DIFFERENT session IDs under one name are two
+// sessions, not one peer's history, so "the other participant" has no answer.
+// Merging them on the name would bind the reply to whichever ID survived.
+func TestLeaveNote_ThreadReplyRefusesWhenTwoPeersShareAName(t *testing.T) {
+	deps, store, _ := collabTestDeps(t, CollabPolicy{Mailbox: true, IntentTTLMinutes: 120})
+	ctx := context.Background()
+	now := time.Now()
+
+	conv, err := store.PutNote(ctx, collab.NoteInput{
+		AuthorSession: "alice", AuthorID: "sess-alice-1",
+		Body: "first alice", Addressee: deps.SessionName(), TTL: time.Hour,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A note bound to a DIFFERENT session that also answers to "alice" — what a
+	// peer renaming away and someone else drawing the name looks like from here.
+	if _, err := store.PutNote(ctx, collab.NoteInput{
+		AuthorSession: deps.SessionName(), AuthorID: "sess-1",
+		Body: "for the other alice", Addressee: "alice", AddresseeID: "sess-alice-2",
+		ConversationID: conv, TTL: time.Hour,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := NewLeaveNote(deps).Execute(ctx,
+		json.RawMessage(`{"body":"to whom?","conversation_id":`+jsonStr(conv)+`}`))
+	if err != nil {
+		t.Fatalf("a refusal must not be an error: %v", err)
+	}
+	if !strings.Contains(out, "Not sent") || !strings.Contains(out, "ambiguous") {
+		t.Errorf("two sessions sharing a name must stay ambiguous; got %q", out)
+	}
+}
+
 // TestLeaveNote_ExplicitToStillWinsInAThread: naming `to` is always honoured.
 // The resolution above is a default for an omitted addressee, not an override.
 func TestLeaveNote_ExplicitToStillWinsInAThread(t *testing.T) {

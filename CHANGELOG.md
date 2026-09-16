@@ -160,6 +160,17 @@
   integration job: CI installs no `xcode-build-server`, so this test SKIPS there and
   runs only on a machine with the Xcode toolchain.
 
+- **An in-thread reply is no longer refused when one peer's rows straddle
+  attribution.** A row that predates attribution names its author without
+  identifying it, and `threadParticipants` keyed such a row on its bare name
+  while an ID-bearing row from the same peer was keyed on its session ID. One
+  peer whose notes span the two therefore read as TWO participants: a reply
+  that had exactly one possible recipient was refused as ambiguous, naming
+  "alice, alice" as the candidates. An ID-bearing row now adopts the name-only
+  entry already standing for that peer. Two peers that genuinely share a name
+  keep two IDs and stay two participants, which is the ambiguity the caller is
+  still told about.
+
 ## 0.19.4 (2026-09-16)
 
 ### Added
