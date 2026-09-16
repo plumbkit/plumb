@@ -220,7 +220,7 @@ project.
 | `allow_dependency_reads` | bool | `true` | — | Allow read/search (never write) to reach the session language's toolchain stdlib + dependency cache read-only (Go: GOMODCACHE/GOROOT; Zig: stdlib + cache; Rust: rust-src + cargo registry; Python: stdlib + site-packages; Swift: SDK; JVM: Gradle/Maven caches). TypeScript is intentionally excluded (node_modules is in-workspace). |
 | `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). Honoured from **global** config only (see below). |
 | `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). Honoured from **global** config only (see below). |
-| `child_scan_depth` | int | `2` | — | Levels below a markerless `.plumb/` root to scan for language markers in subdirectories (multi-language monorepo). `0` disables. See [Architecture → Workspace detection](architecture.md#workspace-detection). |
+| `child_scan_depth` | int | `2` | — | Levels below a markerless `.plumb/` root to scan for language markers in subdirectories (multi-language monorepo). `0` disables. Applies to **marker** discovery only: the markerless-language census is independent of this knob and is not disabled by `0`, because "do not hunt for subproject markers" and "do not look at what this root is written in" are different questions. See [Architecture → Workspace detection](architecture.md#workspace-detection). |
 
 ### Per-workspace roots (trusted grants)
 

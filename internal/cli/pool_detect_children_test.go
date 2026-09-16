@@ -188,6 +188,40 @@ func TestElectPrimary_Order(t *testing.T) {
 	}
 }
 
+// TestElectPrimary_MarkerBeatsSniffed pins the compatibility guarantee for the
+// markerless census. Language order is alphabetical, so "python" sorts ahead of
+// "typescript": without the tier a censused python would take the primary of
+// every workspace whose marker-backed primary is typescript, swapping the server
+// and the identity line of a project whose files did not move. Asserted in both
+// slice orders, because electPrimary folds left and a rule that only held when
+// the marker-backed entry happened to come first would be no rule at all.
+func TestElectPrimary_MarkerBeatsSniffed(t *testing.T) {
+	marker := discoveredRoot{root: "/w/app", language: "typescript"}
+	sniffed := discoveredRoot{root: "/w", language: "python", sniffed: true}
+
+	for _, in := range [][]discoveredRoot{{marker, sniffed}, {sniffed, marker}} {
+		if got := electPrimary(in); got != marker {
+			t.Errorf("electPrimary(%v) = %+v, want the marker-backed typescript root — "+
+				"a file count must not displace a manifest", orderedLangs(in), got)
+		}
+	}
+}
+
+// TestElectPrimary_AllSniffedFallsBackToLanguageOrder: the tier decides only
+// BETWEEN tiers. With nothing marker-backed — a root whose languages were all
+// censused — the usual go-first-then-alphabetical order still picks, or the new
+// clause would have made the choice arbitrary for that workspace.
+func TestElectPrimary_AllSniffedFallsBackToLanguageOrder(t *testing.T) {
+	in := []discoveredRoot{
+		{root: "/w", language: "typescript", sniffed: true},
+		{root: "/w", language: "python", sniffed: true},
+	}
+	want := discoveredRoot{root: "/w", language: "python", sniffed: true}
+	if got := electPrimary(in); got != want {
+		t.Errorf("electPrimary = %+v, want %+v — within one tier the language order stands", got, want)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
