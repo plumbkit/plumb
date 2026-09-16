@@ -4,6 +4,51 @@
 
 ### Fixed
 
+- **A language with no manifest is no longer invisible in a workspace that has
+  one.** A repo with `app/tsconfig.json` and forty `.py` files across five
+  sibling directories, and no `pyproject.toml`/`setup.py`/`pyrightconfig.json`
+  anywhere, resolved TypeScript and nothing else: Python reached no
+  `session_start` identity line, no TUI badge, no `workspace_symbols` fan-out and
+  no `run_task` reachability. Per-file routing had been serving those `.py` files
+  the whole time — it resolves a language from the file's own extension — so the
+  defect was one of attach-time visibility, not of routing.
+
+  Detection had two contributors that each stood down when the other had
+  answered. `discoverChildLanguages` matches strong markers in subdirectories;
+  the last-resort content sniff fires only when nothing else resolved, and it was
+  written inside an already-existing `len(discovered) == 0` branch. One
+  marker-carrying child therefore locked the sniff out of the whole workspace,
+  and a markerless language was nominated by nothing.
+
+  A new census (`censusMarkerlessLanguages`) now runs after child discovery over
+  the part of the root **no discovered marker claims** — the claimed subtrees are
+  pruned from the walk through a new nil-able `skipPath` predicate that prunes by
+  absolute path where `skipDir` prunes by base name — and nominates any active
+  language holding both at least 5 source files and at least 10% of that
+  remainder. Both floors are required: a floor alone admits eight `.py` helpers
+  in a 30k-file TypeScript monorepo, a share alone lets a single `.py` file
+  qualify on the strength of the directory it sits in. The share's denominator
+  counts only languages that could themselves be nominated — `json`, `yaml` and
+  `markdown` are recognised file types with no language server, and counting
+  them let a fixture tree veto a real nomination (40 `.py` beside 400 `.json` is
+  9% of everything and 100% of the code). Nominated languages are rooted at the
+  workspace root, which is the root per-file routing already resolves for those
+  files, so discovery and routing share one server instead of starting two.
+
+  **Election order is unchanged for a workspace that has a marker.**
+  `discoveredRoot` gains a `sniffed` flag and `lessDiscovered` puts marker-backed
+  roots ahead of sniffed ones, so no existing workspace changes its primary —
+  without that tier a sniffed `python` would outrank a marker-backed `typescript`
+  purely alphabetically. Within the sniffed tier the file count decides, falling
+  back to language order only on an equal count: ordering that tier
+  alphabetically elected `html` for a markerless repo of 100 `.py` files and 30
+  `.html` templates, which is both a failure this codebase had fixed once before
+  and a silent change to what a markerless root attaches, since that path was
+  previously `extLangAt` and `extLangAt` picks the dominant language. The census
+  is independent of `child_scan_depth`, which asks a different question, and the
+  unthresholded last-resort sniff is unchanged, so a small single-language
+  markerless repo attaches exactly as before.
+
 - **`make verify` no longer passes silently while it only compiles the
   integration suite.** The target is documented across the repo as the definition
   of "ready to commit", but it ran `build-integration` (`go vet -tags=integration
@@ -97,6 +142,23 @@
   addressee ID as well as the name. Without the ID key, a bound message — exactly the kind
   delivery matches by ID — is the one kind no wake reaches, and because `check_messages`
   with a wait blocks, a missed wake reads as "No messages" rather than as latency.
+- **The Xcode single-flight integration test no longer fails a machine that is
+  merely slow.** It waited three seconds — the budget its stubbed siblings use,
+  where a state change that has not happened almost immediately is a bug — for a
+  transition that runs the real `xcodebuild -list` and `xcode-build-server
+  config` (this test's SourceKit-LSP restart is stubbed, so none of the time is a
+  restart). That path is seconds when the toolchain is warm and can be tens of
+  seconds when it is cold: 16s measured cold here, then 5.3s cold and 1.9-2.3s
+  warm once each command had run, with the two commands at 4.3s and 2.6s on their
+  first run. The old budget was therefore a machine-state-dependent flake rather
+  than a verdict on the code. The wait helper now takes the caller's budget and
+  the integration test passes the pool's own configure timeout; it also stops
+  waiting as soon as the pool reaches a terminal state, and reports the Detail
+  that names it, instead of spending the whole budget on a failure it could
+  already see. The budget is a WAIT bound, not a bound on the work — the pool's
+  per-subprocess timeouts bound that. Worth knowing when reading a green
+  integration job: CI installs no `xcode-build-server`, so this test SKIPS there and
+  runs only on a machine with the Xcode toolchain.
 
 ## 0.19.4 (2026-09-16)
 

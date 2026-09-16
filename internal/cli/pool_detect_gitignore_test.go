@@ -134,7 +134,7 @@ func TestSniffCounts_IgnoredFilesDoNotSpendTheBudget(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "app.py"), "x = 1\n")
 	manyFiles(t, dir, "logs", "run", ".log", extScanMaxFiles+500)
 
-	counts, truncated := defaultsPool(t, "python", "html").sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir)
+	counts, truncated := defaultsPool(t, "python", "html").sniffCounts(dir, extScanDepth, extScanMaxFiles, nil, skipChildDir, nil)
 	if truncated {
 		t.Errorf("truncated = true (counts=%v) — %d ignored files spent a budget they "+
 			"should never have been charged against", counts, extScanMaxFiles+500)

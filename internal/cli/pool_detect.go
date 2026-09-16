@@ -293,7 +293,7 @@ func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, parti
 	if len(matched) == 1 {
 		return names[0]
 	}
-	counts, truncated := p.sniffCountsIn(langs, dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir)
+	counts, truncated := p.sniffCountsIn(langs, dir, tieScanDepth, tieScanMaxFiles, contestedMarkerPatterns(matched), skipTieBreakDir, nil)
 	if truncated && partial == discardPartialCount {
 		return names[0]
 	}
@@ -303,11 +303,24 @@ func (p *workspacePool) resolveMarkerTie(dir string, matched []langConfig, parti
 	return names[0]
 }
 
-// discoveredRoot pairs a subdirectory carrying a strong language root marker
-// with the language that marker names. See discoverChildLanguages.
+// discoveredRoot pairs a directory with a language detected there. See
+// discoverChildLanguages for the marker-backed ones and
+// censusMarkerlessLanguages for the sniffed ones.
 type discoveredRoot struct {
 	root     string
 	language string
+	// sniffed distinguishes a language nominated by FILE EVIDENCE (the census
+	// of the unclaimed remainder) from one nominated by a root MARKER. Only
+	// election reads it, and only to keep marker-backed roots ahead — see
+	// lessDiscovered. The zero value is false, so every marker-backed
+	// construction site keeps its meaning without naming the field.
+	sniffed bool
+	// files is how many source files the census counted for a SNIFFED entry,
+	// and is what orders one sniffed entry against another. Meaningless for a
+	// marker-backed entry, which is why election consults it only inside the
+	// sniffed tier. Carried on the entry rather than recomputed because the
+	// census has already paid for the walk and election runs after it.
+	files int
 }
 
 // discoverChildLanguages descends up to maxDepth levels below root looking for
@@ -409,12 +422,14 @@ func skipTieBreakDir(name string) bool {
 	return false
 }
 
-// electPrimary picks the connection's primary from discovered child roots, with
-// the same deterministic order newWorkspacePool sorts languages by: "go" first,
-// then alphabetical by language, tie-broken by the shorter/lexicographic root
-// path. A stable choice means workspace_symbols and the hierarchies resolve the
-// same primary across reconnects; the others attach lazily and fan-out covers
-// them. Panics on an empty slice — callers guard len(discovered) > 0.
+// electPrimary picks the connection's primary from discovered roots. The order
+// is two-tier: a MARKER-BACKED root always outranks a sniffed one, and within a
+// tier it is the same deterministic order newWorkspacePool sorts languages by —
+// "go" first, then alphabetical by language, tie-broken by the
+// shorter/lexicographic root path. A stable choice means workspace_symbols and
+// the hierarchies resolve the same primary across reconnects; the others attach
+// lazily and fan-out covers them. Panics on an empty slice — callers guard
+// len(discovered) > 0.
 func electPrimary(ds []discoveredRoot) discoveredRoot {
 	best := ds[0]
 	for _, d := range ds[1:] {
@@ -426,6 +441,37 @@ func electPrimary(ds []discoveredRoot) discoveredRoot {
 }
 
 func lessDiscovered(a, b discoveredRoot) bool {
+	// The tier comes first, ahead of the language, and that ordering IS the
+	// compatibility guarantee for the census. Language order is alphabetical, so
+	// a sniffed "python" joining a workspace whose marker-backed primary is
+	// "typescript" would silently take the primary on upgrade — a server swap and
+	// a changed identity line for a workspace whose files did not move. Evidence
+	// strength decides instead: a manifest is a declaration, a file count is an
+	// inference. Inert for any set that has no sniffed entry, which is every set
+	// that elects a primary today.
+	if a.sniffed != b.sniffed {
+		return !a.sniffed
+	}
+	// WITHIN the sniffed tier the file count decides, and dropping it here was a
+	// regression caught in review. Language order is alphabetical, so a root whose
+	// languages are ALL sniffed — a markerless polyglot repo, exactly the shape the
+	// census exists for — elected "html" over a "python" owning three times as many
+	// files, starting vscode-html-language-server for a Django-shaped repo and
+	// leaving its sources unserved. That is the defect weakLangAt's own doc comment
+	// records as already fixed once, arriving by a new route, and it was also a
+	// silent behaviour change: before the census this path was extLangAt, which
+	// picks the DOMINANT language.
+	//
+	// The a.sniffed guard is DEFENSIVE, not load-bearing: the census is the only
+	// thing that sets files, and it sets sniffed at the same time, so today every
+	// marker-backed entry has files == 0 and dropping the guard would change no
+	// answer — mutation confirms that mutant survives, and it survives because it
+	// is equivalent, not because the clause is untested. It stays because the
+	// clause is about the census's evidence, and a later marker-backed entry that
+	// carried a count for some other purpose must not start competing on it.
+	if a.sniffed && a.files != b.files {
+		return a.files > b.files
+	}
 	if a.language != b.language {
 		if a.language == "go" {
 			return true
