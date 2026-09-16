@@ -59,6 +59,60 @@ func TestSiblingLanguages_MarkerRootSurfacesItsOtherLanguages(t *testing.T) {
 	}
 }
 
+// TestSiblingLanguages_DefaultsToOn pins the DEFAULT, which the other tests
+// cannot: they set the flag explicitly, so flipping config.Defaults() changed no
+// assertion and the shipped behaviour was unguarded. Mutation found this.
+func TestSiblingLanguages_DefaultsToOn(t *testing.T) {
+	if !config.Defaults().Workspace.DiscoverSiblings {
+		t.Error("workspace.discover_siblings defaults to false — multi-language discovery " +
+			"is the documented behaviour, and this is the half that never ran")
+	}
+}
+
+// TestSiblingLanguages_MarkerChildTooSmallForTheCensus pins that CHILD MARKERS
+// are consulted, not just the census. With ten .ts files beneath it the census
+// nominates typescript on its own, so removing discoverChildLanguages entirely
+// left every other test green — the marker path was riding on the census's
+// answer. Two .ts files is below censusMinFiles, so only the marker can find it.
+func TestSiblingLanguages_MarkerChildTooSmallForTheCensus(t *testing.T) {
+	pool := censusPool("go", "typescript", "python")
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	writeN(t, root, "", "m", ".go", 40)
+	mustWrite(t, filepath.Join(root, "web", "tsconfig.json"), "{}")
+	writeN(t, root, "web/src", "c", ".ts", 2) // below the census floor
+
+	got := langsOf(siblingSession(t, pool, true).siblingLanguages(root, "go"))
+
+	if !contains(got, "typescript") {
+		t.Errorf("siblings = %v, want typescript — a manifest names a language however few "+
+			"files back it; that is what makes it a marker rather than a count", got)
+	}
+}
+
+// TestSiblingLanguages_NestedRootOfThePrimaryLanguageIsDropped: a child module
+// in the SAME language (root/go.mod plus sub/go.mod) is covered by the primary's
+// server by containment, so listing it would add a duplicate adapter and a
+// redundant fan-out target. Nothing else in this file reaches that filter — the
+// other fixtures have no same-language child — so removing it changed no test.
+func TestSiblingLanguages_NestedRootOfThePrimaryLanguageIsDropped(t *testing.T) {
+	pool := censusPool("go", "typescript", "python")
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	writeN(t, root, "", "m", ".go", 20)
+	mustWrite(t, filepath.Join(root, "sub", "go.mod"), "module x/sub\n")
+	writeN(t, root, "sub", "s", ".go", 10)
+
+	got := siblingSession(t, pool, true).siblingLanguages(root, "go")
+
+	for _, d := range got {
+		if d.language == "go" {
+			t.Errorf("siblings = %v includes a go root at %s — the primary's server is bound "+
+				"at the workspace root and already covers it", langsOf(got), d.root)
+		}
+	}
+}
+
 // TestSiblingLanguages_DisabledByConfig: the off switch actually switches it off.
 // Without this the knob would be decoration.
 func TestSiblingLanguages_DisabledByConfig(t *testing.T) {
