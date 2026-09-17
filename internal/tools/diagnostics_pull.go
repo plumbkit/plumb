@@ -72,6 +72,63 @@ type generationalPullStateSource interface {
 	RecordPullResultAt(uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string)
 }
 
+// ctxPullStateSource is the optional ctx-aware pull-record surface. The pull
+// path always holds the caller's ctx — the same one the
+// textDocument/diagnostic request was issued under — so a source that can
+// attribute a call to a logical agent takes it here.
+//
+// It is not an optimisation. On a shared connection the ctx-less surface can
+// only answer "is this URI inside SOME root pinned on this connection?", which
+// is true for a PEER agent's shard root: a server-supplied relatedDocuments key
+// (or workspace-report item) under that peer's root would be admitted and
+// recorded into the PEER's cache, while the caller is shown nothing of it. The
+// ctx names the caller, so the caller's own policy decides whether a report may
+// be recorded and into whose cache it lands (issue #499).
+type ctxPullStateSource interface {
+	PullResultIDFor(ctx context.Context, uri string) (string, bool)
+	PullGenerationFor(ctx context.Context, uri string) uint64
+	RecordPullResultFor(ctx context.Context, uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string)
+	RecordPullResultAtFor(ctx context.Context, uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string)
+}
+
+// pullResultIDFor asks rec for uri's previous result ID, through the ctx-aware
+// surface when it has one.
+func pullResultIDFor(ctx context.Context, rec pullStateSource, uri string) (string, bool) {
+	if c, ok := rec.(ctxPullStateSource); ok {
+		return c.PullResultIDFor(ctx, uri)
+	}
+	return rec.PullResultID(uri)
+}
+
+// pullGenerationFor captures the generation a record for uri must be made
+// under. ok=false means rec carries no generation guard at all, and the record
+// takes the plain (unguarded) path.
+func pullGenerationFor(ctx context.Context, rec pullStateSource, uri string) (uint64, bool) {
+	if c, ok := rec.(ctxPullStateSource); ok {
+		return c.PullGenerationFor(ctx, uri), true
+	}
+	if g, ok := rec.(generationalPullStateSource); ok {
+		return g.PullGeneration(uri), true
+	}
+	return 0, false
+}
+
+// recordPullResult writes one report to rec, preferring the ctx-aware surface
+// so the CALLING agent's policy decides whether — and into whose cache — the
+// report may be recorded.
+func recordPullResult(ctx context.Context, rec pullStateSource, uri string, rep protocol.DocumentDiagnosticReport, gen uint64, genOK bool) (applied, unresolved []string) {
+	if c, ok := rec.(ctxPullStateSource); ok {
+		if genOK {
+			return c.RecordPullResultAtFor(ctx, uri, rep, gen)
+		}
+		return c.RecordPullResultFor(ctx, uri, rep)
+	}
+	if g, ok := rec.(generationalPullStateSource); ok && genOK {
+		return g.RecordPullResultAt(uri, rep, gen)
+	}
+	return rec.RecordPullResult(uri, rep)
+}
+
 // modeFor returns the resolved diagnostics mode for uri, or "" when the opener
 // cannot report one (push behaviour).
 func (t *Diagnostics) modeFor(uri string) string {
@@ -117,14 +174,12 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 	prevID := ""
 	gen, genOK := uint64(0), false
 	if rec != nil {
-		prevID, _ = rec.PullResultID(uri)
+		prevID, _ = pullResultIDFor(ctx, rec, uri)
 		// Capture the pull-state generation BEFORE the request round-trip, so a
 		// clear that lands while the pull is in flight makes the record drop rather
 		// than re-seed a stale result ID (the whole operation belongs to one server
 		// generation; the retry below reuses the same captured value on purpose).
-		if g, ok := rec.(generationalPullStateSource); ok {
-			gen, genOK = g.PullGeneration(uri), true
-		}
+		gen, genOK = pullGenerationFor(ctx, rec, uri)
 	}
 	rep, err := pd.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
 		TextDocument:     protocol.TextDocumentIdentifier{URI: uri},
@@ -138,9 +193,9 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 	}
 	switch rep.Kind {
 	case protocol.DiagnosticReportFull:
-		return recordPullReport(rec, uri, rep, gen, genOK), nil
+		return recordPullReport(ctx, rec, uri, rep, gen, genOK), nil
 	case protocol.DiagnosticReportUnchanged:
-		recorded := recordPullReport(rec, uri, rep, gen, genOK)
+		recorded := recordPullReport(ctx, rec, uri, rep, gen, genOK)
 		if containsURI(recorded.applied, uri) {
 			return recorded, nil
 		}
@@ -153,20 +208,18 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 		if rep2 == nil || rep2.Kind != protocol.DiagnosticReportFull {
 			return pullRecordResult{}, fmt.Errorf("server answered %q for an unknown result ID and the retry did not return a full report", rep.Kind)
 		}
-		return recordPullReport(rec, uri, rep2, gen, genOK), nil
+		return recordPullReport(ctx, rec, uri, rep2, gen, genOK), nil
 	default:
 		return pullRecordResult{}, fmt.Errorf("unrecognised diagnostic report kind %q", rep.Kind)
 	}
 }
 
-func recordPullReport(rec pullStateSource, uri string, rep *protocol.DocumentDiagnosticReport, gen uint64, genOK bool) pullRecordResult {
+// recordPullReport records one report through the ctx-aware surface when rec
+// has one (see ctxPullStateSource), so the caller's policy decides the record.
+func recordPullReport(ctx context.Context, rec pullStateSource, uri string, rep *protocol.DocumentDiagnosticReport, gen uint64, genOK bool) pullRecordResult {
 	var result pullRecordResult
 	if rec != nil {
-		if g, ok := rec.(generationalPullStateSource); ok && genOK {
-			result.applied, result.unresolved = g.RecordPullResultAt(uri, *rep, gen)
-		} else {
-			result.applied, result.unresolved = rec.RecordPullResult(uri, *rep)
-		}
+		result.applied, result.unresolved = recordPullResult(ctx, rec, uri, *rep, gen, genOK)
 		return result
 	}
 	if rep.Kind == protocol.DiagnosticReportFull {
@@ -468,11 +521,14 @@ func (t *Diagnostics) allFilesPull(ctx context.Context) string {
 	}
 	var unresolved []string
 	for _, item := range rep.Items {
-		_, itemUnresolved := rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
+		// ctx-carrying record: a workspace pull for a shared connection answers
+		// from the primary server, but the items still land only where the
+		// CALLING agent's policy admits them (see ctxPullStateSource).
+		_, itemUnresolved := recordPullResult(ctx, rec, item.URI, protocol.DocumentDiagnosticReport{
 			Kind:     item.Kind,
 			ResultID: item.ResultID,
 			Items:    item.Items,
-		})
+		}, 0, false)
 		unresolved = append(unresolved, itemUnresolved...)
 	}
 	unresolved = uniqueSortedURIs(unresolved)

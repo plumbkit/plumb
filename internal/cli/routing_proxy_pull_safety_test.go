@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -60,7 +61,7 @@ func TestRoutingInvProxy_RelatedDocumentsRespectConnectionBoundary(t *testing.T)
 
 	ri := newRoutingInvProxy(pool)
 	ri.setPrimary(rootA, "go", invA)
-	ri.setBoundaryGuard(func(path string) error {
+	ri.setBoundaryGuard(func(_ context.Context, path string) error {
 		if filepath.Dir(path) == rootA {
 			return nil
 		}

@@ -14,6 +14,43 @@
   entry already standing for that peer. Two peers that genuinely share a name
   keep two IDs and stay two participants, which is the ambiguity the caller is
   still told about.
+- **The diagnostics routing proxy is guarded by workspace policies rather than
+  by root containment, and its pull records carry the caller's identity.** Three
+  defects lived in one guard, each reproduced on `main`.
+
+  It failed OPEN where the policy fails CLOSED. When a root pinned through the
+  roots-list is later swapped for a symlink to a directory containing the user's
+  home, `buildPathPolicy` refuses to build a policy and the session
+  deliberately refuses everything — yet the guard consulted the pinned root
+  STRING, and `PathWithinWorkspace` canonicalises both sides, so a
+  server-supplied `relatedDocuments` URI under `$HOME` resolved inside the
+  symlinked root and was admitted, cached and rendered.
+
+  It refused paths the connection policy admits, and that inverted a fail-safe
+  answer into a false clean. Client-granted roots (`serve --allow-dir`,
+  `PLUMB_ALLOWED_DIRS`), configured `extra_roots`/`read_roots`, the
+  workspace-roots store and dependency roots are not pinned roots, so their pull
+  records were dropped; with the cache left empty the tool answered "No issues
+  found — pulled from the language server, file is clean" for a file whose error
+  the server had just reported.
+
+  And on the ctx-less pull path it wrote into ANOTHER agent's cache. A shared
+  connection's ctx-less record could only ask "is this URI under some root pinned
+  here?", which is true for a peer agent's shard root, and each URI is recorded
+  into the invalidator that OWNS it — so a server-supplied related URI under a
+  peer's root landed in the peer's cache while the caller was shown nothing. This
+  is the one an independent review of #492 found reachable through
+  server-supplied URIs the tool's ctx-aware entry guard never sees.
+
+  The guard is now the union of the connection's policy and every shard policy:
+  a refused policy contributes nothing (fail closed), and every configured
+  admission lives inside a policy (no false clean). The pull-record path —
+  where the server-supplied URIs enter — additionally threads the caller's ctx
+  through a new `ctxPullStateSource` extension, mirroring
+  `generationalPullStateSource`, so the CALLING agent's policy alone decides
+  whether a report may be recorded and into whose cache. A refusal there is not
+  recorded as a session health violation, because the path was named by the
+  language server rather than by the caller.
 
 ## 0.20.0 (2026-09-17)
 
@@ -56,7 +93,6 @@
   New `[workspace] discover_siblings`, default `true`. Set it `false` for the
   older single-language attach, which buys back a child walk and a census on
   every attach.
-
 - **A language with no manifest is no longer invisible in a workspace that has
   one.** A repo with `app/tsconfig.json` and forty `.py` files across five
   sibling directories, and no `pyproject.toml`/`setup.py`/`pyrightconfig.json`

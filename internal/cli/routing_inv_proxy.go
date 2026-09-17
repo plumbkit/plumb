@@ -28,7 +28,13 @@ type routingInvProxy struct {
 	primaryRoot string
 	primaryLang string
 	primary     *cache.Invalidator
-	guard       func(string) error
+	// guard is the ctx-aware workspace boundary guard. The ctx matters: the
+	// pull-RECORD path passes the calling agent's ctx, so its own policy decides
+	// whether a report — including a server-supplied relatedDocuments key — may
+	// enter a cache; the ctx-less cached-read surface passes context.Background,
+	// which resolves to the pinned-policy union (see
+	// connSession.invProxyBoundaryGuard).
+	guard func(context.Context, string) error
 	// workspaceFn resolves the CALLING logical agent's pinned workspace, or "".
 	// The whole-workspace (URI-less) aggregate uses it to scope the result to the
 	// calling agent's project instead of the connection's attach-time primary.
@@ -39,11 +45,15 @@ func newRoutingInvProxy(pool *workspacePool) *routingInvProxy {
 	return &routingInvProxy{pool: pool}
 }
 
-// setBoundaryGuard wires the per-connection workspace boundary guard. Mirrors
+// setBoundaryGuard wires the per-call workspace boundary guard. Mirrors
 // routingProxy.setBoundaryGuard so cross-workspace diagnostics queries cannot
 // reach another acquired adapter through the routing fallback path. Defence in
-// depth: the diagnostics tool already enforces the boundary at its entry.
-func (r *routingInvProxy) setBoundaryGuard(guard func(string) error) {
+// depth: the diagnostics tool already enforces the boundary at its entry for
+// every URI the CALLER names — which is why the guard must be ctx-aware here:
+// the pull-record path also sees URIs the SERVER named (relatedDocuments keys,
+// workspace-report items) and those must be judged against the calling agent's
+// policy, not against every root any agent on this connection pinned.
+func (r *routingInvProxy) setBoundaryGuard(guard func(context.Context, string) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = guard
@@ -57,10 +67,21 @@ func (r *routingInvProxy) setWorkspaceFn(fn func(context.Context) string) {
 	r.workspaceFn = fn
 }
 
-// checkURI applies the boundary guard to uri's path. Empty uri is allowed
-// (callers treat "" as the workspace-aggregate request). Returns nil when no
-// guard is set or when uri is in-bounds.
+// checkURI applies the boundary guard to uri's path with NO attributable
+// caller. The ctx-less cached-read surface (Tracked, Diagnostics) is the only
+// caller: context.Background carries no logical agent, so the guard resolves it
+// to the connection's pinned-policy union rather than any one agent's policy.
+// Empty uri is allowed (callers treat "" as the workspace-aggregate request).
+// Returns nil when no guard is set or when uri is in-bounds.
 func (r *routingInvProxy) checkURI(uri string) error {
+	return r.checkURIFor(context.Background(), uri)
+}
+
+// checkURIFor is checkURI under the caller's ctx. Every path that has one uses
+// this form: the guard then resolves the CALLING agent's policy, so a URI the
+// server supplied under a peer's root cannot be read from — or recorded into —
+// that peer's cache.
+func (r *routingInvProxy) checkURIFor(ctx context.Context, uri string) error {
 	if uri == "" {
 		return nil
 	}
@@ -70,7 +91,7 @@ func (r *routingInvProxy) checkURI(uri string) error {
 	if guard == nil {
 		return nil
 	}
-	return guard(paths.URIToPath(uri))
+	return guard(ctx, paths.URIToPath(uri))
 }
 
 // timedDiagnosticsContract mirrors internal/tools' timedDiagnosticsSource
@@ -358,7 +379,7 @@ func aggregateTimesUnder(entries []*poolEntry, root string) map[string]time.Time
 }
 
 func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
-	if err := r.checkURI(uri); err != nil {
+	if err := r.checkURIFor(ctx, uri); err != nil {
 		return nil, err
 	}
 	inv := r.resolveInv(uri)
@@ -369,7 +390,7 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 }
 
 func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
-	if err := r.checkURI(uri); err != nil {
+	if err := r.checkURIFor(ctx, uri); err != nil {
 		return nil, err
 	}
 	inv := r.resolveInv(uri)

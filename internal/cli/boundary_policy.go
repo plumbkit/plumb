@@ -129,17 +129,30 @@ func (s *connSession) declarationRefusedErr(ctx context.Context) error {
 // boundaryCheck is the shared body: an empty path is a no-op, a nil policy fails
 // closed (unattached), and a policy verdict records a violation and refuses.
 func (s *connSession) boundaryCheck(pol *tools.PathPolicy, path string, want tools.Access) error {
+	err := s.boundaryVerdict(pol, path, want)
+	// The unattached refusal is deliberately NOT recorded — see checkBoundary.
+	if err != nil && pol != nil {
+		s.markBoundaryViolation(err.Error())
+	}
+	return err
+}
+
+// boundaryVerdict is boundaryCheck's decision without the side effect: an empty
+// path is a no-op, a nil policy fails closed (unattached workspace), and
+// otherwise the policy decides. Split out because the diagnostics INV proxy's
+// guard must refuse a path WITHOUT flipping the session to "Health: blocked":
+// the URIs it checks include ones the LANGUAGE SERVER supplied, and a server
+// naming a related document outside the caller's boundary is not this session's
+// boundary violation to record (issue #499).
+func (s *connSession) boundaryVerdict(pol *tools.PathPolicy, path string, want tools.Access) error {
 	if path == "" {
 		return nil
 	}
 	if pol == nil {
 		return tools.ClassifyPathRefusal(tools.UnattachedWorkspaceError{Path: path})
 	}
-	if _, err := pol.Check(path, want); err != nil {
-		s.markBoundaryViolation(err.Error())
-		return err
-	}
-	return nil
+	_, err := pol.Check(path, want)
+	return err
 }
 
 // outsideWorkspaceLabel returns a short label when path resolves under a
@@ -159,38 +172,81 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 	return s.view().policy
 }
 
-// pinnedRootsGuard refuses a path under NO workspace root pinned on this
-// connection — neither the connection's own root nor any logical agent's shard
-// root.
+// invProxyBoundaryGuard is the diagnostics routing INV proxy's boundary guard,
+// and it answers two different questions depending on what it is handed.
 //
-// It is the diagnostics routing INV proxy's guard, and it is deliberately
-// weaker than a per-agent policy. That proxy sits BEHIND the diagnostics tool's
-// ctx-aware entry boundary, which has already checked every requested URI
-// against the CALLING agent's policy, so its own check is defence in depth. A
-// plain connection-policy guard here is what made a declared agent's own
-// diagnostics query fail with "this connection is pinned to <another project>"
-// whenever the connection's default pin named a different root. The union keeps
-// the refusal for a path under no pinned root without re-refusing a root some
-// agent on this connection legitimately owns.
+// An ATTRIBUTED call — one whose ctx names a logical agent, which is every
+// pull-RECORD call the tool makes — is checked against that caller's policy
+// alone, and the refusal is NOT recorded as a session health violation. The
+// policy is the caller's because the URIs crossing this path are not all the
+// caller's: relatedDocuments keys and workspace-report items come from the
+// LANGUAGE SERVER. Checking those against the union of every root pinned on
+// this connection (the pre-#499 behaviour) let a server-supplied URI under a
+// PEER agent's shard root be admitted and recorded into that PEER's cache while
+// the caller was shown nothing — the peer's own policy is the one that admits
+// it, and a union cannot tell "my root" from "another agent's root". Not
+// recording is deliberate too: the diagnostics tool's ctx-aware entry guard
+// already records a violation for every URI the CALLER named, and a server
+// naming a related document across a boundary is not this session's violation
+// to flag.
 //
-// The ctx-less pull-recording methods (RecordPullResult and friends) are the
-// reason this is not ctx-aware: their interface carries no context, and
-// threading one through internal/cache would be a far larger change for a
-// defence-in-depth check the entry guard already makes.
-func (s *connSession) pinnedRootsGuard(path string) error {
+// An UNATTRIBUTED call — the proxy's ctx-less cached-read surface, which has no
+// agent to name — falls to pinnedPolicyGuard's union. See that function for why
+// the union is a POLICY union and not the raw root containment it replaced.
+func (s *connSession) invProxyBoundaryGuard(ctx context.Context, path string) error {
+	if mcp.LogicalAgentFromCtx(ctx) != "" {
+		return s.boundaryVerdict(s.policyFor(ctx), path, tools.AccessRead)
+	}
+	return s.pinnedPolicyGuard(path)
+}
+
+// pinnedPolicyGuard refuses a path admitted by NO path policy pinned on this
+// connection — neither the connection's own policy nor any logical agent's
+// shard policy.
+//
+// It is the INV proxy's guard for the ctx-less half of its surface, and it is
+// deliberately weaker than a per-agent policy: a plain connection-policy guard
+// here is what made a declared agent's own diagnostics query fail with "this
+// connection is pinned to <another project>" whenever the connection's default
+// pin named a different root. The union keeps the refusal for a path under no
+// pinned root without re-refusing a root some agent on this connection
+// legitimately owns.
+//
+// It consults POLICIES, not roots, and both halves of that are load-bearing
+// (issue #499):
+//
+//   - A root whose policy could NOT be built contributes nothing. That is the
+//     #306 refusal: the pinned directory was swapped for a symlink to a
+//     home-containing one, buildPathPolicy logged and returned nil, and the
+//     session deliberately refuses everything. The raw containment this
+//     replaced canonicalised the root STRING and the path together, so it
+//     admitted ~/.ssh/id_ed25519 through the symlinked root at the very moment
+//     the policy had refused to name a boundary at all — fail OPEN exactly
+//     where the policy fails CLOSED.
+//   - Every configured admission lives INSIDE the policies. Client-granted
+//     roots (serve --allow-dir / PLUMB_ALLOWED_DIRS), configured
+//     extra_roots/read_roots, the workspace-roots store and dependency roots
+//     are not pinned roots, so containment against the pinned roots alone
+//     dropped their pull records — which the pull path renders as "No issues
+//     found": a FALSE CLEAN for a client-named path the connection policy
+//     admits.
+func (s *connSession) pinnedPolicyGuard(path string) error {
 	if path == "" {
 		return nil
 	}
-	roots := []string{s.workspace()}
+	policies := []*tools.PathPolicy{s.boundaryPolicy()}
 	s.shardsMu.Lock()
 	for _, sh := range s.shards {
 		sh.mu.RLock()
-		roots = append(roots, sh.root)
+		policies = append(policies, sh.policy)
 		sh.mu.RUnlock()
 	}
 	s.shardsMu.Unlock()
-	for _, root := range roots {
-		if root != "" && tools.PathWithinWorkspace(root, path) {
+	for _, pol := range policies {
+		if pol == nil {
+			continue
+		}
+		if _, err := pol.Check(path, tools.AccessRead); err == nil {
 			return nil
 		}
 	}
