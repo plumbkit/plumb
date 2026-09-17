@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.1 (2026-09-17)
 
 ### Fixed
 
@@ -51,6 +51,10 @@
   whether a report may be recorded and into whose cache. A refusal there is not
   recorded as a session health violation, because the path was named by the
   language server rather than by the caller.
+
+### Changed
+
+- **Dependencies:** Updated `modernc.org/sqlite` to `v1.59.0` (core), and `tailwindcss` to `4.3.3` and `uplot` to `1.6.32` (web UI).
 
 ## 0.20.0 (2026-09-17)
 
