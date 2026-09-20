@@ -370,3 +370,22 @@ func (s *connSession) linkExternalID(externalID string) string {
 		"inherited", prev.Name, "err", err)
 	return ""
 }
+
+// stampChannelState is session_start's view of the per-call identity channel,
+// observed on THIS call rather than assumed from a hook being installed.
+// session_start is stamped like any other plumb tool when the channel works, so
+// an unstamped arrival here is the SAME absence refuse will reject a write on —
+// which is why it can be reported at orientation instead of at the first refused
+// write (PLAN-440 acceptance b).
+//
+// Shared is read through sharedWith rather than restated, so the note and the
+// gate cannot drift apart: when no identity is carried — the only case where
+// Shared is consulted at all, since a stamped call short-circuits before it —
+// sharedWith("") reduces to len(seen) > 1, which is exactly refuse's own
+// predicate. A named method rather than a closure so the parity is testable;
+// PLAN-440 item 1 is the standing lesson that a gate nobody derives a test from
+// is a gate that silently loses coverage.
+func (s *connSession) stampChannelState(ctx context.Context) tools.StampChannelState {
+	id := mcp.LogicalAgentFromCtx(ctx)
+	return tools.StampChannelState{Shared: s.logicalAgents.sharedWith(id), PerCallStamped: id != ""}
+}

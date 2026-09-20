@@ -277,17 +277,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return tools.LinkageState{ExternalID: s.externalID(), Recovery: string(s.recovery())}
 		}).
 		WithResumedNewIdentity(func() bool { return s.view().resumedNewIdentity }).
-		// The per-call identity channel, observed on THIS call rather than
-		// assumed from the hook being installed. session_start is stamped like
-		// any other plumb tool when the channel works, so an unstamped arrival
-		// here is the same absence the write gate will refuse on — reported at
-		// orientation instead of at the first refused write (PLAN-440 (b)).
-		// sharedWith asks the same hypothetical question refuse does, so the
-		// two cannot disagree about whether the gate is armed.
-		WithStampChannel(func(ctx context.Context) tools.StampChannelState {
-			id := mcp.LogicalAgentFromCtx(ctx)
-			return tools.StampChannelState{Shared: s.logicalAgents.sharedWith(id), PerCallStamped: id != ""}
-		}).
+		WithStampChannel(s.stampChannelState).
 		WithExternalID(s.linkExternalID))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
