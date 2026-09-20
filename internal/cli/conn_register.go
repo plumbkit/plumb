@@ -205,7 +205,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPinProvenance(s.pinProvenance).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithAgentIdentity(s.rosterIdentity).WithBoundary(boundary).
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
+		WithAgentIdentity(s.rosterIdentity).
+		WithAgentName(s.addressableNameFor).
+		WithCollabStoreFor(s.collabStoreIfExistsForWorkspace).
 		WithInheritedSessions(s.inheritedSessionIDs).
 		WithTopology(topoFn).
 		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).

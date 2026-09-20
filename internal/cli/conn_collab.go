@@ -33,6 +33,19 @@ func (s *connSession) collabStoreCreate() *collab.Store {
 	return s.collabPool.acquire(ws)
 }
 
+// collabStoreFor returns the calling agent's workspace collab store, creating it
+// on first use.
+func (s *connSession) collabStoreFor(ctx context.Context) *collab.Store {
+	if s.collabPool == nil {
+		return nil
+	}
+	ws := s.workspaceFor(ctx)
+	if ws == "" {
+		return nil
+	}
+	return s.collabPool.acquire(ws)
+}
+
 // collabStoreIfExists returns the workspace's collab store ONLY when collab.db
 // already exists on disk (never creating one), so read/hint/close paths cannot
 // materialise a database for a workspace that never used the feature.
@@ -45,6 +58,28 @@ func (s *connSession) collabStoreIfExists() *collab.Store {
 		return nil
 	}
 	return s.collabPool.get(ws)
+}
+
+// collabStoreIfExistsFor returns the calling agent's workspace collab store only
+// when it already exists on disk.
+func (s *connSession) collabStoreIfExistsFor(ctx context.Context) *collab.Store {
+	if s.collabPool == nil {
+		return nil
+	}
+	ws := s.workspaceFor(ctx)
+	if ws == "" {
+		return nil
+	}
+	return s.collabPool.get(ws)
+}
+
+// collabStoreIfExistsForWorkspace returns the collab store for a workspace root
+// only when it already exists on disk.
+func (s *connSession) collabStoreIfExistsForWorkspace(workspace string) *collab.Store {
+	if s.collabPool == nil || workspace == "" {
+		return nil
+	}
+	return s.collabPool.get(workspace)
 }
 
 // collabPolicy resolves the connection's [collab] intents/mailbox snapshot for
@@ -169,11 +204,16 @@ func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 func (s *connSession) collabDeps() tools.CollabDeps {
 	return tools.CollabDeps{
 		Workspace:                s.workspace,
+		WorkspaceFor:             s.workspaceFor,
 		SessionName:              s.sessionName,
+		SessionNameFor:           s.sessionNameFor,
 		SessionID:                s.sessionID,
+		SessionIDFor:             s.sessionIDFor,
 		Policy:                   s.collabPolicy,
 		Store:                    s.collabStoreCreate,
+		StoreFor:                 s.collabStoreFor,
 		StoreIfExists:            s.collabStoreIfExists,
+		StoreIfExistsFor:         s.collabStoreIfExistsFor,
 		GlobalStore:              s.collabGlobalCreate,
 		GlobalStoreIfExists:      s.collabGlobalIfExists,
 		Notifier:                 s.collabPool.notifier(),
@@ -193,13 +233,18 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 // claiming that peer's messages, which are delivered exactly once and would
 // simply never arrive. Inbox.Claim treats an empty Self as "mailbox off".
 func (s *connSession) inbox() tools.Inbox {
+	return s.inboxFor(context.Background())
+}
+
+// inboxFor returns the message inbox for the calling agent in ctx.
+func (s *connSession) inboxFor(ctx context.Context) tools.Inbox {
 	return tools.Inbox{
-		Self:         s.addressableName(),
-		SelfID:       s.sessionID(),
+		Self:         s.addressableNameFor(ctx),
+		SelfID:       s.sessionIDFor(ctx),
 		InheritedIDs: s.inheritedSessionIDs(),
-		Root:         s.workspace(),
+		Root:         s.workspaceFor(ctx),
 		Policy:       s.collabPolicy(),
-		Workspace:    s.collabStoreIfExists,
+		Workspace:    func() *collab.Store { return s.collabStoreIfExistsFor(ctx) },
 		Global:       s.collabGlobalIfExists,
 	}
 }

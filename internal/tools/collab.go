@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -128,11 +129,17 @@ func (p CollabPolicy) maxWaitSeconds() int {
 type CollabDeps struct {
 	// Workspace returns the connection's pinned workspace root ("" pre-attach).
 	Workspace func() string
+	// WorkspaceFor returns the calling agent's workspace root per call.
+	WorkspaceFor func(ctx context.Context) string
 	// SessionName returns this session's display name (the author label).
 	SessionName func() string
+	// SessionNameFor returns the calling agent's session name per call.
+	SessionNameFor func(ctx context.Context) string
 	// SessionID is this session's stable ID (intent replace + session-end clear).
 	// An accessor, so an ID adopted during initialize (PLAN-296) is seen live.
 	SessionID func() string
+	// SessionIDFor returns the calling agent's session ID per call.
+	SessionIDFor func(ctx context.Context) string
 	// Policy returns the resolved [collab] snapshot.
 	Policy func() CollabPolicy
 	// Store opens (creating on first use) the workspace's collab.db and returns
@@ -140,10 +147,14 @@ type CollabDeps struct {
 	// The collab write tools are the ONLY paths that create collab.db, so a
 	// workspace whose intents+mailbox flags stay off never gets one.
 	Store func() *collab.Store
+	// StoreFor opens the calling agent's workspace collab.db per call.
+	StoreFor func(ctx context.Context) *collab.Store
 	// StoreIfExists returns the workspace's collab.db ONLY when it already exists,
 	// never creating it — the accessor every read and delivery path must use so a
 	// workspace that has not used the feature stays clean. May be nil.
 	StoreIfExists func() *collab.Store
+	// StoreIfExistsFor returns the calling agent's workspace collab.db if it exists.
+	StoreIfExistsFor func(ctx context.Context) *collab.Store
 	// GlobalStore opens (creating on first use) the daemon-level cross-project
 	// store. Only the send path calls it, and only once a message is known to
 	// cross a project boundary, so a daemon whose sessions never talk across
@@ -174,12 +185,64 @@ type CollabDeps struct {
 	TargetAllowsCrossProject func(workspace string) bool
 }
 
-// sessionID returns the session ID, or "" when unwired (tests / pre-registration).
-func (d CollabDeps) sessionID() string {
-	if d.SessionID == nil {
-		return ""
+func (d CollabDeps) workspace(ctx ...context.Context) string {
+	if len(ctx) > 0 && ctx[0] != nil && d.WorkspaceFor != nil {
+		if ws := d.WorkspaceFor(ctx[0]); ws != "" {
+			return ws
+		}
 	}
-	return d.SessionID()
+	if d.Workspace != nil {
+		return d.Workspace()
+	}
+	return ""
+}
+
+func (d CollabDeps) sessionName(ctx ...context.Context) string {
+	if len(ctx) > 0 && ctx[0] != nil && d.SessionNameFor != nil {
+		if name := d.SessionNameFor(ctx[0]); name != "" {
+			return name
+		}
+	}
+	if d.SessionName != nil {
+		return d.SessionName()
+	}
+	return ""
+}
+
+func (d CollabDeps) sessionID(ctx ...context.Context) string {
+	if len(ctx) > 0 && ctx[0] != nil && d.SessionIDFor != nil {
+		if id := d.SessionIDFor(ctx[0]); id != "" {
+			return id
+		}
+	}
+	if d.SessionID != nil {
+		return d.SessionID()
+	}
+	return ""
+}
+
+func (d CollabDeps) store(ctx ...context.Context) *collab.Store {
+	if len(ctx) > 0 && ctx[0] != nil && d.StoreFor != nil {
+		if s := d.StoreFor(ctx[0]); s != nil {
+			return s
+		}
+	}
+	if d.Store != nil {
+		return d.Store()
+	}
+	return nil
+}
+
+func (d CollabDeps) storeIfExists(ctx ...context.Context) *collab.Store {
+	if len(ctx) > 0 && ctx[0] != nil && d.StoreIfExistsFor != nil {
+		if s := d.StoreIfExistsFor(ctx[0]); s != nil {
+			return s
+		}
+	}
+	if d.StoreIfExists != nil {
+		return d.StoreIfExists()
+	}
+	return nil
 }
 
 // PeerSession is a live peer session resolved by name.

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Logical agents on shared connections are now addressable for mail and
+  display their own inboxes.** A logical agent holding a roster row is now
+  addressable by its own name in `leave_note` and `check_messages`, preventing
+  peer agents on the same connection from claiming its notes. In addition,
+  `workspace_sessions` mailbox block reports the calling agent's pending notes
+  rather than the connection's. (#472)
+
 - **A commit through `git` now stamps the calling agent's name in the
   `Plumb-Session` trailer, not its connection.** When multiple logical agents
   share a connection, each agent with its own workspace pin holds its own
@@ -82,8 +89,9 @@
   asked `WriteToolNames`, a list assembled for the recent-writes *feed*, where
   omitting a tool costs a missing line in a listing. Reused as a gate the same
   omission means an unattributable call runs — so `undo_edit`, `write_memory`,
-  `delete_memory`, `run_command`, `run_task`, `rename_session`, `git_init` and
-  the collab writes were all ungated.
+  `delete_memory`, `run_command`, `run_task`, `mutation_test`, `rename_session`,
+  `git_init`, `agent_config`, `share_findings` and the collab writes were all
+  ungated.
 
   The gate now owns its own set, and a contract test derives the universe from
   the live tool registration: every registered tool must be classified as
@@ -144,6 +152,34 @@
   from outside any connection, naming the affected sessions so they can be
   found. It warns rather than fails: a shared connection is a supported
   topology whose guard is working, not a broken installation. (PLAN-440)
+
+- **Sequential conversations over one `plumb serve` no longer read as a shared
+  connection.** The durable record of which agents were multiplexed counted any
+  id ever seen under a proxy session. A long-lived serve — Claude Desktop keeps
+  one per install — accumulates a declaration per conversation, so a user's
+  conversation *history* armed the fail-closed ceiling and refused a
+  single-agent user's writes on every reconnect. The evidence is now bounded to
+  a concurrency window, so agents that declared close together still re-arm it
+  and yesterday's conversations do not.
+- **An agent's own session row no longer claims its conversation's linkage, and
+  is kept fresh.** The row registered for an agent working outside its
+  connection's root carried the conversation's `ExternalID`, which
+  `plumb mail --external-id` and `session.FindEnded` both match on without
+  filtering child rows — so the idle-agent wake hook became ambiguous and a
+  reconnecting conversation could adopt the child row's generated name. The row
+  also went untouched by that agent's calls, advertising it as idle from the
+  moment it pinned. Both fixed; the agent stays addressable by its name.
+- **`session_start` no longer consumes mail for a caller `check_messages` would
+  refuse.** Exactly-once delivery is why `check_messages` is gated on a shared
+  connection, but `session_start`'s own Messages block performed the identical
+  claim and cannot be gated without making identity undeclarable. The gate was
+  doing half a job: blocking the legitimate read while orientation kept
+  consuming other agents' mail. The claim now honours the same rule.
+- **The roster row is no longer registered while holding the agent's shard
+  lock.** Registering a row flocks the session directory; doing that under
+  `sh.mu` let one agent's disk I/O stall every other agent on the connection,
+  because a peer's ordinary call blocks on that shard's lock while holding the
+  shard map's.
 
 ## 0.20.1 (2026-09-17)
 

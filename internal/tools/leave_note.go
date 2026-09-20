@@ -106,7 +106,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "leave_note is disabled — set [collab] mailbox = true (globally or in this " +
 			"workspace's .plumb/config.toml) to leave notes for peers.", nil
 	}
-	ws := t.deps.Workspace()
+	ws := t.deps.workspace(ctx)
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
@@ -188,7 +188,7 @@ type noteTarget struct {
 // back, which is better than being read by whoever inherits the name.
 func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (noteTarget, error) {
 	if to == collab.AddresseeNext {
-		return t.localTarget()
+		return t.localTarget(ctx)
 	}
 	peer, found := PeerSession{}, false
 	if t.deps.ResolvePeer != nil {
@@ -224,7 +224,7 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 			origin: ws, addresseeID: peer.ID,
 		}, nil
 	}
-	local, err := t.localTarget()
+	local, err := t.localTarget(ctx)
 	if err != nil {
 		return local, err
 	}
@@ -233,8 +233,8 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 	return local, nil
 }
 
-func (t *LeaveNote) localTarget() (noteTarget, error) {
-	store := t.deps.Store()
+func (t *LeaveNote) localTarget(ctx context.Context) (noteTarget, error) {
+	store := t.deps.store(ctx)
 	if store == nil {
 		return noteTarget{}, errors.New("leave_note: cross-agent store unavailable for this workspace")
 	}
@@ -279,8 +279,8 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 		inherited = t.deps.InheritedSessionIDs()
 	}
 	in := collab.NoteInput{
-		AuthorSession: t.deps.SessionName(),
-		AuthorID:      t.deps.sessionID(),
+		AuthorSession: t.deps.sessionName(ctx),
+		AuthorID:      t.deps.sessionID(ctx),
 		// A restarted session must still be able to reply into the threads its
 		// predecessor was in; the store's membership guard keys on identity, and
 		// these are the identities this session provably continues.
@@ -327,7 +327,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	// the ADDRESSEE ID too: a message that #479 bound to a live session is
 	// delivered by ID, and the name recorded in the thread can be stale after a
 	// rename, so a name-only key leaves exactly those bound rows unwoken.
-	keys := []string{collab.NotifyKey(t.deps.Workspace(), args.To)}
+	keys := []string{collab.NotifyKey(t.deps.workspace(ctx), args.To)}
 	if target.addresseeID != "" {
 		keys = append(keys, target.addresseeID)
 	}

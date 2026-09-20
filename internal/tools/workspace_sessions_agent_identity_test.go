@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/session"
 )
 
@@ -87,5 +89,81 @@ func TestRosterWithoutAgentIdentityStaysConnectionScoped(t *testing.T) {
 	}
 	if !strings.Contains(out, conn.Name+" (you)") {
 		t.Errorf("unwired, the connection's own row must still be marked (you), got:\n%s", out)
+	}
+}
+
+// TestMailboxReportsForTheCallingAgentNotTheConnection proves that on a shared
+// connection, workspace_sessions' mailbox block reports notes for the calling
+// agent rather than the connection.
+func TestMailboxReportsForTheCallingAgentNotTheConnection(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := t.TempDir()
+	worktree := t.TempDir()
+
+	conn := registerRow(t, parent, "", "")
+	agent := registerRow(t, worktree, conn.ID, "sub")
+
+	store, err := collab.Open(worktree)
+	if err != nil {
+		t.Fatalf("open collab store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Now()
+	// Leave a note addressed to the connection session name.
+	if _, err := store.PutNote(t.Context(), collab.NoteInput{
+		Addressee:     conn.Name,
+		Body:          "note for coordinator",
+		AuthorSession: "peer",
+		AuthorID:      "peer-id",
+		TTL:           time.Hour,
+	}, now); err != nil {
+		t.Fatalf("PutNote conn: %v", err)
+	}
+
+	// Leave a note addressed to the agent's session name.
+	if _, err := store.PutNote(t.Context(), collab.NoteInput{
+		Addressee:     agent.Name,
+		Body:          "note for subagent",
+		AuthorSession: "peer",
+		AuthorID:      "peer-id",
+		TTL:           time.Hour,
+	}, now); err != nil {
+		t.Fatalf("PutNote agent: %v", err)
+	}
+
+	type agentKey string
+	const key agentKey = "agent"
+
+	ws := NewWorkspaceSessions(
+		func() string { return parent },
+		func() string { return conn.ID },
+	).WithAgentIdentity(func(ctx context.Context) (string, string) {
+		if ctx.Value(key) == "sub" {
+			return worktree, agent.ID
+		}
+		return parent, conn.ID
+	}).WithAgentName(func(ctx context.Context) string {
+		if ctx.Value(key) == "sub" {
+			return agent.Name
+		}
+		return conn.Name
+	}).WithCollab(
+		func() (bool, bool) { return true, true },
+		func() *collab.Store { return store },
+		func() string { return conn.Name },
+	)
+
+	ctx := context.WithValue(context.Background(), key, "sub")
+	out, err := ws.Execute(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !strings.Contains(out, "note for subagent") {
+		t.Errorf("calling agent's mailbox should include notes addressed to it, got:\n%s", out)
+	}
+	if strings.Contains(out, "note for coordinator") {
+		t.Errorf("calling agent's mailbox must NOT include notes addressed to the connection, got:\n%s", out)
 	}
 }

@@ -43,6 +43,23 @@ func (s *Store) RecordLogicalAgent(proxySessionID, logicalAgentID string) error 
 	return nil
 }
 
+// BackdateLogicalAgents ages every declaration under a proxy session, for tests
+// that need to distinguish history from concurrency without sleeping.
+func (s *Store) BackdateLogicalAgents(proxySessionID string, to time.Time) error {
+	if s == nil || proxySessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`UPDATE logical_agent SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: backdate logical agents: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE pinned_workspace SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: backdate pins: %w", err)
+	}
+	return nil
+}
+
 // LogicalAgentIDsFor returns the distinct logical-agent IDs that have recorded
 // a pin under proxySessionID — the durable evidence of how many agents were
 // multiplexed over this connection before a restart.
@@ -50,10 +67,11 @@ func (s *Store) RecordLogicalAgent(proxySessionID, logicalAgentID string) error 
 // The connection-level agent (logical_agent_id = ”) is excluded: it is not a
 // logical agent, and counting it would make a single-agent connection read as
 // shared. nil-safe; an empty result means "no evidence", never "not shared".
-func (s *Store) LogicalAgentIDsFor(proxySessionID string) ([]string, error) {
+func (s *Store) LogicalAgentIDsFor(proxySessionID string, since time.Time) ([]string, error) {
 	if s == nil || proxySessionID == "" {
 		return nil, nil
 	}
+	cutoff := since.UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Both sources, unioned: logical_agent is the declaration record and
@@ -61,10 +79,12 @@ func (s *Store) LogicalAgentIDsFor(proxySessionID string) ([]string, error) {
 	// only the latter. Reading just one of them under-counts — which, for a
 	// gate that fails closed, means failing OPEN.
 	rows, err := s.db.Query(
-		`SELECT logical_agent_id FROM logical_agent WHERE proxy_session_id=? AND logical_agent_id<>''
+		`SELECT logical_agent_id FROM logical_agent
+		   WHERE proxy_session_id=? AND logical_agent_id<>'' AND updated_at>=?
 		 UNION
-		 SELECT logical_agent_id FROM pinned_workspace WHERE proxy_session_id=? AND logical_agent_id<>''`,
-		proxySessionID, proxySessionID,
+		 SELECT logical_agent_id FROM pinned_workspace
+		   WHERE proxy_session_id=? AND logical_agent_id<>'' AND updated_at>=?`,
+		proxySessionID, cutoff, proxySessionID, cutoff,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sessionstate: list logical agents: %w", err)

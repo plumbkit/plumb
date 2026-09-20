@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // openV1 hand-builds a database in the v1 shape — pinned_workspace without the
@@ -306,7 +307,7 @@ func TestMigrateV1ToV8_LogicalAgentRecordExistsAndWorks(t *testing.T) {
 	if err := s.UpsertPinForAgent("legacy", "coordinator", "/tmp/legacy-root", "go", PinSourceSessionStart); err != nil {
 		t.Fatalf("upsert pin on a migrated database: %v", err)
 	}
-	ids, err := s.LogicalAgentIDsFor("legacy")
+	ids, err := s.LogicalAgentIDsFor("legacy", time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("list agents: %v", err)
 	}

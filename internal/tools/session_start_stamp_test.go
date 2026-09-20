@@ -64,3 +64,42 @@ func TestStampChannelNoteSilentWhenUnwired(t *testing.T) {
 		t.Fatalf("unwired accessor must stay silent, got %q", got)
 	}
 }
+
+// check_messages is gated on a shared connection because delivery is
+// exactly-once. session_start performs the identical claim and cannot be gated,
+// or identity becomes undeclarable — so the claim itself has to honour the same
+// rule, otherwise the gate blocks the legitimate read while orientation keeps
+// consuming other agents' mail.
+func TestMailIsNotClaimableByAnUnattributableCallerOnASharedConnection(t *testing.T) {
+	var s SessionStart
+	s.WithStampChannel(func(context.Context) StampChannelState {
+		return StampChannelState{Shared: true, PerCallStamped: false}
+	})
+	if s.mailClaimable(context.Background()) {
+		t.Error("the caller check_messages would refuse must not consume mail through session_start either")
+	}
+}
+
+func TestMailStaysClaimableForEveryCallerTheGateAdmits(t *testing.T) {
+	cases := map[string]StampChannelState{
+		"identified on a shared connection": {Shared: true, PerCallStamped: true},
+		"sole agent, unstamped":             {Shared: false, PerCallStamped: false},
+		"sole agent, stamped":               {Shared: false, PerCallStamped: true},
+	}
+	for name, st := range cases {
+		t.Run(name, func(t *testing.T) {
+			var s SessionStart
+			s.WithStampChannel(func(context.Context) StampChannelState { return st })
+			if !s.mailClaimable(context.Background()) {
+				t.Error("a caller the write gate admits must still receive its mail")
+			}
+		})
+	}
+}
+
+func TestMailIsClaimableWhenTheChannelAccessorIsUnwired(t *testing.T) {
+	var s SessionStart
+	if !s.mailClaimable(context.Background()) {
+		t.Error("an unwired accessor must not silently stop mail delivery")
+	}
+}

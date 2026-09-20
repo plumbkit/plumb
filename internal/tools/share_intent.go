@@ -100,14 +100,14 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 		return "share_intent is disabled — set [collab] intents = true (globally or in this " +
 			"workspace's .plumb/config.toml) to broadcast intents.", nil
 	}
-	ws := t.deps.Workspace()
+	ws := t.deps.workspace(ctx)
 	if ws == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
-	if refusal := unregisteredSessionRefusal("share_intent", t.deps.sessionID()); refusal != "" {
+	if refusal := unregisteredSessionRefusal("share_intent", t.deps.sessionID(ctx)); refusal != "" {
 		return refusal, nil
 	}
-	store := t.deps.Store()
+	store := t.deps.store(ctx)
 	if store == nil {
 		return "", errors.New("share_intent: cross-agent store unavailable for this workspace")
 	}
@@ -119,8 +119,8 @@ func (t *ShareIntent) run(ctx context.Context, store *collab.Store, policy Colla
 	ttl := resolveTTL(policy.IntentTTLMinutes, args.TTLMinutes)
 	now := time.Now()
 	in := collab.IntentInput{
-		AuthorSession: t.deps.SessionName(),
-		AuthorID:      t.deps.sessionID(),
+		AuthorSession: t.deps.sessionName(ctx),
+		AuthorID:      t.deps.sessionID(ctx),
 		Body:          body,
 		PathGlobs:     args.PathGlobs,
 		TTL:           ttl,

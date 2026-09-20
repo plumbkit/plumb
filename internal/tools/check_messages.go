@@ -82,7 +82,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 		return "check_messages is disabled — set [collab] mailbox = true (globally or in " +
 			"this workspace's .plumb/config.toml) to exchange messages with peers.", nil
 	}
-	self := t.deps.SessionName()
+	self := t.deps.sessionName(ctx)
 	if self == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
@@ -98,18 +98,18 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	// review; both are closed now. Do not restate either as "the only one" — the
 	// pattern is that each surface deriving its own address is a fresh chance to
 	// skip the gate, so the guard belongs at every one of them.
-	if t.deps.sessionID() == "" {
+	if t.deps.sessionID(ctx) == "" {
 		return "This session is not registered in the session directory, so it has no mailbox " +
 			"address and no peer can write to it. Registration failed at startup — see the " +
 			"daemon log.", nil
 	}
 	inbox := Inbox{
 		Self:         self,
-		SelfID:       t.deps.sessionID(),
+		SelfID:       t.deps.sessionID(ctx),
 		InheritedIDs: t.inheritedIDs(),
-		Root:         t.deps.Workspace(),
+		Root:         t.deps.workspace(ctx),
 		Policy:       policy,
-		Workspace:    t.deps.StoreIfExists,
+		Workspace:    func() *collab.Store { return t.deps.storeIfExists(ctx) },
 		Global:       t.deps.GlobalStoreIfExists,
 	}
 	// The receipt is appended to whichever branch below answers, and is resolved
@@ -194,7 +194,7 @@ const maxReceiptRows = 5
 // recipient who never opted in expires unread by default. Errors are swallowed
 // and the store is never created; a receipt must not fail the call it rides on.
 func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
-	if t.deps.sessionID() == "" {
+	if t.deps.sessionID(ctx) == "" {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
@@ -202,7 +202,7 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 
 	now := time.Now()
 	var unread []collab.Row
-	for _, get := range []func() *collab.Store{t.deps.StoreIfExists, t.deps.GlobalStoreIfExists} {
+	for _, get := range []func() *collab.Store{func() *collab.Store { return t.deps.storeIfExists(ctx) }, t.deps.GlobalStoreIfExists} {
 		if get == nil {
 			continue
 		}
@@ -215,9 +215,9 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 		// trusted as a total: two stores each capped at the display limit yield
 		// twice it, and the overflow count would be measuring the query rather than
 		// the mailbox.
-		rows, err := s.UnreadSentBy(ctx, t.deps.sessionID(), now, maxReceiptRows+1)
+		rows, err := s.UnreadSentBy(ctx, t.deps.sessionID(ctx), now, maxReceiptRows+1)
 		if err != nil {
-			slog.Debug("collab: outbox receipt failed", "session", t.deps.sessionID(), "err", err)
+			slog.Debug("collab: outbox receipt failed", "session", t.deps.sessionID(ctx), "err", err)
 			continue
 		}
 		unread = append(unread, rows...)

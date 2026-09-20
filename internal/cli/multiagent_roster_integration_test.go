@@ -20,12 +20,17 @@ package cli
 // was silent (every wrong path still resolved to a real file).
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -299,3 +304,233 @@ func TestCommitSessionTrailerNamesCallingAgent(t *testing.T) {
 		t.Errorf("coordinator commit must name the connection session (%s), got: %q", m.s.sessionName(), coordTrailer)
 	}
 }
+
+// The child row must not carry the agent's ExternalID. ExternalID is the
+// CONVERSATION linkage, and mail.go matches `--external-id` on it with no
+// ParentID filter, while session.FindEnded resolves a resume by it. A child row
+// sharing its parent's linkage therefore makes `plumb mail --external-id`
+// ambiguous (the idle-agent wake hook fails outright) and lets a reconnecting
+// conversation adopt the CHILD's generated name instead of its own.
+//
+// The agent is addressable by its NAME, which is what the roster prints and what
+// leave_note takes, so the linkage buys nothing here and costs both of those.
+func TestAgentRosterRowDoesNotClaimTheConversationLinkage(t *testing.T) {
+	m := newMultiAgentConn(t)
+	parent := freshTempDir(t)
+	mustGitDir(t, parent)
+	worktree := filepath.Join(parent, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+	mustGitDir(t, worktree)
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "conv-42", "workspace": parent}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	rows, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	byExternal := map[string][]string{}
+	for _, r := range rows {
+		if r.ExternalID != "" {
+			byExternal[r.ExternalID] = append(byExternal[r.ExternalID], r.Name)
+		}
+	}
+	for ext, names := range byExternal {
+		if len(names) > 1 {
+			t.Errorf("external id %q is claimed by %d live rows (%v); `plumb mail --external-id` and "+
+				"session.FindEnded both match on it without filtering children, so this is ambiguous", ext, len(names), names)
+		}
+	}
+}
+
+// A child row's LastSeenAt comes from its file mtime, and the roster renders it
+// as "idle Nm". onAfterTool touched only the connection's row, so an agent
+// working continuously in its worktree advertised itself as idle since the
+// moment it pinned — and any staleness-based reaping would judge it on a
+// timestamp that never moves.
+func TestAgentRosterRowIsTouchedByTheAgentsOwnCalls(t *testing.T) {
+	m := newMultiAgentConn(t)
+	parent := freshTempDir(t)
+	mustGitDir(t, parent)
+	worktree := filepath.Join(parent, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+	mustGitDir(t, worktree)
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	before := rosterSeenAt(t, worktree)
+	if before.IsZero() {
+		t.Fatal("precondition: the agent should hold a row in the worktree")
+	}
+
+	// Backdate the row so a touch is observable regardless of mtime resolution.
+	rosterBackdate(t, worktree, 2*time.Hour)
+	stale := rosterSeenAt(t, worktree)
+
+	// An ordinary attributed call from that agent.
+	if err := m.writeFile(t, "sub", filepath.Join(worktree, "note.txt"), "x"); err != nil {
+		t.Fatalf("subagent write: %v", err)
+	}
+
+	if got := rosterSeenAt(t, worktree); !got.After(stale) {
+		t.Errorf("the agent's own row was not touched by its call (still %v); it will advertise itself as idle while working", got)
+	}
+}
+
+func rosterSeenAt(t *testing.T, dir string) time.Time {
+	t.Helper()
+	rows, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	for _, r := range rows {
+		if filepath.Clean(r.Folder) == filepath.Clean(dir) {
+			return r.LastSeenAt
+		}
+	}
+	return time.Time{}
+}
+
+func rosterBackdate(t *testing.T, dir string, by time.Duration) {
+	t.Helper()
+	rows, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	sdir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("session.Dir: %v", err)
+	}
+	for _, r := range rows {
+		if filepath.Clean(r.Folder) != filepath.Clean(dir) {
+			continue
+		}
+		p := filepath.Join(sdir, r.ID+".json")
+		old := time.Now().Add(-by)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatalf("backdate %s: %v", p, err)
+		}
+	}
+}
+
+func callOutput(t *testing.T, m *multiAgentConn, metaAgent, name string, args map[string]any, exec func(context.Context, json.RawMessage) (string, error)) (string, error) {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal %s args: %v", name, err)
+	}
+	ctx := mcp.WithLogicalAgent(context.Background(), metaAgent)
+	if err := m.s.refuseSharedStateChange(ctx, name, metaAgent); err != nil {
+		return "", err
+	}
+	m.s.recordLogicalAgentCall(metaAgent)
+	m.s.onBeforeTool(ctx, name, raw)
+	out, err := exec(ctx, raw)
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent)
+	return out, err
+}
+
+// TestLogicalAgentIsAddressableForMail proves:
+// 1. A note addressed to a subagent's roster name reaches the subagent and cannot
+//    be claimed by the coordinator on the same connection.
+// 2. The subagent can reply to the coordinator in a thread and the reply is
+//    attributed to the subagent, so the coordinator can claim it.
+func TestLogicalAgentIsAddressableForMail(t *testing.T) {
+	m := newMultiAgentConn(t)
+	parent := freshTempDir(t)
+	mustGitDir(t, parent)
+	worktree := filepath.Join(parent, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+	mustGitDir(t, worktree)
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	cfg := m.s.store.Current()
+	cfg.Collab.CrossProject = true
+	m.s.store = config.NewStore(cfg)
+	m.s.mutate(func(v *sessionView) { v.collab.CrossProject = true })
+
+	m.s.shardsMu.Lock()
+	sh := m.s.shards["sub"]
+	m.s.shardsMu.Unlock()
+	sh.mu.RLock()
+	subName := sh.rosterName
+	sh.mu.RUnlock()
+	if subName == "" {
+		t.Fatal("precondition: subagent should hold a rosterName")
+	}
+
+	leaveNoteTool := tools.NewLeaveNote(m.s.collabDeps())
+	checkMessagesTool := tools.NewCheckMessages(m.s.collabDeps())
+
+	// Coordinator leaves a note addressed to the subagent's roster name.
+	if err := m.call(t, "coord", "leave_note", map[string]any{
+		"to":   subName,
+		"body": "task for sub",
+	}, leaveNoteTool.Execute); err != nil {
+		t.Fatalf("coord leave_note to sub: %v", err)
+	}
+
+	// Coordinator checks messages: it must NOT receive the note addressed to sub.
+	coordCheckRaw, err := callOutput(t, m, "coord", "check_messages", map[string]any{}, checkMessagesTool.Execute)
+	if err != nil {
+		t.Fatalf("coord check_messages: %v", err)
+	}
+	if strings.Contains(coordCheckRaw, "task for sub") {
+		t.Errorf("coordinator must NOT claim note addressed to subagent (%s), got: %s", subName, coordCheckRaw)
+	}
+
+	// Subagent checks messages: it MUST receive the note addressed to its roster name.
+	subCheckRaw, err := callOutput(t, m, "sub", "check_messages", map[string]any{}, checkMessagesTool.Execute)
+	if err != nil {
+		t.Fatalf("sub check_messages: %v", err)
+	}
+	if !strings.Contains(subCheckRaw, "task for sub") {
+		t.Errorf("subagent must claim note addressed to its roster name (%s), got: %s", subName, subCheckRaw)
+	}
+
+	// Subagent replies to the coordinator.
+	if err := m.call(t, "sub", "leave_note", map[string]any{
+		"to":   m.s.sessionName(),
+		"body": "reply from sub",
+	}, leaveNoteTool.Execute); err != nil {
+		t.Fatalf("sub leave_note to coord: %v", err)
+	}
+
+	// Coordinator checks messages: it MUST receive the reply from sub.
+	coordReplyRaw, err := callOutput(t, m, "coord", "check_messages", map[string]any{}, checkMessagesTool.Execute)
+	if err != nil {
+		t.Fatalf("coord check_messages for reply: %v", err)
+	}
+	if !strings.Contains(coordReplyRaw, "reply from sub") {
+		t.Errorf("coordinator must claim reply from subagent, got: %s", coordReplyRaw)
+	}
+	if !strings.Contains(coordReplyRaw, subName) {
+		t.Errorf("reply must show author is subagent (%s), got: %s", subName, coordReplyRaw)
+	}
+}
+

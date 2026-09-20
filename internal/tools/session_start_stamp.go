@@ -92,3 +92,26 @@ func (t *SessionStart) stampChannelNote(ctx context.Context) string {
 	}
 	return stampChannelDormantNotice
 }
+
+// mailClaimable reports whether THIS caller may take exactly-once delivery of
+// the connection's mail.
+//
+// check_messages is gated on a shared connection because delivery is
+// exactly-once: an unattributable poll consumes a message addressed to somebody
+// else. session_start's own Messages block performs the identical claim, and it
+// is NOT gated — session_start must stay callable or identity becomes
+// undeclarable. So the gate on check_messages was doing half a job: it blocked
+// the legitimate read while the consuming path stayed wide open through
+// orientation, which is worse than either gating both or gating neither.
+//
+// The claim is therefore skipped for exactly the callers check_messages refuses.
+// They still get the rest of the packet, and their mail stays in the mailbox for
+// whoever can prove it is theirs, instead of being silently consumed by a caller
+// that cannot.
+func (t *SessionStart) mailClaimable(ctx context.Context) bool {
+	if t.stampChannelFn == nil {
+		return true
+	}
+	st := t.stampChannelFn(ctx)
+	return st.PerCallStamped || !st.Shared
+}

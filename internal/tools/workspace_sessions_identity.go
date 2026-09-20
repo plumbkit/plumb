@@ -8,7 +8,11 @@ package tools
 // it depends on — which workspace the caller is in, and which row is the
 // caller's own.
 
-import "context"
+import (
+	"context"
+
+	"github.com/plumbkit/plumb/internal/collab"
+)
 
 // WithAgentIdentity wires the per-CALL answer to "which workspace am I in, and
 // which row is me?", for a connection multiplexing several logical agents.
@@ -34,6 +38,20 @@ func (t *WorkspaceSessions) WithAgentIdentity(fn func(ctx context.Context) (work
 	return t
 }
 
+// WithAgentName wires the per-CALL session name resolver for multi-agent
+// connections.
+func (t *WorkspaceSessions) WithAgentName(fn func(ctx context.Context) string) *WorkspaceSessions {
+	t.agentNameFn = fn
+	return t
+}
+
+// WithCollabStoreFor wires a per-workspace collab store resolver for
+// multi-agent connections.
+func (t *WorkspaceSessions) WithCollabStoreFor(fn func(workspace string) *collab.Store) *WorkspaceSessions {
+	t.collabStoreFor = fn
+	return t
+}
+
 // resolveCaller returns the workspace to list and the row to mark as the
 // caller's, preferring the per-call agent answer over the connection's.
 func (t *WorkspaceSessions) resolveCaller(ctx context.Context) (workspace, selfID string) {
@@ -49,4 +67,18 @@ func (t *WorkspaceSessions) resolveCaller(ctx context.Context) (workspace, selfI
 		selfID = agentID
 	}
 	return workspace, selfID
+}
+
+// resolveCallerName returns the session name to use for the caller, preferring
+// the per-call agent answer over the connection's display name.
+func (t *WorkspaceSessions) resolveCallerName(ctx context.Context) string {
+	if t.agentNameFn != nil {
+		if name := t.agentNameFn(ctx); name != "" {
+			return name
+		}
+	}
+	if t.selfName != nil {
+		return t.selfName()
+	}
+	return ""
 }

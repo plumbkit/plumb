@@ -402,7 +402,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx)), nil
+		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx), t.mailClaimable(ctx)), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
@@ -426,7 +426,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionEpisodic(&sb, ws)
 	t.writeSessionPeers(&sb, ws)
 	t.writeSessionCollabPolicy(&sb, ws)
-	t.writeSessionMessages(&sb, ws)
+	t.writeSessionMessages(&sb, ws, t.mailClaimable(ctx))
 	t.writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)

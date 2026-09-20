@@ -80,6 +80,10 @@ func newMultiAgentConn(t *testing.T) *multiAgentConn {
 		// store opens lazily under the XDG_DATA_HOME newOriginStore isolated.
 		s.statsStore = newStatsStore()
 	}
+	if s.collabPool == nil {
+		s.collabPool = newCollabPool()
+		t.Cleanup(s.collabPool.closeAll)
+	}
 	start := tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).

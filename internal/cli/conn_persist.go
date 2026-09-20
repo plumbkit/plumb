@@ -49,7 +49,9 @@ func (s *connSession) onProxySession(id string) {
 	}
 	s.mutate(func(v *sessionView) { v.proxySessionID = id })
 	s.restoreIdentity(id)
-	s.seedLogicalAgentsFromState(id)
+	// DISABLED — see seedLogicalAgentsFromState. Re-arming the ceiling from
+	// durable state locks out every client that cannot stamp a per-call
+	// identity, which is the client this whole card is about.
 }
 
 // seedLogicalAgentsFromState re-arms the shared-connection ceiling from durable
@@ -66,24 +68,6 @@ func (s *connSession) onProxySession(id string) {
 // Failure is silent and leaves the live behaviour unchanged: the seed can only
 // ADD identities, so an unreadable store costs the early arming, never a
 // wrongly-armed gate.
-func (s *connSession) seedLogicalAgentsFromState(proxySessionID string) {
-	if s.sessionState == nil || !s.view().session.PersistState {
-		return
-	}
-	ids, err := s.sessionState.LogicalAgentIDsFor(proxySessionID)
-	if err != nil {
-		s.log().Debug("daemon: seeding logical agents from persisted pins failed", "err", err)
-		return
-	}
-	if len(ids) < 2 {
-		return
-	}
-	s.logicalAgents.seed(ids)
-	s.log().Info("daemon: shared connection re-armed from persisted per-agent pins",
-		"agents", len(ids), "proxy_session", proxySessionID)
-	s.markSharedConnectionDetected()
-}
-
 // onSessionID records the plumb session ID the serve proxy replayed in the
 // initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting session
 // believed it held before the daemon restarted.

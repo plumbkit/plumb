@@ -70,6 +70,32 @@ const (
 //  2. Every tool classified as state-changing is gated.
 //  3. No tool classified read-only is gated — a stale entry would refuse calls
 //     that are safe to serve anonymously, which fails closed in the wrong place.
+//
+// The companion to the loop below, and the direction it cannot see. That loop
+// walks srv.ToolNames(), so an entry in the GATE or in the classification map
+// that names no registered tool — a typo, or a tool since renamed or removed —
+// is never visited and the suite stays green while the gate quietly protects
+// nothing. Both lists are therefore checked back against the registration.
+func TestStateChangeGateNamesOnlyRegisteredTools(t *testing.T) {
+	_, srv := buildTestConnSession(t)
+	registered := map[string]bool{}
+	for _, name := range srv.ToolNames() {
+		registered[name] = true
+	}
+	for _, name := range tools.StateChangingToolNames() {
+		if !registered[name] {
+			t.Errorf("the write gate names %q, which is not a registered tool — "+
+				"a rename or a typo has left the gate guarding nothing under that name", name)
+		}
+	}
+	for name := range stateChanging {
+		if !registered[name] {
+			t.Errorf("stateChanging classifies %q, which is not a registered tool — "+
+				"remove the stale entry so the map keeps describing reality", name)
+		}
+	}
+}
+
 func TestStateChangeGateCoversEveryMutatingTool(t *testing.T) {
 	_, srv := buildTestConnSession(t)
 

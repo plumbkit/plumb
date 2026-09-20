@@ -113,7 +113,7 @@ func (t *LeaveNote) resolveThreadAddressee(ctx context.Context, convID string) (
 // genuinely share a name keep two IDs and stay two participants, which is the
 // ambiguity the caller is still told about.
 func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (participant bool, others []threadPeer) {
-	isSelf := t.selfMatcher()
+	isSelf := t.selfMatcher(ctx)
 	byID := map[string]int{} // session ID -> index in others
 	consider := func(id, name string) {
 		name = strings.TrimSpace(name)
@@ -133,7 +133,7 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 	// cross-project mail: without that gate a session here could learn the
 	// participants of a thread between two OTHER projects, which is precisely what
 	// the consent setting exists to prevent.
-	stores := []*collab.Store{t.deps.Store()}
+	stores := []*collab.Store{t.deps.store(ctx)}
 	if t.deps.Policy().CrossProject {
 		stores = append(stores, t.globalIfExists())
 	}
@@ -215,10 +215,10 @@ func threadPeerIndexes(peers []threadPeer, name string) []int {
 // session that later draws a departed peer's name starts matching that peer's.
 // Inherited predecessor identities count as self, so a restarted session still
 // recognises the threads it was in before the restart.
-func (t *LeaveNote) selfMatcher() func(id, name string) bool {
-	selfName := t.deps.SessionName()
+func (t *LeaveNote) selfMatcher(ctx context.Context) func(id, name string) bool {
+	selfName := t.deps.sessionName(ctx)
 	selfIDs := map[string]bool{}
-	if id := t.deps.sessionID(); id != "" {
+	if id := t.deps.sessionID(ctx); id != "" {
 		selfIDs[id] = true
 	}
 	if t.deps.InheritedSessionIDs != nil {

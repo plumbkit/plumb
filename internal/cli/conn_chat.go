@@ -210,7 +210,7 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	if !ccfg.Mailbox {
 		return ""
 	}
-	inbox := s.inbox()
+	inbox := s.inboxFor(ctx)
 	keys := inbox.Keys()
 	if len(keys) == 0 {
 		return ""

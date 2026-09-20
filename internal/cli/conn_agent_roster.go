@@ -39,9 +39,17 @@ import (
 // a session file that cannot be written must not fail the re-pin that was the
 // caller's actual request.
 //
-// Caller holds sh.mu.
+// Takes sh.mu itself — deliberately NOT called with it held. Registering a row
+// flocks the session directory, and holding a shard lock across that stalls
+// every agent on the connection behind one agent's disk I/O (see the defer in
+// repinAgent).
 func (s *connSession) syncAgentRoster(sh *agentShard, root, language string) {
-	if sh == nil || sh.id == "" || root == "" {
+	if sh == nil || root == "" {
+		return
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if sh.id == "" {
 		return
 	}
 	// The connection's own row already covers an agent sitting on its pin.
@@ -58,13 +66,17 @@ func (s *connSession) syncAgentRoster(sh *agentShard, root, language string) {
 		})
 		return
 	}
+	// Deliberately NO ExternalID. That field is the CONVERSATION linkage, and
+	// both `plumb mail --external-id` (mail.go) and session.FindEnded match on
+	// it without filtering child rows — so a child carrying its parent's
+	// linkage makes the idle-agent wake hook ambiguous and lets a reconnecting
+	// conversation adopt the CHILD's generated name instead of its own. The
+	// agent is addressable by its NAME, which is what the roster prints and
+	// what leave_note takes, so the linkage buys nothing here and costs both.
 	info, err := session.Register(session.Info{
 		ParentID: s.sessionID(),
-		// The logical-agent identity, which is what a peer addressing this
-		// agent knows it by and what the stats rows are already attributed to.
-		ExternalID: sh.id,
-		Folder:     root,
-		Language:   language,
+		Folder:   root,
+		Language: language,
 	})
 	if err != nil {
 		s.log().Debug("daemon: registering the agent's roster row failed", "agent", sh.id, "root", root, "err", err)
@@ -138,4 +150,59 @@ func (s *connSession) sessionNameFor(ctx context.Context) string {
 		}
 	}
 	return s.sessionName()
+}
+
+// sessionIDFor returns the session ID for the calling agent in ctx. For a
+// logical agent holding its own roster row, this is that agent's own row ID;
+// otherwise it falls back to the connection's session ID.
+func (s *connSession) sessionIDFor(ctx context.Context) string {
+	sh := s.shardFor(ctx)
+	if sh != nil {
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		if sh.rosterID != "" {
+			return sh.rosterID
+		}
+	}
+	return s.sessionID()
+}
+
+// addressableNameFor returns the addressable name for the calling agent in ctx.
+// For a logical agent holding its own roster row, this is that agent's roster
+// name (which is registered in the session directory); otherwise it falls back
+// to the connection's addressable name.
+func (s *connSession) addressableNameFor(ctx context.Context) string {
+	sh := s.shardFor(ctx)
+	if sh != nil {
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		if sh.rosterID != "" && sh.rosterName != "" {
+			return sh.rosterName
+		}
+	}
+	return s.addressableName()
+}
+
+// touchAgentRoster keeps the calling agent's own row fresh. LastSeenAt comes
+// from the file's mtime and the roster renders it as "idle Nm", so a row that is
+// never touched advertises an agent as idle from the moment it pinned — while it
+// is working — and hands any staleness-based reaping a timestamp that never
+// moves. The connection's own row is touched by onAfterTool; this is the other
+// half for an agent that has a row of its own.
+func (s *connSession) touchAgentRoster(agentID string) {
+	if agentID == "" {
+		return
+	}
+	s.shardsMu.Lock()
+	sh := s.shards[agentID]
+	s.shardsMu.Unlock()
+	if sh == nil {
+		return
+	}
+	sh.mu.RLock()
+	id := sh.rosterID
+	sh.mu.RUnlock()
+	if id != "" {
+		session.Touch(id)
+	}
 }

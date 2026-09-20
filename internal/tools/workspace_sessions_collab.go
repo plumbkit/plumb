@@ -17,7 +17,14 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
+
+// collabNoteBodyCap bounds a single rendered intent/note body in
+// workspace_sessions so one verbose claim cannot dominate the output (UTF-8
+// boundary). workspace_sessions is the dedicated read surface, not an injected
+// hint, so this is a display guard rather than the [collab] hint budget.
+const collabNoteBodyCap = 240
 
 // collabSentCap and collabVolumeCap bound each section. A listing is read by a
 // human scanning for something wrong; an unbounded list of every note ever sent
@@ -122,14 +129,14 @@ func writeConversationVolumes(sb *strings.Builder, vols []collab.ConversationSum
 // author_id, so reading them across stores discloses nothing the caller did not
 // write.
 func (t *WorkspaceSessions) collabObservations(
-	ctx context.Context, store *collab.Store, now time.Time,
+	ctx context.Context, store *collab.Store, workspace, callerID, callerName string, now time.Time,
 ) (sent []collab.Row, vols []collab.ConversationSummary) {
-	if t.selfID() != "" {
-		if rows, err := store.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
+	if callerID != "" {
+		if rows, err := store.SentBy(ctx, callerID, now, collabSentCap); err == nil {
 			sent = rows
 		}
 		if g := t.globalStoreIfExists(); g != nil {
-			if rows, err := g.SentBy(ctx, t.selfID(), now, collabSentCap); err == nil {
+			if rows, err := g.SentBy(ctx, callerID, now, collabSentCap); err == nil {
 				sent = append(sent, rows...)
 			}
 		}
@@ -155,8 +162,8 @@ func (t *WorkspaceSessions) collabObservations(
 		inherited = t.inheritedIDs()
 	}
 	self := collab.Claimant{
-		Name: t.selfNameOrEmpty(), ID: t.selfID(),
-		InheritedIDs: inherited, Workspace: t.workspace(),
+		Name: callerName, ID: callerID,
+		InheritedIDs: inherited, Workspace: workspace,
 	}
 	local, err := store.ConversationSummaries(ctx, self, now, collabVolumeCap)
 	if err != nil {
@@ -166,7 +173,7 @@ func (t *WorkspaceSessions) collabObservations(
 	if t.crossProjectOn() {
 		if g := t.globalStoreIfExists(); g != nil {
 			if rows, gErr := g.ConversationSummariesForWorkspace(
-				ctx, t.workspace(), now, collabVolumeCap,
+				ctx, workspace, now, collabVolumeCap,
 			); gErr == nil {
 				global = rows
 			}
@@ -188,19 +195,113 @@ func (t *WorkspaceSessions) globalStoreIfExists() *collab.Store {
 	return t.collabGlobalStore()
 }
 
-// selfNameOrEmpty is the caller's addressable name, or "" when it has none.
-// Nil-safe so conversation scoping degrades to "no threads" rather than to "all
-// threads" when the accessor was never wired.
-func (t *WorkspaceSessions) selfNameOrEmpty() string {
-	if t.selfName == nil {
-		return ""
-	}
-	return t.selfName()
-}
-
 // crossProjectOn reports this workspace's [collab] cross_project consent.
 // Absent wiring is treated as OFF, so a caller that forgets to wire it discloses
 // nothing rather than everything.
 func (t *WorkspaceSessions) crossProjectOn() bool {
 	return t.collabCrossProject != nil && t.collabCrossProject()
+}
+
+// collabBlock renders the phase-2 sharing surface: every active session's live
+// intent (when [collab] intents is on), the caller's pending notes, its own
+// sent notes with delivery state, and per-conversation note volume (all when
+// [collab] mailbox is on). Returns "" when the feature is off or collab.db does
+// not exist — a listing never creates one. Best-effort: a query error yields no
+// block rather than failing the tool.
+func (t *WorkspaceSessions) collabBlock(workspace, callerID, callerName string, now time.Time) string {
+	if (t.collabStore == nil && t.collabStoreFor == nil) || t.collabPolicy == nil {
+		return ""
+	}
+	intentsOn, mailboxOn := t.collabPolicy()
+	if !intentsOn && !mailboxOn {
+		return ""
+	}
+	store := t.resolveCollabStore(workspace)
+	if store == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wsSessionsTimeout)
+	defer cancel()
+
+	var sb strings.Builder
+	if intentsOn {
+		intents, err := store.LiveIntents(ctx, now)
+		if err == nil {
+			writeCollabIntents(&sb, callerID, intents, now)
+		}
+	}
+	// callerID is checked as well as the name because this block PRINTS the
+	// sender and body of every pending note. A session whose registration failed
+	// has no mailbox address — its name entered no file any peer's uniqueness
+	// check can see, so it may shadow a live peer — and listing is a disclosure
+	// even though it consumes nothing. The caller wires addressableName, which is
+	// already empty in that case; this is the tool refusing to depend on its
+	// caller having done so.
+	if mailboxOn && callerName != "" && callerID != "" {
+		var inherited []string
+		if t.inheritedIDs != nil {
+			inherited = t.inheritedIDs()
+		}
+		who := collab.Claimant{
+			Name: callerName, ID: callerID, InheritedIDs: inherited, Workspace: workspace,
+		}
+		notes, err := store.PendingNotes(ctx, who, now)
+		if err == nil {
+			writeCollabNotes(&sb, notes, now)
+		}
+	}
+	// Observational sections last: they are the least urgent thing in the block,
+	// and a human scanning for a message addressed to them should not have to read
+	// past a volume table to find it.
+	if mailboxOn {
+		sent, vols := t.collabObservations(ctx, store, workspace, callerID, callerName, now)
+		writeCollabSent(&sb, sent, now)
+		writeConversationVolumes(&sb, vols, now)
+	}
+	return sb.String()
+}
+
+func (t *WorkspaceSessions) resolveCollabStore(workspace string) *collab.Store {
+	if t.collabStoreFor != nil {
+		if s := t.collabStoreFor(workspace); s != nil {
+			return s
+		}
+	}
+	if t.collabStore != nil {
+		return t.collabStore()
+	}
+	return nil
+}
+
+// writeCollabIntents renders each active session's live intent as an unverified
+// claim, distinct from the observed recent_writes above it.
+func writeCollabIntents(sb *strings.Builder, callerID string, intents []collab.Row, now time.Time) {
+	if len(intents) == 0 {
+		return
+	}
+	sb.WriteString("\npeer intents (claims, unverified — what agents SAY they are doing, not observed writes):\n")
+	for _, r := range intents {
+		who := r.AuthorSession
+		if r.AuthorID == callerID {
+			who += " (you)"
+		}
+		fmt.Fprintf(sb, "  %s — \"%s\"", who, textfmt.ClampBytes(r.Body, collabNoteBodyCap))
+		if len(r.PathGlobs) > 0 {
+			fmt.Fprintf(sb, " [%s]", strings.Join(r.PathGlobs, ", "))
+		}
+		fmt.Fprintf(sb, "  (declared %s ago)\n", humaniseAge(now.Sub(r.CreatedAt)))
+	}
+}
+
+// writeCollabNotes renders the notes addressed to the caller (pending; not
+// consumed here — session_start delivers and consumes).
+func writeCollabNotes(sb *strings.Builder, notes []collab.Row, now time.Time) {
+	if len(notes) == 0 {
+		return
+	}
+	sb.WriteString("\nnotes for you (from peers; delivered at session_start too):\n")
+	for _, r := range notes {
+		fmt.Fprintf(sb, "  from %s — \"%s\"  (%s ago)\n",
+			r.AuthorSession, textfmt.ClampBytes(r.Body, collabNoteBodyCap), humaniseAge(now.Sub(r.CreatedAt)))
+	}
 }

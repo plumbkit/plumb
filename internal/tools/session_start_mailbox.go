@@ -32,8 +32,14 @@ import (
 // writeSessionMessages appends a "## Messages" block when [collab] mailbox is on
 // and messages await this session. Bailing before the claim when the feature is
 // off or no store exists guarantees a collab.db is never created by a read path.
-func (t *SessionStart) writeSessionMessages(sb *strings.Builder, _ string) {
+func (t *SessionStart) writeSessionMessages(sb *strings.Builder, _ string, claimable bool) {
 	if t.mailboxFn == nil {
+		return
+	}
+	// An unattributable caller on a shared connection must not consume mail it
+	// cannot be shown to own — the same rule check_messages enforces. See
+	// SessionStart.mailClaimable.
+	if !claimable {
 		return
 	}
 	on, inbox := t.mailboxFn()

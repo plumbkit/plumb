@@ -418,35 +418,3 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	// DELETE here without an explicit retirement signal to gate it on.
 	return nil
 }
-
-// migrateV8 adds the durable record of which logical agents were multiplexed
-// over a connection.
-//
-// Split out of migrate for the same reason migrateV7 was: to keep that function
-// under the complexity cap as the history grows. Gated on the on-disk version by
-// its one caller, so it runs exactly once per database.
-func migrateV8(db *sql.DB) error {
-	// PLAN-440 item 2: the durable record of WHICH logical agents were
-	// multiplexed over a connection, independent of whether any of them
-	// pinned a workspace.
-	//
-	// pinned_workspace was the obvious source and the wrong one: a row is
-	// written there only when an agent's own session_start named a
-	// workspace, while an agent identifies itself through three channels —
-	// an attach-time session_id, a per-call _meta stamp, and session_start's
-	// own argument. A subagent that stamps its calls and inherits the
-	// connection's pin, which is the common topology, never wrote a row, so
-	// a reconnecting daemon read a genuinely shared connection as
-	// single-agent and left the fail-closed ceiling disarmed.
-	const addAgents = `CREATE TABLE IF NOT EXISTS logical_agent (
-    proxy_session_id TEXT    NOT NULL,
-    logical_agent_id TEXT    NOT NULL,
-    updated_at       INTEGER NOT NULL,
-    PRIMARY KEY (proxy_session_id, logical_agent_id)
-) WITHOUT ROWID`
-	if _, err := db.Exec(addAgents); err != nil {
-		return fmt.Errorf("sessionstate: migrate v8 (logical_agent): %w", err)
-	}
-
-	return nil
-}

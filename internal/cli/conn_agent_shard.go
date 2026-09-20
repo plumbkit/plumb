@@ -291,6 +291,19 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	if sh == nil {
 		return false, nil
 	}
+	// The roster sync registers or moves a session.Info, which takes a flock on
+	// the session directory. Doing that while holding sh.mu wedges the whole
+	// connection: a peer's ordinary call reaches boundaryPolicy, which walks the
+	// shards under shardsMu and blocks on THIS shard's RLock, and every other
+	// agent then blocks on shardsMu behind it — all waiting on one agent's disk
+	// I/O. Registered before the unlock defer so LIFO runs it AFTER sh.mu is
+	// released, and it re-takes the lock itself.
+	var syncRoot, syncLang string
+	defer func() {
+		if syncRoot != "" {
+			s.syncAgentRoster(sh, syncRoot, syncLang)
+		}
+	}()
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	prev := sh.root
@@ -358,6 +371,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// anonymous forced re-pin — dragged it off a workspace it had
 		// explicitly named, with no call of its own in between (issue #468).
 		s.confirmShardPin(sh, root, language, origin)
+		syncRoot, syncLang = root, language
 		// Also on the confirm branch, not just on a move. A shard restored after
 		// a daemon restart already holds a root that may differ from the
 		// connection's, and the reconnecting agent's next session_start NAMES
@@ -366,7 +380,6 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// issue #472 describes, by a path no live-move test exercises.
 		// confirmShardPin cannot host this: it returns early for a shard that is
 		// already selfPinned, which a restored-and-reconfirming one is.
-		s.syncAgentRoster(sh, root, language)
 		return false, nil
 	}
 	changed = true
@@ -391,7 +404,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	}
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
-	s.syncAgentRoster(sh, root, language)
+	syncRoot, syncLang = root, language
 	return changed, nil
 }
 

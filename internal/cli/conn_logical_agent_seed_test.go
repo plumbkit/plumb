@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
@@ -94,6 +95,7 @@ func TestReconnectAfterRestartRefusesAnonymousWritesImmediately(t *testing.T) {
 
 	// newPersistSession fires onProxySession, exactly as handleInitialize does.
 	s := newPersistSession(t, store, ss, proxyID)
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
 
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("a reconnecting shared connection admitted an anonymous write before any agent re-declared")
@@ -150,6 +152,7 @@ func TestReconnectArmsWhenOnlyOneAgentEverPinnedAWorkspace(t *testing.T) {
 	}
 
 	s := newPersistSession(t, store, ss, proxyID)
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
 
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("a connection whose second agent never pinned a workspace came back disarmed; " +
@@ -175,9 +178,94 @@ func TestDeclarationsMadeOnALiveConnectionSurviveTheRestart(t *testing.T) {
 
 	// The restart: a fresh connection adopting the same proxy session.
 	after := newPersistSession(t, store, ss, proxyID)
+	after.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
 
 	if err := after.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("the reconnecting connection came back disarmed; declarations made on the live " +
 			"connection were not durably recorded")
+	}
+}
+
+// Sequential conversations over one long-lived `plumb serve` are NOT a shared
+// connection. Claude Desktop keeps one serve process per install, so a user who
+// opens conversation after conversation accumulates a declaration row per
+// conversation under the same proxy session id — while only ever one agent was
+// live at a time.
+//
+// Seeding on mere existence therefore armed the ceiling for a single-agent user
+// on every reconnect after a daemon restart, refusing their writes permanently.
+// That is a worse failure than the window item 2 set out to close, and it hits
+// exactly the client the whole card is about.
+//
+// The durable evidence has to mean "these agents were active TOGETHER", not
+// "these ids were seen at some point", so the seed only counts declarations
+// inside a recent window.
+func TestSequentialConversationsDoNotArmTheGate(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-sequential-conversations"
+
+	if err := ss.RecordLogicalAgent(proxyID, "conv-1"); err != nil {
+		t.Fatalf("record conv-1: %v", err)
+	}
+	if err := ss.RecordLogicalAgent(proxyID, "conv-2"); err != nil {
+		t.Fatalf("record conv-2: %v", err)
+	}
+	// Age both declarations well past the concurrency window: they are history,
+	// not evidence that two agents are multiplexing now.
+	if err := ss.BackdateLogicalAgents(proxyID, time.Now().Add(-30*24*time.Hour)); err != nil {
+		t.Fatalf("backdate declarations: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, proxyID)
+
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Errorf("a single-agent user whose past conversations left old declarations was locked out of writes: %v", err)
+	}
+}
+
+// The other side: declarations made close together ARE concurrency evidence and
+// must still re-arm the ceiling, or item 2's fix is gone.
+func TestRecentConcurrentDeclarationsStillArmTheGate(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-recent-concurrent"
+
+	if err := ss.RecordLogicalAgent(proxyID, "coordinator"); err != nil {
+		t.Fatalf("record coordinator: %v", err)
+	}
+	if err := ss.RecordLogicalAgent(proxyID, "subagent"); err != nil {
+		t.Fatalf("record subagent: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, proxyID)
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
+
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Error("two agents declared moments apart must still re-arm the ceiling after a restart")
+	}
+}
+
+// The regression that took plumb's write lane down in the field, pinned so it
+// cannot come back: a daemon restart must leave an unstamped client able to
+// write. Arming the ceiling from durable evidence refused every edit on
+// local-agent-mode-plumb, which has no per-call identity channel at all, so the
+// refusal named a remedy the user could not reach.
+func TestRestartDoesNotLockOutAClientThatCannotStamp(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-no-lockout-on-restart"
+	ws := freshTempDir(t)
+	for _, id := range []string{"conv-a", "conv-b", "conv-c"} {
+		if err := ss.RecordLogicalAgent(proxyID, id); err != nil {
+			t.Fatalf("record %s: %v", id, err)
+		}
+	}
+	if err := ss.UpsertPinForAgent(proxyID, "conv-a", ws, "go", sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("persist pin: %v", err)
+	}
+
+	// The reconnect, exactly as handleInitialize performs it.
+	s := newPersistSession(t, store, ss, proxyID)
+
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Fatalf("a reconnecting client with no per-call identity channel was refused its writes: %v", err)
 	}
 }
