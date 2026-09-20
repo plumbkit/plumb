@@ -26,6 +26,7 @@ package cli
 // would invert it.
 
 import (
+	"context"
 	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/session"
@@ -102,4 +103,22 @@ func (s *connSession) unregisterAgentRosters() {
 		s.retireAgentRoster(sh)
 		sh.mu.Unlock()
 	}
+}
+
+// rosterIdentity answers workspace_sessions' per-call question: which workspace
+// the CALLING agent is in, and which row is its own.
+//
+// A caller with no row of its own returns "" for the id, which the tool reads as
+// "fall back to the connection's" — the correct answer rather than a missing
+// one, since an agent sitting on its connection's root IS represented by the
+// connection's row.
+func (s *connSession) rosterIdentity(ctx context.Context) (workspace, selfID string) {
+	workspace = s.workspaceFor(ctx)
+	sh := s.shardFor(ctx)
+	if sh == nil {
+		return workspace, ""
+	}
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return workspace, sh.rosterID
 }

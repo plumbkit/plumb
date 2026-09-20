@@ -52,12 +52,15 @@ var writeToolNames = []string{
 // resource at a time, and the resource it does hold (an OS flock) is not
 // involved in any Go mutex ordering.
 type WorkspaceSessions struct {
-	workspace     func() string
-	selfSessID    func() string
-	inheritedIDs  func() []string
-	boundaryCheck func(string) error // read boundary guard
-	topo          topologyStoreFn    // may be nil; live topology store for write annotation
-	peerAware     func() bool        // may be nil (treated as off); [collab] peer_awareness snapshot
+	workspace  func() string
+	selfSessID func() string
+	// agentIdentityFn answers, per call, which workspace the CALLING logical
+	// agent is in and which row is its own; nil on a single-agent connection.
+	agentIdentityFn func(ctx context.Context) (workspace, selfID string)
+	inheritedIDs    func() []string
+	boundaryCheck   func(string) error // read boundary guard
+	topo            topologyStoreFn    // may be nil; live topology store for write annotation
+	peerAware       func() bool        // may be nil (treated as off); [collab] peer_awareness snapshot
 	// Phase-2 cross-agent sharing (all nil-safe): collabStore opens the
 	// workspace's collab.db ONLY if it already exists (a listing never creates
 	// one); collabPolicy is the [collab] intents/mailbox snapshot; selfName is the
@@ -217,7 +220,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 		limit = 50
 	}
 
-	workspace := t.workspace()
+	workspace, callerID := t.resolveCaller(ctx)
 	if workspace == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
@@ -231,7 +234,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 	}
 
 	result := runWithTimeout(
-		func() string { return t.runSync(workspace, limit) },
+		func() string { return t.runSync(workspace, callerID, limit) },
 		wsSessionsTimeout,
 		"workspace_sessions: timed out reading session or stats data",
 	)
@@ -243,7 +246,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 // wsSessionsTimeout. It holds no Go mutexes and acquires only one OS-level
 // resource at a time (the session-dir flock, then a fresh read-only DB
 // connection), so no deadlock is possible.
-func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
+func (t *WorkspaceSessions) runSync(workspace, callerID string, recentLimit int) string {
 	now := time.Now()
 
 	// ── 1. Active sessions for this workspace ──────────────────────────────
@@ -271,7 +274,7 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 	writes = feedRecentWrites(writes, recentLimit)
 
 	annotations := t.annotateWrites(workspace, writes)
-	base := formatWorkspaceSessions(workspace, t.selfID(), peers, writes, annotations, now)
+	base := formatWorkspaceSessions(workspace, callerID, peers, writes, annotations, now)
 	return base + t.collabBlock(now)
 }
 

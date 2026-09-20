@@ -49,6 +49,21 @@
   the git trailer — is the follow-on, and needs the roster dedupe and
   name-collision work that issue #472 asks to be scoped first. (#472)
 
+- **`workspace_sessions` now answers for the calling agent, not its
+  connection.** It resolved both of its questions — which workspace to list,
+  and which row is "(you)" — from the connection. That was merely incomplete
+  while an agent had no row of its own; once it does, it is wrong: the agent
+  reads the roster of its own workspace, finds its own row and cannot tell it
+  from a peer, so it treats its own writes as a peer's and re-reads files
+  nobody else touched. Both now resolve per call, falling back to the
+  connection's answers field by field, so a single-agent connection and every
+  existing caller are unchanged.
+
+  The collab and mailbox blocks deliberately still key on the connection: mail
+  is addressed to the connection's name, and moving its identity without moving
+  the delivery paths would route a note to an address nothing listens on. That
+  half is the follow-on. (#472)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed
