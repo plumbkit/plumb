@@ -247,7 +247,7 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := args.validate(); err != nil {
 		return "", err
 	}
-	plan, err := t.resolvePlan(args)
+	plan, err := t.resolvePlan(ctx, args)
 	if err != nil {
 		return "", err
 	}
@@ -284,7 +284,7 @@ func parseMutationTestArgs(raw json.RawMessage) (mutationTestArgs, error) {
 // resolved WITHOUT the target: {target} is honoured only in the test slot
 // (config.TasksConfig), and a whole-module compile is the stronger check anyway
 // — it catches breakage a package-scoped test run would never reach.
-func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
+func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mutationPlan, error) {
 	if t.resolve == nil {
 		return mutationPlan{}, errors.New("mutation_test: task commands are not available for this session")
 	}
@@ -294,7 +294,7 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 	// compile gate and test command are the ones for the language that file is
 	// written in. run_task's language argument exists to reach a sibling
 	// language's commands; pointing a mutant's gate at one would prove nothing.
-	compile, err := t.resolve(a.CompileTask, "", "")
+	compile, err := t.resolve(ctx, a.CompileTask, "", "")
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the compile gate (%s): %w", a.CompileTask, err)
 	}
@@ -303,7 +303,7 @@ func (t *MutationTest) resolvePlan(a mutationTestArgs) (mutationPlan, error) {
 			"Without that proof a non-compiling mutant is indistinguishable from a kill, so the run is refused rather than reported unverifiably. "+
 			"Configure [tasks.<lang>] %s, or point compile_task at a slot that does compile", a.CompileTask, a.CompileTask)
 	}
-	test, err := t.resolve(a.TestTask, a.TestTarget, "")
+	test, err := t.resolve(ctx, a.TestTask, a.TestTarget, "")
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the test command (%s): %w", a.TestTask, err)
 	}

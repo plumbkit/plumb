@@ -8,7 +8,7 @@ import (
 )
 
 func TestRunCommand_ArgValidation(t *testing.T) {
-	rc := NewRunCommand(func(name, target string) (ResolvedCommand, error) {
+	rc := NewRunCommand(func(_ context.Context, name, target string) (ResolvedCommand, error) {
 		return ResolvedCommand{}, nil
 	})
 	cases := []struct {
@@ -29,7 +29,7 @@ func TestRunCommand_ArgValidation(t *testing.T) {
 }
 
 func TestRunCommand_ResolverErrorSurfaces(t *testing.T) {
-	rc := NewRunCommand(func(name, target string) (ResolvedCommand, error) {
+	rc := NewRunCommand(func(_ context.Context, name, target string) (ResolvedCommand, error) {
 		return ResolvedCommand{}, errUntrusted
 	})
 	_, err := rc.Execute(context.Background(), json.RawMessage(`{"name":"lint"}`))
@@ -46,7 +46,7 @@ func TestRunCommand_NilResolver(t *testing.T) {
 }
 
 func TestRunCommand_Runs(t *testing.T) {
-	rc := NewRunCommand(func(name, target string) (ResolvedCommand, error) {
+	rc := NewRunCommand(func(_ context.Context, name, target string) (ResolvedCommand, error) {
 		return ResolvedCommand{
 			Name:       name,
 			Argv:       []string{"echo", "hello-" + target},
@@ -70,7 +70,7 @@ func TestRunCommand_Runs(t *testing.T) {
 }
 
 func TestRunCommand_ReportsNetworkOff(t *testing.T) {
-	rc := NewRunCommand(func(name, target string) (ResolvedCommand, error) {
+	rc := NewRunCommand(func(_ context.Context, name, target string) (ResolvedCommand, error) {
 		return ResolvedCommand{
 			Name:       name,
 			Argv:       []string{"echo", "x"},

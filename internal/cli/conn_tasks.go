@@ -6,6 +6,7 @@ package cli
 // closure pattern (config adapted into a plain tools type at the cli seam).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -27,8 +28,10 @@ import (
 // included — were unreachable through run_task, and an agent that wanted the
 // Python tests in a TypeScript-primary repo had to abandon the tool and shell
 // out, losing the no-shell argv contract and the trust gate with it.
-func (s *connSession) taskResolver(slot, target, language string) (tools.TaskCommand, error) {
-	ws := s.workspace()
+// The working directory is the CALLING AGENT's root — see commandResolver for
+// why the connection's pin was the wrong answer (PLAN-440 item 4).
+func (s *connSession) taskResolver(ctx context.Context, slot, target, language string) (tools.TaskCommand, error) {
+	ws := s.workspaceFor(ctx)
 	if ws == "" {
 		return tools.TaskCommand{}, errors.New("run_task: no workspace is pinned for this session")
 	}

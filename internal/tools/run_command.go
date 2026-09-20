@@ -38,7 +38,7 @@ type ResolvedCommand struct {
 // errors when the name is unknown, when a project-supplied command is not yet
 // trusted, or when the {target} does not fit the command. nil ⇒ the tool reports
 // command execution is unavailable.
-type CommandResolverFn = func(name, target string) (ResolvedCommand, error)
+type CommandResolverFn = func(ctx context.Context, name, target string) (ResolvedCommand, error)
 
 // RunCommand is the run_command MCP tool. It takes no filesystem path argument —
 // the workspace and working directory come from the resolver, and confinement is
@@ -103,7 +103,7 @@ func (t *RunCommand) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if t.resolve == nil {
 		return "", errors.New("run_command: command execution is not available for this session")
 	}
-	rc, err := t.resolve(a.Name, a.Target)
+	rc, err := t.resolve(ctx, a.Name, a.Target)
 	if err != nil {
 		return "", err
 	}

@@ -136,7 +136,7 @@ const runTaskContested = "run_task: this connection's workspace pin is contested
 // this alias is SHARED with mutation_test, and a shared seam with two shapes is
 // how the two drift. mutation_test passes "" deliberately — a mutant is only
 // meaningful against the language its source is written in.
-type TaskResolverFn = func(slot, target, language string) (TaskCommand, error)
+type TaskResolverFn = func(ctx context.Context, slot, target, language string) (TaskCommand, error)
 
 // Tasks is the run_task MCP tool.
 type Tasks struct {
@@ -216,7 +216,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	if t.resolve == nil {
 		return "", errors.New("run_task: task commands are not available for this session")
 	}
-	cmd, err := t.resolve(a.Slot, a.Target, a.Language)
+	cmd, err := t.resolve(ctx, a.Slot, a.Target, a.Language)
 	if err != nil {
 		return "", err
 	}

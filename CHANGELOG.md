@@ -104,6 +104,17 @@
   table cannot disarm a gate that is currently holding. A single persisted agent
   does not arm anything — the connection is that agent. (PLAN-440 item 2)
 
+- **`run_command` and `run_task` now execute in the calling agent's workspace,
+  not its connection's.** Neither tool takes a workspace argument — the working
+  directory comes from the resolver — and both resolvers asked for the
+  connection's pin. An agent holding its own shard therefore ran the project's
+  build, tests and scripts against whichever project the connection happened to
+  be pinned to. This is the dangerous sibling of the wrong-root *read*, and
+  silent for the same reason: a worktree sits inside its parent checkout, so
+  every path still resolved and the commands still succeeded — against the
+  wrong tree. An unidentified caller and a single-agent connection resolve the
+  connection's pin exactly as before. (PLAN-440 item 4)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed

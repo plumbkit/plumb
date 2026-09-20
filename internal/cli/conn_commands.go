@@ -18,6 +18,7 @@ package cli
 // as something the user once approved.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -29,8 +30,13 @@ import (
 
 // commandResolver resolves a [[command]] name (+ optional target) to a runnable,
 // sandboxed command for this session's workspace, applying the trust gate.
-func (s *connSession) commandResolver(name, target string) (tools.ResolvedCommand, error) {
-	ws := s.workspace()
+// The working directory is the CALLING AGENT's root, not the connection's.
+// run_command has no workspace argument, so before this an agent holding its
+// own shard ran the project's scripts against whichever project the connection
+// was pinned to — silent, because a worktree sits inside its parent checkout
+// and every path still resolved (PLAN-440 item 4).
+func (s *connSession) commandResolver(ctx context.Context, name, target string) (tools.ResolvedCommand, error) {
+	ws := s.workspaceFor(ctx)
 	if ws == "" {
 		return tools.ResolvedCommand{}, errors.New("run_command: no workspace is attached")
 	}
