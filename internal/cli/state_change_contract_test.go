@@ -43,17 +43,17 @@ var stateChanging = map[string]string{
 	"read_file": readOnly, "read_symbol": readOnly, "read_multiple_files": readOnly,
 	"read_memory": readOnly, "list_memories": readOnly, "search_memories": readOnly,
 	"relevant_memories": readOnly,
-	"file_outline": readOnly, "file_status": readOnly, "file_diff": readOnly,
+	"file_outline":      readOnly, "file_status": readOnly, "file_diff": readOnly,
 	"minimal_diff_review": readOnly,
-	"find_files": readOnly, "search_in_files": readOnly, "find_references": readOnly,
+	"find_files":          readOnly, "search_in_files": readOnly, "find_references": readOnly,
 	"get_definition": readOnly, "explain_symbol": readOnly,
 	"call_hierarchy": readOnly, "type_hierarchy": readOnly,
 	"workspace_symbols": readOnly, "workspace_search": readOnly,
-	"diagnostics": readOnly,
+	"diagnostics":     readOnly,
 	"topology_search": readOnly, "topology_explore": readOnly, "topology_impact": readOnly,
 	"topology_routes": readOnly, "topology_affected": readOnly, "topology_status": readOnly,
 	"structural_query": readOnly,
-	"daemon_info": readOnly, "workspace_sessions": readOnly,
+	"daemon_info":      readOnly, "workspace_sessions": readOnly,
 }
 
 const (
