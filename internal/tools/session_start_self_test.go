@@ -204,3 +204,52 @@ func TestShortSessionID(t *testing.T) {
 		}
 	}
 }
+
+// PLAN-440 item 3, recorded as a decision rather than left open: a resume by
+// linkage recovers the predecessor's NAME but never its internal session ID —
+// only the proxy credential proves that — so the continuation keeps a new ID
+// and DISCLOSES what did not follow it.
+//
+// Disclosure is the intended answer, not a stopgap for a rename we failed to
+// prevent. Preventing the rename would break the addressability the resume
+// exists to preserve (mail is addressed to the name), and adopting the
+// predecessor's ID would assert a continuity the caller cannot prove. The
+// honest middle is to take the name, keep a new ID, and say which of the
+// predecessor's bindings are gone.
+//
+// That makes this sentence load-bearing, and it was unpinned: the existing
+// resumed-name test asserts only that "resumed" appears, so deleting the
+// disclosure branch entirely left the suite green while an agent silently lost
+// the one warning that its predecessor's mail will not arrive.
+func TestSessionStart_ResumeUnderANewIDDisclosesWhatDidNotFollow(t *testing.T) {
+	ws := t.TempDir()
+
+	t.Run("a name-only resume says the bindings did not follow", func(t *testing.T) {
+		out, err := selfStart(t, ws, "calm-stag", "abcd1234deadbeef").
+			WithExternalID(func(string) string { return "calm-stag" }).
+			WithResumedNewIdentity(func() bool { return true }).
+			Execute(t.Context(), json.RawMessage(`{"session_id":"conv-1"}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "new internal identity") {
+			t.Errorf("a resume under a new internal ID must disclose it:\n%s", out)
+		}
+		if !strings.Contains(out, "not inherited") {
+			t.Errorf("the disclosure must say what did not follow — bound mail and threads:\n%s", out)
+		}
+	})
+
+	t.Run("a full resume claims nothing extra", func(t *testing.T) {
+		out, err := selfStart(t, ws, "calm-stag", "abcd1234deadbeef").
+			WithExternalID(func(string) string { return "calm-stag" }).
+			WithResumedNewIdentity(func() bool { return false }).
+			Execute(t.Context(), json.RawMessage(`{"session_id":"conv-1"}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "new internal identity") {
+			t.Errorf("a session that kept its identity must not be told it lost it:\n%s", out)
+		}
+	})
+}
