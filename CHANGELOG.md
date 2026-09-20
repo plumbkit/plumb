@@ -125,6 +125,16 @@
   wrong tree. An unidentified caller and a single-agent connection resolve the
   connection's pin exactly as before. (PLAN-440 item 4)
 
+- **`plumb doctor` reports connections that are refusing unidentified agents.**
+  The agent-facing half of this disclosure tells an agent at `session_start`
+  that its per-call identity channel is dead. That is the right audience for
+  the agent's next call and the wrong one for the person debugging afterwards,
+  who typically has no agent transcript and only the symptom "the agents
+  stopped being able to write". A new **Agent Identity** section answers that
+  from outside any connection, naming the affected sessions so they can be
+  found. It warns rather than fails: a shared connection is a supported
+  topology whose guard is working, not a broken installation. (PLAN-440)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed

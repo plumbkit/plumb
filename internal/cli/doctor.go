@@ -119,6 +119,7 @@ func doctorSections(ws string) []doctorSection {
 		{"Language Servers", func() []checkResult { return checkLSPs(ws) }, false},
 		{"LSP Live", checkActiveLSPProcesses, true},
 		{"MCP Clients", checkMCPClients, false},
+		{"Agent Identity", checkAgentIdentity, false},
 		{"Configuration", func() []checkResult { return checkConfigs(ws) }, false},
 		{"Dev Tools", checkDevTools, false},
 		{"Integrations", func() []checkResult { return checkRastro(ws) }, false},
