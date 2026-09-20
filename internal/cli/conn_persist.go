@@ -49,6 +49,39 @@ func (s *connSession) onProxySession(id string) {
 	}
 	s.mutate(func(v *sessionView) { v.proxySessionID = id })
 	s.restoreIdentity(id)
+	s.seedLogicalAgentsFromState(id)
+}
+
+// seedLogicalAgentsFromState re-arms the shared-connection ceiling from durable
+// evidence, before OnInit attaches and before any tool call arrives.
+//
+// logicalAgentState.seen lives for the connection's life only, so a daemon
+// restart made a connection that WAS shared read as unshared: refuse admits
+// every anonymous state-changing call until two agents happen to re-declare.
+// That window sits exactly where the guard matters most — clients reconnect and
+// resume calling before they re-declare. The per-agent pins already persisted
+// under this proxy session are the evidence that the connection was shared, so
+// they seed the set (PLAN-440 item 2).
+//
+// Failure is silent and leaves the live behaviour unchanged: the seed can only
+// ADD identities, so an unreadable store costs the early arming, never a
+// wrongly-armed gate.
+func (s *connSession) seedLogicalAgentsFromState(proxySessionID string) {
+	if s.sessionState == nil || !s.view().session.PersistState {
+		return
+	}
+	ids, err := s.sessionState.LogicalAgentIDsFor(proxySessionID)
+	if err != nil {
+		s.log().Debug("daemon: seeding logical agents from persisted pins failed", "err", err)
+		return
+	}
+	if len(ids) < 2 {
+		return
+	}
+	s.logicalAgents.seed(ids)
+	s.log().Info("daemon: shared connection re-armed from persisted per-agent pins",
+		"agents", len(ids), "proxy_session", proxySessionID)
+	s.markSharedConnectionDetected()
 }
 
 // onSessionID records the plumb session ID the serve proxy replayed in the

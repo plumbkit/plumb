@@ -88,6 +88,22 @@
   undeclarable and the connection permanently unusable. Its re-pin is guarded
   where it happens, by the sticky-pin guard. (PLAN-440 item 1)
 
+- **A daemon restart no longer disarms the shared-connection ceiling.** The set
+  of logical agents observed on a connection lived in memory and was scoped to
+  that connection's life, so after a restart a connection that *was* shared read
+  as unshared: every anonymous state-changing call was admitted until two agents
+  happened to re-declare. The window sat exactly where the guard matters most —
+  clients reconnect and resume calling before they re-declare.
+
+  The per-agent pins already persisted under the proxy session are durable
+  evidence that the connection was shared, and they now seed the set when the
+  proxy session is adopted, before the workspace attaches and before the first
+  tool call. Seeding only ever ADDS, preserving the documented invariant that
+  the observed set never shrinks: a durable view is a lower bound on what a
+  connection has seen, never an upper one, so a pruned or partially-written pin
+  table cannot disarm a gate that is currently holding. A single persisted agent
+  does not arm anything — the connection is that agent. (PLAN-440 item 2)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed
