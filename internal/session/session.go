@@ -70,6 +70,14 @@ type Info struct {
 	// LastSeenAt is populated by List from the session file's mtime.
 	// It is not stored in the JSON; Touch updates the mtime instead.
 	LastSeenAt time.Time `json:"-"`
+	// ParentID names the CONNECTION session this row belongs to, when the row
+	// is a logical agent's own rather than a connection's. A connection
+	// registers one Info whose Folder is its pin; an agent that pins its own
+	// shard elsewhere would otherwise be absent from the roster of the
+	// workspace it actually works in and present in one it never touched
+	// (issue #472), since workspace_sessions matches on Folder alone. Empty on
+	// a connection's own row, which is every row a single-agent connection has.
+	ParentID string `json:"parent_id,omitempty"`
 	// ExternalID is an opaque string set by the caller via session_start's
 	// session_id parameter. It is persisted so FindEnded can match a
 	// reconnecting agent to its previous session across plumb restarts.

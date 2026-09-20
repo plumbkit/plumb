@@ -57,6 +57,11 @@ type agentShard struct {
 	// declaration-refusal marker in repinAgent.
 	restored bool
 
+	// rosterID is the session.Info registered for THIS agent, so the workspace
+	// it actually works in lists it (issue #472). Empty until the agent holds a
+	// root of its own; guarded by mu with the scalars above.
+	rosterID string
+
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
 	undoStore    *tools.UndoStore
@@ -376,6 +381,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	}
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
+	s.syncAgentRoster(sh, root, language)
 	return changed, nil
 }
 

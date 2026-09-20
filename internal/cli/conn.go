@@ -536,6 +536,7 @@ func (s *connSession) close() {
 	if budgetKey != "" {
 		s.budgets.release(budgetKey)
 	}
+	s.unregisterAgentRosters()
 	session.Unregister(s.sessionID())
 }
 

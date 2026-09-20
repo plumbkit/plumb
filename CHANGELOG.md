@@ -25,6 +25,30 @@
   attaches), and it does not repeat the hook remedy. Nothing about the gate
   itself is relaxed: an unattributable state-changing call is still refused.
 
+- **A logical agent that pins its own root is now listed in the roster of the
+  workspace it actually works in.** A connection registers exactly one
+  `session.Info`, whose `Folder` is the *connection's* pin, and
+  `workspace_sessions` builds its roster by matching `Folder == workspace`. An
+  agent that re-pinned its shard was therefore absent from the workspace it was
+  working in and present in one it never touched — observed on disk as
+  `folder: …/yayl` with `external_id: …pauta`. That roster is how an agent
+  discovers who else is live before touching a file, so the cost was a
+  peer-awareness hint nobody received and a name nobody could address.
+
+  Such an agent now registers its own session row, carrying a new `parent_id`
+  naming the connection it belongs to. The row moves with the agent on a later
+  re-pin, is retired when the agent returns to its connection's root, and is
+  retired for every agent on connection teardown — a row that outlives what it
+  describes is worse than the invisibility, because a peer would address a name
+  nobody is listening on.
+
+  Deliberately narrower than "a child row per logical agent": an agent sharing
+  its connection's root is already listed in the right workspace through the
+  connection's own row, so no second row is registered there. Making every
+  agent individually addressable — the half that also closes mail routing and
+  the git trailer — is the follow-on, and needs the roster dedupe and
+  name-collision work that issue #472 asks to be scoped first. (#472)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed
