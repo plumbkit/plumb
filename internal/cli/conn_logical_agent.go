@@ -298,6 +298,15 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if !slices.Contains(tools.StateChangingToolNames(), name) {
 		return nil
 	}
+	// The user's own opt-out. The ceiling's refusal names a remedy the caller
+	// must be able to reach — identify yourself — and a client whose runtime
+	// carries no per-call identity channel cannot reach it, so for that client
+	// the guard is not a guard but a permanent outage. This is the supported way
+	// to accept the attribution risk on a machine where it is the user's to
+	// accept; it is global-only config, never a project's, and never implicit.
+	if s.collabConfig().AllowUnidentifiedWrites {
+		return nil
+	}
 	if !s.logicalAgents.refuse(logicalAgent) {
 		return nil
 	}
@@ -452,4 +461,11 @@ func (s *connSession) persistLogicalAgent(id string) {
 	if err := s.sessionState.RecordLogicalAgent(v.proxySessionID, id); err != nil {
 		s.log().Debug("daemon: recording the logical-agent declaration failed", "agent", id, "err", err)
 	}
+}
+
+// setCollabAllowUnidentifiedWritesForTest sets the opt-out on a bare
+// connSession. Test-only: production reads it from the resolved global config
+// through collabConfig.
+func (s *connSession) setCollabAllowUnidentifiedWritesForTest(v bool) {
+	s.mutate(func(sv *sessionView) { sv.collab.AllowUnidentifiedWrites = v })
 }

@@ -448,10 +448,10 @@ func callOutput(t *testing.T, m *multiAgentConn, metaAgent, name string, args ma
 }
 
 // TestLogicalAgentIsAddressableForMail proves:
-// 1. A note addressed to a subagent's roster name reaches the subagent and cannot
-//    be claimed by the coordinator on the same connection.
-// 2. The subagent can reply to the coordinator in a thread and the reply is
-//    attributed to the subagent, so the coordinator can claim it.
+//  1. A note addressed to a subagent's roster name reaches the subagent and cannot
+//     be claimed by the coordinator on the same connection.
+//  2. The subagent can reply to the coordinator in a thread and the reply is
+//     attributed to the subagent, so the coordinator can claim it.
 func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	m := newMultiAgentConn(t)
 	parent := freshTempDir(t)
@@ -533,4 +533,3 @@ func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 		t.Errorf("reply must show author is subagent (%s), got: %s", subName, coordReplyRaw)
 	}
 }
-

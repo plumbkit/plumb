@@ -548,6 +548,27 @@ machine, and the daemon is the only process that observes every agent's activity
 on a workspace. This layer surfaces that **advisorily** — nothing here ever
 blocks a write. No env override; hot-reloaded; strictly per-workspace.
 
+**`allow_unidentified_writes`** (default `false`, **global config only**) turns
+off the shared-connection write ceiling — the refusal of a state-changing call
+that arrives on a connection serving several logical agents with no per-call
+identity to attribute it to.
+
+Set it when your client cannot stamp per-call identity. The ceiling's refusal
+tells the caller to identify itself, which assumes a channel to do that with; a
+client whose runtime drops the identity stamp has none, so on a shared connection
+every write is refused permanently and the advice cannot be followed. A guard
+whose remedy the caller cannot reach is an outage, and this is the supported way
+to say so.
+
+Understand what it costs, which is why it defaults off: with the ceiling down, a
+write from an unattributable caller lands in whichever agent's shard the
+connection resolves to, so one agent's edit can be recorded against another's
+tracker and a peer's pin can be reset under it. A single human on their own
+machine may reasonably accept that; an orchestrator running untrusted agents must
+not. It is deliberately **not** trust-gated: there is no version of "this
+repository asked to disable the guard" a user should be answering, so a project's
+`.plumb/config.toml` cannot set it at all.
+
 **Trust split.** The four channel switches — `intents`, `mailbox`,
 `cross_project`, `knowledge_handoff` — are **gated on `plumb trust`**. A project
 may ask for them, but the request is only honoured once you have approved that

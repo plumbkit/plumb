@@ -249,6 +249,10 @@ var registryData = []Field{
 		Description: "Agent-to-agent messaging between sessions on THIS workspace: leave_note, check_messages, and delivery on tool results. Default on.",
 	},
 	{
+		Key: "collab.allow_unidentified_writes", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Turn OFF the shared-connection write ceiling: admit a state-changing call that arrives on a connection serving several agents with no per-call identity. Global config only. Default false. Set it when your client cannot stamp per-call identity and the ceiling therefore refuses every write with a remedy you cannot apply — and understand the cost: an unattributable write lands in whichever agent's shard the connection resolves to.",
+	},
+	{
 		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means a cross-project send to you is refused up front, not silently dropped.",
 	},

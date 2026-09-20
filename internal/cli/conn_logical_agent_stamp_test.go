@@ -66,3 +66,30 @@ func TestStampChannelStateReadsTheIdentityFromCtx(t *testing.T) {
 		t.Error("two declared identities must read as a shared connection")
 	}
 }
+
+// The user's opt-out. The ceiling refuses an unattributable state-changing call
+// and tells the caller to identify itself — advice that assumes a channel to do
+// it with. A client whose runtime drops the per-call stamp has none, so on a
+// shared connection every write is refused permanently and the remedy cannot be
+// followed. That is an outage, not a guard, and the user must be able to accept
+// the attribution risk on their own machine.
+func TestAllowUnidentifiedWritesLiftsTheCeiling(t *testing.T) {
+	var s connSession
+	s.recordLogicalAgentCall("a")
+	s.recordLogicalAgentCall("b")
+
+	// Default: refused, exactly as before.
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("precondition: an anonymous write on a shared connection must refuse by default")
+	}
+
+	s.setCollabAllowUnidentifiedWritesForTest(true)
+
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Errorf("with the opt-out set the write must be admitted: %v", err)
+	}
+	// Reads were never refused and must stay that way.
+	if err := s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
+		t.Errorf("a read must never refuse: %v", err)
+	}
+}

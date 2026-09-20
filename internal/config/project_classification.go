@@ -256,10 +256,16 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// repository decides" are not the same thing, and a user who wants chat on for
 	// one repository should be able to say so. A project may now ASK, and the
 	// request is honoured once `plumb trust` has approved that exact content.
-	"collab.intents":           ClassTrustGated,
-	"collab.mailbox":           ClassTrustGated,
-	"collab.cross_project":     ClassTrustGated,
-	"collab.knowledge_handoff": ClassTrustGated,
+	// Not trust-gated but FORCED GLOBAL: `plumb trust` approves a project's
+	// request, and there is no version of "this repository asked to disable the
+	// guard that stops one agent's write landing in another's shard" that a user
+	// should be answering. Taking the ceiling down is the machine owner's call,
+	// made once, in their own config.
+	"collab.allow_unidentified_writes": ClassForcedGlobal,
+	"collab.intents":                   ClassTrustGated,
+	"collab.mailbox":                   ClassTrustGated,
+	"collab.cross_project":             ClassTrustGated,
+	"collab.knowledge_handoff":         ClassTrustGated,
 	// Budgets, expiries and the passive, observed-facts layer stay per-project.
 	// max_wait_seconds only bounds how long check_messages blocks, and is capped
 	// below the client's own call timeout at the point of use.

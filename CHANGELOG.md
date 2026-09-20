@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **`[collab] allow_unidentified_writes` — a supported way to turn off the
+  shared-connection write ceiling.** The ceiling refuses a state-changing call
+  that carries no per-call identity on a connection serving several agents, and
+  tells the caller to identify itself. That advice assumes the client has a
+  channel to do it with. A client whose runtime drops the identity stamp has
+  none, so every write is refused permanently and the remedy cannot be followed
+  — an outage, not a guard. Observed in the field: a user on such a client lost
+  their write lane entirely.
+
+  Default `false`, and **global config only** — deliberately not trust-gated,
+  because there is no version of "this repository asked to disable the guard
+  that stops one agent's write landing in another's shard" a user should be
+  answering. The cost is real and is why it defaults off: with the ceiling down
+  an unattributable write lands in whichever agent's shard the connection
+  resolves to. A single human on their own machine may reasonably accept that;
+  an orchestrator running untrusted agents must not.
+
 ### Fixed
 
 - **Logical agents on shared connections are now addressable for mail and

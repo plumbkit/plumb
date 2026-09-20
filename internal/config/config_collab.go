@@ -38,6 +38,28 @@ type CollabConfig struct {
 	// Reaching another project is a separate, off-by-default decision (see
 	// CrossProject). Messages are agent-authored and advisory — never blocking.
 	Mailbox bool `toml:"mailbox"`
+	// AllowUnidentifiedWrites turns OFF the shared-connection write ceiling: the
+	// refusal of a state-changing call that arrives on a connection serving
+	// several logical agents with no per-call identity to attribute it to.
+	//
+	// Opt-in, default false, and GLOBAL-ONLY — a project's .plumb/config.toml
+	// cannot set it, because a cloned repository must not be able to disable a
+	// guard on the machine that opened it.
+	//
+	// It exists because the ceiling can otherwise have no reachable remedy. Its
+	// refusal tells the caller to identify itself, which assumes the client has
+	// a channel to do that with; a client whose runtime drops the per-call
+	// identity stamp has none, so on a shared connection EVERY write is refused
+	// permanently and the advice cannot be followed. Observed in the field: a
+	// user on such a client lost their write lane entirely.
+	//
+	// What it costs is real and is the whole reason it defaults off: with the
+	// ceiling down, a write from an unattributable caller lands in whichever
+	// agent's shard the connection resolves to, so one agent's edit can be
+	// recorded against another's tracker, and a peer's pin can be reset under
+	// it. That is a trade a single human on their own machine may reasonably
+	// accept and an orchestrator running untrusted agents must not.
+	AllowUnidentifiedWrites bool `toml:"allow_unidentified_writes"`
 	// CrossProject lets this session RECEIVE messages from sessions pinned to a
 	// different workspace. Opt-in, default false, and deliberately the recipient's
 	// decision rather than the sender's, so another project can never inject text

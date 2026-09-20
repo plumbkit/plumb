@@ -375,6 +375,8 @@ func boolFieldCollab(c *config.Config, key settingKey) *bool {
 		return &c.Collab.Mailbox
 	case skCollabCrossProject:
 		return &c.Collab.CrossProject
+	case skCollabAllowUnidentifiedWrites:
+		return &c.Collab.AllowUnidentifiedWrites
 	case skCollabKnowledgeHandoff:
 		return &c.Collab.KnowledgeHandoff
 	case skCollabKeepDelivered:
@@ -552,6 +554,18 @@ func toggleLabelMore(key settingKey) string {
 		return "knowledge handoff"
 	case skCollabKeepDelivered:
 		return "keep delivered notes"
+	default:
+		return toggleLabelRest(key)
+	}
+}
+
+// toggleLabelRest is the third link in the chain. The switch is split purely to
+// keep each function under the cyclomatic cap as settings are added; the order
+// carries no meaning.
+func toggleLabelRest(key settingKey) string {
+	switch key {
+	case skCollabAllowUnidentifiedWrites:
+		return "allow unidentified writes"
 	case skXcodeAutoBuildServer:
 		return "xcode auto build server"
 	default:
