@@ -244,6 +244,12 @@ func (s *connSession) declaredAgentCtx(ctx context.Context, id string) context.C
 // nothing on the session record to explain the refusal.
 func (s *connSession) recordLogicalAgent(id string) {
 	shared, transition := s.logicalAgents.record(id)
+	// Durable before the shared check, and for the FIRST identity too: the
+	// connection that must come back armed is one where two agents declared
+	// themselves, and the first declaration is half that evidence. Recording it
+	// only once the connection is already shared would lose the coordinator
+	// whenever the subagent's declaration is the one that crosses a restart.
+	s.persistLogicalAgent(id)
 	if !shared {
 		return
 	}
@@ -426,4 +432,24 @@ func (l *logicalAgentState) count() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.seen)
+}
+
+// persistLogicalAgent writes an observed identity to the durable per-connection
+// record that seedLogicalAgentsFromState reads back after a restart.
+//
+// Silent on failure: the record is an optimisation of the fail-closed ceiling's
+// recovery, and a connection that cannot write it behaves exactly as it did
+// before the record existed — the live in-memory set still arms the gate for
+// this connection's life.
+func (s *connSession) persistLogicalAgent(id string) {
+	if id == "" || s.sessionState == nil {
+		return
+	}
+	v := s.view()
+	if !v.session.PersistState || v.proxySessionID == "" {
+		return
+	}
+	if err := s.sessionState.RecordLogicalAgent(v.proxySessionID, id); err != nil {
+		s.log().Debug("daemon: recording the logical-agent declaration failed", "agent", id, "err", err)
+	}
 }

@@ -276,3 +276,41 @@ func TestMigrateV3ToV4_NameSurvivesAndInheritsNothing(t *testing.T) {
 		t.Errorf("after upgrade SessionID = %q, want sess-new", got.SessionID)
 	}
 }
+
+// The v8 step must run on the UPGRADE path, not only when a database is created
+// fresh. Every installed daemon has a pre-existing file, and a gate that
+// depends on the logical_agent table would fail open on all of them if this
+// step were only reachable from the baseline schema.
+func TestMigrateV1ToV8_LogicalAgentRecordExistsAndWorks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	openV1(t, path)
+
+	s, err := openAt(path)
+	if err != nil {
+		t.Fatalf("open after v1: %v", err)
+	}
+	defer s.Close()
+
+	if got := userVersion(t, s); got != SchemaVersion {
+		t.Errorf("user_version = %d, want %d", got, SchemaVersion)
+	}
+	if !tableExists(t, s, "logical_agent") {
+		t.Fatal("logical_agent is missing after migrating a v1 database")
+	}
+
+	// The legacy pin row survives and still counts as evidence, alongside a
+	// declaration the new table records.
+	if err := s.RecordLogicalAgent("legacy", "subagent"); err != nil {
+		t.Fatalf("record on a migrated database: %v", err)
+	}
+	if err := s.UpsertPinForAgent("legacy", "coordinator", "/tmp/legacy-root", "go", PinSourceSessionStart); err != nil {
+		t.Fatalf("upsert pin on a migrated database: %v", err)
+	}
+	ids, err := s.LogicalAgentIDsFor("legacy")
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Errorf("LogicalAgentIDsFor = %v (%d), want both sources unioned", ids, len(ids))
+	}
+}

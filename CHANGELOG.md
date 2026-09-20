@@ -102,7 +102,17 @@
   the observed set never shrinks: a durable view is a lower bound on what a
   connection has seen, never an upper one, so a pruned or partially-written pin
   table cannot disarm a gate that is currently holding. A single persisted agent
-  does not arm anything — the connection is that agent. (PLAN-440 item 2)
+  does not arm anything — the connection is that agent.
+  The durable source is a record of the DECLARATIONS themselves (a new
+  `logical_agent` table, schema v8), not of pinned workspaces. Pins were the
+  obvious source and the wrong one: a row is written there only when an agent's
+  own `session_start` named a workspace, while an agent identifies itself
+  through three channels. A subagent that stamps its calls and inherits the
+  connection's pin — the common topology — never wrote one, so reading pins
+  alone made a genuinely shared connection come back from a restart looking
+  single-agent, leaving the ceiling disarmed for exactly the case this fixes.
+  Both sources are unioned, so a database written before v8 still contributes
+  what it has. (PLAN-440 item 2)
 
 - **`run_command` and `run_task` now execute in the calling agent's workspace,
   not its connection's.** Neither tool takes a workspace argument — the working

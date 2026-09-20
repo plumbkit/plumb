@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	    durable identity record carries its own authorised external linkage (so
 //	    recovery no longer depends on a prunable ended-session JSON file) and a
 //	    revision that orders name updates (PLAN-426)
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -173,158 +173,6 @@ func openAt(path string) (*Store, error) {
 // created reads 0; one written by an older plumb reads its own version.
 func readVersion(db *sql.DB) (int, error) {
 	return sqlitex.Version(db)
-}
-
-// migrate brings a database at version `from` up to SchemaVersion. Each step is
-// gated on the on-disk version, so it runs exactly once per database and a
-// re-open is a no-op. The baseline `schema` above is frozen at v1, so a fresh
-// database (version 0) and an upgraded one converge on the same shape here.
-func migrate(db *sql.DB, from int) error {
-	if from < 2 {
-		// SQLite permits a NOT NULL column via ADD COLUMN when it carries a
-		// default, which back-fills every pre-existing row to the unknown origin.
-		const addSource = `ALTER TABLE pinned_workspace ADD COLUMN source TEXT NOT NULL DEFAULT ''`
-		if _, err := db.Exec(addSource); err != nil {
-			return fmt.Errorf("sessionstate: migrate v2 (pinned_workspace.source): %w", err)
-		}
-	}
-	if from < 3 {
-		// A dedicated table, not a column on pinned_workspace: a pin row only
-		// exists once a workspace is pinned, but the name must be recorded for
-		// every identified proxy session, pinned or not.
-		const addNames = `CREATE TABLE IF NOT EXISTS session_names (
-    proxy_session_id TEXT    PRIMARY KEY,
-    name             TEXT    NOT NULL,
-    updated_at       INTEGER NOT NULL
-)`
-		if _, err := db.Exec(addNames); err != nil {
-			return fmt.Errorf("sessionstate: migrate v3 (session_names): %w", err)
-		}
-	}
-	if from < 4 {
-		// The plumb session ID the name belonged to, so a reconnecting proxy can
-		// inherit its predecessor's mailbox identity and collect messages bound to
-		// it. A pre-v4 row back-fills to "" and inherits nothing, which is the
-		// behaviour that shipped before this column existed.
-		const addSessionID = `ALTER TABLE session_names ADD COLUMN plumb_session_id TEXT NOT NULL DEFAULT ''`
-		if _, err := db.Exec(addSessionID); err != nil {
-			return fmt.Errorf("sessionstate: migrate v4 (session_names.plumb_session_id): %w", err)
-		}
-	}
-	if from < 5 {
-		// A key/value side table rather than more columns: these are facts about
-		// the DATABASE (which one-shot maintenance has already run), not about any
-		// proxy session. The schema version is the wrong place to record "has this
-		// run yet", because that answer has to survive later version bumps.
-		const addMeta = `CREATE TABLE IF NOT EXISTS meta (
-    key        TEXT    PRIMARY KEY,
-    value      TEXT    NOT NULL,
-    updated_at INTEGER NOT NULL
-) WITHOUT ROWID`
-		if _, err := db.Exec(addMeta); err != nil {
-			return fmt.Errorf("sessionstate: migrate v5 (meta): %w", err)
-		}
-	}
-	if from < 6 {
-		// PLAN-286: a shared connection keys mutable state per logical agent, so
-		// both persisted tables gain a logical_agent_id dimension. SQLite cannot
-		// alter a WITHOUT-ROWID primary key, so each table is recreated with the
-		// new column folded into its key; pre-existing rows back-fill to "" (the
-		// connection-level agent), so an upgrade changes no behaviour until a
-		// shared connection actually persists per-agent rows.
-		const addReadAgent = `
-CREATE TABLE read_tracking_v6 (
-    proxy_session_id TEXT    NOT NULL,
-    logical_agent_id TEXT    NOT NULL DEFAULT '',
-    workspace        TEXT    NOT NULL,
-    path             TEXT    NOT NULL,
-    mtime_unix_nano  INTEGER NOT NULL,
-    sha              TEXT    NOT NULL DEFAULT '',
-    updated_at       INTEGER NOT NULL,
-    PRIMARY KEY (proxy_session_id, logical_agent_id, workspace, path)
-) WITHOUT ROWID;
-INSERT INTO read_tracking_v6 (proxy_session_id, logical_agent_id, workspace, path, mtime_unix_nano, sha, updated_at)
-    SELECT proxy_session_id, '', workspace, path, mtime_unix_nano, sha, updated_at FROM read_tracking;
-DROP TABLE read_tracking;
-ALTER TABLE read_tracking_v6 RENAME TO read_tracking;
-CREATE INDEX IF NOT EXISTS idx_rt_updated ON read_tracking(updated_at);`
-		if _, err := db.Exec(addReadAgent); err != nil {
-			return fmt.Errorf("sessionstate: migrate v6 (read_tracking.logical_agent_id): %w", err)
-		}
-		const addPinAgent = `
-CREATE TABLE pinned_workspace_v6 (
-    proxy_session_id TEXT    NOT NULL,
-    logical_agent_id TEXT    NOT NULL DEFAULT '',
-    workspace        TEXT    NOT NULL,
-    language         TEXT    NOT NULL DEFAULT '',
-    source           TEXT    NOT NULL DEFAULT '',
-    updated_at       INTEGER NOT NULL,
-    PRIMARY KEY (proxy_session_id, logical_agent_id)
-);
-INSERT INTO pinned_workspace_v6 (proxy_session_id, logical_agent_id, workspace, language, source, updated_at)
-    SELECT proxy_session_id, '', workspace, language, source, updated_at FROM pinned_workspace;
-DROP TABLE pinned_workspace;
-ALTER TABLE pinned_workspace_v6 RENAME TO pinned_workspace;`
-		if _, err := db.Exec(addPinAgent); err != nil {
-			return fmt.Errorf("sessionstate: migrate v6 (pinned_workspace.logical_agent_id): %w", err)
-		}
-	}
-	if from < 7 {
-		if err := migrateV7(db); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// migrateV7 turns session_names into the canonical durable identity record.
-//
-// Split out of migrate to keep that function under the complexity cap as the
-// history grows; every step is still gated on the on-disk version by its one
-// caller, so it runs exactly once per database.
-func migrateV7(db *sql.DB) error {
-	// PLAN-426: session_names becomes the CANONICAL durable identity record,
-	// so it has to carry everything a recovery needs on its own.
-	//
-	// external_id is the authorised external-conversation linkage. It used to
-	// live only in the predecessor's session JSON file, which is garbage
-	// collected 24 h after the session ends — so an outage longer than that
-	// silently dropped the linkage even though the identity itself survived.
-	// A pre-v7 row back-fills to "", which means "unknown", never "none": the
-	// JSON path still supplies it while that file is there, and a blank value
-	// is never written over a known one (see SaveIdentity).
-	//
-	// name_revision orders name updates, so a proxy holding a snapshot taken
-	// before an explicit rename cannot replay the older name over the newer
-	// one. Pre-v7 rows start at 0 and take their first bump on the next save
-	// that changes the name.
-	//
-	// Two ALTERs rather than a table rebuild: session_names has a rowid and a
-	// single-column primary key, so ADD COLUMN with a default back-fills in
-	// place — no copy, and no window in which the identity table is absent.
-	const addExternal = `ALTER TABLE session_names ADD COLUMN external_id TEXT NOT NULL DEFAULT ''`
-	if _, err := db.Exec(addExternal); err != nil {
-		return fmt.Errorf("sessionstate: migrate v7 (session_names.external_id): %w", err)
-	}
-	const addRevision = `ALTER TABLE session_names ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0`
-	if _, err := db.Exec(addRevision); err != nil {
-		return fmt.Errorf("sessionstate: migrate v7 (session_names.name_revision): %w", err)
-	}
-	// The name index serves the reservation lookup, which now runs on every
-	// name draw. It is deliberately NOT unique, and that is not only about
-	// history: a name was once unique only among LIVE sessions, and a serve
-	// RESTART minted a second row for a name the first still held, so duplicates
-	// could be written at any time. A unique index would fail the migration on
-	// exactly the databases that most need it, and a name held by two different
-	// conversations is a standing ambiguity rather than a thing to be resolved on
-	// migration. Every one of those rows is legitimate history — the durable proof
-	// of which session a reconnecting proxy is — so a conversation's own
-	// superseded rows are collapsed when the name is READ (see independentClaims)
-	// and never deleted.
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
-		return fmt.Errorf("sessionstate: migrate v7 (idx_sn_name): %w", err)
-	}
-	return nil
 }
 
 // stampVersion records SchemaVersion once the migrations for `current` have run.
@@ -563,7 +411,42 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune pins: %w", err)
 	}
+	if _, err := s.db.Exec(`DELETE FROM logical_agent WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
+		return fmt.Errorf("sessionstate: prune logical agents: %w", err)
+	}
 	// session_names is intentionally absent — see the doc comment. Do not add a
 	// DELETE here without an explicit retirement signal to gate it on.
+	return nil
+}
+
+// migrateV8 adds the durable record of which logical agents were multiplexed
+// over a connection.
+//
+// Split out of migrate for the same reason migrateV7 was: to keep that function
+// under the complexity cap as the history grows. Gated on the on-disk version by
+// its one caller, so it runs exactly once per database.
+func migrateV8(db *sql.DB) error {
+	// PLAN-440 item 2: the durable record of WHICH logical agents were
+	// multiplexed over a connection, independent of whether any of them
+	// pinned a workspace.
+	//
+	// pinned_workspace was the obvious source and the wrong one: a row is
+	// written there only when an agent's own session_start named a
+	// workspace, while an agent identifies itself through three channels —
+	// an attach-time session_id, a per-call _meta stamp, and session_start's
+	// own argument. A subagent that stamps its calls and inherits the
+	// connection's pin, which is the common topology, never wrote a row, so
+	// a reconnecting daemon read a genuinely shared connection as
+	// single-agent and left the fail-closed ceiling disarmed.
+	const addAgents = `CREATE TABLE IF NOT EXISTS logical_agent (
+    proxy_session_id TEXT    NOT NULL,
+    logical_agent_id TEXT    NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (proxy_session_id, logical_agent_id)
+) WITHOUT ROWID`
+	if _, err := db.Exec(addAgents); err != nil {
+		return fmt.Errorf("sessionstate: migrate v8 (logical_agent): %w", err)
+	}
+
 	return nil
 }

@@ -123,3 +123,61 @@ func TestReconnectWithOneAgentStillAdmitsAnonymousWrites(t *testing.T) {
 		t.Errorf("a single-agent connection must still admit its own anonymous write: %v", err)
 	}
 }
+
+// The seed's durable source must cover how agents actually declare themselves.
+// A pinned_workspace row is written only when an agent's own session_start
+// named a workspace; a subagent that identifies itself with a per-call _meta
+// stamp, or with session_start carrying just a session_id, inherits the
+// connection's pin and writes no row of its own. That is the COMMON topology —
+// a coordinator that named a workspace and a subagent that did not — so a seed
+// reading pins alone sees one identity, skips, and leaves the gate disarmed
+// after a restart for exactly the case item 2 exists to cover.
+func TestReconnectArmsWhenOnlyOneAgentEverPinnedAWorkspace(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-restart-mixed-declaration"
+	ws := freshTempDir(t)
+
+	// Before the restart: the coordinator named a workspace; the subagent only
+	// ever declared an identity.
+	if err := ss.UpsertPinForAgent(proxyID, "coordinator", ws, "go", sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("persist coordinator pin: %v", err)
+	}
+	if err := ss.RecordLogicalAgent(proxyID, "coordinator"); err != nil {
+		t.Fatalf("record coordinator identity: %v", err)
+	}
+	if err := ss.RecordLogicalAgent(proxyID, "subagent"); err != nil {
+		t.Fatalf("record subagent identity: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, proxyID)
+
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Error("a connection whose second agent never pinned a workspace came back disarmed; " +
+			"the seed's durable source must cover every declaration channel, not just pins")
+	}
+}
+
+// End to end through the LIVE path: the declarations are made on a real
+// connection, which must record them itself, and a second connection on the
+// same proxy session — the restart — must come back armed. Without this, a
+// persistLogicalAgent that was never wired in would still pass every test
+// above, because they seed the store by hand.
+func TestDeclarationsMadeOnALiveConnectionSurviveTheRestart(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-live-declarations"
+
+	before := newPersistSession(t, store, ss, proxyID)
+	before.recordLogicalAgentCall("coordinator")
+	before.recordLogicalAgentCall("subagent")
+	if err := before.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("precondition: the live connection should already be refusing anonymous writes")
+	}
+
+	// The restart: a fresh connection adopting the same proxy session.
+	after := newPersistSession(t, store, ss, proxyID)
+
+	if err := after.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Error("the reconnecting connection came back disarmed; declarations made on the live " +
+			"connection were not durably recorded")
+	}
+}
