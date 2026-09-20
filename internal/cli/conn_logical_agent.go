@@ -289,7 +289,7 @@ func (s *connSession) markSharedConnectionDetected() {
 // contract is about state-changing operations resetting a peer's pin, trackers,
 // rate budget, undo state or language.
 func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAgent string) error {
-	if !slices.Contains(tools.WriteToolNames(), name) {
+	if !slices.Contains(tools.StateChangingToolNames(), name) {
 		return nil
 	}
 	if !s.logicalAgents.refuse(logicalAgent) {

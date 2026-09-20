@@ -66,6 +66,28 @@
   the delivery paths would route a note to an address nothing listens on. That
   half is the follow-on. (#472)
 
+- **The shared-connection write gate no longer borrows the peer-awareness
+  display list, and seven mutating tools stop being ungated.** The gate decides
+  which anonymous calls to refuse on a connection serving several agents; it
+  asked `WriteToolNames`, a list assembled for the recent-writes *feed*, where
+  omitting a tool costs a missing line in a listing. Reused as a gate the same
+  omission means an unattributable call runs — so `undo_edit`, `write_memory`,
+  `delete_memory`, `run_command`, `run_task`, `rename_session`, `git_init` and
+  the collab writes were all ungated.
+
+  The gate now owns its own set, and a contract test derives the universe from
+  the live tool registration: every registered tool must be classified as
+  state-changing, read-only, or guarded-elsewhere, so a newly added tool fails
+  the suite until someone decides which it is. Hand-extending a list was the
+  trap; the test is the fix.
+
+  `session_start` is deliberately not gated, and that is now recorded rather
+  than left to look like another omission: it is state-changing, but it is also
+  the only channel by which an agent on a connection that cannot stamp per-call
+  identity declares itself, so refusing it anonymously would make identity
+  undeclarable and the connection permanently unusable. Its re-pin is guarded
+  where it happens, by the sticky-pin guard. (PLAN-440 item 1)
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed
