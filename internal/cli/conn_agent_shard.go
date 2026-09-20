@@ -60,7 +60,8 @@ type agentShard struct {
 	// rosterID is the session.Info registered for THIS agent, so the workspace
 	// it actually works in lists it (issue #472). Empty until the agent holds a
 	// root of its own; guarded by mu with the scalars above.
-	rosterID string
+	rosterID   string
+	rosterName string
 
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker

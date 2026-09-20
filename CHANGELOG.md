@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A commit through `git` now stamps the calling agent's name in the
+  `Plumb-Session` trailer, not its connection.** When multiple logical agents
+  share a connection, each agent with its own workspace pin holds its own
+  roster name and session ID. Previously, `commitTrailerToken` consulted only
+  the static connection session name resolver wired at registration time,
+  attributing every subagent commit to the coordinator session. The `Git` tool
+  now supports a per-call session name resolver (`WithSessionNameFor`), which
+  `connSession` wires to the calling agent's shard roster name, falling back to
+  the connection name for agents sharing the root or when unconfigured. (#472)
+
 - **A client whose per-call identity channel is dead now learns it at
   `session_start`, not from its first refused write.** The shared-connection
   write gate reads exactly one channel — the per-call logical-agent identity —

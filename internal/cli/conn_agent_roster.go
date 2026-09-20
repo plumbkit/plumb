@@ -71,6 +71,7 @@ func (s *connSession) syncAgentRoster(sh *agentShard, root, language string) {
 		return
 	}
 	sh.rosterID = info.ID
+	sh.rosterName = info.Name
 	s.log().Info("daemon: logical agent registered in its own workspace roster",
 		"agent", sh.id, "root", root, "row", info.ID, "name", info.Name, "parent", s.sessionID())
 }
@@ -85,6 +86,7 @@ func (s *connSession) retireAgentRoster(sh *agentShard) {
 	}
 	session.Unregister(sh.rosterID)
 	sh.rosterID = ""
+	sh.rosterName = ""
 }
 
 // unregisterAgentRosters retires every agent row this connection registered, on
@@ -121,4 +123,19 @@ func (s *connSession) rosterIdentity(ctx context.Context) (workspace, selfID str
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	return workspace, sh.rosterID
+}
+
+// sessionNameFor returns the session name for the calling agent in ctx. For a
+// logical agent holding its own roster row, this is that agent's own name;
+// otherwise it falls back to the connection's session name.
+func (s *connSession) sessionNameFor(ctx context.Context) string {
+	sh := s.shardFor(ctx)
+	if sh != nil {
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		if sh.rosterName != "" {
+			return sh.rosterName
+		}
+	}
+	return s.sessionName()
 }

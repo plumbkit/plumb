@@ -61,14 +61,16 @@ var gitSchema = json.RawMessage(`{
 // in git_policy.go; argv assembly, execution, and output formatting in
 // git_exec.go. This file holds the MCP Tool surface and request orchestration.
 //
-// Concurrency: Execute is safe for concurrent use. sessID/sessNameFn are set
-// once at registration (WithSession); the cross-session ledger itself lives in
-// the process-global gitRefStates map (git_ref_guard.go).
+// Concurrency: Execute is safe for concurrent use. sessID/sessNameFn/sessNameForFn
+// are set once at registration (WithSession/WithSessionNameFor); the
+// cross-session ledger itself lives in the process-global gitRefStates map
+// (git_ref_guard.go).
 type Git struct {
-	deps       WriteDeps
-	policy     GitPolicyFn
-	sessID     func() string
-	sessNameFn func() string
+	deps          WriteDeps
+	policy        GitPolicyFn
+	sessID        func() string
+	sessNameFn    func() string
+	sessNameForFn func(ctx context.Context) string
 	// Peer repo-intent warning wiring (git_intent_warn.go), all nil-safe and
 	// consulted lazily per call: unwired means no warning is ever computed.
 	// hintBudgetBytes is the [collab] hint_budget_bytes snapshot the rendered
@@ -88,6 +90,13 @@ func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 func (t *Git) WithSession(id func() string, name func() string) *Git {
 	t.sessID = id
 	t.sessNameFn = name
+	return t
+}
+
+// WithSessionNameFor wires a per-call session name resolver for multi-agent
+// connections.
+func (t *Git) WithSessionNameFor(fn func(ctx context.Context) string) *Git {
+	t.sessNameForFn = fn
 	return t
 }
 
@@ -193,7 +202,7 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := t.checkBoundary(ctx, a); err != nil {
 		return "", err
 	}
-	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand), gitChildSpecFor(policy))
+	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), gitChildSpecFor(policy))
 }
 
 // commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
@@ -209,11 +218,17 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 // this tool fail with "error: unknown option 'trailer'" — plumb runs no
 // runtime version probe to catch that ahead of time. See the git ≥ 2.32
 // requirement on the [git] commit_trailer row in docs/configuration.md.
-func (t *Git) commitTrailerToken(p GitPolicy, sub string) string {
-	if sub != "commit" || !p.CommitTrailer || t.sessNameFn == nil {
+func (t *Git) commitTrailerToken(ctx context.Context, p GitPolicy, sub string) string {
+	if sub != "commit" || !p.CommitTrailer {
 		return ""
 	}
-	name := strings.TrimSpace(t.sessNameFn())
+	var name string
+	if t.sessNameForFn != nil {
+		name = strings.TrimSpace(t.sessNameForFn(ctx))
+	}
+	if name == "" && t.sessNameFn != nil {
+		name = strings.TrimSpace(t.sessNameFn())
+	}
 	if name == "" {
 		return ""
 	}

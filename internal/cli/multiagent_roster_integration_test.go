@@ -21,10 +21,13 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 func TestAgentIsVisibleInTheRosterOfItsOwnWorkspace(t *testing.T) {
@@ -204,5 +207,95 @@ func TestRestoredAgentConfirmingItsRootIsStillListed(t *testing.T) {
 	}
 	if n := rowsIn(t, worktree); n == 0 {
 		t.Error("a restored agent that confirmed its own root has no roster row, so it is invisible in the workspace it works in (issue #472)")
+	}
+}
+
+// TestCommitSessionTrailerNamesCallingAgent proves issue #472: a commit made
+// through the git tool on a shared connection carries a Plumb-Session: trailer
+// naming the agent that made it, not the connection.
+func TestCommitSessionTrailerNamesCallingAgent(t *testing.T) {
+	m := newMultiAgentConn(t)
+	parent := t.TempDir()
+	gitCmd := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitCmd(parent, "init")
+	gitCmd(parent, "config", "user.email", "test@example.com")
+	gitCmd(parent, "config", "user.name", "Test User")
+	_ = os.WriteFile(filepath.Join(parent, "init.txt"), []byte("init\n"), 0o644)
+	gitCmd(parent, "add", "init.txt")
+	gitCmd(parent, "commit", "-m", "initial commit")
+
+	worktree := filepath.Join(parent, "worktree")
+	gitCmd(parent, "worktree", "add", worktree, "-b", "wt-branch")
+	gitCmd(worktree, "config", "user.email", "test@example.com")
+	gitCmd(worktree, "config", "user.name", "Test User")
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	gitTool := tools.NewGit(
+		m.s.buildWriteDeps(),
+		func() tools.GitPolicy { return tools.GitPolicy{AllowWrites: true, CommitTrailer: true} },
+	).WithSession(m.s.sessionID, m.s.sessionName).WithSessionNameFor(m.s.sessionNameFor)
+
+	if err := os.WriteFile(filepath.Join(worktree, "f.txt"), []byte("sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.call(t, "sub", "git", map[string]any{"subcommand": "add", "files": []string{"f.txt"}, "repo": worktree}, gitTool.Execute); err != nil {
+		t.Fatalf("subagent git add: %v", err)
+	}
+	if err := m.call(t, "sub", "git", map[string]any{"subcommand": "commit", "message": "sub commit", "repo": worktree}, gitTool.Execute); err != nil {
+		t.Fatalf("subagent git commit: %v", err)
+	}
+
+	m.s.shardsMu.Lock()
+	sh := m.s.shards["sub"]
+	m.s.shardsMu.Unlock()
+	sh.mu.RLock()
+	subName := sh.rosterName
+	sh.mu.RUnlock()
+	if subName == "" {
+		t.Fatal("precondition: subagent should hold a rosterName")
+	}
+
+	out, err := exec.Command("git", "-C", worktree, "log", "-1", "--format=%(trailers)").Output()
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	trailer := string(out)
+	if !strings.Contains(trailer, "Plumb-Session: "+subName) {
+		t.Errorf("subagent commit must name the calling agent (Plumb-Session: %s), got: %q", subName, trailer)
+	}
+	if strings.Contains(trailer, "Plumb-Session: "+m.s.sessionName()) {
+		t.Errorf("subagent commit must NOT name the connection (%s), got: %q", m.s.sessionName(), trailer)
+	}
+
+	// Coordinator commit must name the connection session.
+	if err := os.WriteFile(filepath.Join(parent, "coord.txt"), []byte("coord\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.call(t, "coord", "git", map[string]any{"subcommand": "add", "files": []string{"coord.txt"}, "repo": parent}, gitTool.Execute); err != nil {
+		t.Fatalf("coord git add: %v", err)
+	}
+	if err := m.call(t, "coord", "git", map[string]any{"subcommand": "commit", "message": "coord commit", "repo": parent}, gitTool.Execute); err != nil {
+		t.Fatalf("coord git commit: %v", err)
+	}
+	coordOut, err := exec.Command("git", "-C", parent, "log", "-1", "--format=%(trailers)").Output()
+	if err != nil {
+		t.Fatalf("git log coord: %v", err)
+	}
+	coordTrailer := string(coordOut)
+	if !strings.Contains(coordTrailer, "Plumb-Session: "+m.s.sessionName()) {
+		t.Errorf("coordinator commit must name the connection session (%s), got: %q", m.s.sessionName(), coordTrailer)
 	}
 }

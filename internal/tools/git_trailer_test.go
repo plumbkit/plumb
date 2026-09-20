@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,7 +56,7 @@ func TestCommitTrailerToken(t *testing.T) {
 		{"knob on, blank name", blank, GitPolicy{CommitTrailer: true}, "commit", ""},
 	}
 	for _, c := range cases {
-		if got := c.tool.commitTrailerToken(c.p, c.sub); got != c.want {
+		if got := c.tool.commitTrailerToken(context.Background(), c.p, c.sub); got != c.want {
 			t.Errorf("%s: commitTrailerToken = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -75,7 +76,7 @@ func TestCommitTrailerToken_RejectsNewlineOrColon(t *testing.T) {
 	}
 	for _, name := range cases {
 		tool := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s1" }, func() string { return name })
-		if got := tool.commitTrailerToken(GitPolicy{CommitTrailer: true}, "commit"); got != "" {
+		if got := tool.commitTrailerToken(context.Background(), GitPolicy{CommitTrailer: true}, "commit"); got != "" {
 			t.Errorf("name %q: commitTrailerToken = %q, want \"\"", name, got)
 		}
 	}
@@ -137,5 +138,46 @@ func TestGit_CommitSessionTrailerDefaultOff(t *testing.T) {
 	addAndCommit(t, tool, repo, "a.txt", "unattributed commit")
 	if got := gitTrailers(t, repo); strings.Contains(got, "Plumb-Session") {
 		t.Errorf("default policy must not stamp a trailer, trailers: %q", got)
+	}
+}
+
+// TestGit_CommitSessionTrailerPerAgent proves that on a multi-agent connection,
+// the Plumb-Session trailer names the calling agent rather than the connection.
+func TestGit_CommitSessionTrailerPerAgent(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	type agentCtxKey string
+	const key agentCtxKey = "agent"
+	tool := NewGit(
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }},
+		func() GitPolicy { return GitPolicy{AllowWrites: true, CommitTrailer: true} },
+	).WithSession(
+		func() string { return "conn-sess" },
+		func() string { return "swift-falcon" },
+	).WithSessionNameFor(func(ctx context.Context) string {
+		if s, ok := ctx.Value(key).(string); ok {
+			return s
+		}
+		return ""
+	})
+
+	ctx := context.WithValue(context.Background(), key, "bold-badger")
+	addAndCommitCtx := func(file, msg string) {
+		if err := os.WriteFile(filepath.Join(repo, file), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rawAdd, _ := json.Marshal(map[string]any{"subcommand": "add", "files": []string{file}, "repo": repo})
+		if _, err := tool.Execute(ctx, rawAdd); err != nil {
+			t.Fatalf("git add: %v", err)
+		}
+		rawCommit, _ := json.Marshal(map[string]any{"subcommand": "commit", "message": msg, "repo": repo})
+		if _, err := tool.Execute(ctx, rawCommit); err != nil {
+			t.Fatalf("git commit: %v", err)
+		}
+	}
+
+	addAndCommitCtx("a.txt", "agent commit")
+	if got := gitTrailers(t, repo); !strings.Contains(got, "Plumb-Session: bold-badger") {
+		t.Errorf("commit should carry the calling agent's trailer (Plumb-Session: bold-badger), got trailers: %q", got)
 	}
 }
