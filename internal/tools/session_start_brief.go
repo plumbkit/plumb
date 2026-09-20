@@ -77,7 +77,7 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // woken session must still see its pending mail, or the wake flow loses its
 // point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
 // so it costs nothing when there is nothing to deliver.
-func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string, linked bool) string {
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
@@ -109,6 +109,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	// precisely when a degraded or unlinked state is likeliest, and the one
 	// place it will definitely look is here.
 	sb.WriteString(t.linkageNote(linked))
+	sb.WriteString(stampNote)
 	if t.gitPolicyFn != nil && branch != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
 	}

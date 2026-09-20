@@ -14,7 +14,7 @@ import (
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool) {
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
 		fmt.Fprintf(sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
@@ -44,6 +44,7 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	// session_start_self.go for why that is not a nicety.
 	sb.WriteString(t.selfIdentityLine(inheritedName))
 	sb.WriteString(t.linkageNote(linked))
+	sb.WriteString(stampNote)
 	sb.WriteString(t.contestedPinNote())
 	if note := uncoveredPrimaryLanguageNote(lang); note != "" {
 		sb.WriteString(note)

@@ -101,6 +101,7 @@ type SessionStart struct {
 	externalIDFn   func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
 	linkageStateFn func() LinkageState                                                               // may be nil; the connection's PERSISTED linkage + recovery outcome, for state-true linkage notes
 	resumedNewIDFn func() bool                                                                       // may be nil; this call resumed a predecessor's NAME under a new internal session ID
+	stampChannelFn func(ctx context.Context) StampChannelState                                       // may be nil; whether THIS call carried a per-call logical-agent identity, and whether the gate is already armed
 	declaredAgent  func(ctx context.Context, id string) context.Context                              // may be nil; derives the per-call ctx carrying the logical-agent identity declared by session_id
 	pinConflict    func(requested string)                                                            // may be nil; records a same-connection workspace switch attempt
 	repin          func(ctx context.Context, workspace, language string, force bool) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language; force overrides the sticky-pin guard
@@ -401,11 +402,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked), nil
+		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx)), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked)
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx))
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	if t.xcodeHintFn != nil {
 		if hint := t.xcodeHintFn(""); hint != "" {

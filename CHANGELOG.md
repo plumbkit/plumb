@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A client whose per-call identity channel is dead now learns it at
+  `session_start`, not from its first refused write.** The shared-connection
+  write gate reads exactly one channel — the per-call logical-agent identity —
+  while `session_start`'s `session_id` only registers the agent, which is what
+  makes the connection count as shared in the first place. A client can sit in
+  the gap: it declares itself perfectly well and every state-changing call is
+  still refused. Observed on `local-agent-mode-plumb`, whose runtime does not
+  apply Claude Code's PreToolUse `updatedInput` rewrite to MCP calls, so the
+  stamp `plumb hooks run-claude` emits correctly never reaches the daemon.
+
+  The refusal's own remedy made this worse rather than better: it leads with
+  `plumb hooks install claude-code`, which such a user has already installed
+  and which cannot help, so the one true remedy — a `plumb serve` per logical
+  agent — was the last one reached. `session_start` is itself stamped when the
+  channel works, so its own arrival is now read as the probe: unstamped means
+  the channel is not live for this client. The note distinguishes a gate that
+  is already armed (writes are being refused now) from a single-agent
+  connection (nothing is refused yet, but will be the moment a second agent
+  attaches), and it does not repeat the hook remedy. Nothing about the gate
+  itself is relaxed: an unattributable state-changing call is still refused.
+
 ## 0.20.1 (2026-09-17)
 
 ### Fixed
