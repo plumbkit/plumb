@@ -157,3 +157,52 @@ func rowsIn(t *testing.T, dir string) int {
 	}
 	return n
 }
+
+// A shard can hold a root different from its connection's WITHOUT a live re-pin
+// having happened in this process: after a daemon restart the agent's pin is
+// restored, and its next session_start names the root it already holds. That
+// takes repinAgent's confirm branch, not its changed branch — so a roster row
+// registered only on a move leaves the restored agent exactly as invisible as
+// issue #472 describes, by a path no live-move test exercises.
+//
+// The restored state is modelled directly: a shard on the worktree with no row,
+// which is what shardFor produces after a restart.
+func TestRestoredAgentConfirmingItsRootIsStillListed(t *testing.T) {
+	m := newMultiAgentConn(t)
+	parent := freshTempDir(t)
+	mustGitDir(t, parent)
+	worktree := filepath.Join(parent, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+	mustGitDir(t, worktree)
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	// Model the restart: the shard keeps its root, the row is gone.
+	m.s.shardsMu.Lock()
+	sh := m.s.shards["sub"]
+	m.s.shardsMu.Unlock()
+	if sh == nil {
+		t.Fatal("precondition: the subagent should hold a shard")
+	}
+	sh.mu.Lock()
+	m.s.retireAgentRoster(sh)
+	sh.mu.Unlock()
+	if rowsIn(t, worktree) != 0 {
+		t.Fatal("precondition: the modelled restart should leave no row")
+	}
+
+	// The reconnecting agent re-orients, naming the root it already holds.
+	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+		t.Fatalf("restored subagent re-confirming its root: %v", err)
+	}
+	if n := rowsIn(t, worktree); n == 0 {
+		t.Error("a restored agent that confirmed its own root has no roster row, so it is invisible in the workspace it works in (issue #472)")
+	}
+}

@@ -37,8 +37,10 @@
 
   Such an agent now registers its own session row, carrying a new `parent_id`
   naming the connection it belongs to. The row moves with the agent on a later
-  re-pin, is retired when the agent returns to its connection's root, and is
-  retired for every agent on connection teardown — a row that outlives what it
+  re-pin, is registered when an agent whose pin was restored after a daemon
+  restart re-confirms the root it already holds, is retired when the agent
+  returns to its connection's root, and is retired for every agent on
+  connection teardown — a row that outlives what it
   describes is worse than the invisibility, because a peer would address a name
   nobody is listening on.
 

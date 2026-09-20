@@ -357,6 +357,15 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// anonymous forced re-pin — dragged it off a workspace it had
 		// explicitly named, with no call of its own in between (issue #468).
 		s.confirmShardPin(sh, root, language, origin)
+		// Also on the confirm branch, not just on a move. A shard restored after
+		// a daemon restart already holds a root that may differ from the
+		// connection's, and the reconnecting agent's next session_start NAMES
+		// that root — which lands here, not in the move branch below. Syncing
+		// only on a move therefore left a restored agent exactly as invisible as
+		// issue #472 describes, by a path no live-move test exercises.
+		// confirmShardPin cannot host this: it returns early for a shard that is
+		// already selfPinned, which a restored-and-reconfirming one is.
+		s.syncAgentRoster(sh, root, language)
 		return false, nil
 	}
 	changed = true
