@@ -74,7 +74,9 @@ func sharedConnectionCheck(sessions []session.Info) checkResult {
 		// rewrite, which is what `local-agent-mode-plumb` does. So the transport
 		// remedy is named first and unconditionally.
 		fix: "run one plumb serve per logical agent; on Claude Code's terminal client " +
-			"`plumb hooks install claude-code` stamps every call, but a client whose runtime drops " +
-			"the PreToolUse argument rewrite cannot be fixed by any hook",
+			"`plumb hooks install claude-code` stamps every call. A client whose runtime drops the " +
+			"PreToolUse argument rewrite cannot be fixed by any hook — for that one, set " +
+			"`[collab] allow_unidentified_writes = true` in the global config to accept the " +
+			"attribution risk on this machine",
 	}
 }

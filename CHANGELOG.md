@@ -125,7 +125,18 @@
   undeclarable and the connection permanently unusable. Its re-pin is guarded
   where it happens, by the sticky-pin guard. (PLAN-440 item 1)
 
-- **A daemon restart no longer disarms the shared-connection ceiling.** The set
+- **WITHDRAWN before release — a daemon restart still disarms the
+  shared-connection ceiling, deliberately.** The change described below shipped
+  and was disabled the same day: re-arming from durable state locked out every
+  client that cannot stamp a per-call identity, which is the client the whole
+  effort is about. A restart had been the only thing giving such a client a
+  usable window, and closing it refused every write permanently with a remedy
+  the user could not apply. `seedLogicalAgentsFromState` remains in the tree,
+  unwired and documented, with `TestRestartDoesNotLockOutAClientThatCannotStamp`
+  pinning that it stays that way until such a client has some way to attribute a
+  call. The original entry is kept below for the record.
+
+  ~~A daemon restart no longer disarms the shared-connection ceiling.~~ The set
   of logical agents observed on a connection lived in memory and was scoped to
   that connection's life, so after a restart a connection that *was* shared read
   as unshared: every anonymous state-changing call was admitted until two agents
