@@ -2,6 +2,7 @@ package sessionstate
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -313,5 +314,72 @@ func TestMigrateV1ToV8_LogicalAgentRecordExistsAndWorks(t *testing.T) {
 	}
 	if len(ids) != 2 {
 		t.Errorf("LogicalAgentIDsFor = %v (%d), want both sources unioned", ids, len(ids))
+	}
+}
+
+// Migrations ran without a transaction and stamped the version only after every
+// step had finished. A crash or an error midway therefore left the schema
+// partly migrated with user_version still at the OLD value, so the next open
+// replayed steps that had already run — and those steps are not idempotent
+// (`ALTER TABLE ... ADD COLUMN` fails with "duplicate column name"). The state
+// database could not be opened again without manual repair.
+//
+// Each step is now its own transaction with the version stamped inside it, so a
+// step either applies AND advances the version, or does neither.
+func TestMigrationStepIsAtomicWithItsVersionStamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	openV1(t, path)
+
+	s, err := openAt(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	before := userVersion(t, s)
+
+	// A step that writes and then fails, exactly like an interrupted migration.
+	boom := func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE half_applied (x TEXT)`); err != nil {
+			return err
+		}
+		return errors.New("migration interrupted")
+	}
+	if err := runMigrationStep(s.db, before+1, boom); err == nil {
+		t.Fatal("a failing step must report its error")
+	}
+
+	if got := userVersion(t, s); got != before {
+		t.Errorf("user_version moved to %d on a FAILED step (was %d); the next open would skip work that never ran", got, before)
+	}
+	if tableExists(t, s, "half_applied") {
+		t.Error("a failed step left its writes behind; replaying it will now fail on the objects it already created")
+	}
+}
+
+// The success path must stamp inside the same transaction, or a crash between
+// the step and the stamp reopens the same hole from the other side.
+func TestMigrationStepStampsItsVersionOnSuccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	openV1(t, path)
+
+	s, err := openAt(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	target := userVersion(t, s) + 1
+	ok := func(tx *sql.Tx) error {
+		_, err := tx.Exec(`CREATE TABLE fully_applied (x TEXT)`)
+		return err
+	}
+	if err := runMigrationStep(s.db, target, ok); err != nil {
+		t.Fatalf("a successful step must not error: %v", err)
+	}
+	if got := userVersion(t, s); got != target {
+		t.Errorf("user_version = %d after a successful step, want %d", got, target)
+	}
+	if !tableExists(t, s, "fully_applied") {
+		t.Error("a successful step's writes were not committed")
 	}
 }

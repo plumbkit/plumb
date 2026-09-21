@@ -20,7 +20,7 @@ import (
 // two branches per version and had already pushed migrate over the complexity
 // cap twice — a tax the history pays again at every future version, for a
 // function whose logic never actually changes. The loop is now constant.
-var migrationSteps = map[int]func(*sql.DB) error{
+var migrationSteps = map[int]func(*sql.Tx) error{
 	2: migrateV2,
 	3: migrateV3,
 	4: migrateV4,
@@ -28,6 +28,39 @@ var migrationSteps = map[int]func(*sql.DB) error{
 	6: migrateV6,
 	7: migrateV7,
 	8: migrateV8,
+}
+
+// runMigrationStep applies one step and advances user_version to that step's
+// version IN THE SAME TRANSACTION.
+//
+// Before this, steps ran bare and the version was stamped only once every step
+// had finished. A crash or an error midway left the schema partly migrated with
+// user_version still at the old value, so the next open replayed steps that had
+// already run — and they are not idempotent: `ALTER TABLE ... ADD COLUMN` fails
+// with "duplicate column name", and the state database could not be opened again
+// without manual repair. SQLite makes DDL transactional, so a step now either
+// applies and advances, or does neither, and an interrupted upgrade simply
+// resumes from the last step that completed.
+//
+// user_version cannot be parameterised — SQLite takes a PRAGMA value as a
+// literal — so the version is formatted in. It is an int from this package's own
+// step table, never caller input.
+func runMigrationStep(db *sql.DB, version int, step func(*sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("sessionstate: begin migration v%d: %w", version, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := step(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+		return fmt.Errorf("sessionstate: stamp migration v%d: %w", version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sessionstate: commit migration v%d: %w", version, err)
+	}
+	return nil
 }
 
 // migrate brings a database at version `from` up to SchemaVersion. Each step is
@@ -40,7 +73,7 @@ func migrate(db *sql.DB, from int) error {
 		if !ok {
 			continue
 		}
-		if err := step(db); err != nil {
+		if err := runMigrationStep(db, v, step); err != nil {
 			return err
 		}
 	}
@@ -49,11 +82,11 @@ func migrate(db *sql.DB, from int) error {
 
 // migrateV2 is schema step v2. Extracted so migrate stays a dispatch loop;
 // the narrative for this step lives with the statements it runs.
-func migrateV2(db *sql.DB) error {
+func migrateV2(tx *sql.Tx) error {
 	// SQLite permits a NOT NULL column via ADD COLUMN when it carries a
 	// default, which back-fills every pre-existing row to the unknown origin.
 	const addSource = `ALTER TABLE pinned_workspace ADD COLUMN source TEXT NOT NULL DEFAULT ''`
-	if _, err := db.Exec(addSource); err != nil {
+	if _, err := tx.Exec(addSource); err != nil {
 		return fmt.Errorf("sessionstate: migrate v2 (pinned_workspace.source): %w", err)
 	}
 	return nil
@@ -61,7 +94,7 @@ func migrateV2(db *sql.DB) error {
 
 // migrateV3 is schema step v3. Extracted so migrate stays a dispatch loop;
 // the narrative for this step lives with the statements it runs.
-func migrateV3(db *sql.DB) error {
+func migrateV3(tx *sql.Tx) error {
 	// A dedicated table, not a column on pinned_workspace: a pin row only
 	// exists once a workspace is pinned, but the name must be recorded for
 	// every identified proxy session, pinned or not.
@@ -70,7 +103,7 @@ func migrateV3(db *sql.DB) error {
     name             TEXT    NOT NULL,
     updated_at       INTEGER NOT NULL
 )`
-	if _, err := db.Exec(addNames); err != nil {
+	if _, err := tx.Exec(addNames); err != nil {
 		return fmt.Errorf("sessionstate: migrate v3 (session_names): %w", err)
 	}
 	return nil
@@ -78,13 +111,13 @@ func migrateV3(db *sql.DB) error {
 
 // migrateV4 is schema step v4. Extracted so migrate stays a dispatch loop;
 // the narrative for this step lives with the statements it runs.
-func migrateV4(db *sql.DB) error {
+func migrateV4(tx *sql.Tx) error {
 	// The plumb session ID the name belonged to, so a reconnecting proxy can
 	// inherit its predecessor's mailbox identity and collect messages bound to
 	// it. A pre-v4 row back-fills to "" and inherits nothing, which is the
 	// behaviour that shipped before this column existed.
 	const addSessionID = `ALTER TABLE session_names ADD COLUMN plumb_session_id TEXT NOT NULL DEFAULT ''`
-	if _, err := db.Exec(addSessionID); err != nil {
+	if _, err := tx.Exec(addSessionID); err != nil {
 		return fmt.Errorf("sessionstate: migrate v4 (session_names.plumb_session_id): %w", err)
 	}
 	return nil
@@ -92,7 +125,7 @@ func migrateV4(db *sql.DB) error {
 
 // migrateV5 is schema step v5. Extracted so migrate stays a dispatch loop;
 // the narrative for this step lives with the statements it runs.
-func migrateV5(db *sql.DB) error {
+func migrateV5(tx *sql.Tx) error {
 	// A key/value side table rather than more columns: these are facts about
 	// the DATABASE (which one-shot maintenance has already run), not about any
 	// proxy session. The schema version is the wrong place to record "has this
@@ -102,7 +135,7 @@ func migrateV5(db *sql.DB) error {
     value      TEXT    NOT NULL,
     updated_at INTEGER NOT NULL
 ) WITHOUT ROWID`
-	if _, err := db.Exec(addMeta); err != nil {
+	if _, err := tx.Exec(addMeta); err != nil {
 		return fmt.Errorf("sessionstate: migrate v5 (meta): %w", err)
 	}
 	return nil
@@ -110,7 +143,7 @@ func migrateV5(db *sql.DB) error {
 
 // migrateV6 is schema step v6. Extracted so migrate stays a dispatch loop;
 // the narrative for this step lives with the statements it runs.
-func migrateV6(db *sql.DB) error {
+func migrateV6(tx *sql.Tx) error {
 	// PLAN-286: a shared connection keys mutable state per logical agent, so
 	// both persisted tables gain a logical_agent_id dimension. SQLite cannot
 	// alter a WITHOUT-ROWID primary key, so each table is recreated with the
@@ -133,7 +166,7 @@ INSERT INTO read_tracking_v6 (proxy_session_id, logical_agent_id, workspace, pat
 DROP TABLE read_tracking;
 ALTER TABLE read_tracking_v6 RENAME TO read_tracking;
 CREATE INDEX IF NOT EXISTS idx_rt_updated ON read_tracking(updated_at);`
-	if _, err := db.Exec(addReadAgent); err != nil {
+	if _, err := tx.Exec(addReadAgent); err != nil {
 		return fmt.Errorf("sessionstate: migrate v6 (read_tracking.logical_agent_id): %w", err)
 	}
 	const addPinAgent = `
@@ -150,7 +183,7 @@ INSERT INTO pinned_workspace_v6 (proxy_session_id, logical_agent_id, workspace, 
     SELECT proxy_session_id, '', workspace, language, source, updated_at FROM pinned_workspace;
 DROP TABLE pinned_workspace;
 ALTER TABLE pinned_workspace_v6 RENAME TO pinned_workspace;`
-	if _, err := db.Exec(addPinAgent); err != nil {
+	if _, err := tx.Exec(addPinAgent); err != nil {
 		return fmt.Errorf("sessionstate: migrate v6 (pinned_workspace.logical_agent_id): %w", err)
 	}
 	return nil
@@ -161,7 +194,7 @@ ALTER TABLE pinned_workspace_v6 RENAME TO pinned_workspace;`
 // Split out of migrate to keep that function under the complexity cap as the
 // history grows; every step is still gated on the on-disk version by its one
 // caller, so it runs exactly once per database.
-func migrateV7(db *sql.DB) error {
+func migrateV7(tx *sql.Tx) error {
 	// PLAN-426: session_names becomes the CANONICAL durable identity record,
 	// so it has to carry everything a recovery needs on its own.
 	//
@@ -182,11 +215,11 @@ func migrateV7(db *sql.DB) error {
 	// single-column primary key, so ADD COLUMN with a default back-fills in
 	// place — no copy, and no window in which the identity table is absent.
 	const addExternal = `ALTER TABLE session_names ADD COLUMN external_id TEXT NOT NULL DEFAULT ''`
-	if _, err := db.Exec(addExternal); err != nil {
+	if _, err := tx.Exec(addExternal); err != nil {
 		return fmt.Errorf("sessionstate: migrate v7 (session_names.external_id): %w", err)
 	}
 	const addRevision = `ALTER TABLE session_names ADD COLUMN name_revision INTEGER NOT NULL DEFAULT 0`
-	if _, err := db.Exec(addRevision); err != nil {
+	if _, err := tx.Exec(addRevision); err != nil {
 		return fmt.Errorf("sessionstate: migrate v7 (session_names.name_revision): %w", err)
 	}
 	// The name index serves the reservation lookup, which now runs on every
@@ -200,7 +233,7 @@ func migrateV7(db *sql.DB) error {
 	// of which session a reconnecting proxy is — so a conversation's own
 	// superseded rows are collapsed when the name is READ (see independentClaims)
 	// and never deleted.
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_sn_name ON session_names(name)`); err != nil {
 		return fmt.Errorf("sessionstate: migrate v7 (idx_sn_name): %w", err)
 	}
 	return nil
@@ -212,7 +245,7 @@ func migrateV7(db *sql.DB) error {
 // Split out of migrate for the same reason migrateV7 was: to keep that function
 // under the complexity cap as the history grows. Gated on the on-disk version by
 // its one caller, so it runs exactly once per database.
-func migrateV8(db *sql.DB) error {
+func migrateV8(tx *sql.Tx) error {
 	// PLAN-440 item 2: the durable record of WHICH logical agents were
 	// multiplexed over a connection, independent of whether any of them
 	// pinned a workspace.
@@ -231,7 +264,7 @@ func migrateV8(db *sql.DB) error {
     updated_at       INTEGER NOT NULL,
     PRIMARY KEY (proxy_session_id, logical_agent_id)
 ) WITHOUT ROWID`
-	if _, err := db.Exec(addAgents); err != nil {
+	if _, err := tx.Exec(addAgents); err != nil {
 		return fmt.Errorf("sessionstate: migrate v8 (logical_agent): %w", err)
 	}
 

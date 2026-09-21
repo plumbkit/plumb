@@ -23,6 +23,17 @@
 
 ### Fixed
 
+- **An interrupted schema migration no longer bricks the state database.**
+  Steps ran without a transaction and `user_version` was stamped only after
+  every step had finished, so a crash or an error midway left the schema partly
+  migrated with the version still at its old value. The next open replayed steps
+  that had already run — and they are not idempotent: `ALTER TABLE ... ADD
+  COLUMN` fails with "duplicate column name", and `plumb` could not open its
+  state database again without manual repair. Each step is now its own
+  transaction with the version stamped inside it, so a step either applies *and*
+  advances the version or does neither, and an interrupted upgrade resumes from
+  the last step that completed.
+
 - **Logical agents on shared connections are now addressable for mail and
   display their own inboxes.** A logical agent holding a roster row is now
   addressable by its own name in `leave_note` and `check_messages`, preventing
