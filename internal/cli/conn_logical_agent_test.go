@@ -17,7 +17,7 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 	if l.refuse("") {
 		t.Fatal("a single-agent connection must never refuse")
 	}
-	l.record("A") // attach-time session_id channel
+	l.recordAttach("A") // attach-time session_id channel
 	// One committed identity: the connection IS the agent, so nothing is
 	// refused. Note what does NOT explain this — there is no attach-time
 	// fallback identity any more (PLAN-394 deleted it); the call is admitted
@@ -28,7 +28,7 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 	if l.refuse("A") {
 		t.Fatal("an explicit call ID must not refuse")
 	}
-	l.record("B") // a second agent arrives per-call
+	l.recordCall("B") // a second agent arrives per-call
 	if l.refuse("B") {
 		t.Fatal("an explicit ID on a shared connection must not refuse")
 	}
@@ -42,8 +42,8 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 
 func TestLogicalAgentStateRefuseNoAttach(t *testing.T) {
 	var l logicalAgentState
-	l.record("A")
-	l.record("B") // shared, via per-call identities
+	l.recordCall("A")
+	l.recordCall("B") // shared, via per-call identities
 	if !l.refuse("") {
 		t.Fatal("an anonymous call on a shared, no-attach connection must refuse")
 	}
@@ -73,14 +73,27 @@ func TestRefuseSharedStateChange(t *testing.T) {
 		t.Fatalf("a single-agent connection must not refuse an anonymous write: %v", err)
 	}
 
-	// PLAN-394: an attach-time session_id does not rescue an anonymous call on a
-	// shared connection — that id belongs to whichever agent attached last, so
-	// admitting the call on its strength wrote the work into a peer's trackers.
+	// PLAN-394's principle is intact and its MECHANISM is what changed. Its
+	// defect was an anonymous call being ATTRIBUTED to whichever agent attached
+	// last, writing one agent's work into a peer's trackers. That fallback is
+	// still gone: shardFor returns nil without a per-call identity, so the call
+	// resolves against the connection and never lands in a peer's shard.
+	//
+	// What no longer follows is refusing it. On a connection where nobody has
+	// ever stamped a call, the client cannot address its agents at all, so
+	// refusing routes nothing and costs the entire write lane — the field
+	// outage. The call is admitted, unattributed, against the connection, and
+	// the condition is reported by session_start and doctor instead.
 	var s3 connSession
 	s3.recordLogicalAgentAttach("coordinator")
 	s3.recordLogicalAgentAttach("subagent-last")
+	if err := s3.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Fatalf("a client that has never stamped cannot act on a refusal, so it must not be refused: %v", err)
+	}
+	// One stamped call and the ceiling arms, because now there IS an address.
+	s3.recordLogicalAgentCall("coordinator")
 	if err := s3.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Fatal("an anonymous write on a shared connection must refuse even with an attach-time id")
+		t.Fatal("once the per-call channel is proven, an anonymous write must refuse")
 	}
 	if err := s3.refuseSharedStateChange(context.Background(), "write_file", "coordinator"); err != nil {
 		t.Fatalf("an identified write must not refuse: %v", err)
@@ -139,8 +152,10 @@ func TestSharedMarkSurvivesAHealthClearingRepin(t *testing.T) {
 	})
 
 	// The connection has not stopped being shared, and its peers keep
-	// declaring themselves.
-	s.recordLogicalAgent("C")
+	// declaring themselves. recordLogicalAgentCall, not the bare record: the
+	// ceiling arms on a client having DEMONSTRATED it can stamp, and this test
+	// is about the health mark surviving a re-pin, not about that condition.
+	s.recordLogicalAgentCall("C")
 	if !s.logicalAgents.refuse("") {
 		t.Fatal("sanity: the connection must still be shared, so anonymous state-changing calls are still refused")
 	}

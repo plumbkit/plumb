@@ -73,10 +73,9 @@ func sharedConnectionCheck(sessions []session.Info) checkResult {
 		// installed, matched and emitting correctly while the client drops the
 		// rewrite, which is what `local-agent-mode-plumb` does. So the transport
 		// remedy is named first and unconditionally.
-		fix: "run one plumb serve per logical agent; on Claude Code's terminal client " +
-			"`plumb hooks install claude-code` stamps every call. A client whose runtime drops the " +
-			"PreToolUse argument rewrite cannot be fixed by any hook — for that one, set " +
-			"`[collab] allow_unidentified_writes = true` in the global config to accept the " +
-			"attribution risk on this machine",
+		fix: "these connections have carried a per-call identity before, so the channel works on them: " +
+			"stamp every call. On Claude Code, `plumb hooks install claude-code`; otherwise a per-call " +
+			"_meta identity, or one plumb serve per logical agent. A client that can never stamp is not " +
+			"refused at all, so it will not appear here",
 	}
 }

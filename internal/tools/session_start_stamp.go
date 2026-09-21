@@ -62,11 +62,10 @@ func (t *SessionStart) WithStampChannel(fn func(ctx context.Context) StampChanne
 const stampChannelRefusedNotice = "NOTE: state-changing calls from this session are being refused. " +
 	"This connection serves more than one logical agent and this call carried no per-call identity, " +
 	"so a write cannot be attributed to the agent that issued it. Your session_id declaration IS " +
-	"recorded — it is not the channel the write gate reads. If your client does not carry a per-call " +
-	"identity (its runtime may drop a PreToolUse argument rewrite), no hook can close this and the " +
-	"refusal has no remedy you can apply: run one plumb serve per logical agent, set " +
-	"`[collab] allow_unidentified_writes = true` in your GLOBAL config to accept the attribution risk " +
-	"on this machine, or make writes through your client's own file tools.\n"
+	"recorded — it is not the channel the write gate reads. This connection has carried a per-call " +
+	"identity before, so the channel works here: stamp this call the same way. On Claude Code, " +
+	"`plumb hooks install claude-code`; otherwise a per-call _meta identity, or one plumb serve per " +
+	"logical agent.\n"
 
 // stampChannelDormantNotice is emitted when the channel is not live but the
 // connection is still single-agent. Nothing is refused yet, so the wording
@@ -74,9 +73,10 @@ const stampChannelRefusedNotice = "NOTE: state-changing calls from this session 
 // linkage notes already draw, and the reason acceptance (b) asks for
 // orientation-time disclosure rather than a louder refusal.
 const stampChannelDormantNotice = "NOTE: this call carried no per-call logical-agent identity. Nothing is " +
-	"refused while you are the only agent on this connection, but as soon as a second agent attaches, " +
-	"every state-changing call arriving without one will be refused. If your client cannot stamp calls, " +
-	"run one plumb serve per logical agent.\n"
+	"refused right now — the ceiling arms only once some caller on this connection has proven it CAN " +
+	"stamp, so a client that never does is never locked out. But the moment one does, while a second " +
+	"agent is attached, unstamped state-changing calls start being refused. On Claude Code, " +
+	"`plumb hooks install claude-code` stamps every call.\n"
 
 // stampChannelNote renders the disclosure, or "" when there is nothing to say:
 // the accessor is unwired, or the channel is live. Rendered alongside

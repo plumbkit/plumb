@@ -23,6 +23,32 @@
 
 ### Fixed
 
+- **The shared-connection write ceiling no longer arms where no caller can ever
+  satisfy it — this is the fix for "plumb refuses every edit".** The ceiling
+  refuses an unattributable state-changing call so the write can be *routed* to
+  the agent that issued it; PLAN-440 is explicit that this is "routing, not
+  authorisation". On a connection where no caller has ever presented a per-call
+  identity, refusing routes nothing: there is no address, no future call will
+  carry one, and every write is refused forever with a remedy the user cannot
+  apply. That is what happened on `local-agent-mode-plumb`, whose runtime drops
+  the PreToolUse argument rewrite — the write lane stopped entirely.
+
+  The ceiling now arms on **demonstrated capability**: once any caller on a
+  connection has stamped a call, the channel provably works, an anonymous call
+  is a genuine attribution gap, and it is refused exactly as before. Clients
+  that can stamp — Claude Code's terminal client, dsh with its identity plugin —
+  are unaffected. Clients that cannot are no longer locked out, and need no
+  configuration to work.
+
+  The protection that actually mattered is untouched and now asserted first
+  rather than behind a `t.Fatal` that had been hiding it: an anonymous call
+  resolves against the *connection*, never a peer's shard, and the workspace
+  boundary still refuses a path in another project. PLAN-394's fallback — an
+  anonymous call inheriting the last-attached agent's shard — remains deleted.
+  The `session_start` note, the refusal text and `doctor` all describe the new
+  rule, and the note's parity test gained the attach-only cases it had never
+  covered.
+
 - **An interrupted schema migration no longer bricks the state database.**
   Steps ran without a transaction and `user_version` was stamped only after
   every step had finished, so a crash or an error midway left the schema partly

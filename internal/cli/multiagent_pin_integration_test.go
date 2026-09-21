@@ -577,6 +577,10 @@ func testAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "subagent-last"}); err != nil {
 		t.Fatalf("subagent session_start: %v", err)
 	}
+	// This models a client whose per-call identity channel WORKS — most of them.
+	// The ceiling arms on demonstrated capability, because refusing a client
+	// that can never stamp routes nothing and costs it the whole write lane.
+	m.s.recordLogicalAgentCall("coordinator")
 
 	// The anonymous call resolves to the connection's pin — no peer's shard.
 	if got := m.s.workspaceFor(context.Background()); got != ws {
@@ -636,12 +640,26 @@ func testAnonymousWriteIntoPeerProjectRefused(t *testing.T) {
 	if got := m.s.workspaceFor(context.Background()); got != ws {
 		t.Errorf("an anonymous call resolves to %q, want the connection pin %q — it inherited the peer's shard", got, ws)
 	}
-	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Fatal("an anonymous write into the peer's project must be refused")
-	}
+	// What actually keeps the write out, asserted FIRST and unconditionally.
+	// The gate's refusal below is defence in depth; this is the defence. It is
+	// checked before the gate because a t.Fatal on the gate would skip it — and
+	// it did, which hid whether this protection survived the ceiling's arming
+	// rule changing.
 	victim := filepath.Join(peer, "victim.txt")
 	if _, err := m.s.policyFor(context.Background()).Check(victim, tools.AccessReadWrite); err == nil {
 		t.Error("the anonymous call's boundary admits a path in the peer's project — fail-open")
+	}
+	// A client that has never stamped cannot act on a refusal, so the ceiling
+	// does not arm for it and the call is admitted — resolved against the
+	// CONNECTION, where the boundary above still refuses the peer's project.
+	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
+		t.Errorf("a client that cannot stamp must not be refused its writes: %v", err)
+	}
+	// Once the channel is proven, an anonymous call is a real attribution gap
+	// and the ceiling adds its refusal on top of the boundary.
+	m.s.recordLogicalAgentCall("coordinator")
+	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Fatal("an anonymous write on a connection that CAN stamp must be refused")
 	}
 	if m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(victim) {
 		t.Error("the anonymous write was recorded as the peer's work")

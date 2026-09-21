@@ -33,14 +33,18 @@ func TestStampChannelNoteWarnsWhenSharedAndUnstamped(t *testing.T) {
 	if got == "" {
 		t.Fatal("a shared connection with no per-call stamp must warn; got no note")
 	}
-	// The whole point is that the refusal's own remedy is wrong here: the hook
-	// may be installed and still not reach the daemon. The note must not repeat
-	// it, and must name the one remedy that does not depend on the client.
-	if strings.Contains(got, "plumb hooks install") {
-		t.Errorf("note must not repeat the hook remedy on a client that drops the stamp: %q", got)
+	// This assertion was inverted when the ceiling's arming rule changed, and
+	// the reason matters. It used to FORBID the hook remedy, because the note
+	// could reach a client that drops the stamp and for which the hook is
+	// useless. The ceiling now arms only once some caller on the connection has
+	// PROVEN it can stamp, so the note's audience is exactly the callers for
+	// which stamping works — naming the hook is the most actionable thing it can
+	// say. A client that can never stamp is never refused and never sees this.
+	if !strings.Contains(got, "plumb hooks install") {
+		t.Errorf("the note's audience can stamp, so it must name the hook: %q", got)
 	}
 	if !strings.Contains(got, "one plumb serve per") {
-		t.Errorf("note must name the transport remedy, got %q", got)
+		t.Errorf("note must still name the transport remedy, got %q", got)
 	}
 }
 
@@ -55,6 +59,9 @@ func TestStampChannelNoteWarnsBeforeTheConnectionIsShared(t *testing.T) {
 	}
 	if strings.Contains(got, "are being refused") {
 		t.Errorf("a sole agent is not being refused yet; note must state a future cost: %q", got)
+	}
+	if !strings.Contains(got, "never locked out") {
+		t.Errorf("the dormant note must say a client that never stamps is never locked out: %q", got)
 	}
 }
 
