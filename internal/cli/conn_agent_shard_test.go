@@ -39,10 +39,10 @@ func TestAgentRepinIsolation(t *testing.T) {
 	ctxA := mcp.WithLogicalAgent(context.Background(), "agent-a")
 	ctxB := mcp.WithLogicalAgent(context.Background(), "agent-b")
 
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("agent A re-pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false, false); err != nil {
 		t.Fatalf("agent B re-pin: %v", err)
 	}
 	if got := s.workspaceFor(ctxA); got != rootA {
@@ -53,14 +53,14 @@ func TestAgentRepinIsolation(t *testing.T) {
 	}
 
 	// A same-agent non-forced re-pin is refused (sticky, inverted guard).
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootC, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootC, "", false, false); err == nil {
 		t.Fatal("same-agent non-forced re-pin was accepted; the per-agent sticky guard must refuse it")
 	}
 	if got := s.workspaceFor(ctxA); got != rootA {
 		t.Fatalf("refused re-pin moved agent A's pin to %q, want %q", got, rootA)
 	}
 	// A forced same-agent re-pin lands.
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootC, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootC, "", true, false); err != nil {
 		t.Fatalf("forced same-agent re-pin: %v", err)
 	}
 	if got := s.workspaceFor(ctxA); got != rootC {
@@ -90,10 +90,10 @@ func TestAgentTrackerIsolation(t *testing.T) {
 	mustGitDir(t, rootA)
 	rootB := freshTempDir(t)
 	mustGitDir(t, rootB)
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("agent A re-pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false, false); err != nil {
 		t.Fatalf("agent B re-pin: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestAgentTrackerIsolation(t *testing.T) {
 	// Force B to a new root to exercise B's own reset path.
 	rootB2 := freshTempDir(t)
 	mustGitDir(t, rootB2)
-	if _, err := s.repinWorkspace(ctxB, "file://"+rootB2, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootB2, "", true, false); err != nil {
 		t.Fatalf("agent B forced re-pin: %v", err)
 	}
 	if got := s.readTrackerFor(ctxA).Mtime(path); !got.Equal(mtime) {
@@ -183,12 +183,12 @@ func TestAgentRepinRefusalLogsATrace(t *testing.T) {
 	rootA, rootB := freshTempDir(t), freshTempDir(t)
 	mustGitDir(t, rootA)
 	mustGitDir(t, rootB)
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("agent A first pin: %v", err)
 	}
 	logs.Reset() // only the refusal below is under test
 
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the same-agent non-forced re-pin should have been refused")
 	}
 	got := logs.String()
@@ -206,7 +206,7 @@ func TestAgentRepinRefusalLogsATrace(t *testing.T) {
 
 	// A re-pin that LANDS is not an incident and must not log the refusal line.
 	logs.Reset()
-	if _, err := s.repinWorkspace(ctxA, "file://"+rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+rootB, "", true, false); err != nil {
 		t.Fatalf("forced re-pin: %v", err)
 	}
 	if strings.Contains(logs.String(), "per-agent session_start re-pin refused") {
@@ -234,7 +234,7 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 	// One agent has attached and pinned; a peer recorded a read against the
 	// connection's tracker, as every call on an unshared connection does.
 	s.recordLogicalAgentAttach("coordinator")
-	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "coordinator"), "file://"+rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "coordinator"), "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("coordinator pin: %v", err)
 	}
 	read := filepath.Join(rootA, "peer.go")
@@ -246,7 +246,7 @@ func TestRefusedRepinCommitsNoIdentity(t *testing.T) {
 	// declaration down. Building the ctx with mcp.WithLogicalAgent directly would
 	// bypass the mechanism and pass no matter what it does.
 	ctxB := s.declaredAgentCtx(context.Background(), "drifter")
-	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxB, "file://"+rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the cross-workspace re-pin should have been refused")
 	}
 
@@ -295,11 +295,11 @@ func TestAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	// attaches LAST and force-pins its own shard elsewhere — the incident's
 	// exact shape.
 	s.recordLogicalAgentAttach("coordinator")
-	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "coordinator"), "file://"+rootConn, "", false); err != nil {
+	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "coordinator"), "file://"+rootConn, "", false, false); err != nil {
 		t.Fatalf("coordinator pin: %v", err)
 	}
 	s.recordLogicalAgentAttach("peer")
-	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "peer"), "file://"+rootPeer, "", true); err != nil {
+	if _, err := s.repinWorkspace(mcp.WithLogicalAgent(context.Background(), "peer"), "file://"+rootPeer, "", true, false); err != nil {
 		t.Fatalf("peer forced re-pin: %v", err)
 	}
 	if !committedShared(s) {

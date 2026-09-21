@@ -33,11 +33,11 @@ func TestStickyPin_ConflictingSessionStartRepinRefused(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
-	_, err := s.repinWorkspace(context.Background(), rootB, "", false)
+	_, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
 	if err == nil {
 		t.Fatal("a conflicting live session_start re-pin must be refused while an explicit pin holds")
 	}
@@ -59,11 +59,11 @@ func TestStickyPin_ForceOverrides(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
-	root, err := s.repinWorkspace(context.Background(), rootB, "", true)
+	root, err := s.repinWorkspace(context.Background(), rootB, "", true, false)
 	if err != nil {
 		t.Fatalf("force: true must override the sticky-pin guard: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestStickyPin_RestoredPinIsSticky(t *testing.T) {
 	mustGitDir(t, rootB)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()
@@ -93,7 +93,7 @@ func TestStickyPin_RestoredPinIsSticky(t *testing.T) {
 		t.Fatalf("precondition: restored pin = %q, want %q", got, rootA)
 	}
 
-	if _, err := after.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := after.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("a re-pin against a restored explicit pin must be refused")
 	}
 	if got := after.workspace(); got != rootA {
@@ -112,7 +112,7 @@ func TestStickyPin_RestoreReplayNeverBlocked(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 	if _, err := s.repinWorkspaceFrom(context.Background(), rootB, "", sessionstate.PinSourceSessionStart, pinTriggerRestore, false); err != nil {
@@ -135,7 +135,7 @@ func TestStickyPin_RootsOriginPinNotSticky(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA) // origin roots
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
 		t.Fatalf("a roots-held pin must not block the first explicit pin: %v", err)
 	}
 	if got := s.workspace(); got != rootB {
@@ -153,7 +153,7 @@ func TestStickyPin_IncidentalAutoAttachNotSticky(t *testing.T) {
 	defer s.close()
 	s.attachWorkspacePin(context.Background(), "file://"+rootA, sessionstate.PinSourceUnknown)
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
 		t.Fatalf("an incidental auto-attach must not block the first explicit pin: %v", err)
 	}
 }
@@ -172,13 +172,13 @@ func TestStickyPin_SameRootAndSubdirNotRefused(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("same-root re-pin refused: %v", err)
 	}
-	resolved, err := s.repinWorkspace(context.Background(), sub, "", false)
+	resolved, err := s.repinWorkspace(context.Background(), sub, "", false, false)
 	if err != nil {
 		t.Fatalf("subdir re-pin refused: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestStickyPin_RootsChangeKeepsExplicitPin(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
@@ -230,11 +230,11 @@ func TestStickyPin_SameRootSessionStartMakesPinSticky(t *testing.T) {
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA) // origin roots
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("same-root explicit pin: %v", err)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("a same-root session_start promotion should have made the pin sticky")
 	}
 }
@@ -266,14 +266,14 @@ func TestStickyPin_RefusalMarksSessionHealth(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 	if health, _ := sessionHealth(t, s.sessID); health != "" {
 		t.Fatalf("precondition: health = %q, want clear", health)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the conflicting re-pin should have been refused")
 	}
 	health, msg := sessionHealth(t, s.sessID)
@@ -286,20 +286,20 @@ func TestStickyPin_RefusalMarksSessionHealth(t *testing.T) {
 
 	// The victim's own same-root session_start — the natural next call in the
 	// #182 field report — must heal the session, not only a forced switch.
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("same-root re-pin: %v", err)
 	}
 	if health, msg := sessionHealth(t, s.sessID); health != "" {
 		t.Errorf("health after the victim's same-root re-pin = %q (%q), want clear", health, msg)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the second conflicting re-pin should have been refused")
 	}
 	if health, _ := sessionHealth(t, s.sessID); health != "blocked" {
 		t.Fatalf("precondition: health = %q, want blocked again", health)
 	}
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", true, false); err != nil {
 		t.Fatalf("forced re-pin: %v", err)
 	}
 	if health, msg := sessionHealth(t, s.sessID); health != "" {
@@ -321,10 +321,10 @@ func TestStickyPin_RefusalHealthMessageNamesTheForceRemedy(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the conflicting re-pin should have been refused")
 	}
 	health, msg := sessionHealth(t, s.sessID)
@@ -353,7 +353,7 @@ func TestPinConflict_HealthMessageNamesTheNewConnectionRemedy(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
@@ -392,7 +392,7 @@ func TestStickyPin_ConcurrentExplicitPins_ExactlyOneLands(t *testing.T) {
 	var wg sync.WaitGroup
 	for i, target := range []string{rootA, rootB} {
 		wg.Go(func() {
-			_, errs[i] = s.repinWorkspace(context.Background(), target, "", false)
+			_, errs[i] = s.repinWorkspace(context.Background(), target, "", false, false)
 		})
 	}
 	wg.Wait()
@@ -421,7 +421,7 @@ func TestStickyPin_DirectRootsRepinKeptInLane(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
@@ -465,7 +465,7 @@ func TestStickyPin_MarkerlessExplicitPinIsSticky(t *testing.T) {
 		t.Fatalf("pin origin = %q, want session_start", got)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("a markerless explicit pin must be sticky: the peer re-pin should have been refused")
 	}
 	if got := s.workspace(); got != rootA {
@@ -491,10 +491,10 @@ func TestStickyPin_LanguageOnlyRepinNotRefused(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(context.Background(), root, "go", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "go", false, false); err != nil {
 		t.Fatalf("language-only re-pin of a sticky pin must not be refused: %v", err)
 	}
 	if got := s.workspace(); got != root {
@@ -525,7 +525,7 @@ func TestStickyPin_RestoredRootsOriginPinNotSticky(t *testing.T) {
 		t.Fatalf("precondition: restored origin = %q, want roots", got)
 	}
 
-	if _, err := after.repinWorkspace(context.Background(), rootB, "", false); err != nil {
+	if _, err := after.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
 		t.Fatalf("a restored roots-origin pin must not block the first explicit pin: %v", err)
 	}
 	if got := after.workspace(); got != rootB {
@@ -554,10 +554,10 @@ func TestStickyPin_VictimSameRootSessionStartHealsViaTool(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("precondition: the conflicting re-pin should have been refused")
 	}
 	if health, _ := sessionHealth(t, s.sessID); health != "blocked" {
@@ -598,7 +598,7 @@ func TestStickyPin_SameRootPromotionThroughToolSurface(t *testing.T) {
 	if got := s.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
 		t.Fatalf("pin origin = %q, want session_start (promotion through the tool surface)", got)
 	}
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("the promoted pin should be sticky")
 	}
 }
@@ -620,7 +620,7 @@ func TestStickyPin_AliasOfOwnRootNotRefusedViaTool(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
@@ -655,7 +655,7 @@ func TestStickyPin_RedundantSameRootCallKeepsTrackers(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 	if got := s.view().acquiredLanguage; got != LanguageNone {
@@ -668,7 +668,7 @@ func TestStickyPin_RedundantSameRootCallKeepsTrackers(t *testing.T) {
 		t.Fatal("precondition: write tracker should hold the recorded path")
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("redundant same-root re-pin: %v", err)
 	}
 	if !s.writeTracker.Wrote(written) {
@@ -711,7 +711,7 @@ func TestStickyPin_MarkerlessPinRestoredAcrossRestart(t *testing.T) {
 	if got := after.view().pinVia; got != "restore:session_start" {
 		t.Fatalf("restored provenance label = %q, want restore:session_start", got)
 	}
-	if _, err := after.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := after.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("a restored markerless explicit pin must still be sticky")
 	}
 }
@@ -728,7 +728,7 @@ func TestStickyPin_ForceOnRootsHeldPinLands(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA) // origin roots
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", true, false); err != nil {
 		t.Fatalf("forced re-pin over a roots-held pin: %v", err)
 	}
 	if got := s.workspace(); got != rootB {
@@ -756,7 +756,7 @@ func TestStickyPin_MarkerlessExplicitPinPinsUnderDefaultAutoAttach(t *testing.T)
 		t.Fatalf("pin origin = %q, want session_start", got)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err == nil {
 		t.Fatal("a markerless explicit pin under default auto_attach must be sticky: the peer re-pin should have been refused")
 	}
 	if got := s.workspace(); got != rootA {
@@ -776,12 +776,12 @@ func TestStickyPin_LanguageOverrideOnStickyPinLogsBreadcrumb(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
 	buf := captureLog(s)
-	if _, err := s.repinWorkspace(context.Background(), root, "go", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "go", false, false); err != nil {
 		t.Fatalf("language override re-pin: %v", err)
 	}
 	for _, want := range []string{"primary language overridden", "sticky pin", "issue #182"} {

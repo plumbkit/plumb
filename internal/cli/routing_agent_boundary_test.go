@@ -60,7 +60,7 @@ func TestBoundaryGuards_AgentScopedGuardUsesTheAgentsPinNotTheConnections(t *tes
 	mustGitDir(t, agentRoot)
 
 	ctx := context.Background()
-	if _, err := s.repinWorkspace(ctx, connRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, connRoot, "", false, false); err != nil {
 		t.Fatalf("pin the connection to %s: %v", connRoot, err)
 	}
 	// Commit one identity so the connection is shared and the agent gets a shard.
@@ -88,7 +88,7 @@ func pinSharedConnection(t *testing.T, s *connSession, connRoot, agentRoot strin
 		mustGitDir(t, root)
 	}
 	ctx := context.Background()
-	if _, err := s.repinWorkspace(ctx, connRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, connRoot, "", false, false); err != nil {
 		t.Fatalf("pin the connection to %s: %v", connRoot, err)
 	}
 	// Commit one identity so the connection is shared and the agent gets a shard.
@@ -135,7 +135,7 @@ func TestPinnedPolicyGuard_AdmitsRootsNoPinNames(t *testing.T) {
 
 	connRoot, granted := freshTempDir(t), freshTempDir(t)
 	mustGitDir(t, connRoot)
-	if _, err := s.repinWorkspace(context.Background(), connRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), connRoot, "", false, false); err != nil {
 		t.Fatalf("pin the connection to %s: %v", connRoot, err)
 	}
 	s.onAllowDirs([]string{granted})

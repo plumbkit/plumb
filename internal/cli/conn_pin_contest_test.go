@@ -148,7 +148,7 @@ func TestForcedRepin_MarksProvenanceAndContests(t *testing.T) {
 	ctx := context.Background()
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(ctx, rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(A): %v", err)
 	}
 	if prov := s.pinProvenance(); prov.Forced || prov.Contested {
@@ -156,7 +156,7 @@ func TestForcedRepin_MarksProvenanceAndContests(t *testing.T) {
 	}
 
 	// A peer takes the pin, exactly as the sticky refusal tells it to.
-	if _, err := s.repinWorkspace(ctx, rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", true, false); err != nil {
 		t.Fatalf("forced repin(B): %v", err)
 	}
 	prov := s.pinProvenance()
@@ -171,7 +171,7 @@ func TestForcedRepin_MarksProvenanceAndContests(t *testing.T) {
 	}
 
 	// The displaced agent takes it back — the second half of the alternation.
-	if _, err := s.repinWorkspace(ctx, rootA, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", true, false); err != nil {
 		t.Fatalf("forced repin back to A: %v", err)
 	}
 	if !s.pinProvenance().Contested {
@@ -204,7 +204,7 @@ func TestUnforcedRepin_DoesNotContest(t *testing.T) {
 	// Attach from client roots first: a roots-origin pin is not sticky, so the
 	// re-pins below land without force and displace nothing deliberate.
 	s.attachWorkspace(ctx, "file://"+rootA)
-	if _, err := s.repinWorkspace(ctx, rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(B): %v", err)
 	}
 	if s.pinContested() {
@@ -228,12 +228,12 @@ func TestContestedPin_RemedyStopsLeadingWithForce(t *testing.T) {
 	ctx := context.Background()
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(ctx, rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(A): %v", err)
 	}
 
 	// Before contest: the ordinary remedy, which names force first.
-	_, err := s.repinWorkspace(ctx, rootB, "", false)
+	_, err := s.repinWorkspace(ctx, rootB, "", false, false)
 	if err == nil {
 		t.Fatal("a plain re-pin off an explicit pin must be refused (sticky, issue #182)")
 	}
@@ -242,14 +242,14 @@ func TestContestedPin_RemedyStopsLeadingWithForce(t *testing.T) {
 	}
 
 	// Two forced alternations make it contested.
-	if _, err := s.repinWorkspace(ctx, rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", true, false); err != nil {
 		t.Fatalf("forced repin(B): %v", err)
 	}
-	if _, err := s.repinWorkspace(ctx, rootA, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", true, false); err != nil {
 		t.Fatalf("forced repin(A): %v", err)
 	}
 
-	_, err = s.repinWorkspace(ctx, rootC, "", false)
+	_, err = s.repinWorkspace(ctx, rootC, "", false, false)
 	if err == nil {
 		t.Fatal("the sticky guard stopped refusing once contested; ownership semantics must not change")
 	}
@@ -286,10 +286,10 @@ func TestContestedPin_DisplacedAgentIsTold(t *testing.T) {
 	ctx := context.Background()
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(ctx, rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(A): %v", err)
 	}
-	if _, err := s.repinWorkspace(ctx, rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", true, false); err != nil {
 		t.Fatalf("forced repin(B): %v", err)
 	}
 

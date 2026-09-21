@@ -75,7 +75,7 @@ func TestAllowDir_PreservedAcrossRepin(t *testing.T) {
 	s.onAllowDirs([]string{allowDir})
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
 		t.Fatalf("repin: %v", err)
 	}
 

@@ -24,38 +24,29 @@ package cli
 // (a) says must not happen. The exemption is still right; the claim that
 // something else was guarding it was not.
 //
-// WHY THIS IS SKIPPED RATHER THAN FIXED.
+// WHY THIS COULD NOT BE CLOSED BY A GUARD ALONE.
 //
-// A guard refusing the anonymous forced move was written and it worked — and it
-// broke three of PLAN-398's regression tests, because PLAN-398 DELIBERATELY
-// makes a seeded shard follow exactly this move so that an agent is not
-// stranded on a stale root (TestShardSeededBeforeRefusalFollowsTheConnection,
-// TestSelfPinnedShardDoesNotFollowTheConnection,
-// TestConfirmingASeededWorkspaceStopsTheShardFollowing). On a connection whose
-// pin came from session_start, force is the ONLY way that pin moves: a roots
-// notification re-pins unforced (conn_roots.go) and is refused by the sticky
-// guard, and an IDENTIFIED caller routes to repinAgent and moves its own shard
-// instead, never the connection. So refusing the anonymous forced move freezes
-// a shared connection's pin permanently.
+// Refusing the anonymous forced move breaks PLAN-398, which DELIBERATELY makes
+// a seeded shard follow exactly this move so an agent is not stranded on a
+// stale root. On a connection pinned by session_start, force was the ONLY way
+// that pin moved: a roots notification re-pins unforced and the sticky guard
+// refuses it, and an IDENTIFIED caller routed to repinAgent and moved its own
+// shard, never the connection. Refusing the anonymous route therefore froze a
+// shared connection's pin permanently — a guard that closes a hole by removing
+// a capability.
 //
-// That is a conflict between two shipped designs, not a defect with an obvious
-// fix, and PLAN-440 lists "session_start (with workspace/force)" as a KNOWN gap
-// in the gate's coverage. It needs an owner decision: either acceptance (a) is
-// narrowed to exclude the connection's own pin, or PLAN-398's follow behaviour
-// gives up the anonymous route and agents re-declare instead.
-//
-// The reproduction stays here, skipped, so the gap is visible in the suite
-// rather than surviving only as a sentence in a card.
+// The missing piece was an ATTRIBUTABLE way to move the connection. session_start
+// now takes scope: "connection", available to an identified caller, so the move
+// has an author. With that in place the anonymous route is refused and nothing
+// is lost: PLAN-398's follow still happens, driven by a caller who can be named.
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestAnonymousForcedRepinIsRefusedOnASharedConnection(t *testing.T) {
-	t.Skip("OPEN GAP, reproduction kept deliberately — see the note below. " +
-		"Closing it conflicts with PLAN-398's shipped behaviour and needs an owner decision.")
-
 	m := newMultiAgentConn(t)
 	wsA, wsC := freshTempDir(t), freshTempDir(t)
 	mustGitDir(t, wsA)
@@ -83,6 +74,9 @@ func TestAnonymousForcedRepinIsRefusedOnASharedConnection(t *testing.T) {
 	if err == nil {
 		t.Error("an anonymous forced re-pin was ACCEPTED on a shared connection; " +
 			"an unattributable caller must not move state that belongs to several agents")
+	}
+	if err != nil && !strings.Contains(err.Error(), "connection") {
+		t.Errorf("the refusal must point at the attributable route (scope: \"connection\"), got: %v", err)
 	}
 	if got := m.s.workspace(); filepath.Clean(got) != filepath.Clean(wsA) {
 		t.Errorf("the connection pin moved to %q under an anonymous forced re-pin; want it held at %q", got, wsA)
@@ -115,5 +109,33 @@ func TestAnonymousDeclarationsStillWorkOnASharedConnection(t *testing.T) {
 	// A declaration: no per-call stamp, but it names itself.
 	if err := m.sessionStart(t, map[string]any{"session_id": "third"}); err != nil {
 		t.Errorf("a session_start declaring an identity must not be refused: %v", err)
+	}
+}
+
+// The capability that makes refusing the anonymous route acceptable: an agent
+// that identifies itself CAN move the connection's pin, and the move is
+// attributed to it. Operator-only would have been too restrictive — agents
+// legitimately need to reposition the connection they share.
+func TestIdentifiedAgentCanMoveTheConnectionPin(t *testing.T) {
+	m := newMultiAgentConn(t)
+	wsA, wsC := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, wsA)
+	mustGitDir(t, wsC)
+
+	if err := m.sessionStart(t, map[string]any{"session_id": "coordinator", "workspace": wsA}); err != nil {
+		t.Fatalf("coordinator session_start: %v", err)
+	}
+	if err := m.sessionStart(t, map[string]any{"session_id": "subagent"}); err != nil {
+		t.Fatalf("subagent session_start: %v", err)
+	}
+
+	// An identified agent asking for the CONNECTION's pin, not its own shard.
+	if err := m.sessionStart(t, map[string]any{
+		"session_id": "coordinator", "workspace": wsC, "force": true, "scope": "connection",
+	}); err != nil {
+		t.Fatalf("an identified agent must be able to move the connection pin: %v", err)
+	}
+	if got := m.s.workspace(); filepath.Clean(got) != filepath.Clean(wsC) {
+		t.Errorf("connection pin = %q, want %q", got, wsC)
 	}
 }

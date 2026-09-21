@@ -21,15 +21,23 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 		Workspace string `json:"workspace"`
 		Language  string `json:"language"`
 		Force     bool   `json:"force"`
+		Scope     string `json:"scope"`
 	}
 	_ = json.Unmarshal(raw, &a)
+	// scope: "connection" asks for the CONNECTION's pin rather than this agent's
+	// own shard. It is the attributable route for a topology where every agent
+	// shares one MCP connection — DSH opens exactly one and multiplexes every
+	// agent over it, so if agents cannot move the connection's pin, nothing can.
+	// The daemon refuses it for a caller that has not identified itself, because
+	// the move resets peers' workspace, read tracking and undo state.
+	connScope := a.Scope == "connection"
 	// The daemon's attached root is authoritative. An attached connection is
 	// re-pinned or answered from its root below; an UNATTACHED one that declares
 	// an identity was deliberately not pre-pinned by onBeforeTool (PLAN-395),
 	// so the attach below is the one that routes it to the right layer.
 	if t.ws != nil {
 		if current := t.ws(ctx); current != "" {
-			return t.resolveAttached(ctx, current, a.Workspace, a.Language, a.Force)
+			return t.resolveAttached(ctx, current, a.Workspace, a.Language, a.Force, connScope)
 		}
 	}
 	// Not attached yet: honour an explicit arg through the re-pin callback, then
@@ -38,7 +46,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// across all connections), and guessing it produced confidently-wrong
 	// "workspaces".
 	if a.Workspace != "" {
-		ws, uerr := t.resolveUnattachedWorkspace(ctx, a.Workspace, a.Language, a.Force)
+		ws, uerr := t.resolveUnattachedWorkspace(ctx, a.Workspace, a.Language, a.Force, connScope)
 		return ws, "", uerr
 	}
 	if t.roots != nil {
@@ -62,11 +70,11 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 // deferral removes. The resolved root (not the raw argument) coming back keeps
 // the displayed workspace consistent with the TUI, memory, and topology, as
 // the language branch already did.
-func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace, language string, force bool) (string, error) {
+func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace, language string, force, connScope bool) (string, error) {
 	if t.repin == nil {
 		return workspace, nil
 	}
-	root, err := t.repin(ctx, workspace, language, force)
+	root, err := t.repin(ctx, workspace, language, force, connScope)
 	if err != nil {
 		if language != "" {
 			return "", fmt.Errorf("session_start: pinning %s as %s: %w", workspace, language, err)
@@ -90,7 +98,7 @@ func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace
 // while the daemon's sticky guard compares literal resolved roots, so the
 // re-pin is handed the pinned spelling, not the alias: the caller is naming
 // their OWN workspace, and the alias must not read as a peer steal.
-func (t *SessionStart) resolveAttached(ctx context.Context, current, workspace, language string, force bool) (string, string, error) {
+func (t *SessionStart) resolveAttached(ctx context.Context, current, workspace, language string, force, connScope bool) (string, string, error) {
 	switch {
 	case workspace != "":
 		requested := workspace
@@ -102,7 +110,7 @@ func (t *SessionStart) resolveAttached(ctx context.Context, current, workspace, 
 			}
 			requested = current
 		}
-		return t.repinExplicit(ctx, current, requested, language, force)
+		return t.repinExplicit(ctx, current, requested, language, force, connScope)
 	case language != "":
 		return t.forceLanguage(ctx, current, language)
 	default:
@@ -125,7 +133,7 @@ func (t *SessionStart) resolveAttached(ctx context.Context, current, workspace, 
 // refuses the re-pin when the current pin was itself set by an explicit
 // session_start, so a peer agent on a multiplexed connection cannot silently
 // steal another agent's workspace.
-func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, language string, force bool) (string, string, error) {
+func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, language string, force, connScope bool) (string, string, error) {
 	if t.repin == nil {
 		if t.pinConflict != nil {
 			t.pinConflict(requested)
@@ -135,7 +143,7 @@ func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, la
 			current, requested,
 		)
 	}
-	newRoot, err := t.repin(ctx, requested, language, force)
+	newRoot, err := t.repin(ctx, requested, language, force, connScope)
 	if err != nil {
 		return "", "", fmt.Errorf("session_start: re-pinning to %s: %w", requested, err)
 	}
@@ -157,7 +165,7 @@ func (t *SessionStart) forceLanguage(ctx context.Context, current, language stri
 	if t.repin == nil {
 		return current, "", nil
 	}
-	if _, err := t.repin(ctx, current, language, false); err != nil {
+	if _, err := t.repin(ctx, current, language, false, false); err != nil {
 		return "", "", fmt.Errorf("session_start: pinning language %s: %w", language, err)
 	}
 	return current, "", nil

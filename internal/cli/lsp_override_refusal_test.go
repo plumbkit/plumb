@@ -132,7 +132,7 @@ func TestRepinWorkspace_InactiveLanguageOverrideIsRefused(t *testing.T) {
 
 	// detectTestPool's active set does not include this language, so the
 	// override cannot be honoured — and must not be silently discarded.
-	_, err := s.repinWorkspace(context.Background(), "file://"+root, "cobol", false)
+	_, err := s.repinWorkspace(context.Background(), "file://"+root, "cobol", false, false)
 	if err == nil {
 		t.Fatal("expected the re-pin to be refused rather than silently ignoring the language")
 	}
@@ -155,7 +155,7 @@ func TestRepinWorkspace_ActiveLanguageOverrideStillPins(t *testing.T) {
 	root := freshTempDir(t)
 	mustGitDir(t, root)
 
-	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "go", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "go", false, false); err != nil {
 		t.Fatalf("an active language override must still pin: %v", err)
 	}
 	if got := s.workspace(); got != root {

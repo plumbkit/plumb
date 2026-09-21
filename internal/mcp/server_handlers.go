@@ -196,6 +196,19 @@ func WithLogicalAgent(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, logicalAgentCtxKey{}, id)
 }
 
+// WithoutLogicalAgent derives a ctx carrying NO logical-agent identity, so a
+// resolver that routes per agent falls back to the connection instead.
+//
+// WithLogicalAgent(ctx, "") cannot express this — it returns the parent
+// unchanged by design, so a caller trying to clear an identity would silently
+// keep it. The one caller is session_start's connection-scoped re-pin, which
+// must reach the CONNECTION's pin rather than be routed to the calling agent's
+// own shard; the identity is still read for the guard and the audit line before
+// it is stripped, so the move stays attributable.
+func WithoutLogicalAgent(ctx context.Context) context.Context {
+	return context.WithValue(ctx, logicalAgentCtxKey{}, "")
+}
+
 // LogicalAgentFromCtx returns the logical-agent identity carried in a tools/call
 // ctx (set by handleToolsCall), or "" when the call declared none. It is the
 // single source the daemon's per-agent state resolvers key on.

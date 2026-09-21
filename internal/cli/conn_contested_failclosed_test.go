@@ -35,7 +35,7 @@ func TestContestedFailClosed_RelativeRefusedAbsoluteWorks(t *testing.T) {
 	s := newPersistSession(t, store, ss, "proxyX")
 
 	// A single explicit pin is NOT contested.
-	if _, err := s.repinWorkspace(ctx, rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(A): %v", err)
 	}
 	if s.pinContested() {
@@ -50,13 +50,13 @@ func TestContestedFailClosed_RelativeRefusedAbsoluteWorks(t *testing.T) {
 	}
 
 	// Two forced alternations between two distinct roots: the trigger.
-	if _, err := s.repinWorkspace(ctx, rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", true, false); err != nil {
 		t.Fatalf("forced repin(B): %v", err)
 	}
 	if s.pinContested() {
 		t.Fatal("one forced re-pin is an ordinary switch, not a contest")
 	}
-	if _, err := s.repinWorkspace(ctx, rootA, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", true, false); err != nil {
 		t.Fatalf("forced repin back to A: %v", err)
 	}
 	if !s.pinContested() {
@@ -104,13 +104,13 @@ func TestContestedFailClosed_PathlessToolsRefused(t *testing.T) {
 	mustGitDir(t, rootB)
 	ctx := context.Background()
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(ctx, rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(A): %v", err)
 	}
-	if _, err := s.repinWorkspace(ctx, rootB, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootB, "", true, false); err != nil {
 		t.Fatalf("forced repin(B): %v", err)
 	}
-	if _, err := s.repinWorkspace(ctx, rootA, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctx, rootA, "", true, false); err != nil {
 		t.Fatalf("forced repin back to A: %v", err)
 	}
 	if !s.pinContested() {

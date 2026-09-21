@@ -21,7 +21,7 @@ var sessionStartSchema = json.RawMessage(`{
   "properties": {
     "workspace": {
       "type": "string",
-      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). If this connection is already pinned to a different project, passing a workspace here re-pins it to the new project — this is how you switch projects on a connection reused across conversations. When the current pin was itself set by an explicit session_start, the re-pin is refused unless you also pass force: true — a guard against a peer agent silently stealing the pin on a shared connection (issue #182). Defaults to the daemon's already-resolved workspace."
+      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Passing it re-pins — see force and scope for what that moves and when it is refused. Defaults to the daemon's already-resolved workspace."
     },
     "session_id": {
       "type": "string",
@@ -31,9 +31,14 @@ var sessionStartSchema = json.RawMessage(`{
       "type": "string",
       "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is refused, naming the reason and the remedy, not silently ignored. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
     },
+    "scope": {
+      "type": "string",
+      "enum": ["agent", "connection"],
+      "description": "Which pin a workspace re-pin moves. 'agent' (default) moves only your own shard, leaving peers where they are. 'connection' moves the connection's pin, which peers that never chose a root then follow; it needs force: true when an explicit pin holds the connection, and an identity, since it resets peers' workspace, reads and undo."
+    },
     "force": {
       "type": "boolean",
-      "description": "Override the sticky-pin guard: when this connection is already pinned to a different project by an explicit session_start call, a re-pin is refused unless force is true. Use it only when you are deliberately switching THIS connection to another project — e.g. a new conversation on a connection reused across conversations. On a connection shared by several agents (Cowork, Claude Desktop local-agent-mode), prefer a dedicated plumb serve process per agent over forcing."
+      "description": "Override the sticky-pin guard: a re-pin away from a pin an explicit session_start already holds is refused unless force is true. Use it when you are deliberately moving this pin — see scope for whether that is your own shard or the whole connection."
     },
     "purpose": {
       "type": "string",
@@ -86,37 +91,37 @@ type RootsResolver func(ctx context.Context) string
 // — always Detect-validated and never persisted as the sticky pin.
 type SessionStart struct {
 	ws             WorkspaceFn
-	diag           diagnosticsSource                                                                 // may be nil; diagnostics section skipped when nil
-	roots          RootsResolver                                                                     // may be nil; roots/list fallback skipped when nil
-	refuseFn       func() bool                                                                       // may be nil; treated as false (no refusal)
-	clientNameFn   func() string                                                                     // may be nil; returns current MCP client name
-	topo           topologyStoreFn                                                                   // may be nil; returns the live topology store, or nil when disabled
-	gitPolicyFn    func() GitPolicy                                                                  // may be nil; git policy section skipped when nil
-	projectGitFn   func() ProjectGitStatus                                                           // may be nil; this session's captured view of the capability-granting keys its project config sets
-	lspLangFn      func() string                                                                     // may be nil; the LSP language attached to this session ("" when none)
-	lspSkipNoteFn  func() string                                                                     // may be nil; names why no LSP is attached when the skip is deliberate (e.g. a home-directory workspace root)
-	pinProvFn      func() PinProvenance                                                              // may be nil; this connection's pin provenance, for the contested-connection note
-	lspLangsFn     func() []string                                                                   // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
-	lspRoutedFn    func() []string                                                                   // may be nil; non-primary languages whose servers have actually served this session
-	externalIDFn   func(id string) string                                                            // may be nil; links session to external ID, returns inherited name
-	linkageStateFn func() LinkageState                                                               // may be nil; the connection's PERSISTED linkage + recovery outcome, for state-true linkage notes
-	resumedNewIDFn func() bool                                                                       // may be nil; this call resumed a predecessor's NAME under a new internal session ID
-	stampChannelFn func(ctx context.Context) StampChannelState                                       // may be nil; whether THIS call carried a per-call logical-agent identity, and whether the gate is already armed
-	declaredAgent  func(ctx context.Context, id string) context.Context                              // may be nil; derives the per-call ctx carrying the logical-agent identity declared by session_id
-	pinConflict    func(requested string)                                                            // may be nil; records a same-connection workspace switch attempt
-	repin          func(ctx context.Context, workspace, language string, force bool) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language; force overrides the sticky-pin guard
-	episodicFn     func(ws string) (string, bool)                                                    // may be nil; returns the last episodic summary for the workspace
-	toolProfile    func() (profile string, hidden int, reason string)                                // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
-	lspWarmingFn   func() (bool, time.Duration)                                                      // may be nil; reports whether the primary LSP is still warming + elapsed
-	lspDiagModeFn  func() string                                                                     // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
-	purposeFn      func(purpose string)                                                              // may be nil; persists a validated session purpose tag
-	selfSessID     func() string                                                                     // this session's ID, excluded from the peer digest and shown as the caller's own
-	selfName       func() string                                                                     // may be nil; this session's own current name, shown as the caller's own
-	collabFn       func() (peerAwareness bool, hintBudgetBytes int)                                  // may be nil; the resolved [collab] snapshot for the peer digest
-	mailboxFn      func() (on bool, inbox Inbox)                                                     // may be nil; the mailbox delivery snapshot
-	xcodeHintFn    XcodeHintFn                                                                       // may be nil; bare-Xcode BSP guidance
-	tasksFn        func() TaskState                                                                  // may be nil; the resolved run_task/run_command state for this workspace
-	surchargeFn    func() (bytes int, tokens int, toolCount int)                                     // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
+	diag           diagnosticsSource                                                                                  // may be nil; diagnostics section skipped when nil
+	roots          RootsResolver                                                                                      // may be nil; roots/list fallback skipped when nil
+	refuseFn       func() bool                                                                                        // may be nil; treated as false (no refusal)
+	clientNameFn   func() string                                                                                      // may be nil; returns current MCP client name
+	topo           topologyStoreFn                                                                                    // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn    func() GitPolicy                                                                                   // may be nil; git policy section skipped when nil
+	projectGitFn   func() ProjectGitStatus                                                                            // may be nil; this session's captured view of the capability-granting keys its project config sets
+	lspLangFn      func() string                                                                                      // may be nil; the LSP language attached to this session ("" when none)
+	lspSkipNoteFn  func() string                                                                                      // may be nil; names why no LSP is attached when the skip is deliberate (e.g. a home-directory workspace root)
+	pinProvFn      func() PinProvenance                                                                               // may be nil; this connection's pin provenance, for the contested-connection note
+	lspLangsFn     func() []string                                                                                    // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
+	lspRoutedFn    func() []string                                                                                    // may be nil; non-primary languages whose servers have actually served this session
+	externalIDFn   func(id string) string                                                                             // may be nil; links session to external ID, returns inherited name
+	linkageStateFn func() LinkageState                                                                                // may be nil; the connection's PERSISTED linkage + recovery outcome, for state-true linkage notes
+	resumedNewIDFn func() bool                                                                                        // may be nil; this call resumed a predecessor's NAME under a new internal session ID
+	stampChannelFn func(ctx context.Context) StampChannelState                                                        // may be nil; whether THIS call carried a per-call logical-agent identity, and whether the gate is already armed
+	declaredAgent  func(ctx context.Context, id string) context.Context                                               // may be nil; derives the per-call ctx carrying the logical-agent identity declared by session_id
+	pinConflict    func(requested string)                                                                             // may be nil; records a same-connection workspace switch attempt
+	repin          func(ctx context.Context, workspace, language string, force, connectionScope bool) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language; force overrides the sticky-pin guard
+	episodicFn     func(ws string) (string, bool)                                                                     // may be nil; returns the last episodic summary for the workspace
+	toolProfile    func() (profile string, hidden int, reason string)                                                 // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
+	lspWarmingFn   func() (bool, time.Duration)                                                                       // may be nil; reports whether the primary LSP is still warming + elapsed
+	lspDiagModeFn  func() string                                                                                      // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
+	purposeFn      func(purpose string)                                                                               // may be nil; persists a validated session purpose tag
+	selfSessID     func() string                                                                                      // this session's ID, excluded from the peer digest and shown as the caller's own
+	selfName       func() string                                                                                      // may be nil; this session's own current name, shown as the caller's own
+	collabFn       func() (peerAwareness bool, hintBudgetBytes int)                                                   // may be nil; the resolved [collab] snapshot for the peer digest
+	mailboxFn      func() (on bool, inbox Inbox)                                                                      // may be nil; the mailbox delivery snapshot
+	xcodeHintFn    XcodeHintFn                                                                                        // may be nil; bare-Xcode BSP guidance
+	tasksFn        func() TaskState                                                                                   // may be nil; the resolved run_task/run_command state for this workspace
+	surchargeFn    func() (bytes int, tokens int, toolCount int)                                                      // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
 }
 
 // WithProjectPolicy wires the accessor for this session's capability-granting
@@ -306,7 +311,7 @@ func (t *SessionStart) WithPinConflict(fn func(requested string)) *SessionStart 
 // returns the resolved root. Nil-safe: with no callback wired, session_start
 // falls back to the historical "start a new connection" refusal. Returns the
 // receiver for chaining.
-func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace, language string, force bool) (string, error)) *SessionStart {
+func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace, language string, force, connectionScope bool) (string, error)) *SessionStart {
 	t.repin = fn
 	return t
 }

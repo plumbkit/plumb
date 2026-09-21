@@ -188,7 +188,7 @@ func TestDiagnosticsPull_GrantedAllowDirIsNotAFalseClean(t *testing.T) {
 	t.Cleanup(s.close)
 	ri.setBoundaryGuard(s.invProxyBoundaryGuard)
 	ri.setWorkspaceFn(s.workspaceFor)
-	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false, false); err != nil {
 		t.Fatalf("pin the connection to %s: %v", rootA, err)
 	}
 	s.onAllowDirs([]string{granted})

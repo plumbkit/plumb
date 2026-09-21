@@ -126,7 +126,7 @@ func TestRehydratePin_SyntheticRootDeletedLeavesNoGhost(t *testing.T) {
 	root := freshTempDir(t) // no .git here or above: a synthetic (markerless) root
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()
@@ -157,7 +157,7 @@ func TestRehydratePin_SyntheticRootDoesNotClimbToNewGit(t *testing.T) {
 	}
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	if got := before.workspace(); got != root {

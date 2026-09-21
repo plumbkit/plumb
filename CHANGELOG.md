@@ -4,6 +4,23 @@
 
 ### Added
 
+- **`session_start` takes `scope: "connection"`, and an unattributable forced
+  re-pin is now refused.** A connection's pin had no attributable way to move:
+  an identified caller routed to its own shard, a roots notification re-pins
+  unforced and the sticky guard refuses it, so the ONLY route was an anonymous
+  `force: true` call — which moved the pin and dragged every peer shard that had
+  not chosen a root of its own, resetting its read, write and undo state, with
+  nobody to attribute it to. Refusing that alone would have frozen a shared
+  connection's pin permanently, which is fatal on a client like DSH that
+  multiplexes every agent over one connection.
+
+  `scope: "connection"` is that route: available to any identified agent —
+  deliberately not operator-only, since agents legitimately need to relocate the
+  connection they share — logged with its author, and refused for a caller that
+  has not identified itself. With it in place the anonymous route closes and no
+  capability is lost: PLAN-398's shard-following still happens, now driven by a
+  caller who can be named. (PLAN-440 acceptance a)
+
 - **`[collab] allow_unidentified_writes` — a supported way to turn off the
   shared-connection write ceiling.** The ceiling refuses a state-changing call
   that carries no per-call identity on a connection serving several agents, and

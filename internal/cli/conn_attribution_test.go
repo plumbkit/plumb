@@ -45,7 +45,7 @@ func TestAfterToolFromCtxRecordsTheCallersAgent(t *testing.T) {
 	mustGitDir(t, root)
 	s := newPersistSession(t, store, ss, "proxy-attrib")
 	s.statsStore = newStatsStore()
-	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxy-audit-ws")
 	s.statsStore = newStatsStore()
-	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false, false); err != nil {
 		t.Fatalf("connection pin: %v", err)
 	}
 
@@ -230,7 +230,7 @@ func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxy-audit-order")
 	s.statsStore = newStatsStore()
-	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false, false); err != nil {
 		t.Fatalf("connection pin: %v", err)
 	}
 	s.recordLogicalAgentAttach("agent-here")

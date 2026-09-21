@@ -181,7 +181,7 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 	const skipNote = "LSP skipped: the workspace root is the home directory"
 
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-		WithRepin(func(_ context.Context, ws, _ string, _ bool) (string, error) { return ws, nil }).
+		WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (string, error) { return ws, nil }).
 		WithExternalID(func(string) string { return "resumed-session" }).
 		WithLSPSkipNote(func() string { return skipNote })
 

@@ -53,7 +53,7 @@ func TestLinkageOwnerInheritsConnectionReads(t *testing.T) {
 
 	root := freshTempDir(t)
 	mustGitDir(t, root)
-	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	path := root + "/main.go"
@@ -94,7 +94,7 @@ func TestConnectionReadsSeedOnlyTheLinkageOwner(t *testing.T) {
 
 	root := freshTempDir(t)
 	mustGitDir(t, root)
-	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	path := root + "/main.go"
@@ -224,7 +224,7 @@ func TestLinkageOwnerSeededWhenTheLinkageArrivesLast(t *testing.T) {
 
 	root := freshTempDir(t)
 	mustGitDir(t, root)
-	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
 	path := root + "/main.go"
@@ -237,7 +237,7 @@ func TestLinkageOwnerSeededWhenTheLinkageArrivesLast(t *testing.T) {
 
 	// session_start's order: re-pin (creates the shard, externalID still "") …
 	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
-	if _, err := s.repinWorkspace(ctxConv, "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxConv, "file://"+root, "", false, false); err != nil {
 		t.Fatalf("parent re-pin: %v", err)
 	}
 	if got := s.externalID(); got != "" {
@@ -267,7 +267,7 @@ func TestConnectionReadsNotSeededOntoAnAgentPinnedElsewhere(t *testing.T) {
 	before.recordLogicalAgentAttach("conv")
 	before.recordLogicalAgentCall("conv/agent-1")
 	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
-	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false); err != nil {
+	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false, false); err != nil {
 		t.Fatalf("agent pin to rootB: %v", err)
 	}
 	before.close()
@@ -277,7 +277,7 @@ func TestConnectionReadsNotSeededOntoAnAgentPinnedElsewhere(t *testing.T) {
 	// test can refuse the seed.
 	after := newPersistSession(t, store, ss, "proxyX")
 	t.Cleanup(after.close)
-	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false); err != nil {
+	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("connection pin to rootA: %v", err)
 	}
 	session.SetExternalID(after.sessionID(), "conv")
@@ -312,14 +312,14 @@ func TestSeedOnLinkRespectsTheAgentsOwnRoot(t *testing.T) {
 	before.recordLogicalAgentAttach("conv")
 	before.recordLogicalAgentCall("conv/agent-1")
 	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
-	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false); err != nil {
+	if _, err := before.repinWorkspace(ctxConv, "file://"+rootB, "", false, false); err != nil {
 		t.Fatalf("agent pin to rootB: %v", err)
 	}
 	before.close()
 
 	after := newPersistSession(t, store, ss, "proxyY")
 	t.Cleanup(after.close)
-	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false); err != nil {
+	if _, err := after.repinWorkspace(context.Background(), "file://"+rootA, "", false, false); err != nil {
 		t.Fatalf("connection pin to rootA: %v", err)
 	}
 	path := rootA + "/main.go"

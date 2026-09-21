@@ -110,11 +110,11 @@ func TestCanonicalRoot_AliasedRepinIsANoOpNotAStickyRefusal(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	if _, err := s.repinWorkspace(context.Background(), realRoot, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), realRoot, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
-	root, err := s.repinWorkspace(context.Background(), alias, "", false)
+	root, err := s.repinWorkspace(context.Background(), alias, "", false, false)
 	if err != nil {
 		t.Fatalf("re-pinning to the SAME project by its other spelling must be a no-op, "+
 			"not a sticky-pin refusal: %v", err)
@@ -145,7 +145,7 @@ func TestCanonicalRoot_SyntheticRootIsCanonicalised(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxySynth")
 	defer s.close()
-	root, err := s.repinWorkspace(context.Background(), alias, "", false)
+	root, err := s.repinWorkspace(context.Background(), alias, "", false, false)
 	if err != nil {
 		t.Fatalf("explicit pin on a markerless folder: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestCanonicalRoot_NonexistentRootStillPins(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyMissing")
 	defer s.close()
-	root, err := s.repinWorkspace(context.Background(), missing, "", false)
+	root, err := s.repinWorkspace(context.Background(), missing, "", false, false)
 	if err != nil {
 		t.Fatalf("a nonexistent root must still pin: %v", err)
 	}

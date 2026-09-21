@@ -90,7 +90,7 @@ func TestSeededShardDoesNotInheritAPeersStickiness(t *testing.T) {
 
 	// A peer names that same root explicitly, promoting the pin origin.
 	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
-	if _, err := s.repinWorkspace(ctxPeer, parent, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxPeer, parent, "", false, false); err != nil {
 		t.Fatalf("the peer's same-root session_start: %v", err)
 	}
 	s.recordLogicalAgentAttach("peer")
@@ -98,7 +98,7 @@ func TestSeededShardDoesNotInheritAPeersStickiness(t *testing.T) {
 	// The reporting agent's FIRST session_start, naming its own worktree. It
 	// has never pinned anything on this connection.
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	root, err := s.repinWorkspace(ctxAgent, worktree, "", false)
+	root, err := s.repinWorkspace(ctxAgent, worktree, "", false, false)
 	if err != nil {
 		t.Fatalf("an agent's first explicit pin was refused off a root it never chose: %v", err)
 	}
@@ -133,11 +133,11 @@ func TestChosenShardStaysSticky(t *testing.T) {
 	s.recordLogicalAgentAttach("peer")
 
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("the agent's own pin: %v", err)
 	}
 
-	_, err := s.repinWorkspace(ctxAgent, other, "", false)
+	_, err := s.repinWorkspace(ctxAgent, other, "", false, false)
 	if err == nil {
 		t.Fatal("a move away from the workspace this agent chose must be refused without force")
 	}
@@ -163,7 +163,7 @@ func TestAgentPinSurvivesItsShardMaterialising(t *testing.T) {
 	first := newPersistSession(t, store, ss, "proxy-drift")
 	first.recordLogicalAgentAttach("agent-A")
 	first.recordLogicalAgentAttach("peer")
-	if _, err := first.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+	if _, err := first.repinWorkspace(ctxAgent, parent, "", false, false); err != nil {
 		t.Fatalf("setup: pinning the parent checkout: %v", err)
 	}
 	first.close()
@@ -172,7 +172,7 @@ func TestAgentPinSurvivesItsShardMaterialising(t *testing.T) {
 	// rebuild): same proxy session, a fresh connection whose observed-identity
 	// set starts empty, so this agent is once again the only identity known.
 	second := newPersistSession(t, store, ss, "proxy-drift")
-	root, err := second.repinWorkspace(ctxAgent, worktree, "", false)
+	root, err := second.repinWorkspace(ctxAgent, worktree, "", false, false)
 	if err != nil {
 		t.Fatalf("the agent's explicit session_start: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestAgentPinSurvivesItsShardMaterialising(t *testing.T) {
 	// Naming its own workspace again must not be refused: an agent that never
 	// left is not a peer trying to steal a pin, and force: true is not a remedy
 	// it can safely reach for on a connection it shares.
-	if _, err := second.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := second.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Errorf("re-pinning to the workspace the agent already chose was refused: %v", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestExplicitConnectionPinIsAttributedToItsAgent(t *testing.T) {
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
 
 	s := newPersistSession(t, store, ss, "proxy-attrib")
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("explicit pin: %v", err)
 	}
 
@@ -239,7 +239,7 @@ func TestUnattributedPinIsNotAttributedToAnAgent(t *testing.T) {
 	parent, _ := worktreeUnderParent(t)
 
 	s := newPersistSession(t, store, ss, "proxy-anon")
-	if _, err := s.repinWorkspace(context.Background(), parent, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), parent, "", false, false); err != nil {
 		t.Fatalf("unattributed pin: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestConfirmingASeededWorkspaceStopsTheShardFollowing(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxy-confirm")
 	// The connection pins the worktree, and the agent's shard is seeded there.
-	if _, err := s.repinWorkspace(context.Background(), worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), worktree, "", false, false); err != nil {
 		t.Fatalf("connection pin to the worktree: %v", err)
 	}
 	s.recordLogicalAgentAttach("coordinator")
@@ -282,12 +282,15 @@ func TestConfirmingASeededWorkspaceStopsTheShardFollowing(t *testing.T) {
 
 	// The agent names that workspace explicitly — a deliberate choice, even
 	// though nothing moves.
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("the agent's same-root session_start: %v", err)
 	}
 
-	// The connection now moves elsewhere without the agent being involved.
-	if _, err := s.repinWorkspace(context.Background(), parent, "", true); err != nil {
+	// The connection now moves elsewhere without THIS agent being involved — a
+	// peer relocates it through the attributable route, scope: "connection".
+	// The move needs an author now (PLAN-440 (a)); whose it is does not matter
+	// here, only that it is not this agent's.
+	if _, err := s.repinConnection(mcp.WithLogicalAgent(context.Background(), "peer"), parent, "", true); err != nil {
 		t.Fatalf("connection move to the parent checkout: %v", err)
 	}
 
@@ -306,14 +309,14 @@ func TestConfirmedWorkspaceIsPersisted(t *testing.T) {
 	_, worktree := worktreeUnderParent(t)
 
 	s := newPersistSession(t, store, ss, "proxy-confirm-persist")
-	if _, err := s.repinWorkspace(context.Background(), worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), worktree, "", false, false); err != nil {
 		t.Fatalf("connection pin: %v", err)
 	}
 	s.recordLogicalAgentAttach("coordinator")
 	s.recordLogicalAgentAttach("agent-A")
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
 	_ = s.workspaceFor(ctxAgent) // seed the shard
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("the agent's same-root session_start: %v", err)
 	}
 
@@ -349,13 +352,13 @@ func TestSeededShardStillRefusesAnUnrelatedWorkspace(t *testing.T) {
 	s.attachWorkspace(context.Background(), "file://"+parent)
 
 	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
-	if _, err := s.repinWorkspace(ctxPeer, parent, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxPeer, parent, "", false, false); err != nil {
 		t.Fatalf("the peer's same-root session_start: %v", err)
 	}
 	s.recordLogicalAgentAttach("peer")
 
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	_, err := s.repinWorkspace(ctxAgent, elsewhere, "", false)
+	_, err := s.repinWorkspace(ctxAgent, elsewhere, "", false, false)
 	if err == nil {
 		t.Fatal("a seeded shard re-pinning to a workspace outside the connection's project was accepted — the #182 guard is fail-open")
 	}
@@ -397,18 +400,18 @@ func TestChosenWorkspaceIsStickyEvenWithinItsOwnTree(t *testing.T) {
 	s.recordLogicalAgentAttach("peer")
 
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	if _, err := s.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, parent, "", false, false); err != nil {
 		t.Fatalf("the agent's own pin: %v", err)
 	}
 
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err == nil {
 		t.Fatal("a move off a workspace this agent chose was accepted because the target was nested inside it — the exemption is for a SEEDED root, not any root")
 	}
 	if got := s.workspaceFor(ctxAgent); got != parent {
 		t.Errorf("the refused re-pin moved the shard to %q; it must stay at %q", got, parent)
 	}
 	// force: true is the advertised remedy and must land, on this agent alone.
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", true, false); err != nil {
 		t.Fatalf("force: true is the named remedy and must land: %v", err)
 	}
 	if got := s.workspace(); got != other {
@@ -436,7 +439,7 @@ func TestRestoredShardStaysStickyAcrossARestart(t *testing.T) {
 	first.attachWorkspace(context.Background(), "file://"+parent)
 	first.recordLogicalAgentAttach("peer")
 	first.recordLogicalAgentAttach("agent-A")
-	if _, err := first.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := first.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("setup: the agent's own pin: %v", err)
 	}
 	first.close()
@@ -450,7 +453,7 @@ func TestRestoredShardStaysStickyAcrossARestart(t *testing.T) {
 		t.Fatalf("precondition: the restored shard sits at %q, want the persisted %q", got, worktree)
 	}
 
-	_, err := second.repinWorkspace(ctxAgent, elsewhere, "", false)
+	_, err := second.repinWorkspace(ctxAgent, elsewhere, "", false, false)
 	if err == nil {
 		t.Fatal("a restored shard accepted a cross-workspace re-pin — the sticky guard does not survive a restart")
 	}
@@ -479,13 +482,13 @@ func TestSeededShardMayCorrectOutwardToItsParentCheckout(t *testing.T) {
 
 	// A peer names that same root explicitly, promoting the pin origin.
 	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
-	if _, err := s.repinWorkspace(ctxPeer, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxPeer, worktree, "", false, false); err != nil {
 		t.Fatalf("the peer's same-root session_start: %v", err)
 	}
 	s.recordLogicalAgentAttach("peer")
 
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	if _, err := s.repinWorkspace(ctxAgent, parent, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, parent, "", false, false); err != nil {
 		t.Fatalf("an agent's first explicit pin outward to the checkout around a root it never chose was refused: %v", err)
 	}
 	if got := s.workspaceFor(ctxAgent); got != parent {

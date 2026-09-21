@@ -52,7 +52,7 @@ func TestPin_SurvivesDaemonRestartByteIdentical(t *testing.T) {
 	mustGitDir(t, root)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	pinned, err := before.repinWorkspace(context.Background(), root, "", false)
+	pinned, err := before.repinWorkspace(context.Background(), root, "", false, false)
 	if err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestPin_RestoreDoesNotResolveAfresh(t *testing.T) {
 	mustGitDir(t, child)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	pinned, err := before.repinWorkspace(context.Background(), child, "", false)
+	pinned, err := before.repinWorkspace(context.Background(), child, "", false, false)
 	if err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}

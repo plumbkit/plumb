@@ -398,7 +398,7 @@ func TestSessionStart_LanguageOverride(t *testing.T) {
 	var gotWs, gotLang string
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithLSPLanguage(func() string { return "swift" }). // server attached after the forced pin
-		WithRepin(func(_ context.Context, ws, lang string, _ bool) (string, error) {
+		WithRepin(func(_ context.Context, ws, lang string, _, _ bool) (string, error) {
 			gotWs, gotLang = ws, lang
 			return ws, nil
 		})
@@ -447,7 +447,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		target := t.TempDir()
 		var got string
 		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-			WithRepin(func(_ context.Context, ws, _ string, _ bool) (string, error) {
+			WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (string, error) {
 				got = ws
 				return ws, nil
 			})
@@ -809,7 +809,7 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 	target := t.TempDir()
 	var gotForce []bool
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-		WithRepin(func(_ context.Context, ws, _ string, force bool) (string, error) {
+		WithRepin(func(_ context.Context, ws, _ string, force, _ bool) (string, error) {
 			gotForce = append(gotForce, force)
 			return ws, nil
 		})
@@ -832,7 +832,7 @@ func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
 	target := t.TempDir()
 	var gotForce bool
 	tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil).
-		WithRepin(func(_ context.Context, _, _ string, force bool) (string, error) {
+		WithRepin(func(_ context.Context, _, _ string, force, _ bool) (string, error) {
 			gotForce = force
 			return target, nil
 		})

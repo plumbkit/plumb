@@ -56,7 +56,7 @@ func TestRepinWorkspace_RefusesARelativeWorkspace(t *testing.T) {
 	t.Chdir(root)
 
 	for _, rel := range []string{".", "./", "sub", "a/../b"} {
-		if _, err := s.repinWorkspace(context.Background(), rel, "", false); err == nil {
+		if _, err := s.repinWorkspace(context.Background(), rel, "", false, false); err == nil {
 			t.Errorf("repinWorkspace(%q) was accepted; a relative workspace names no "+
 				"directory and must be refused rather than resolved against the daemon's cwd", rel)
 		}
@@ -64,7 +64,7 @@ func TestRepinWorkspace_RefusesARelativeWorkspace(t *testing.T) {
 
 	// Control: the absolute form of the same directory still pins, so the refusal
 	// is about the spelling and not a re-pin that has stopped working.
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("control failed — an absolute re-pin was refused: %v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestRepinWorkspace_RefusesInactiveLanguageOverride(t *testing.T) {
 	s.attachWorkspace(context.Background(), "file://"+root)
 	before := s.view().acquiredLanguage
 
-	_, err := s.repinWorkspace(context.Background(), root, "swift", false)
+	_, err := s.repinWorkspace(context.Background(), root, "swift", false, false)
 	if err == nil {
 		t.Fatal("expected a refusal: swift is not active in this pool, so the override cannot be honoured")
 	}
@@ -229,7 +229,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 		t.Fatalf("attach: workspace = %s, want %s", got, rootA)
 	}
 
-	newRoot, err := s.repinWorkspace(context.Background(), rootB, "", false)
+	newRoot, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
 	if err != nil {
 		t.Fatalf("repin: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 	}
 
 	// Re-pinning to the already-pinned root is a no-op (no error, same root).
-	again, err := s.repinWorkspace(context.Background(), rootB, "", false)
+	again, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
 	if err != nil || again != rootB {
 		t.Fatalf("no-op repin: returned %s, err %v; want %s, nil", again, err, rootB)
 	}
@@ -265,7 +265,7 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
-	newRoot, err := s.repinWorkspace(context.Background(), bare, "", false)
+	newRoot, err := s.repinWorkspace(context.Background(), bare, "", false, false)
 	if err != nil {
 		t.Fatalf("repin to marker-less dir: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestRepinWorkspace_ResetsTrackers(t *testing.T) {
 		t.Fatal("precondition: tracker should hold the recorded paths before re-pin")
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
 		t.Fatalf("repin: %v", err)
 	}
 	if s.writeTracker.Wrote(writtenA) {

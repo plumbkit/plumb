@@ -37,14 +37,14 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 	ctxFresh := mcp.WithLogicalAgent(context.Background(), "fresh")
 
 	// 1. The connection pins to X (unattributed call — the connection-level path).
-	if _, err := s.repinWorkspace(context.Background(), rootX, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
 		t.Fatalf("connection pin to X: %v", err)
 	}
 	s.recordLogicalAgentAttach("coordinator")
 	s.recordLogicalAgentAttach("sub")
 
 	// 2. sub asks for Y and is refused — but its shard is now cached at X.
-	if _, err := s.repinWorkspace(ctxSub, rootY, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxSub, rootY, "", false, false); err == nil {
 		t.Fatal("precondition: sub's cross-workspace re-pin should have been refused")
 	}
 	if got := shardRoot(t, s, ctxSub); got != rootX {
@@ -59,14 +59,17 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 	}
 
 	// 3. The connection legitimately moves to Z (force: the pin is sticky).
-	if _, err := s.repinWorkspace(context.Background(), rootZ, "", true); err != nil {
+	// The connection moves through the attributable route: an identified agent
+	// asking for scope: "connection". The anonymous forced move it used to use is
+	// now refused, because it could not be attributed to anyone (PLAN-440 (a)).
+	if _, err := s.repinConnection(ctxSub, rootZ, "", true); err != nil {
 		t.Fatalf("connection move to Z: %v", err)
 	}
 
 	// 4. THE CARD: sub now asks for Z — where the connection actually is — and
 	// must be ACCEPTED. Before the fix the stale cached shard's sticky seed at
 	// X refused the identical request its peer's fresh shard admitted.
-	if _, err := s.repinWorkspace(ctxSub, rootZ, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxSub, rootZ, "", false, false); err != nil {
 		t.Fatalf("a legitimate call for the root the connection moved to was refused off a stale seeded shard (PLAN-398): %v", err)
 	}
 	if got := s.workspaceFor(ctxSub); got != rootZ {
@@ -74,13 +77,13 @@ func TestShardSeededBeforeRefusalFollowsTheConnection(t *testing.T) {
 	}
 
 	// 5. Control: a fresh agent asking the identical thing is accepted too.
-	if _, err := s.repinWorkspace(ctxFresh, rootZ, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxFresh, rootZ, "", false, false); err != nil {
 		t.Fatalf("control: a fresh agent's identical call must be accepted: %v", err)
 	}
 
 	// Fail-closed survives the follow: sub's shard now lives at Z, so a genuine
 	// cross-workspace ask is still refused, with the remedy.
-	_, driftErr := s.repinWorkspace(ctxSub, rootY, "", false)
+	_, driftErr := s.repinWorkspace(ctxSub, rootY, "", false, false)
 	if driftErr == nil {
 		t.Fatal("after following the connection, a genuine cross-workspace drift must still be refused")
 	}
@@ -108,22 +111,25 @@ func TestSelfPinnedShardDoesNotFollowTheConnection(t *testing.T) {
 
 	ctxSub := mcp.WithLogicalAgent(context.Background(), "sub")
 
-	if _, err := s.repinWorkspace(context.Background(), rootX, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
 		t.Fatalf("connection pin to X: %v", err)
 	}
 	s.recordLogicalAgentAttach("coordinator")
 	s.recordLogicalAgentAttach("sub")
 
 	// sub's first ask is refused (shard seeded at X), then it CHOOSES W with force.
-	if _, err := s.repinWorkspace(ctxSub, rootW, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxSub, rootW, "", false, false); err == nil {
 		t.Fatal("precondition: the cross-workspace ask should have been refused")
 	}
-	if _, err := s.repinWorkspace(ctxSub, rootW, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxSub, rootW, "", true, false); err != nil {
 		t.Fatalf("sub's forced pin to W: %v", err)
 	}
 
 	// The connection moves to Z. sub's own choice must survive it.
-	if _, err := s.repinWorkspace(context.Background(), rootZ, "", true); err != nil {
+	// The connection moves through the attributable route: an identified agent
+	// asking for scope: "connection". The anonymous forced move it used to use is
+	// now refused, because it could not be attributed to anyone (PLAN-440 (a)).
+	if _, err := s.repinConnection(ctxSub, rootZ, "", true); err != nil {
 		t.Fatalf("connection move to Z: %v", err)
 	}
 	if got := s.workspaceFor(ctxSub); got != rootW {
@@ -138,13 +144,13 @@ func TestSelfPinnedShardDoesNotFollowTheConnection(t *testing.T) {
 	// shard at W — without the guard, the move away from W re-seeds the shard
 	// (its root matches the connection's previous root), dragging the agent's
 	// own choice along with the connection.
-	if _, err := s.repinWorkspace(context.Background(), rootW, "", true); err != nil {
+	if _, err := s.repinConnection(mcp.WithLogicalAgent(context.Background(), "peer"), rootW, "", true); err != nil {
 		t.Fatalf("connection move to W: %v", err)
 	}
 	if got := s.workspaceFor(ctxSub); got != rootW {
 		t.Fatalf("connection settling on the agent's own root moved the shard to %q, want %q", got, rootW)
 	}
-	if _, err := s.repinWorkspace(context.Background(), rootZ, "", true); err != nil {
+	if _, err := s.repinConnection(mcp.WithLogicalAgent(context.Background(), "peer"), rootZ, "", true); err != nil {
 		t.Fatalf("connection move away from W: %v", err)
 	}
 	if got := s.workspaceFor(ctxSub); got != rootW {

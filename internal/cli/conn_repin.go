@@ -15,7 +15,6 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
-	"github.com/plumbkit/plumb/internal/toolerror"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -84,7 +83,10 @@ func (s *connSession) repinRemedy() string {
 // connection must not silently steal the pin the caller deliberately chose.
 // The refusal error names the remediation (retry with force: true), so a new
 // conversation deliberately switching projects still can, one round-trip later.
-func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string, force bool) (string, error) {
+func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string, force, connectionScope bool) (string, error) {
+	if connectionScope {
+		return s.repinConnection(ctx, folder, langOverride, force)
+	}
 	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
 }
 
@@ -283,47 +285,12 @@ func (s *connSession) attributeConnectionPin(ctx context.Context, root string, o
 func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic, langForced bool) (changed bool, refused error) {
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
-		// Sticky-pin guard (issue #182). Only a LIVE re-pin away from a pin held
-		// by an explicit session_start is gated: a same-root request falls
-		// through to the promotion branch below, a restore replay is never
-		// blocked (the pin's owner re-attaching is not a peer stealing it), and
-		// a roots/auto-attach pin is not sticky — the first explicit pin must
-		// always land.
-		if !force && trigger == pinTriggerLive && prev != "" && root != prev &&
-			v.pinOrigin == sessionstate.PinSourceSessionStart {
-			if origin == sessionstate.PinSourceSessionStart {
-				remedy := s.repinRemedy()
-				s.log().Warn("daemon: session_start re-pin refused — explicit pin held (sticky, issue #182)", "pinned", prev, "requested", root, "contested", s.pinContested())
-				// Surface the refused steal attempt to the operator (TUI /
-				// dashboard); a later successful re-pin clears Health below. The
-				// remedy is appended here too (issue #358) — the dashboard alert
-				// renders HealthMessage directly, so a message with no next step
-				// left the operator with nothing actionable but a loop.
-				s.markBoundaryViolation(fmt.Sprintf("session_start re-pin refused: explicit pin %s is sticky; requested %s (issue #182). %s", prev, root, remedy))
-				// Classified at "connection" scope: unlike the per-agent refusal in
-				// conn_agent_shard.go, force: true here moves the pin EVERY agent on
-				// this connection resolves against — and the pin may have been
-				// restored from persistence for another conversation entirely. A
-				// client must therefore surface this rather than retry it
-				// automatically; the scope in Details is what lets it tell the two
-				// apart without parsing the sentence.
-				refused = toolerror.Wrap(
-					fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. %s", prev, root, pinProvenanceOf(v), remedy),
-					toolerror.KindPinRefused,
-					toolerror.ClassRepinWorkspace,
-					toolerror.WithTool("session_start"),
-					toolerror.WithDetail("scope", "connection"),
-					toolerror.WithDetail("pinned", prev),
-					toolerror.WithDetail("requested", root),
-				)
-				return
-			}
-			// A roots-driven re-pin (the client dropped our root from its
-			// reported set) is a weaker signal than the deliberate pin: keep the
-			// pin, no error — the live counterpart of the persisted-pin
-			// promotion rule. onRootsChanged short-circuits this case up front;
-			// this in-lane check is the authoritative one.
-			s.log().Info("daemon: roots re-pin skipped — explicit session_start pin held (issue #182)", "pinned", prev, "requested", root)
+		if err := s.refuseAnonymousForcedMove(ctx, prev, root, trigger, force); err != nil {
+			refused = err
+			return
+		}
+		if handled, err := s.stickyPinHolds(v, origin, prev, root, trigger, force); handled {
+			refused = err
 			return
 		}
 		// No-op when the root does not change, UNLESS the caller explicitly

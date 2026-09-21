@@ -29,10 +29,10 @@ func TestRepinWorkspace_LanguageOverrideRefusedOnSharedConnection(t *testing.T) 
 	s.recordLogicalAgentCall("agent-b")
 	ctxA := mcp.WithLogicalAgent(context.Background(), "agent-a")
 
-	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false, false); err != nil {
 		t.Fatalf("agent A pin: %v", err)
 	}
-	_, err := s.repinWorkspace(ctxA, "file://"+root, "go", false)
+	_, err := s.repinWorkspace(ctxA, "file://"+root, "go", false, false)
 	if err == nil {
 		t.Fatal("a language override on a shared connection must be refused, not stored and ignored")
 	}
@@ -46,7 +46,7 @@ func TestRepinWorkspace_LanguageOverrideRefusedOnSharedConnection(t *testing.T) 
 	if got := s.workspaceFor(ctxA); got != root {
 		t.Fatalf("agent A workspace after the refusal = %q, want %q", got, root)
 	}
-	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false, false); err != nil {
 		t.Fatalf("the same re-pin without a language must still succeed: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestSameRootLanguageSwitchPreservesTrackers(t *testing.T) {
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
 
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 	read := filepath.Join(root, "read.go")
@@ -74,7 +74,7 @@ func TestSameRootLanguageSwitchPreservesTrackers(t *testing.T) {
 	// "go" is active in newPersistSession's pool (see
 	// TestStickyPin_LanguageOnlyRepinNotRefused), so this is a real same-root
 	// language switch, not a silently ignored override.
-	if _, err := s.repinWorkspace(context.Background(), root, "go", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "go", false, false); err != nil {
 		t.Fatalf("same-root language switch: %v", err)
 	}
 	// The WRITE tracker is the load-bearing assertion here. The read half is
@@ -93,7 +93,7 @@ func TestSameRootLanguageSwitchPreservesTrackers(t *testing.T) {
 	// The contrast: a move to another root does start clean.
 	other := freshTempDir(t)
 	mustGitDir(t, other)
-	if _, err := s.repinWorkspace(context.Background(), other, "", true); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), other, "", true, false); err != nil {
 		t.Fatalf("move to another root: %v", err)
 	}
 	if !s.readTracker.Mtime(read).IsZero() || s.writeTracker.Wrote(written) {
@@ -119,7 +119,7 @@ func TestSameRootLanguageSwitchPreservesShardTrackers(t *testing.T) {
 	s.recordLogicalAgentAttach("agent-a")
 	s.recordLogicalAgentCall("agent-b")
 	ctxA := mcp.WithLogicalAgent(context.Background(), "agent-a")
-	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false, false); err != nil {
 		t.Fatalf("agent A pin: %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestShardLanguageOverride_NoOpIsNotRefused(t *testing.T) {
 	s.recordLogicalAgentAttach("agent-a")
 	s.recordLogicalAgentCall("agent-b")
 	ctxA := mcp.WithLogicalAgent(context.Background(), "agent-a")
-	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxA, "file://"+root, "", false, false); err != nil {
 		t.Fatalf("agent A pin: %v", err)
 	}
 

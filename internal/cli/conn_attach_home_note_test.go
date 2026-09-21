@@ -19,7 +19,7 @@ func TestHomePin_RecordsLSPSkipNote(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 
 	s := newRefreshSession(t, pool)
-	if _, err := s.repinWorkspace(context.Background(), home, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), home, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(home): %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestNormalSyntheticPin_DoesNotRecordLSPSkipNote(t *testing.T) {
 	root := freshTempDir(t) // markerless: synthesises to itself, language none
 
 	s := newRefreshSession(t, pool)
-	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("repinWorkspace(root): %v", err)
 	}
 

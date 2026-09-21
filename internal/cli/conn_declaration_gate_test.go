@@ -49,7 +49,7 @@ func TestRefusedDeclarationGatesWorkspaceDependentCalls(t *testing.T) {
 	// origin to session_start and turns the connection shared — the reported
 	// shape, and what makes the next agent's shard sticky-seeded.
 	ctxPeer := mcp.WithLogicalAgent(context.Background(), "peer")
-	if _, err := s.repinWorkspace(ctxPeer, seeded, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxPeer, seeded, "", false, false); err != nil {
 		t.Fatalf("the peer's same-root session_start: %v", err)
 	}
 	s.recordLogicalAgentAttach("peer")
@@ -57,7 +57,7 @@ func TestRefusedDeclarationGatesWorkspaceDependentCalls(t *testing.T) {
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-gated")
 	// The agent's FIRST declaration, naming an unrelated project: refused,
 	// because its shard is seeded from the connection root and never chose one.
-	pinErr, err := s.repinWorkspace(ctxAgent, other, "", false)
+	pinErr, err := s.repinWorkspace(ctxAgent, other, "", false, false)
 	if err == nil {
 		t.Fatal("a cross-workspace first declaration must be refused (fail-closed, PLAN-395)")
 	}
@@ -110,7 +110,7 @@ func TestRefusedDeclarationGatesWorkspaceDependentCalls(t *testing.T) {
 	}
 
 	// The remedy is reachable, and it clears the gate.
-	if _, err := s.repinWorkspace(ctxAgent, other, "", true); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, other, "", true, false); err != nil {
 		t.Fatalf("the forced declaration the refusal names must succeed: %v", err)
 	}
 	if err := s.readBoundaryGuardFor(ctxAgent, filepath.Join(other, "notes.md")); err != nil {
@@ -136,11 +136,11 @@ func TestChosenShardIsNeverGated(t *testing.T) {
 
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-chosen")
 	// Same-tree correction: this one LANDS, so the shard has chosen a root.
-	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false); err != nil {
+	if _, err := s.repinWorkspace(ctxAgent, worktree, "", false, false); err != nil {
 		t.Fatalf("the agent's own same-tree pin: %v", err)
 	}
 	// A move away from a root it chose is still refused (issue #182)...
-	if _, err := s.repinWorkspace(ctxAgent, other, "", false); err == nil {
+	if _, err := s.repinWorkspace(ctxAgent, other, "", false, false); err == nil {
 		t.Fatal("a move away from the agent's own workspace must be refused without force")
 	}
 	// ...but the agent keeps its own workspace: no gate, and the boundary still

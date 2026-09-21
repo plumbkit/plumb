@@ -31,7 +31,7 @@ func TestSessionStart_AttributionPrecedesTheWorkspace(t *testing.T) {
 			order = append(order, "declared-agent")
 			return context.WithValue(ctx, declaredAgentKeyType{}, id)
 		}).
-		WithRepin(func(ctx context.Context, workspace, _ string, _ bool) (string, error) {
+		WithRepin(func(ctx context.Context, workspace, _ string, _, _ bool) (string, error) {
 			order = append(order, "repin")
 			if got, _ := ctx.Value(declaredAgentKeyType{}).(string); got != "subagent-7" {
 				t.Errorf("re-pin ctx logical agent = %q, want %q — the re-pin ran unattributed", got, "subagent-7")
@@ -74,7 +74,7 @@ func TestSessionStart_LinkageNotCommittedOnARefusedCall(t *testing.T) {
 			attributed = true
 			return context.WithValue(ctx, declaredAgentKeyType{}, id)
 		}).
-		WithRepin(func(context.Context, string, string, bool) (string, error) {
+		WithRepin(func(context.Context, string, string, bool, bool) (string, error) {
 			return "", errors.New("refusing to re-pin: sticky (issue #182)")
 		})
 
