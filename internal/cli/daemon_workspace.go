@@ -90,12 +90,27 @@ func rootsFromClient(ctx context.Context, request mcp.RequestFn, logger *slog.Lo
 }
 
 // workspaceFromArgs returns the resolved workspace root for a tool call's raw
-// JSON arguments. Returns "" if no path-bearing field is present or the path
-// doesn't sit under a discoverable project root.
-func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
+// JSON arguments, for stats attribution. Returns "" if no path-bearing field is
+// present or the path doesn't sit under a discoverable project root.
+//
+// base is the root the call itself resolved against. Tools accept
+// workspace-relative paths and anchor them there (Git.defaultRepo, resolvePath),
+// so a relative seed is anchored the same way — left relative, Detect would
+// resolve it against the daemon's cwd, which belongs to no caller. With no base
+// a relative seed attributes nothing.
+func workspaceFromArgs(pool *workspacePool, args json.RawMessage, base string) string {
 	seed := seedPathFromArgs(args)
 	if seed == "" {
+		seed = repoFromArgs(args)
+	}
+	if seed == "" {
 		return ""
+	}
+	if !filepath.IsAbs(seed) {
+		if base == "" {
+			return ""
+		}
+		seed = filepath.Join(base, seed)
 	}
 	// If seed is already a directory, use it directly — filepath.Dir would
 	// strip the last component and miss the project root marker.
@@ -108,6 +123,20 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 		return ""
 	}
 	return root
+}
+
+// repoFromArgs returns git's `repo` argument (#471), the documented lane for
+// committing into a nested submodule. It is read for attribution only, and kept
+// out of seedPathFromArgs on purpose: that function also seeds the CONNECTION's
+// pin (onBeforeTool), and a submodule commit must not choose it.
+func repoFromArgs(args json.RawMessage) string {
+	var a struct {
+		Repo string `json:"repo"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	return paths.URIToPath(a.Repo)
 }
 
 // workspaceArgPresent reports whether the tool arguments carry a non-empty

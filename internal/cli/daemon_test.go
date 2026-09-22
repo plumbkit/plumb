@@ -170,6 +170,14 @@ func TestSeedPathFromArgs(t *testing.T) {
 			want: "",
 		},
 		{
+			// seedPathFromArgs also seeds the CONNECTION's pin (conn_attach.go).
+			// git's repo is honoured for stats attribution only (#471); letting it
+			// seed here would let a submodule commit pick the connection's pin.
+			name: "git repo does not seed the pin",
+			args: `{"subcommand":"commit","repo":"/tmp/sub"}`,
+			want: "",
+		},
+		{
 			name: "malformed JSON",
 			args: `{not-json`,
 			want: "",
@@ -216,9 +224,35 @@ func TestWorkspaceFromArgs_NestedShapes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := workspaceFromArgs(pool, json.RawMessage(tc.args))
+			got := workspaceFromArgs(pool, json.RawMessage(tc.args), "")
 			if got != dir {
 				t.Errorf("workspaceFromArgs = %q, want %q", got, dir)
+			}
+		})
+	}
+}
+
+// TestWorkspaceFromArgs_RelativeSeedAnchorsAtBase: tools accept
+// workspace-relative paths and resolve them against the caller's root, so the
+// attribution must too. Left relative, Detect resolved them against the
+// daemon's cwd — a directory belonging to no caller.
+func TestWorkspaceFromArgs_RelativeSeedAnchorsAtBase(t *testing.T) {
+	base := freshTempDir(t)
+	mustWrite(t, filepath.Join(base, "go.mod"), "module base\n")
+	nested := filepath.Join(base, "nested")
+	mustWrite(t, filepath.Join(nested, "go.mod"), "module nested\n")
+	pool := detectTestPool()
+
+	for _, tc := range []struct {
+		name, args, base, want string
+	}{
+		{"relative file_path", `{"file_path":"nested/a.go"}`, base, nested},
+		{"relative git repo", `{"subcommand":"status","repo":"nested"}`, base, nested},
+		{"relative seed with no base attributes nothing", `{"file_path":"nested/a.go"}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workspaceFromArgs(pool, json.RawMessage(tc.args), tc.base); got != tc.want {
+				t.Errorf("workspaceFromArgs = %q, want %q", got, tc.want)
 			}
 		})
 	}

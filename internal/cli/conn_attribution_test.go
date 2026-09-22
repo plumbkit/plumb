@@ -276,3 +276,72 @@ func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
 		t.Errorf("the caller's own workspace has %d audit rows for a write into another project, want 0", len(stray))
 	}
 }
+
+// TestAfterToolFilesAGitCallUnderItsRepo (#471): git names its target with
+// `repo`, which is the documented lane for committing into a nested submodule.
+// No path-bearing argument matched it, so the row fell back to the caller's own
+// root and the repository the commit landed in had no record of it. A relative
+// repo is anchored where Git.defaultRepo anchors it — the CALLER's root, not the
+// connection's pin and not the daemon's cwd.
+func TestAfterToolFilesAGitCallUnderItsRepo(t *testing.T) {
+	store, ss := newOriginStore(t)
+	connRoot := freshTempDir(t)
+	mustGitDir(t, connRoot)
+	agentRoot := freshTempDir(t)
+	mustGitDir(t, agentRoot)
+	nested := agentRoot + "/sub"
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	mustGitDir(t, nested)
+	other := freshTempDir(t)
+	mustGitDir(t, other)
+
+	s := newPersistSession(t, store, ss, "proxy-audit-repo")
+	s.statsStore = newStatsStore()
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false, false); err != nil {
+		t.Fatalf("connection pin: %v", err)
+	}
+	s.recordLogicalAgentAttach("agent-here")
+	s.recordLogicalAgentCall("agent-elsewhere")
+	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
+	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
+	}
+
+	commit := func(repo, msg string) {
+		args, err := json.Marshal(map[string]any{"subcommand": "commit", "message": msg, "repo": repo})
+		if err != nil {
+			t.Fatalf("marshal git args: %v", err)
+		}
+		s.afterToolFromCtx(ctx, "git", args, "abc1234 "+msg, "", time.Millisecond, false, nil)
+	}
+	commit(other, "absolute")
+	commit("sub", "relative")
+
+	s.statsStore.Close()
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+
+	for _, c := range []struct {
+		root string
+		want int
+		why  string
+	}{
+		{other, 1, "an absolute repo names the repository committed to"},
+		{nested, 1, "a relative repo resolves against the caller's root, as git itself resolved it"},
+		{agentRoot, 0, "the caller's own root was not committed to"},
+		{connRoot, 0, "the connection's pin was not committed to"},
+	} {
+		rows, err := db.RecentWritesByWorkspace(c.root, []string{"git"}, 50)
+		if err != nil {
+			t.Fatalf("RecentWritesByWorkspace(%s): %v", c.root, err)
+		}
+		if len(rows) != c.want {
+			t.Errorf("%s has %d git rows, want %d — %s", c.root, len(rows), c.want, c.why)
+		}
+	}
+}

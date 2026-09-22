@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.3 (unreleased)
+
+### Fixed
+
+- **A git call with an explicit `repo` is filed under that repository.** The
+  documented way to commit into a nested submodule is `git` with `repo` set, but
+  its stats row was filed under the caller's own workspace, so the submodule's
+  `workspace_sessions` feed never showed a commit plumb itself made. The row now
+  names the repository the call acted on. A relative `repo` — and any other
+  workspace-relative path argument — is resolved against the caller's root, as
+  the tool resolved it, instead of against the daemon's working directory.
+  Attribution only: `repo` still does not seed the connection's workspace pin.
+  (#471)
+
 ## 0.20.2 (2026-09-21)
 
 ### Added

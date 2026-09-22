@@ -388,8 +388,9 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		root = w
 	}
 	// A path argument is more specific still: it names the project this
-	// particular call reached into, whichever workspace the caller sits in.
-	if w := workspaceFromArgs(s.pool, args); w != "" {
+	// particular call reached into, whichever workspace the caller sits in. A
+	// relative one is anchored at the root just chosen, as the tool anchored it.
+	if w := workspaceFromArgs(s.pool, args, root); w != "" {
 		root = w
 	}
 	if root == "" {
