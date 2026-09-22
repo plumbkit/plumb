@@ -54,20 +54,6 @@ func (s *connSession) onProxySession(id string) {
 	// identity, which is the client this whole card is about.
 }
 
-// seedLogicalAgentsFromState re-arms the shared-connection ceiling from durable
-// evidence, before OnInit attaches and before any tool call arrives.
-//
-// logicalAgentState.seen lives for the connection's life only, so a daemon
-// restart made a connection that WAS shared read as unshared: refuse admits
-// every anonymous state-changing call until two agents happen to re-declare.
-// That window sits exactly where the guard matters most — clients reconnect and
-// resume calling before they re-declare. The per-agent pins already persisted
-// under this proxy session are the evidence that the connection was shared, so
-// they seed the set (PLAN-440 item 2).
-//
-// Failure is silent and leaves the live behaviour unchanged: the seed can only
-// ADD identities, so an unreadable store costs the early arming, never a
-// wrongly-armed gate.
 // onSessionID records the plumb session ID the serve proxy replayed in the
 // initialize _meta (mcp.MetaSessionIDKey) — the identity a reconnecting session
 // believed it held before the daemon restarted.

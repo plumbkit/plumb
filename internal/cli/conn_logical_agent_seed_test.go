@@ -81,11 +81,11 @@ func TestSeedWithNothingIsANoOp(t *testing.T) {
 	}
 }
 
-// The restart, end to end: two agents recorded pins under this proxy session
-// before the daemon went down, so the reconnecting connection must refuse an
-// unattributable write from its very first call — not from whenever the second
-// agent happens to re-declare.
-func TestReconnectAfterRestartRefusesAnonymousWritesImmediately(t *testing.T) {
+// The seed, driven directly (it is unwired in production): two agents recorded
+// pins under this proxy session before the daemon went down, so once seeded and
+// once a caller has stamped, the connection refuses an unattributable write —
+// not from whenever the second agent happens to re-declare.
+func TestSeedFromStateArmsOnceACallerStamps(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-restart-arming"
 	ws := freshTempDir(t)
@@ -256,6 +256,9 @@ func TestRecentConcurrentDeclarationsStillArmTheGate(t *testing.T) {
 // write. Arming the ceiling from durable evidence refused every edit on
 // local-agent-mode-plumb, which has no per-call identity channel at all, so the
 // refusal named a remedy the user could not reach.
+//
+// It pins the OUTCOME. Since 8d4eb640 the ceiling needs a stamped call to arm,
+// so re-wiring seedLogicalAgentsFromState alone would leave this green.
 func TestRestartDoesNotLockOutAClientThatCannotStamp(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-no-lockout-on-restart"
