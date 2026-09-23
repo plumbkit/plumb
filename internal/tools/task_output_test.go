@@ -107,9 +107,12 @@ func TestCapTaskOutputPrefersVerdictsOverDetail(t *testing.T) {
 // PR #502 review: the lift is bounded by the tail budget, so a small cap with
 // many failures neither panics nor overruns.
 func TestCapTaskLinesSmallBudgets(t *testing.T) {
-	in := strings.Repeat("--- FAIL: TestN (0.00s)\n", 300)
+	in := strings.Repeat("--- FAIL: TestN (0.00s)\n", 300) + "LAST\n"
 	for _, maxLines := range []int{0, 1, 3, 10, 50, 79} {
 		got := capTaskLines(in, maxLines)
+		if maxLines > 0 && !strings.HasSuffix(got, "\nLAST\n") {
+			t.Errorf("maxLines=%d lost the final line to a cap full of failures", maxLines)
+		}
 		content := 0
 		for _, l := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
 			if !strings.HasPrefix(l, "… (") {
@@ -118,6 +121,28 @@ func TestCapTaskLinesSmallBudgets(t *testing.T) {
 		}
 		if content > maxLines {
 			t.Errorf("maxLines=%d kept %d content lines", maxLines, content)
+		}
+	}
+}
+
+// PR #502 re-review: a `go test` timeout names no test but panics; the panic
+// line is the explanation and must reach the excerpt, not goroutine frames.
+func TestExcerptShowsTheTimeoutPanic(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("panic: test timed out after 30s\n\trunning tests:\n\t\tTestSlow (30s)\n")
+	for i := range 40 {
+		fmt.Fprintf(&b, "goroutine %d [chan receive]:\n\tmain.f()\n", i)
+	}
+	b.WriteString("FAIL\texample.com/p\t30.1s\nFAIL")
+	if ex := excerpt(b.String()); !strings.Contains(ex, "panic: test timed out") {
+		t.Errorf("the timeout panic did not reach the excerpt:\n%s", ex)
+	}
+}
+
+func TestSelectFailureLinesNonPositiveLimit(t *testing.T) {
+	for _, limit := range []int{0, -1} {
+		if got := selectFailureLines([]string{"FAIL", "FAIL"}, limit); len(got) != 0 {
+			t.Errorf("limit %d selected %d lines, want 0", limit, len(got))
 		}
 	}
 }

@@ -83,6 +83,9 @@ func isFailureLine(line string) bool { return failureRank(line) != notFailure }
 // verdict first, then details with what budget remains — and returns them in
 // their original order.
 func selectFailureLines(lines []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
 	pick := make([]bool, len(lines))
 	taken := 0
 	for _, rank := range []int{failureVerdict, failureDetail} {
@@ -155,13 +158,17 @@ func capTaskLines(s string, maxLines int) string {
 	// failure line sitting at the head of the shrunken-away tail. The lift always
 	// leaves at least one tail line when the budget has one, so the final line —
 	// where a runner's verdict lands — survives even a cap full of failures.
-	liftCap := max(maxLines-head-1, 0)
+	// Each pass counts only the lines the previous one newly exposed, so the
+	// whole walk is linear however many passes it takes.
+	liftCap := min(max(maxLines-head-1, 0), maxLiftedFailureLines)
+	found := countFailureLines(lines, head, base)
 	n := 0
 	for {
-		next := min(liftedCount(lines, head, base+n), liftCap)
+		next := min(found, liftCap)
 		if next == n {
 			break
 		}
+		found += countFailureLines(lines, base+n, base+next)
 		n = next
 	}
 	tailStart := base + n
@@ -191,17 +198,36 @@ func capTaskLines(s string, maxLines int) string {
 	return b.String()
 }
 
-// liftedCount counts the failure lines in lines[from:to], capped at
-// maxLiftedFailureLines.
-func liftedCount(lines []string, from, to int) int {
+// countFailureLines counts the failure lines in lines[from:to].
+func countFailureLines(lines []string, from, to int) int {
 	n := 0
-	for i := from; i < to && n < maxLiftedFailureLines; i++ {
+	for i := from; i < to; i++ {
 		if isFailureLine(lines[i]) {
 			n++
 		}
 	}
 	return n
 }
+
+// explainsFailure reports whether out carries a verdict that says more than a
+// bare `FAIL` — a named test, a panic (a `go test` timeout names no test but
+// prints `panic: test timed out`), a fatal error.
+func explainsFailure(out string) bool {
+	if len(failedTestNames(out)) > 0 {
+		return true
+	}
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSuffix(l, "\r")
+		if failureRank(l) == failureVerdict && !bareFailVerdict.MatchString(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// bareFailVerdict is Go's package-level FAIL line, which says a package failed
+// but not why — including when a test file did not compile.
+var bareFailVerdict = regexp.MustCompile(`^FAIL(\s|$)`)
 
 // capTaskBytes bounds s to maxTaskBytes, keeping a fifth from the head and the
 // rest from the tail. It cuts at a line boundary when one is available and at a
