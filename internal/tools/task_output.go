@@ -13,8 +13,8 @@ import (
 // say WHICH test failed can sit anywhere in between. Keeping the first N lines —
 // what capTaskOutput used to do — kept a noisy package's log output and dropped
 // both, so a red `go test` through run_task named no test at all (PLAN-441).
-// The cap now keeps a short head, the tail, and every failure-marker line from
-// the omitted middle.
+// The cap now keeps a short head, the tail, and up to maxLiftedFailureLines
+// failure-marker lines from the omitted middle.
 
 const (
 	// taskHeadLines is the head kept when output is over maxTaskLines: enough to
@@ -25,34 +25,84 @@ const (
 	maxLiftedFailureLines = 60
 )
 
-// failureLinePatterns recognises the lines test runners use to name a failure.
-// Anchored at line start (after optional indentation) so a log line merely
-// MENTIONING "FAIL" is not lifted.
-var failureLinePatterns = []*regexp.Regexp{
-	// Go: "--- FAIL: TestX (0.1s)", "FAIL\tpkg 1.2s", "FAIL", panics, and the
-	// indented "file_test.go:42: message" assertion lines under a --- FAIL.
-	regexp.MustCompile(`^\s*--- FAIL: `),
-	regexp.MustCompile(`^FAIL(\s|$)`),
-	regexp.MustCompile(`^(panic: |fatal error: )`),
-	regexp.MustCompile(`^\s+\S+_test\.go:\d+: `),
-	// pytest: "FAILED tests/x.py::test_y - AssertionError", "E   assert ...".
-	regexp.MustCompile(`^FAILED `),
-	regexp.MustCompile(`^E\s{2,}\S`),
-	// cargo test: "test foo ... FAILED", "test result: FAILED.".
-	regexp.MustCompile(`^test \S+ \.\.\. FAILED$`),
-	regexp.MustCompile(`^test result: FAILED`),
-}
+// Failure markers come in two ranks. Anchored at line start (after optional
+// indentation) so a log line merely MENTIONING "FAIL" matches neither.
+//
+// A VERDICT line says a test or package failed. A DETAIL line is the assertion
+// text around one — but the same shape is also printed for a PASSING test's
+// t.Log under `go test -v`, so details alone can fill any budget with noise.
+// Selection therefore always takes verdicts first (selectFailureLines).
+var (
+	verdictLinePatterns = []*regexp.Regexp{
+		// Go: "--- FAIL: TestX (0.1s)", "FAIL\tpkg 1.2s", "FAIL", panics.
+		regexp.MustCompile(`^\s*--- FAIL: `),
+		regexp.MustCompile(`^FAIL(\s|$)`),
+		regexp.MustCompile(`^(panic: |fatal error: )`),
+		// pytest: "FAILED tests/x.py::test_y - AssertionError".
+		regexp.MustCompile(`^FAILED `),
+		// cargo test: "test foo ... FAILED", "test result: FAILED.".
+		regexp.MustCompile(`^test \S+ \.\.\. FAILED$`),
+		regexp.MustCompile(`^test result: FAILED`),
+	}
+	detailLinePatterns = []*regexp.Regexp{
+		// Go: the indented "file_test.go:42: message" under a --- FAIL.
+		regexp.MustCompile(`^\s+\S+_test\.go:\d+: `),
+		// pytest: "E   assert 1 == 2".
+		regexp.MustCompile(`^E\s{2,}\S`),
+	}
+)
 
-// isFailureLine reports whether line is a test runner's failure marker. A
-// trailing CR is ignored, so CRLF output matches the `$`-anchored patterns.
-func isFailureLine(line string) bool {
+// Failure-line ranks, highest kept first.
+const (
+	notFailure = iota
+	failureDetail
+	failureVerdict
+)
+
+// failureRank classifies line. A trailing CR is ignored, so CRLF output matches
+// the `$`-anchored patterns.
+func failureRank(line string) int {
 	line = strings.TrimSuffix(line, "\r")
-	for _, re := range failureLinePatterns {
+	for _, re := range verdictLinePatterns {
 		if re.MatchString(line) {
-			return true
+			return failureVerdict
 		}
 	}
-	return false
+	for _, re := range detailLinePatterns {
+		if re.MatchString(line) {
+			return failureDetail
+		}
+	}
+	return notFailure
+}
+
+// isFailureLine reports whether line is a test runner's failure marker.
+func isFailureLine(line string) bool { return failureRank(line) != notFailure }
+
+// selectFailureLines picks at most limit failure lines from lines — every
+// verdict first, then details with what budget remains — and returns them in
+// their original order.
+func selectFailureLines(lines []string, limit int) []string {
+	pick := make([]bool, len(lines))
+	taken := 0
+	for _, rank := range []int{failureVerdict, failureDetail} {
+		for i, l := range lines {
+			if taken == limit {
+				break
+			}
+			if !pick[i] && failureRank(l) == rank {
+				pick[i] = true
+				taken++
+			}
+		}
+	}
+	out := make([]string, 0, taken)
+	for i, l := range lines {
+		if pick[i] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // goFailedTest matches Go's per-test failure header; pytest and cargo name the
@@ -87,9 +137,10 @@ func capTaskOutput(s string) string {
 }
 
 // capTaskLines keeps taskHeadLines lines, then up to maxLiftedFailureLines
-// failure lines from the omitted middle, then as much tail as the budget allows,
-// with a marker naming how many lines were dropped. A trailing newline ends the
-// last line rather than starting another, so it does not count against the cap.
+// failure lines from the omitted middle (verdicts first), then as much tail as
+// the budget allows, with a marker naming how many lines were dropped. A
+// trailing newline ends the last line rather than starting another, so it does
+// not count against the cap.
 func capTaskLines(s string, maxLines int) string {
 	body, nl := strings.CutSuffix(s, "\n")
 	lines := strings.Split(body, "\n")
@@ -101,32 +152,37 @@ func capTaskLines(s string, maxLines int) string {
 	// Every lifted line costs one tail line, and shrinking the tail can expose
 	// another failure line to the middle. liftedCount is non-decreasing in n and
 	// capped, so iterating to its fixed point converges; stopping short dropped a
-	// failure line sitting at the head of the shrunken-away tail.
+	// failure line sitting at the head of the shrunken-away tail. The lift always
+	// leaves at least one tail line when the budget has one, so the final line —
+	// where a runner's verdict lands — survives even a cap full of failures.
+	liftCap := max(maxLines-head-1, 0)
 	n := 0
 	for {
-		next := liftedCount(lines, head, base+n)
+		next := min(liftedCount(lines, head, base+n), liftCap)
 		if next == n {
 			break
 		}
 		n = next
 	}
 	tailStart := base + n
-	var lifted []string
-	for i := head; i < tailStart && len(lifted) < n; i++ {
-		if isFailureLine(lines[i]) {
-			lifted = append(lifted, lines[i])
-		}
-	}
+	lifted := selectFailureLines(lines[head:tailStart], n)
 	omitted := tailStart - head - len(lifted)
 
 	var b strings.Builder
-	b.WriteString(strings.Join(lines[:head], "\n"))
+	if head > 0 {
+		b.WriteString(strings.Join(lines[:head], "\n"))
+		b.WriteByte('\n')
+	}
 	if len(lifted) > 0 {
-		fmt.Fprintf(&b, "\n… (%d lines omitted; the %d failure lines among them are kept below)\n", omitted, len(lifted))
+		fmt.Fprintf(&b, "… (%d lines omitted; %d failure lines from among them are kept below)\n", omitted, len(lifted))
 		b.WriteString(strings.Join(lifted, "\n"))
 		b.WriteString("\n… (end of kept failure lines)\n")
 	} else {
-		fmt.Fprintf(&b, "\n… (%d lines omitted)\n", omitted)
+		fmt.Fprintf(&b, "… (%d lines omitted)\n", omitted)
+	}
+	if tailStart == len(lines) {
+		// No tail at all (a zero budget): end on the marker, not a blank line.
+		return strings.TrimSuffix(b.String(), "\n")
 	}
 	b.WriteString(strings.Join(lines[tailStart:], "\n"))
 	if nl {

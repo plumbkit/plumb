@@ -9,12 +9,14 @@
   package that logs heavily — plumb's own `internal/cli` — filled the cap with
   log lines and dropped both the `--- FAIL: TestX` line and the verdict: a red
   run named no test, and the agent had to re-run it outside plumb to find out
-  which. The cap now keeps a short head, the tail, and every failure-marker line
-  from the omitted middle (Go, pytest and cargo markers), and says how many lines
-  it dropped. `mutation_test` names the test that killed each mutant
-  (`killed by: TestX`) and quotes the failure lines instead of the last ten lines
-  of output — without the name, a kill by an unrelated flaky test read exactly
-  like a real one. (PLAN-441)
+  which. The cap now keeps a short head, the tail, and up to 60 failure-marker
+  lines from the omitted middle (Go, pytest and cargo; verdict lines such as
+  `--- FAIL` before assertion detail), and says how many lines it dropped.
+  `mutation_test` names the test that killed each mutant (`killed by: TestX`)
+  and quotes the failure lines instead of the last ten lines of output — without
+  the name, a kill by an unrelated flaky test read exactly like a real one. When
+  no test is named (a test file that failed to compile), it still shows the tail,
+  where the compile error is. (PLAN-441)
 
 - **A git call with an explicit `repo` is filed under that repository.** The
   documented way to commit into a nested submodule is `git` with `repo` set, but

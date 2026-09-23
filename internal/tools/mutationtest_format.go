@@ -159,31 +159,29 @@ func killedByLine(out string) string {
 	return "      killed by: " + strings.Join(names, ", ") + more + "\n"
 }
 
-// excerpt renders a step's evidence as a quote block. When the output carries
-// test-runner failure lines, those ARE the evidence and are shown first-come;
-// otherwise the TAIL, since a runner's verdict lands at the end while the head
-// is setup noise. A tail alone was not enough: a package that logs after its
-// failing test left ten lines of log noise and no test name.
+// excerpt renders a step's evidence as a quote block. When the output names a
+// failing test, its failure lines ARE the evidence (verdicts first); otherwise
+// the TAIL, since a runner's verdict lands at the end while the head is setup
+// noise. A tail alone was not enough: a package that logs after its failing
+// test left ten lines of log noise and no test name. Failure lines alone are
+// not enough either: a test FILE that fails to compile prints only bare
+// `FAIL` verdicts, and the compile error that explains them is in the tail.
 func excerpt(out string) string {
 	out = strings.TrimSpace(out)
 	if out == "" {
 		return ""
 	}
 	lines := strings.Split(out, "\n")
-	var failures []string
-	for _, l := range lines {
-		if isFailureLine(l) {
-			failures = append(failures, l)
-		}
-	}
 	var b strings.Builder
-	if len(failures) > 0 {
-		for i, l := range failures {
-			if i == mutationExcerptLines {
-				b.WriteString("      | …\n")
-				break
-			}
+	if len(failedTestNames(out)) > 0 {
+		// Select exactly the budget: selecting one more and printing the first N
+		// in line order would drop a late verdict in favour of early detail.
+		failures := selectFailureLines(lines, mutationExcerptLines)
+		for _, l := range failures {
 			fmt.Fprintf(&b, "      | %s\n", l)
+		}
+		if len(selectFailureLines(lines, mutationExcerptLines+1)) > len(failures) {
+			b.WriteString("      | …\n")
 		}
 		return b.String()
 	}
