@@ -42,7 +42,7 @@ func TestCapTaskOutputKeepsTheFailureFromTheMiddle(t *testing.T) {
 	if n := strings.Count(got, "\n") + 1; n > maxTaskLines+2 {
 		t.Errorf("capped output is %d lines, over the %d-line budget", n, maxTaskLines+2)
 	}
-	if !strings.Contains(got, "lines omitted; the 2 failure lines among them are kept below") {
+	if !strings.Contains(got, "lines omitted; 2 failure lines from among them are kept below") {
 		t.Errorf("the omission marker must say failure lines were kept:\n%s", got)
 	}
 }
@@ -80,6 +80,55 @@ func TestCapTaskOutputCapsTheLiftedFailures(t *testing.T) {
 	got := capTaskOutput(b.String())
 	if n := strings.Count(got, "\n") + 1; n > maxTaskLines+4 {
 		t.Errorf("capped output is %d lines, over budget", n)
+	}
+}
+
+// PR #502 review: under `go test -v` a PASSING test's t.Log lines have the same
+// shape as assertion detail. Verdicts are selected first, so they cannot evict
+// the one real --- FAIL from the 60-line lift.
+func TestCapTaskOutputPrefersVerdictsOverDetail(t *testing.T) {
+	var b strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&b, "    x_test.go:%d: t.Log from a passing test\n", i+1)
+	}
+	b.WriteString("--- FAIL: TestReal (0.01s)\n")
+	for i := range 300 {
+		fmt.Fprintf(&b, "    y_test.go:%d: more passing-test logging\n", i+1)
+	}
+	got := capTaskOutput(b.String())
+	if !strings.Contains(got, "--- FAIL: TestReal") {
+		t.Error("t.Log detail lines evicted the only verdict from the lift")
+	}
+	if ex := excerpt(got); !strings.Contains(ex, "--- FAIL: TestReal") {
+		t.Errorf("the excerpt showed detail noise instead of the verdict:\n%s", ex)
+	}
+}
+
+// PR #502 review: the lift is bounded by the tail budget, so a small cap with
+// many failures neither panics nor overruns.
+func TestCapTaskLinesSmallBudgets(t *testing.T) {
+	in := strings.Repeat("--- FAIL: TestN (0.00s)\n", 300)
+	for _, maxLines := range []int{0, 1, 3, 10, 50, 79} {
+		got := capTaskLines(in, maxLines)
+		content := 0
+		for _, l := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+			if !strings.HasPrefix(l, "… (") {
+				content++
+			}
+		}
+		if content > maxLines {
+			t.Errorf("maxLines=%d kept %d content lines", maxLines, content)
+		}
+	}
+}
+
+// PR #502 review: a test FILE that fails to compile prints only bare FAIL
+// verdicts, which name no test. The excerpt must fall back to the tail, where
+// the compile error that explains the kill is.
+func TestExcerptShowsTheCompileErrorWhenNoTestIsNamed(t *testing.T) {
+	out := "./p_test.go:5:2: undefined: Foo\nFAIL\texample.com/p [build failed]\nFAIL"
+	if ex := excerpt(out); !strings.Contains(ex, "undefined: Foo") {
+		t.Errorf("the compile error was hidden behind bare FAIL lines:\n%s", ex)
 	}
 }
 

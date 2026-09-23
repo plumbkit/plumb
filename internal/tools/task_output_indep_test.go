@@ -183,12 +183,12 @@ func TestIndepCapTaskLineInvariants(t *testing.T) {
 			if inFail > maxLiftedFailureLines && keptFail < maxLiftedFailureLines {
 				t.Fatalf("kept only %d failure lines of %d", keptFail, inFail)
 			}
-			hasLiftNote := strings.Contains(out, "failure lines among them are kept")
+			hasLiftNote := strings.Contains(out, "failure lines from among them are kept")
 			if c.wantLift >= 0 {
 				if (c.wantLift > 0) != hasLiftNote {
 					t.Fatalf("lift note present=%v, want lifted=%d\n%s", hasLiftNote, c.wantLift, out)
 				}
-				if c.wantLift > 0 && !strings.Contains(out, fmt.Sprintf("the %d failure lines", c.wantLift)) {
+				if c.wantLift > 0 && !strings.Contains(out, fmt.Sprintf("; %d failure lines from among them", c.wantLift)) {
 					t.Fatalf("marker does not say %d failure lines kept:\n%.600s", c.wantLift, out)
 				}
 			}
