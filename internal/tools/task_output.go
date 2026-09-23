@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // task_output.go — bounding a task command's output without losing the verdict.
@@ -42,8 +43,10 @@ var failureLinePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^test result: FAILED`),
 }
 
-// isFailureLine reports whether line is a test runner's failure marker.
+// isFailureLine reports whether line is a test runner's failure marker. A
+// trailing CR is ignored, so CRLF output matches the `$`-anchored patterns.
 func isFailureLine(line string) bool {
+	line = strings.TrimSuffix(line, "\r")
 	for _, re := range failureLinePatterns {
 		if re.MatchString(line) {
 			return true
@@ -66,6 +69,7 @@ func failedTestNames(out string) []string {
 	var names []string
 	seen := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		for _, re := range []*regexp.Regexp{goFailedTest, pytestFailed, cargoTestFailed} {
 			if m := re.FindStringSubmatch(line); m != nil && !seen[m[1]] {
 				seen[m[1]] = true
@@ -84,20 +88,35 @@ func capTaskOutput(s string) string {
 
 // capTaskLines keeps taskHeadLines lines, then up to maxLiftedFailureLines
 // failure lines from the omitted middle, then as much tail as the budget allows,
-// with a marker naming how many lines were dropped.
+// with a marker naming how many lines were dropped. A trailing newline ends the
+// last line rather than starting another, so it does not count against the cap.
 func capTaskLines(s string, maxLines int) string {
-	lines := strings.Split(s, "\n")
+	body, nl := strings.CutSuffix(s, "\n")
+	lines := strings.Split(body, "\n")
 	if len(lines) <= maxLines {
 		return s
 	}
 	head := min(taskHeadLines, maxLines/4)
-	// Count the failure lines outside the full-size tail first, then shrink the
-	// tail by that many so the lifted lines fit the budget. Shrinking only widens
-	// the middle, so re-collecting there finds at least as many again.
-	tailStart := len(lines) - (maxLines - head)
-	n := len(liftedBefore(lines, head, tailStart, maxLiftedFailureLines))
-	tailStart += n
-	lifted := liftedBefore(lines, head, tailStart, n)
+	base := len(lines) - (maxLines - head) // tail start with no lines lifted
+	// Every lifted line costs one tail line, and shrinking the tail can expose
+	// another failure line to the middle. liftedCount is non-decreasing in n and
+	// capped, so iterating to its fixed point converges; stopping short dropped a
+	// failure line sitting at the head of the shrunken-away tail.
+	n := 0
+	for {
+		next := liftedCount(lines, head, base+n)
+		if next == n {
+			break
+		}
+		n = next
+	}
+	tailStart := base + n
+	var lifted []string
+	for i := head; i < tailStart && len(lifted) < n; i++ {
+		if isFailureLine(lines[i]) {
+			lifted = append(lifted, lines[i])
+		}
+	}
 	omitted := tailStart - head - len(lifted)
 
 	var b strings.Builder
@@ -110,22 +129,28 @@ func capTaskLines(s string, maxLines int) string {
 		fmt.Fprintf(&b, "\n… (%d lines omitted)\n", omitted)
 	}
 	b.WriteString(strings.Join(lines[tailStart:], "\n"))
+	if nl {
+		b.WriteByte('\n')
+	}
 	return b.String()
 }
 
-// liftedBefore re-collects at most limit failure lines from lines[from:to].
-func liftedBefore(lines []string, from, to, limit int) []string {
-	var out []string
-	for i := from; i < to && len(out) < limit; i++ {
+// liftedCount counts the failure lines in lines[from:to], capped at
+// maxLiftedFailureLines.
+func liftedCount(lines []string, from, to int) int {
+	n := 0
+	for i := from; i < to && n < maxLiftedFailureLines; i++ {
 		if isFailureLine(lines[i]) {
-			out = append(out, lines[i])
+			n++
 		}
 	}
-	return out
+	return n
 }
 
 // capTaskBytes bounds s to maxTaskBytes, keeping a fifth from the head and the
-// rest from the tail, cut at line boundaries.
+// rest from the tail. It cuts at a line boundary when one is available and at a
+// rune boundary otherwise, so the result is always valid UTF-8 for valid input
+// and the final line always survives (in part, if it alone is over budget).
 func capTaskBytes(s string) string {
 	if len(s) <= maxTaskBytes {
 		return s
@@ -135,10 +160,24 @@ func capTaskBytes(s string) string {
 	head := s[:headBudget]
 	if i := strings.LastIndexByte(head, '\n'); i > 0 {
 		head = head[:i]
+	} else {
+		// Drop a rune the cut split in two. Bounded by UTFMax, so bytes that were
+		// already invalid in the input are left alone rather than eaten.
+		for range utf8.UTFMax {
+			if r, size := utf8.DecodeLastRuneInString(head); r != utf8.RuneError || size != 1 {
+				break
+			}
+			head = head[:len(head)-1]
+		}
 	}
 	tail := s[len(s)-tailBudget:]
-	if i := strings.IndexByte(tail, '\n'); i >= 0 {
+	// A newline that is the tail's own last byte would cut the whole final line.
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i < len(tail)-1 {
 		tail = tail[i+1:]
+	} else {
+		for i := 0; i < utf8.UTFMax && len(tail) > 0 && !utf8.RuneStart(tail[0]); i++ {
+			tail = tail[1:]
+		}
 	}
 	return head + "\n… (output over 100 KiB; middle omitted)\n" + tail
 }
