@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **`run_task`, `run_command` and `mutation_test` no longer cut the failure out
+  of a red test run.** Task output was capped at its FIRST 200 lines, so a
+  package that logs heavily — plumb's own `internal/cli` — filled the cap with
+  log lines and dropped both the `--- FAIL: TestX` line and the verdict: a red
+  run named no test, and the agent had to re-run it outside plumb to find out
+  which. The cap now keeps a short head, the tail, and every failure-marker line
+  from the omitted middle (Go, pytest and cargo markers), and says how many lines
+  it dropped. `mutation_test` names the test that killed each mutant
+  (`killed by: TestX`) and quotes the failure lines instead of the last ten lines
+  of output — without the name, a kill by an unrelated flaky test read exactly
+  like a real one. (PLAN-441)
+
 - **A git call with an explicit `repo` is filed under that repository.** The
   documented way to commit into a nested submodule is `git` with `repo` set, but
   its stats row was filed under the caller's own workspace, so the submodule's
@@ -200,9 +212,13 @@
   effort is about. A restart had been the only thing giving such a client a
   usable window, and closing it refused every write permanently with a remedy
   the user could not apply. `seedLogicalAgentsFromState` remains in the tree,
-  unwired and documented, with `TestRestartDoesNotLockOutAClientThatCannotStamp`
-  pinning that it stays that way until such a client has some way to attribute a
-  call. The original entry is kept below for the record.
+  unwired and documented. `TestRestartDoesNotLockOutAClientThatCannotStamp` pins
+  the outcome — a restart must leave an unstamped client able to write — not
+  the function's wiring: since the write-ceiling change above, the ceiling arms
+  only after a stamped call, so re-wiring the seed alone would not lock such a
+  client out and would leave that test green. (Corrected 2026-09-23; this entry
+  previously said the test pinned the wiring.) The original entry is kept below
+  for the record.
 
   ~~A daemon restart no longer disarms the shared-connection ceiling.~~ The set
   of logical agents observed on a connection lived in memory and was scoped to

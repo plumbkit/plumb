@@ -11,7 +11,8 @@ import (
 
 // cmdexec.go is the bounded, no-shell argv executor shared by the task runner.
 // It mirrors the git tool's execution hygiene (git_exec.go): captured output
-// capped at 100 KiB / 200 lines, a timeout, an explicit working directory, and
+// capped at 100 KiB / 200 lines (head, tail and failure lines kept — see
+// task_output.go), a timeout, an explicit working directory, and
 // exec of an argv — never `sh -c` with interpolation — so a configured command
 // cannot smuggle shell syntax.
 
@@ -96,13 +97,4 @@ func networkLabel(denied bool) string {
 		return "off"
 	}
 	return "on"
-}
-
-// capTaskOutput bounds output to maxTaskLines lines then maxTaskBytes bytes.
-func capTaskOutput(s string) string {
-	s = truncateLines(s, maxTaskLines, "… (output truncated at 200 lines)")
-	if len(s) > maxTaskBytes {
-		s = s[:maxTaskBytes] + "\n… (output truncated at 100 KiB)"
-	}
-	return s
 }

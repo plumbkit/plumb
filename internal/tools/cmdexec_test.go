@@ -76,7 +76,11 @@ func TestRunArgv_OutputCapped(t *testing.T) {
 	if lines > maxTaskLines+1 {
 		t.Errorf("output not capped: %d lines", lines)
 	}
-	if !strings.Contains(res.Stdout, "truncated") {
+	if !strings.Contains(res.Stdout, "lines omitted") {
 		t.Error("expected a truncation marker")
+	}
+	// The tail survives the cap: a runner's verdict lands at the end (PLAN-441).
+	if !strings.Contains(res.Stdout, "\n500\n") {
+		t.Error("the last line of output was dropped by the cap")
 	}
 }
