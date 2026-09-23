@@ -159,13 +159,14 @@ func killedByLine(out string) string {
 	return "      killed by: " + strings.Join(names, ", ") + more + "\n"
 }
 
-// excerpt renders a step's evidence as a quote block. When the output names a
-// failing test, its failure lines ARE the evidence (verdicts first); otherwise
-// the TAIL, since a runner's verdict lands at the end while the head is setup
-// noise. A tail alone was not enough: a package that logs after its failing
-// test left ten lines of log noise and no test name. Failure lines alone are
-// not enough either: a test FILE that fails to compile prints only bare
-// `FAIL` verdicts, and the compile error that explains them is in the tail.
+// excerpt renders a step's evidence as a quote block. When the output explains
+// the failure — names a test, or panics (a timeout) — its failure lines ARE the
+// evidence (verdicts first); otherwise the TAIL, since a runner's verdict lands
+// at the end while the head is setup noise. A tail alone was not enough: a
+// package that logs after its failing test left ten lines of log noise and no
+// test name. Failure lines alone are not enough either: a test FILE that fails
+// to compile prints only bare `FAIL` verdicts, and the compile error that
+// explains them is in the tail.
 func excerpt(out string) string {
 	out = strings.TrimSpace(out)
 	if out == "" {
@@ -173,7 +174,7 @@ func excerpt(out string) string {
 	}
 	lines := strings.Split(out, "\n")
 	var b strings.Builder
-	if len(failedTestNames(out)) > 0 {
+	if explainsFailure(out) {
 		// Select exactly the budget: selecting one more and printing the first N
 		// in line order would drop a late verdict in favour of early detail.
 		failures := selectFailureLines(lines, mutationExcerptLines)
