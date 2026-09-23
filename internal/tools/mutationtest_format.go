@@ -90,6 +90,7 @@ func mutationVerdictLines(r mutationResult) string {
 	switch r.outcome {
 	case MutationKilled:
 		b.WriteString("    ✓ killed — a test failed, so this line is genuinely asserted.\n")
+		b.WriteString(killedByLine(r.test.output))
 		b.WriteString(excerpt(r.test.output))
 	case MutationSurvived:
 		b.WriteString("    ⚠ SURVIVED — the mutant compiled and every test still passed.\n")
@@ -141,22 +142,53 @@ func quoteMutantText(s string) string {
 	return `"` + textfmt.Ellipsis(s, 90) + `"`
 }
 
-// excerpt renders the TAIL of a step's output, indented as a quote block. The
-// tail, not the head: a test runner's verdict and the assertion that produced
-// it land at the end, while the head is setup noise.
+// killedByLine names the test(s) whose failure killed the mutant. A kill by a
+// test that has nothing to do with the mutated line — a flake — reads exactly
+// like a real one without this, so saying which test it was is the evidence.
+func killedByLine(out string) string {
+	names := failedTestNames(out)
+	if len(names) == 0 {
+		return "      killed by: (no failing test named in the output — read the excerpt)\n"
+	}
+	const maxNames = 5
+	more := ""
+	if len(names) > maxNames {
+		more = fmt.Sprintf(" (+%d more)", len(names)-maxNames)
+		names = names[:maxNames]
+	}
+	return "      killed by: " + strings.Join(names, ", ") + more + "\n"
+}
+
+// excerpt renders a step's evidence as a quote block. When the output carries
+// test-runner failure lines, those ARE the evidence and are shown first-come;
+// otherwise the TAIL, since a runner's verdict lands at the end while the head
+// is setup noise. A tail alone was not enough: a package that logs after its
+// failing test left ten lines of log noise and no test name.
 func excerpt(out string) string {
 	out = strings.TrimSpace(out)
 	if out == "" {
 		return ""
 	}
 	lines := strings.Split(out, "\n")
-	trimmed := false
-	if len(lines) > mutationExcerptLines {
-		lines = lines[len(lines)-mutationExcerptLines:]
-		trimmed = true
+	var failures []string
+	for _, l := range lines {
+		if isFailureLine(l) {
+			failures = append(failures, l)
+		}
 	}
 	var b strings.Builder
-	if trimmed {
+	if len(failures) > 0 {
+		for i, l := range failures {
+			if i == mutationExcerptLines {
+				b.WriteString("      | …\n")
+				break
+			}
+			fmt.Fprintf(&b, "      | %s\n", l)
+		}
+		return b.String()
+	}
+	if len(lines) > mutationExcerptLines {
+		lines = lines[len(lines)-mutationExcerptLines:]
 		b.WriteString("      | …\n")
 	}
 	for _, l := range lines {
