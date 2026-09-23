@@ -261,6 +261,12 @@ broader "any import node" signal would have made the refusal unreachable for eve
 workspace it exists to catch. A Go `package` clause is mandatory and per-file, so a
 `language=go` package node is unambiguous evidence no other extractor produces.
 
+In a polyglot workspace, the package graph used for this answer contains only Go
+package directories and import edges between them. Other languages' package
+declarations are counted as out of scope in the response, even when they share a
+directory with Go source; they are never listed as unreachable. A `path_to`
+request for a non-Go package directory reports it as out of scope.
+
 **Roots.** Package granularity starts from every `package main` directory by
 default, plus `topology_routes` entry-point candidates (labelled
 `candidate-seeded`, since route results are name/signature heuristics). Pass `roots`
