@@ -178,12 +178,12 @@ func probeGitDir(ctx context.Context, dir string) gitProbe {
 		(len(lines) == 5 && !filepath.IsAbs(lines[4])) {
 		return gitProbe{place: placeUnknown, reason: fmt.Sprintf("unexpected `git rev-parse` output %q", out)}
 	}
-	// git prints --git-dir and --git-common-dir relative to its working directory
-	// when it can, and that directory is dir with every symlink resolved — the
-	// kernel's view after chdir — so a relative answer is joined to that, never to
-	// dir as spelled ("../../.git" from under an in-repo symlink names a different
-	// repository when joined to the link's spelling).
-	physical := paths.Canonical(dir)
+	// A relative --git-dir or --git-common-dir is relative to dir with every symlink
+	// resolved (the kernel's view after chdir), so it is joined to git's spelling of
+	// that, top plus prefix — never to dir as spelled: through an in-repo symlink
+	// "../../.git" names another repository, and in another case on a case-folding
+	// volume it makes a main work-tree's two answers differ, reading as linked.
+	physical := filepath.Join(lines[0], filepath.FromSlash(lines[1]))
 	abs := func(p string) string {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(physical, p)

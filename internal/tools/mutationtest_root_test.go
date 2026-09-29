@@ -367,6 +367,33 @@ func TestMutationTest_AFileInAnotherRepositorysMainTreeRunsInPlace(t *testing.T)
 	requireContent(t, filepath.Join(other, "target.txt"), worktreeTargetOriginal)
 }
 
+// TestMutationTest_AnotherRepositorysMainTreeSpelledInAnotherCaseRunsInPlace: the
+// same run with the nested repository spelled in a case the disk does not use, as
+// a client on macOS's case-insensitive volume may. It must not be mistaken for a
+// linked worktree and refused (see TestProbeGitDir_ACaseVariantSpellingIsTheSameTree).
+func TestMutationTest_AnotherRepositorysMainTreeSpelledInAnotherCaseRunsInPlace(t *testing.T) {
+	e := newWorktreeEnv(t, "", false, false)
+	other := filepath.Join(e.root, "Other")
+	gwWrite(t, filepath.Join(other, "pkg"), "target.txt", worktreeTargetOriginal)
+	gitInit(t, other)
+	flipped := filepath.Join(e.root, "oTHER", "pkg", "target.txt")
+	if _, err := os.Stat(flipped); err != nil {
+		t.Skip("this volume is case-sensitive: no other spelling of the file exists")
+	}
+	e.testArgv = []string{"/bin/sh", "-c", "echo \"$(/bin/pwd) $0 ${GOWORK-UNSET}\" >> " + shellQuote(e.log) +
+		"; grep -q 43 Other/pkg/target.txt && { echo '--- FAIL: TestNested (0.00s)'; exit 1; }; exit 0"}
+
+	out, err := e.run(t, e.mutant(flipped, "42", "43"))
+	if err != nil {
+		t.Fatalf("a file in another repository's main work-tree must run in place whatever the case it is spelled in: %v", err)
+	}
+	if !strings.Contains(out, "[1] KILLED") || strings.Contains(out, "re-rooted") {
+		t.Errorf("the workspace's test must kill the mutant where it already runs; got:\n%s", out)
+	}
+	e.requireAllRanIn(t, e.root)
+	requireContent(t, filepath.Join(other, "pkg", "target.txt"), worktreeTargetOriginal)
+}
+
 // TestMutationTest_AFileInALinkedWorktreeOfAnotherRepositoryIsRefused: a LINKED
 // worktree of a repository the commands do not run in always has a twin — that
 // repository's main work-tree — which the commands would reach instead. It cannot
@@ -520,6 +547,39 @@ func TestProbeGitDir(t *testing.T) {
 	}
 	if p := probeGitDir(ctx, filepath.Join(parent, "no", "such")); p.place != placeUnknown || p.reason == "" {
 		t.Errorf("a path git cannot enter must be unknown with git's reason, never 'no repository': got %+v", p)
+	}
+}
+
+// TestProbeGitDir_ACaseVariantSpellingIsTheSameTree: on a case-insensitive volume
+// (macOS's default) a client may spell a directory in a case the disk does not
+// use. Below a main work-tree's root git prints --git-dir absolute, in the disk's
+// case, but --git-common-dir relative ("../.git"); joined to the client's spelling
+// the two named one directory in two cases, and the main work-tree read as a
+// LINKED worktree — so a file in another repository's main work-tree was refused
+// as stranded instead of running in place.
+func TestProbeGitDir_ACaseVariantSpellingIsTheSameTree(t *testing.T) {
+	requireGit(t)
+	parent := evalTempDir(t)
+	repo := filepath.Join(parent, "Repo")
+	gwWrite(t, filepath.Join(repo, "Pkg"), "x.txt", "x\n")
+	gitInit(t, repo)
+	flipped := filepath.Join(parent, "rEPO", "pKG")
+	if a, err := os.Stat(filepath.Join(repo, "Pkg")); err != nil {
+		t.Fatal(err)
+	} else if b, err := os.Stat(flipped); err != nil || !os.SameFile(a, b) {
+		t.Skip("this volume is case-sensitive: no other spelling of the directory exists")
+	}
+
+	ctx := context.Background()
+	asSpelled, flippedP := probeGitDir(ctx, filepath.Join(repo, "Pkg")), probeGitDir(ctx, flipped)
+	if asSpelled.place != placeTree || flippedP.place != placeTree {
+		t.Fatalf("both spellings must be in a work-tree: %+v, %+v", asSpelled, flippedP)
+	}
+	if flippedP.tree.linked {
+		t.Errorf("a main work-tree spelled in another case must not read as a linked worktree: %+v", flippedP.tree)
+	}
+	if flippedP.tree != asSpelled.tree {
+		t.Errorf("two spellings of one directory must get git's one answer:\n%+v\n%+v", flippedP.tree, asSpelled.tree)
 	}
 }
 
