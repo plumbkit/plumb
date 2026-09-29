@@ -198,3 +198,20 @@ func TestRerootCommand_AnUnconfirmedDestinationNamesGitsReason(t *testing.T) {
 		t.Fatalf("want a refusal naming git's reason, not a symlink guess; got %v", err)
 	}
 }
+
+// TestProbeGitDir_InsideAGitDirectoryKeepsItsCommonDir: asked from inside a
+// submodule's git directory, git names the submodule's work-tree as the top, an
+// empty prefix, and "." for both git directories. "." is relative to the git
+// directory, not to top plus prefix, so joining it there would name the work-tree
+// as the common directory.
+func TestProbeGitDir_InsideAGitDirectoryKeepsItsCommonDir(t *testing.T) {
+	e := newSubmoduleEnv(t, true)
+	modDir := filepath.Join(e.super, ".git", "modules", "lib")
+	p := probeGitDir(context.Background(), modDir)
+	if p.place != placeTree {
+		t.Skipf("this git does not describe a work-tree from inside a git directory: %+v", p)
+	}
+	if p.tree.common != modDir || p.tree.linked {
+		t.Errorf("from inside %s: got %+v, want that directory as the common dir, not linked", modDir, p.tree)
+	}
+}

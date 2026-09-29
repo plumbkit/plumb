@@ -273,6 +273,35 @@ func TestMutationTest_RerootKeepsTheRelativeWorkingDir(t *testing.T) {
 	e.requireAllRanIn(t, filepath.Join(e.wt, "module"))
 }
 
+// TestMutationTest_ADirectoryRecasedOnTheWorktreesBranchStillReRoots: on a
+// case-insensitive volume the worktree's branch may spell the working directory in
+// another case (Module/ renamed to module/). It is the same directory, and git
+// names it in the worktree's case; refusing it as "a symlink on its branch" was
+// a false refusal.
+func TestMutationTest_ADirectoryRecasedOnTheWorktreesBranchStillReRoots(t *testing.T) {
+	e := newWorktreeEnv(t, "Module", false, false)
+	e.workdir = filepath.Join(e.root, "Module")
+	gwGit(t, e.wt, "mv", "Module", "recase-tmp")
+	gwGit(t, e.wt, "mv", "recase-tmp", "module")
+	gwGit(t, e.wt, "commit", "-q", "-m", "recase")
+	if _, err := os.Stat(filepath.Join(e.wt, "Module")); err != nil {
+		t.Skip("this volume is case-sensitive: the worktree has no Module/ at all")
+	}
+
+	out, err := e.run(t, e.mutant(filepath.Join(e.wt, "module", "target.txt"), "42", "43"))
+	if err != nil {
+		t.Fatalf("the recased directory is the same directory and must be re-rooted into: %v", err)
+	}
+	if !strings.Contains(out, "[1] KILLED") || !strings.Contains(out, "re-rooted") {
+		t.Errorf("the worktree's test must kill the mutant after a re-root; got:\n%s", out)
+	}
+	for _, d := range e.ranIn(t) {
+		if !strings.EqualFold(d, filepath.Join(e.wt, "module")) {
+			t.Errorf("a command ran in %s, want the worktree's module directory", d)
+		}
+	}
+}
+
 // --- refusals: never a silent wrong-tree run ---------------------------------
 
 func TestMutationTest_MutantsInTwoWorkTreesAreRefused(t *testing.T) {

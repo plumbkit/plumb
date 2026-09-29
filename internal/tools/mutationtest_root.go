@@ -55,11 +55,9 @@ import (
 // the outermost superproject's work-tree (gitProbes.placement), and a submodule in
 // a worktree re-roots into that worktree like any other file in it.
 //
-// "Same repository" is git's own answer — the common git directory — not a path
-// heuristic. Every question is put to git, never answered from a spelling: the
-// work-tree roots and relative directories git prints are compared with each
-// other, so a symlinked workspace, a case-insensitive volume or a relative
-// common directory cannot make two spellings of one place disagree.
+// "Same repository" is git's own answer (the common git directory), and the paths
+// compared are ones git printed, so a symlinked workspace, a case-insensitive
+// volume or a relative common directory cannot make two spellings disagree.
 //
 // When git cannot answer for a directory (a checkout owned by another user without
 // a safe.directory entry, or no git on the daemon's PATH), the nearest .git is read
@@ -178,12 +176,14 @@ func probeGitDir(ctx context.Context, dir string) gitProbe {
 		(len(lines) == 5 && !filepath.IsAbs(lines[4])) {
 		return gitProbe{place: placeUnknown, reason: fmt.Sprintf("unexpected `git rev-parse` output %q", out)}
 	}
-	// A relative --git-dir or --git-common-dir is relative to dir with every symlink
-	// resolved (the kernel's view after chdir), so it is joined to git's spelling of
-	// that, top plus prefix — never to dir as spelled: through an in-repo symlink
-	// "../../.git" names another repository, and in another case on a case-folding
-	// volume it makes a main work-tree's two answers differ, reading as linked.
+	// A relative --git-dir or --git-common-dir is relative to dir with symlinks resolved,
+	// so it is joined to git's spelling of that (top plus prefix), not dir as spelled:
+	// through an in-repo symlink, or in another case on a case-folding volume, that
+	// names another directory. Inside a git directory (prefix "", dir not top) only dir will do.
 	physical := filepath.Join(lines[0], filepath.FromSlash(lines[1]))
+	if lines[1] == "" && !sameGitPath(physical, paths.Canonical(dir)) {
+		physical = paths.Canonical(dir)
+	}
 	abs := func(p string) string {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(physical, p)
@@ -439,7 +439,7 @@ func rerootCommand(ctx context.Context, probes gitProbes, cmd TaskCommand, dir s
 			"and plumb does not move trusted commands on a guess. Nothing was run. Fix what git reports and retry",
 			file, dest.top, moved, rel, got.reason)
 	}
-	if got.place != placeTree || got.tree.top != dest.top || got.tree.prefix != from.prefix {
+	if got.place != placeTree || !sameGitPath(got.tree.top, dest.top) || !sameGitPath(got.tree.prefix, from.prefix) {
 		return cmd, fmt.Errorf("mutation_test: %s is in work-tree %s, but the matching directory there, %s, resolves to %s — not "+
 			"that work-tree's %q (a symlink on its branch?). Commands run there would test whatever it leads to. Nothing was run",
 			file, dest.top, moved, paths.Canonical(moved), rel)
