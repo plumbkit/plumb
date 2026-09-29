@@ -509,7 +509,13 @@ func TestProbeGitDir(t *testing.T) {
 
 	parent := evalTempDir(t)
 	t.Setenv("GIT_CEILING_DIRECTORIES", parent)
-	if p := probeGitDir(ctx, parent); p.place != placeNoRepo {
+	// Probe BELOW the ceiling: git still resolves the ceiling directory itself up
+	// to an enclosing repository, and `make test` puts t.TempDir() inside this one.
+	plain := filepath.Join(parent, "plain")
+	if err := os.Mkdir(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if p := probeGitDir(ctx, plain); p.place != placeNoRepo {
 		t.Errorf("a directory in no repository: got %+v, want placeNoRepo", p)
 	}
 	if p := probeGitDir(ctx, filepath.Join(parent, "no", "such")); p.place != placeUnknown || p.reason == "" {
