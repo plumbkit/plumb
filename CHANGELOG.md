@@ -17,6 +17,10 @@
   the name, a kill by an unrelated flaky test read exactly like a real one. When
   no test is named (a test file that failed to compile), it still shows the tail,
   where the compile error is. (PLAN-441)
+- **Package reachability scopes polyglot workspaces to Go.** A single Go file
+  previously let `topology_impact` report C#/PHP/Elixir/Scala package directories
+  as unreachable. The Go graph now excludes other languages and names their
+  package directories as out of scope.
 
 - **A git call with an explicit `repo` is filed under that repository.** The
   documented way to commit into a nested submodule is `git` with `repo` set, but

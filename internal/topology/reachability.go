@@ -88,6 +88,11 @@ type PackageGraph struct {
 	// package clause is mandatory and per-file: no other extractor's package
 	// node is ever labelled Language=="go".
 	HasGoSignal bool
+	// GoDirs retains Go's package and node metadata separately from other
+	// languages that may declare packages in the same directory.
+	GoDirs map[string]*PackageInfo
+	// NonGoDirs records package declarations omitted from the Go analysis.
+	NonGoDirs map[string]bool
 }
 
 // TotalEdges returns the number of directory-level edges in g, summed across
@@ -119,7 +124,10 @@ func isTestGoImporter(relPath string) bool {
 // index: every package directory (with its main-package flag and node count)
 // and every directory-level import edge.
 func LoadPackageGraph(ctx context.Context, db *sql.DB) (*PackageGraph, error) {
-	g := &PackageGraph{Dirs: map[string]*PackageInfo{}, Edges: map[string]map[string]bool{}}
+	g := &PackageGraph{
+		Dirs: map[string]*PackageInfo{}, Edges: map[string]map[string]bool{},
+		GoDirs: map[string]*PackageInfo{}, NonGoDirs: map[string]bool{},
+	}
 	if err := loadPackageDirs(ctx, db, g); err != nil {
 		return nil, err
 	}
@@ -135,6 +143,15 @@ func LoadPackageGraph(ctx context.Context, db *sql.DB) (*PackageGraph, error) {
 	}
 	g.HasGoSignal = hasGo
 	return g, nil
+}
+
+// GoView restricts package traversal to Go declarations. Edges already
+// connect only Go nodes (loadPackageEdges), so the view can share them.
+func (g *PackageGraph) GoView() *PackageGraph {
+	return &PackageGraph{
+		Dirs: g.GoDirs, Edges: g.Edges, GoDirs: g.GoDirs,
+		HasGoSignal: g.HasGoSignal, NonGoDirs: g.NonGoDirs,
+	}
 }
 
 // loadHasGoSignal reports whether the index carries independent evidence of
@@ -156,7 +173,7 @@ func loadHasGoSignal(ctx context.Context, db *sql.DB) (bool, error) {
 
 func loadPackageDirs(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT n.name, f.path FROM topology_nodes n
+		`SELECT n.name, n.language, f.path FROM topology_nodes n
            JOIN topology_files f ON f.id = n.file_id
           WHERE n.kind = ?`, string(KindPackage))
 	if err != nil {
@@ -164,8 +181,8 @@ func loadPackageDirs(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, p string
-		if scanErr := rows.Scan(&name, &p); scanErr != nil {
+		var name, language, p string
+		if scanErr := rows.Scan(&name, &language, &p); scanErr != nil {
 			return fmt.Errorf("topology: load package dirs: scan: %w", scanErr)
 		}
 		dir := path.Dir(p)
@@ -177,6 +194,18 @@ func loadPackageDirs(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 		if name == "main" {
 			info.IsMain = true
 		}
+		if language != "go" {
+			g.NonGoDirs[dir] = true
+			continue
+		}
+		goInfo, ok := g.GoDirs[dir]
+		if !ok {
+			goInfo = &PackageInfo{Dir: dir}
+			g.GoDirs[dir] = goInfo
+		}
+		if name == "main" {
+			goInfo.IsMain = true
+		}
 	}
 	return rows.Err()
 }
@@ -186,21 +215,26 @@ func loadPackageDirs(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 // biggest (most actionable) dead packages surface first.
 func loadPackageNodeCounts(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT f.path, COUNT(*) FROM topology_nodes n
+		`SELECT f.path, n.language, COUNT(*) FROM topology_nodes n
            JOIN topology_files f ON f.id = n.file_id
-          GROUP BY f.path`)
+          GROUP BY f.path, n.language`)
 	if err != nil {
 		return fmt.Errorf("topology: load package node counts: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var p string
+		var p, language string
 		var n int
-		if scanErr := rows.Scan(&p, &n); scanErr != nil {
+		if scanErr := rows.Scan(&p, &language, &n); scanErr != nil {
 			return fmt.Errorf("topology: load package node counts: scan: %w", scanErr)
 		}
 		if info, ok := g.Dirs[path.Dir(p)]; ok {
 			info.NumNodes += n
+		}
+		if language == "go" {
+			if info, ok := g.GoDirs[path.Dir(p)]; ok {
+				info.NumNodes += n
+			}
 		}
 	}
 	return rows.Err()
@@ -229,7 +263,8 @@ func loadPackageEdges(ctx context.Context, db *sql.DB, g *PackageGraph) error {
 		  JOIN topology_nodes pt ON pt.id = e2.to_id
 		  JOIN topology_files ft ON ft.id = pt.file_id
 		 WHERE e1.kind = ? AND pf.kind = ? AND ni.kind = ?
-		   AND e2.kind = ? AND pt.kind = ?`,
+		   AND e2.kind = ? AND pt.kind = ?
+		   AND pf.language = 'go' AND ni.language = 'go' AND pt.language = 'go'`,
 		string(EdgeImports), string(KindPackage), string(KindImport),
 		string(EdgeImports), string(KindPackage))
 	if err != nil {
