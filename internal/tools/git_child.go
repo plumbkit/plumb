@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -78,7 +77,10 @@ const defaultGitWriteTimeout = 10 * time.Minute
 //
 // Returns nil when there is nothing to override, so the caller leaves cmd.Env
 // nil and os/exec inherits the daemon's environment directly — byte-for-byte
-// the previous behaviour, not a reconstruction of it.
+// the previous behaviour, not a reconstruction of it. (That is this builder's
+// contract, not the child's final environment: execGitCmd may add GOWORK=off —
+// never over a GOWORK set here or inherited — and, whenever the environment is
+// explicit, PWD naming the repository; see git_gowork.go.)
 //
 // An override REPLACES any inherited value of the same name; that is the point
 // (GOWORK=off has to beat an inherited GOWORK). Setting a name to the empty
@@ -92,7 +94,7 @@ func gitChildEnv(overrides map[string]string) []string {
 		return nil
 	}
 	env := os.Environ()
-	// Deterministic order. setGitEnvVar matches names case-SENSITIVELY, which is
+	// Deterministic order. withEnvVar matches names case-SENSITIVELY, which is
 	// right on Linux and Darwin (both have case-sensitive environments) but not
 	// on Windows, where os/exec folds case when it deduplicates cmd.Env and keeps
 	// the LAST of the matching entries. Sorting the names is what makes that last
@@ -103,22 +105,9 @@ func gitChildEnv(overrides map[string]string) []string {
 	}
 	sort.Strings(names)
 	for _, k := range names {
-		env = setGitEnvVar(env, k, overrides[k])
+		env = withEnvVar(env, k, overrides[k])
 	}
 	return env
-}
-
-// setGitEnvVar replaces the value of key in env if present, otherwise appends
-// "key=value". env is modified in place.
-func setGitEnvVar(env []string, key, val string) []string {
-	prefix := key + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + val
-			return env
-		}
-	}
-	return append(env, prefix+val)
 }
 
 // gitChildWaitDelay bounds how long cmd.Wait may keep waiting on the output

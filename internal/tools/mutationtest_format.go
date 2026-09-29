@@ -39,6 +39,17 @@ func mutationHeader(args mutationTestArgs, plan mutationPlan, n int) string {
 		renderSteps(plan.compile), args.CompileTask, plan.compile.Provenance)
 	fmt.Fprintf(&b, "  test command: %s (%s, source=%s)%s\n",
 		renderSteps(plan.test), args.TestTask, plan.test.Provenance, targetNote(plan.target, plan.test))
+	seen := map[string]bool{}
+	for _, r := range plan.reroots {
+		if seen[r.dir] {
+			continue // the compile and test commands normally move to the same place
+		}
+		seen[r.dir] = true
+		fmt.Fprintf(&b, "  ran in: %s — re-rooted from %s: the mutated file(s) live in this work-tree, not the workspace's\n", r.dir, r.from)
+	}
+	if plan.goWorkOff != "" {
+		fmt.Fprintf(&b, "  GOWORK=off: %s lists another directory for this Go module, so in workspace mode go would refuse this directory or build that copy\n", plan.goWorkOff)
+	}
 	return b.String()
 }
 
