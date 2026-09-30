@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.3 (2026-09-30)
+## 0.20.4 (unreleased)
 
 ### Fixed
 
@@ -18,6 +18,10 @@
   attach to finish, so on a reconnect a restored `session_start` pin is never
   overwritten by the client's root, and it does not start an attach once the
   connection has closed.
+
+## 0.20.3 (2026-09-30)
+
+### Fixed
 
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime
