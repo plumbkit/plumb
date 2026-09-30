@@ -16,6 +16,27 @@
   descriptor. A file replaced during the read keeps the version read. One
   rewritten in place is read again, and one that never settles records no hash.
   Applies to `read_file` (windowed and pattern search) and `read_symbol`.
+- **A write records the version it wrote.** After a successful write, plumb
+  refreshed the session's read record by stat'ing and hashing the path again.
+  The per-path lock excludes only plumb's own writers, so a process outside
+  plumb that wrote the file in that gap had its content recorded as this
+  session's version, and the session's next write passed "changed since you
+  read it" and the same-mtime `expected_mtime` check over a change it never
+  saw. Writes now record the hash of the bytes plumb wrote and the mtime of the
+  file it wrote them to, taken from the staged file's descriptor before the
+  rename publishes it. `rename_file`, which writes no bytes, records the version
+  it moved, read from the source before the move. Applies to every write tool,
+  `undo_edit`, and the `fail_on_new_errors` rollbacks (issue #528).
+- **A file read through one spelling and written through another keeps its read
+  record.** Read tracking keyed a read on the path as spelled, while the write
+  lock, write tracking and undo resolve symlinks and fold case where the volume
+  does. A file read through a symlinked parent, macOS `/tmp` versus
+  `/private/tmp`, or a case variant, and then written through another spelling,
+  had no read record at the write: the "changed since you read it" guard let the
+  write overwrite a peer's change, and strict mode refused the edit as unread.
+  Reads are now keyed the way writes are, in memory and in the persisted
+  session state. Rows saved by an older daemon are re-keyed when they are
+  restored after a restart (issue #524).
 - **Contested-pin messages no longer recommend `session_id` as the fix.** The
   contested-pin note in `session_start`, the boundary and re-pin refusals, and
   the `git`, `run_task` and `undo_edit` refusals told agents sharing a

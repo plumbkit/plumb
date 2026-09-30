@@ -38,8 +38,7 @@ func (t *EditFile) executePartial(
 	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr))
 	sb.WriteString(formatPartialEditsResults(results))
 	if writeErr == nil && applied > 0 {
-		_ = res
-		t.executePartialPostWrite(ctx, path, uri, original, content, awaitFresh, &sb, baseline)
+		t.executePartialPostWrite(ctx, path, uri, original, content, res.written, awaitFresh, &sb, baseline)
 		t.deps.recordUndo(ctx, path, original, content, true, "edit_file")
 	}
 	return sb.String()
@@ -108,7 +107,7 @@ func formatPartialEditsResults(results []partialEditResult) string {
 	return sb.String()
 }
 
-func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, before, content string, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, before, content string, written fileSnapshot, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
 	notifyFailed := false
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		notifyFailed = true
@@ -121,7 +120,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, befor
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.recordWritten(ctx, path)
+	t.deps.recordWritten(ctx, path, written)
 	// apply_partial cannot request fail_on_new_errors (the preconditions refuse
 	// the combination), so this path only ever reports.
 	opt := postWriteDiagOpts{awaitFresh: awaitFresh, structured: awaitFresh, lspNotifyFailed: notifyFailed}

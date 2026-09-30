@@ -78,6 +78,21 @@ func snapshotLines(path string) ([]string, fileSnapshot, error) {
 	return lines, snap, err
 }
 
+// stagedSnapshot is the version a write is about to publish: the SHA-256 of the
+// bytes plumb wrote into the staged file f, and the mtime f's descriptor reports.
+// The rename that publishes f moves its inode, mtime included, so this IS the
+// target's version the moment the rename lands — known without re-reading a path
+// an outside writer may already have replaced (issue #528, the write-side twin of
+// the read race above). Call it after the last write to f.
+func stagedSnapshot(f *os.File, data []byte) (fileSnapshot, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	sum := sha256.Sum256(data)
+	return fileSnapshot{mtime: info.ModTime(), size: int64(len(data)), sha: hex.EncodeToString(sum[:])}, nil
+}
+
 func readSnapshotOnce(path string, consume func(io.Reader) error) (fileSnapshot, bool, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: path was resolved and boundary-checked by the calling tool
 	if err != nil {

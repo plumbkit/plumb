@@ -54,7 +54,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		t.deps.recordWritten(ctx, path)
+		t.deps.recordWritten(ctx, path, result.written)
 		t.deps.recordUndo(ctx, path, before, content, true, "edit_file")
 
 		// Still inside the per-path lock taken in Execute: the write, the
