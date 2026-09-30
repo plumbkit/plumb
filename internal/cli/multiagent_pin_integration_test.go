@@ -457,7 +457,9 @@ func testAnonymousStateChangeStillRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("an anonymous state-changing call on a shared connection must be refused")
 	}
-	for _, want := range []string{"one plumb serve per logical agent", mcp.MetaLogicalAgentKey, "session_start.session_id"} {
+	// session_start.session_id is deliberately NOT offered as a remedy: it
+	// identifies that one call, not later ones (PLAN-394).
+	for _, want := range []string{"one plumb serve per agent", mcp.MetaLogicalAgentKey, "plumb hooks install claude-code"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal missing %q: %s", want, err)
 		}
@@ -577,9 +579,8 @@ func testAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "subagent-last"}); err != nil {
 		t.Fatalf("subagent session_start: %v", err)
 	}
-	// This models a client whose per-call identity channel WORKS — most of them.
-	// The ceiling arms on demonstrated capability, because refusing a client
-	// that can never stamp routes nothing and costs it the whole write lane.
+	// A stamped call, as from a client whose per-call channel works. (The
+	// ceiling is armed by the two declarations alone; this is not required.)
 	m.s.recordLogicalAgentCall("coordinator")
 
 	// The anonymous call resolves to the connection's pin — no peer's shard.
@@ -594,7 +595,7 @@ func testAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("an anonymous write on a shared connection must be refused (PLAN-394 closed the inherit-last-attached gap)")
 	}
-	for _, want := range []string{"one plumb serve per logical agent", mcp.MetaLogicalAgentKey} {
+	for _, want := range []string{"one plumb serve per agent", mcp.MetaLogicalAgentKey} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal missing %q: %s", want, err)
 		}
@@ -649,17 +650,12 @@ func testAnonymousWriteIntoPeerProjectRefused(t *testing.T) {
 	if _, err := m.s.policyFor(context.Background()).Check(victim, tools.AccessReadWrite); err == nil {
 		t.Error("the anonymous call's boundary admits a path in the peer's project — fail-open")
 	}
-	// A client that has never stamped cannot act on a refusal, so the ceiling
-	// does not arm for it and the call is admitted — resolved against the
-	// CONNECTION, where the boundary above still refuses the peer's project.
-	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
-		t.Errorf("a client that cannot stamp must not be refused its writes: %v", err)
-	}
-	// Once the channel is proven, an anonymous call is a real attribution gap
-	// and the ceiling adds its refusal on top of the boundary.
-	m.s.recordLogicalAgentCall("coordinator")
+	// And the ceiling refuses it outright, whether or not any caller has ever
+	// stamped. Admitting it against the connection (the PLAN-440 exemption) is
+	// the path by which a worktree edit landed in another agent's checkout on
+	// 2026-09-30: there the connection pin WAS the other agent's project.
 	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Fatal("an anonymous write on a connection that CAN stamp must be refused")
+		t.Fatal("an anonymous write on a connection two agents declared must be refused")
 	}
 	if m.s.writeTrackerFor(agentCtx("subagent-last")).Wrote(victim) {
 		t.Error("the anonymous write was recorded as the peer's work")

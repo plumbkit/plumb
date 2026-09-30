@@ -377,6 +377,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	perCallCtx := ctx
 	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
+	repinLine := repinAnnouncement(repinnedFrom, ws)
 	if err != nil {
 		return "", err
 	}
@@ -412,11 +413,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(ctx)), nil
+		return t.executeBrief(ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(ctx)), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(perCallCtx))
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx))
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	if t.xcodeHintFn != nil {
 		if hint := t.xcodeHintFn(""); hint != "" {

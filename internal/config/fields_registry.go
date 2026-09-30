@@ -250,7 +250,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "collab.allow_unidentified_writes", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Turn OFF the shared-connection write ceiling: admit a state-changing call that arrives on a connection serving several agents with no per-call identity. Global config only. Default false. Set it when your client cannot stamp per-call identity and the ceiling therefore refuses every write with a remedy you cannot apply — and understand the cost: an unattributable write lands in whichever agent's shard the connection resolves to.",
+		Description: "Retired and ignored. It used to admit a state-changing call with no per-call identity on a connection serving several agents; such a write resolved through the connection pin and could land in another agent's checkout. Kept so an existing config still loads.",
 	},
 	{
 		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadLive,

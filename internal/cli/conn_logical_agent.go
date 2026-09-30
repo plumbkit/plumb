@@ -36,19 +36,6 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
-	// stamped records that some caller on this connection has presented a
-	// PER-CALL identity, proving the channel the ceiling depends on actually
-	// works here. Attach-time declarations do not set it: session_start's
-	// session_id says who is attaching, not who is calling, and a client can
-	// supply one while being structurally unable to stamp a later write.
-	//
-	// It gates whether the ceiling arms at all. Refusing an unattributable call
-	// is how a write gets ROUTED to its author — acceptance (a) is routing, not
-	// authorisation — and where no caller can ever present a routing key there
-	// is nothing to route to and never will be. Refusing then buys no
-	// attribution and costs the whole write lane, which is exactly what it cost
-	// in the field on a client whose runtime drops the argument rewrite.
-	stamped bool
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -185,16 +172,11 @@ func (l *logicalAgentState) sharedWith(id string) bool {
 }
 
 // armed reports whether the ceiling would refuse an unattributable call on this
-// connection right now: shared, and with the per-call channel demonstrated. It
-// is the question the orientation note asks, and refuse's own predicate minus
-// the caller's id, so the two cannot describe different worlds.
+// connection right now: it is shared. It is the question the orientation note
+// asks, and refuse's own predicate minus the caller's id, so the two cannot
+// describe different worlds.
 func (l *logicalAgentState) armed(id string) bool {
-	if !l.sharedWith(id) {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.stamped
+	return l.sharedWith(id)
 }
 
 // refuse reports whether a call declaring callID must be refused on this
@@ -215,46 +197,27 @@ func (l *logicalAgentState) refuse(callID string) bool {
 	if len(l.seen) <= 1 {
 		return false
 	}
-	// Nobody here has ever presented a per-call identity, so this client cannot
-	// address its agents at all and no future call will either. Refusing routes
-	// nothing and removes the write lane; the condition is reported instead, by
-	// session_start's orientation note and doctor's Agent Identity section.
-	if !l.stamped {
-		return false
-	}
+	// No exemption for a connection where no caller has stamped yet. That
+	// exemption (PLAN-440) let every anonymous write through on Claude
+	// desktop's connector, whose stamp was being dropped in transit, and a
+	// worktree edit landed in another agent's checkout (2026-09-30). An
+	// unattributable write is refused; the refusal names the remedy.
 	return callID == ""
 }
 
 // recordLogicalAgentAttach records a session_start.session_id identity.
 func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id) }
 
-// recordLogicalAgentCall records a per-call tools/call._meta identity. It is
-// also the proof that this connection's per-call channel works, which is what
-// lets the ceiling arm (see logicalAgentState.stamped).
+// recordLogicalAgentCall records a per-call identity (_meta or the stamp
+// argument).
 func (s *connSession) recordLogicalAgentCall(id string) {
-	if id != "" {
-		s.logicalAgents.markStamped()
-	}
 	s.recordLogicalAgent(id)
 }
 
-// markStamped records that a per-call identity has been observed. Monotonic,
-// like seen: a channel that has worked once does not stop having worked.
-func (l *logicalAgentState) markStamped() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.stamped = true
-}
-
-// recordCall commits an identity that arrived on the PER-CALL channel, which
-// also proves the channel works here. recordAttach commits one that arrived at
-// attach time, which does not. The two exist so a caller — including a test —
-// has to say which channel it means; `record` alone could not express the
-// difference the ceiling now turns on.
+// recordCall commits an identity that arrived on the PER-CALL channel;
+// recordAttach one that arrived at attach time. Both commit it the same way;
+// the two names keep call sites and tests explicit about the channel.
 func (l *logicalAgentState) recordCall(id string) (shared, transition bool) {
-	if id != "" {
-		l.markStamped()
-	}
 	return l.record(id)
 }
 
@@ -363,26 +326,25 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if !slices.Contains(tools.StateChangingToolNames(), name) {
 		return nil
 	}
-	// The user's own opt-out. The ceiling's refusal names a remedy the caller
-	// must be able to reach — identify yourself — and a client whose runtime
-	// carries no per-call identity channel cannot reach it, so for that client
-	// the guard is not a guard but a permanent outage. This is the supported way
-	// to accept the attribution risk on a machine where it is the user's to
-	// accept; it is global-only config, never a project's, and never implicit.
-	if s.collabConfig().AllowUnidentifiedWrites {
-		return nil
-	}
 	if !s.logicalAgents.refuse(logicalAgent) {
 		return nil
 	}
-	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection — %s", name, sharedIdentityRemedy)
+	// [collab] allow_unidentified_writes used to lift this refusal. It is no
+	// longer honoured: with it set, an unattributable write resolved through
+	// the connection pin, which is how one agent's edit landed in another
+	// agent's checkout. Say so, so a user who set it is not left guessing.
+	retired := ""
+	if s.collabConfig().AllowUnidentifiedWrites {
+		retired = " ([collab] allow_unidentified_writes is set but no longer honoured.)"
+	}
+	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s%s", name, sharedIdentityRemedy, retired)
 }
 
 // sharedIdentityRemedy names the ways an agent on a shared connection gets an
 // identity, cheapest first. Identity comes before topology on purpose
 // (PLAN-417): the previous wording led with "one plumb serve per agent", the
 // one remedy an agent cannot apply from inside a tool call.
-const sharedIdentityRemedy = "each agent must identify itself: on Claude Code, `plumb hooks install claude-code` stamps every call (the PreToolUse identity hook); otherwise pass a stable per-agent session_start.session_id or a per-call _meta[" + mcp.MetaLogicalAgentKey + "]; or run one plumb serve per logical agent. This connection HAS carried a per-call identity before, so the channel works here and this call can be stamped too — that is why the refusal applies. A connection whose client can never stamp is not refused at all"
+const sharedIdentityRemedy = "every call must carry its agent's identity. On Claude Code (terminal or the desktop app), `plumb hooks install claude-code` stamps every call; on Claude desktop, restart the app after upgrading plumb so it re-reads the tool list. A client whose transport can set it sends a per-call _meta[" + mcp.MetaLogicalAgentKey + "]. A session_start session_id alone identifies that call, not later ones. Otherwise, run one plumb serve per agent"
 
 // linkExternalID is session_start's external-ID linker: it records the
 // declared identity, links the session RECORD to its conversation, and
@@ -467,12 +429,8 @@ func (s *connSession) linkExternalID(externalID string) string {
 // is a gate that silently loses coverage.
 func (s *connSession) stampChannelState(ctx context.Context) tools.StampChannelState {
 	id := mcp.LogicalAgentFromCtx(ctx)
-	// Shared means "the ceiling is ARMED for this call", not merely "two agents
-	// are here". The ceiling arms only once some caller has proven the per-call
-	// channel works, so a connection where nobody ever stamps is shared and not
-	// armed — and telling such a caller its writes are being refused, while they
-	// flow, would be a false warning in the one place an agent is most likely to
-	// believe it.
+	// Shared means "the ceiling is ARMED for this call": two or more identities
+	// are here, so an unstamped state-changing call is refused.
 	return tools.StampChannelState{Shared: s.logicalAgents.armed(id), PerCallStamped: id != "", HookClient: s.isHookClient()}
 }
 

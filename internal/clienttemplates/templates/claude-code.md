@@ -6,7 +6,7 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **Peers.** If another agent may be working in this workspace, use `check_messages`/`leave_note` — delivery is poll-only, so silence is not refusal.
 
-**Identity.** Subagents share this connection: install the identity hook (`plumb hooks install claude-code`) or pass a stable per-agent `session_id` to `session_start`.
+**Identity.** Subagents share this connection: install the identity hook (`plumb hooks install claude-code`). On a shared connection an unstamped write is refused; `session_id` covers only its own call.
 
 **Subagents.** Call `session_start({detail:"brief"})` first for a short orientation packet.
 

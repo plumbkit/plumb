@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -293,18 +292,16 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	// line-by-line, so an over-cap file stays searchable) instead of returning a
 	// positional window.
 	if a.Pattern != "" {
-		return t.searchWithinFile(ctx, fpath, info, mtime, concurrentNote, a)
+		return t.searchWithinFile(ctx, fpath, concurrentNote, a)
 	}
 
-	body, err := readFileBody(fpath, a)
+	body, snap, err := readFileBody(fpath, a)
 	if err != nil {
 		return "", err
 	}
-
-	sha, err := fileSHA256(fpath)
-	if err != nil {
-		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
-	}
+	// The recorded and printed version is the one the body was read from (see
+	// read_snapshot.go), not the stat above, which only served the checks before it.
+	mtime, sha := snap.mtime, snap.sha
 	t.readTracker(ctx).Record(fpath, mtime, sha)
 
 	firstLine := 1
@@ -312,7 +309,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		firstLine = *body.start
 	}
 	largeNote := t.largeReadNote(fpath, len(body.content), body.truncated, body.ranged)
-	return t.formatOutput(mtime, sha, body.content, info.Size(), firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
+	return t.formatOutput(mtime, sha, body.content, snap.size, firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
 }
 
 // readBody is the decoded result of reading (a slice of) a file.
@@ -327,31 +324,29 @@ type readBody struct {
 // readFileBody opens fpath, rejects binaries, applies the optional line window,
 // and caps the result at maxReadFileBytes. Extracted from Execute so the
 // orchestrator stays under the complexity bound.
-func readFileBody(fpath string, a readFileArgs) (readBody, error) {
-	f, err := os.Open(fpath)
-	if err != nil {
-		return readBody{}, fmt.Errorf("read_file: %w", err)
-	}
-	defer f.Close()
-
-	// Sniff up to binarySniffBytes for null bytes. We hand the prefix bytes
-	// back into the read path via io.MultiReader so no Seek is needed — Seek
-	// fails on pipes/devices and is wasted work on regular files.
-	sniff := make([]byte, binarySniffBytes)
-	n, _ := io.ReadFull(f, sniff)
-	sniff = sniff[:n]
-	if bytes.IndexByte(sniff, 0) >= 0 {
-		return readBody{}, fmt.Errorf("read_file: %q appears to be a binary file", fpath)
-	}
-	src := io.MultiReader(bytes.NewReader(sniff), f)
-
+func readFileBody(fpath string, a readFileArgs) (readBody, fileSnapshot, error) {
 	start, end, err := resolveLineWindow(a)
 	if err != nil {
-		return readBody{}, fmt.Errorf("read_file: %w", err)
+		return readBody{}, fileSnapshot{}, fmt.Errorf("read_file: %w", err)
 	}
-	content, hasLines, err := readContentMaybeRanged(src, start, end)
+	var content string
+	var hasLines bool
+	snap, err := readSnapshot(fpath, func(r io.Reader) error {
+		// Sniff up to binarySniffBytes for null bytes. We hand the prefix bytes
+		// back into the read path via io.MultiReader so no Seek is needed — Seek
+		// fails on pipes/devices and is wasted work on regular files.
+		sniff := make([]byte, binarySniffBytes)
+		n, _ := io.ReadFull(r, sniff)
+		sniff = sniff[:n]
+		if bytes.IndexByte(sniff, 0) >= 0 {
+			return fmt.Errorf("%q appears to be a binary file", fpath)
+		}
+		var rerr error
+		content, hasLines, rerr = readContentMaybeRanged(io.MultiReader(bytes.NewReader(sniff), r), start, end)
+		return rerr
+	})
 	if err != nil {
-		return readBody{}, fmt.Errorf("read_file: %w", err)
+		return readBody{}, fileSnapshot{}, fmt.Errorf("read_file: %w", err)
 	}
 
 	truncated := false
@@ -362,7 +357,7 @@ func readFileBody(fpath string, a readFileArgs) (readBody, error) {
 		}
 		truncated = true
 	}
-	return readBody{content: content, hasLines: hasLines, truncated: truncated, ranged: start != nil || end != nil, start: start}, nil
+	return readBody{content: content, hasLines: hasLines, truncated: truncated, ranged: start != nil || end != nil, start: start}, snap, nil
 }
 
 // largeReadFileThreshold is the whole-file body size above which read_file

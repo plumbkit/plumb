@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -47,7 +45,7 @@ type matchLine struct {
 // search-specific arguments, restricts the scan to an optional start_line/
 // end_line window, records the read (so strict mode is satisfied), and formats
 // the bounded, labelled result.
-func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.FileInfo, mtime time.Time, concurrentNote string, a readFileArgs) (string, error) {
+func (t *ReadFile) searchWithinFile(ctx context.Context, fpath, concurrentNote string, a readFileArgs) (string, error) {
 	if a.Limit != nil {
 		return "", errors.New("read_file: pattern cannot be combined with limit — use max_matches to bound search output, and start_line/end_line to restrict the searched range")
 	}
@@ -78,18 +76,14 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.F
 		return "", err
 	}
 
-	matches, matchCount, scanned, truncated, err := scanFileMatches(ctx, fpath, re, start, end, a.ContextLines, maxMatches)
+	matches, matchCount, scanned, truncated, snap, err := scanFileMatches(ctx, fpath, re, start, end, a.ContextLines, maxMatches)
 	if err != nil {
 		return "", err
 	}
-
-	sha, err := fileSHA256(fpath)
-	if err != nil {
-		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
-	}
+	mtime, sha := snap.mtime, snap.sha
 	t.readTracker(ctx).Record(fpath, mtime, sha)
 
-	return t.formatSearchOutput(fpath, mtime, sha, info.Size(), concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
+	return t.formatSearchOutput(fpath, mtime, sha, snap.size, concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
 }
 
 // compileReadFilePattern builds the matcher for search mode: literal text by
@@ -123,51 +117,52 @@ func compileReadFilePattern(pattern string, useRegex bool, caseSensitive *bool) 
 // 200 KiB cap; either sets truncated. Returns the emitted lines (matches +
 // context, in file order), the match count, the number of lines scanned, and
 // whether the result was truncated.
-func scanFileMatches(ctx context.Context, fpath string, re *regexp.Regexp, start, end, contextLines, maxMatches int) (lines []matchLine, matchCount, scanned int, truncated bool, err error) {
-	f, err := os.Open(fpath)
-	if err != nil {
-		return nil, 0, 0, false, fmt.Errorf("read_file: %w", err)
-	}
-	defer f.Close()
+// It returns the version of the file the scan read (read_snapshot.go), which is
+// what the read records.
+func scanFileMatches(ctx context.Context, fpath string, re *regexp.Regexp, start, end, contextLines, maxMatches int) (lines []matchLine, matchCount, scanned int, truncated bool, snap fileSnapshot, err error) {
+	var c matchCollector
+	snap, err = readSnapshot(fpath, func(r io.Reader) error {
+		// Reject binaries via the same null-byte sniff read_file uses, feeding the
+		// prefix back through io.MultiReader so no Seek is needed.
+		sniff := make([]byte, binarySniffBytes)
+		n, _ := io.ReadFull(r, sniff)
+		sniff = sniff[:n]
+		if bytes.IndexByte(sniff, 0) >= 0 {
+			return fmt.Errorf("%q appears to be a binary file", fpath)
+		}
+		scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(sniff), r))
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // up to 4 MiB per line
 
-	// Reject binaries via the same null-byte sniff read_file uses, feeding the
-	// prefix back through io.MultiReader so no Seek is needed.
-	sniff := make([]byte, binarySniffBytes)
-	n, _ := io.ReadFull(f, sniff)
-	sniff = sniff[:n]
-	if bytes.IndexByte(sniff, 0) >= 0 {
-		return nil, 0, 0, false, fmt.Errorf("read_file: %q appears to be a binary file", fpath)
-	}
-	src := io.MultiReader(bytes.NewReader(sniff), f)
-
-	scanner := bufio.NewScanner(src)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // up to 4 MiB per line
-
-	c := matchCollector{contextLines: contextLines, maxMatches: maxMatches, budget: maxReadFileBytes}
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		if lineNo&0xFFF == 0 {
-			if cerr := ctx.Err(); cerr != nil {
-				return nil, 0, 0, false, cerr
+		c, scanned = matchCollector{contextLines: contextLines, maxMatches: maxMatches, budget: maxReadFileBytes}, 0
+		lineNo := 0
+		for scanner.Scan() {
+			lineNo++
+			if lineNo&0xFFF == 0 {
+				if cerr := ctx.Err(); cerr != nil {
+					return cerr
+				}
+			}
+			if start > 0 && lineNo < start {
+				continue
+			}
+			if end > 0 && lineNo > end {
+				break
+			}
+			scanned++
+			text := scanner.Text()
+			if !c.feed(matchLine{lineNo: lineNo, text: text}, re.MatchString(text)) {
+				break
 			}
 		}
-		if start > 0 && lineNo < start {
-			continue
+		return scanner.Err()
+	})
+	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, 0, 0, false, fileSnapshot{}, cerr
 		}
-		if end > 0 && lineNo > end {
-			break
-		}
-		scanned++
-		text := scanner.Text()
-		if !c.feed(matchLine{lineNo: lineNo, text: text}, re.MatchString(text)) {
-			break
-		}
+		return nil, 0, 0, false, fileSnapshot{}, fmt.Errorf("read_file: %w", err)
 	}
-	if serr := scanner.Err(); serr != nil {
-		return nil, 0, 0, false, fmt.Errorf("read_file: %w", serr)
-	}
-	return c.lines, c.matchCount, scanned, c.truncated, nil
+	return c.lines, c.matchCount, scanned, c.truncated, snap, nil
 }
 
 // matchCollector accumulates matching lines and their surrounding context as

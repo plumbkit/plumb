@@ -415,7 +415,7 @@ func TestSessionStart_LanguageOverride(t *testing.T) {
 	if !strings.Contains(out, "Language: Swift") {
 		t.Errorf("display should show the forced Swift primary\n%s", out)
 	}
-	if strings.Contains(out, "Re-pinned this connection") {
+	if strings.Contains(out, "Re-pinned") {
 		t.Errorf("a language-only pin must not announce a project re-pin\n%s", out)
 	}
 }
@@ -461,7 +461,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		if !strings.Contains(out, "# Workspace: "+target) {
 			t.Errorf("output should show the new workspace %q\n%s", target, out)
 		}
-		if !strings.Contains(out, "Re-pinned this connection: "+attached+" → "+target) {
+		if !strings.Contains(out, "Re-pinned: "+attached+" → "+target) {
 			t.Errorf("output should announce the re-pin\n%s", out)
 		}
 	})
@@ -790,7 +790,7 @@ func TestSessionStart_Idempotent(t *testing.T) {
 	if !strings.Contains(out1, "# Workspace: "+ws) || !strings.Contains(out2, "# Workspace: "+ws) {
 		t.Fatalf("both calls should report the same workspace\ncall 1:\n%s\ncall 2:\n%s", out1, out2)
 	}
-	if strings.Contains(out2, "Re-pinned this connection") {
+	if strings.Contains(out2, "Re-pinned") {
 		t.Errorf("a second call with an unchanged workspace must not announce a re-pin\n%s", out2)
 	}
 	if purposeCalls != 2 {

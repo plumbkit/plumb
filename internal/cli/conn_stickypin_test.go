@@ -568,7 +568,7 @@ func TestStickyPin_VictimSameRootSessionStartHealsViaTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("victim's same-root session_start: %v", err)
 	}
-	if strings.Contains(out, "Re-pinned this connection") {
+	if strings.Contains(out, "Re-pinned") {
 		t.Errorf("same-root session_start must not announce a re-pin\n%s", out)
 	}
 	if health, msg := sessionHealth(t, s.sessID); health != "" {
@@ -628,7 +628,7 @@ func TestStickyPin_AliasOfOwnRootNotRefusedViaTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an alias of the caller's own root must not be refused: %v", err)
 	}
-	if strings.Contains(out, "Re-pinned this connection") {
+	if strings.Contains(out, "Re-pinned") {
 		t.Errorf("alias call must not announce a re-pin\n%s", out)
 	}
 	if got := s.workspace(); got != root {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -95,78 +96,69 @@ func TestStampChannelStateReadsTheIdentityFromCtx(t *testing.T) {
 	}
 }
 
-// The user's opt-out. The ceiling refuses an unattributable state-changing call
-// and tells the caller to identify itself — advice that assumes a channel to do
-// it with. A client whose runtime drops the per-call stamp has none, so on a
-// shared connection every write is refused permanently and the remedy cannot be
-// followed. That is an outage, not a guard, and the user must be able to accept
-// the attribution risk on their own machine.
-func TestAllowUnidentifiedWritesLiftsTheCeiling(t *testing.T) {
+// [collab] allow_unidentified_writes is retired. It lifted the ceiling, and on
+// Claude desktop's connector (whose stamp was dropped in transit) that let an
+// anonymous edit resolve through the connection pin into another agent's
+// checkout (2026-09-30). A user who still has it set is told it is ignored.
+func TestAllowUnidentifiedWritesIsRetired(t *testing.T) {
 	var s connSession
 	s.recordLogicalAgentCall("a")
 	s.recordLogicalAgentCall("b")
 
-	// Default: refused, exactly as before.
-	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Fatal("precondition: an anonymous write on a shared connection must refuse by default")
+	err := s.refuseSharedStateChange(context.Background(), "write_file", "")
+	if err == nil {
+		t.Fatal("an anonymous write on a shared connection must refuse")
+	}
+	if strings.Contains(err.Error(), "allow_unidentified_writes") {
+		t.Errorf("with the key unset the refusal must not mention it: %v", err)
 	}
 
 	s.setCollabAllowUnidentifiedWritesForTest(true)
-
-	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
-		t.Errorf("with the opt-out set the write must be admitted: %v", err)
+	err = s.refuseSharedStateChange(context.Background(), "write_file", "")
+	if err == nil {
+		t.Fatal("the retired opt-out still lifted the ceiling")
 	}
-	// Reads were never refused and must stay that way.
+	if !strings.Contains(err.Error(), "allow_unidentified_writes is set but no longer honoured") {
+		t.Errorf("the refusal must say the opt-out is ignored: %v", err)
+	}
 	if err := s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
 		t.Errorf("a read must never refuse: %v", err)
 	}
 }
 
-// A guard that cannot be satisfied is not a guard. The ceiling refuses an
-// unattributable state-changing call so the write can be ROUTED to the agent
-// that issued it — PLAN-440 is explicit that acceptance (a) is "routing, not
-// authorisation". On a connection where NO caller has ever presented a per-call
-// identity, refusing achieves no routing: there is no address to route to, and
-// no call will ever carry one, so every write is refused forever and the
-// refusal's remedy cannot be followed.
-//
-// That is the shape of the field outage: local-agent-mode-plumb drops the
-// PreToolUse argument rewrite, so its calls are permanently anonymous, and
-// arming the ceiling took the write lane down entirely.
-//
-// So the ceiling arms on DEMONSTRATED capability: once any caller on this
-// connection has stamped a call, the channel provably works, an anonymous call
-// is a real attribution gap, and it is refused exactly as before.
-func TestCeilingDoesNotArmWhereNoCallerCanEverStamp(t *testing.T) {
+// The ceiling arms on two identities, however they were declared. The
+// exemption for "no caller has ever stamped" is gone: it was the path the
+// 2026-09-30 incident took, where two conversations declared through
+// session_start and every write resolved through one connection pin.
+func TestCeilingArmsWhenAgentsDeclaredOnlyAtAttach(t *testing.T) {
 	var s connSession
-	// Two agents, declared the only way this client can: through session_start.
-	// Neither ever carries a per-call identity, because its runtime cannot.
 	s.recordLogicalAgentAttach("conversation-a")
 	s.recordLogicalAgentAttach("conversation-b")
 
-	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
-		t.Errorf("a client that can never stamp was refused its writes with no remedy it could apply: %v", err)
+	err := s.refuseSharedStateChange(context.Background(), "write_file", "")
+	if err == nil {
+		t.Fatal("an anonymous write on a connection two agents declared must refuse")
+	}
+	for _, want := range []string{"plumb hooks install claude-code", mcp.MetaLogicalAgentKey, "one plumb serve per agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name the remedy %q: %v", want, err)
+		}
+	}
+	// Not "pass plumb_agent yourself": without the hook an invented id is
+	// admitted as a fresh agent on the connection root, the misroute itself.
+	if strings.Contains(err.Error(), mcp.ArgLogicalAgentDeclaredKey) {
+		t.Errorf("the refusal must not invite typing %s: %v", mcp.ArgLogicalAgentDeclaredKey, err)
+	}
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", "conversation-b"); err != nil {
+		t.Errorf("an attributed write must be admitted: %v", err)
 	}
 }
 
-// The other side, and the reason this is not simply a hole: the moment ANY
-// caller demonstrates the channel works, an anonymous call is a genuine
-// attribution gap rather than a client limitation, and the ceiling arms.
-func TestCeilingArmsOnceAnyCallerHasStamped(t *testing.T) {
+// A single identity is not a shared connection: nothing is refused.
+func TestCeilingStaysDownForOneAgent(t *testing.T) {
 	var s connSession
-	s.recordLogicalAgentAttach("conversation-a")
-	s.recordLogicalAgentAttach("conversation-b")
+	s.recordLogicalAgentAttach("only")
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
-		t.Fatalf("precondition: an unstamped connection should not be armed: %v", err)
-	}
-
-	// One stamped call proves the client can address its agents.
-	s.recordLogicalAgentCall("conversation-a")
-
-	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Error("once the per-call channel is proven to work, an anonymous write is an attribution gap and must be refused")
-	}
-	if err := s.refuseSharedStateChange(context.Background(), "write_file", "conversation-b"); err != nil {
-		t.Errorf("an attributed write must still be admitted: %v", err)
+		t.Errorf("a single-agent connection refused an anonymous write: %v", err)
 	}
 }

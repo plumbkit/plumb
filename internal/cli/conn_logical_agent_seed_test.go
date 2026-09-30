@@ -21,9 +21,6 @@ import (
 func TestSeedArmsTheGateBeforeAnyAgentRedeclares(t *testing.T) {
 	var l logicalAgentState
 	l.seed([]string{"coordinator", "subagent"})
-	// Restoring ids from disk says who was here, not that this client can
-	// address them. The ceiling arms on demonstrated capability, so prove it.
-	l.markStamped()
 
 	if !l.refuse("") {
 		t.Error("a connection with two persisted identities must refuse an anonymous state-changing call immediately after a restart")
@@ -82,10 +79,10 @@ func TestSeedWithNothingIsANoOp(t *testing.T) {
 }
 
 // The seed, driven directly (it is unwired in production): two agents recorded
-// pins under this proxy session before the daemon went down, so once seeded and
-// once a caller has stamped, the connection refuses an unattributable write —
+// pins under this proxy session before the daemon went down, so once seeded the
+// connection refuses an unattributable write —
 // not from whenever the second agent happens to re-declare.
-func TestSeedFromStateArmsOnceACallerStamps(t *testing.T) {
+func TestSeedFromStateArmsTheGate(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-restart-arming"
 	ws := freshTempDir(t)
@@ -98,8 +95,8 @@ func TestSeedFromStateArmsOnceACallerStamps(t *testing.T) {
 
 	// newPersistSession fires onProxySession, exactly as handleInitialize does.
 	s := newPersistSession(t, store, ss, proxyID)
-	s.seedLogicalAgentsFromState(proxyID)   // deliberately unwired in production
-	s.recordLogicalAgentCall("coordinator") // this client can stamp; the ceiling arms on that
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
+	s.recordLogicalAgentCall("coordinator")
 
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("a reconnecting shared connection admitted an anonymous write before any agent re-declared")
@@ -156,8 +153,8 @@ func TestReconnectArmsWhenOnlyOneAgentEverPinnedAWorkspace(t *testing.T) {
 	}
 
 	s := newPersistSession(t, store, ss, proxyID)
-	s.seedLogicalAgentsFromState(proxyID)   // deliberately unwired in production
-	s.recordLogicalAgentCall("coordinator") // this client can stamp; the ceiling arms on that
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
+	s.recordLogicalAgentCall("coordinator")
 
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("a connection whose second agent never pinned a workspace came back disarmed; " +
@@ -183,8 +180,8 @@ func TestDeclarationsMadeOnALiveConnectionSurviveTheRestart(t *testing.T) {
 
 	// The restart: a fresh connection adopting the same proxy session.
 	after := newPersistSession(t, store, ss, proxyID)
-	after.seedLogicalAgentsFromState(proxyID)   // deliberately unwired in production
-	after.recordLogicalAgentCall("coordinator") // this client can stamp; the ceiling arms on that
+	after.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
+	after.recordLogicalAgentCall("coordinator")
 
 	if err := after.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("the reconnecting connection came back disarmed; declarations made on the live " +
@@ -243,8 +240,8 @@ func TestRecentConcurrentDeclarationsStillArmTheGate(t *testing.T) {
 	}
 
 	s := newPersistSession(t, store, ss, proxyID)
-	s.seedLogicalAgentsFromState(proxyID)   // deliberately unwired in production
-	s.recordLogicalAgentCall("coordinator") // this client can stamp; the ceiling arms on that
+	s.seedLogicalAgentsFromState(proxyID) // deliberately unwired in production
+	s.recordLogicalAgentCall("coordinator")
 
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
 		t.Error("two agents declared moments apart must still re-arm the ceiling after a restart")

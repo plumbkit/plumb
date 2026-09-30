@@ -62,31 +62,24 @@ func (t *SessionStart) WithStampChannel(fn func(ctx context.Context) StampChanne
 // connection is shared and this call carried no per-call identity, so writes
 // are being refused right now.
 //
-// It deliberately does NOT repeat the refusal's own remedy. That line leads
-// with `plumb hooks install claude-code`, which is correct for Claude Code's
-// terminal client and actively misleading here — the hook can be installed,
-// matched, and emitting the right document while the client drops it. Naming a
-// remedy the user has already applied is what turns a five-minute diagnosis
-// into an afternoon. The transport remedy is the one that does not depend on
-// the client honouring anything.
+// It names the hook first: since the desktop connector's schemas declare
+// plumb_agent, the hook works there too, so it is the remedy most callers can
+// apply. The transport remedy (one plumb serve per agent) follows, for a client
+// that cannot stamp at all.
 const stampChannelRefusedNotice = "NOTE: state-changing calls from this session are being refused. " +
 	"This connection serves more than one logical agent and this call carried no per-call identity, " +
-	"so a write cannot be attributed to the agent that issued it. Your session_id declaration IS " +
-	"recorded — it is not the channel the write gate reads. This connection has carried a per-call " +
-	"identity before, so the channel works here: stamp this call the same way. On Claude Code, " +
-	"`plumb hooks install claude-code`; otherwise a per-call _meta identity, or one plumb serve per " +
-	"logical agent.\n"
+	"so plumb cannot tell which agent's workspace a write belongs to and will not guess. Your session_id " +
+	"declaration IS recorded, but it identifies this call only. Stamp every call: on Claude Code, " +
+	"`plumb hooks install claude-code` (on Claude desktop, restart the app after upgrading plumb); a client " +
+	"whose transport can set it sends a per-call _meta identity; otherwise run one plumb serve per agent.\n"
 
-// stampChannelDormantNotice is emitted when the channel is not live but the
-// connection is still single-agent. Nothing is refused yet, so the wording
-// states a future cost rather than a present failure — the distinction the
-// linkage notes already draw, and the reason acceptance (b) asks for
-// orientation-time disclosure rather than a louder refusal.
+// stampChannelDormantNotice is emitted when this call carried no per-call
+// identity but the connection is still single-agent. Nothing is refused yet,
+// so the wording states the future cost rather than a present failure.
 const stampChannelDormantNotice = "NOTE: this call carried no per-call logical-agent identity. Nothing is " +
-	"refused right now — the ceiling arms only once some caller on this connection has proven it CAN " +
-	"stamp, so a client that never does is never locked out. But the moment one does, while a second " +
-	"agent is attached, unstamped state-changing calls start being refused. On Claude Code, " +
-	"`plumb hooks install claude-code` stamps every call.\n"
+	"refused while you are the only agent on this connection, but once a second agent attaches, your " +
+	"unstamped state-changing calls are refused. On Claude Code, `plumb hooks install claude-code` stamps " +
+	"every call.\n"
 
 // stampChannelNote renders the disclosure, or "" when there is nothing to say:
 // the accessor is unwired, or the channel is live. Rendered alongside

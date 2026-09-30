@@ -4,7 +4,7 @@ plumb is registered as an MCP server in this project — LSP-backed navigation a
 
 **Compile truth on write.** Pass `fail_on_new_errors` or `await_diagnostics` on an edit/write to have plumb catch (or report) a change that breaks the build, instead of finding out later.
 
-**Identity.** Pass a stable id for this conversation as `session_start`'s `session_id` on every call; every agent sharing one connection needs its own, or its state-changing calls are refused as unattributable.
+**Identity.** Pass a stable id for this conversation as `session_start`'s `session_id`; it covers that call only. Once two conversations share a connection, writes are refused: use one plumb serve each.
 
 **Persisting this.** If this project already has an agent instruction file (`AGENTS.md`, or your client's own), these conventions are worth recording there — ask the user first; don't create the file just for this.
 

@@ -34,9 +34,9 @@ const sharedConcurrencyWindow = 6 * time.Hour
 //
 // NOT WIRED IN PRODUCTION. Wired on 2026-09-21, it locked out a client with no
 // per-call identity channel (local-agent-mode-plumb) and was unwired the same
-// day. Since 8d4eb640 the ceiling arms only once some caller on the connection
-// has stamped a call, so re-wiring this would no longer lock such a client out —
-// but re-wiring is a decision to make, not a revert.
+// day. The ceiling now arms on two declared identities whether or not anyone
+// has stamped, so re-wiring this WOULD lock such a client out again right after
+// a restart — re-wiring is a decision to make, not a revert.
 // TestRestartDoesNotLockOutAClientThatCannotStamp pins the lockout outcome, not
 // this function's wiring.
 //

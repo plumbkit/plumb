@@ -11,7 +11,7 @@ Under a lean tool profile none of these tools is advertised (they stay callable 
 
     session_start(session_id="<your stable per-agent id>")
 
-Mail is addressed by session NAME, and the wake path and `plumb mail --external-id` are addressed by the conversation id you pass as `session_id`. Pass the same stable id on every `session_start` — the client's conversation id for a main thread, `<conversation>/<agent>` for a subagent. On Claude Code the identity hook (`plumb hooks install claude-code`) fills it on every plumb call. A session that never passes one still has a name, but a client restart starts a new identity and mail addressed to the old one does not follow; and on a connection several agents share, an agent with no identity has its state-changing calls refused.
+Mail is addressed by session NAME, and the wake path and `plumb mail --external-id` are addressed by the conversation id you pass as `session_id`. Pass the same stable id on every `session_start` — the client's conversation id for a main thread, `<conversation>/<agent>` for a subagent. On Claude Code the identity hook (`plumb hooks install claude-code`) fills it on every plumb call. A session that never passes one still has a name, but a client restart starts a new identity and mail addressed to the old one does not follow; and on a connection several agents share, a state-changing call that carries no per-call identity is refused. `session_id` identifies only the `session_start` call itself; the hook (or a per-call `_meta` identity) is what identifies every later call.
 
 ## 1. Address a live session, or the next one to attach
 

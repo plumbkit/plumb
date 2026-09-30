@@ -195,7 +195,7 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 	if !strings.Contains(out, briefOrientationFooter) {
 		t.Fatalf("expected this call to auto-brief, got:\n%s", out)
 	}
-	if want := "Re-pinned this connection: " + attached + " → " + target; !strings.Contains(out, want) {
+	if want := "Re-pinned: " + attached + " → " + target; !strings.Contains(out, want) {
 		t.Errorf("brief must carry the re-pin announcement %q, got:\n%s", want, out)
 	}
 	if !strings.Contains(out, "Session:  resumed-session (resumed)") {
@@ -270,5 +270,16 @@ func TestSessionStartBrief_JoinNamesCap(t *testing.T) {
 	}
 	if strings.Count(got, ",") != maxListedBriefNames {
 		t.Errorf("over cap: got %q, want exactly %d commas (n shown names + the tail)", got, maxListedBriefNames)
+	}
+}
+
+// TestRepinAnnouncement: the line names no pin, because which one moved is the
+// daemon's decision; it only reports the move itself.
+func TestRepinAnnouncement(t *testing.T) {
+	if got := repinAnnouncement("", "/b"); got != "" {
+		t.Errorf("nothing moved, got %q", got)
+	}
+	if got := repinAnnouncement("/a", "/b"); got != "Re-pinned: /a → /b\n\n" {
+		t.Errorf("got %q", got)
 	}
 }

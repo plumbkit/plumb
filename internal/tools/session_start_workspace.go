@@ -170,3 +170,14 @@ func (t *SessionStart) forceLanguage(ctx context.Context, current, language stri
 	}
 	return current, "", nil
 }
+
+// repinAnnouncement renders the re-pin line, or "" when nothing moved. It
+// deliberately names no pin: which one moved (the caller's shard or the
+// connection's) is decided in the daemon, not visible here, and a guess from
+// the arguments was wrong for an anonymous caller on a shared connection.
+func repinAnnouncement(from, to string) string {
+	if from == "" {
+		return ""
+	}
+	return fmt.Sprintf("Re-pinned: %s → %s\n\n", from, to)
+}

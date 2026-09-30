@@ -34,15 +34,15 @@ func TestStampChannelNoteWarnsWhenSharedAndUnstamped(t *testing.T) {
 	if got == "" {
 		t.Fatal("a shared connection with no per-call stamp must warn; got no note")
 	}
-	// This assertion was inverted when the ceiling's arming rule changed, and
-	// the reason matters. It used to FORBID the hook remedy, because the note
-	// could reach a client that drops the stamp and for which the hook is
-	// useless. The ceiling now arms only once some caller on the connection has
-	// PROVEN it can stamp, so the note's audience is exactly the callers for
-	// which stamping works — naming the hook is the most actionable thing it can
-	// say. A client that can never stamp is never refused and never sees this.
+	// Every remedy that can apply: the hook for Claude Code (which, since the
+	// connector declares plumb_agent, now works on Claude desktop too), _meta,
+	// and the transport remedy. Never "type plumb_agent yourself": without the
+	// hook an invented id is admitted as a fresh agent on the connection root.
 	if !strings.Contains(got, "plumb hooks install") {
-		t.Errorf("the note's audience can stamp, so it must name the hook: %q", got)
+		t.Errorf("note must name the hook: %q", got)
+	}
+	if strings.Contains(got, "plumb_agent") {
+		t.Errorf("note must not invite a model to type plumb_agent: %q", got)
 	}
 	if !strings.Contains(got, "one plumb serve per") {
 		t.Errorf("note must still name the transport remedy, got %q", got)
@@ -61,8 +61,10 @@ func TestStampChannelNoteWarnsBeforeTheConnectionIsShared(t *testing.T) {
 	if strings.Contains(got, "are being refused") {
 		t.Errorf("a sole agent is not being refused yet; note must state a future cost: %q", got)
 	}
-	if !strings.Contains(got, "never locked out") {
-		t.Errorf("the dormant note must say a client that never stamps is never locked out: %q", got)
+	// No "never locked out" promise any more: once a second agent attaches,
+	// unstamped writes are refused whether or not anyone has stamped before.
+	if !strings.Contains(got, "once a second agent attaches") || strings.Contains(got, "plumb_agent") {
+		t.Errorf("the dormant note must state when refusals start, and not invite typing plumb_agent: %q", got)
 	}
 }
 
