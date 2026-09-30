@@ -184,6 +184,16 @@ func TestClaudePreToolUse_FailsOpen(t *testing.T) {
 // failing probe is "no", and the threshold reads releases as releases and a
 // dev build as current.
 func TestDaemonAcceptsIdentityStamp(t *testing.T) {
+	daemonAcceptsIdentityStamp := func(probe func() (string, error), cache string, now time.Time) bool {
+		var p func() (identityProbeRecord, error)
+		if probe != nil {
+			p = func() (identityProbeRecord, error) {
+				v, err := probe()
+				return identityProbeRecord{DaemonVersion: v}, err
+			}
+		}
+		return daemonVersionAcceptsStamp(daemonIdentity(p, cache, now).DaemonVersion)
+	}
 	cache := filepath.Join(t.TempDir(), "probe", identityProbeCacheFile)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	probes := 0
