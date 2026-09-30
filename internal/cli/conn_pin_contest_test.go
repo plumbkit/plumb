@@ -336,7 +336,9 @@ func TestContestedPin_MarksHealthWhenUnmarked(t *testing.T) {
 	if got != "contested_pin" {
 		t.Errorf("health = %q, want contested_pin", got)
 	}
-	if !strings.Contains(msg, "session_start.session_id") {
-		t.Errorf("health message gives the operator no next step: %q", msg)
+	for _, want := range []string{"plumb hooks install claude-code", "one plumb serve per agent"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("health message gives the operator no next step (%q): %q", want, msg)
+		}
 	}
 }
