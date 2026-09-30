@@ -256,7 +256,7 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 		if err != nil {
 			out.startErr = true
 			out.exitCode = -1
-			out.output = err.Error()
+			out.output = err.Error() + workingDirOrigin(err, cmd)
 			break
 		}
 		out.exitCode = res.ExitCode

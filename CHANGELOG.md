@@ -39,6 +39,20 @@
 
 ### Fixed
 
+- **An agent pinned to its own project runs that project's tasks and
+  commands.** On a `plumb serve` connection shared by several agents, an agent
+  that pinned itself with `session_start` to project B while the connection
+  stayed on project A ran `run_task` and `mutation_test` with A's
+  `[tasks.<lang>]` commands, `working_dir` and `env` against B's root, and
+  `run_command` with A's `[[command]]` list under A's trust. A's
+  `working_dir = "plumb"` sent the agent's build into `<B>/plumb`, which did not
+  exist. These tools, `topology_affected`'s test targets and `session_start`'s
+  task section now read B's config and B's `plumb trust` state. An agent on the
+  connection's own project, and a connection with one agent, are unchanged. A
+  working directory that does not exist is now refused before the command
+  starts, naming the directory and the `working_dir` setting that produced it.
+  Before, Go reported `fork/exec <binary>: no such file or directory`, which
+  blamed a binary that exists. (#522)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
