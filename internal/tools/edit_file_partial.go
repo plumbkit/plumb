@@ -34,13 +34,19 @@ func (t *EditFile) executePartial(
 	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
+	var post strings.Builder
+	if writeErr == nil && applied > 0 {
+		t.executePartialPostWrite(ctx, path, uri, original, content, res.written, awaitFresh, &post, baseline)
+		t.deps.recordUndo(ctx, path, original, content, true, "edit_file")
+	}
+	// The header is rendered after the post-write pipeline, as edit_file's
+	// ordinary reply is: that pipeline is where an outside write can land, so
+	// both replies face the same window and one regression test pins both to
+	// the written version (#528). The output order is unchanged.
 	var sb strings.Builder
 	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr, res.written))
 	sb.WriteString(formatPartialEditsResults(results))
-	if writeErr == nil && applied > 0 {
-		t.executePartialPostWrite(ctx, path, uri, original, content, res.written, awaitFresh, &sb, baseline)
-		t.deps.recordUndo(ctx, path, original, content, true, "edit_file")
-	}
+	sb.WriteString(post.String())
 	return sb.String()
 }
 
