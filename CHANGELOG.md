@@ -39,6 +39,18 @@
 
 ### Fixed
 
+- **A daemon restart no longer deletes a long-lived session's pins and read
+  records.** The daemon pruned persisted session state older than
+  `[session] persist_state_ttl_minutes` (24h by default) at start-up, before
+  any `plumb serve` had reconnected, so it could not spare sessions still in
+  use. Rows refresh only when rewritten, so a serve kept open for more than a
+  day came back from a restart without its per-agent pins or its read records,
+  and the "changed since you read it" guard then let an edit through for any
+  file read more than a day earlier. Nothing is pruned at start-up now. The idle
+  reaper prunes instead: its first pass runs 5 minutes after start, once
+  surviving serves have reconnected, and it skips every connected session, so a
+  dead session's state is still removed once it is older than the TTL. The
+  identity record is still kept regardless of age. (#525)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside

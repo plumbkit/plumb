@@ -208,10 +208,11 @@ func TestRestore_BlankExternalIDNeverErasesAKnownOne(t *testing.T) {
 // regression, driven through the daemon's own prune entry point.
 //
 // The distinction it pins is why the live-session exemption could not fix this:
-// pruneSessionState is called at daemon start, BEFORE any connection is
-// accepted, so the exemption list is necessarily empty. A record older than the
-// TTL therefore had nothing protecting it at exactly the moment a surviving
-// serve was about to need it. The exemption is deliberately not passed here.
+// pruneSessionState used to run at daemon start, BEFORE any connection was
+// accepted, so the exemption list was necessarily empty. It now runs only on the
+// reaper (issue #525), but a pass can still find a surviving serve between
+// connections, and age is no evidence either way — so the identity record must
+// not depend on the exemption. The exemption is deliberately not passed here.
 func TestRestore_AgedRecordSurvivesStartupPruning(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
@@ -226,8 +227,9 @@ func TestRestore_AgedRecordSurvivesStartupPruning(t *testing.T) {
 	if err := ss.Prune(time.Now().Add(24 * time.Hour)); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	// And again through the daemon's own startup path, with no live exemptions —
-	// the configuration that actually ships.
+	// And again through the daemon's own start-up maintenance and prune entry
+	// point, with no live exemptions.
+	maintainSessionStateAtStart(ss)
 	pruneSessionState(ss, 1)
 
 	next := newPersistSession(t, store, ss, "proxyX")
