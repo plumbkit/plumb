@@ -17,8 +17,8 @@
   test`'s prerequisite does. `run_task` lists the applied entries, credentials
   redacted, and `plumb config show` shows each with its provenance. A project's
   `env` is trust-gated like a command: every entry is in the `plumb trust` hash,
-  it makes every slot of the language project-supplied (except a `GOTMPDIR` or
-  `TMPDIR` inside the workspace, which changes neither what runs nor where),
+  it makes every slot of the language project-supplied (except a `GOTMPDIR`
+  inside the workspace, which changes neither what runs nor where),
   `plumb trust` flags entries such as `PATH`, `GOFLAGS` or `GIT_*` that change
   what runs, and the loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`,
   `DYLD_INSERT_LIBRARIES`, `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. A

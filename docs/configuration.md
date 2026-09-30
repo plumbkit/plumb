@@ -1551,9 +1551,9 @@ command does (`PATH`, `GOFLAGS=-toolexec=…`, `LD_LIBRARY_PATH`), so a project'
 `env` is trust-gated like a command: every entry is part of the hash `plumb trust`
 records, a changed value needs a new `plumb trust`, and a project `env` makes
 *every* slot of that language project-supplied, shipped defaults included — the
-rule `working_dir` follows. The one exception is a scratch directory inside the
-workspace: `GOTMPDIR` or `TMPDIR` set to `{workspace}` or `{workspace}/<relative
-path>` moves temporary files and changes neither what runs nor where, so on its
+rule `working_dir` follows. The one exception is Go's scratch directory inside
+the workspace: `GOTMPDIR` set to `{workspace}` or `{workspace}/<relative path>`
+moves go's temporary files and changes neither what runs nor where, so on its
 own it needs no trust (it is still hashed, and still applied); a checked-in
 `GOTMPDIR = "{workspace}/.testcache"` therefore works in every fresh clone and
 worktree. A refused command names the setting that made it project-supplied.
