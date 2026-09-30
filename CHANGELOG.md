@@ -4,25 +4,6 @@
 
 ### Fixed
 
-- **plumb now follows a client's folder change.** MCP clients announce a
-  folder change with `notifications/roots/list_changed`; plumb matched
-  `notifications/roots/listChanged` (the capability key, not the method name)
-  since 0.3.1, so the notification never reached its handler. The daemon log
-  on one machine held 499 of them and not one "roots changed" line. A
-  connection kept the root it reported at connect time until a `session_start`
-  moved it, so a client whose folder changed kept resolving relative paths
-  against the old project. The handler now runs. A pin that was not set by an
-  explicit `session_start` follows the client's new folder, and read, write and
-  undo tracking restart with it, as on any re-pin; a `session_start` pin still
-  outranks roots (issue #182). The handler waits for the connection's initial
-  attach to finish, so on a reconnect a restored `session_start` pin is never
-  overwritten by the client's root, and it does not start an attach once the
-  connection has closed.
-
-## 0.20.3 (2026-09-30)
-
-### Fixed
-
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one
   `plumb serve` (`claude_desktop_config.json`, client `local-agent-mode-plumb`)
@@ -45,6 +26,21 @@
   working on exactly the client that dropped it. The advance notice (before
   anything is refused) goes to Claude Code and Claude desktop only, whose fix
   is the hook; any client is told when its writes are being refused.
+
+- **plumb now follows a client's folder change.** MCP clients announce a
+  folder change with `notifications/roots/list_changed`; plumb matched
+  `notifications/roots/listChanged` (the capability key, not the method name)
+  since 0.3.1, so the notification never reached its handler. The daemon log
+  on one machine held 499 of them and not one "roots changed" line. A
+  connection kept the root it reported at connect time until a `session_start`
+  moved it, so a client whose folder changed kept resolving relative paths
+  against the old project. The handler now runs. A pin that was not set by an
+  explicit `session_start` follows the client's new folder, and read, write and
+  undo tracking restart with it, as on any re-pin; a `session_start` pin still
+  outranks roots (issue #182). The handler waits for the connection's initial
+  attach to finish, so on a reconnect a restored `session_start` pin is never
+  overwritten by the client's root, and it does not start an attach once the
+  connection has closed.
 
 ## 0.20.3 (2026-09-30)
 
