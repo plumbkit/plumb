@@ -67,12 +67,19 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 				before: before, existedBefore: true, wrote: content, diag: diag,
 			})
 		}
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, notes, diag), nil
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, notes, diag, result.written), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
 
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content string, notes []string, diag postWriteDiagResult) string {
+// formatEditFileSuccess renders the reply. Its mtime line is written — the
+// version this edit published and recordWritten recorded — never a re-stat of
+// the path: this runs after the post-write diagnostics wait (seconds, with
+// await_diagnostics), and an outside writer landing in it would otherwise hand
+// the caller ITS mtime. Passed back as expected_mtime, that matched the file,
+// and changedAtSameMtime could not second-guess it (the recorded read is at
+// plumb's mtime), so the next write went over a change it never saw (#528).
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content string, notes []string, diag postWriteDiagResult, written fileSnapshot) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -86,8 +93,8 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 	if attempt > 1 {
 		fmt.Fprintf(&sb, " (succeeded on attempt %d)", attempt)
 	}
-	if info, err := os.Stat(path); err == nil {
-		fmt.Fprintf(&sb, "\nmtime: %s", info.ModTime().Format(time.RFC3339Nano))
+	if !written.mtime.IsZero() {
+		fmt.Fprintf(&sb, "\nmtime: %s", written.mtime.Format(time.RFC3339Nano))
 	}
 	for _, n := range notes {
 		fmt.Fprintf(&sb, "\n%s", n)
