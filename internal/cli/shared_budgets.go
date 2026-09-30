@@ -27,9 +27,11 @@ type sharedBudgets struct {
 	mu sync.Mutex
 	m  map[string]*budgetEntry
 
-	// onAcquire, when set, runs at the start of acquire. Test seam only: it
-	// lets a test prove a caller acquires under its own lock (issue #514).
+	// onAcquire and onRelease, when set, run at the start of acquire and
+	// release. Test seams only: they let a test observe a caller's ordering
+	// and locking around the budget (issue #514).
 	onAcquire func()
+	onRelease func(key string)
 }
 
 type budgetEntry struct {
@@ -84,6 +86,9 @@ func (b *sharedBudgets) setLimit(key string, limit int) {
 func (b *sharedBudgets) release(key string) {
 	if b == nil || key == "" {
 		return
+	}
+	if b.onRelease != nil {
+		b.onRelease(key)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

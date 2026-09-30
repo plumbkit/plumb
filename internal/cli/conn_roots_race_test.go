@@ -557,13 +557,13 @@ func TestTrackProjectWatch_CloseRaceStress(t *testing.T) {
 	}
 }
 
-// TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent: two binds
-// racing to different keys must leave the limiter parented to the budget of
-// the key that ended up bound. Re-parenting outside the lane let the bind that
-// published first re-parent last, pointing the limiter at a budget the other
-// bind had already released.
-func TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent(t *testing.T) {
-	const iterations = 2000
+// TestBindWriteLimiterParent_ReparentsBeforeReleasingTheOldBudget: a re-bind
+// must point the write limiter at the new budget before the old one is
+// released. Re-parenting after the release left a window in which the limiter
+// charged a budget that might already be gone, and let two concurrent binds
+// finish with the limiter on the key that was NOT bound. The probe in release
+// charges one write and checks where it landed.
+func TestBindWriteLimiterParent_ReparentsBeforeReleasingTheOldBudget(t *testing.T) {
 	root := freshTempDir(t)
 	s, _, _ := goRefSession(t, root)
 	budgets := newSharedBudgets()
@@ -572,7 +572,12 @@ func TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent(t *testing.T) {
 	s.writeLimiter = tools.NewRateLimiter(1<<30, time.Minute)
 	s.mutate(func(v *sessionView) { v.clientName, v.clientVersion = "client", "a" })
 	s.attachWorkspace(context.Background(), "file://"+root)
-	parentCount := func(key string) int {
+	s.bindWriteLimiterParent()
+	oldKey := s.view().boundBudgetKey
+	if oldKey == "" {
+		t.Fatal("setup: no budget bound")
+	}
+	charged := func(key string) int {
 		budgets.mu.Lock()
 		e, ok := budgets.m[key]
 		budgets.mu.Unlock()
@@ -582,30 +587,27 @@ func TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent(t *testing.T) {
 		n, _, _ := e.limiter.Snapshot()
 		return n
 	}
-	stale := 0
-	for range iterations {
-		var wg sync.WaitGroup
-		start := make(chan struct{})
-		for _, ver := range []string{"a", "b"} {
-			wg.Go(func() {
-				<-start
-				s.mutate(func(v *sessionView) { v.clientVersion = ver })
-				s.bindWriteLimiterParent()
-			})
+
+	s.mutate(func(v *sessionView) { v.clientVersion = "b" })
+	var probed, onNew bool
+	budgets.onRelease = func(key string) {
+		if key != oldKey {
+			return
 		}
-		close(start)
-		wg.Wait()
-		key := s.view().boundBudgetKey
-		before := parentCount(key)
+		probed = true
+		newKey := s.view().boundBudgetKey
+		before := charged(newKey)
 		if !s.writeLimiter.Allow() {
-			t.Fatal("the limiter refused under a cap no test reaches")
+			t.Error("the limiter refused under a cap no test reaches")
 		}
-		if parentCount(key) != before+1 {
-			stale++
-		}
+		onNew = charged(newKey) == before+1
 	}
-	if stale > 0 {
-		t.Fatalf("%d/%d iterations left the limiter parented to a budget other than the bound key's", stale, iterations)
+	s.bindWriteLimiterParent()
+	if !probed {
+		t.Fatal("the re-bind never released the old budget")
+	}
+	if !onNew {
+		t.Fatal("the old budget was released while the limiter still pointed at it: re-parent before releasing")
 	}
 }
 
