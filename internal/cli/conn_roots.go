@@ -29,8 +29,9 @@ import (
 // goroutines, and a first-attach here that beat the ladder would skip its
 // restore of a persisted session_start pin (rung 1b) and overwrite the stored
 // row with the client's root — a silent cross-repo move on reconnect. After
-// the connection closes it does nothing: an attach then would hold a language
-// server reference close() has already released.
+// the connection closes it does not start an attach: one then would hold a
+// language-server reference close() has already released. (A close that lands
+// inside the attach itself is not covered here; OnInit shares that gap.)
 func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
 	if !s.awaitInitSettled(ctx) {
 		return
@@ -39,7 +40,7 @@ func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.Re
 	s.log().Info("daemon: roots changed — re-fetching workspace root")
 	roots := rootsFromClient(ctx, request, s.log())
 	s.log().Info("daemon: roots received", "count", len(roots), "roots", boundedForLog(roots, 8))
-	if s.ctx.Err() != nil {
+	if ctx.Err() != nil || s.ctx.Err() != nil {
 		return
 	}
 	s.onRootsChanged(ctx, roots)

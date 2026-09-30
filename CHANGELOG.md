@@ -16,8 +16,8 @@
   undo tracking restart with it, as on any re-pin; a `session_start` pin still
   outranks roots (issue #182). The handler waits for the connection's initial
   attach to finish, so on a reconnect a restored `session_start` pin is never
-  overwritten by the client's root, and it does nothing after the connection
-  closes.
+  overwritten by the client's root, and it does not start an attach once the
+  connection has closed.
 
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime
