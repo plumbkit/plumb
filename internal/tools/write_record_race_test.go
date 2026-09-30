@@ -113,6 +113,18 @@ func TestWriteFile_OutsiderWriteAfterOwnWriteIsNotRecordedAsOwn(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertNextWriteSeesOutsider(t, deps, path, "outsider\n")
+			if m.keepMtime {
+				return // the write tracker is mtime-only; nothing to see here
+			}
+			// The write tracker records the same written version, so read_file's
+			// concurrent-edit note still fires for the outsider's later mtime.
+			out, err := NewReadFile(NewReadTracker()).WithWrites(deps.Writes).Execute(context.Background(), mustJSON(map[string]any{"file_path": path}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "changed on disk since plumb last wrote it") {
+				t.Fatalf("read_file must warn that the file changed after plumb's write:\n%s", out)
+			}
 		})
 	}
 }
@@ -182,6 +194,33 @@ func TestRenameFile_OutsiderWriteAfterMoveIsNotRecordedAsOwn(t *testing.T) {
 			}
 			assertNextWriteSeesOutsider(t, deps, to, "outsider\n")
 		})
+	}
+}
+
+// TestRenameFile_UnreadableSourceRecordsNoReadState: when rename_file cannot
+// read the version it moves, it must not invent one. The destination then has no
+// read record, exactly like a file the session never read, rather than a
+// zero-mtime record that makes every later write look stale.
+func TestRenameFile_UnreadableSourceRecordsNoReadState(t *testing.T) {
+	dir := t.TempDir()
+	from, to := filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(from, []byte("secret\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(from); err == nil {
+		_ = f.Close()
+		t.Skip("a mode-0 file is readable here (running as root?)")
+	}
+	deps := raceDeps()
+	deps.BlockDirtyFn = func() bool { return false }
+	if _, err := NewRenameFile(deps).Execute(context.Background(), mustJSON(map[string]any{"from": from, "to": to})); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := deps.Reads.recorded(to); ok {
+		t.Fatalf("an unreadable move recorded read state %+v; want none", e)
+	}
+	if !deps.Writes.Wrote(to) {
+		t.Fatal("the move must still be recorded as this session's write")
 	}
 }
 
