@@ -29,8 +29,18 @@ func TestLogicalAgentStateRefuse(t *testing.T) {
 		t.Fatal("an explicit call ID must not refuse")
 	}
 	l.recordCall("B") // a second agent arrives per-call
+	// Issue #513: presenting an id is not declaring one. B only ever stamped a
+	// call, so on a shared connection it is refused until session_start
+	// declares it; A declared at attach and is admitted.
+	if !l.refuse("B") {
+		t.Fatal("an identity no session_start declared must refuse on a shared connection")
+	}
+	if l.refuse("A") {
+		t.Fatal("an identity declared at attach must not refuse")
+	}
+	l.declare("B")
 	if l.refuse("B") {
-		t.Fatal("an explicit ID on a shared connection must not refuse")
+		t.Fatal("a declared ID on a shared connection must not refuse")
 	}
 	// PLAN-394: once the connection is shared the attach-time id is whichever
 	// peer attached LAST, not the caller — attributing on its strength was the
@@ -47,8 +57,9 @@ func TestLogicalAgentStateRefuseNoAttach(t *testing.T) {
 	if !l.refuse("") {
 		t.Fatal("an anonymous call on a shared, no-attach connection must refuse")
 	}
+	l.declare("A") // session_start ran under A's per-call identity
 	if l.refuse("A") {
-		t.Fatal("an explicit call ID on a shared connection must not refuse")
+		t.Fatal("a declared call ID on a shared connection must not refuse")
 	}
 }
 
@@ -56,6 +67,7 @@ func TestRefuseSharedStateChange(t *testing.T) {
 	var s connSession
 	s.recordLogicalAgentCall("agent-1")
 	s.recordLogicalAgentCall("agent-2") // shared, no attach ID
+	s.declareLogicalAgent("agent-1")    // agent-1's session_start succeeded
 
 	if err := s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
 		t.Fatalf("a read must never refuse: %v", err)

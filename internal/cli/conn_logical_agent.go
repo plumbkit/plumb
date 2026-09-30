@@ -22,6 +22,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -36,6 +37,17 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
+	// declared is the set of LINKAGES (linkageIDOf) that declared themselves
+	// through session_start on this connection — its session_id argument, or
+	// the per-call identity a successful session_start ran under. It is the
+	// evidence refuse asks for before it lets a per-call identity route a
+	// state-changing call to a per-agent shard (issue #513): an identity nobody
+	// declared would otherwise get a fresh shard seeded from the connection's
+	// root, and a relative write would land in whatever workspace the connection
+	// holds. Keyed on the linkage so a hook-stamped subagent `<conv>/<agent>`,
+	// which usually never calls session_start itself, rides its parent's
+	// declaration. Like seen, it only grows.
+	declared map[string]struct{}
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -159,6 +171,11 @@ func shortIDPrefix(s string) string {
 func (l *logicalAgentState) sharedWith(id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.sharedWithLocked(id)
+}
+
+// sharedWithLocked is sharedWith for a caller already holding l.mu.
+func (l *logicalAgentState) sharedWithLocked(id string) bool {
 	if len(l.seen) > 1 {
 		return true
 	}
@@ -179,10 +196,29 @@ func (l *logicalAgentState) armed(id string) bool {
 	return l.sharedWith(id)
 }
 
+// refusalKind is why the ceiling refuses a call, or refusalNone.
+type refusalKind int
+
+const (
+	refusalNone refusalKind = iota
+	// refusalAnonymous: a shared connection and no per-call identity.
+	refusalAnonymous
+	// refusalUndeclared: a per-call identity whose linkage never declared
+	// itself through session_start on this connection (issue #513).
+	refusalUndeclared
+)
+
 // refuse reports whether a call declaring callID must be refused on this
-// connection: the connection is shared (two or more distinct IDs observed) and
-// the call is unattributable (no per-call ID). A non-shared connection needs no
-// ID — the connection itself is the identity.
+// connection. See refusal for the rule.
+func (l *logicalAgentState) refuse(callID string) bool {
+	return l.refusal(callID) != refusalNone
+}
+
+// refusal decides the fail-closed ceiling for a call declaring callID.
+//
+// Anonymous: refused once the connection is shared (two or more distinct IDs
+// observed). A non-shared connection needs no ID — the connection itself is the
+// identity.
 //
 // PLAN-394 removed the attach-time fallback from this decision. Before it, an
 // anonymous call was admitted whenever ANY session_start had attached — and
@@ -191,22 +227,44 @@ func (l *logicalAgentState) armed(id string) bool {
 // force-pin, in the peer's project. Admitting a call on the strength of an
 // identity it did not present is attribution by guesswork; on a shared
 // connection only a presented ID admits a state-changing call.
-func (l *logicalAgentState) refuse(callID string) bool {
+//
+// Identified: refused when the connection is shared COUNTING THE CALLER — the
+// exact predicate shardFor routes on, so this refuses precisely the calls that
+// would be served a per-agent shard — and the id's linkage was never declared
+// through session_start (issue #513). Presenting an id is not the same as
+// having declared one: an id nothing declared (a model typing `plumb_agent`,
+// a client sending _meta it never announced) got a fresh shard seeded from the
+// connection's root, so its relative write landed in whichever workspace the
+// connection held — the misroute an anonymous call is refused for. The linkage,
+// not the full id, is what must be declared, because a hook-stamped subagent
+// `<conv>/<agent>` rarely calls session_start and is vouched for by `<conv>`.
+// session_start itself is not state-changing, so the remedy stays reachable.
+func (l *logicalAgentState) refusal(callID string) refusalKind {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.seen) <= 1 {
-		return false
+	if !l.sharedWithLocked(callID) {
+		return refusalNone
 	}
 	// No exemption for a connection where no caller has stamped yet. That
 	// exemption (PLAN-440) let every anonymous write through on Claude
 	// desktop's connector, whose stamp was being dropped in transit, and a
 	// worktree edit landed in another agent's checkout (2026-09-30). An
 	// unattributable write is refused; the refusal names the remedy.
-	return callID == ""
+	if callID == "" {
+		return refusalAnonymous
+	}
+	if _, ok := l.declared[linkageIDOf(callID)]; ok {
+		return refusalNone
+	}
+	return refusalUndeclared
 }
 
-// recordLogicalAgentAttach records a session_start.session_id identity.
-func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id) }
+// recordLogicalAgentAttach records a session_start.session_id identity, which
+// is also a declaration of its linkage.
+func (s *connSession) recordLogicalAgentAttach(id string) {
+	s.declareLogicalAgent(id)
+	s.recordLogicalAgent(id)
+}
 
 // recordLogicalAgentCall records a per-call identity (_meta or the stamp
 // argument).
@@ -215,14 +273,16 @@ func (s *connSession) recordLogicalAgentCall(id string) {
 }
 
 // recordCall commits an identity that arrived on the PER-CALL channel;
-// recordAttach one that arrived at attach time. Both commit it the same way;
-// the two names keep call sites and tests explicit about the channel.
+// recordAttach one that arrived at attach time. Both commit it to seen the same
+// way; only the attach channel is session_start, so only it also declares the
+// linkage (issue #513).
 func (l *logicalAgentState) recordCall(id string) (shared, transition bool) {
 	return l.record(id)
 }
 
 // recordAttach commits an attach-time identity. See recordCall.
 func (l *logicalAgentState) recordAttach(id string) (shared, transition bool) {
+	l.declare(id)
 	return l.record(id)
 }
 
@@ -312,13 +372,14 @@ func (s *connSession) markSharedConnectionDetected() {
 			return
 		}
 		info.Health = "shared_connection_detected"
-		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, and a state-changing call carrying no identity is refused — " + sharedIdentityRemedy
+		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, and a state-changing call carrying no identity, or one no session_start declared, is refused — " + sharedIdentityRemedy
 	})
 }
 
 // refuseSharedStateChange is the fail-closed ceiling. It refuses a mutating
 // tool call that arrives on a shared connection without a trustworthy
-// logical-agent identity, naming the supported topology and its remedy. Read
+// logical-agent identity — none at all, or one whose linkage no session_start
+// declared (issue #513) — naming the supported topology and its remedy. Read
 // calls are never refused: sharing read-only state is safe, and the acceptance
 // contract is about state-changing operations resetting a peer's pin, trackers,
 // rate budget, undo state or language.
@@ -326,8 +387,12 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if !slices.Contains(tools.StateChangingToolNames(), name) {
 		return nil
 	}
-	if !s.logicalAgents.refuse(logicalAgent) {
+	switch s.logicalAgents.refusal(logicalAgent) {
+	case refusalNone:
 		return nil
+	case refusalUndeclared:
+		return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (the identity you are stamping) first, then retry. A subagent stamped `<conversation>/<agent>` is covered once its conversation has declared itself",
+			name, stats.SanitiseAgentID(logicalAgent), stats.SanitiseAgentID(linkageIDOf(logicalAgent)))
 	}
 	// [collab] allow_unidentified_writes used to lift this refusal. It is no
 	// longer honoured: with it set, an unattributable write resolved through

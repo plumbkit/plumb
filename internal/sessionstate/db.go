@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	    durable identity record carries its own authorised external linkage (so
 //	    recovery no longer depends on a prunable ended-session JSON file) and a
 //	    revision that orders name updates (PLAN-426)
-const SchemaVersion = 8
+//	8 — logical_agent: every identity observed on a connection (PLAN-440)
+//	9 — declared_linkage: the conversations that declared themselves through
+//	    session_start, so a restart does not refuse them as undeclared (#513)
+const SchemaVersion = 9
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -413,6 +416,9 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	}
 	if _, err := s.db.Exec(`DELETE FROM logical_agent WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune logical agents: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM declared_linkage WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
+		return fmt.Errorf("sessionstate: prune declared linkages: %w", err)
 	}
 	// session_names is intentionally absent — see the doc comment. Do not add a
 	// DELETE here without an explicit retirement signal to gate it on.

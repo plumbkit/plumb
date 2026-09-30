@@ -211,4 +211,64 @@ func TestDesktopConnector(t *testing.T) {
 			}
 		}
 	})
+
+	// Issue #513. The stamp survives the host, but it names an identity no
+	// session_start on this connection declared — a model typing plumb_agent
+	// where the hook does not run. It used to be admitted onto a fresh shard
+	// seeded from the connection's root and land in the main checkout. It is
+	// refused, lands nowhere, and leaves no identity behind.
+	t.Run("InventedIdentityIsRefusedNotMisrouted", func(t *testing.T) {
+		c := newDesktopConn(t, mcp.ArgLogicalAgentDeclaredKey)
+		mainCheckout, worktree, text, isErr := incident(t, c)
+		if isErr {
+			t.Fatalf("precondition: the declared agent's write was refused: %s", text)
+		}
+		observed := c.s.logicalAgents.count()
+
+		text, isErr = c.call(t, "my-session", "write_file", map[string]any{"file_path": "INVENTED.md", "content": "who\n"})
+		if !isErr {
+			t.Fatalf("a write under an undeclared identity was admitted: %s", text)
+		}
+		if !strings.Contains(text, "session_start") {
+			t.Errorf("the refusal does not name session_start as the remedy: %s", text)
+		}
+		for _, dir := range []string{mainCheckout, worktree} {
+			if _, err := os.Stat(filepath.Join(dir, "INVENTED.md")); err == nil {
+				t.Errorf("the refused write landed in %s", dir)
+			}
+		}
+		if got := c.s.logicalAgents.count(); got != observed {
+			t.Errorf("the refused call registered an identity: %d observed, want %d", got, observed)
+		}
+
+		// Controls. The declared agent still writes into its own worktree —
+		// the same relative write through the same host, so the refusal above
+		// is about the identity, not the call.
+		if text, isErr := c.call(t, "conv-y", "write_file", map[string]any{"file_path": "Y2.md", "content": "y\n"}); isErr {
+			t.Fatalf("declared agent's write refused: %s", text)
+		}
+		if _, err := os.Stat(filepath.Join(worktree, "Y2.md")); err != nil {
+			t.Fatalf("the declared agent's write did not land in its worktree: %v", err)
+		}
+		// A hook-stamped subagent of a declared conversation is admitted
+		// without ever calling session_start itself.
+		if text, isErr := c.call(t, "conv-x/sub", "write_file", map[string]any{"file_path": "SUB.md", "content": "sub\n"}); isErr {
+			t.Fatalf("a subagent of a declared conversation was refused: %s", text)
+		}
+		if _, err := os.Stat(filepath.Join(mainCheckout, "SUB.md")); err != nil {
+			t.Fatalf("the subagent's write did not land in its conversation's checkout: %v", err)
+		}
+		// The count above is not vacuous: an admitted new identity IS recorded.
+		if got := c.s.logicalAgents.count(); got != observed+1 {
+			t.Errorf("an admitted subagent was not recorded: %d observed, want %d", got, observed+1)
+		}
+
+		// The remedy is reachable: session_start under the identity declares it.
+		if text, isErr := c.call(t, "my-session", "session_start", map[string]any{"session_id": "my-session"}); isErr {
+			t.Fatalf("session_start, the named remedy, was refused: %s", text)
+		}
+		if text, isErr := c.call(t, "my-session", "write_file", map[string]any{"file_path": "INVENTED.md", "content": "who\n"}); isErr {
+			t.Fatalf("a write after declaring through session_start was refused: %s", text)
+		}
+	})
 }

@@ -121,7 +121,12 @@ key, or `plumb_agent`, placed by a client **runtime** as a top-level key inside
 `plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
 every `mcp__plumb__*` call and also fills `session_id` on this tool); and
 `session_id` itself, which identifies this call only: on a connection other agents
-share, a later write without a per-call identity is refused. Pass a stable value per agent:
+share, a later write without a per-call identity is refused. It is also the
+declaration a per-call identity needs there: a state-changing call whose
+conversation half no successful `session_start` on the connection has declared
+(its `session_id`, or the per-call identity it ran under) is refused with that
+remedy, while a subagent stamped `<conversation>/<agent>` rides its
+conversation's declaration. Pass a stable value per agent:
 the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
 The session **record** — the name mail is addressed to, `plumb mail
 --external-id`, name inheritance on resume — is linked to the conversation half,

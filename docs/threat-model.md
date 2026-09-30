@@ -241,7 +241,11 @@ shares one pin unless each call carries a logical-agent identity — per-call
 Code's PreToolUse hook). `session_start.session_id` identifies only that call.
 A client that sends none still shares one pin, and its anonymous
 state-changing calls are refused once two identities have been seen — see
-[Known gaps](#known-gaps).
+[Known gaps](#known-gaps). A per-call identity whose conversation never
+declared itself through `session_start` on the connection is refused the same
+way rather than given a fresh shard of the connection's root (#513);
+declarations persist under the proxy session, so a daemon restart does not
+refuse an agent that had declared.
 
 ### A2 — Path escape via alias or traversal
 

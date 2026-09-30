@@ -437,6 +437,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 // derived INSIDE its Execute, which this hook never sees, so a session_start
 // row is attributed only when the call itself also carried an identity.
 func (s *connSession) afterToolFromCtx(ctx context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
+	s.declareSessionStartCaller(ctx, toolName, isError)
 	s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure, mcp.LogicalAgentFromCtx(ctx))
 }
 
