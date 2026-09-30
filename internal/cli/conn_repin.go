@@ -218,20 +218,24 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		// branch below are settling paths for the CALLER, whichever scope the
 		// pin landed on.
 		s.clearDeclarationRefused(mcp.LogicalAgentFromCtx(ctx))
-		return repinOutcome{root: root, scope: tools.PinScopeAgent, from: prev}, nil
+		// The caller now resolves against the root its shard was just set to:
+		// peers move only their own shards, and a connection move never drags a
+		// shard its agent chose.
+		return repinOutcome{root: root, scope: tools.PinScopeAgent, from: prev, effective: root}, nil
 	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
 	// lane: after the root resolution above, so a requested path that resolves
 	// to the current root is never falsely refused, and on the view under
 	// mutation, so a concurrent re-pin can never land between the refusal
-	// decision and the pin move.
-	prevConnRoot := s.workspace()
-	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
+	// decision and the pin move. The previous root comes out of that same lane.
+	prevConnRoot, changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
 	if err != nil {
 		return repinOutcome{}, err
 	}
 	s.attributeConnectionPin(ctx, root, origin, trigger)
-	out := repinOutcome{root: root, scope: tools.PinScopeConnection, from: prevConnRoot}
+	// A caller routed here resolves against the connection, which this move
+	// left at root. repinConnection corrects it for an agent keeping its own pin.
+	out := repinOutcome{root: root, scope: tools.PinScopeConnection, from: prevConnRoot, effective: root}
 	if changed {
 		s.applyProjectConfig(root)
 		// PLAN-398: shards seeded from the old connection pin follow the move,
@@ -300,9 +304,16 @@ func (s *connSession) attributeConnectionPin(ctx context.Context, root string, o
 // replays instead of hardcoding false. langForced marks language as an
 // explicit, active session_start override — the only signal allowed to
 // re-acquire on a same-root call (see the no-op branch).
-func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic, langForced bool) (changed bool, refused error) {
+//
+// prevRoot is the connection's root as the lane found it, read under the same
+// mutation that moves it. The caller reports it as the pin's previous root and
+// re-seeds followers from it: a root read before the lane can be stale by then,
+// so two racing re-pins to one target both reported moving the pin, and shards
+// seeded at an intermediate root were neither followed nor counted (#517).
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic, langForced bool) (prevRoot string, changed bool, refused error) {
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
+		prevRoot = prev
 		if err := s.refuseAnonymousForcedMove(ctx, prev, root, trigger, force); err != nil {
 			refused = err
 			return
@@ -432,7 +443,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// that flipped the signal.
 		s.announceContestedPin(justContested)
 	})
-	return changed, refused
+	return prevRoot, changed, refused
 }
 
 // logLanguageOverrideBreadcrumb emits the distinguishing signal for a same-root

@@ -45,12 +45,15 @@ type RepinReport struct {
 	// Effective is the root the caller's next unqualified (relative-path) call
 	// resolves against. It differs from Root when an agent with a pin of its own
 	// moves the connection's pin: the agent itself stays where it was. Empty
-	// means Root.
+	// means the caller resolves against NOTHING (an agent whose workspace
+	// declaration is still refused), and the announcement says so rather than
+	// naming a root its relative paths will not reach.
 	Effective string
 }
 
-// effectiveRoot is the root the caller resolves against after the re-pin.
-func (r RepinReport) effectiveRoot() string {
+// headerRoot is the root the packet orients on: the caller's own, or the
+// resolved root when the caller has none to name.
+func (r RepinReport) headerRoot() string {
 	if r.Effective != "" {
 		return r.Effective
 	}
@@ -91,8 +94,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// across all connections), and guessing it produced confidently-wrong
 	// "workspaces".
 	if a.Workspace != "" {
-		ws, uerr := t.resolveUnattachedWorkspace(ctx, a.Workspace, a.Language, a.Force, connScope)
-		return ws, "", uerr
+		return t.resolveUnattachedWorkspace(ctx, a.Workspace, a.Language, a.Force, connScope)
 	}
 	if t.roots != nil {
 		if ws := t.roots(ctx); ws != "" {
@@ -115,18 +117,24 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 // deferral removes. The resolved root (not the raw argument) coming back keeps
 // the displayed workspace consistent with the TUI, memory, and topology, as
 // the language branch already did.
-func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace, language string, force, connScope bool) (string, error) {
+//
+// "Unattached" is the CALLER's view: an agent whose workspace declaration is
+// still refused resolves to nothing while the connection itself is pinned, so
+// a re-pin from here can move an existing pin — even the connection's, with
+// its followers. The announcement is therefore rendered here too; on a truly
+// unattached connection there is no previous root and it renders nothing.
+func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace, language string, force, connScope bool) (string, string, error) {
 	if t.repin == nil {
-		return workspace, nil
+		return workspace, "", nil
 	}
 	rep, err := t.repin(ctx, workspace, language, force, connScope)
 	if err != nil {
 		if language != "" {
-			return "", fmt.Errorf("session_start: pinning %s as %s: %w", workspace, language, err)
+			return "", "", fmt.Errorf("session_start: pinning %s as %s: %w", workspace, language, err)
 		}
-		return "", fmt.Errorf("session_start: pinning %s: %w", workspace, err)
+		return "", "", fmt.Errorf("session_start: pinning %s: %w", workspace, err)
 	}
-	return rep.effectiveRoot(), nil
+	return rep.headerRoot(), repinAnnouncement(rep), nil
 }
 
 // resolveAttached handles session_start on an already-attached connection: an
@@ -192,7 +200,7 @@ func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, la
 	if err != nil {
 		return "", "", fmt.Errorf("session_start: re-pinning to %s: %w", requested, err)
 	}
-	return rep.effectiveRoot(), repinAnnouncement(rep), nil
+	return rep.headerRoot(), repinAnnouncement(rep), nil
 }
 
 // forceLanguage re-pins the connection's CURRENT workspace to a forced primary
@@ -231,12 +239,19 @@ func repinAnnouncement(rep RepinReport) string {
 	default:
 		line = fmt.Sprintf("Re-pinned this connection's pin: %s → %s (%s)", rep.From, rep.Root, followersPhrase(rep.Followers))
 	}
-	next := rep.effectiveRoot()
-	suffix := ""
-	if !sameDir(next, rep.Root) {
-		suffix = " (your own pin, not the connection's)"
+	return fmt.Sprintf("%s\nNext relative-path call resolves against: %s\n\n", line, nextCallTarget(rep))
+}
+
+// nextCallTarget names what the caller's next relative path resolves against.
+func nextCallTarget(rep RepinReport) string {
+	switch {
+	case rep.Effective == "":
+		return "nothing — your workspace declaration is still unresolved, so pass absolute paths"
+	case !sameDir(rep.Effective, rep.Root):
+		return rep.Effective + " (your own pin, not the connection's)"
+	default:
+		return rep.Effective
 	}
-	return fmt.Sprintf("%s\nNext relative-path call resolves against: %s%s\n\n", line, next, suffix)
 }
 
 // followersPhrase renders how many other agents follow a connection pin.

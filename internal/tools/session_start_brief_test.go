@@ -182,7 +182,7 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (RepinReport, error) {
-			return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached}, nil
+			return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached, Effective: ws}, nil
 		}).
 		WithExternalID(func(string) string { return "resumed-session" }).
 		WithLSPSkipNote(func() string { return skipNote })
@@ -294,7 +294,7 @@ func TestRepinAnnouncement(t *testing.T) {
 		},
 		{
 			"connection pin, single agent",
-			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a"},
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a", Effective: "/b"},
 			"Re-pinned this connection's pin: /a → /b (no other agent follows it)\nNext relative-path call resolves against: /b\n\n",
 		},
 		{
@@ -306,6 +306,13 @@ func TestRepinAnnouncement(t *testing.T) {
 			"connection pin moved by an agent holding its own",
 			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a", Followers: 2, Effective: "/own"},
 			"Re-pinned this connection's pin: /a → /b (2 other agents follow it)\nNext relative-path call resolves against: /own (your own pin, not the connection's)\n\n",
+		},
+		{
+			// A caller that resolves to nothing must be told so, not shown the
+			// connection's root its relative paths will not reach.
+			"caller resolves to nothing",
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a"},
+			"Re-pinned this connection's pin: /a → /b (no other agent follows it)\nNext relative-path call resolves against: nothing — your workspace declaration is still unresolved, so pass absolute paths\n\n",
 		},
 	}
 	for _, tc := range cases {

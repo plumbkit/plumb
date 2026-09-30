@@ -22,12 +22,14 @@ import (
 
 // repinOutcome is what one re-pin did: the requested folder's resolved root,
 // which pin it moved, that pin's root before the call (equal to root when
-// nothing moved), and the ids of the shards that followed a connection move.
+// nothing moved), the ids of the shards that followed a connection move, and
+// the root the caller resolves against afterwards.
 type repinOutcome struct {
-	root     string
-	scope    tools.PinScope
-	from     string
-	followed []string
+	root      string
+	scope     tools.PinScope
+	from      string
+	followed  []string
+	effective string
 }
 
 // repinReport renders a completed re-pin's outcome in session_start's terms.
@@ -36,11 +38,10 @@ type repinOutcome struct {
 // shard still sits where the connection seeded it drags that shard too, but
 // the caller is not one of the OTHER agents the report counts.
 //
-// Effective is read AFTER the move, through the same per-call resolver every
-// later tool uses (workspaceFor), under the caller's own ctx — not the
-// identity-stripped one repinConnection moves the connection with. It is
-// therefore what the caller's next relative path resolves against: its own pin
-// when it holds one, the connection's otherwise.
+// Effective is derived from the move itself (repinWorkspaceFrom and
+// repinConnection set it), not re-read through workspaceFor afterwards, where
+// a peer's concurrent move could already have changed what the connection
+// resolves to and so mislabel whose pin the caller is on.
 func (s *connSession) repinReport(ctx context.Context, out repinOutcome) tools.RepinReport {
 	caller := mcp.LogicalAgentFromCtx(ctx)
 	followers := 0
@@ -54,6 +55,6 @@ func (s *connSession) repinReport(ctx context.Context, out repinOutcome) tools.R
 		Scope:     out.scope,
 		From:      out.from,
 		Followers: followers,
-		Effective: s.workspaceFor(ctx),
+		Effective: out.effective,
 	}
 }

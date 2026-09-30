@@ -269,3 +269,79 @@ func TestSessionStartRepinReport_SingleAgentConnection(t *testing.T) {
 		})
 	}
 }
+
+// An agent that already holds a pin of its own moves it again. "From" must be
+// the agent's own previous root, not the connection's, which it never sat on.
+func TestSessionStartRepinReport_AgentScopeFromItsOwnPin(t *testing.T) {
+	for _, detail := range []string{"full", "brief"} {
+		t.Run(detail, func(t *testing.T) {
+			s := newRepinReportSession(t)
+			r := repinReportRoots(t, 3)
+			rootX, rootW, rootY := r[0], r[1], r[2]
+			if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
+				t.Fatalf("connection pin to X: %v", err)
+			}
+			s.recordLogicalAgentAttach("coordinator")
+			s.recordLogicalAgentAttach("own")
+			ctxOwn := mcp.WithLogicalAgent(context.Background(), "own")
+			if _, err := s.repinWorkspace(ctxOwn, rootW, "", true, false); err != nil {
+				t.Fatalf("own's pin to W: %v", err)
+			}
+
+			out := runRepinReport(t, s, ctxOwn, map[string]any{"workspace": rootY, "force": true}, detail)
+
+			// Positive control and absence share the prefix, so the absence
+			// check is live: the line exists, and names W rather than X.
+			wantLines(t, out,
+				"Re-pinned your pin: "+rootW+" → "+rootY+"\n",
+				"Next relative-path call resolves against: "+rootY+"\n",
+			)
+			refuseLines(t, out, "Re-pinned your pin: "+rootX)
+			if got := s.workspace(); got != rootX {
+				t.Errorf("connection pin = %q, want it unchanged at %q", got, rootX)
+			}
+		})
+	}
+}
+
+// An agent whose workspace declaration was refused resolves to nothing, so
+// session_start takes its unattached path — yet the connection is pinned, and
+// a scope: "connection" move from there really moves it. The report must be
+// rendered on that path too, and the move must settle the CALLER's refusal
+// marker (the identity-stripped move used to clear only the anonymous one),
+// so the next-call line is true.
+func TestSessionStartRepinReport_ConnectionScopeFromRefusedDeclaration(t *testing.T) {
+	for _, detail := range []string{"full", "brief"} {
+		t.Run(detail, func(t *testing.T) {
+			s := newRepinReportSession(t)
+			r := repinReportRoots(t, 3)
+			rootX, rootY, rootZ := r[0], r[1], r[2]
+			if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
+				t.Fatalf("connection pin to X: %v", err)
+			}
+			s.recordLogicalAgentAttach("coord")
+			s.recordLogicalAgentAttach("sub")
+			ctxSub := mcp.WithLogicalAgent(context.Background(), "sub")
+			if _, err := s.repinWorkspace(ctxSub, rootY, "", false, false); err == nil {
+				t.Fatal("precondition: an unforced move of a seeded shard to an unrelated root is refused")
+			}
+			if _, pending := s.pendingDeclarationFor("sub"); !pending {
+				t.Fatal("precondition: sub's declaration is pending")
+			}
+
+			out := runRepinReport(t, s, ctxSub, map[string]any{"workspace": rootZ, "scope": "connection", "force": true}, detail)
+
+			wantLines(t, out,
+				"# Workspace: "+rootZ+"\n",
+				"Re-pinned this connection's pin: "+rootX+" → "+rootZ+" (no other agent follows it)\n",
+				"Next relative-path call resolves against: "+rootZ+"\n",
+			)
+			if _, pending := s.pendingDeclarationFor("sub"); pending {
+				t.Error("a successful connection-scoped move left the caller's own refusal marker in place")
+			}
+			if got := s.workspaceFor(ctxSub); got != rootZ {
+				t.Errorf("sub resolves to %q, want %q — the report's next-call line must be true", got, rootZ)
+			}
+		})
+	}
+}

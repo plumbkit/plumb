@@ -400,7 +400,7 @@ func TestSessionStart_LanguageOverride(t *testing.T) {
 		WithLSPLanguage(func() string { return "swift" }). // server attached after the forced pin
 		WithRepin(func(_ context.Context, ws, lang string, _, _ bool) (RepinReport, error) {
 			gotWs, gotLang = ws, lang
-			return RepinReport{Root: ws, Scope: PinScopeConnection, From: ws}, nil
+			return RepinReport{Root: ws, Scope: PinScopeConnection, From: ws, Effective: ws}, nil
 		})
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"language":"swift"}`))
 	if err != nil {
@@ -449,7 +449,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 			WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (RepinReport, error) {
 				got = ws
-				return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached}, nil
+				return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached, Effective: ws}, nil
 			})
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`"}`))
 		if err != nil {
@@ -811,7 +811,7 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(func(_ context.Context, ws, _ string, force, _ bool) (RepinReport, error) {
 			gotForce = append(gotForce, force)
-			return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached}, nil
+			return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached, Effective: ws}, nil
 		})
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`"}`)); err != nil {
 		t.Fatalf("Execute without force: %v", err)
@@ -834,7 +834,7 @@ func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
 	tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(func(_ context.Context, _, _ string, force, _ bool) (RepinReport, error) {
 			gotForce = force
-			return RepinReport{Root: target, Scope: PinScopeConnection}, nil
+			return RepinReport{Root: target, Scope: PinScopeConnection, Effective: target}, nil
 		})
 	raw := json.RawMessage(`{"workspace":"` + target + `","language":"go","force":true}`)
 	if _, err := tool.Execute(context.Background(), raw); err != nil {

@@ -65,7 +65,37 @@ func (s *connSession) repinConnection(ctx context.Context, folder, langOverride 
 	// Deliberately NOT under the caller's ctx identity: this moves the
 	// CONNECTION, so it must reach attachOrRepinTo rather than being routed to
 	// the caller's shard by repinShard.
-	return s.repinWorkspaceFrom(withConnScopeAuthorised(mcp.WithoutLogicalAgent(ctx)), folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
+	out, err := s.repinWorkspaceFrom(withConnScopeAuthorised(mcp.WithoutLogicalAgent(ctx)), folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
+	if err != nil || id == "" {
+		return out, err
+	}
+	// The stripped ctx made repinWorkspaceFrom settle the ANONYMOUS declaration
+	// marker, not this agent's. A deliberate move of the connection is a
+	// settling path for its caller too, so clear the caller's own marker —
+	// otherwise it kept resolving to nothing after a successful call.
+	s.clearDeclarationRefused(id)
+	out.effective = s.connScopeCallerRoot(id, out)
+	return out, nil
+}
+
+// connScopeCallerRoot is the root an identified caller of a connection-scoped
+// re-pin resolves against afterwards: the root its shard holds — the new root
+// when the shard followed the move, its own pin when it did not — or, with no
+// shard yet (one is seeded from the connection's new pin on its next call), the
+// new root.
+//
+// The shard's root is read after the move rather than inside it: the move and
+// the shard are guarded by different locks, and holding both would invert the
+// documented order (shardsMu before sh.mu, s.mu innermost). The window left is
+// narrow — only this agent's own concurrent session_start, or a later
+// connection move off a root this shard shares without having chosen it, can
+// change that root in between, and either leaves the answer true of the moment
+// it was read.
+func (s *connSession) connScopeCallerRoot(id string, out repinOutcome) string {
+	if own := s.recordedRootFor(id); own != "" {
+		return own
+	}
+	return out.root
 }
 
 // refuseAnonymousForcedMove refuses a forced connection re-pin that carries no

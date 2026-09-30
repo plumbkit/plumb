@@ -36,7 +36,7 @@ func TestSessionStart_AttributionPrecedesTheWorkspace(t *testing.T) {
 			if got, _ := ctx.Value(declaredAgentKeyType{}).(string); got != "subagent-7" {
 				t.Errorf("re-pin ctx logical agent = %q, want %q — the re-pin ran unattributed", got, "subagent-7")
 			}
-			return RepinReport{Root: workspace, Scope: PinScopeAgent, From: ws}, nil
+			return RepinReport{Root: workspace, Scope: PinScopeAgent, From: ws, Effective: workspace}, nil
 		})
 
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+ws+`","session_id":"subagent-7"}`)); err != nil {
