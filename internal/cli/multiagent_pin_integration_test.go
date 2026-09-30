@@ -246,8 +246,10 @@ func testUndeclaredAgentsForcePingPongIsContested(t *testing.T) {
 	if err == nil {
 		t.Fatal("the sticky guard stopped refusing once contested; this must change advice, never permission")
 	}
-	if !strings.Contains(err.Error(), "Identify each agent instead") {
-		t.Errorf("the contested refusal does not name the real remedy: %v", err)
+	for _, want := range []string{"Stamp each agent's calls", "plumb hooks install claude-code", "one plumb serve per agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the contested refusal does not name the real remedy %q: %v", want, err)
+		}
 	}
 
 	// Forcing still WORKS. plumb cannot know which undeclared agent is entitled
