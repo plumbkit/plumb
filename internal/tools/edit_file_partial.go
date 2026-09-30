@@ -34,14 +34,19 @@ func (t *EditFile) executePartial(
 	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
-	var sb strings.Builder
-	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr))
-	sb.WriteString(formatPartialEditsResults(results))
+	var post strings.Builder
 	if writeErr == nil && applied > 0 {
-		_ = res
-		t.executePartialPostWrite(ctx, path, uri, original, content, awaitFresh, &sb, baseline)
+		t.executePartialPostWrite(ctx, path, uri, original, content, res.written, awaitFresh, &post, baseline)
 		t.deps.recordUndo(ctx, path, original, content, true, "edit_file")
 	}
+	// The header is rendered after the post-write pipeline, as edit_file's
+	// ordinary reply is: that pipeline is where an outside write can land, so
+	// both replies face the same window and one regression test pins both to
+	// the written version (#528). The output order is unchanged.
+	var sb strings.Builder
+	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr, res.written))
+	sb.WriteString(formatPartialEditsResults(results))
+	sb.WriteString(post.String())
 	return sb.String()
 }
 
@@ -55,26 +60,28 @@ func countApplied(results []partialEditResult) int {
 	return n
 }
 
-func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error) string {
+func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error, written fileSnapshot) string {
 	switch {
 	case writeErr != nil:
 		return fmt.Sprintf("partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
 	case applied == 0:
 		return "partial apply: all edits failed — file not modified\n\n"
 	default:
-		return t.formatPartialAppliedHeader(path, original, content, applied, total)
+		return t.formatPartialAppliedHeader(path, original, content, applied, total, written)
 	}
 }
 
 // formatPartialAppliedHeader renders the header for the case where at least one
-// edit landed and the write succeeded: the count, the fresh mtime, a line-change
-// summary, and (when enabled) the diff.
-func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int) string {
+// edit landed and the write succeeded: the count, the written version's mtime, a
+// line-change summary, and (when enabled) the diff. The mtime is the version the
+// write published, not a re-stat of the path, for the reason formatEditFileSuccess
+// gives (#528).
+func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int, written fileSnapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
 		applied, total, path, len(content))
-	if info, err := os.Stat(path); err == nil {
-		fmt.Fprintf(&sb, "mtime: %s\n", info.ModTime().Format(time.RFC3339Nano))
+	if !written.mtime.IsZero() {
+		fmt.Fprintf(&sb, "mtime: %s\n", written.mtime.Format(time.RFC3339Nano))
 	}
 	if s := summariseLineChanges(original, content); s != "" {
 		fmt.Fprintf(&sb, "%s\n", s)
@@ -108,7 +115,7 @@ func formatPartialEditsResults(results []partialEditResult) string {
 	return sb.String()
 }
 
-func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, before, content string, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, before, content string, written fileSnapshot, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
 	notifyFailed := false
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		notifyFailed = true
@@ -121,7 +128,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, befor
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.recordWritten(ctx, path)
+	t.deps.recordWritten(ctx, path, written)
 	// apply_partial cannot request fail_on_new_errors (the preconditions refuse
 	// the combination), so this path only ever reports.
 	opt := postWriteDiagOpts{awaitFresh: awaitFresh, structured: awaitFresh, lspNotifyFailed: notifyFailed}
