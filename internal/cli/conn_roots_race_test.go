@@ -611,6 +611,60 @@ func TestBindWriteLimiterParent_ReparentsBeforeReleasingTheOldBudget(t *testing.
 	}
 }
 
+// TestBindWriteLimiterParent_ConcurrentBindsKeepTheBoundParent: two binds
+// racing to different keys must leave the limiter parented to the budget of
+// the key that ended up bound. Seam-free: re-parenting anywhere outside the
+// lane — even before the old budget's release, which the release probe above
+// accepts — lets the bind that published first re-parent last. Such a round
+// charges a budget other than the bound key's. Measured on that mutant: about
+// 10 bad rounds per 20000, so this round count fails it with near certainty.
+func TestBindWriteLimiterParent_ConcurrentBindsKeepTheBoundParent(t *testing.T) {
+	const rounds = 20000
+	root := freshTempDir(t)
+	s, _, _ := goRefSession(t, root)
+	budgets := newSharedBudgets()
+	s.budgets = budgets
+	// A cap no test reaches, so Allow always records against the parent.
+	s.writeLimiter = tools.NewRateLimiter(1<<30, time.Minute)
+	s.mutate(func(v *sessionView) { v.clientName, v.clientVersion = "client", "a" })
+	s.attachWorkspace(context.Background(), "file://"+root)
+	charged := func(key string) int {
+		budgets.mu.Lock()
+		e, ok := budgets.m[key]
+		budgets.mu.Unlock()
+		if !ok {
+			return -1
+		}
+		n, _, _ := e.limiter.Snapshot()
+		return n
+	}
+	bad := 0
+	for range rounds {
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, ver := range []string{"a", "b"} {
+			wg.Go(func() {
+				<-start
+				s.mutate(func(v *sessionView) { v.clientVersion = ver })
+				s.bindWriteLimiterParent()
+			})
+		}
+		close(start)
+		wg.Wait()
+		key := s.view().boundBudgetKey
+		before := charged(key)
+		if !s.writeLimiter.Allow() {
+			t.Fatal("the limiter refused under a cap no test reaches")
+		}
+		if charged(key) != before+1 {
+			bad++
+		}
+	}
+	if bad > 0 {
+		t.Fatalf("%d/%d rounds left the limiter charging a budget other than the bound key's", bad, rounds)
+	}
+}
+
 // laneProbeCtx is a context whose Err records, while armed, whether it was
 // consulted and whether any call ran with the mutation lane free.
 type laneProbeCtx struct {
