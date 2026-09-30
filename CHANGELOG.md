@@ -105,6 +105,22 @@
   restore now prints a recovery command that works from any directory
   (`git -C <dir> checkout -- <file>`). (PLAN-442)
 
+### Changed
+
+- **gotreesitter v0.52.0 → v0.55.1, Go toolchain go1.26.6 → go1.26.8, and
+  minor module bumps** (modernc.org/sqlite v1.60.1, modernc.org/libc v1.77.1,
+  golang.org/x/sync v0.23.0, and indirect updates). The gotreesitter line brings
+  tree handles that tolerate a second `Release`, incremental-reuse correctness
+  fixes, and faster Python, C and deeply nested parses. TS/TSX extraction is
+  unchanged: a 545-file differential sweep against the canonical grammar shows
+  no drift on either version. Swift is
+  unaffected in production because it still indexes through the WASM grammar.
+  The pure-Go Swift fallback gains five `swift-algorithms` files but regresses
+  on any `#`-token (`#if`, `#else`, `#warning`, `#Preview`, `#expect`) that
+  follows a statement. The regression is in gotreesitter's v0.54.0 scanner port,
+  because the canonical grammar at the same commit parses those files cleanly,
+  and it keeps the Swift WASM path in place (PLAN-1).
+
 ## 0.20.2 (2026-09-21)
 
 ### Added
