@@ -332,7 +332,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// retry is safe here (and is not at connection scope, conn_repin.go).
 		// Error() stays byte-identical — the classification is a side-car.
 		refused = toolerror.Wrap(
-			fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, "+tools.PerCallIdentityRemedy, mcp.LogicalAgentFromCtx(ctx), prev, root),
+			fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true. For agents sharing a connection: %s", mcp.LogicalAgentFromCtx(ctx), prev, root, tools.PerCallIdentityRemedy),
 			toolerror.KindPinRefused,
 			toolerror.ClassPassForce,
 			toolerror.WithTool("session_start"),

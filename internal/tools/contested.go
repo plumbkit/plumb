@@ -68,3 +68,9 @@ func classifyContestedRelative(err error) error {
 const PerCallIdentityRemedy = "stamp every call with the agent's identity — on Claude Code (terminal or desktop), " +
 	"`plumb hooks install claude-code`; otherwise a per-call _meta[" + mcp.MetaLogicalAgentKey + "] identity " +
 	"(a session_start.session_id covers only its own call) — or run one plumb serve per agent"
+
+// PerCallIdentityRemedyShort is PerCallIdentityRemedy for size-bounded
+// surfaces (the dashboard alert fits about eight lines at 80 columns), keeping
+// both working remedies rather than eliding them.
+const PerCallIdentityRemedyShort = "stamp each agent's calls (Claude Code: `plumb hooks install claude-code`; " +
+	"else per-call _meta) or run one plumb serve per agent"
