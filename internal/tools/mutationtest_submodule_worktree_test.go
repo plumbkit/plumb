@@ -62,3 +62,63 @@ func TestMutationTest_ASubmoduleWorktreeSessionReRootsToTheSubmoduleCheckout(t *
 	}
 	e.requireAllRanIn(t, lib)
 }
+
+// withNestedInLibWorktree gives the submodule lib a submodule of its own, inner,
+// then a linked worktree x of lib with inner initialised in it. x/inner's git
+// directory lives under lib's worktrees/x/modules, unrelated to lib/inner's, so
+// only lib's own repository is shared, one level above both files. x's test
+// script KILLS a 42→43 mutant of inner/target.txt; lib's passes everything
+// (newSubmoduleEnv(t, true)). It returns x.
+func (e *submoduleEnv) withNestedInLibWorktree(t *testing.T) string {
+	t.Helper()
+	innerUp := filepath.Join(filepath.Dir(e.super), "inner-upstream")
+	gwWrite(t, innerUp, "target.txt", worktreeTargetOriginal)
+	gitInit(t, innerUp)
+	lib := filepath.Join(e.super, "lib")
+	gwGit(t, lib, "config", "commit.gpgsign", "false")
+	gwGit(t, lib, "-c", "protocol.file.allow=always", "submodule", "add", "-q", innerUp, "inner")
+	gwGit(t, lib, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "add inner")
+	x := filepath.Join(lib, ".claude", "worktrees", "x")
+	gwGit(t, lib, "worktree", "add", "-q", "-b", "libx", x)
+	gwGit(t, x, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+	gwWrite(t, x, "test.sh", fmt.Sprintf("echo \"$(/bin/pwd)\" >> %s\n", shellQuote(e.log))+
+		"grep -q 43 \"$(dirname \"$0\")/inner/target.txt\" && { echo '--- FAIL: TestInner (0.00s)'; exit 1; }\nexit 0\n")
+	gwGit(t, x, "add", "test.sh")
+	gwGit(t, x, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "this copy kills")
+	return x
+}
+
+// TestMutationTest_ANestedSubmoduleInTheSubmodulesWorktreeReRootsThere: from a
+// session on lib, a file in x/inner shares no repository with lib at its own level
+// and none at the outermost one (the superproject), only lib's repository in
+// between: x is lib's worktree. The commands move to x.
+func TestMutationTest_ANestedSubmoduleInTheSubmodulesWorktreeReRootsThere(t *testing.T) {
+	e := newSubmoduleEnv(t, true)
+	x := e.withNestedInLibWorktree(t)
+
+	out, err := executeMutants(t, e.tool(filepath.Join(e.super, "lib"), "", ""), filepath.Join(x, "inner", "target.txt"))
+	if err != nil {
+		t.Fatalf("a nested submodule of lib's worktree must re-root into that worktree: %v", err)
+	}
+	if !strings.Contains(out, "[1] KILLED") || !strings.Contains(out, "re-rooted") {
+		t.Errorf("x's test kills the mutant after a re-root; got:\n%s", out)
+	}
+	e.requireAllRanIn(t, x)
+	requireContent(t, filepath.Join(x, "inner", "target.txt"), worktreeTargetOriginal)
+}
+
+// TestMutationTest_ASessionOnTheNestedSubmoduleReRootsToItsWorktreeCopy: the same
+// from a session on lib/inner; the same relative directory, inner, is taken in x.
+func TestMutationTest_ASessionOnTheNestedSubmoduleReRootsToItsWorktreeCopy(t *testing.T) {
+	e := newSubmoduleEnv(t, true)
+	x := e.withNestedInLibWorktree(t)
+
+	out, err := executeMutants(t, e.tool(filepath.Join(e.super, "lib", "inner"), "", "../"), filepath.Join(x, "inner", "target.txt"))
+	if err != nil {
+		t.Fatalf("from lib/inner, the mutant in x/inner must re-root to x/inner: %v", err)
+	}
+	if !strings.Contains(out, "[1] KILLED") || !strings.Contains(out, "re-rooted") {
+		t.Errorf("x's test kills the mutant after a re-root; got:\n%s", out)
+	}
+	e.requireAllRanIn(t, filepath.Join(x, "inner"))
+}

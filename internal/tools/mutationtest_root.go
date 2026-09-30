@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -53,15 +52,22 @@ import (
 // same submodule in the main checkout, however unrelated the submodule's own git
 // directory looks. So both the files and the commands' directory are seen from
 // the outermost superproject's work-tree (gitProbes.placement), and a submodule in
-// a worktree re-roots into that worktree like any other file in it. The climb is
-// skipped when git already names ONE repository for the commands' directory and
-// every file (gitProbes.ownRepository): a submodule's main checkout and a linked
-// worktree of that same submodule are two work-trees of it, and climbing only the
-// checkout (the worktree has no superproject) would make them look unrelated.
+// a worktree re-roots into that worktree like any other file in it. The climb stops
+// early at the INNERMOST repository that holds the commands' directory and every
+// file (gitProbes.sharedLevel): a submodule's checkout and a linked worktree of that
+// same submodule are two work-trees of it, as are lib and lib's worktree x for a
+// file in x's own nested submodule, and climbing further would compare trees that
+// only one side has, making them look unrelated. When no repository is shared by
+// all the files together but one of them alone would move the commands, the run is
+// refused (gitProbes.splitLevels): the outermost placement would keep the commands
+// where they are and test their own copy of that file.
 //
 // "Same repository" is git's own answer (the common git directory), and the paths
 // compared are ones git printed, so a symlinked workspace, a case-insensitive
-// volume or a relative common directory cannot make two spellings disagree.
+// volume or a relative common directory cannot make two spellings disagree. One
+// fold applies (sameRepo): a submodule checked out inside a superproject's linked
+// worktree has its git directory under that worktree's, yet holds a copy of the same
+// files as the main checkout's submodule, so the two count as one repository.
 //
 // When git cannot answer for a directory (a checkout owned by another user without
 // a safe.directory entry, or no git on the daemon's PATH), the nearest .git is read
@@ -230,55 +236,6 @@ func (g gitProbes) of(ctx context.Context, dir string) gitProbe {
 	return p
 }
 
-// maxSubmoduleDepth bounds the climb through nested superprojects.
-const maxSubmoduleDepth = 16
-
-// placement is git's answer for dir seen from its OUTERMOST superproject (see the
-// file comment): a directory in a submodule is reported as the superproject's
-// work-tree, with the prefix extended by the submodule's path inside it. A
-// superproject git cannot identify makes the answer unknown — the submodule's own
-// answer would hide the very twin the climb exists to find.
-func (g gitProbes) placement(ctx context.Context, dir string) gitProbe {
-	p := g.of(ctx, dir)
-	for depth := 0; p.place == placeTree && p.tree.super != ""; depth++ {
-		sub := p.tree
-		sp := g.of(ctx, sub.super)
-		rel, err := filepath.Rel(sp.tree.top, sub.top)
-		switch {
-		case depth == maxSubmoduleDepth:
-			return gitProbe{place: placeUnknown, reason: "submodules nested more than " + strconv.Itoa(maxSubmoduleDepth) + " deep"}
-		case sp.place != placeTree:
-			return gitProbe{place: placeUnknown, reason: firstNonEmpty(sp.reason, "git could not identify "+sub.super+", the superproject of "+sub.top)}
-		case err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)):
-			return gitProbe{place: placeUnknown, reason: "the submodule " + sub.top + " is not inside its superproject " + sp.tree.top}
-		}
-		sp.tree.prefix = filepath.ToSlash(rel) + "/" + sub.prefix // sp is a copy: the memo keeps git's own answer
-		sp.approx = sp.approx || p.approx
-		p = sp
-	}
-	return p
-}
-
-// ownRepository returns git's own answers — no climb to a superproject — for dir
-// and for every mutated file's directory when all of them are confirmed work-trees
-// of one repository (the same common git directory). Those answers already compare
-// like with like, and in the same view the destination is re-checked (probes.of).
-func (g gitProbes) ownRepository(ctx context.Context, dir string, targets []mutationTarget) (gitProbe, []gitProbe, bool) {
-	run := g.of(ctx, dir)
-	if run.place != placeTree || run.approx {
-		return gitProbe{}, nil, false
-	}
-	files := make([]gitProbe, len(targets))
-	for i, tgt := range targets {
-		f := g.of(ctx, filepath.Dir(tgt.path))
-		if f.place != placeTree || f.approx || !sameGitPath(f.tree.common, run.tree.common) {
-			return gitProbe{}, nil, false
-		}
-		files[i] = f
-	}
-	return run, files, true
-}
-
 // commandDir is the directory a resolved command runs in: its working_dir, else
 // the workspace root. runStep, runDirNote and rerootPlan all use it, so the
 // directory re-rooting reasons about is the one the command really runs in.
@@ -309,8 +266,10 @@ func (t *MutationTest) rerootPlan(ctx context.Context, plan mutationPlan, target
 			continue // no directory to reason about; runStep runs it as it always has
 		}
 		run, fileTrees, lookup := probes.placement(ctx, dir), files, probes.placement
-		if ownRun, own, ok := probes.ownRepository(ctx, dir, targets); ok {
-			run, fileTrees, lookup = ownRun, own, probes.of
+		if shared, own, ok := probes.sharedLevel(ctx, dir, targets); ok {
+			run, fileTrees, lookup = shared, own, probes.atLevel(shared.tree.common)
+		} else if err := probes.splitLevels(ctx, dir, targets); err != nil {
+			return plan, err
 		}
 		if err := ctx.Err(); err != nil {
 			return plan, fmt.Errorf("mutation_test: cancelled while finding the work-tree of the commands' directory; nothing was run or mutated: %w", err)
@@ -379,7 +338,7 @@ func placeFile(f gitProbe, display, dir string, run gitProbe) (move bool, err er
 			dir, run.reason, display)
 	case run.place == placeTree && sameGitPath(f.tree.top, run.tree.top):
 		return false, nil
-	case run.place == placeTree && sameGitPath(f.tree.common, run.tree.common):
+	case run.place == placeTree && sameRepo(f.tree.common, run.tree.common):
 		if f.approx || run.approx {
 			return false, fmt.Errorf("mutation_test: %s is in work-tree %s, not the one the commands run in (%s), so they would have to be "+
 				"moved there — but git could not confirm either tree (%s), and plumb does not move trusted commands on a guess. "+
@@ -483,7 +442,7 @@ func rerootCommand(ctx context.Context, lookup func(context.Context, string) git
 
 // argNamingTree finds an argv element holding an absolute path that lies in the
 // work-tree being left (fromTop) rather than the one being entered (destTop).
-// "Lies in" is component-wise containment of the symlink-resolved path, and when
+// "Lies in" is asked of the filesystem (pathWithin), and when
 // one work-tree is nested inside the other the more specific root decides: from a
 // main checkout into its nested worktree, a path in the worktree is fine and any
 // other path under the main checkout — a sibling worktree included — is not; the
@@ -502,7 +461,7 @@ func argNamingTree(cmd TaskCommand, fromTop, destTop string) (string, bool) {
 			for _, p := range absolutePathsIn(arg) {
 				c := paths.Canonical(p)
 				inFrom, inDest := pathWithin(from, c), pathWithin(dest, c)
-				if inFrom && (!inDest || len(from) > len(dest)) {
+				if inFrom && (!inDest || pathWithin(dest, from)) {
 					return arg, true
 				}
 			}
@@ -530,13 +489,28 @@ func absolutePathsIn(arg string) []string {
 	return out
 }
 
-// pathWithin is withinRoot for comparing a path with a work-tree root git
-// printed. On macOS the default volume is case-insensitive while git prints the
-// on-disk case, so a differently cased spelling of the same place must still
-// count as inside; folding case can only make the check refuse more, never less.
+// pathWithin reports whether p is root or lies under it, asked of the filesystem:
+// p or one of its parents is the same directory as root. A volume that folds case
+// or Unicode normalisation (macOS's default) gives one directory several spellings,
+// and git prints the one on disk while an argument may carry another; comparing
+// spellings, even lowercased, misses an NFC path under an NFD directory. A root
+// that cannot be stat'ed falls back to comparing spellings, folding case on macOS.
 func pathWithin(root, p string) bool {
-	if runtime.GOOS == "darwin" {
-		root, p = strings.ToLower(root), strings.ToLower(p)
+	ri, err := os.Stat(root)
+	if err != nil {
+		if runtime.GOOS == "darwin" {
+			root, p = strings.ToLower(root), strings.ToLower(p)
+		}
+		return withinRoot(root, p)
 	}
-	return withinRoot(root, p)
+	for d := filepath.Clean(p); ; {
+		if di, err := os.Stat(d); err == nil && os.SameFile(ri, di) {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
 }
