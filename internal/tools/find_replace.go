@@ -317,7 +317,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		unlock()
 		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
 	}
-	_, writeErr := safeWrite(path, newData, 0o644)
+	res, writeErr := safeWrite(path, newData, 0o644)
 	unlock()
 	if writeErr != nil {
 		return fmt.Errorf("find_replace: writing %s: %w", path, writeErr)
@@ -326,7 +326,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
-	t.deps.recordWritten(ctx, path)
+	t.deps.recordWritten(ctx, path, res.written)
 	return nil
 }
 

@@ -147,11 +147,12 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 	if info, err := os.Stat(path); err == nil && info.Mode().Perm() != 0 {
 		perm = info.Mode().Perm()
 	}
-	if _, err := safeWrite(path, []byte(snap.before), perm); err != nil {
+	res, err := safeWrite(path, []byte(snap.before), perm)
+	if err != nil {
 		return "", fmt.Errorf("undo_edit: %w", err)
 	}
 	t.notifyUndo(ctx, path, uri, protocol.FileChanged)
-	t.deps.recordWritten(ctx, path)
+	t.deps.recordWritten(ctx, path, res.written)
 	t.deps.notifyTopology(path)
 	return t.formatUndoRestore(path, string(current), snap), nil
 }
