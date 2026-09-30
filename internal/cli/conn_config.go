@@ -514,10 +514,9 @@ func (s *connSession) bindWriteLimiterParent() {
 	// only while the connection is open (issue #514). close() reads
 	// boundBudgetKey under the lane and releases it, so an acquire made outside
 	// the lane — after close() had read the key, or after close() had run —
-	// held a budget reference nobody released. sharedBudgets.mu is a leaf lock,
-	// so taking it under the lane cannot invert any lock order.
+	// held a budget reference nobody released. sharedBudgets.mu is a leaf lock
+	// and SetParent an atomic store, so neither can invert a lock order.
 	var prevKey string
-	var parent *tools.RateLimiter
 	bound := s.mutateLive(func(v *sessionView) {
 		prevKey = v.boundBudgetKey
 		if prevKey == key {
@@ -525,8 +524,12 @@ func (s *connSession) bindWriteLimiterParent() {
 		}
 		// Acquire-before-release: pin the new budget before dropping the old so
 		// a re-pin back to a recently-left key never reclaims it mid-flight.
-		parent = s.budgets.acquire(key, limit)
+		parent := s.budgets.acquire(key, limit)
 		v.boundBudgetKey = key
+		// Re-parent in the same critical section: two concurrent binds then
+		// leave the limiter pointing at the budget of whichever key was
+		// published last, never at one the other bind has since released.
+		s.writeLimiter.SetParent(parent)
 	})
 	if !bound {
 		return
@@ -540,7 +543,6 @@ func (s *connSession) bindWriteLimiterParent() {
 	if prevKey != "" {
 		s.budgets.release(prevKey)
 	}
-	s.writeLimiter.SetParent(parent)
 }
 
 // gitPolicyFrom adapts the resolved [git] config into the tools package's

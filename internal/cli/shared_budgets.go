@@ -20,6 +20,9 @@ import (
 //
 // Concurrency: all methods are safe for concurrent use; mu guards the map and
 // every entry's refs. The limiter inside an entry is itself internally locked.
+// mu is a LEAF lock: no method calls out or takes another lock while holding
+// it, so callers may use it under their own locks — connSession binds its
+// budget inside the mutation lane (issue #514). Keep it that way.
 type sharedBudgets struct {
 	mu sync.Mutex
 	m  map[string]*budgetEntry

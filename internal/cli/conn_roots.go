@@ -39,9 +39,12 @@ import (
 // later one. Now at most one run is in flight; a notification that arrives
 // during it only marks the run stale, and the running goroutine fetches roots
 // once more when it finishes. The last fetch starts after the last
-// notification, so the pin settles on the newest answer, and a burst of any
-// size costs at most two round trips. The re-run uses the loop owner's ctx;
-// every notification carries the same serve context, so nothing is lost.
+// notification, so the pin settles on the newest answer. However many
+// notifications land while one fetch is in flight, they cost one more fetch,
+// not one each; a notification arriving during that re-fetch earns another,
+// so a steady stream costs one fetch per fetch interval. The re-run uses the
+// loop owner's ctx; every notification carries the same serve context, so
+// nothing is lost.
 //
 // After the connection closes nothing is attached: the check below skips the
 // work, and the attach itself re-checks inside the mutation lane (mutateLive),

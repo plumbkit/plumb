@@ -12,6 +12,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // Issue #514: a close() that lands between an attach's decision and its
@@ -332,10 +333,10 @@ func TestHandleRootsListChanged_FirstAnswerArrivesLast(t *testing.T) {
 	}
 }
 
-// TestHandleRootsListChanged_BurstCostsAtMostTwoFetches: a burst of
+// TestHandleRootsListChanged_BurstDuringAFetchCostsOneMore: a burst of
 // notifications that all arrive while one fetch is in flight folds into
-// exactly one re-fetch.
-func TestHandleRootsListChanged_BurstCostsAtMostTwoFetches(t *testing.T) {
+// exactly one re-fetch, not one fetch each.
+func TestHandleRootsListChanged_BurstDuringAFetchCostsOneMore(t *testing.T) {
 	const burst = 8
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	rootA, rootB := freshTempDir(t), freshTempDir(t)
@@ -440,5 +441,213 @@ func TestRootsCoalescer_Protocol(t *testing.T) {
 	}
 	if !c.enter(answer("5")) {
 		t.Fatal("the loop was not released when the connection closed")
+	}
+}
+
+// watchSession builds a bare connection on a real project-config watch
+// manager, plus a closer that runs close()'s own order for the watcher:
+// cancel, then releaseProjectWatch.
+func watchSession(t *testing.T) (s *connSession, m *projectConfigWatchManager, closeLike func()) {
+	t.Helper()
+	m, _ = testWatchManager(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	s = &connSession{ctx: ctx, cancel: cancel, store: config.NewStore(config.Defaults()), projectWatches: m}
+	closeLike = sync.OnceFunc(func() { s.cancel(); s.releaseProjectWatch() })
+	t.Cleanup(closeLike)
+	return s, m, closeLike
+}
+
+// TestTrackProjectWatch_NoWatchOutlivesClose: the project-config watcher
+// reference follows the same rule as the language server (issue #514). Before
+// the fix trackProjectWatch published the root and acquired afterwards, so a
+// close() in between released first and the acquire leaked.
+func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
+	t.Run("control: one reference, released on close", func(t *testing.T) {
+		s, m, closeLike := watchSession(t)
+		ws := t.TempDir()
+		s.trackProjectWatch(ws)
+		if got := m.refs(ws); got != 1 {
+			t.Fatalf("refs = %d, want 1", got)
+		}
+		s.trackProjectWatch(ws) // same root: no extra reference
+		if got := m.refs(ws); got != 1 {
+			t.Fatalf("refs after a repeat = %d, want 1", got)
+		}
+		closeLike()
+		if got := m.refs(ws); got != 0 {
+			t.Fatalf("refs after close = %d, want 0", got)
+		}
+	})
+	t.Run("close at the lane", func(t *testing.T) {
+		s, m, closeLike := watchSession(t)
+		ws := t.TempDir()
+		fired := closeAtLane(s, closeLike)
+		s.trackProjectWatch(ws)
+		if !fired.Load() {
+			t.Fatal("the probe never fired: trackProjectWatch did not reach mutateLive")
+		}
+		if got := m.refs(ws); got != 0 {
+			t.Fatalf("refs = %d, want 0: a watcher reference outlived close()", got)
+		}
+	})
+	t.Run("the reference is held before it is published", func(t *testing.T) {
+		s, m, _ := watchSession(t)
+		ws := t.TempDir()
+		refsAtLane := -1
+		s.beforeLiveMutate = func() { refsAtLane = m.refs(ws) }
+		s.trackProjectWatch(ws)
+		if refsAtLane != 1 {
+			t.Fatalf("refs when publishing = %d, want 1: a close() between the publish and the acquire would release first and the acquire would leak", refsAtLane)
+		}
+	})
+	t.Run("a concurrent track of the same root keeps one reference", func(t *testing.T) {
+		s, m, _ := watchSession(t)
+		ws := t.TempDir()
+		// The first track, holding its reference but not yet published, lets a
+		// second track of the same root run to completion. The first then finds
+		// the root already published and must drop its own reference.
+		var nested atomic.Bool
+		s.beforeLiveMutate = func() {
+			if nested.CompareAndSwap(false, true) {
+				s.trackProjectWatch(ws)
+			}
+		}
+		s.trackProjectWatch(ws)
+		if got := m.refs(ws); got != 1 {
+			t.Fatalf("refs = %d, want 1: two tracks of one root left two references", got)
+		}
+	})
+	t.Run("a re-pin releases the previous root", func(t *testing.T) {
+		s, m, _ := watchSession(t)
+		ws, ws2 := t.TempDir(), t.TempDir()
+		s.trackProjectWatch(ws)
+		s.trackProjectWatch(ws2)
+		if a, b := m.refs(ws), m.refs(ws2); a != 0 || b != 1 {
+			t.Fatalf("refs = (%d, %d), want (0, 1)", a, b)
+		}
+	})
+}
+
+// TestTrackProjectWatch_CloseRaceStress races close()'s watcher teardown
+// against trackProjectWatch with no seam at all. A leaked reference shows up
+// as a nonzero count once both have finished.
+func TestTrackProjectWatch_CloseRaceStress(t *testing.T) {
+	const iterations = 3000
+	m, _ := testWatchManager(t, nil)
+	ws := t.TempDir()
+	leaks := 0
+	for range iterations {
+		ctx, cancel := context.WithCancel(context.Background())
+		s := &connSession{ctx: ctx, cancel: cancel, store: config.NewStore(config.Defaults()), projectWatches: m}
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Go(func() { <-start; s.trackProjectWatch(ws) })
+		wg.Go(func() { <-start; s.cancel(); s.releaseProjectWatch() })
+		close(start)
+		wg.Wait()
+		if m.refs(ws) != 0 {
+			leaks++
+			for m.refs(ws) > 0 {
+				m.release(ws)
+			}
+		}
+	}
+	if leaks > 0 {
+		t.Fatalf("%d/%d iterations leaked a watcher reference past close()", leaks, iterations)
+	}
+}
+
+// TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent: two binds
+// racing to different keys must leave the limiter parented to the budget of
+// the key that ended up bound. Re-parenting outside the lane let the bind that
+// published first re-parent last, pointing the limiter at a budget the other
+// bind had already released.
+func TestBindWriteLimiterParent_ConcurrentBindsKeepTheLiveParent(t *testing.T) {
+	const iterations = 2000
+	root := freshTempDir(t)
+	s, _, _ := goRefSession(t, root)
+	budgets := newSharedBudgets()
+	s.budgets = budgets
+	// A cap no test reaches, so Allow always records against the parent.
+	s.writeLimiter = tools.NewRateLimiter(1<<30, time.Minute)
+	s.mutate(func(v *sessionView) { v.clientName, v.clientVersion = "client", "a" })
+	s.attachWorkspace(context.Background(), "file://"+root)
+	parentCount := func(key string) int {
+		budgets.mu.Lock()
+		e, ok := budgets.m[key]
+		budgets.mu.Unlock()
+		if !ok {
+			return -1
+		}
+		n, _, _ := e.limiter.Snapshot()
+		return n
+	}
+	stale := 0
+	for range iterations {
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, ver := range []string{"a", "b"} {
+			wg.Go(func() {
+				<-start
+				s.mutate(func(v *sessionView) { v.clientVersion = ver })
+				s.bindWriteLimiterParent()
+			})
+		}
+		close(start)
+		wg.Wait()
+		key := s.view().boundBudgetKey
+		before := parentCount(key)
+		if !s.writeLimiter.Allow() {
+			t.Fatal("the limiter refused under a cap no test reaches")
+		}
+		if parentCount(key) != before+1 {
+			stale++
+		}
+	}
+	if stale > 0 {
+		t.Fatalf("%d/%d iterations left the limiter parented to a budget other than the bound key's", stale, iterations)
+	}
+}
+
+// laneProbeCtx is a context whose Err records, while armed, whether it was
+// consulted and whether any call ran with the mutation lane free.
+type laneProbeCtx struct {
+	context.Context
+	s       *connSession
+	armed   *atomic.Bool
+	outside *atomic.Bool
+	calls   *atomic.Int32
+}
+
+func (c laneProbeCtx) Err() error {
+	if c.armed.Load() {
+		c.calls.Add(1)
+		if c.s.muMutate.TryLock() {
+			c.s.muMutate.Unlock()
+			c.outside.Store(true)
+		}
+	}
+	return c.Context.Err()
+}
+
+// TestMutateLive_ChecksTheConnectionInsideTheLane: the close-at-the-lane tests
+// call close() from beforeLiveMutate, so a check placed after that seam but
+// before the lock would pass them while leaving the window open. This pins the
+// check itself: every consultation of the connection context must find the
+// lane held.
+func TestMutateLive_ChecksTheConnectionInsideTheLane(t *testing.T) {
+	s := &connSession{}
+	armed, outside, calls := &atomic.Bool{}, &atomic.Bool{}, &atomic.Int32{}
+	s.ctx = laneProbeCtx{Context: context.Background(), s: s, armed: armed, outside: outside, calls: calls}
+	armed.Store(true)
+	if !s.mutateLive(func(*sessionView) {}) {
+		t.Fatal("mutateLive reported closed on an open connection")
+	}
+	armed.Store(false)
+	if calls.Load() == 0 {
+		t.Fatal("mutateLive never consulted the connection context")
+	}
+	if outside.Load() {
+		t.Fatal("mutateLive checked the connection outside the lane: a close() can land between the check and the lock")
 	}
 }
