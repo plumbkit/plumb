@@ -53,7 +53,11 @@ import (
 // same submodule in the main checkout, however unrelated the submodule's own git
 // directory looks. So both the files and the commands' directory are seen from
 // the outermost superproject's work-tree (gitProbes.placement), and a submodule in
-// a worktree re-roots into that worktree like any other file in it.
+// a worktree re-roots into that worktree like any other file in it. The climb is
+// skipped when git already names ONE repository for the commands' directory and
+// every file (gitProbes.ownRepository): a submodule's main checkout and a linked
+// worktree of that same submodule are two work-trees of it, and climbing only the
+// checkout (the worktree has no superproject) would make them look unrelated.
 //
 // "Same repository" is git's own answer (the common git directory), and the paths
 // compared are ones git printed, so a symlinked workspace, a case-insensitive
@@ -255,6 +259,26 @@ func (g gitProbes) placement(ctx context.Context, dir string) gitProbe {
 	return p
 }
 
+// ownRepository returns git's own answers — no climb to a superproject — for dir
+// and for every mutated file's directory when all of them are confirmed work-trees
+// of one repository (the same common git directory). Those answers already compare
+// like with like, and in the same view the destination is re-checked (probes.of).
+func (g gitProbes) ownRepository(ctx context.Context, dir string, targets []mutationTarget) (gitProbe, []gitProbe, bool) {
+	run := g.of(ctx, dir)
+	if run.place != placeTree || run.approx {
+		return gitProbe{}, nil, false
+	}
+	files := make([]gitProbe, len(targets))
+	for i, tgt := range targets {
+		f := g.of(ctx, filepath.Dir(tgt.path))
+		if f.place != placeTree || f.approx || !sameGitPath(f.tree.common, run.tree.common) {
+			return gitProbe{}, nil, false
+		}
+		files[i] = f
+	}
+	return run, files, true
+}
+
 // commandDir is the directory a resolved command runs in: its working_dir, else
 // the workspace root. runStep, runDirNote and rerootPlan all use it, so the
 // directory re-rooting reasons about is the one the command really runs in.
@@ -284,18 +308,21 @@ func (t *MutationTest) rerootPlan(ctx context.Context, plan mutationPlan, target
 		if dir == "" {
 			continue // no directory to reason about; runStep runs it as it always has
 		}
-		run := probes.placement(ctx, dir)
+		run, fileTrees, lookup := probes.placement(ctx, dir), files, probes.placement
+		if ownRun, own, ok := probes.ownRepository(ctx, dir, targets); ok {
+			run, fileTrees, lookup = ownRun, own, probes.of
+		}
 		if err := ctx.Err(); err != nil {
 			return plan, fmt.Errorf("mutation_test: cancelled while finding the work-tree of the commands' directory; nothing was run or mutated: %w", err)
 		}
-		dest, err := mutantsTree(targets, files, dir, run)
+		dest, err := mutantsTree(targets, fileTrees, dir, run)
 		if err != nil {
 			return plan, err
 		}
 		if dest == nil {
 			continue
 		}
-		moved, err := rerootCommand(ctx, probes, *cmd, dir, run.tree, *dest, targets[0].display)
+		moved, err := rerootCommand(ctx, lookup, *cmd, dir, run.tree, *dest, targets[0].display)
 		if err != nil {
 			return plan, err
 		}
@@ -414,8 +441,9 @@ func strandedError(display string, tree gitTree, dir string, run gitProbe) error
 
 // rerootCommand moves one resolved command from its directory in the from
 // work-tree to the same relative directory in dest, refusing when that move is
-// not safe. file names a mutated file for the messages.
-func rerootCommand(ctx context.Context, probes gitProbes, cmd TaskCommand, dir string, from, dest gitTree, file string) (TaskCommand, error) {
+// not safe. lookup is the view from and dest were taken in, so the destination is
+// re-checked in that view. file names a mutated file for the messages.
+func rerootCommand(ctx context.Context, lookup func(context.Context, string) gitProbe, cmd TaskCommand, dir string, from, dest gitTree, file string) (TaskCommand, error) {
 	moved := filepath.Join(dest.top, filepath.FromSlash(from.prefix))
 	rel := strings.TrimSuffix(from.prefix, "/")
 	if rel == "" {
@@ -430,7 +458,7 @@ func rerootCommand(ctx context.Context, probes gitProbes, cmd TaskCommand, dir s
 	// work-tree once every symlink is followed: on another branch a component of it
 	// can be a link leading back into the tree being left, or out of the
 	// workspace altogether, and a command run there tests whatever it leads to.
-	got := probes.placement(ctx, moved)
+	got := lookup(ctx, moved)
 	if err := ctx.Err(); err != nil {
 		return cmd, fmt.Errorf("mutation_test: cancelled while checking the directory the commands would move to; nothing was run or mutated: %w", err)
 	}
@@ -511,90 +539,4 @@ func pathWithin(root, p string) bool {
 		root, p = strings.ToLower(root), strings.ToLower(p)
 	}
 	return withinRoot(root, p)
-}
-
-// diskProbe reads the nearest .git at or above dir straight from the disk — the
-// fallback for when git cannot answer (reason is git's words). A .git DIRECTORY
-// marks a main work-tree whose common directory is that .git. A .git FILE is a
-// link, "gitdir: <dir>": the linked directory belongs to a worktree exactly when
-// it holds a `commondir` file naming the common directory (relative to it), which
-// is how git itself tells a worktree's git directory from a submodule's. No .git
-// anywhere above is no repository. A link that cannot be read is placeUnknown.
-func diskProbe(dir, reason string) gitProbe {
-	for d := paths.Canonical(dir); ; {
-		dotGit := filepath.Join(d, ".git")
-		if info, err := os.Lstat(dotGit); err == nil {
-			tree, ok := diskTree(d, dotGit, info)
-			if !ok {
-				return gitProbe{place: placeUnknown, reason: reason}
-			}
-			return gitProbe{place: placeTree, tree: tree, reason: reason, approx: true}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return gitProbe{place: placeNoRepo, reason: reason, approx: true}
-		}
-		d = parent
-	}
-}
-
-// diskTree describes the work-tree rooted at top from its .git entry (info), or
-// reports false when a .git link cannot be read.
-func diskTree(top, dotGit string, info os.FileInfo) (gitTree, bool) {
-	if info.IsDir() {
-		return gitTree{top: top, common: paths.Canonical(dotGit)}, true
-	}
-	gitDir, ok := readGitLink(dotGit, top)
-	if !ok {
-		return gitTree{}, false
-	}
-	data, err := readGoConfigFile(filepath.Join(gitDir, "commondir"))
-	if errors.Is(err, os.ErrNotExist) {
-		// A submodule's git directory, not a worktree's — unless it is a submodule
-		// checked out INSIDE a linked worktree (<common>/worktrees/<id>/modules/…),
-		// whose twin is the main checkout's copy. Without git to name the
-		// superproject, that shape is the evidence, and it counts as linked.
-		return gitTree{top: top, common: gitDir, linked: inWorktreeModules(gitDir)}, true
-	}
-	if err != nil {
-		return gitTree{}, false
-	}
-	common := strings.TrimSpace(string(data))
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(gitDir, common)
-	}
-	return gitTree{top: top, common: paths.Canonical(common), linked: true}, true
-}
-
-// inWorktreeModules reports whether gitDir lies under a "worktrees/<id>/modules/"
-// segment: the git directory of a submodule checked out in a linked worktree.
-func inWorktreeModules(gitDir string) bool {
-	parts := strings.Split(filepath.ToSlash(gitDir), "/")
-	for i := 0; i+2 < len(parts); i++ {
-		if parts[i] == "worktrees" && parts[i+2] == "modules" {
-			return true
-		}
-	}
-	return false
-}
-
-// readGitLink reads a .git file's "gitdir: <dir>" line and returns the directory
-// it names, made absolute against dir (where the .git file is) and resolved.
-func readGitLink(dotGit, dir string) (string, bool) {
-	data, err := readGoConfigFile(dotGit)
-	if err != nil {
-		return "", false
-	}
-	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
-	if !ok {
-		return "", false
-	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "", false
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(dir, target)
-	}
-	return paths.Canonical(target), true
 }

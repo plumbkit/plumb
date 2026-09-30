@@ -191,7 +191,7 @@ func TestRerootCommand_AnUnconfirmedDestinationNamesGitsReason(t *testing.T) {
 	writeTree(t, dest, map[string]string{"sub/x": "x"})
 	moved := filepath.Join(dest, "sub")
 	probes := gitProbes{moved: {place: placeTree, approx: true, reason: "detected dubious ownership", tree: gitTree{top: dest}}}
-	_, err := rerootCommand(context.Background(), probes, TaskCommand{Steps: [][]string{{"true"}}}, filepath.Join(root, "from", "sub"),
+	_, err := rerootCommand(context.Background(), probes.of, TaskCommand{Steps: [][]string{{"true"}}}, filepath.Join(root, "from", "sub"),
 		gitTree{top: filepath.Join(root, "from"), prefix: "sub/"}, gitTree{top: dest}, "x")
 	if err == nil || !strings.Contains(err.Error(), "could not confirm") || !strings.Contains(err.Error(), "dubious ownership") ||
 		strings.Contains(err.Error(), "symlink") {
