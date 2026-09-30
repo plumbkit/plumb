@@ -30,8 +30,8 @@ import (
 // fires inside subagents too, whose stdin names the conversation
 // (`session_id`) and, in a subagent, the agent (`agent_id`), and whose
 // `updatedInput` replaces the tool's arguments. So the identity rides inside
-// `arguments` (under mcp.ArgLogicalAgentDeclaredKey, or mcp.ArgLogicalAgentKey
-// for a daemon older than identityDeclaredKeyMinVersion; identityStampKey
+// `arguments` (under mcp.ArgLogicalAgentDeclaredKey when the daemon lists it in
+// its identity-keys answer, else mcp.ArgLogicalAgentKey; identityStampKey
 // picks), and the daemon lifts it out again
 // before any tool or schema sees it (internal/mcp/argidentity.go).
 //
@@ -46,7 +46,7 @@ import (
 // exit 0 leaves the call exactly as the client would have sent it. The one
 // failure that must be prevented is stamping a daemon that predates the
 // channel — it would reject every stamped call as an unknown parameter — so
-// the stamp is gated on the running daemon's version (claudeIdentityStamps).
+// the stamp is gated on what the running daemon reports (claudeIdentityDaemon).
 
 const (
 	// claudeIdentityMatcher is the PreToolUse matcher the installer writes. It
@@ -181,9 +181,9 @@ func mustJSONString(s string) []byte {
 // replaces the binary and the daemon keeps running the old one. A daemon that
 // predates the argument channel rejects every stamped call as an unknown
 // parameter, which would turn an upgrade into a total plumb outage until the
-// restart. So the stamp is gated on the running daemon's version, read over
-// the control socket and cached for a minute: one probe per minute per
-// machine, not one per tool call.
+// restart. So the stamp is gated on what the running daemon reports over the
+// control socket — its version, and the identity keys it lifts — cached for a
+// minute: one probe (two dials) per minute per machine, not one per tool call.
 
 const (
 	// identityChannelMinVersion is the first plumb whose daemon lifts the
@@ -191,7 +191,10 @@ const (
 	identityChannelMinVersion = "0.19.1"
 	identityProbeTTL          = time.Minute
 	identityProbeTimeout      = 300 * time.Millisecond
-	identityProbeCacheFile    = "daemon-identity-channel.json"
+	// identityProbeCacheFile is new with the declared-key probe: a hook binary
+	// from before it writes records with no declared_key to the old name, and
+	// sharing that file would have the new hook read them as "no" for a minute.
+	identityProbeCacheFile = "daemon-identity-keys.json"
 )
 
 // identityProbeRecord is the cached answer.
@@ -204,6 +207,10 @@ type identityProbeRecord struct {
 	// builds that had it.
 	DeclaredKey bool      `json:"declared_key,omitempty"`
 	CheckedAt   time.Time `json:"checked_at"`
+	// uncertain marks an answer whose identity-keys probe failed on I/O (not
+	// a real "no"): it is used for this call but not cached, so the next call
+	// asks again instead of stripping stamps for a minute.
+	uncertain bool
 }
 
 // claudeIdentityDaemon is the production gate: what the running daemon
@@ -232,28 +239,11 @@ func identityStampKey(daemon func() identityProbeRecord) string {
 	return mcp.ArgLogicalAgentKey
 }
 
-// daemonAcceptsIdentityStamp answers "may this call be stamped?".
-func daemonAcceptsIdentityStamp(probe func() (string, error), cachePath string, now time.Time) bool {
-	return daemonVersionAcceptsStamp(daemonIdentityVersion(probe, cachePath, now))
-}
-
-// daemonIdentityVersion returns the daemon's version from the cache when it is
-// fresh, otherwise from probe, refreshing the cache. Every failure — no
-// daemon, a daemon too old to answer, an unreadable cache — is "", which no
-// threshold accepts: an unstamped call is what the client would have sent
-// anyway.
-func daemonIdentityVersion(probe func() (string, error), cachePath string, now time.Time) string {
-	if probe == nil {
-		return daemonIdentity(nil, cachePath, now).DaemonVersion
-	}
-	return daemonIdentity(func() (identityProbeRecord, error) {
-		v, err := probe()
-		return identityProbeRecord{DaemonVersion: v}, err
-	}, cachePath, now).DaemonVersion
-}
-
-// daemonIdentity is daemonIdentityVersion's full answer: the version and
-// whether the daemon lifts the declared key, cached together.
+// daemonIdentity returns what the daemon reports — its version and whether it
+// lifts the declared key — from the cache when it is fresh, otherwise from
+// probe, refreshing the cache. Every failure (no daemon, a daemon too old to
+// answer, an unreadable cache) is the zero record, which no threshold accepts:
+// an unstamped call is what the client would have sent anyway.
 func daemonIdentity(probe func() (identityProbeRecord, error), cachePath string, now time.Time) identityProbeRecord {
 	if rec, ok := readIdentityProbe(cachePath); ok && now.Sub(rec.CheckedAt) < identityProbeTTL && now.After(rec.CheckedAt) {
 		return rec
@@ -264,6 +254,9 @@ func daemonIdentity(probe func() (identityProbeRecord, error), cachePath string,
 	rec, err := probe()
 	if err != nil {
 		return identityProbeRecord{}
+	}
+	if rec.uncertain {
+		return rec
 	}
 	rec.CheckedAt = now
 	writeIdentityProbe(cachePath, rec)
@@ -346,26 +339,30 @@ func probeDaemonIdentity() (identityProbeRecord, error) {
 	if err != nil {
 		return identityProbeRecord{}, err
 	}
-	return identityProbeRecord{DaemonVersion: version, DeclaredKey: probeDaemonDeclaredKey()}, nil
+	declared, err := probeDaemonDeclaredKey()
+	return identityProbeRecord{DaemonVersion: version, DeclaredKey: declared, uncertain: err != nil}, nil
 }
 
 // probeDaemonDeclaredKey reports whether the daemon's `identity-keys` answer
-// lists mcp.ArgLogicalAgentDeclaredKey. Any failure is false.
-func probeDaemonDeclaredKey() bool {
+// lists mcp.ArgLogicalAgentDeclaredKey. A reply without it — including an
+// older daemon's "unknown command" — is a real "no". An I/O failure is an
+// error: the caller treats it as "no" for this call only (the safe key) and
+// does not cache it.
+func probeDaemonDeclaredKey() (bool, error) {
 	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
 	if _, err := conn.Write([]byte(ctrlIdentityKeysCommand + "\n")); err != nil {
-		return false
+		return false, err
 	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return false
+		return false, err
 	}
-	return identityKeysReplyHasDeclared(line)
+	return identityKeysReplyHasDeclared(line), nil
 }
 
 // identityKeysReplyHasDeclared parses `ok <key> <key>...`.
