@@ -178,6 +178,12 @@ func TestTrust_IdenticalConfigInAnotherRepositoryIsNotTrusted(t *testing.T) {
 	if policyTrusted(t, s, other) || tasksTrusted(t, s, other) {
 		t.Error("an unrelated repository with identical config inherited the grant")
 	}
+	// Its linked worktree is a genuine worktree — of the wrong repository.
+	otherWT := filepath.Join(other, ".claude", "worktrees", "wt")
+	gitCmd(t, other, "worktree", "add", "-q", "-b", "feature", otherWT, "main")
+	if policyTrusted(t, s, otherWT) || tasksTrusted(t, s, otherWT) {
+		t.Error("a worktree of an unrelated repository with identical config inherited the grant")
+	}
 }
 
 // TestTrust_ForgedWorktreeLinkIsNotTrusted: a .git FILE is just text, and any
