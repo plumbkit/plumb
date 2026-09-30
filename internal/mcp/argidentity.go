@@ -22,12 +22,13 @@ import (
 // is absent the original bytes are returned untouched, which is the common
 // path for every client that does not stamp.
 
-// splitLogicalAgentArg removes ArgLogicalAgentKey from a top-level arguments
-// object and returns its string value. Non-object arguments (an array, a
-// scalar, null, empty, malformed) pass through unchanged with no identity. A
-// non-string value under the key is removed but never becomes an identity: a
-// malformed stamp must neither attribute the call nor reach validation as an
-// unknown parameter.
+// splitLogicalAgentArg removes ArgLogicalAgentKey and ArgLogicalAgentDeclaredKey
+// from a top-level arguments object and returns the identity they carry (the
+// reverse-DNS key first). Non-object arguments (an array, a scalar, null,
+// empty, malformed) pass through unchanged with no identity. A non-string
+// value under either key is removed but never becomes an identity: a malformed
+// stamp must neither attribute the call nor reach validation as an unknown
+// parameter.
 func splitLogicalAgentArg(raw json.RawMessage) (string, json.RawMessage) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
@@ -37,16 +38,55 @@ func splitLogicalAgentArg(raw json.RawMessage) (string, json.RawMessage) {
 	if err := json.Unmarshal(trimmed, &obj); err != nil || obj == nil {
 		return "", raw
 	}
-	stamp, ok := obj[ArgLogicalAgentKey]
-	if !ok {
+	stamp, okStamp := obj[ArgLogicalAgentKey]
+	declared, okDeclared := obj[ArgLogicalAgentDeclaredKey]
+	if !okStamp && !okDeclared {
 		return "", raw
 	}
 	delete(obj, ArgLogicalAgentKey)
-	var id string
-	if err := json.Unmarshal(stamp, &id); err != nil {
-		id = ""
+	delete(obj, ArgLogicalAgentDeclaredKey)
+	id := rawString(stamp)
+	if id == "" {
+		id = rawString(declared)
 	}
 	return id, marshalRawObject(obj)
+}
+
+// rawString decodes a JSON string, or "" for anything else (absent, null, a
+// number, an object).
+func rawString(v json.RawMessage) string {
+	var s string
+	if len(v) == 0 || json.Unmarshal(v, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// identityPropertySchema is the property advertised under
+// ArgLogicalAgentDeclaredKey. Model-facing: it tells a model not to type it.
+const identityPropertySchema = `{"type":"string","description":"Agent identity, filled in by plumb's client hook. Leave unset."}`
+
+// withIdentityProperty returns schema with ArgLogicalAgentDeclaredKey added to
+// its top-level properties, so a host that forwards only declared arguments
+// passes the hook's stamp through. A schema that is not an object, cannot be
+// parsed, or already declares the key is returned unchanged.
+func withIdentityProperty(schema json.RawMessage) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &obj); err != nil || obj == nil {
+		return schema
+	}
+	props := map[string]json.RawMessage{}
+	if raw, ok := obj["properties"]; ok {
+		if err := json.Unmarshal(raw, &props); err != nil || props == nil {
+			return schema
+		}
+	}
+	if _, ok := props[ArgLogicalAgentDeclaredKey]; ok {
+		return schema
+	}
+	props[ArgLogicalAgentDeclaredKey] = json.RawMessage(identityPropertySchema)
+	obj["properties"] = marshalRawObject(props)
+	return marshalRawObject(obj)
 }
 
 // marshalRawObject re-encodes a map of raw values with sorted keys, matching

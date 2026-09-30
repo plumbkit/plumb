@@ -16,7 +16,8 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 )
 
-func acceptingDaemon() bool { return true }
+// acceptingDaemon is a daemon new enough for the declarable stamp key.
+func acceptingDaemon() string { return identityDeclaredKeyMinVersion }
 
 func noEnv(string) string { return "" }
 
@@ -78,7 +79,7 @@ func TestClaudePreToolUse_StampsPlumbTools(t *testing.T) {
 	if len(input) != 5 {
 		t.Fatalf("updatedInput has %d keys, want the 4 originals plus the stamp: %s", len(input), raw)
 	}
-	if got := string(input[mcp.ArgLogicalAgentKey]); got != `"conv-1/agent-7"` {
+	if got := string(input[mcp.ArgLogicalAgentDeclaredKey]); got != `"conv-1/agent-7"` {
 		t.Fatalf("stamp = %s, want \"conv-1/agent-7\"", got)
 	}
 	for k, want := range map[string]string{
@@ -114,7 +115,7 @@ func TestClaudePreToolUse_SessionStartGetsSessionID(t *testing.T) {
 			if got := string(input["session_id"]); got != tc.wantID {
 				t.Fatalf("session_id = %s, want %s (%s)", got, tc.wantID, raw)
 			}
-			if got := string(input[mcp.ArgLogicalAgentKey]); got != tc.wantID {
+			if got := string(input[mcp.ArgLogicalAgentDeclaredKey]); got != tc.wantID {
 				t.Fatalf("stamp = %s, want %s", got, tc.wantID)
 			}
 			if strings.Contains(tc.input, "workspace") && string(input["workspace"]) != `"/w"` {
@@ -162,7 +163,7 @@ func TestClaudePreToolUse_FailsOpen(t *testing.T) {
 	if _, ok := claudePreToolUseOutput(base, killed, acceptingDaemon); ok {
 		t.Error("kill switch ignored")
 	}
-	if _, ok := claudePreToolUseOutput(base, noEnv, func() bool { return false }); ok {
+	if _, ok := claudePreToolUseOutput(base, noEnv, func() string { return "0.19.0" }); ok {
 		t.Error("a daemon that predates the channel must not be stamped")
 	}
 	if _, ok := claudePreToolUseOutput(base, noEnv, nil); ok {
@@ -313,7 +314,7 @@ func TestRunClaudeHook_PreToolUseAcceptsLargeInput(t *testing.T) {
 		"tool_input": map[string]any{"file_path": "/w/big.txt", "content": body},
 	})
 	out := runHookForTest(t, payload)
-	if !bytes.Contains(out, []byte(mcp.ArgLogicalAgentKey)) {
+	if !bytes.Contains(out, []byte(mcp.ArgLogicalAgentDeclaredKey)) {
 		t.Fatalf("a large PreToolUse payload was not stamped (stdout %d bytes)", len(out))
 	}
 	if !bytes.Contains(out, []byte(body[:64])) {
@@ -528,5 +529,45 @@ func TestIdentityHookSkewNoteOlderInstall(t *testing.T) {
 	}
 	if got := identityHookSkewNote(claudeCodeHooksTarget, complete, nil); got != "" {
 		t.Errorf("a complete install with no probe needs no note, got %q", got)
+	}
+}
+
+// TestIdentityStampKey_ByDaemonVersion: the declarable key only for a daemon
+// that lifts it — an older one rejects unknown parameters, so it keeps the
+// reverse-DNS key — and nothing for a daemon that predates the channel.
+func TestIdentityStampKey_ByDaemonVersion(t *testing.T) {
+	for _, tc := range []struct{ version, want string }{
+		{"0.19.0", ""},
+		{"", ""},
+		{"0.19.1", mcp.ArgLogicalAgentKey},
+		{"0.20.2", mcp.ArgLogicalAgentKey},
+		{"0.20.3", mcp.ArgLogicalAgentDeclaredKey},
+		{"0.21.0", mcp.ArgLogicalAgentDeclaredKey},
+		{"dev", mcp.ArgLogicalAgentDeclaredKey},
+	} {
+		v := tc.version
+		if got := identityStampKey(func() string { return v }); got != tc.want {
+			t.Errorf("daemon %q: key %q, want %q", tc.version, got, tc.want)
+		}
+	}
+	if got := identityStampKey(nil); got != "" {
+		t.Errorf("no daemon check: key %q, want none", got)
+	}
+}
+
+// TestClaudePreToolUse_OldDaemonGetsReverseDNSKey: the stamp a 0.20.2 daemon
+// can lift, and never the declarable key it would reject.
+func TestClaudePreToolUse_OldDaemonGetsReverseDNSKey(t *testing.T) {
+	in := claudeHookInput{SessionID: "conv-1", ToolName: "mcp__plumb__read_file", ToolInput: json.RawMessage(`{"file_path":"/w/a.go"}`)}
+	out, ok := claudePreToolUseOutput(in, noEnv, func() string { return "0.20.2" })
+	if !ok {
+		t.Fatal("a 0.20.2 daemon accepts the identity channel")
+	}
+	input, raw := updatedInputOf(t, out)
+	if string(input[mcp.ArgLogicalAgentKey]) != `"conv-1"` {
+		t.Fatalf("want the reverse-DNS stamp: %s", raw)
+	}
+	if _, has := input[mcp.ArgLogicalAgentDeclaredKey]; has {
+		t.Fatalf("a 0.20.2 daemon would reject %s: %s", mcp.ArgLogicalAgentDeclaredKey, raw)
 	}
 }

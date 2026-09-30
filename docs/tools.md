@@ -116,8 +116,8 @@ workspace pin, read tracking, undo history and rate budget by a logical-agent
 id, and refuses a state-changing call it cannot attribute. The id reaches the
 daemon on three channels, strongest first: a per-call
 `_meta["dev.plumbkit/logical-agent"]` set by the client's transport; the same
-key placed by a client **runtime** as a top-level key inside `arguments`, which
-the daemon lifts out before any tool or schema sees it (Claude Code's
+key, or `plumb_agent`, placed by a client **runtime** as a top-level key inside
+`arguments`, which the daemon lifts out before any tool sees it (Claude Code's
 `plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
 every `mcp__plumb__*` call and also fills `session_id` on this tool); and
 `session_id` itself, declared once by this call. Pass a stable value per agent:

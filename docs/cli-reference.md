@@ -294,14 +294,17 @@ Code gets a third:
   so the daemon could not tell a subagent's call from its parent's — and, once
   two agents had declared themselves, refused every write from both as
   unattributable. The hook closes that: on every `mcp__plumb__*` call it adds
-  one top-level argument, `dev.plumbkit/logical-agent`, holding the
-  conversation id (main thread) or `<conversation>/<agent_id>` (subagent), and
-  on `session_start` it also sets `session_id` to the same value, so no agent
-  has to remember one. The daemon lifts the key out before validation; no tool
-  ever sees it. The stamp is gated on the running daemon's version (cached for
-  a minute under `PLUMB_WAKE_DIR`): a daemon older than 0.19.1 would reject it
-  as an unknown parameter, so against one the hook stamps nothing and bare
-  `plumb hooks` says so. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
+  one top-level argument, `plumb_agent`, holding the conversation id (main
+  thread) or `<conversation>/<agent_id>` (subagent), and on `session_start` it
+  also sets `session_id` to the same value, so no agent has to remember one.
+  The daemon lifts the key out before validation; no tool ever sees it. For a
+  client that forwards only declared arguments (Claude desktop's connector)
+  the daemon declares `plumb_agent` in every tool's schema so the stamp gets
+  through. The stamp is gated on the running daemon's version (cached for a
+  minute under `PLUMB_WAKE_DIR`): a daemon from 0.19.1 to 0.20.2 gets the
+  older key `dev.plumbkit/logical-agent` instead, and one older than 0.19.1
+  would reject either as an unknown parameter, so against it the hook stamps
+  nothing and bare `plumb hooks` says so. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
   a call: the only failure mode is an unstamped call, which is what the client
   sent anyway. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
   not matched. Codex is not covered: its `updatedInput` requires

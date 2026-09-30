@@ -370,6 +370,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	// external id, may rename it to inherit an ended session's name, and records
 	// the attach-time fallback identity for unattributed calls. A REFUSED call
 	// must commit none of that — an agent whose pin was refused never attached.
+	// The stamp-channel note must read the identity THIS call carried per call,
+	// before the declared session_id is put on the ctx: the hook adds session_id
+	// to every session_start, so reading after would report the channel live
+	// exactly when it is being dropped (see session_start_stamp.go).
+	perCallCtx := ctx
 	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
 	if err != nil {
@@ -407,11 +412,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx), t.mailClaimable(ctx)), nil
+		return t.executeBrief(ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(ctx)), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(ctx))
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom, linked, t.stampChannelNote(perCallCtx))
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	if t.xcodeHintFn != nil {
 		if hint := t.xcodeHintFn(""); hint != "" {

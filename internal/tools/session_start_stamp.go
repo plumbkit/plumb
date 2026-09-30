@@ -15,16 +15,21 @@ import "context"
 // The two facts therefore come apart, and a client can sit in the gap: it
 // declares its identity through session_start perfectly well, and every
 // state-changing call it makes is still refused. Observed on
-// `local-agent-mode-plumb`, whose runtime does not apply Claude Code's
-// PreToolUse `updatedInput` rewrite to MCP calls, so the hook's stamp — emitted
-// correctly by `plumb hooks run-claude` — never reaches the daemon.
+// `local-agent-mode-plumb` (Claude desktop's connector). Its runtime DOES apply
+// the PreToolUse `updatedInput` rewrite — a hook-added session_id arrives — but
+// forwards only the argument keys a tool's schema declares, so the undeclared
+// reverse-DNS stamp was dropped. The daemon now advertises a declarable stamp
+// key to that client (mcp.ArgLogicalAgentDeclaredKey); this note remains the
+// disclosure for any client that still arrives unstamped.
 //
 // That gap used to be discoverable only by being refused mid-session, behind a
 // remedy line naming a hook the user had already installed and which could not
 // help. session_start is itself stamped when the channel works
 // (claudePreToolUseOutput stamps every `mcp__plumb__*` call, session_start
 // included), so THIS call is the honest probe: if it arrived unstamped, the
-// channel is not live for this client. That is an observation, not a guess, and
+// channel is not live for this client. The probe must read the identity the
+// call carried PER CALL — Execute captures it before the declared session_id
+// is applied to the ctx, or the hook's own session_id masks the absence. That is an observation, not a guess, and
 // it costs nothing on a client whose channel works. PLAN-440 acceptance (b).
 
 // StampChannelState is what the connection knows about the per-call identity

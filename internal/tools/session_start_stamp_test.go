@@ -2,14 +2,15 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
 // The per-call identity channel is the ONLY channel the shared-connection write
 // gate reads (internal/cli/conn_logical_agent.go refuse). A client whose runtime
-// drops the PreToolUse `updatedInput` rewrite — observed on
-// `local-agent-mode-plumb` — declares its identity through session_start fine and
+// drops the stamp — observed on `local-agent-mode-plumb`, which forwards only
+// declared argument keys — declares its identity through session_start fine and
 // still has every state-changing call refused, with a remedy line telling it to
 // install a hook it already has. These tests pin the disclosure that turns that
 // mid-session refusal into an orientation-time fact (PLAN-440 acceptance b).
@@ -108,5 +109,41 @@ func TestMailIsClaimableWhenTheChannelAccessorIsUnwired(t *testing.T) {
 	var s SessionStart
 	if !s.mailClaimable(context.Background()) {
 		t.Error("an unwired accessor must not silently stop mail delivery")
+	}
+}
+
+// TestStampChannelNote_ReadsThePerCallIdentityNotTheDeclaredOne goes through
+// Execute with both channels wired the way the daemon wires them. The hook adds
+// session_id to every session_start, and the declared-agent channel puts it on
+// the ctx; the note used to read that ctx, so it reported the per-call channel
+// live on exactly the client that drops it (Claude desktop's connector, where
+// an unattributed edit then landed in another checkout). The note must read the
+// identity the call carried per call, before session_id is applied.
+func TestStampChannelNote_ReadsThePerCallIdentityNotTheDeclaredOne(t *testing.T) {
+	ws := t.TempDir()
+	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithDeclaredAgent(func(ctx context.Context, id string) context.Context {
+			return context.WithValue(ctx, declaredAgentKeyType{}, id)
+		}).
+		WithStampChannel(func(ctx context.Context) StampChannelState {
+			id, _ := ctx.Value(declaredAgentKeyType{}).(string)
+			return StampChannelState{Shared: true, PerCallStamped: id != ""}
+		})
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"conv-1","detail":"brief"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, stampChannelRefusedNotice) {
+		t.Fatalf("an unstamped session_start that only declared session_id must get the notice:\n%s", out)
+	}
+
+	stamped := context.WithValue(context.Background(), declaredAgentKeyType{}, "conv-1")
+	out, err = tool.Execute(stamped, json.RawMessage(`{"session_id":"conv-1","detail":"brief"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "NOTE: state-changing") || strings.Contains(out, "carried no per-call") {
+		t.Fatalf("control: a stamped call must get no notice:\n%s", out)
 	}
 }
