@@ -123,7 +123,7 @@ func noCommandError(cmd TaskCommand, slot string) error {
 // contested. run_task has no workspace argument of its own — the working
 // directory resolves against the pinned workspace — so on a contested connection
 // it would run against whichever project holds the pin right now.
-const runTaskContested = "run_task: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), and run_task has no workspace argument of its own, so it would run against whichever project holds the pin right now. Refused rather than misroute. Identify the agents — pass session_start.session_id on every call, or run one plumb serve per agent — then run the task on the connection that is pinned to your project"
+const runTaskContested = "run_task: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), and run_task has no workspace argument of its own, so it would run against whichever project holds the pin right now. Refused rather than misroute. Identify the agents (" + PerCallIdentityRemedy + "), then run the task on the connection that is pinned to your project"
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
 // the session's workspace, applying the per-workspace trust gate. It returns an

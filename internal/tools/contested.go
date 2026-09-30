@@ -31,8 +31,7 @@ func (e ContestedRelativePathError) Error() string {
 			"several agents are multiplexing this plumb serve without declaring an identity, so a relative path "+
 			"cannot be attributed to any one of them and would be anchored to whichever project holds the pin right now. "+
 			"Use an ABSOLUTE path instead — it is checked against the currently-pinned workspace's boundary, so it can "+
-			"never silently land in the wrong project. To stop the pin from being shared, pass session_start.session_id "+
-			"on every call, or run one plumb serve per agent.",
+			"never silently land in the wrong project. To stop the pin from being shared, "+PerCallIdentityRemedy+".",
 		e.Path,
 	)
 }
@@ -58,3 +57,12 @@ func classifyContestedRelative(err error) error {
 		Reason: "Re-issue the call with an absolute path: on a contested connection a relative path cannot be attributed to a project.",
 	})
 }
+
+// PerCallIdentityRemedy is the one remedy text for "several agents share this
+// connection and plumb cannot tell them apart". Every such message uses it, so
+// none can drift back to recommending session_start.session_id alone: that
+// identifies only the session_start call, and once two agents have declared
+// one, a later call without a per-call identity is refused.
+const PerCallIdentityRemedy = "stamp every call with the agent's identity — on Claude Code (terminal or desktop), " +
+	"`plumb hooks install claude-code`; otherwise a per-call _meta identity (a session_start.session_id covers " +
+	"only its own call) — or run one plumb serve per agent"

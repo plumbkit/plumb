@@ -15,6 +15,7 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -27,7 +28,7 @@ import (
 // widget, which elides the middle of a long message and keeps the tail — so a
 // remedy that runs on loses its own advice and preserves only the force
 // sentence, which is the one this wording exists to demote.
-const repinStickyRemedy = "If several agents share this connection, identify each one (session_start.session_id, or plumb's identity hook) so each keeps its own pin, or run one plumb serve per agent. Use force: true only if you are switching this connection deliberately, or the agent that set the pin has finished."
+const repinStickyRemedy = "If agents share this connection, stamp each one's calls (Claude Code: `plumb hooks install claude-code`; else per-call _meta) to keep pins apart, or run one plumb serve per agent. Use force: true only if you are switching this connection deliberately, or the agent that set the pin has finished."
 
 // repinContestedRemedy replaces repinStickyRemedy once this connection's pin has
 // been force-taken between projects repeatedly (see conn_pin_contest.go).
@@ -39,7 +40,7 @@ const repinStickyRemedy = "If several agents share this connection, identify eac
 // and force is kept (the daemon cannot know which undeclared agent is entitled to
 // the workspace, so refusing outright would strand real work) but demoted to a
 // last resort with a condition on it.
-const repinContestedRemedy = "This connection's pin has already been force-taken back and forth between projects, so forcing again would displace whichever agent holds it now. Identify each agent instead — pass session_start.session_id on every call so plumb can keep their pins, read-tracking and undo state separate, or run a dedicated plumb serve process per agent. Use force: true only if you are certain no other agent is using this connection."
+const repinContestedRemedy = "This connection's pin has already been force-taken back and forth between projects, so forcing again would displace whichever agent holds it now. Identify each agent instead, so plumb can keep their pins, read-tracking and undo state separate: " + tools.PerCallIdentityRemedy + ". Use force: true only if you are certain no other agent is using this connection."
 
 // repinRemedy picks the next step a refused re-pin is given. One chooser, used
 // by BOTH surfaces of the refusal — the error the caller reads and the health

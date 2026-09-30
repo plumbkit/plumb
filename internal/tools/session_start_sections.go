@@ -73,7 +73,7 @@ func (t *SessionStart) contestedPinNote() string {
 	}
 	return "NOTE: this connection's workspace pin has been force-taken between projects more than once — several agents are " +
 		"multiplexing one `plumb serve` without declaring an identity, so plumb cannot keep their pins, read-tracking or " +
-		"undo state apart. Pass session_start.session_id on every call, or run one `plumb serve` per agent. Confirm the " +
+		"undo state apart. To fix it, " + PerCallIdentityRemedy + ". Confirm the " +
 		"workspace above is yours before a relative-path write.\n"
 }
 

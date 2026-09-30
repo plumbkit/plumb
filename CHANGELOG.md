@@ -16,6 +16,16 @@
   descriptor. A file replaced during the read keeps the version read. One
   rewritten in place is read again, and one that never settles records no hash.
   Applies to `read_file` (windowed and pattern search) and `read_symbol`.
+- **Contested-pin messages no longer recommend `session_id` as the fix.** The
+  contested-pin note in `session_start`, the boundary and re-pin refusals, and
+  the `git`, `run_task` and `undo_edit` refusals told agents sharing a
+  connection to "pass session_start.session_id on every call". A `session_id`
+  identifies only its own call, and once two agents have declared one, their
+  later unstamped writes are refused, so following that advice led straight
+  to a refusal. Every such message now names the working remedies: the Claude
+  Code identity hook, a per-call `_meta` identity, or one `plumb serve` per
+  agent.
+
 - **On a shared connection, a write plumb cannot attribute is refused.**
   Once two agent identities have been declared on one `plumb serve`
   connection, a state-changing call that carries no per-call identity cannot

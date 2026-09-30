@@ -266,7 +266,7 @@ func TestContestedPin_RemedyStopsLeadingWithForce(t *testing.T) {
 	if berr == nil {
 		t.Fatal("a path in a third project must still be refused")
 	}
-	if !strings.Contains(berr.Error(), "identify yourself with session_start.session_id") {
+	if !strings.Contains(berr.Error(), tools.PerCallIdentityRemedy) {
 		t.Errorf("contested boundary error does not name the real remedy: %v", berr)
 	}
 	if strings.Contains(berr.Error(), "retry with force: true") {

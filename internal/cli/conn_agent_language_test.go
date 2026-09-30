@@ -220,7 +220,7 @@ func TestRepinStickyRemedyFitsTheDashboardAlert(t *testing.T) {
 	}
 	// It must still carry both real remedies, or shortening it has traded one
 	// failure for the other.
-	for _, want := range []string{"session_start.session_id", "plumb serve"} {
+	for _, want := range []string{"plumb hooks install claude-code", "_meta", "plumb serve"} {
 		if !strings.Contains(repinStickyRemedy, want) {
 			t.Errorf("repinStickyRemedy no longer names %q", want)
 		}

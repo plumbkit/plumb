@@ -156,8 +156,9 @@ func TestWorkspaceBoundaryError_ContestedSwapsTheAdvice(t *testing.T) {
 		t.Errorf("contested error still leads with force: true:\n%s", contested)
 	}
 	for _, frag := range []string{
-		"identify yourself with session_start.session_id",
-		"one `plumb serve` per agent",
+		"plumb hooks install claude-code",
+		"covers only its own call",
+		"one plumb serve per agent",
 		"use force: true only if",
 	} {
 		if !strings.Contains(contested, frag) {
