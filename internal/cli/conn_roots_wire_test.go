@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
@@ -136,5 +137,61 @@ func TestHandleRootsListChanged_NoAttachAfterClose(t *testing.T) {
 	s.handleRootsListChanged(context.Background(), rootsAnswer(t, root))
 	if got := s.workspace(); got != "" {
 		t.Fatalf("a closed connection attached %q", got)
+	}
+}
+
+// TestRegisterHooks_RootsHandlerRunsAfterOnInit drives the callbacks
+// registerHooks installs, not a hand-called markInitSettled: the OnInit wrapper
+// is the only production path that releases the roots handler, so a refactor
+// that dropped its deferred markInitSettled would park every roots notification
+// until disconnect, bringing back "a client's folder change never lands".
+func TestRegisterHooks_RootsHandlerRunsAfterOnInit(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	defer s.close()
+	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: "0"})
+	s.registerHooks(srv)
+	if srv.OnInit == nil || srv.OnRootsChanged == nil {
+		t.Fatal("registerHooks left OnInit or OnRootsChanged unwired")
+	}
+
+	srv.OnInit(context.Background(), rootsAnswer(t, rootA), func(string, any) error { return nil })
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("OnInit attach: workspace = %q, want %q", got, rootA)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.OnRootsChanged(context.Background(), rootsAnswer(t, rootB))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the roots handler is still waiting after OnInit returned: nothing released it")
+	}
+	if got := s.workspace(); got != rootB {
+		t.Fatalf("roots change after OnInit: workspace = %q, want %q", got, rootB)
+	}
+}
+
+// TestHandleRootsListChanged_CloseDuringRootsList: the connection closes while
+// the client is answering roots/list. The handler must not attach afterwards.
+func TestHandleRootsListChanged_CloseDuringRootsList(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	s.markInitSettled()
+	answer := rootsAnswer(t, root)
+	closing := func(ctx context.Context, method string, params any) (json.RawMessage, error) {
+		s.close()
+		return answer(ctx, method, params)
+	}
+	s.handleRootsListChanged(context.Background(), closing)
+	if got := s.workspace(); got != "" {
+		t.Fatalf("attached %q after the connection closed during roots/list", got)
 	}
 }
