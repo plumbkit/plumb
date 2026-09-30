@@ -8,20 +8,6 @@ import (
 	"testing"
 )
 
-// TestGitChildEnv_EmptyInheritsVerbatim pins the no-op case: with nothing
-// configured the builder returns nil so cmd.Env stays nil and os/exec inherits
-// the daemon's environment directly. Returning os.Environ() instead would be a
-// reconstruction, not an inheritance, and would silently change behaviour for
-// every user who never set the knob.
-func TestGitChildEnv_EmptyInheritsVerbatim(t *testing.T) {
-	if env := gitChildEnv(nil); env != nil {
-		t.Errorf("nil overrides must yield a nil env (inherit), got %d entries", len(env))
-	}
-	if env := gitChildEnv(map[string]string{}); env != nil {
-		t.Errorf("empty overrides must yield a nil env (inherit), got %d entries", len(env))
-	}
-}
-
 // TestGitChildEnv_ExtendsAndOverrides pins the replace-vs-extend decision: the
 // inherited environment survives (git needs PATH, HOME and SSH_AUTH_SOCK to
 // function at all) and a configured name beats the inherited value of the same

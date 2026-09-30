@@ -39,6 +39,16 @@
 
 ### Fixed
 
+- **The `git` tool no longer opens an editor.** plumb runs git with no
+  terminal, so `rebase --continue`, `rebase -i`, `cherry-pick -e` and
+  `revert --edit` launched `core.editor` and failed with `cannot exec
+  '<editor>'`, or waited on it until the write timeout while holding the
+  repository's git lock. Every git child the tool runs now gets
+  `GIT_EDITOR=true` and `GIT_SEQUENCE_EDITOR=true`, which accept the message
+  or todo list git prepared as written, and `GIT_TERMINAL_PROMPT=0`, so an
+  HTTPS credential prompt fails instead of waiting. These replace a value the
+  daemon inherited, which is usually your interactive editor; a value set
+  under `[git] env` is still used as is. (#544)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
