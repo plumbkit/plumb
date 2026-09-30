@@ -39,29 +39,40 @@ import (
 // The coarse Trusted flag is not bound to content, so sharing it would let a
 // branch change whatever it gates without an approval; it stays per path.
 
-// sharedWorktreeGrant reports whether root is a verified linked worktree whose
-// repository has another checkout with a grant that match accepts.
-func sharedWorktreeGrant(m map[string]trustRecord, root string, match func(trustRecord) bool) bool {
+// sharedWorktreeGrant returns the root whose grant a verified linked worktree
+// at root shares — another checkout of the same repository holding a grant that
+// match accepts — or "" when there is none. When several qualify, the
+// lexically first is named, so the answer (which surfaces in user-facing text)
+// does not depend on map order.
+func sharedWorktreeGrant(m map[string]trustRecord, root string, match func(trustRecord) bool) string {
 	key := canonRoot(root)
 	common := linkedWorktreeCommonDir(key)
 	if common == "" {
-		return false
+		return ""
 	}
+	from := ""
 	for other, rec := range m {
-		if other == key || !match(rec) {
+		if other == key || !match(rec) || (from != "" && other > from) {
 			continue
 		}
 		if checkoutCommonDir(other) == common {
-			return true
+			from = other
 		}
 	}
-	return false
+	return from
 }
 
 // linkedWorktreeCommonDir returns the canonical common git directory of the
 // linked worktree whose top level is root, or "" when root is not one git
-// vouches for: its .git must be a link file into <common>/worktrees/<id>, and
-// that directory's back-link must name root's own .git.
+// vouches for: its .git must be a link file to a directory that sits directly
+// in <common>/worktrees/ — inside the common git directory it names — and that
+// directory's back-link must name root's own .git.
+//
+// Both halves are needed. The back-link alone proves nothing when the linked
+// directory is one the borrower wrote itself (evil/fake/worktrees/x, naming
+// evil/.git and a trusted repository's .git as its common directory); only a
+// linked directory INSIDE the trusted repository's git directory puts the
+// back-link where the borrower cannot write.
 func linkedWorktreeCommonDir(root string) string {
 	dotGit := filepath.Join(root, ".git")
 	gitDir := readGitDirLink(dotGit)
@@ -72,11 +83,15 @@ func linkedWorktreeCommonDir(root string) string {
 	if err != nil || paths.Canonical(resolveAgainst(gitDir, back)) != paths.Canonical(dotGit) {
 		return ""
 	}
-	common, err := readSmallFile(filepath.Join(gitDir, "commondir"))
+	commonLink, err := readSmallFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
 		return ""
 	}
-	return paths.Canonical(resolveAgainst(gitDir, common))
+	common := paths.Canonical(resolveAgainst(gitDir, commonLink))
+	if filepath.Dir(paths.Canonical(gitDir)) != filepath.Join(common, "worktrees") {
+		return ""
+	}
+	return common
 }
 
 // checkoutCommonDir returns the canonical common git directory of the checkout

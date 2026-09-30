@@ -193,7 +193,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 	}
 	if st.Trusted {
 		s.log().Info("daemon: project capability config trusted and applied",
-			"workspace", workspace, "keys", st.Spec.Keys())
+			"workspace", workspace, "keys", st.Spec.Keys(), "inherited_from", st.InheritedFrom)
 		return
 	}
 	s.log().Warn("daemon: project capability config IGNORED (untrusted) — global values in force; run `plumb trust` to honour them",
@@ -204,7 +204,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 // session_start renders. Pure, so the capture at config apply is the only place
 // the answer is decided.
 func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
-	out := tools.ProjectGitStatus{Trusted: st.Trusted}
+	out := tools.ProjectGitStatus{Trusted: st.Trusted, InheritedFrom: st.InheritedFrom}
 	for _, e := range st.Spec {
 		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}

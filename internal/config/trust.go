@@ -144,18 +144,27 @@ func (s *TrustStore) IsTrusted(root string) bool {
 // git worktree with no matching record of its own shares its repository's
 // grant for the same content (sharedWorktreeGrant).
 func (s *TrustStore) IsTrustedForTasks(root string, cmds []TaskCommandSpec) bool {
+	trusted, _ := s.TaskGrant(root, cmds)
+	return trusted
+}
+
+// TaskGrant is IsTrustedForTasks that also names the checkout a linked
+// worktree shares the grant from ("" for its own record, or none) — see
+// PolicyGrant.
+func (s *TrustStore) TaskGrant(root string, cmds []TaskCommandSpec) (trusted bool, inheritedFrom string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.load()
 	if err != nil {
-		return false
+		return false, ""
 	}
 	want := canonicalTaskHash(cmds)
 	match := func(rec trustRecord) bool { return rec.TaskHash != "" && rec.TaskHash == want }
 	if rec, ok := m[canonRoot(root)]; ok && match(rec) {
-		return true
+		return true, ""
 	}
-	return sharedWorktreeGrant(m, root, match)
+	from := sharedWorktreeGrant(m, root, match)
+	return from != "", from
 }
 
 // SetTrusted records (trusted=true) or clears (false) the coarse grant for root,
@@ -196,18 +205,29 @@ func (s *TrustStore) SetTrusted(root string, trusted bool) error {
 // It never consults the coarse Trusted flag, so no other surface that grants
 // trust can incidentally have a repository's argv honoured.
 func (s *TrustStore) IsTrustedForPolicy(root string, spec ProjectPolicySpec) bool {
+	trusted, _ := s.PolicyGrant(root, spec)
+	return trusted
+}
+
+// PolicyGrant is IsTrustedForPolicy that also names where the grant came from:
+// inheritedFrom is the other checkout whose grant a linked worktree shares, and
+// "" when root's own record matches (or nothing does). Revoking a shared grant
+// means revoking it THERE — root has no record of its own to remove — which is
+// why every surface reporting the grant needs the name.
+func (s *TrustStore) PolicyGrant(root string, spec ProjectPolicySpec) (trusted bool, inheritedFrom string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.load()
 	if err != nil {
-		return false
+		return false, ""
 	}
 	want := canonicalPolicyHash(spec)
 	match := func(rec trustRecord) bool { return rec.PolicyHash != "" && rec.PolicyHash == want }
 	if rec, ok := m[canonRoot(root)]; ok && match(rec) {
-		return true
+		return true, ""
 	}
-	return sharedWorktreeGrant(m, root, match)
+	from := sharedWorktreeGrant(m, root, match)
+	return from != "", from
 }
 
 // SetTrustedForProject grants trust for root and binds it to everything the

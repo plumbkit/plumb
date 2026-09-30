@@ -206,6 +206,87 @@ func TestTrust_ForgedWorktreeLinkIsNotTrusted(t *testing.T) {
 	}
 }
 
+// TestTrust_SelfContainedForgedWorktreeIsNotTrusted is the #540 review's
+// bypass: every file of the "worktree" lives in the borrower's own directory.
+// Its .git names evil/fake/worktrees/x, whose back-link names evil/.git (so the
+// back-link check alone passes) and whose commondir names the TRUSTED
+// repository's .git (so it looks like the same repository). Only requiring the
+// linked directory to sit in <common>/worktrees/ — inside the trusted
+// repository, where the borrower cannot write — refuses it.
+func TestTrust_SelfContainedForgedWorktreeIsNotTrusted(t *testing.T) {
+	main, _ := worktreeFixture(t)
+	s := tempTrustStore(t)
+	trustForProject(t, s, main)
+
+	evil := filepath.Join(realTempDir(t), "evil")
+	writeProjectConfig(t, evil, worktreeTrustConfig)
+	linked := filepath.Join(evil, "fake", "worktrees", "x")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		filepath.Join(evil, ".git"):        "gitdir: fake/worktrees/x\n",
+		filepath.Join(linked, "gitdir"):    filepath.Join(evil, ".git") + "\n",
+		filepath.Join(linked, "commondir"): filepath.Join(main, ".git") + "\n",
+	} {
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if policyTrusted(t, s, evil) || tasksTrusted(t, s, evil) {
+		t.Error("a self-contained forged worktree layout borrowed the trusted repository's grant")
+	}
+}
+
+// TestTrust_SharedGrantNamesItsSource: a shared grant can only be revoked where
+// it is recorded, so the grant reports that checkout — and reports nothing for
+// a checkout trusted through its own record.
+func TestTrust_SharedGrantNamesItsSource(t *testing.T) {
+	main, wt := worktreeFixture(t)
+	s := tempTrustStore(t)
+	trustForProject(t, s, main)
+
+	spec, err := ProjectPolicySpecFor(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, from := s.PolicyGrant(wt, spec); !ok || from != main {
+		t.Errorf("PolicyGrant(worktree) = (%v, %q), want (true, %q)", ok, from, main)
+	}
+	cmds, err := ProjectTaskCommands(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, from := s.TaskGrant(wt, cmds); !ok || from != main {
+		t.Errorf("TaskGrant(worktree) = (%v, %q), want (true, %q)", ok, from, main)
+	}
+	if ok, from := s.PolicyGrant(main, spec); !ok || from != "" {
+		t.Errorf("PolicyGrant(main) = (%v, %q), want its own grant (true, \"\")", ok, from)
+	}
+	st, err := ProjectPolicyStatusFor(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.InheritedFrom != main {
+		t.Errorf("ProjectPolicyStatusFor(worktree).InheritedFrom = %q, want %q", st.InheritedFrom, main)
+	}
+
+	// Revoking in the worktree removes nothing — it has no record — so the grant
+	// survives until it is revoked where it lives.
+	if err := s.SetTrusted(wt, false); err != nil {
+		t.Fatal(err)
+	}
+	if !policyTrusted(t, s, wt) {
+		t.Fatal("precondition: the shared grant should survive a revoke in the worktree")
+	}
+	if err := s.SetTrusted(main, false); err != nil {
+		t.Fatal(err)
+	}
+	if policyTrusted(t, s, wt) || tasksTrusted(t, s, wt) {
+		t.Error("the worktree kept the grant after it was revoked at its source")
+	}
+}
+
 // TestTrust_WorktreeOfATrustedSubmoduleSharesItsGrant is the shape the report
 // came from: the trusted checkout is itself a submodule (its .git is a file
 // naming <super>/.git/modules/<name>), and the worktree is one of the

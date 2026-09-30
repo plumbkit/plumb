@@ -71,3 +71,18 @@ func TestGit_TierRefusalNoteOnlyWhenItIsTheExplanation(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectGitNotice_NamesASharedGrantsSource: session_start says where a
+// linked worktree's shared grant lives, because that is the only place it can be
+// revoked; a workspace's own grant adds nothing.
+func TestProjectGitNotice_NamesASharedGrantsSource(t *testing.T) {
+	p := GitPolicy{AllowWrites: true, AllowPush: true}
+	keys := []ProjectGitKey{{Key: "git.allow_push", Value: true}}
+	shared := formatProjectGitNotice("/wt", ProjectGitStatus{Trusted: true, Keys: keys, InheritedFrom: "/main"}, p)
+	if !strings.Contains(shared, "/main") || !strings.Contains(shared, "plumb trust --revoke '/main'") {
+		t.Errorf("shared-grant notice does not name its source and revoke:\n%s", shared)
+	}
+	if own := formatProjectGitNotice("/main", ProjectGitStatus{Trusted: true, Keys: keys}, p); own != "" {
+		t.Errorf("a workspace's own grant produced a notice:\n%s", own)
+	}
+}

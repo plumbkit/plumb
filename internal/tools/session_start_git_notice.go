@@ -49,6 +49,9 @@ type ProjectGitStatus struct {
 	// Workspace is the root the snapshot was taken for — the path a trust grant
 	// would have to name. "" when nothing was captured.
 	Workspace string
+	// InheritedFrom is the checkout whose grant a trusted linked worktree
+	// shares; "" when the grant is the workspace's own (or there is none).
+	InheritedFrom string
 }
 
 // gitPolicyField splits a "git.<field>" policy key. Matched case-INSENSITIVELY
@@ -197,7 +200,7 @@ func formatProjectGitNotice(ws string, st ProjectGitStatus, p GitPolicy) string 
 		return unreadableProjectConfigNotice(ws)
 	}
 	if st.Trusted {
-		return trustedGitOverrideNotice(ws, overriddenGitKeys(st.Keys, p))
+		return inheritedGrantNotice(st) + trustedGitOverrideNotice(ws, overriddenGitKeys(st.Keys, p))
 	}
 	dropped := droppedGitKeys(st.Keys, p)
 	if len(dropped) == 0 {
@@ -220,6 +223,17 @@ func formatProjectGitNotice(ws string, st ProjectGitStatus, p GitPolicy) string 
 		shellQuote(ws), shellQuote(ws))
 	sb.WriteString(gitRemediationTiming)
 	return sb.String()
+}
+
+// inheritedGrantNotice names the checkout a linked worktree's grant is shared
+// from, because that is where it has to be revoked: the worktree has no record
+// of its own. "" for a workspace trusted through its own grant.
+func inheritedGrantNotice(st ProjectGitStatus) string {
+	if st.InheritedFrom == "" {
+		return ""
+	}
+	return fmt.Sprintf("\nShared grant — this linked worktree is trusted through the grant recorded for %s (same repository, "+
+		"identical config). Revoke it there: `plumb trust --revoke %s`.\n", st.InheritedFrom, shellQuote(st.InheritedFrom))
 }
 
 // gitRemediationTiming states when each remediation above actually lands. The

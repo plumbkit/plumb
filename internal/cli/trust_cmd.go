@@ -28,6 +28,10 @@ import (
 // only way to grant without a terminal — see confirmTrust.
 var trustAssumeYes bool
 
+// trustRevoke removes the workspace's grant instead of recording one
+// (`plumb trust --revoke`).
+var trustRevoke bool
+
 var trustCmd = &cobra.Command{
 	Use:   "trust [directory]",
 	Short: "Trust everything this workspace's .plumb/config.toml supplies",
@@ -58,6 +62,8 @@ config until you run this again.`,
 func init() {
 	trustCmd.Flags().BoolVar(&trustAssumeYes, "yes", false,
 		"Skip the confirmation prompt (required to grant trust non-interactively)")
+	trustCmd.Flags().BoolVar(&trustRevoke, "revoke", false,
+		"Remove this workspace's grant instead of recording one")
 }
 
 func runTrust(_ *cobra.Command, args []string) error {
@@ -76,6 +82,9 @@ func runTrust(_ *cobra.Command, args []string) error {
 	spec, err := config.ProjectPolicySpecFor(root)
 	if err != nil {
 		return err
+	}
+	if trustRevoke {
+		return revokeTrust(root, cmds, spec)
 	}
 	// Informed consent: show everything trust is about to bind to — the exact
 	// sets SetTrustedForProject hashes below, covering every language the project
@@ -99,6 +108,45 @@ func runTrust(_ *cobra.Command, args []string) error {
 	// format re-confirms here once.
 	printTrustGrantSummary(root)
 	return nil
+}
+
+// revokeTrust removes root's own grant, then says whether root is STILL
+// trusted through another checkout's: a linked git worktree shares its
+// repository's grant for identical content (#530), and has no record of its own
+// for a revoke to remove. Reporting only "revoked" there would be false —
+// the worktree would keep running the project's commands — so the command
+// names the checkout the grant lives on and the revoke that ends it.
+func revokeTrust(root string, cmds []config.TaskCommandSpec, spec config.ProjectPolicySpec) error {
+	store := config.NewTrustStore()
+	if err := store.SetTrusted(root, false); err != nil {
+		return err
+	}
+	tui.RebuildStyles()
+	fmt.Println(tui.HintStyle.Render("● Revoked any grant recorded for " + root))
+	from := inheritedGrantRoot(store, root, cmds, spec)
+	if from == "" {
+		return nil
+	}
+	fmt.Println()
+	for _, line := range []string{
+		"This workspace is STILL trusted: it is a linked git worktree of the same",
+		"repository as " + from + ",",
+		"and shares the grant recorded there while its config is identical.",
+		"To end it, revoke it there: plumb trust --revoke " + from,
+	} {
+		fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"), tui.MutedStyle.Render(line))
+	}
+	return nil
+}
+
+// inheritedGrantRoot names the checkout whose grant root shares, for either of
+// the two content-bound grants, or "".
+func inheritedGrantRoot(store *config.TrustStore, root string, cmds []config.TaskCommandSpec, spec config.ProjectPolicySpec) string {
+	if _, from := store.PolicyGrant(root, spec); from != "" {
+		return from
+	}
+	_, from := store.TaskGrant(root, cmds)
+	return from
 }
 
 // printTrustGrantSummary is the post-grant record: what the grant covers, and
