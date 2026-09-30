@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // mutationtest_levels.go compares directories repository by repository: each
@@ -37,18 +41,96 @@ func (g gitProbes) chain(ctx context.Context, dir string) []gitProbe {
 		rel, err := filepath.Rel(sp.tree.top, sub.top)
 		switch {
 		case depth == maxSubmoduleDepth:
-			return append(out, gitProbe{place: placeUnknown, reason: "submodules nested more than " + strconv.Itoa(maxSubmoduleDepth) + " deep"})
+			return g.withKeys(ctx, append(out, gitProbe{place: placeUnknown, reason: "submodules nested more than " + strconv.Itoa(maxSubmoduleDepth) + " deep"}))
 		case sp.place != placeTree:
-			return append(out, gitProbe{place: placeUnknown, reason: firstNonEmpty(sp.reason, "git could not identify "+sub.super+", the superproject of "+sub.top)})
+			return g.withKeys(ctx, append(out, gitProbe{place: placeUnknown, reason: firstNonEmpty(sp.reason, "git could not identify "+sub.super+", the superproject of "+sub.top)}))
 		case err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)):
-			return append(out, gitProbe{place: placeUnknown, reason: "the submodule " + sub.top + " is not inside its superproject " + sp.tree.top})
+			return g.withKeys(ctx, append(out, gitProbe{place: placeUnknown, reason: "the submodule " + sub.top + " is not inside its superproject " + sp.tree.top}))
 		}
 		sp.tree.prefix = filepath.ToSlash(rel) + "/" + sub.prefix // sp is a copy: the memo keeps git's own answer
 		sp.approx = sp.approx || p.approx
 		p = sp
 		out = append(out, p)
 	}
-	return out
+	return g.withKeys(ctx, out)
+}
+
+// withKeys sets gitTree.key along a chain, outermost first. The outermost tree,
+// and any tree whose superproject git could not describe, is keyed by its common
+// git directory, except that a LINKED worktree with no superproject takes the key
+// of its repository's main checkout (mainKey): a worktree of a submodule
+// repository is that submodule's copy, and only the checkout knows its
+// superproject. A submodule checkout's git directory is <superproject's own git
+// directory>/modules/<name> (git keeps it there, keyed by the submodule's name,
+// whichever of the superproject's work-trees it is checked out in), so its key is
+// the superproject's key plus modules/<name>. When the git directory is not there
+// (an old checkout with an embedded .git, a git directory read from disk), the
+// submodule is keyed by its common directory alone: a distinct repository.
+func (g gitProbes) withKeys(ctx context.Context, chain []gitProbe) []gitProbe {
+	for i := len(chain) - 1; i >= 0; i-- {
+		t := &chain[i].tree
+		if chain[i].place != placeTree {
+			continue
+		}
+		t.key = t.common
+		if i+1 >= len(chain) || chain[i+1].place != placeTree {
+			if t.linked && t.super == "" && !chain[i].approx {
+				t.key = g.mainKey(ctx, t.common)
+			}
+			continue
+		}
+		super := chain[i+1].tree
+		if super.gitDir == "" {
+			continue
+		}
+		name, err := filepath.Rel(filepath.Join(super.gitDir, "modules"), t.common)
+		if err == nil && name != "." && name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+			t.key = filepath.Join(super.key, "modules", name)
+		}
+	}
+	return chain
+}
+
+// mainKeyPrefix marks gitProbes entries that memoise mainKey, apart from the
+// per-directory probes (no directory path starts with a NUL).
+const mainKeyPrefix = "\x00main:"
+
+// mainKey is the key of the main checkout of the repository whose common git
+// directory is common. A submodule's git directory records its checkout in its own
+// core.worktree (relative to the git directory); that checkout knows its
+// superproject, so it is keyed through its own chain. Without core.worktree the
+// repository is not a submodule's and common is the key. `rev-parse
+// --show-toplevel` must not be used here: with --git-dir and no core.worktree git
+// takes the CALLER's directory as the work-tree, and would name the daemon's.
+func (g gitProbes) mainKey(ctx context.Context, common string) string {
+	memo := mainKeyPrefix + common
+	if p, ok := g[memo]; ok {
+		return p.tree.key
+	}
+	key := common
+	// Seeded before the climb below: a core.worktree cycle (A names B, B names A,
+	// or a linked worktree named as its own checkout) then ends at common
+	// instead of recursing without end.
+	g[memo] = gitProbe{tree: gitTree{key: key}}
+	cmd := exec.CommandContext(ctx, "git", gitNoOptionalLocks, "--git-dir", common, "config", "--local", "--get", "core.worktree") //nolint:gosec // G204: argv is package literals plus a git directory git itself printed
+	cmd.Env = withEnvVar(os.Environ(), "LC_ALL", "C")
+	if out, err := cmd.Output(); err == nil {
+		if wt := strings.TrimSpace(string(out)); wt != "" {
+			if !filepath.IsAbs(wt) {
+				wt = filepath.Join(common, wt)
+			}
+			// Only a checkout of THIS repository counts. core.worktree is a value in a
+			// repository's config, and a stale one (the submodule at that path was
+			// swapped for another) or a hostile one names someone else's checkout,
+			// whose key would move commands into an unrelated repository.
+			c := g.chain(ctx, paths.Canonical(wt))
+			if c[0].place == placeTree && !c[0].tree.linked && !c[0].approx && sameGitPath(c[0].tree.common, common) {
+				key = c[0].tree.key
+			}
+		}
+	}
+	g[memo] = gitProbe{tree: gitTree{key: key}}
+	return key
 }
 
 // sharedLevel finds the innermost repository that git confirms holds the commands'
@@ -67,7 +149,7 @@ func (g gitProbes) sharedLevel(ctx context.Context, dir string, targets []mutati
 		files := make([]gitProbe, len(targets))
 		ok := true
 		for i := range chains {
-			files[i], ok = atCommon(chains[i], run.tree.common)
+			files[i], ok = atKey(chains[i], run.tree.key)
 			if !ok {
 				break
 			}
@@ -79,11 +161,11 @@ func (g gitProbes) sharedLevel(ctx context.Context, dir string, targets []mutati
 	return gitProbe{}, nil, false
 }
 
-// atCommon returns the confirmed answer in chain for the repository whose common
-// git directory is common.
-func atCommon(chain []gitProbe, common string) (gitProbe, bool) {
+// atKey returns the confirmed answer in chain for the repository identified by key
+// (gitTree.key).
+func atKey(chain []gitProbe, key string) (gitProbe, bool) {
 	for _, p := range chain {
-		if p.place == placeTree && !p.approx && sameRepo(p.tree.common, common) {
+		if p.place == placeTree && !p.approx && sameGitPath(p.tree.key, key) {
 			return p, true
 		}
 	}
@@ -91,56 +173,16 @@ func atCommon(chain []gitProbe, common string) (gitProbe, bool) {
 }
 
 // atLevel is placement for a command moved at a shared level: dir's answer for
-// the repository whose common git directory is common, or its outermost answer
-// when that repository does not hold dir (which then fails the re-check).
-func (g gitProbes) atLevel(common string) func(context.Context, string) gitProbe {
+// the repository identified by key, or its outermost answer when that repository
+// does not hold dir (which then fails the re-check).
+func (g gitProbes) atLevel(key string) func(context.Context, string) gitProbe {
 	return func(ctx context.Context, dir string) gitProbe {
 		c := g.chain(ctx, dir)
-		if p, ok := atCommon(c, common); ok {
+		if p, ok := atKey(c, key); ok {
 			return p
 		}
 		return c[len(c)-1]
 	}
-}
-
-// sameRepo reports whether two common git directories are the same repository for
-// re-rooting: equal, or the same submodule of one superproject. A submodule
-// checked out inside a superproject's LINKED worktree keeps its git directory
-// under that worktree's (<git>/worktrees/<id>/modules/<name>), while the main
-// checkout's copy is <git>/modules/<name>; the two hold copies of the same files,
-// so a command in one reaches the other's twin. repoKey folds the first form into
-// the second, at every depth.
-func sameRepo(a, b string) bool {
-	return sameGitPath(repoKey(a), repoKey(b))
-}
-
-// repoKey folds every "worktrees/<id>/modules/" segment of a git directory into
-// "modules/". Only the part below the first ".git" component is folded, so a
-// directory that merely happens to be named worktrees above the repository is left
-// alone; a git directory with no ".git" component (--separate-git-dir, a bare
-// superproject) is folded from its start.
-//
-// Known limit: submodule names may contain "/", so a submodule at path
-// worktrees/<a> with a nested submodule <b> folds to the key of a submodule at
-// modules/<b>. Such a run still moves only into the work-tree that holds the file.
-func repoKey(gitDir string) string {
-	parts := strings.Split(filepath.ToSlash(gitDir), "/")
-	start := -1
-	for i, p := range parts {
-		if p == ".git" {
-			start = i
-			break
-		}
-	}
-	out := parts[: start+1 : start+1] // start == -1 keeps nothing and folds from the top
-	for i := start + 1; i < len(parts); i++ {
-		if parts[i] == "worktrees" && i+2 < len(parts) && parts[i+2] == "modules" {
-			i++ // drop "worktrees" and the id; "modules" follows
-			continue
-		}
-		out = append(out, parts[i])
-	}
-	return filepath.FromSlash(strings.Join(out, "/"))
 }
 
 // splitLevels refuses a run whose files, taken together, share no repository with

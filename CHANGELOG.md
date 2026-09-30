@@ -84,6 +84,20 @@
   attach to finish, so on a reconnect a restored `session_start` pin is never
   overwritten by the client's root, and it does not start an attach once the
   connection has closed.
+- **`mutation_test` no longer mistakes one submodule for another with a
+  look-alike path.** 0.20.3 treated a submodule checked out inside a superproject
+  worktree as the same repository as the main checkout's by folding
+  `worktrees/<id>/modules/` out of git-directory paths. Submodule names may
+  contain `/`, so a submodule at `worktrees/foo` nesting `bar` folded onto an
+  unrelated submodule at `modules/bar`, and the commands were moved into the
+  wrong repository. Repository identity is now built from git's own answers:
+  - a submodule checkout is its superproject's identity plus `modules/<name>`,
+    with the name taken from where git keeps its git directory;
+  - a linked worktree of a submodule repository takes its identity from the
+    checkout that repository's `core.worktree` names.
+
+  No path is pattern-matched, and a `--separate-git-dir` superproject needs no
+  special case.
 
 ## 0.20.3 (2026-09-30)
 
