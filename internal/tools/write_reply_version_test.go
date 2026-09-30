@@ -53,10 +53,8 @@ func editArgs(path string, partial bool, expectedMtime, old, repl string) map[st
 }
 
 // TestEditFile_ReplyMtimeIsTheWrittenVersion: an outsider lands after the
-// rename and before the reply is returned. The reply's mtime must be the one
-// plumb recorded, and a write guarded by it must be refused. (apply_partial
-// formats its header before its first post-write hook, so for it this pins the
-// contract rather than reproducing a live window.)
+// rename and before the reply is rendered. The reply's mtime must be the one
+// plumb recorded, and a write guarded by it must be refused.
 func TestEditFile_ReplyMtimeIsTheWrittenVersion(t *testing.T) {
 	for _, c := range editReplyCases {
 		for _, m := range outsiderModes {
