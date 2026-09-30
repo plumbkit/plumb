@@ -116,7 +116,7 @@ func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce
 
 	resp, isRequest := ss.s.handle(ctx, data)
 	if !isRequest {
-		if peek.Method == "notifications/roots/listChanged" && ss.s.OnRootsChanged != nil {
+		if peek.Method == "notifications/roots/list_changed" && ss.s.OnRootsChanged != nil {
 			go safeRun("OnRootsChanged", func() { ss.s.OnRootsChanged(ctx, ss.makeRequest) })
 		}
 		return

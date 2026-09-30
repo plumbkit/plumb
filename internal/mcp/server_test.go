@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -755,5 +756,48 @@ func TestServer_WriteDeadline_NoDeadlineWriterUnaffected(t *testing.T) {
 	}
 	if out.Len() == 0 {
 		t.Fatal("expected a response on a non-deadline writer regardless of WriteTimeout")
+	}
+}
+
+// TestServer_RootsListChanged_FiresOnSpecMethod drives the notification over the
+// wire, not by calling the handler: the MCP spec names it
+// "notifications/roots/list_changed", and the dispatcher matched the camelCase
+// "notifications/roots/listChanged" (the capability key, not the method) from
+// 0.3.1 on — so no client's folder change ever reached OnRootsChanged, while
+// every test that called onRootsChanged directly stayed green.
+func TestServer_RootsListChanged_FiresOnSpecMethod(t *testing.T) {
+	cases := []struct {
+		method string
+		fires  bool
+	}{
+		{"notifications/roots/list_changed", true},
+		{"notifications/initialized", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			s := newServer()
+			fired := make(chan struct{}, 1)
+			s.OnRootsChanged = func(context.Context, mcp.RequestFn) { fired <- struct{}{} }
+			serverConn, clientConn := net.Pipe()
+			t.Cleanup(func() { _ = clientConn.Close(); _ = serverConn.Close() })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = s.Serve(ctx, serverConn, serverConn) }()
+			go func() { _, _ = io.Copy(io.Discard, clientConn) }()
+			go func() {
+				_, _ = clientConn.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n"))
+				_, _ = clientConn.Write([]byte(`{"jsonrpc":"2.0","method":"` + tc.method + `"}` + "\n"))
+			}()
+			select {
+			case <-fired:
+				if !tc.fires {
+					t.Fatalf("%s fired OnRootsChanged", tc.method)
+				}
+			case <-time.After(time.Second):
+				if tc.fires {
+					t.Fatalf("%s never reached OnRootsChanged", tc.method)
+				}
+			}
+		})
 	}
 }

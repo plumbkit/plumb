@@ -122,7 +122,8 @@ type ServerInfo struct {
 // to send server-initiated notifications (e.g. notifications/tools/list_changed).
 //
 // OnRootsChanged, if set, is called in a goroutine each time the client sends
-// a notifications/roots/listChanged notification.
+// a notifications/roots/list_changed notification (the spec method name;
+// "listChanged" is only the capability key).
 //
 // Concurrency: Register and setting callbacks must finish before Serve is called.
 // Serve handles individual requests concurrently.
