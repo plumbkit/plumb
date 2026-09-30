@@ -71,3 +71,28 @@ func (t *SessionStart) lspDiagMode() string {
 	}
 	return t.lspDiagModeFn()
 }
+
+// WithLSPGoWorkOff wires an accessor for the go.work the session's primary
+// language server was started with GOWORK=off against ("" when its environment
+// was left alone). session_start names it in the identity block: an agent in a
+// worktree otherwise has no way to tell why the server answers about the
+// worktree while `go` in its own shell, under the same go.work, does not (#521).
+// Nil-safe. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPGoWorkOff(fn func() string) *SessionStart {
+	t.lspGoWorkFn = fn
+	return t
+}
+
+// lspGoWorkNote renders the GOWORK=off identity line, ending in a newline, or
+// "" when the primary server runs with the environment it inherited.
+func (t *SessionStart) lspGoWorkNote() string {
+	if t.lspGoWorkFn == nil {
+		return ""
+	}
+	work := t.lspGoWorkFn()
+	if work == "" {
+		return ""
+	}
+	return "Go LSP:   runs with GOWORK=off — " + work + " lists another copy of this module " +
+		"(set GOWORK in [lsp.go] env to override)\n"
+}

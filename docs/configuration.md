@@ -386,6 +386,16 @@ hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
 `log -1`, `rev-parse`, `diff --cached`) are plumbing whose output plumb parses,
 and deliberately keep inheriting.
 
+The same `GOWORK` decision is made for the **Go language server** plumb starts
+for a workspace root, keyed on that root: gopls resolves the same `go.work`, and
+from a worktree it would otherwise answer `workspace_symbols` from the main
+checkout and never type-check the worktree's files. A `GOWORK` under
+`[lsp.go]`'s `env`, or in gopls's own `env` setting under
+`[lsp.go.initialization_options]`, is a choice and is used as is. `session_start` shows a `Go LSP:` line naming the `go.work`
+when the server runs with `GOWORK=off`, and the daemon log says so when it
+starts one. The decision is made when the server starts: a server already
+running keeps the environment it started with.
+
 **A project's entries compose with your global ones**, the way every other
 setting in this file does: the project's value wins for the names it sets, and a
 global entry it does not mention survives. Any of the three TOML spellings gives

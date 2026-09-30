@@ -67,3 +67,14 @@ func (s *connSession) lspDiagMode() string {
 	}
 	return s.sessionProxy.DiagMode("")
 }
+
+// lspGoWorkOff returns the go.work this session's primary language server was
+// started with GOWORK=off against, or "" when none was switched off.
+// session_start names it, so an agent in a worktree knows why the server answers
+// about the worktree and not the checkout its go.work lists (#521).
+func (s *connSession) lspGoWorkOff() string {
+	if s.acquiredLanguageName() == "" {
+		return ""
+	}
+	return s.sessionProxy.GoWorkOff()
+}
