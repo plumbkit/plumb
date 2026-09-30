@@ -292,7 +292,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	// line-by-line, so an over-cap file stays searchable) instead of returning a
 	// positional window.
 	if a.Pattern != "" {
-		return t.searchWithinFile(ctx, fpath, info, concurrentNote, a)
+		return t.searchWithinFile(ctx, fpath, concurrentNote, a)
 	}
 
 	body, snap, err := readFileBody(fpath, a)
@@ -309,7 +309,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		firstLine = *body.start
 	}
 	largeNote := t.largeReadNote(fpath, len(body.content), body.truncated, body.ranged)
-	return t.formatOutput(mtime, sha, body.content, info.Size(), firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
+	return t.formatOutput(mtime, sha, body.content, snap.size, firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
 }
 
 // readBody is the decoded result of reading (a slice of) a file.
