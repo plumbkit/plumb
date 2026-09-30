@@ -610,8 +610,8 @@ identity to attribute it to. With it on, such a write resolved through the
 connection's pin, so one agent's edit could land in another agent's checkout,
 which is what happened on Claude desktop's connector before it could carry the
 identity stamp. A refused call now names the remedy instead: the Claude Code
-identity hook (`plumb hooks install claude-code`), `plumb_agent` on every call
-for a client without the hook, or one `plumb serve` per agent. A config that
+identity hook (`plumb hooks install claude-code`), a per-call `_meta` identity
+for a client whose transport can set one, or one `plumb serve` per agent. A config that
 still sets the key loads, and the refusal says the key is ignored.
 
 **Trust split.** The four channel switches — `intents`, `mailbox`,

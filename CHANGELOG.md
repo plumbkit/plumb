@@ -12,7 +12,7 @@
   `[collab] allow_unidentified_writes`. On Claude desktop's connector both
   applied, and an agent's edit landed in another agent's checkout. Both are
   gone. Such a call is refused with the remedy: the Claude Code identity hook,
-  `plumb_agent` on every call for a client without the hook, or one
+  a per-call `_meta` identity for a client whose transport can set one, or one
   `plumb serve` per agent. **`allow_unidentified_writes` is retired**: a
   config that sets it still loads, and the refusal says the key is ignored. A
   single-agent connection is unaffected.

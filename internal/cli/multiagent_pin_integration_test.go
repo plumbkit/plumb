@@ -459,7 +459,7 @@ func testAnonymousStateChangeStillRefused(t *testing.T) {
 	}
 	// session_start.session_id is deliberately NOT offered as a remedy: it
 	// identifies that one call, not later ones (PLAN-394).
-	for _, want := range []string{"one plumb serve per agent", mcp.MetaLogicalAgentKey, mcp.ArgLogicalAgentDeclaredKey} {
+	for _, want := range []string{"one plumb serve per agent", mcp.MetaLogicalAgentKey, "plumb hooks install claude-code"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal missing %q: %s", want, err)
 		}

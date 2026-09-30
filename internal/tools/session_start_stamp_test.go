@@ -35,13 +35,14 @@ func TestStampChannelNoteWarnsWhenSharedAndUnstamped(t *testing.T) {
 		t.Fatal("a shared connection with no per-call stamp must warn; got no note")
 	}
 	// Every remedy that can apply: the hook for Claude Code (which, since the
-	// connector declares plumb_agent, now works on Claude desktop too), the
-	// declared key for a client without the hook, and the transport remedy.
+	// connector declares plumb_agent, now works on Claude desktop too), _meta,
+	// and the transport remedy. Never "type plumb_agent yourself": without the
+	// hook an invented id is admitted as a fresh agent on the connection root.
 	if !strings.Contains(got, "plumb hooks install") {
 		t.Errorf("note must name the hook: %q", got)
 	}
-	if !strings.Contains(got, "plumb_agent") {
-		t.Errorf("note must name the hookless remedy: %q", got)
+	if strings.Contains(got, "plumb_agent") {
+		t.Errorf("note must not invite a model to type plumb_agent: %q", got)
 	}
 	if !strings.Contains(got, "one plumb serve per") {
 		t.Errorf("note must still name the transport remedy, got %q", got)
@@ -62,8 +63,8 @@ func TestStampChannelNoteWarnsBeforeTheConnectionIsShared(t *testing.T) {
 	}
 	// No "never locked out" promise any more: once a second agent attaches,
 	// unstamped writes are refused whether or not anyone has stamped before.
-	if !strings.Contains(got, "once a second agent attaches") || !strings.Contains(got, "plumb_agent") {
-		t.Errorf("the dormant note must state when refusals start and the hookless remedy: %q", got)
+	if !strings.Contains(got, "once a second agent attaches") || strings.Contains(got, "plumb_agent") {
+		t.Errorf("the dormant note must state when refusals start, and not invite typing plumb_agent: %q", got)
 	}
 }
 
