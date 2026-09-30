@@ -11,9 +11,13 @@
   on one machine held 499 of them and not one "roots changed" line. A
   connection kept the root it reported at connect time until a `session_start`
   moved it, so a client whose folder changed kept resolving relative paths
-  against the old project. The handler now runs: a connection whose pin came
-  from the client's roots follows the new folder, and a pin set by an explicit
-  `session_start` still outranks roots (issue #182).
+  against the old project. The handler now runs. A pin that was not set by an
+  explicit `session_start` follows the client's new folder, and read, write and
+  undo tracking restart with it, as on any re-pin; a `session_start` pin still
+  outranks roots (issue #182). The handler waits for the connection's initial
+  attach to finish, so on a reconnect a restored `session_start` pin is never
+  overwritten by the client's root, and it does nothing after the connection
+  closes.
 
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime

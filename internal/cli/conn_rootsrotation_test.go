@@ -133,6 +133,7 @@ func TestRootsChanged_LogsReceivedRootsBounded(t *testing.T) {
 	})
 
 	s := newPersistSession(t, store, ss, "proxyX")
+	s.markInitSettled() // production: OnInit has run before any roots notification
 	buf := captureLog(s)
 	s.handleRootsListChanged(context.Background(), fake)
 

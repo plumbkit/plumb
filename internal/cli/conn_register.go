@@ -349,6 +349,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.OnAfterTool = s.afterToolFromCtx
 	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn, notify mcp.NotifyFn) {
+		defer s.markInitSettled()
 		// Capture the notifier and seed the last-advertised profile so a later
 		// profile-changing reload is detected against the seed (no spurious fire).
 		s.mutate(func(v *sessionView) {

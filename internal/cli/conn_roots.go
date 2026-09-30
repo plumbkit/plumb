@@ -24,13 +24,44 @@ import (
 // up to the bound, so logging after it could make the protected grep line hard
 // to find for exactly the hung-client case an operator is diagnosing. The
 // received list follows on its own "roots received" line.
+//
+// It waits for OnInit's attach ladder first. The two run in separate
+// goroutines, and a first-attach here that beat the ladder would skip its
+// restore of a persisted session_start pin (rung 1b) and overwrite the stored
+// row with the client's root — a silent cross-repo move on reconnect. After
+// the connection closes it does nothing: an attach then would hold a language
+// server reference close() has already released.
 func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
+	if !s.awaitInitSettled(ctx) {
+		return
+	}
 	s.setClientRequest(request)
 	s.log().Info("daemon: roots changed — re-fetching workspace root")
 	roots := rootsFromClient(ctx, request, s.log())
 	s.log().Info("daemon: roots received", "count", len(roots), "roots", boundedForLog(roots, 8))
+	if s.ctx.Err() != nil {
+		return
+	}
 	s.onRootsChanged(ctx, roots)
 	s.startConfigWatcher()
+}
+
+// markInitSettled records that OnInit's attach ladder has finished. Idempotent.
+func (s *connSession) markInitSettled() {
+	s.initSettledOnce.Do(func() { close(s.initSettled) })
+}
+
+// awaitInitSettled blocks until the attach ladder has run, reporting false when
+// the call or the connection ends first.
+func (s *connSession) awaitInitSettled(ctx context.Context) bool {
+	select {
+	case <-s.initSettled:
+		return s.ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	case <-s.ctx.Done():
+		return false
+	}
 }
 
 // onRootsChanged applies a client's updated workspace roots (the
