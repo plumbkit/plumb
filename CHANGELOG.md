@@ -4,6 +4,26 @@
 
 ### Fixed
 
+- **The identity hook re-asks a daemon that was swapped within the minute.**
+  The Claude Code identity hook caches, for a minute, the daemon's version
+  and whether it accepts `plumb_agent`. If the daemon was replaced inside
+  that minute by an older build that does not accept `plumb_agent`, the hook
+  kept stamping it from the cache and every plumb call was refused as an
+  unknown parameter until the cache expired. The cache is now tied to the
+  daemon instance (its PID file plus the control socket's inode and
+  modification time), so a restarted or swapped daemon is asked again. When
+  those cannot be read the hook asks the daemon instead of trusting the cache.
+  (#532)
+- **`plumb hooks` reports a daemon that does not accept `plumb_agent`.** A
+  daemon from 0.19.1 to 0.20.3 accepts the identity stamp only under the key
+  Claude desktop's connector strips, so desktop sessions lost their per-agent
+  identity while the status showed nothing wrong. The status now says so and
+  suggests upgrading and restarting the daemon. (#515)
+- **The tool-schema size in `session_start` counts `plumb_agent`.** For Claude
+  desktop's connector every advertised tool schema carries the `plumb_agent`
+  property, about 80 bytes per tool, but the profile surcharge measured the
+  schemas without it. It now measures the schemas as that connection is served
+  them. (#515)
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 )
@@ -131,5 +132,129 @@ func TestIdentityProbe_TransientKeysFailureIsNotCached(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wakeDir(), identityProbeCacheFile)); err == nil {
 		t.Fatal("an unanswered identity-keys probe was cached as a definitive no")
+	}
+}
+
+// currentDaemon answers like a daemon that lifts plumb_agent.
+func currentDaemon(version string) func(net.Conn, string) {
+	return func(c net.Conn, line string) {
+		switch line {
+		case "version":
+			_, _ = c.Write([]byte("ok " + version + "\n"))
+		case ctrlIdentityKeysCommand:
+			_, _ = c.Write([]byte(identityKeysReply()))
+		}
+	}
+}
+
+func writePIDFile(t *testing.T, pid string) {
+	t.Helper()
+	if err := os.WriteFile(daemonPIDPath(), []byte(pid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIdentityProbe_DaemonSwappedInsideTheMinuteIsReprobed is #532's
+// reproduction through the real probe: the cache holds a current daemon's
+// "plumb_agent is fine", the daemon is replaced inside the minute by an older
+// build that does not lift it, and the next call must ask the new daemon
+// rather than stamp a key it rejects as an unknown parameter.
+func TestIdentityProbe_DaemonSwappedInsideTheMinuteIsReprobed(t *testing.T) {
+	probeTestEnv(t)
+	writePIDFile(t, "4101")
+	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
+	if got := probedStampKey(); got != mcp.ArgLogicalAgentDeclaredKey {
+		t.Fatalf("control: the current daemon got key %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(wakeDir(), identityProbeCacheFile)); err != nil {
+		t.Fatalf("control: the current daemon's answer was not cached: %v", err)
+	}
+
+	// The swap: a new process (new PID) binds a new control socket.
+	writePIDFile(t, "4102")
+	fakeCtrlDaemon(t, preKeysDaemon("0.20.3"))
+	if got := probedStampKey(); got != mcp.ArgLogicalAgentKey {
+		t.Fatalf("after a swap to a daemon that does not lift plumb_agent the hook stamped %q from the old daemon's cache", got)
+	}
+}
+
+// TestDaemonInstanceMarker: the marker moves when either half of the
+// instance changes, and is "" — a miss — when either cannot be read.
+func TestDaemonInstanceMarker(t *testing.T) {
+	probeTestEnv(t)
+	if got := daemonInstanceMarker(); got != "" {
+		t.Fatalf("no PID file and no socket must be no marker, got %q", got)
+	}
+	writePIDFile(t, "4101")
+	if got := daemonInstanceMarker(); got != "" {
+		t.Fatalf("a PID file with no control socket must be no marker, got %q", got)
+	}
+	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
+	a := daemonInstanceMarker()
+	if a == "" {
+		t.Fatal("a PID file and a live control socket must give a marker")
+	}
+	if again := daemonInstanceMarker(); again != a {
+		t.Fatalf("the marker is not stable for one instance: %q then %q", a, again)
+	}
+
+	writePIDFile(t, "4102")
+	if b := daemonInstanceMarker(); b == a || b == "" {
+		t.Fatalf("a new PID must move the marker: %q then %q", a, b)
+	}
+
+	// Same PID (a container restart), socket re-bound by the new process.
+	writePIDFile(t, "4101")
+	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
+	if c := daemonInstanceMarker(); c == a || c == "" {
+		t.Fatalf("a re-bound control socket must move the marker even under the same PID: %q then %q", a, c)
+	}
+
+	for _, empty := range []string{"", "  \n"} {
+		writePIDFile(t, empty)
+		if got := daemonInstanceMarker(); got != "" {
+			t.Fatalf("an empty PID file (%q) must be no marker, got %q", empty, got)
+		}
+	}
+	_ = os.Remove(daemonPIDPath())
+	if got := daemonInstanceMarker(); got != "" {
+		t.Fatalf("a missing PID file must be no marker, got %q", got)
+	}
+}
+
+// TestDaemonIdentity_CacheIsKeyedOnTheInstance covers the cache rule without
+// a daemon: a record answers only for the instance it was written for, and
+// an unreadable marker neither hits nor writes.
+func TestDaemonIdentity_CacheIsKeyedOnTheInstance(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	probes := 0
+	older := func() (identityProbeRecord, error) {
+		probes++
+		return identityProbeRecord{DaemonVersion: "0.20.3"}, nil
+	}
+	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, DaemonInstance: "A", CheckedAt: now})
+
+	if rec := daemonIdentity(older, "A", cache, now.Add(10*time.Second)); !rec.DeclaredKey || probes != 0 {
+		t.Fatalf("control: the same instance inside the minute must hit: %+v, probes=%d", rec, probes)
+	}
+	if rec := daemonIdentity(older, "B", cache, now.Add(20*time.Second)); rec.DeclaredKey || probes != 1 {
+		t.Fatalf("another instance must re-probe: %+v, probes=%d", rec, probes)
+	}
+	if rec, _ := readIdentityProbe(cache); rec.DaemonInstance != "B" || rec.DeclaredKey {
+		t.Fatalf("the re-probe must be cached for the new instance: %+v", rec)
+	}
+
+	// An unreadable marker is a miss even against a record that also lacks
+	// one (a cache written by an older hook binary).
+	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, CheckedAt: now})
+	probes = 0
+	if rec := daemonIdentity(older, "", cache, now.Add(10*time.Second)); rec.DeclaredKey || probes != 1 {
+		t.Fatalf("no marker must re-probe, never trust the cache: %+v, probes=%d", rec, probes)
+	}
+	fresh := filepath.Join(t.TempDir(), identityProbeCacheFile)
+	daemonIdentity(older, "", fresh, now)
+	if _, err := os.Stat(fresh); err == nil {
+		t.Fatal("an answer with no instance marker was cached; no later call could ever match it")
 	}
 }

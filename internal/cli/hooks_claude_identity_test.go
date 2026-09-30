@@ -192,7 +192,7 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 				return identityProbeRecord{DaemonVersion: v}, err
 			}
 		}
-		return daemonVersionAcceptsStamp(daemonIdentity(p, cache, now).DaemonVersion)
+		return daemonVersionAcceptsStamp(daemonIdentity(p, "pid=1 ino=2 mtime=3", cache, now).DaemonVersion)
 	}
 	cache := filepath.Join(t.TempDir(), "probe", identityProbeCacheFile)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -242,10 +242,10 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 func TestIdentityHookSkewNote(t *testing.T) {
 	installed := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateInstalled}}
 	missing := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateMissing}}
-	current := func() (string, error) { return "0.19.1", nil }
-	old := func() (string, error) { return "0.19.0", nil }
-	down := func() (string, error) { return "", errDaemonNotRunning }
-	mute := func() (string, error) { return "", errDaemonVersionUnknown }
+	current := statusProbe("0.19.1", true, nil)
+	old := statusProbe("0.19.0", false, nil)
+	down := statusProbe("", false, errDaemonNotRunning)
+	mute := statusProbe("", false, errDaemonVersionUnknown)
 
 	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, current); got != "" {
 		t.Errorf("a current daemon needs no note, got %q", got)
@@ -266,7 +266,7 @@ func TestIdentityHookSkewNote(t *testing.T) {
 	// error on the socket and a wedged listener both land here; telling the
 	// reader to restart a daemon that is answering, or to wait for one that is
 	// already up, sends them to fix something that is not broken.
-	opaque := func() (string, error) { return "", errors.New("dialling the daemon control socket: permission denied") }
+	opaque := statusProbe("", false, errors.New("dialling the daemon control socket: permission denied"))
 	got := identityHookSkewNote(claudeCodeHooksTarget, installed, opaque)
 	if !strings.Contains(got, "permission denied") {
 		t.Errorf("an unclassified probe failure must quote what actually happened, got %q", got)
@@ -280,6 +280,58 @@ func TestIdentityHookSkewNote(t *testing.T) {
 	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, nil); got != "" {
 		t.Errorf("no probe, no note; got %q", got)
 	}
+}
+
+// statusProbe is a fixed identityHookSkewNote probe answer.
+func statusProbe(version string, declared bool, err error) func() (identityProbeRecord, error) {
+	return func() (identityProbeRecord, error) {
+		return identityProbeRecord{DaemonVersion: version, DeclaredKey: declared}, err
+	}
+}
+
+// TestIdentityHookSkewNote_DeclaredKey (#515): a daemon new enough for the
+// channel but not listing plumb_agent gets the reverse-DNS stamp, which
+// Claude desktop's connector strips — the status must say so, and must stay
+// quiet for a daemon that lists it or one whose answer was not observed.
+func TestIdentityHookSkewNote_DeclaredKey(t *testing.T) {
+	installed := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateInstalled}}
+	for _, v := range []string{"0.19.1", "0.20.3", "dev"} {
+		got := identityHookSkewNote(claudeCodeHooksTarget, installed, statusProbe(v, false, nil))
+		for _, want := range []string{v, mcp.ArgLogicalAgentDeclaredKey, "Claude desktop", "strip", "plumb restart"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("daemon %s without %s: the note must carry %q, got %q", v, mcp.ArgLogicalAgentDeclaredKey, want, got)
+			}
+		}
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, statusProbe("0.20.3", true, nil)); got != "" {
+		t.Errorf("a daemon that lists %s needs no note, got %q", mcp.ArgLogicalAgentDeclaredKey, got)
+	}
+	uncertain := func() (identityProbeRecord, error) {
+		return identityProbeRecord{DaemonVersion: "0.21.0", uncertain: true}, nil
+	}
+	if got := identityHookSkewNote(claudeCodeHooksTarget, installed, uncertain); got != "" {
+		t.Errorf("an identity-keys answer that was never observed must not be reported as a no, got %q", got)
+	}
+}
+
+// TestIdentityHookSkewNote_DeclaredKeyThroughTheRealProbe drives the probe
+// `plumb hooks` uses against fake daemons, both directions.
+func TestIdentityHookSkewNote_DeclaredKeyThroughTheRealProbe(t *testing.T) {
+	installed := []hookState{{entry: hookEntry{event: "PreToolUse"}, state: hookStateInstalled}}
+	t.Run("without plumb_agent", func(t *testing.T) {
+		probeTestEnv(t)
+		fakeCtrlDaemon(t, preKeysDaemon("0.20.3"))
+		if got := identityHookSkewNote(claudeCodeHooksTarget, installed, probeDaemonIdentity); !strings.Contains(got, mcp.ArgLogicalAgentDeclaredKey) || !strings.Contains(got, "strip") {
+			t.Errorf("a 0.20.3 daemon does not lift %s; the status must say desktop strips the stamp, got %q", mcp.ArgLogicalAgentDeclaredKey, got)
+		}
+	})
+	t.Run("with plumb_agent", func(t *testing.T) {
+		probeTestEnv(t)
+		fakeCtrlDaemon(t, currentDaemon("0.20.4"))
+		if got := identityHookSkewNote(claudeCodeHooksTarget, installed, probeDaemonIdentity); got != "" {
+			t.Errorf("a daemon listing %s needs no note, got %q", mcp.ArgLogicalAgentDeclaredKey, got)
+		}
+	})
 }
 
 // TestClassifyDialError: only a missing socket or a refused connection may be
@@ -520,7 +572,7 @@ func TestIdentityHookSkewNoteOlderInstall(t *testing.T) {
 	}
 	// The config fact outranks every daemon case below it: with the hook
 	// absent there is nothing to stamp, so a restart would fix nothing.
-	if got := identityHookSkewNote(claudeCodeHooksTarget, olderInstall, func() (string, error) { return "0.19.0", nil }); !strings.Contains(got, "plumb hooks install claude-code") || strings.Contains(got, "plumb restart") {
+	if got := identityHookSkewNote(claudeCodeHooksTarget, olderInstall, statusProbe("0.19.0", false, nil)); !strings.Contains(got, "plumb hooks install claude-code") || strings.Contains(got, "plumb restart") {
 		t.Errorf("a missing hook outranks an old daemon, got %q", got)
 	}
 
@@ -667,10 +719,10 @@ func TestDaemonIdentity_CachesTheDeclaredKey(t *testing.T) {
 		probes++
 		return identityProbeRecord{DaemonVersion: "0.20.3", DeclaredKey: true}, nil
 	}
-	if rec := daemonIdentity(probe, cache, now); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(probe, "pid=1 ino=2 mtime=3", cache, now); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("first probe: %+v, probes=%d", rec, probes)
 	}
-	if rec := daemonIdentity(probe, cache, now.Add(30*time.Second)); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(probe, "pid=1 ino=2 mtime=3", cache, now.Add(30*time.Second)); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("cached answer lost the declared key: %+v, probes=%d", rec, probes)
 	}
 }
