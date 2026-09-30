@@ -377,7 +377,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	perCallCtx := ctx
 	ctx = t.withDeclaredAgent(ctx, raw)
 	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
-	repinLine := repinAnnouncement(raw, repinnedFrom, ws)
+	repinLine := repinAnnouncement(repinnedFrom, ws)
 	if err != nil {
 		return "", err
 	}

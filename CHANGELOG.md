@@ -24,16 +24,16 @@
   but runs no hook. Declared identities are not forgotten while the
   connection lives, so such a client's writes stay refused until it
   restarts (a fresh connection) or runs one `plumb serve` per conversation.
-  Reads are never refused. On a connection where only one identity has been
+  Read-only file and navigation tools are never refused; `git`,
+  `check_messages` and `run_task` are. On a connection where only one identity has been
   declared, an unidentified call still resolves against the connection's
   pin, as before.
 
-- **`session_start` says which pin a re-pin moved.** It printed "Re-pinned
-  this connection" even when only the calling agent's own pin moved. It now
-  prints `Re-pinned: <from> → <to>` for your own pin, and names the
-  connection only for `scope: "connection"`, which moves every agent without
-  its own pin. The no-identity notices and `plumb doctor`'s shared-connection
-  fix now describe the current refusal rule.
+- **`session_start` no longer claims it re-pinned the connection.** It
+  printed "Re-pinned this connection" even when only the calling agent's own
+  pin moved; it now prints `Re-pinned: <from> → <to>`. The no-identity
+  notices, `plumb doctor`'s shared-connection fix and the client instruction
+  templates now describe the current refusal rule.
 
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one

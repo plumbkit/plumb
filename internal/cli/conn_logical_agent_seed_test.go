@@ -79,8 +79,8 @@ func TestSeedWithNothingIsANoOp(t *testing.T) {
 }
 
 // The seed, driven directly (it is unwired in production): two agents recorded
-// pins under this proxy session before the daemon went down, so once seeded and
-// once a caller has stamped, the connection refuses an unattributable write —
+// pins under this proxy session before the daemon went down, so once seeded the
+// connection refuses an unattributable write —
 // not from whenever the second agent happens to re-declare.
 func TestSeedFromStateArmsTheGate(t *testing.T) {
 	store, ss := newOriginStore(t)
