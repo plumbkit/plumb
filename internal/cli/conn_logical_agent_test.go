@@ -146,9 +146,8 @@ func TestSharedMarkSurvivesAHealthClearingRepin(t *testing.T) {
 	})
 
 	// The connection has not stopped being shared, and its peers keep
-	// declaring themselves. recordLogicalAgentCall, not the bare record: the
-	// ceiling arms on a client having DEMONSTRATED it can stamp, and this test
-	// is about the health mark surviving a re-pin, not about that condition.
+	// declaring themselves; this test is about the health mark surviving a
+	// re-pin.
 	s.recordLogicalAgentCall("C")
 	if !s.logicalAgents.refuse("") {
 		t.Fatal("sanity: the connection must still be shared, so anonymous state-changing calls are still refused")

@@ -579,9 +579,8 @@ func testAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"workspace": ws, "session_id": "subagent-last"}); err != nil {
 		t.Fatalf("subagent session_start: %v", err)
 	}
-	// This models a client whose per-call identity channel WORKS — most of them.
-	// The ceiling arms on demonstrated capability, because refusing a client
-	// that can never stamp routes nothing and costs it the whole write lane.
+	// A stamped call, as from a client whose per-call channel works. (The
+	// ceiling is armed by the two declarations alone; this is not required.)
 	m.s.recordLogicalAgentCall("coordinator")
 
 	// The anonymous call resolves to the connection's pin — no peer's shard.

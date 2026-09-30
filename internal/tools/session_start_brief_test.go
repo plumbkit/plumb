@@ -272,3 +272,21 @@ func TestSessionStartBrief_JoinNamesCap(t *testing.T) {
 		t.Errorf("over cap: got %q, want exactly %d commas (n shown names + the tail)", got, maxListedBriefNames)
 	}
 }
+
+// TestRepinAnnouncement_SaysWhichPinMoved: "this connection" only when the
+// connection's pin moved (scope "connection"), since peers follow that one.
+func TestRepinAnnouncement_SaysWhichPinMoved(t *testing.T) {
+	if got := repinAnnouncement(json.RawMessage(`{"workspace":"/b"}`), "", "/b"); got != "" {
+		t.Errorf("nothing moved, got %q", got)
+	}
+	if got := repinAnnouncement(json.RawMessage(`{"workspace":"/b","scope":"agent"}`), "/a", "/b"); got != "Re-pinned: /a → /b\n\n" {
+		t.Errorf("agent scope: %q", got)
+	}
+	if got := repinAnnouncement(json.RawMessage(`{"workspace":"/b"}`), "/a", "/b"); got != "Re-pinned: /a → /b\n\n" {
+		t.Errorf("default scope: %q", got)
+	}
+	got := repinAnnouncement(json.RawMessage(`{"workspace":"/b","scope":"connection","force":true}`), "/a", "/b")
+	if !strings.HasPrefix(got, "Re-pinned this connection") || !strings.Contains(got, "/a → /b") {
+		t.Errorf("connection scope must say the connection moved: %q", got)
+	}
+}

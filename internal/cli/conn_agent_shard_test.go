@@ -313,8 +313,8 @@ func TestAnonymousCallOnSharedConnectionFailsClosed(t *testing.T) {
 	if _, err := s.policyFor(anonymous).Check(filepath.Join(rootPeer, "x.go"), tools.AccessReadWrite); err == nil {
 		t.Error("the boundary admits a path in the peer's project for an anonymous call — the inherited shard's policy is the fail-open")
 	}
-	// The ceiling arms on demonstrated capability: a client that has never
-	// stamped a call cannot act on the refusal, so it is not refused.
+	// A stamped call from a peer; the ceiling is already armed by the two
+	// declarations, and an anonymous write stays refused.
 	s.recordLogicalAgentCall("agent-a")
 	if err := s.refuseSharedStateChange(anonymous, "write_file", ""); err == nil {
 		t.Error("an anonymous state-changing call on a shared connection must be refused")

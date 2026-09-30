@@ -170,3 +170,22 @@ func (t *SessionStart) forceLanguage(ctx context.Context, current, language stri
 	}
 	return current, "", nil
 }
+
+// repinAnnouncement renders the re-pin line, or "" when nothing moved. It says
+// which pin moved: scope "connection" moves the connection's pin, which every
+// agent without its own pin follows; otherwise the caller's own pin moved (on a
+// single-agent connection that is the connection's pin too, and no one else is
+// affected either way).
+func repinAnnouncement(raw json.RawMessage, from, to string) string {
+	if from == "" {
+		return ""
+	}
+	var a struct {
+		Scope string `json:"scope"`
+	}
+	_ = json.Unmarshal(raw, &a)
+	if a.Scope == "connection" {
+		return fmt.Sprintf("Re-pinned this connection (agents without their own pin follow): %s → %s\n\n", from, to)
+	}
+	return fmt.Sprintf("Re-pinned: %s → %s\n\n", from, to)
+}
