@@ -14,12 +14,13 @@ import (
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
-// repinnedFrom is the rendered re-pin line (repinAnnouncement), or "".
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string) {
+// ws is the root the CALLER resolves against, which after a scope:
+// "connection" re-pin by an agent holding its own pin is not the connection's
+// new root (issue #517). repinLine is the rendered re-pin block
+// (repinAnnouncement), or "".
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinLine string, linked bool, stampNote string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
-	if repinnedFrom != "" {
-		sb.WriteString(repinnedFrom)
-	}
+	sb.WriteString(repinLine)
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}

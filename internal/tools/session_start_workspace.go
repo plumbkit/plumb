@@ -13,10 +13,55 @@ import (
 	"fmt"
 )
 
-// resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is
-// the previous root when an explicit `workspace` argument switched an
-// already-pinned connection to a different project; it is empty otherwise.
-func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (ws string, repinnedFrom string, err error) {
+// PinScope names which pin a session_start re-pin moved: the calling agent's own
+// per-agent pin, or the connection's pin, which every agent on the connection
+// that has not chosen a root of its own follows.
+type PinScope string
+
+const (
+	// PinScopeAgent is the caller's own per-agent pin on a shared connection.
+	PinScopeAgent PinScope = "agent"
+	// PinScopeConnection is the connection's pin: an anonymous caller's, a
+	// single-agent connection's, or the one scope: "connection" moves.
+	PinScopeConnection PinScope = "connection"
+)
+
+// RepinReport is what the re-pin callback reports back. Which pin moves is
+// decided in the daemon, from facts the tool cannot see (whether the
+// connection is shared, whether the caller is identified, whether it holds a
+// pin of its own), so the daemon reports it rather than the tool guessing from
+// the call's arguments — a guess was wrong for an anonymous caller on a shared
+// connection (issue #517).
+type RepinReport struct {
+	// Root is the requested folder's resolved root.
+	Root string
+	// Scope is the pin the re-pin moved (or, on a no-op, would have moved).
+	Scope PinScope
+	// From is that pin's root before the call. Equal to Root when nothing moved.
+	From string
+	// Followers counts the OTHER agents whose pins followed the connection's
+	// when it moved. Always 0 for PinScopeAgent.
+	Followers int
+	// Effective is the root the caller's next unqualified (relative-path) call
+	// resolves against. It differs from Root when an agent with a pin of its own
+	// moves the connection's pin: the agent itself stays where it was. Empty
+	// means Root.
+	Effective string
+}
+
+// effectiveRoot is the root the caller resolves against after the re-pin.
+func (r RepinReport) effectiveRoot() string {
+	if r.Effective != "" {
+		return r.Effective
+	}
+	return r.Root
+}
+
+// resolveSessionWorkspace resolves the workspace for this call: the root the
+// CALLER resolves against, which is what the packet's header names. repinLine
+// is the rendered re-pin announcement when an explicit `workspace` argument
+// moved a pin to a different project, and "" otherwise.
+func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (ws string, repinLine string, err error) {
 	var a struct {
 		Workspace string `json:"workspace"`
 		Language  string `json:"language"`
@@ -74,14 +119,14 @@ func (t *SessionStart) resolveUnattachedWorkspace(ctx context.Context, workspace
 	if t.repin == nil {
 		return workspace, nil
 	}
-	root, err := t.repin(ctx, workspace, language, force, connScope)
+	rep, err := t.repin(ctx, workspace, language, force, connScope)
 	if err != nil {
 		if language != "" {
 			return "", fmt.Errorf("session_start: pinning %s as %s: %w", workspace, language, err)
 		}
 		return "", fmt.Errorf("session_start: pinning %s: %w", workspace, err)
 	}
-	return root, nil
+	return rep.effectiveRoot(), nil
 }
 
 // resolveAttached handles session_start on an already-attached connection: an
@@ -143,18 +188,11 @@ func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, la
 			current, requested,
 		)
 	}
-	newRoot, err := t.repin(ctx, requested, language, force, connScope)
+	rep, err := t.repin(ctx, requested, language, force, connScope)
 	if err != nil {
 		return "", "", fmt.Errorf("session_start: re-pinning to %s: %w", requested, err)
 	}
-	// Suppress the "re-pinned" banner when the requested path resolves to the
-	// same root (e.g. a subdir of the current project, or a language-only pin):
-	// no project switch actually happened.
-	from := current
-	if sameDir(newRoot, current) {
-		from = ""
-	}
-	return newRoot, from, nil
+	return rep.effectiveRoot(), repinAnnouncement(rep), nil
 }
 
 // forceLanguage re-pins the connection's CURRENT workspace to a forced primary
@@ -171,13 +209,44 @@ func (t *SessionStart) forceLanguage(ctx context.Context, current, language stri
 	return current, "", nil
 }
 
-// repinAnnouncement renders the re-pin line, or "" when nothing moved. It
-// deliberately names no pin: which one moved (the caller's shard or the
-// connection's) is decided in the daemon, not visible here, and a guess from
-// the arguments was wrong for an anonymous caller on a shared connection.
-func repinAnnouncement(from, to string) string {
-	if from == "" {
+// repinAnnouncement renders the re-pin block, or "" when no pin moved: the
+// pin had no previous root, or the requested path resolved to the root it
+// already held (a subdir of the current project, a language-only pin).
+//
+// It names the pin the DAEMON reports moving, never one guessed from the
+// arguments (issue #517), and says how many other agents moved with a
+// connection pin — a caller that moved its peers must be told so. The second
+// line is what the caller's own next relative path resolves against, which is
+// not the new connection root when an agent with a pin of its own moved the
+// connection's. Every variant opens with "Re-pinned", so an absence check on
+// that bare prefix still covers all of them.
+func repinAnnouncement(rep RepinReport) string {
+	if rep.From == "" || sameDir(rep.From, rep.Root) {
 		return ""
 	}
-	return fmt.Sprintf("Re-pinned: %s → %s\n\n", from, to)
+	var line string
+	switch rep.Scope {
+	case PinScopeAgent:
+		line = fmt.Sprintf("Re-pinned your pin: %s → %s", rep.From, rep.Root)
+	default:
+		line = fmt.Sprintf("Re-pinned this connection's pin: %s → %s (%s)", rep.From, rep.Root, followersPhrase(rep.Followers))
+	}
+	next := rep.effectiveRoot()
+	suffix := ""
+	if !sameDir(next, rep.Root) {
+		suffix = " (your own pin, not the connection's)"
+	}
+	return fmt.Sprintf("%s\nNext relative-path call resolves against: %s%s\n\n", line, next, suffix)
+}
+
+// followersPhrase renders how many other agents follow a connection pin.
+func followersPhrase(n int) string {
+	switch n {
+	case 0:
+		return "no other agent follows it"
+	case 1:
+		return "1 other agent follows it"
+	default:
+		return fmt.Sprintf("%d other agents follow it", n)
+	}
 }

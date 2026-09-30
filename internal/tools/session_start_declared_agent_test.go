@@ -31,12 +31,12 @@ func TestSessionStart_AttributionPrecedesTheWorkspace(t *testing.T) {
 			order = append(order, "declared-agent")
 			return context.WithValue(ctx, declaredAgentKeyType{}, id)
 		}).
-		WithRepin(func(ctx context.Context, workspace, _ string, _, _ bool) (string, error) {
+		WithRepin(func(ctx context.Context, workspace, _ string, _, _ bool) (RepinReport, error) {
 			order = append(order, "repin")
 			if got, _ := ctx.Value(declaredAgentKeyType{}).(string); got != "subagent-7" {
 				t.Errorf("re-pin ctx logical agent = %q, want %q — the re-pin ran unattributed", got, "subagent-7")
 			}
-			return workspace, nil
+			return RepinReport{Root: workspace, Scope: PinScopeAgent, From: ws}, nil
 		})
 
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+ws+`","session_id":"subagent-7"}`)); err != nil {
@@ -74,8 +74,8 @@ func TestSessionStart_LinkageNotCommittedOnARefusedCall(t *testing.T) {
 			attributed = true
 			return context.WithValue(ctx, declaredAgentKeyType{}, id)
 		}).
-		WithRepin(func(context.Context, string, string, bool, bool) (string, error) {
-			return "", errors.New("refusing to re-pin: sticky (issue #182)")
+		WithRepin(func(context.Context, string, string, bool, bool) (RepinReport, error) {
+			return RepinReport{}, errors.New("refusing to re-pin: sticky (issue #182)")
 		})
 
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+t.TempDir()+`","session_id":"drifter"}`))

@@ -229,7 +229,8 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 		t.Fatalf("attach: workspace = %s, want %s", got, rootA)
 	}
 
-	newRoot, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
+	newRootRep, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
+	newRoot := newRootRep.Root
 	if err != nil {
 		t.Fatalf("repin: %v", err)
 	}
@@ -241,7 +242,8 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 	}
 
 	// Re-pinning to the already-pinned root is a no-op (no error, same root).
-	again, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
+	againRep, err := s.repinWorkspace(context.Background(), rootB, "", false, false)
+	again := againRep.Root
 	if err != nil || again != rootB {
 		t.Fatalf("no-op repin: returned %s, err %v; want %s, nil", again, err, rootB)
 	}
@@ -265,7 +267,8 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
-	newRoot, err := s.repinWorkspace(context.Background(), bare, "", false, false)
+	newRootRep, err := s.repinWorkspace(context.Background(), bare, "", false, false)
+	newRoot := newRootRep.Root
 	if err != nil {
 		t.Fatalf("repin to marker-less dir: %v", err)
 	}

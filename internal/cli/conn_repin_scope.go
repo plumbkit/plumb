@@ -49,10 +49,10 @@ func connScopeAuthorised(ctx context.Context) bool {
 // The caller must be identified. The move resets every peer shard that has not
 // pinned a root of its own (followConnectionShards), including its read, write
 // and undo state, so it has to be attributable to the agent that asked for it.
-func (s *connSession) repinConnection(ctx context.Context, folder, langOverride string, force bool) (string, error) {
+func (s *connSession) repinConnection(ctx context.Context, folder, langOverride string, force bool) (repinOutcome, error) {
 	id := mcp.LogicalAgentFromCtx(ctx)
 	if id == "" && s.logicalAgents.sharedWith("") {
-		return "", toolerror.Wrap(
+		return repinOutcome{}, toolerror.Wrap(
 			fmt.Errorf(`refusing a connection-scoped re-pin to %s: this connection serves several logical agents and this call carries no identity, so a move that resets every peer's workspace, read tracking and undo state cannot be attributed to the agent that asked for it. Identify yourself — pass session_start.session_id, or a per-call _meta[%s] — and retry with scope: "connection"`, folder, mcp.MetaLogicalAgentKey),
 			toolerror.KindPinRefused,
 			toolerror.ClassFixArguments,

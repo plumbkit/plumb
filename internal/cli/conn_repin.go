@@ -15,6 +15,7 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -65,7 +66,8 @@ func (s *connSession) repinRemedy() string {
 // folder may be any absolute path inside the target project. It is resolved to
 // a workspace root via pool.Detect; when no marker is found the folder itself
 // becomes the workspace (SynthesiseRoot), so an explicit pin always succeeds.
-// Returns the resolved root.
+// It is session_start's re-pin callback (WithRepin), so it reports the resolved
+// root together with which pin moved — see repinReport (issue #517).
 //
 // langOverride, when a non-empty active language, forces the primary language
 // instead of the detected one — for an ambiguous project (e.g. an Xcode app with
@@ -83,11 +85,20 @@ func (s *connSession) repinRemedy() string {
 // connection must not silently steal the pin the caller deliberately chose.
 // The refusal error names the remediation (retry with force: true), so a new
 // conversation deliberately switching projects still can, one round-trip later.
-func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string, force, connectionScope bool) (string, error) {
+func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string, force, connectionScope bool) (tools.RepinReport, error) {
+	var (
+		out repinOutcome
+		err error
+	)
 	if connectionScope {
-		return s.repinConnection(ctx, folder, langOverride, force)
+		out, err = s.repinConnection(ctx, folder, langOverride, force)
+	} else {
+		out, err = s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
 	}
-	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
+	if err != nil {
+		return tools.RepinReport{}, err
+	}
+	return s.repinReport(ctx, out), nil
 }
 
 // repinWorkspaceFrom is repinWorkspace with the pin origin made explicit.
@@ -101,10 +112,15 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride s
 // where the request is silently not honoured — a live roots-driven re-pin kept
 // off an explicit pin — it therefore differs from the pin the connection still
 // holds; the only such caller (onRootsChanged) discards the value.
-func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource, trigger pinTrigger, force bool) (string, error) {
+//
+// Besides the root, the outcome records which pin moved, that pin's previous
+// root and which agents' shards followed it (issue #517). The choice between
+// the caller's shard and the connection's pin is made here, so this is the
+// only place that can report it.
+func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource, trigger pinTrigger, force bool) (repinOutcome, error) {
 	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
-		return "", fmt.Errorf("repin: empty workspace path %q", folder)
+		return repinOutcome{}, fmt.Errorf("repin: empty workspace path %q", folder)
 	}
 	// A RELATIVE workspace is refused rather than resolved. The only anchor
 	// available here is the daemon's working directory, and the daemon is a
@@ -123,7 +139,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// refused when there is no workspace to anchor it to, and a workspace is
 	// refused when there is nothing to anchor IT to.
 	if !filepath.IsAbs(folder) {
-		return "", fmt.Errorf(
+		return repinOutcome{}, fmt.Errorf(
 			"repin: workspace %q is relative, so it names no particular directory. "+
 				"Pass an absolute path: the daemon is shared between clients and its working "+
 				"directory belongs to whichever one started it, so resolving %q here would "+
@@ -141,7 +157,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		// home directory — SynthesiseRoot refuses it and the pin stays put.
 		root = s.pool.SynthesiseRoot(folder, origin == sessionstate.PinSourceSessionStart)
 		if root == "" {
-			return "", fmt.Errorf("refusing to pin %s as a workspace from a non-explicit source (%s): it is the home directory, so pinning it would put every credential file under it inside the boundary. Call session_start({workspace: %q}) if you really mean it", folder, pinSourceLabel(origin), folder)
+			return repinOutcome{}, fmt.Errorf("refusing to pin %s as a workspace from a non-explicit source (%s): it is the home directory, so pinning it would put every credential file under it inside the boundary. Call session_start({workspace: %q}) if you really mean it", folder, pinSourceLabel(origin), folder)
 		}
 		language = LanguageNone
 	}
@@ -156,7 +172,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// carries. Refuse the drift here, before that exemption ever applies. A live
 	// trigger is untouched: rung 1b's declared-wide-root restore still works.
 	if err := restoreDriftErr(folder, root, trigger); err != nil {
-		return "", err
+		return repinOutcome{}, err
 	}
 	// Containment guard (issue #306): SynthesiseRoot above refuses a
 	// home-IDENTITY root for a non-explicit origin, but a root CONTAINING a
@@ -165,7 +181,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// refused here, where the origin is in scope; an explicit session_start
 	// still succeeds (issue #182).
 	if err := undeclaredWideRootErr(root, origin); err != nil {
-		return "", err
+		return repinOutcome{}, err
 	}
 	// root is canonical here — both Detect and SynthesiseRoot resolve symlinks
 	// (issue #263) — which is what lets the sticky-pin guard below recognise a
@@ -177,12 +193,12 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// ever apply — work done on the strength of an error, only to be refused on
 	// the retry (PLAN-428).
 	if err := s.refuseShardLanguageOverride(ctx, langOverride); err != nil {
-		return "", err
+		return repinOutcome{}, err
 	}
 	langForced := false
 	if langOverride != "" {
 		if err := s.languageOverrideErr(root, langOverride); err != nil {
-			return "", err
+			return repinOutcome{}, err
 		}
 		language = langOverride
 		langForced = true
@@ -193,15 +209,16 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// actual issue #182 fix. The connection-level attachOrRepinTo below runs only
 	// for an unattributed re-pin (roots, restore) or a non-shared connection.
 	if s.repinShard(ctx) != nil {
-		if _, refused := s.repinAgent(ctx, root, language, origin, force); refused != nil {
-			return "", refused
+		prev, _, refused := s.repinAgent(ctx, root, language, origin, force)
+		if refused != nil {
+			return repinOutcome{}, refused
 		}
 		// The agent's workspace question is settled, so drop any pending-refusal
 		// marker an earlier attempt left. Both this branch and the connection
 		// branch below are settling paths for the CALLER, whichever scope the
 		// pin landed on.
 		s.clearDeclarationRefused(mcp.LogicalAgentFromCtx(ctx))
-		return root, nil
+		return repinOutcome{root: root, scope: tools.PinScopeAgent, from: prev}, nil
 	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
 	// lane: after the root resolution above, so a requested path that resolves
@@ -211,18 +228,19 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	prevConnRoot := s.workspace()
 	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
 	if err != nil {
-		return "", err
+		return repinOutcome{}, err
 	}
 	s.attributeConnectionPin(ctx, root, origin, trigger)
+	out := repinOutcome{root: root, scope: tools.PinScopeConnection, from: prevConnRoot}
 	if changed {
 		s.applyProjectConfig(root)
 		// PLAN-398: shards seeded from the old connection pin follow the move,
 		// so a seeded agent is not left refusing its next legitimate call off a
 		// stale sticky root.
-		s.followConnectionShards(prevConnRoot)
+		out.followed = s.followConnectionShards(prevConnRoot)
 	}
 	s.clearDeclarationRefused(mcp.LogicalAgentFromCtx(ctx))
-	return root, nil
+	return out, nil
 }
 
 // attributeConnectionPin records a pin that landed on the CONNECTION under the
