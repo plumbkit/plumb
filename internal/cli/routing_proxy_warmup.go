@@ -65,6 +65,17 @@ func (r *routingProxy) DiagMode(uri string) string {
 	return r.pool.diagModeFor(root, language)
 }
 
+// GoWorkOff reports the go.work the connection's primary language server was
+// started with GOWORK=off against (goLSPEnv), or "" when it runs with the
+// environment it inherited or nothing is pooled. Resolution-only, like DiagMode.
+func (r *routingProxy) GoWorkOff() string {
+	root, language := r.warmupTarget("")
+	if root == "" || language == "" || language == LanguageNone {
+		return ""
+	}
+	return r.pool.goWorkOffFor(root, language)
+}
+
 // warmupTarget resolves the (root, language) WarmupStatus inspects for uri: the
 // connection primary when uri is empty, else the URI's detected root and
 // per-file language (mirroring route()). Falls back to the primary when URI

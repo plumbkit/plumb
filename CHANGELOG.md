@@ -133,6 +133,17 @@
 
   No path is pattern-matched, and a `--separate-git-dir` superproject needs no
   special case.
+- **The Go language server in a worktree answers about the worktree.** In a git
+  worktree under an enclosing `go.work` that lists the main checkout's directory
+  for the module, gopls resolved that `go.work`, in which the worktree is not a
+  module. `workspace_symbols` answered from the main checkout or not at all, and
+  the worktree's files were never type-checked, so a post-write diagnostics pass
+  labelled "authoritative" reported clean code that `go build` rejected. When
+  plumb starts a Go language server it now makes the per-root `GOWORK=off`
+  decision that hooks, `run_task` and `mutation_test` already get, and never
+  overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
+  file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
+  naming the `go.work` when it applies (#521).
 
 ## 0.20.3 (2026-09-30)
 
