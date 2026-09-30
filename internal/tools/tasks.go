@@ -36,9 +36,11 @@ var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
 // runPattern bounds the {run} test-name filter (#538). The value is one argv
 // element with no shell, so `|` for a Go -run alternation, `^$*+?()[]` for the
 // rest of a regexp and spaces for a pytest -k expression (`a or b`) are inert
-// text here. What is refused is a LEADING `-` or space: a bare {run} would put the
-// value where a flag is parsed, and `-exec=…` must never reach `go test`.
-var runPattern = regexp.MustCompile(`^[A-Za-z0-9_./:@|^$*+?()\[\]][A-Za-z0-9_./:@|^$*+?()\[\] -]{0,255}$`)
+// text here. What is refused is a LEADING `-`, space or `@`: a bare {run} would put
+// the value where a flag is parsed, and `-exec=…` must never reach `go test`; a
+// leading `@` is an argument file to tools that read `@file` (javac, some test
+// runners), which would let the value inject arguments from disk.
+var runPattern = regexp.MustCompile(`^[A-Za-z0-9_./:|^$*+?()\[\]][A-Za-z0-9_./:@|^$*+?()\[\] -]{0,255}$`)
 
 // taskLanguageName bounds run_task's optional `language` to the shape of a
 // [tasks.<lang>] key. Same alphabet as a slot name: these are TOML table keys

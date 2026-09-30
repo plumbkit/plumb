@@ -60,7 +60,9 @@ func PrepareTaskEnv(env []string, root, dir string) []string {
 		kv = r.Replace(kv)
 		out = append(out, kv)
 		k, v, _ := strings.Cut(kv, "=")
-		if !tempDirEnvKeys[k] || !filepath.IsAbs(v) || !PathWithinWorkspace(root, v) {
+		// No root, no "inside": PathWithinWorkspace("", v) is true for any v, and
+		// nothing may be created on that answer.
+		if root == "" || !tempDirEnvKeys[k] || !filepath.IsAbs(v) || !PathWithinWorkspace(root, v) {
 			continue
 		}
 		if err := os.MkdirAll(v, 0o755); err != nil {
@@ -103,5 +105,5 @@ func validateRunFilter(what, run string) error {
 		return nil
 	}
 	return fmt.Errorf("%s %q is not an accepted test-name filter: up to 256 of letters, digits, space and ._/:@|^$*+?()[]-, "+
-		"not starting with - or a space", what, run)
+		"not starting with -, @ or a space", what, run)
 }

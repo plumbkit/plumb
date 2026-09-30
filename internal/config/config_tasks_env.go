@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -19,7 +20,11 @@ import (
 // Trust: an environment variable changes what a command runs as surely as the
 // command does, so a project's entries are part of the trusted content (see
 // taskSpecsFrom) and a project env makes every slot of that language
-// project-supplied, the rule working_dir already follows.
+// project-supplied, the rule working_dir already follows. One exception
+// (TaskEnvIsScratchDir): a temp-directory variable pointing inside the workspace
+// changes neither what runs nor where, so it alone does not make the shipped
+// defaults need trust, and a checked-in `GOTMPDIR = "{workspace}/.testcache"`
+// does not break run_task in every fresh clone and worktree.
 //
 // Concurrency: stateless; the regexps are read-only.
 
@@ -57,11 +62,40 @@ var deniedTaskEnvKeys = map[string]bool{
 // allowed — a toolchain on a custom PATH is ordinary — but `plumb trust` flags
 // each one a project sets, so the consent is informed.
 var steeringEnvKeys = map[string]bool{
-	"PATH": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOROOT": true,
-	"NODE_OPTIONS": true, "PYTHONPATH": true, "PYTHONSTARTUP": true, "PYTHONHOME": true,
-	"RUSTC_WRAPPER": true, "RUSTFLAGS": true, "RUSTC": true, "CARGO_BUILD_RUSTC_WRAPPER": true,
-	"BASH_ENV": true, "ENV": true, "PERL5OPT": true, "RUBYOPT": true, "JAVA_TOOL_OPTIONS": true,
-	"LD_LIBRARY_PATH": true,
+	"PATH": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOROOT": true, "GOENV": true,
+	"GOPROXY": true, "GOSUMDB": true, "GONOSUMDB": true, "GOINSECURE": true, "GOPRIVATE": true,
+	"CC": true, "CXX": true, "HOME": true, "XDG_CONFIG_HOME": true,
+	"NODE_OPTIONS": true, "NODE_PATH": true, "PYTHONPATH": true, "PYTHONSTARTUP": true, "PYTHONHOME": true,
+	"RUSTC_WRAPPER": true, "RUSTC_WORKSPACE_WRAPPER": true, "RUSTFLAGS": true, "RUSTC": true,
+	"CARGO_BUILD_RUSTC_WRAPPER": true, "CARGO_HOME": true,
+	"BASH_ENV": true, "ENV": true, "PERL5OPT": true, "PERL5LIB": true, "RUBYOPT": true, "RUBYLIB": true,
+	"JAVA_TOOL_OPTIONS": true, "LD_LIBRARY_PATH": true,
+}
+
+// steeringEnvPrefixes are families of variables that steer execution the same way:
+// git's (hooks, ssh command, config), the macOS loader's, cgo's compiler flags,
+// cargo's per-target runner and linker, and npm's config.
+var steeringEnvPrefixes = []string{"GIT_", "DYLD_", "CGO_", "CARGO_TARGET_", "NPM_CONFIG_"}
+
+// scratchDirEnvKeys name a directory a command writes temporary files to and
+// nothing else; see TaskEnvIsScratchDir.
+var scratchDirEnvKeys = map[string]bool{"GOTMPDIR": true, "TMPDIR": true}
+
+// TaskEnvIsScratchDir reports whether a [tasks.<lang>] env entry only moves
+// temporary files to a directory inside the workspace: a scratch-directory key
+// whose value is {workspace} or {workspace}/<a relative path that stays inside>.
+// Such an entry changes neither what runs nor where it runs — the shipped default
+// already runs the workspace's own code — so it is exempt from the rule that a
+// project env makes every slot need trust. It is still hashed like every entry.
+func TaskEnvIsScratchDir(key, value string) bool {
+	if !scratchDirEnvKeys[strings.ToUpper(key)] {
+		return false
+	}
+	if value == TaskEnvWorkspace {
+		return true
+	}
+	rest, ok := strings.CutPrefix(value, TaskEnvWorkspace+"/")
+	return ok && !strings.ContainsAny(rest, "{}\\") && filepath.IsLocal(rest)
 }
 
 // EnvKeySteersExecution reports whether an environment variable changes which
@@ -69,7 +103,15 @@ var steeringEnvKeys = map[string]bool{
 // disclosure.
 func EnvKeySteersExecution(key string) bool {
 	u := strings.ToUpper(key)
-	return steeringEnvKeys[u] || strings.HasPrefix(u, "GIT_") || strings.HasPrefix(u, "DYLD_")
+	if steeringEnvKeys[u] {
+		return true
+	}
+	for _, p := range steeringEnvPrefixes {
+		if strings.HasPrefix(u, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // TaskEnvKeyOf reports whether a TaskCommandSpec slot is an env entry, and the

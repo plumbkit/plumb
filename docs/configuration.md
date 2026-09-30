@@ -1541,9 +1541,15 @@ command does (`PATH`, `GOFLAGS=-toolexec=…`, `LD_LIBRARY_PATH`), so a project'
 `env` is trust-gated like a command: every entry is part of the hash `plumb trust`
 records, a changed value needs a new `plumb trust`, and a project `env` makes
 *every* slot of that language project-supplied, shipped defaults included — the
-rule `working_dir` follows. `plumb trust` lists the entries and flags the ones
-that change which program or code runs (`PATH`, `GOFLAGS`, `GIT_*`,
-`NODE_OPTIONS`, `PYTHONPATH`, `RUSTC_WRAPPER`, `DYLD_*`, …). Names must be portable
+rule `working_dir` follows. The one exception is a scratch directory inside the
+workspace: `GOTMPDIR` or `TMPDIR` set to `{workspace}` or `{workspace}/<relative
+path>` moves temporary files and changes neither what runs nor where, so on its
+own it needs no trust (it is still hashed, and still applied); a checked-in
+`GOTMPDIR = "{workspace}/.testcache"` therefore works in every fresh clone and
+worktree. A refused command names the setting that made it project-supplied.
+`plumb trust` lists the entries and flags the ones that change which program or
+code runs (`PATH`, `GOFLAGS`, `GOENV`, `GOPROXY`, `CC`, `HOME`, `GIT_*`, `CGO_*`,
+`NODE_OPTIONS`, `PYTHONPATH`, `RUSTC_WRAPPER`, `CARGO_TARGET_*`, `DYLD_*`, …). Names must be portable
 (`^[A-Za-z_][A-Za-z0-9_]*$`), values may not contain NUL, and the dynamic-loader
 injection variables `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and
 `DYLD_FORCE_FLAT_NAMESPACE` are refused in every layer: they run extra code in

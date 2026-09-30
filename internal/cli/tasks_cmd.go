@@ -173,14 +173,14 @@ func runTaskCLI(slot string, args []string) error {
 			"set one under [tasks.%s] in .plumb/config.toml",
 			slot, lang, strings.Join(configuredSlots(projectCfg.Tasks[lang], lang), ", "), lang)
 	}
-	if _, fromProject := taskProvenance(root, lang, slot); fromProject {
+	if _, fromProject, why := taskProvenance(root, lang, slot); fromProject {
 		cmds, cerr := config.ProjectTaskCommands(root)
 		if cerr != nil {
 			return cerr
 		}
 		if !config.NewTrustStore().IsTrustedForTasks(root, cmds) {
-			return fmt.Errorf("the %s command for %s comes from this project's .plumb/config.toml and is not trusted "+
-				"(or the project's task commands changed since `plumb trust` was last run); run `plumb trust` in %s first", slot, lang, root)
+			return fmt.Errorf("the %s command for %s is shaped by this project's .plumb/config.toml (%s) and is not trusted "+
+				"(or the project's task settings changed since `plumb trust` was last run); run `plumb trust` in %s first", slot, lang, why, root)
 		}
 	}
 	for _, note := range taskNotes(tc, lang, slot, taskScope{target: target}) {

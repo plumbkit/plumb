@@ -59,7 +59,7 @@ func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (
 	if wdErr != nil {
 		return tools.TaskCommand{}, fmt.Errorf("run_task %s: %w", slot, wdErr)
 	}
-	provenance, fromProject := taskProvenance(ws, lang, slot)
+	provenance, fromProject, why := taskProvenance(ws, lang, slot)
 	if fromProject {
 		cmds, cmdErr := config.ProjectTaskCommands(ws)
 		if cmdErr != nil {
@@ -67,9 +67,9 @@ func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (
 		}
 		if !config.NewTrustStore().IsTrustedForTasks(ws, cmds) {
 			return tools.TaskCommand{}, fmt.Errorf(
-				"run_task: the %s command for %s comes from this project's .plumb/config.toml and is not trusted "+
-					"(or the project's task commands changed since `plumb trust` was last run). "+
-					"review them, then run `plumb trust` in %s to allow this project's task commands", slot, lang, ws)
+				"run_task: the %s command for %s is shaped by this project's .plumb/config.toml (%s) and is not trusted "+
+					"(or the project's task settings changed since `plumb trust` was last run). "+
+					"review them, then run `plumb trust` in %s to allow this project's task settings", slot, lang, why, ws)
 		}
 	}
 	return tools.TaskCommand{
@@ -476,14 +476,18 @@ func taskStep(tc config.TasksConfig, lang, slot string, sc taskScope) ([]string,
 // A read error fails CLOSED (treated as project-supplied, so the trust gate
 // applies). A gate that cannot determine provenance must not assume the safe
 // answer.
-func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
+//
+// why names the project setting that makes the slot project-supplied, for the
+// refusal: a contributor told only that the shipped `go build ./...` "comes from
+// this project" cannot find the reason.
+func taskProvenance(ws, lang, slot string) (label string, fromProject bool, why string) {
 	slots := []string{slot}
 	if subs, ok := compositeSubSlots(slot); ok {
 		slots = subs
 	}
 	cmds, err := config.ProjectTaskCommands(ws)
 	if err != nil {
-		return "project", true
+		return "project", true, "its task settings could not be read"
 	}
 	for _, c := range cmds {
 		if !strings.EqualFold(c.Lang, lang) {
@@ -499,16 +503,24 @@ func taskProvenance(ws, lang, slot string) (label string, fromProject bool) {
 		// directory is influence — the argv is only half of what runs.
 		// A project env is the same influence, over WHAT runs: GOFLAGS or PATH
 		// change the program the shipped default ends up executing.
-		if _, isEnv := config.TaskEnvKeyOf(c.Slot); isEnv || strings.EqualFold(c.Slot, taskWorkingDirKey) {
-			return "project", true
+		// A scratch-directory entry inside the workspace is the one exception
+		// (config.TaskEnvIsScratchDir): it influences neither what runs nor where.
+		if key, isEnv := config.TaskEnvKeyOf(c.Slot); isEnv {
+			if config.TaskEnvIsScratchDir(key, c.Command) {
+				continue
+			}
+			return "project", true, fmt.Sprintf("its [tasks.%s] env sets %s, which applies to every %s command", c.Lang, key, c.Lang)
+		}
+		if strings.EqualFold(c.Slot, taskWorkingDirKey) {
+			return "project", true, fmt.Sprintf("its [tasks.%s] working_dir applies to every %s command", c.Lang, c.Lang)
 		}
 		for _, sl := range slots {
 			if strings.EqualFold(c.Slot, sl) {
-				return "project", true
+				return "project", true, fmt.Sprintf("it sets [tasks.%s] %s", c.Lang, c.Slot)
 			}
 		}
 	}
-	return "config", false
+	return "config", false, ""
 }
 
 // taskWorkingDirKey is the [tasks.<lang>] key that is not a command slot.

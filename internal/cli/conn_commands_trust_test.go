@@ -174,7 +174,7 @@ func TestTaskTrust_FoldedTasksTableStillGated(t *testing.T) {
 				t.Errorf("%s is invisible to ProjectTaskCommands, so it is absent from the trust hash", table)
 			}
 			// And it must be recognised as project-supplied, or the gate is skipped.
-			if _, fromProject := taskProvenance(ws, "go", "test"); !fromProject {
+			if _, fromProject, _ := taskProvenance(ws, "go", "test"); !fromProject {
 				t.Errorf("BYPASS: %s is not reported as project-supplied, so run_task's trust gate is skipped", table)
 			}
 		})
@@ -202,7 +202,7 @@ func TestTaskProvenance_UnreadableConfigFailsClosed(t *testing.T) {
 	if _, err := config.ProjectTaskCommands(ws); err == nil {
 		t.Fatal("premise broken: the fixture parses, so the error path is not exercised")
 	}
-	if _, fromProject := taskProvenance(ws, "go", "test"); !fromProject {
+	if _, fromProject, _ := taskProvenance(ws, "go", "test"); !fromProject {
 		t.Error("an unreadable project config reported not-project-supplied, which SKIPS " +
 			"run_task's trust gate for a file whose contents are unknown")
 	}
