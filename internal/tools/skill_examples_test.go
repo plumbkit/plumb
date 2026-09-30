@@ -76,8 +76,9 @@ var skillContentCounts = map[string]skillCounts{
 	// a target run_task can take (PLAN-378) — the very composition this file's
 	// doc comment names as the defect class it exists to catch — and a third when
 	// run_task took a `language` argument, so a polyglot workspace's non-primary
-	// commands became reachable through the tool.
-	"plumb-testing": {calls: 7, bullets: 0},
+	// commands became reachable through the tool. 8 since run_task took a `run`
+	// test-name filter (#538).
+	"plumb-testing": {calls: 8, bullets: 0},
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill

@@ -59,7 +59,8 @@ func newMutationEnv(t *testing.T, content string) *mutationEnv {
 	env.installScript(t, env.testScript, "exit 0")
 
 	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return root }}
-	env.tool = NewMutationTest(deps, func(_ context.Context, slot, target, _ string) (TaskCommand, error) {
+	env.tool = NewMutationTest(deps, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot, target := req.Slot, req.Target
 		script := env.testScript
 		if slot == "build" {
 			script = env.compileScript
@@ -273,11 +274,12 @@ func TestMutationTest_AmbiguousMutantIsInvalid(t *testing.T) {
 // stage a command that cannot start or never returns.
 func (e *mutationEnv) useArgv(slot string, argv []string) {
 	prev := e.tool.resolve
-	e.tool.resolve = func(ctx context.Context, s, target, _ string) (TaskCommand, error) {
+	e.tool.resolve = func(ctx context.Context, req TaskRequest) (TaskCommand, error) {
+		s := req.Slot
 		if s == slot {
 			return TaskCommand{Slot: s, Steps: [][]string{argv}, Provenance: "default"}, nil
 		}
-		return prev(ctx, s, target, "")
+		return prev(ctx, req)
 	}
 }
 
@@ -498,14 +500,15 @@ func TestBaseline_NamesTheStepThatFailed(t *testing.T) {
 	env.commitAll(t)
 
 	prev := env.tool.resolve
-	env.tool.resolve = func(ctx context.Context, slot, target, _ string) (TaskCommand, error) {
+	env.tool.resolve = func(ctx context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		if slot == "test" {
 			return TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{
 				{"/bin/sh", firstScript},
 				{"/bin/sh", secondScript},
 			}}, nil
 		}
-		return prev(ctx, slot, target, "")
+		return prev(ctx, req)
 	}
 
 	msg := env.baselineRefusal(t, nil)

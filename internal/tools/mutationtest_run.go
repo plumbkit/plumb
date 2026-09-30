@@ -248,9 +248,10 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	// root is where every command fails, so running the compile gate there made
 	// the whole tool unusable in exactly the repositories that need it.
 	ws := t.commandDir(ctx, cmd)
+	env := taskEnviron(cmd, ws)
 	for i, argv := range cmd.Steps {
 		out.step = i
-		res, err := RunTaskArgv(ctx, ws, argv, timeout)
+		res, err := RunTaskArgv(ctx, ws, argv, env, timeout)
 		out.goWorkOff = firstNonEmpty(out.goWorkOff, res.GoWorkOff)
 		if err != nil {
 			out.startErr = true

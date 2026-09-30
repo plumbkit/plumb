@@ -183,6 +183,11 @@ func printLangTaskCommands(slots map[string]string) {
 			fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"),
 				tui.WarnStyle.Render("!! WARNING: this runs an interpreter with inline code ("+argv[0]+") — arbitrary code execution by design; trust only if you wrote it"))
 		}
+		if key, isEnv := config.TaskEnvKeyOf(slot); isEnv && config.EnvKeySteersExecution(key) {
+			fmt.Printf("  %s %s\n", tui.SepStyle.Render("┊"),
+				tui.WarnStyle.Render("!! WARNING: "+key+" changes which program or code every "+
+					"command of this language runs; trust only if you wrote it"))
+		}
 	}
 }
 

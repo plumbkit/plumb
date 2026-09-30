@@ -1005,7 +1005,16 @@ tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
 (100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
-one shell-safe argument), `language` (optional, see below). A project-supplied
+one shell-safe argument), `run` (optional test-name filter for a `{run}`
+placeholder — `go test -run`, `pytest -k`, cargo's libtest filter — e.g.
+`TestA|TestB`), `verbose` (optional, fills a `{verbose:<flag>}` placeholder, e.g.
+`go test -v` to see skipped tests), `language` (optional, see below). The shipped
+go/python test defaults carry all three placeholders (rust: `{target}` and
+`{run}`); a `run` on a command without `{run}` is refused, an unplaceable
+`verbose` is noted — see
+[`configuration.md`](configuration.md#run-and-verbose--a-test-name-filter-and-verbose-output).
+Commands run with the language's `[tasks.<lang>] env`, which the response lists
+(`env: GOTMPDIR=…`, credentials redacted). A project-supplied
 command must be trusted first (`plumb trust`); defaults and global-config
 commands always run. Pairs with `topology_affected` (which says *which* tests to
 run) — the `plumb-testing` skill walks the whole post-edit loop.
@@ -1064,7 +1073,10 @@ restore the file. **Inputs:** `mutants` (array, 1–20, each `{file_path,
 old_string, new_string, label?}` — an exact-once `str_replace` in the style of
 `edit_file`; it does **not** generate mutants), `test_task` (slot, default
 `test`), `test_target` (fills the stored test command's `{target}` — the way to
-scope the run; ask `topology_affected` what to name), `compile_task` (slot,
+scope the run; ask `topology_affected` what to name), `test_run` (fills the test
+command's `{run}` test-name filter, as `run_task`'s `run` does, so each mutant runs
+only the tests that should kill it — seconds instead of a whole package),
+`compile_task` (slot,
 default `build`), `timeout_seconds` (per step, default 600).
 
 **Three outcomes.** `killed` — the mutant compiled and a test failed, so the

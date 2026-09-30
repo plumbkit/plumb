@@ -432,8 +432,9 @@ func collapseFolds(m map[string]any, order *foldOrder, path []string) {
 // rather than struct fields. go-toml folds a TOML key into a struct field via
 // its byFold map but keeps map[string]… keys verbatim, so these children must
 // never be collapsed: each is a distinct entry the decoder does not merge.
-// The lsp.<lang>.env and lsp.<lang>.initialization_options paths — whose <lang>
-// segment is itself a map key — are matched in isMapKeyLevel, not enumerated.
+// The lsp.<lang>.env, lsp.<lang>.initialization_options and tasks.<lang>.env
+// paths — whose <lang> segment is itself a map key — are matched in
+// isMapKeyLevel, not enumerated.
 var mapKeyLevels = map[string]bool{
 	"tasks":                 true, // Config.Tasks
 	"lsp":                   true, // Config.LSP
@@ -446,6 +447,9 @@ var mapKeyLevels = map[string]bool{
 // case collapseFolds must skip them.
 func isMapKeyLevel(path []string) bool {
 	if len(path) == 3 && path[0] == "lsp" && (path[2] == "env" || path[2] == "initialization_options") {
+		return true
+	}
+	if len(path) == 3 && path[0] == "tasks" && path[2] == TaskEnvKey {
 		return true
 	}
 	return mapKeyLevels[strings.Join(path, ".")]

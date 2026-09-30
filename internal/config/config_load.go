@@ -355,6 +355,7 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 		// Extras merge per slot onto whatever the global layer supplied, so a
 		// project naming one extra does not erase the others.
 		merged.Tasks = applyExtraTaskSlots(cloneTasks(merged.Tasks), extraTaskSlots(raw))
+		merged.Tasks = composeTaskEnv(base.Tasks, merged.Tasks)
 	}
 	// The spec is computed from the same bytes that were just merged, so the
 	// content trust is checked against is exactly the content in play — a second
