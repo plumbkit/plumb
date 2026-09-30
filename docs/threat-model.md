@@ -237,10 +237,11 @@ working directory; boundary violations mark session health.
 
 Residual: a client that multiplexes several logical agents over one connection
 shares one pin unless each call carries a logical-agent identity — per-call
-`_meta`, the same key stamped into `arguments` by a client runtime (Claude
-Code's PreToolUse hook), or `session_start.session_id`. A client that sends
-none still shares one pin, and its anonymous state-changing calls are refused
-once two identities have been seen — see [Known gaps](#known-gaps).
+`_meta`, or the same key stamped into `arguments` by a client runtime (Claude
+Code's PreToolUse hook). `session_start.session_id` identifies only that call.
+A client that sends none still shares one pin, and its anonymous
+state-changing calls are refused once two identities have been seen — see
+[Known gaps](#known-gaps).
 
 ### A2 — Path escape via alias or traversal
 
@@ -595,7 +596,8 @@ Tracked, not hidden. Each is real today.
    client identifies each logical agent. With an identity — per-call `_meta`,
    the `dev.plumbkit/logical-agent` or `plumb_agent` key a client runtime
    stamps into `arguments` (Claude Code's PreToolUse hook, the DeepSeek Harness identity
-   plugin), or `session_start.session_id` — the pin, read tracker, write
+   plugin) on every call, with `session_start.session_id` covering only its
+   own call — the pin, read tracker, write
    tracker, undo history, write budget, **LSP routing, and the workspace-wide
    diagnostics/symbol aggregates** are per agent. Still per connection: the
    primary language selection, the mailbox name and session record, and the

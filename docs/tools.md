@@ -120,7 +120,8 @@ key, or `plumb_agent`, placed by a client **runtime** as a top-level key inside
 `arguments`, which the daemon lifts out before any tool sees it (Claude Code's
 `plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
 every `mcp__plumb__*` call and also fills `session_id` on this tool); and
-`session_id` itself, declared once by this call. Pass a stable value per agent:
+`session_id` itself, which identifies this call only: on a connection other agents
+share, a later write without a per-call identity is refused. Pass a stable value per agent:
 the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
 The session **record** — the name mail is addressed to, `plumb mail
 --external-id`, name inheritance on resume — is linked to the conversation half,
