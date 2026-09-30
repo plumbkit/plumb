@@ -96,26 +96,6 @@ func (e *mutationEnv) failsOnlyWhenMutated(t *testing.T, script, needle, msg str
 		fmt.Sprintf(`grep -q '%s' "$(dirname "$0")/target.txt" && { echo '%s'; exit 1; }; exit 0`, needle, msg))
 }
 
-func gitInit(t *testing.T, root string) {
-	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"config", "user.email", "t@example.com"},
-		{"config", "user.name", "t"},
-		{"add", "-A"},
-		{"commit", "-q", "-m", "fixture"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-}
-
 // commitAll re-commits the fixture so the tree is clean again after a test
 // mutates a script.
 func (e *mutationEnv) commitAll(t *testing.T) {
@@ -727,7 +707,7 @@ func TestRestoreFailed_EscalatesAndSavesASidecar(t *testing.T) {
 	if err == nil {
 		t.Fatal("restoreFailed must return an error")
 	}
-	for _, want := range []string{"RESTORE FAILED", "src.go", "still MUTATED", "git checkout", "disk on fire"} {
+	for _, want := range []string{"RESTORE FAILED", "src.go", "still MUTATED", "git -C '" + root + "' checkout -- 'src.go'", "disk on fire"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("escalation must mention %q; got:\n%s", want, err)
 		}

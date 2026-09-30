@@ -324,7 +324,62 @@ environment, so `PATH` (git finding its own subcommands), `HOME` (`~/.gitconfig`
 untouched. An entry whose name is already present replaces that value — that is
 the point, `GOWORK = "off"` has to beat an inherited `GOWORK`. There is no way to
 *unset* an inherited variable; setting a name to `""` sets it to the empty
-string. With no entries the child inherits exactly as it always did.
+string. With no entries the child inherits exactly as it always did, apart from
+the one automatic `GOWORK` decision described next.
+
+**`GOWORK` is decided per repository, so the example above is rarely needed.**
+A static `GOWORK = "off"` is project-wide, and the main checkout of a Go
+repository legitimately *needs* its `go.work`. The case that breaks is a git
+**worktree** — the recommended way to isolate an agent — under an enclosing
+`go.work` that lists the main checkout's directory for the module, not the
+worktree's. From the worktree, workspace mode has nothing that works: `./...` is
+refused (`pattern ./...: directory prefix . does not contain modules listed in
+go.work`), and the module's own import path resolves to the *main checkout's*
+copy. So before it spawns git, plumb finds the `go.work` the way `go` does and
+adds `GOWORK=off` to **that one child** when all of these hold:
+
+- no `GOWORK` is set for the child — not in its environment (inherited, or under
+  `env` here, whatever the value, including empty or `auto`), and not in the two
+  files `go` also reads for it: the `go env` file (`GOENV`) and the toolchain's
+  `$GOROOT/go.env`;
+- a `go.work` is found walking up from the repository root, and it parses the way
+  `go` parses it;
+- a `go.mod` is found at or above the repository root and no higher than that
+  `go.work`'s directory;
+- that module's directory is not a `use` directory, and no `use` directory sits
+  inside it;
+- **another** `use` directory declares the **same module path** — the workspace
+  has a different copy of this very module, so workspace mode here can only refuse
+  or build that copy.
+
+Paths are compared the way `go` compares them: lexically, from the directory the
+child runs in, so a `use ./alias` whose link points at the module does not count
+as listing it (to `go` it does not). A module the `go.work` simply does not list,
+with no copy of itself listed, is left alone: workspace mode still resolves the
+listed modules by import path there (`go run example.com/devtools/cmd/lint`), and
+switching it off would break that. The main checkout, or any worktree the
+`go.work` lists, never gets `GOWORK=off`.
+
+It never overrides a choice, and every doubt leaves the environment alone: no
+`go.work` above, no `go.mod` below it (a monorepo whose module is in a
+subdirectory is not recognised), a `go.work` or `go.mod` that cannot be read or
+parsed, or one that is not a regular file — a `go.work` committed as a link to a
+device is left alone rather than read. The one cost, stated: a hook that relies on
+a tool listed only in the workspace (`go tool x` with the `tool` directive in a
+separately listed tools module) loses it under `GOWORK=off`. Such a repository
+sets `GOWORK` under `env` here, which is then used as is. A failed git command
+that ran with the automatic `GOWORK=off` says so, and names this setting.
+
+When plumb gives the child an environment of its own — this `env` table, or the
+automatic `GOWORK=off` — it also sets `PWD` to the directory the child runs in.
+`os/exec` does that only for an inherited environment, and without it a hook saw
+the daemon's own `PWD` (`/` for an auto-spawned daemon), which a `$(PWD)` in a
+Makefile or a script reading `$PWD` would trust.
+
+The same decision is made for the stored `[tasks.<lang>]` commands `run_task` and
+`mutation_test` run, keyed on the directory the command runs in, and `run_task`
+reports it. It is not made for `run_command`, whose commands are the agent's own —
+one of them may be exactly the `go work use .` that fixes a workspace.
 
 It applies to the git process plumb runs on your behalf — the one that runs
 hooks and can open an editor. The auxiliary read queries around it (`ls-files`,

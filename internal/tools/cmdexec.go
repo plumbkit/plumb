@@ -31,6 +31,10 @@ type ExecResult struct {
 	Stderr    string // captured, capped
 	TimedOut  bool
 	Cancelled bool // the request context was cancelled, not a genuine non-zero exit
+	// GoWorkOff is the go.work RunTaskArgv switched off for this command with
+	// GOWORK=off (git_gowork.go), or "" when the environment was left alone. A
+	// failure report names it: a command can fail BECAUSE of the switch.
+	GoWorkOff string
 }
 
 // RunArgv executes argv[0] with argv[1:] in workdir with NO shell, capturing
@@ -41,6 +45,22 @@ type ExecResult struct {
 //
 // Concurrency: safe for concurrent use — each call owns its process and buffers.
 func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
+	return runArgv(ctx, workdir, argv, timeout, false)
+}
+
+// RunTaskArgv is RunArgv for a stored [tasks.<lang>] command (run_task,
+// mutation_test): the child inherits the daemon's environment, except that
+// applyAutoGoWork may add GOWORK=off — the decision the git tool makes for a
+// repository's hooks, made here for the repository's configured commands, keyed on
+// workdir (git_gowork.go says when, and why run_command is not included).
+// res.GoWorkOff names the go.work that was switched off.
+//
+// Concurrency: as RunArgv.
+func RunTaskArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
+	return runArgv(ctx, workdir, argv, timeout, true)
+}
+
+func runArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration, autoGoWork bool) (ExecResult, error) {
 	if len(argv) == 0 {
 		return ExecResult{}, errors.New("run task: empty command")
 	}
@@ -57,6 +77,10 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	// config.ParseTaskCommand. The argv is never built from agent free-text.
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...) //nolint:gosec // see comment above
 	cmd.Dir = workdir
+	goWorkOff := ""
+	if autoGoWork {
+		goWorkOff = applyAutoGoWork(cmd)
+	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	// Run in its own process group and, on timeout/cancel, SIGKILL the whole group
@@ -74,6 +98,7 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 		Stderr:    capTaskOutput(stderr.String()),
 		TimedOut:  errors.Is(ctxErr, context.DeadlineExceeded),
 		Cancelled: errors.Is(ctxErr, context.Canceled),
+		GoWorkOff: goWorkOff,
 	}
 	if res.TimedOut || res.Cancelled {
 		res.ExitCode = -1

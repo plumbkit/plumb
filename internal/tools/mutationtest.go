@@ -153,11 +153,12 @@ func (*MutationTest) Description() string {
 	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
 		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
 		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, did not compile, could not be started, or timed out — it proves nothing and is NEVER reported as a kill; that false kill is why the compile gate exists). " +
-		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name) — the shipped go/python/rust test defaults carry one, so scoping works out of the box. " +
+		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name). " +
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
-		"Restoration is guaranteed on every exit path (pass, fail, compile error, timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory, rewritten under the same per-path lock, and SHA-256-verified before the run is reported clean. " +
-		"It REFUSES to touch a file with uncommitted changes (untracked included), no override — a clean file means `git checkout` recovers it if the daemon dies mid-run; that is the recovery story. " +
-		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant reads as killed for a reason unrelated to it. The refusal says which happened — suite red, command timed out, or could not start — because only the first is about your code. " +
+		"They run from the git work-tree holding the mutated file: a file in another worktree of the commands' repository re-roots them there (same relative working_dir). Mutants spanning work-trees, or in a linked worktree they can't move into, are refused, never run on the wrong tree. " +
+		"Restoration is guaranteed on every exit path (including panic and cancellation): the pre-mutation bytes are snapshotted, rewritten under the per-path lock, and SHA-256-verified before the run is reported clean. " +
+		"It REFUSES a file with uncommitted changes (untracked included), no override — a clean file means `git checkout` recovers it if the daemon dies mid-run. " +
+		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant reads as killed for a reason unrelated to it. The refusal says which: suite red, timed out, or could not start — only the first is about your code. " +
 		"One mutation run at a time per daemon; a second call is refused rather than queued."
 }
 
@@ -237,6 +238,13 @@ type mutationPlan struct {
 	test    TaskCommand
 	target  string
 	timeout time.Duration
+	// reroots records each command moved to another work-tree of the repository
+	// because the mutated files live there (mutationtest_root.go). It is set only
+	// after preflight, so a run refused before that point never carries one.
+	reroots []mutationReroot
+	// goWorkOff is the go.work the baseline's commands ran with GOWORK=off for
+	// (RunTaskArgv), or "": the report says so, since it changes what go builds.
+	goWorkOff string
 }
 
 func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -261,7 +269,19 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	if err := t.baseline(ctx, plan); err != nil {
+	// Between preflight and the baseline on purpose: the files are known, nothing has
+	// been mutated or run, and the baseline must run in the directory the mutants
+	// will — a baseline in one tree certifies nothing about another.
+	plan, err = t.rerootPlan(ctx, plan, targets)
+	if err != nil {
+		return "", err
+	}
+	// Charged only now: every refusal above is instant and writes nothing, so it
+	// must not spend the write budget the session shares with every write tool.
+	if err := t.chargeWrites(ctx, targets); err != nil {
+		return "", err
+	}
+	if plan, err = t.baseline(ctx, plan); err != nil {
 		return "", err
 	}
 	results, restoreErr := t.runAll(ctx, targets, plan)
@@ -343,14 +363,20 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 // fails … Get the suite green first" — a false diagnosis with unactionable
 // advice attached, which is this tool's own defect class reached from the
 // diagnostics side rather than the verdict side.
-func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) error {
-	if compile := t.runStep(ctx, plan.compile, plan.timeout); compile.failed() {
-		return t.baselineError(plan, plan.compile, compile, roleCompile)
+//
+// It returns the plan with goWorkOff recorded from what the commands actually ran
+// with, for the report header.
+func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) (mutationPlan, error) {
+	compile := t.runStep(ctx, plan.compile, plan.timeout)
+	if compile.failed() {
+		return plan, t.baselineError(ctx, plan, plan.compile, compile, roleCompile)
 	}
-	if test := t.runStep(ctx, plan.test, plan.timeout); test.failed() {
-		return t.baselineError(plan, plan.test, test, roleTest)
+	test := t.runStep(ctx, plan.test, plan.timeout)
+	if test.failed() {
+		return plan, t.baselineError(ctx, plan, plan.test, test, roleTest)
 	}
-	return nil
+	plan.goWorkOff = firstNonEmpty(compile.goWorkOff, test.goWorkOff)
+	return plan, nil
 }
 
 // baselineRole is which half of the baseline failed. It is a type rather than a
@@ -374,8 +400,8 @@ const (
 // the resolved argv could never fire, and the compile gate resolves without a
 // target by construction, so scoping the test command would not shorten it
 // anyway.
-func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out stepOutcome, role baselineRole) error {
-	where := t.runDirNote(cmd, out.step)
+func (t *MutationTest) baselineError(ctx context.Context, plan mutationPlan, cmd TaskCommand, out stepOutcome, role baselineRole) error {
+	where := t.planDirNote(ctx, plan, cmd, out.step) + goWorkOffBaselineNote(out.goWorkOff)
 	switch out.failure() {
 	case stepUnrunnable:
 		// The command never launched, so it says NOTHING about this workspace —
@@ -407,6 +433,18 @@ func (t *MutationTest) baselineError(plan mutationPlan, cmd TaskCommand, out ste
 		cmd.Slot, where, excerpt(out.output))
 }
 
+// goWorkOffBaselineNote tells the reader of a red baseline that plumb ran the
+// command with GOWORK=off (RunTaskArgv), because that alone can be why it failed: a
+// build that needs a module only the workspace provides.
+func goWorkOffBaselineNote(workFile string) string {
+	if workFile == "" {
+		return ""
+	}
+	return fmt.Sprintf(" plumb ran it with GOWORK=off, because %s lists another directory for this Go module (in workspace mode go "+
+		"would refuse this directory or build that other copy); if it failed on a module only that workspace provides, "+
+		"set GOWORK in the daemon's environment, which plumb never overrides.", workFile)
+}
+
 // slotSource names the config key that actually holds a slot's command. verify
 // stores none of its own — it is synthesised from build then test — so pointing
 // the reader at [tasks.<lang>].verify sends them to a key the runner never reads.
@@ -434,7 +472,7 @@ func slotSource(slot string) string {
 // existed; repeating it afterwards would send a reader to inspect a directory the
 // command never entered — the same wrong-place-to-look failure this note exists
 // to prevent, just relocated.
-func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
+func (t *MutationTest) runDirNote(ctx context.Context, cmd TaskCommand, step int) string {
 	if len(cmd.Steps) == 0 {
 		return ""
 	}
@@ -444,12 +482,9 @@ func (t *MutationTest) runDirNote(cmd TaskCommand, step int) string {
 	argv := strings.Join(cmd.Steps[step], " ")
 	root := ""
 	if t.deps.WorkspaceFn != nil {
-		root = t.deps.WorkspaceFn(context.Background())
+		root = t.deps.WorkspaceFn(ctx)
 	}
-	dir := cmd.WorkingDir
-	if dir == "" {
-		dir = root
-	}
+	dir := t.commandDir(ctx, cmd)
 	if dir == "" {
 		return fmt.Sprintf(" It ran `%s`.", argv)
 	}
@@ -522,9 +557,6 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 	if err != nil {
 		return mutationTarget{}, fmt.Errorf("cannot read: %w", err)
 	}
-	if !t.deps.limiter(ctx).Allow() {
-		return mutationTarget{}, rateLimitError("mutation_test", t.deps.limiter(ctx))
-	}
 	return mutationTarget{
 		spec:     spec,
 		path:     path,
@@ -533,6 +565,21 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 		mode:     info.Mode().Perm(),
 		sha:      sha256OfString(string(data)),
 	}, nil
+}
+
+// chargeWrites spends one write-budget slot per mutant — each is a write, twice
+// over counting the restore — and refuses the run when the budget is exhausted.
+// It runs after every instant refusal (preflight's and rerootPlan's), so a call
+// that writes nothing never spends the budget the session shares with every write
+// tool; the baseline, which can take minutes, runs after it so a run the budget
+// would refuse is refused before that cost is paid.
+func (t *MutationTest) chargeWrites(ctx context.Context, targets []mutationTarget) error {
+	for i, tgt := range targets {
+		if !t.deps.limiter(ctx).Allow() {
+			return fmt.Errorf("mutation_test: mutant %d (%s): %w", i+1, tgt.spec.Path, rateLimitError("mutation_test", t.deps.limiter(ctx)))
+		}
+	}
+	return nil
 }
 
 // displayPath renders path relative to the session workspace for the report,

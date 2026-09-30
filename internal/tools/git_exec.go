@@ -106,7 +106,8 @@ func gitReadArgv(argv []string) []string {
 // child carries how the git child is RUN (git_child.go): its environment, built
 // from [git] env, and the [git] write_timeout bound. A nil Env means inherit
 // the daemon's environment, which is what an unconfigured knob resolves to and
-// what every git child got before it existed. This is the ONE git child plumb
+// what every git child got before it existed — except that execGitCmd may add
+// GOWORK=off, never over a GOWORK already set (git_gowork.go). This is the ONE git child plumb
 // spawns that runs the repository's hooks or can open an editor, so it is the
 // one whose environment is configurable; the auxiliary read queries around it
 // (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
@@ -143,7 +144,8 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	mutating := tier == tierWrite || tier == tierDestructive
-	if err := execGitCmd(cmd, mutating, repoRoot); err != nil {
+	goWorkOff, err := execGitCmd(cmd, mutating, repoRoot)
+	if err != nil {
 		// git check-ignore exits 1 when NONE of the listed paths are ignored —
 		// a normal "no match" result, not a failure.
 		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
@@ -163,7 +165,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 		// warning is attached here too, not just on the success path below: a
 		// failure is exactly when a peer's claim ("rebasing ops main") is most
 		// likely to be the explanation, and the query cost was already paid.
-		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String(), warning)
+		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String(), warning, goWorkOff)
 	}
 	guard.postExec(execCtx)
 	out := stdout.String()
@@ -233,16 +235,24 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier,
 // The hygiene is applied here rather than at the callsite so every git child
 // that goes through this chokepoint gets it, and so a test can exercise the
 // real function rather than a reconstruction of it.
-func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) error {
+//
+// The child's GOWORK is decided here for the same reason (applyAutoGoWork): a
+// worktree under a go.work that lists another checkout of its module would fail
+// every go command its hooks run, and this is the one place every hook-running
+// git child — commit, rebase, cherry-pick, push — passes through. goWorkOff is
+// the go.work that was switched off ("" when none was), so a failure can say so.
+func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) (goWorkOff string, err error) {
 	boundGitChildWait(cmd)
+	goWorkOff = applyAutoGoWork(cmd)
+	pinChildPWD(cmd)
 	if err := cmd.Start(); err != nil {
-		return err
+		return goWorkOff, err
 	}
 	if mutating {
 		recordGitLockOwner(repoRoot, cmd.Process.Pid)
 		defer clearGitLockOwner(repoRoot)
 	}
-	return cmd.Wait()
+	return goWorkOff, cmd.Wait()
 }
 
 // postProcessGit replaces the raw output of add/commit with the concise

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,52 @@ func TestRunArgv_Success(t *testing.T) {
 	}
 	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "hello") {
 		t.Errorf("got exit=%d stdout=%q", res.ExitCode, res.Stdout)
+	}
+}
+
+// TestRunTaskArgv pins the task-command seam (run_task, mutation_test): under a
+// go.work that lists another checkout of the directory's module the command runs
+// with GOWORK=off and says so, PWD names the directory it runs in (not the daemon's),
+// and everything else is inherited. RunArgv — run_command's path — never does this:
+// an agent's own `go work use .` must not be refused by plumb.
+func TestRunTaskArgv(t *testing.T) {
+	hermeticGoEnv(t)
+	t.Setenv("PLUMB_RUNARGV_PROBE", "inherited")
+	t.Setenv("PWD", "/") // what an auto-spawned daemon has
+	root := goWorkLayout(t, map[string]string{
+		"go.work":     "go 1.21\n\nuse ./main\n",
+		"main/go.mod": goModMain,
+		"wt/go.mod":   goModMain,
+	})
+	wt, main := filepath.Join(root, "wt"), filepath.Join(root, "main")
+	probe := []string{"sh", "-c", `printf '%s|%s|%s' "${GOWORK-UNSET}" "$PWD" "${PLUMB_RUNARGV_PROBE-UNSET}"`}
+	ctx := context.Background()
+
+	res, err := RunTaskArgv(ctx, wt, probe, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "off|" + wt + "|inherited"; res.Stdout != want {
+		t.Errorf("a task command in the shadowed worktree saw %q, want %q", res.Stdout, want)
+	}
+	if res.GoWorkOff != filepath.Join(root, "go.work") {
+		t.Errorf("GoWorkOff = %q, want the go.work that was switched off", res.GoWorkOff)
+	}
+
+	res, err = RunTaskArgv(ctx, main, probe, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "UNSET|" + main + "|inherited"; res.Stdout != want || res.GoWorkOff != "" {
+		t.Errorf("a task command in the listed checkout saw %q (GoWorkOff %q), want %q untouched", res.Stdout, res.GoWorkOff, want)
+	}
+
+	res, err = RunArgv(ctx, wt, probe, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res.Stdout, "UNSET|") || res.GoWorkOff != "" {
+		t.Errorf("RunArgv (run_command) must never switch GOWORK off; saw %q (GoWorkOff %q)", res.Stdout, res.GoWorkOff)
 	}
 }
 

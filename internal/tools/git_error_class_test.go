@@ -34,7 +34,7 @@ func TestGitCommandError_RenderedTextIsPinned(t *testing.T) {
 		"… (output truncated — re-run `git commit -m 'hook fails'` in /r for the complete output)"
 
 	err := gitCommandError("/r", "commit", []string{"commit", "-m", "hook fails"},
-		exitError(t), stdout.String(), "hook: lint failed\n", "")
+		exitError(t), stdout.String(), "hook: lint failed\n", "", "")
 
 	if got := err.Error(); got != want {
 		t.Errorf("rendered text drifted.\n got: %q\nwant: %q", got, want)
@@ -48,7 +48,7 @@ func TestGitCommandError_RenderedTextIsPinned(t *testing.T) {
 func TestGitCommandError_WarningLeadsTheMessage(t *testing.T) {
 	const warning = "# plumb-warning: peer session \"amber-fox\" claims: rebasing ops main.\n"
 	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t),
-		"", "hook: lint failed\n", warning)
+		"", "hook: lint failed\n", warning, "")
 
 	want := warning + "git commit: exit code 1\nstderr:\nhook: lint failed"
 	if got := err.Error(); got != want {
@@ -83,7 +83,7 @@ func TestGitCommandError_Classification(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := gitCommandError("/r", "push", []string{"push"}, tt.runErr, tt.stdout, "", "")
+			err := gitCommandError("/r", "push", []string{"push"}, tt.runErr, tt.stdout, "", "", "")
 			assertClassified(t, err, toolerror.KindGitCommandFailed, toolerror.ClassInspectOutput, false)
 			te := mustClassify(t, err)
 			if len(te.Details) != len(tt.wantDetails) {
