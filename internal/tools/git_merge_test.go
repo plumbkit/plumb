@@ -183,8 +183,10 @@ func TestGit_MergeRefusesFlagsThatEscapeTheToolsContract(t *testing.T) {
 	}
 	for _, c := range cases {
 		_, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "merge", "args": c.args})
-		if err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("merge %v: want a refusal mentioning %q, got %v", c.args, c.want, err)
+		// "not permitted" pins that the TOOL refused: git's own failure on a
+		// malformed call can quote the same flag and would pass on c.want alone.
+		if err == nil || !strings.Contains(err.Error(), "not permitted") || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("merge %v: want the tool's refusal mentioning %q, got %v", c.args, c.want, err)
 		}
 	}
 	if gitHeadSHA(t, repo) != before {
