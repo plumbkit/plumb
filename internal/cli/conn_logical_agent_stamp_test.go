@@ -139,10 +139,15 @@ func TestCeilingArmsWhenAgentsDeclaredOnlyAtAttach(t *testing.T) {
 	if err == nil {
 		t.Fatal("an anonymous write on a connection two agents declared must refuse")
 	}
-	for _, want := range []string{"plumb hooks install claude-code", mcp.ArgLogicalAgentDeclaredKey, "one plumb serve per agent"} {
+	for _, want := range []string{"plumb hooks install claude-code", mcp.MetaLogicalAgentKey, "one plumb serve per agent"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal must name the remedy %q: %v", want, err)
 		}
+	}
+	// Not "pass plumb_agent yourself": without the hook an invented id is
+	// admitted as a fresh agent on the connection root, the misroute itself.
+	if strings.Contains(err.Error(), mcp.ArgLogicalAgentDeclaredKey) {
+		t.Errorf("the refusal must not invite typing %s: %v", mcp.ArgLogicalAgentDeclaredKey, err)
 	}
 	if err := s.refuseSharedStateChange(context.Background(), "write_file", "conversation-b"); err != nil {
 		t.Errorf("an attributed write must be admitted: %v", err)

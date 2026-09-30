@@ -344,7 +344,7 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 // identity, cheapest first. Identity comes before topology on purpose
 // (PLAN-417): the previous wording led with "one plumb serve per agent", the
 // one remedy an agent cannot apply from inside a tool call.
-const sharedIdentityRemedy = "every call must carry its agent's identity. On Claude Code (terminal or the desktop app), `plumb hooks install claude-code` stamps every call; on Claude desktop, restart the app after upgrading plumb so it re-reads the tool list. A client without the hook passes " + mcp.ArgLogicalAgentDeclaredKey + " (the session_id it gave session_start) on every call, or a per-call _meta[" + mcp.MetaLogicalAgentKey + "]. A session_start session_id alone identifies that call, not later ones. Or run one plumb serve per agent"
+const sharedIdentityRemedy = "every call must carry its agent's identity. On Claude Code (terminal or the desktop app), `plumb hooks install claude-code` stamps every call; on Claude desktop, restart the app after upgrading plumb so it re-reads the tool list. A client whose transport can set it sends a per-call _meta[" + mcp.MetaLogicalAgentKey + "]. A session_start session_id alone identifies that call, not later ones. Otherwise, run one plumb serve per agent"
 
 // linkExternalID is session_start's external-ID linker: it records the
 // declared identity, links the session RECORD to its conversation, and

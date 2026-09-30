@@ -200,7 +200,7 @@ func TestDesktopConnector(t *testing.T) {
 		if !isErr {
 			t.Fatalf("an unattributable write on a shared connection was admitted: %s", text)
 		}
-		for _, want := range []string{"cannot be attributed", mcp.ArgLogicalAgentDeclaredKey} {
+		for _, want := range []string{"cannot be attributed", "plumb hooks install claude-code"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("refusal missing %q: %s", want, text)
 			}
