@@ -367,7 +367,7 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 		return dirtyWrite(&editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)})
 	}
-	if err := checkExpectedVersion(path, a, t.isStrict()); err != nil {
+	if err := checkExpectedVersion(path, a, t.isStrict(), t.deps.reads(ctx)); err != nil {
 		return err
 	}
 	return t.checkStrictRead(ctx, path)
@@ -389,11 +389,11 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 // hint is suppressed in strict mode, where reconcile alone is NOT enough —
 // checkStrictRead would still demand a fresh read — so pointing at reconcile there
 // would just cost an extra failed round-trip.
-func checkExpectedVersion(path string, a editFileArgs, strict bool) error {
+func checkExpectedVersion(path string, a editFileArgs, strict bool, reads *ReadTracker) error {
 	if a.Reconcile {
 		return nil
 	}
-	err := verifyExpectedVersion("edit_file", path, a.ExpectedMtime, a.ExpectedSha)
+	err := verifyExpectedVersion("edit_file", path, a.ExpectedMtime, a.ExpectedSha, reads)
 	if err == nil {
 		return nil
 	}

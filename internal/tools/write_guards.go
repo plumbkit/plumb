@@ -20,7 +20,7 @@ import (
 // and edit_file's checkExpectedVersion delegates here (wrapping a failure as an
 // edit-logic error, and appending a reconcile hint for an anchored batch), so the
 // two enforce identical semantics and wording.
-func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error {
+func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string, reads *ReadTracker) error {
 	if expectedMtime == "" && expectedSha == "" {
 		return nil
 	}
@@ -48,6 +48,17 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 					"  Re-read the file and try again",
 				tool, path, want.Format(time.RFC3339Nano), currentMtime.Format(time.RFC3339Nano),
 				currentShaLine(path)))
+		}
+		if expectedSha == "" {
+			if readSha, cur, changed := changedAtSameMtime(reads, path, want); changed {
+				return staleRead(fmt.Errorf(
+					"%s: file %q was modified since you read it (same mtime, different content)\n"+
+						"  expected_mtime:  %s\n"+
+						"  read sha256:     %s\n"+
+						"  current sha256:  %s\n"+
+						"  Re-read the file and try again",
+					tool, path, want.Format(time.RFC3339Nano), readSha, cur))
+			}
 		}
 	}
 	if expectedSha != "" {
@@ -77,6 +88,27 @@ func currentShaLine(path string) string {
 		return ""
 	}
 	return fmt.Sprintf("  current sha256: %s\n", sha)
+}
+
+// changedAtSameMtime reports whether path's content differs from what this
+// session read at mtime want: the check behind an expected_mtime that matches.
+// An equal mtime does not prove equal content — a coarse timestamp clock (ext4
+// stamps from the jiffy-granular coarse clock; HFS+ 1 s; FAT 2 s) gives two
+// writes in one tick the same mtime, and mtime-preserving tools (cp -p, rsync -t,
+// tar) alias it on purpose. When the session recorded a SHA at that same mtime it
+// is authoritative, as changedSinceSessionRead treats it on the unguarded path.
+// A session that never read the file, or read it at another mtime, is not
+// second-guessed: the caller's token matches the file, and nothing contradicts it.
+func changedAtSameMtime(reads *ReadTracker, path string, want time.Time) (readSha, current string, changed bool) {
+	entry, ok := reads.recorded(path)
+	if !ok || entry.sha == "" || !entry.mtime.Equal(want) {
+		return "", "", false
+	}
+	cur, err := fileSHA256(path)
+	if err != nil || cur == entry.sha {
+		return "", "", false
+	}
+	return entry.sha, cur, true
 }
 
 // changedSinceSessionRead reports whether this session read path earlier (via

@@ -177,7 +177,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 
-	prepared, err := txPhase1Validate(a.Operations)
+	prepared, err := txPhase1Validate(a.Operations, t.deps.reads(ctx))
 	if err != nil {
 		return "", err
 	}
@@ -320,11 +320,12 @@ func txDirtyCheck(ctx context.Context, deps WriteDeps, paths []string, dirtyOk b
 	return nil
 }
 
-// txPhase1Validate validates every operation in memory. No writes happen.
-func txPhase1Validate(ops []txOperation) ([]txPrepared, error) {
+// txPhase1Validate validates every operation in memory. No writes happen. reads
+// is the session's read tracker, for the same-mtime content check.
+func txPhase1Validate(ops []txOperation, reads *ReadTracker) ([]txPrepared, error) {
 	prepared := make([]txPrepared, 0, len(ops))
 	for i, op := range ops {
-		p, err := txValidateOp(i, op, paths.URIToPath(op.Path))
+		p, err := txValidateOp(i, op, paths.URIToPath(op.Path), reads)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +336,7 @@ func txPhase1Validate(ops []txOperation) ([]txPrepared, error) {
 
 // txValidateOp validates a single operation against the current on-disk state
 // and returns the prepared in-memory result.
-func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
+func txValidateOp(i int, op txOperation, path string, reads *ReadTracker) (txPrepared, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: stat %q: %w", i, path, err)}
@@ -350,6 +351,16 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 				"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
 				i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
 			)})
+		}
+		if op.ExpectedSha == "" {
+			if readSha, cur, changed := changedAtSameMtime(reads, path, want); changed {
+				return txPrepared{}, staleRead(&editLogicErr{fmt.Errorf(
+					"transaction_apply: op[%d]: %q changed since you read it (same mtime, different content)\n"+
+						"  read sha256:    %s\n"+
+						"  current sha256: %s",
+					i, path, readSha, cur,
+				)})
+			}
 		}
 	}
 	if op.ExpectedSha != "" {

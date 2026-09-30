@@ -149,16 +149,16 @@ func TestVerifyExpectedVersion_Classified(t *testing.T) {
 	}
 
 	stale := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
-	err := verifyExpectedVersion("write_file", path, stale, "")
+	err := verifyExpectedVersion("write_file", path, stale, "", nil)
 	assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassReRead, true)
 
-	err = verifyExpectedVersion("write_file", path, "", "0000000000000000000000000000000000000000000000000000000000000000")
+	err = verifyExpectedVersion("write_file", path, "", "0000000000000000000000000000000000000000000000000000000000000000", nil)
 	assertClassified(t, err, toolerror.KindUnreadOrStale, toolerror.ClassReRead, true)
 
 	// A malformed expected_mtime is the caller's argument, not a concurrent
 	// change — so it is classified, but as invalid_arguments, never as a
 	// staleness refusal that would send the caller to re-read a fine file.
-	err = verifyExpectedVersion("write_file", path, "not-a-time", "")
+	err = verifyExpectedVersion("write_file", path, "not-a-time", "", nil)
 	assertClassified(t, err, toolerror.KindInvalidArguments, toolerror.ClassFixArguments, true)
 }
 
