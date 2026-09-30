@@ -39,6 +39,18 @@
 
 ### Fixed
 
+- **`mutation_test` names the run holding its slot, and frees the slot when
+  that run's client goes.** (#545) A second run is still refused (one run per
+  daemon keeps two agents from reading each other's mutant as their own result),
+  but the refusal said only "another mutation run is already in progress", so
+  agents waited over an hour unable to tell a long run from a stuck one. It now
+  names the holder's session name and id, workspace, how long ago it started,
+  and its progress (checking its mutants, the unmutated baseline, or mutant *k*
+  of *n* and its compile or test step). And the MCP server never cancelled a
+  call whose client disconnected, so a crashed agent's run held the slot until
+  it finished, for a report nobody could receive. A run whose connection closes
+  is now cancelled: the step in flight is killed, the file restored, the slot
+  released, and no further mutant is started.
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
