@@ -80,11 +80,14 @@
   submodule checked out inside a worktree is tested with that worktree's copy;
   the climb stops at the innermost repository holding the commands and every
   file, so a linked worktree of the submodule itself, and a nested submodule
-  inside that worktree, re-root from the submodule's checkout (and back). A file in the
+  inside that worktree, re-root from the submodule's checkout (and back); a
+  submodule checked out inside a superproject worktree counts as the same
+  repository as the main checkout's copy. A file in the
   commands' own tree, in no repository, or in another repository's main
   work-tree (a submodule, a sibling module) runs as before.
   Refused before anything runs, mutates or spends the write budget: mutants that
-  need two work-trees; a file in a linked worktree the commands cannot move into;
+  need two work-trees, including a file that alone would move the commands
+  beside one that shares no repository with them; a file in a linked worktree the commands cannot move into;
   a destination directory that is missing or reached through a symlink leading
   elsewhere; a command argument holding an absolute path into the tree being left
   (asked of the filesystem after resolving links, so a spelling in another case

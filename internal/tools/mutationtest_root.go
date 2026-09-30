@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -58,11 +57,17 @@ import (
 // file (gitProbes.sharedLevel): a submodule's checkout and a linked worktree of that
 // same submodule are two work-trees of it, as are lib and lib's worktree x for a
 // file in x's own nested submodule, and climbing further would compare trees that
-// only one side has, making them look unrelated.
+// only one side has, making them look unrelated. When no repository is shared by
+// all the files together but one of them alone would move the commands, the run is
+// refused (gitProbes.splitLevels): the outermost placement would keep the commands
+// where they are and test their own copy of that file.
 //
 // "Same repository" is git's own answer (the common git directory), and the paths
 // compared are ones git printed, so a symlinked workspace, a case-insensitive
-// volume or a relative common directory cannot make two spellings disagree.
+// volume or a relative common directory cannot make two spellings disagree. One
+// fold applies (sameRepo): a submodule checked out inside a superproject's linked
+// worktree has its git directory under that worktree's, yet holds a copy of the same
+// files as the main checkout's submodule, so the two count as one repository.
 //
 // When git cannot answer for a directory (a checkout owned by another user without
 // a safe.directory entry, or no git on the daemon's PATH), the nearest .git is read
@@ -231,97 +236,6 @@ func (g gitProbes) of(ctx context.Context, dir string) gitProbe {
 	return p
 }
 
-// maxSubmoduleDepth bounds the climb through nested superprojects.
-const maxSubmoduleDepth = 16
-
-// placement is git's answer for dir seen from its OUTERMOST superproject (see the
-// file comment): the last element of its chain.
-func (g gitProbes) placement(ctx context.Context, dir string) gitProbe {
-	c := g.chain(ctx, dir)
-	return c[len(c)-1]
-}
-
-// chain is git's answer for dir followed by its answer at each enclosing
-// superproject, innermost first: a directory in a submodule is reported as the
-// superproject's work-tree, with the prefix extended by the submodule's path
-// inside it. A superproject git cannot identify ends the chain with an unknown
-// answer — the submodule's own answer would hide the very twin the climb exists
-// to find.
-func (g gitProbes) chain(ctx context.Context, dir string) []gitProbe {
-	p := g.of(ctx, dir)
-	out := []gitProbe{p}
-	for depth := 0; p.place == placeTree && p.tree.super != ""; depth++ {
-		sub := p.tree
-		sp := g.of(ctx, sub.super)
-		rel, err := filepath.Rel(sp.tree.top, sub.top)
-		switch {
-		case depth == maxSubmoduleDepth:
-			return append(out, gitProbe{place: placeUnknown, reason: "submodules nested more than " + strconv.Itoa(maxSubmoduleDepth) + " deep"})
-		case sp.place != placeTree:
-			return append(out, gitProbe{place: placeUnknown, reason: firstNonEmpty(sp.reason, "git could not identify "+sub.super+", the superproject of "+sub.top)})
-		case err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)):
-			return append(out, gitProbe{place: placeUnknown, reason: "the submodule " + sub.top + " is not inside its superproject " + sp.tree.top})
-		}
-		sp.tree.prefix = filepath.ToSlash(rel) + "/" + sub.prefix // sp is a copy: the memo keeps git's own answer
-		sp.approx = sp.approx || p.approx
-		p = sp
-		out = append(out, p)
-	}
-	return out
-}
-
-// sharedLevel finds the innermost repository that git confirms holds the commands'
-// directory (dir) and every mutated file's directory, somewhere along their chains,
-// and returns their answers at that level. Answers taken there compare like with
-// like; the destination is re-checked at the same level (atLevel).
-func (g gitProbes) sharedLevel(ctx context.Context, dir string, targets []mutationTarget) (gitProbe, []gitProbe, bool) {
-	chains := make([][]gitProbe, len(targets))
-	for i, tgt := range targets {
-		chains[i] = g.chain(ctx, filepath.Dir(tgt.path))
-	}
-	for _, run := range g.chain(ctx, dir) {
-		if run.place != placeTree || run.approx {
-			break
-		}
-		files := make([]gitProbe, len(targets))
-		ok := true
-		for i := range chains {
-			files[i], ok = atCommon(chains[i], run.tree.common)
-			if !ok {
-				break
-			}
-		}
-		if ok {
-			return run, files, true
-		}
-	}
-	return gitProbe{}, nil, false
-}
-
-// atCommon returns the confirmed answer in chain for the repository whose common
-// git directory is common.
-func atCommon(chain []gitProbe, common string) (gitProbe, bool) {
-	for _, p := range chain {
-		if p.place == placeTree && !p.approx && sameGitPath(p.tree.common, common) {
-			return p, true
-		}
-	}
-	return gitProbe{}, false
-}
-
-// atLevel is placement for a command moved at a shared level: dir's answer for
-// the repository whose common git directory is common, or its outermost answer
-// when that repository does not hold dir (which then fails the re-check).
-func (g gitProbes) atLevel(common string) func(context.Context, string) gitProbe {
-	return func(ctx context.Context, dir string) gitProbe {
-		c := g.chain(ctx, dir)
-		if p, ok := atCommon(c, common); ok {
-			return p
-		}
-		return c[len(c)-1]
-	}
-}
-
 // commandDir is the directory a resolved command runs in: its working_dir, else
 // the workspace root. runStep, runDirNote and rerootPlan all use it, so the
 // directory re-rooting reasons about is the one the command really runs in.
@@ -354,6 +268,8 @@ func (t *MutationTest) rerootPlan(ctx context.Context, plan mutationPlan, target
 		run, fileTrees, lookup := probes.placement(ctx, dir), files, probes.placement
 		if shared, own, ok := probes.sharedLevel(ctx, dir, targets); ok {
 			run, fileTrees, lookup = shared, own, probes.atLevel(shared.tree.common)
+		} else if err := probes.splitLevels(ctx, dir, targets); err != nil {
+			return plan, err
 		}
 		if err := ctx.Err(); err != nil {
 			return plan, fmt.Errorf("mutation_test: cancelled while finding the work-tree of the commands' directory; nothing was run or mutated: %w", err)
@@ -422,7 +338,7 @@ func placeFile(f gitProbe, display, dir string, run gitProbe) (move bool, err er
 			dir, run.reason, display)
 	case run.place == placeTree && sameGitPath(f.tree.top, run.tree.top):
 		return false, nil
-	case run.place == placeTree && sameGitPath(f.tree.common, run.tree.common):
+	case run.place == placeTree && sameRepo(f.tree.common, run.tree.common):
 		if f.approx || run.approx {
 			return false, fmt.Errorf("mutation_test: %s is in work-tree %s, not the one the commands run in (%s), so they would have to be "+
 				"moved there — but git could not confirm either tree (%s), and plumb does not move trusted commands on a guess. "+
