@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -83,7 +84,7 @@ func claudeIdentity(sessionID, agentID string) string {
 // derived identity, so a subagent never needs to remember one and a
 // model-typed value ("subagent-7") cannot become a phantom third identity that
 // clobbers the connection's linkage.
-func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daemonVersion func() string) (map[string]any, bool) {
+func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daemon func() identityProbeRecord) (map[string]any, bool) {
 	if strings.EqualFold(strings.TrimSpace(env(claudeIdentityKillSwitch)), "off") {
 		return nil, false
 	}
@@ -98,7 +99,7 @@ func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daem
 	if !ok {
 		return nil, false
 	}
-	key := identityStampKey(daemonVersion)
+	key := identityStampKey(daemon)
 	if key == "" {
 		return nil, false
 	}
@@ -188,43 +189,47 @@ const (
 	// identityChannelMinVersion is the first plumb whose daemon lifts the
 	// argument-carried identity out of tools/call arguments.
 	identityChannelMinVersion = "0.19.1"
-	// identityDeclaredKeyMinVersion is the first plumb whose daemon lifts
-	// mcp.ArgLogicalAgentDeclaredKey. An older daemon would reject it as an
-	// unknown parameter, so it gets the reverse-DNS key instead.
-	identityDeclaredKeyMinVersion = "0.20.4"
-	identityProbeTTL              = time.Minute
-	identityProbeTimeout          = 300 * time.Millisecond
-	identityProbeCacheFile        = "daemon-identity-channel.json"
+	identityProbeTTL          = time.Minute
+	identityProbeTimeout      = 300 * time.Millisecond
+	identityProbeCacheFile    = "daemon-identity-channel.json"
 )
 
 // identityProbeRecord is the cached answer.
 type identityProbeRecord struct {
-	DaemonVersion string    `json:"daemon_version"`
-	CheckedAt     time.Time `json:"checked_at"`
+	DaemonVersion string `json:"daemon_version"`
+	// DeclaredKey reports that the daemon listed mcp.ArgLogicalAgentDeclaredKey
+	// in its `identity-keys` answer. It is asked, not inferred from the
+	// version: a development build of main carries the last release's version
+	// label, so a version threshold kept the declared key off exactly the
+	// builds that had it.
+	DeclaredKey bool      `json:"declared_key,omitempty"`
+	CheckedAt   time.Time `json:"checked_at"`
 }
 
-// claudeIdentityDaemonVersion is the production gate: the running daemon's
-// version from the cached control-socket probe, or "" when it cannot be had.
-func claudeIdentityDaemonVersion() string {
-	return daemonIdentityVersion(probeDaemonVersion, filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
+// claudeIdentityDaemon is the production gate: what the running daemon
+// accepts, from the cached control-socket probe (zero when it cannot be had).
+func claudeIdentityDaemon() identityProbeRecord {
+	return daemonIdentity(probeDaemonIdentity, filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
 }
 
 // identityStampKey picks the argument key the stamp goes under for the running
 // daemon, or "" when the call must not be stamped. The declarable key is
 // preferred because it is the one a host that forwards only declared arguments
-// lets through (see mcp.ArgLogicalAgentDeclaredKey).
-func identityStampKey(daemonVersion func() string) string {
-	if daemonVersion == nil {
+// lets through (see mcp.ArgLogicalAgentDeclaredKey), but only a daemon that
+// says it lifts that key gets it: an older one rejects it as an unknown
+// parameter.
+func identityStampKey(daemon func() identityProbeRecord) string {
+	if daemon == nil {
 		return ""
 	}
-	v := daemonVersion()
-	if !daemonVersionAcceptsStamp(v) {
+	rec := daemon()
+	if !daemonVersionAcceptsStamp(rec.DaemonVersion) {
 		return ""
 	}
-	if versionOlder(v, identityDeclaredKeyMinVersion) {
-		return mcp.ArgLogicalAgentKey
+	if rec.DeclaredKey {
+		return mcp.ArgLogicalAgentDeclaredKey
 	}
-	return mcp.ArgLogicalAgentDeclaredKey
+	return mcp.ArgLogicalAgentKey
 }
 
 // daemonAcceptsIdentityStamp answers "may this call be stamped?".
@@ -238,18 +243,31 @@ func daemonAcceptsIdentityStamp(probe func() (string, error), cachePath string, 
 // threshold accepts: an unstamped call is what the client would have sent
 // anyway.
 func daemonIdentityVersion(probe func() (string, error), cachePath string, now time.Time) string {
+	if probe == nil {
+		return daemonIdentity(nil, cachePath, now).DaemonVersion
+	}
+	return daemonIdentity(func() (identityProbeRecord, error) {
+		v, err := probe()
+		return identityProbeRecord{DaemonVersion: v}, err
+	}, cachePath, now).DaemonVersion
+}
+
+// daemonIdentity is daemonIdentityVersion's full answer: the version and
+// whether the daemon lifts the declared key, cached together.
+func daemonIdentity(probe func() (identityProbeRecord, error), cachePath string, now time.Time) identityProbeRecord {
 	if rec, ok := readIdentityProbe(cachePath); ok && now.Sub(rec.CheckedAt) < identityProbeTTL && now.After(rec.CheckedAt) {
-		return rec.DaemonVersion
+		return rec
 	}
 	if probe == nil {
-		return ""
+		return identityProbeRecord{}
 	}
-	version, err := probe()
+	rec, err := probe()
 	if err != nil {
-		return ""
+		return identityProbeRecord{}
 	}
-	writeIdentityProbe(cachePath, identityProbeRecord{DaemonVersion: version, CheckedAt: now})
-	return version
+	rec.CheckedAt = now
+	writeIdentityProbe(cachePath, rec)
+	return rec
 }
 
 // daemonVersionAcceptsStamp: a release older than the threshold does not;
@@ -317,6 +335,46 @@ func probeDaemonVersion() (string, error) {
 		return "", fmt.Errorf("reading the daemon's version reply: %w", err)
 	}
 	return parseDaemonVersionReply(line)
+}
+
+// probeDaemonIdentity asks the daemon its version and, separately, which
+// identity argument keys it lifts. A daemon that predates `identity-keys`
+// answers "unknown command", which reads as "not the declared key" — the safe
+// answer, since such a daemon would reject it.
+func probeDaemonIdentity() (identityProbeRecord, error) {
+	version, err := probeDaemonVersion()
+	if err != nil {
+		return identityProbeRecord{}, err
+	}
+	return identityProbeRecord{DaemonVersion: version, DeclaredKey: probeDaemonDeclaredKey()}, nil
+}
+
+// probeDaemonDeclaredKey reports whether the daemon's `identity-keys` answer
+// lists mcp.ArgLogicalAgentDeclaredKey. Any failure is false.
+func probeDaemonDeclaredKey() bool {
+	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
+	if _, err := conn.Write([]byte(ctrlIdentityKeysCommand + "\n")); err != nil {
+		return false
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	return identityKeysReplyHasDeclared(line)
+}
+
+// identityKeysReplyHasDeclared parses `ok <key> <key>...`.
+func identityKeysReplyHasDeclared(line string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ok ")
+	if !ok {
+		return false
+	}
+	return slices.Contains(strings.Fields(rest), mcp.ArgLogicalAgentDeclaredKey)
 }
 
 // classifyDialError separates "there is no daemon" from "there is something
