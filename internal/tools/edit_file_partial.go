@@ -35,7 +35,7 @@ func (t *EditFile) executePartial(
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
 	var sb strings.Builder
-	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr))
+	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr, res.written))
 	sb.WriteString(formatPartialEditsResults(results))
 	if writeErr == nil && applied > 0 {
 		t.executePartialPostWrite(ctx, path, uri, original, content, res.written, awaitFresh, &sb, baseline)
@@ -54,26 +54,28 @@ func countApplied(results []partialEditResult) int {
 	return n
 }
 
-func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error) string {
+func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error, written fileSnapshot) string {
 	switch {
 	case writeErr != nil:
 		return fmt.Sprintf("partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
 	case applied == 0:
 		return "partial apply: all edits failed — file not modified\n\n"
 	default:
-		return t.formatPartialAppliedHeader(path, original, content, applied, total)
+		return t.formatPartialAppliedHeader(path, original, content, applied, total, written)
 	}
 }
 
 // formatPartialAppliedHeader renders the header for the case where at least one
-// edit landed and the write succeeded: the count, the fresh mtime, a line-change
-// summary, and (when enabled) the diff.
-func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int) string {
+// edit landed and the write succeeded: the count, the written version's mtime, a
+// line-change summary, and (when enabled) the diff. The mtime is the version the
+// write published, not a re-stat of the path, for the reason formatEditFileSuccess
+// gives (#528).
+func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int, written fileSnapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
 		applied, total, path, len(content))
-	if info, err := os.Stat(path); err == nil {
-		fmt.Fprintf(&sb, "mtime: %s\n", info.ModTime().Format(time.RFC3339Nano))
+	if !written.mtime.IsZero() {
+		fmt.Fprintf(&sb, "mtime: %s\n", written.mtime.Format(time.RFC3339Nano))
 	}
 	if s := summariseLineChanges(original, content); s != "" {
 		fmt.Fprintf(&sb, "%s\n", s)

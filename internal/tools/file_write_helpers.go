@@ -232,8 +232,8 @@ type writeResult struct {
 	// modified by a third party after we started but before our rename landed.
 	tempWrittenAt time.Time
 	// written is the version this write published (stagedSnapshot): the hash of
-	// the bytes written and the staged file's mtime, which the rename carries to
-	// the target. recordWritten records it rather than re-reading the path.
+	// the bytes written and the closed staged file's mtime, which the rename
+	// carries to the target. recordWritten records it rather than re-reading the path.
 	written fileSnapshot
 }
 
@@ -308,14 +308,13 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 		_ = os.Remove(tmpPath)
 		return res, fmt.Errorf("syncing temp file: %w", err)
 	}
-	if res.written, err = stagedSnapshot(tmp, data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return res, fmt.Errorf("stat temp file: %w", err)
-	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return res, fmt.Errorf("closing temp file: %w", err)
+	}
+	if res.written, err = stagedSnapshot(tmpPath, data); err != nil {
+		_ = os.Remove(tmpPath)
+		return res, fmt.Errorf("stat temp file: %w", err)
 	}
 
 	res.tempWrittenAt = time.Now()
@@ -364,14 +363,13 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 		_ = os.Remove(sibling)
 		return res, fmt.Errorf("syncing sibling temp file: %w", err)
 	}
-	if res.written, err = stagedSnapshot(f, data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(sibling)
-		return res, fmt.Errorf("stat sibling temp file: %w", err)
-	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(sibling)
 		return res, fmt.Errorf("closing sibling temp file: %w", err)
+	}
+	if res.written, err = stagedSnapshot(sibling, data); err != nil {
+		_ = os.Remove(sibling)
+		return res, fmt.Errorf("stat sibling temp file: %w", err)
 	}
 	res.tempWrittenAt = time.Now()
 

@@ -91,28 +91,49 @@ func (r *ReadTracker) SetPersistSink(fn func(path string, mtime time.Time, sha s
 //
 // Every record is re-keyed through lockPathKey, because a daemon that predates
 // issue #524 persisted the path as the agent spelled it. Two spellings of one
-// file then collapse onto one key, and the later read wins whatever order the
-// store returned them in: it is the newest version the session is known to have
-// seen, and keeping an older one would only make the guards refuse the session's
-// own knowledge.
+// file then collapse onto one key, and one must win whatever order the store
+// returned them in (see hydrateOutranks).
 func (r *ReadTracker) Hydrate(records []ReadRecord) {
 	if r == nil || len(records) == 0 {
 		return
 	}
 	// Resolve outside the lock: lockPathKey touches the filesystem.
-	loaded := make(map[string]readEntry, len(records))
+	loaded := make(map[string]hydratedRead, len(records))
 	for _, rec := range records {
 		key := lockPathKey(rec.Path)
-		if prev, dup := loaded[key]; dup && !rec.Mtime.After(prev.mtime) {
+		c := hydratedRead{readEntry: readEntry{mtime: rec.Mtime, sha: rec.SHA}, canonical: rec.Path == key}
+		if prev, dup := loaded[key]; dup && !hydrateOutranks(c, prev) {
 			continue
 		}
-		loaded[key] = readEntry{mtime: rec.Mtime, sha: rec.SHA}
+		loaded[key] = c
 	}
 	r.mu.Lock()
 	for key, e := range loaded {
-		r.entries[key] = e
+		r.entries[key] = e.readEntry
 	}
 	r.mu.Unlock()
+}
+
+// hydratedRead is one row on its way into Hydrate, remembering whether it was
+// already stored under its key.
+type hydratedRead struct {
+	readEntry
+	canonical bool
+}
+
+// hydrateOutranks reports whether c should replace prev when both name one file.
+// A row already stored under its canonical key wins: a daemon with this keying
+// writes nothing else, so a row spelled any other way was left by an older
+// daemon and predates it. File mtime cannot decide that pair, because
+// mtime-preserving tools (cp -p, rsync -t) move it backwards, and an older read
+// winning would make the guards refuse a file the session did read, on every
+// restart. Between two rows of the same kind, the later file mtime wins: the
+// newest version seen.
+func hydrateOutranks(c, prev hydratedRead) bool {
+	if c.canonical != prev.canonical {
+		return c.canonical
+	}
+	return c.mtime.After(prev.mtime)
 }
 
 // Reset forgets every recorded read. Called on a deliberate workspace re-pin so

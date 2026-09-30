@@ -174,13 +174,15 @@ func TestReadTracker_PersistsCanonicalKey(t *testing.T) {
 
 // TestReadTracker_HydrateCanonicalisesSpelledRows: rows persisted by a daemon
 // that predates the fix carry the path as the agent spelled it. Hydration must
-// fold them onto the canonical key, and when two spellings of one file collide
-// the later read wins whichever order the store returns them in — it is the
-// newest version the session is known to have seen.
+// fold them onto the canonical key, and when two spelled rows of one file
+// collide the later read wins whichever order the store returns them in — it is
+// the newest version the session is known to have seen.
 func TestReadTracker_HydrateCanonicalisesSpelledRows(t *testing.T) {
 	realPath, aliasPath := aliasedFile(t, "f.txt", "v1\n")
+	// Both spellings unclean, so neither equals the key on any platform.
+	spelledReal := filepath.Dir(realPath) + "/./" + filepath.Base(realPath)
 	older := ReadRecord{Path: aliasPath, Mtime: time.Unix(100, 0), SHA: "sha-old"}
-	newer := ReadRecord{Path: realPath, Mtime: time.Unix(200, 0), SHA: "sha-new"}
+	newer := ReadRecord{Path: spelledReal, Mtime: time.Unix(200, 0), SHA: "sha-new"}
 	for name, recs := range map[string][]ReadRecord{
 		"older first": {older, newer},
 		"newer first": {newer, older},
@@ -204,5 +206,39 @@ func TestReadTracker_HydrateCanonicalisesSpelledRows(t *testing.T) {
 	rt.Hydrate([]ReadRecord{older})
 	if got := rt.Mtime(realPath); !got.Equal(older.Mtime) {
 		t.Fatalf("Mtime(real) after hydrating the alias row = %v, want %v", got, older.Mtime)
+	}
+}
+
+// TestReadTracker_HydrateCanonicalRowOutranksSpelledRow: a row stored under its
+// canonical key was written by a daemon with this keying, so it is newer than
+// any spelled row an older daemon left, even when its file mtime is OLDER —
+// cp -p and rsync -t move mtimes backwards. Deciding by mtime there restored the
+// stale spelled read, and the guard then refused a file the session had read.
+func TestReadTracker_HydrateCanonicalRowOutranksSpelledRow(t *testing.T) {
+	realPath, aliasPath := aliasedFile(t, "f.txt", "B\n")
+	olderMtime := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(realPath, olderMtime, olderMtime); err != nil { // B restored with an older mtime
+		t.Fatal(err)
+	}
+	shaB, err := fileSHA256(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := ReadRecord{Path: lockPathKey(realPath), Mtime: olderMtime, SHA: shaB}
+	stale := ReadRecord{Path: aliasPath, Mtime: olderMtime.Add(time.Hour), SHA: strings.Repeat("a", 64)}
+	for name, recs := range map[string][]ReadRecord{
+		"canonical first": {current, stale},
+		"spelled first":   {stale, current},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt := NewReadTracker()
+			rt.Hydrate(recs)
+			if e, _ := rt.recorded(realPath); e.sha != shaB {
+				t.Fatalf("hydrated %+v, want the canonical row's read (sha %s)", e, shaB)
+			}
+			if changedSinceSessionRead(rt, realPath) {
+				t.Fatal("the file the session last read is unchanged, but the guard calls it stale")
+			}
+		})
 	}
 }

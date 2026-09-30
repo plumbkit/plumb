@@ -78,10 +78,14 @@
   session's version, and the session's next write passed "changed since you
   read it" and the same-mtime `expected_mtime` check over a change it never
   saw. Writes now record the hash of the bytes plumb wrote and the mtime of the
-  file it wrote them to, taken from the staged file's descriptor before the
+  file it wrote them to, taken from the closed staged file just before the
   rename publishes it. `rename_file`, which writes no bytes, records the version
   it moved, read from the source before the move. Applies to every write tool,
-  `undo_edit`, and the `fail_on_new_errors` rollbacks (issue #528).
+  `undo_edit`, and the `fail_on_new_errors` rollbacks. `edit_file`'s reply had
+  the same gap: its `mtime:` line re-read the path after the post-write
+  diagnostics wait, so an outside write in that wait handed the caller an
+  `expected_mtime` that let its next write through. The reply now prints the
+  version plumb wrote, with or without `apply_partial` (issue #528).
 - **A file read through one spelling and written through another keeps its read
   record.** Read tracking keyed a read on the path as spelled, while the write
   lock, write tracking and undo resolve symlinks and fold case where the volume
@@ -91,7 +95,9 @@
   write overwrite a peer's change, and strict mode refused the edit as unread.
   Reads are now keyed the way writes are, in memory and in the persisted
   session state. Rows saved by an older daemon are re-keyed when they are
-  restored after a restart (issue #524).
+  restored after a restart; where one collides with a row this version saved,
+  the newer row wins even if a tool such as `cp -p` moved the file's mtime
+  backwards (issue #524).
 - **Contested-pin messages no longer recommend `session_id` as the fix.** The
   contested-pin note in `session_start`, the boundary and re-pin refusals, and
   the `git`, `run_task` and `undo_edit` refusals told agents sharing a
