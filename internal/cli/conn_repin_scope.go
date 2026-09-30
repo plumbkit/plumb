@@ -79,23 +79,36 @@ func (s *connSession) repinConnection(ctx context.Context, folder, langOverride 
 }
 
 // connScopeCallerRoot is the root an identified caller of a connection-scoped
-// re-pin resolves against afterwards: the root its shard holds — the new root
-// when the shard followed the move, its own pin when it did not — or, with no
-// shard yet (one is seeded from the connection's new pin on its next call), the
-// new root.
+// re-pin resolves against afterwards.
 //
-// The shard's root is read after the move rather than inside it: the move and
-// the shard are guarded by different locks, and holding both would invert the
-// documented order (shardsMu before sh.mu, s.mu innermost). The window left is
-// narrow — only this agent's own concurrent session_start, or a later
-// connection move off a root this shard shares without having chosen it, can
-// change that root in between, and either leaves the answer true of the moment
-// it was read.
+// It is decided by WHETHER the caller's shard follows the connection, not by
+// comparing roots after the fact. A shard that never chose a root follows the
+// connection, so it resolves against the root this move left the connection
+// at — even if a peer's concurrent connection move has already dragged it on,
+// which a root comparison mislabelled as "your own pin". A caller with no shard
+// yet is seeded from the connection on its next call, so the same holds. Only
+// a shard that chose its root (selfPinned) or restored its own persisted pin
+// keeps a root of its own, and that root is reported.
+//
+// The shard is read after the move: the move and the shard are guarded by
+// different locks, and holding both would invert the documented order
+// (shardsMu before sh.mu, s.mu innermost). selfPinned only ever goes from false
+// to true, and a self-pinned shard's root changes only through its own agent's
+// repinAgent, so the one window left is this agent's own concurrent
+// session_start.
 func (s *connSession) connScopeCallerRoot(id string, out repinOutcome) string {
-	if own := s.recordedRootFor(id); own != "" {
-		return own
+	s.shardsMu.Lock()
+	sh := s.shards[id]
+	s.shardsMu.Unlock()
+	if sh == nil {
+		return out.root
 	}
-	return out.root
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	if !sh.selfPinned && !sh.restored {
+		return out.root
+	}
+	return sh.root
 }
 
 // refuseAnonymousForcedMove refuses a forced connection re-pin that carries no

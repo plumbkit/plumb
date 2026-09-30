@@ -18,6 +18,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 func newRepinReportSession(t *testing.T) *connSession {
@@ -343,5 +344,73 @@ func TestSessionStartRepinReport_ConnectionScopeFromRefusedDeclaration(t *testin
 				t.Errorf("sub resolves to %q, want %q — the report's next-call line must be true", got, rootZ)
 			}
 		})
+	}
+}
+
+// The other half of the settling rule: a connection-scoped move that is
+// REFUSED settles nothing, so the caller's refused-declaration marker must
+// survive it. The successful twin above is the positive control that clearing
+// happens at all.
+func TestSessionStartRepinReport_RefusedConnectionScopeKeepsCallerMarker(t *testing.T) {
+	s := newRepinReportSession(t)
+	r := repinReportRoots(t, 3)
+	rootX, rootY, rootZ := r[0], r[1], r[2]
+	if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
+		t.Fatalf("connection pin to X: %v", err)
+	}
+	s.recordLogicalAgentAttach("coord")
+	s.recordLogicalAgentAttach("sub")
+	ctxSub := mcp.WithLogicalAgent(context.Background(), "sub")
+	if _, err := s.repinWorkspace(ctxSub, rootY, "", false, false); err == nil {
+		t.Fatal("precondition: an unforced move of a seeded shard to an unrelated root is refused")
+	}
+	// Unforced, against the connection's sticky explicit pin: refused.
+	raw, err := json.Marshal(map[string]any{"workspace": rootZ, "scope": "connection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSessionStartTool(s).Execute(ctxSub, raw); err == nil {
+		t.Fatal("precondition: an unforced connection-scoped move off a sticky pin is refused")
+	}
+	if _, pending := s.pendingDeclarationFor("sub"); !pending {
+		t.Error("a REFUSED connection-scoped move cleared the caller's refused-declaration marker")
+	}
+	if got := s.workspace(); got != rootX {
+		t.Errorf("connection pin = %q, want it unchanged at %q", got, rootX)
+	}
+}
+
+// A shard restored from the agent's own persisted pin holds a root of its own
+// without ever having re-pinned in this daemon (selfPinned stays false). It did
+// not follow a connection move off another root, so the report must name its
+// restored root as the caller's own pin, not the connection's new one.
+func TestSessionStartRepinReport_ConnectionScopeFromRestoredPin(t *testing.T) {
+	store, ss := newOriginStore(t)
+	r := repinReportRoots(t, 3)
+	rootX, rootW, rootZ := r[0], r[1], r[2]
+	const proxyID = "proxy-restored"
+	if err := ss.UpsertPinForAgent(proxyID, "own", rootW, "", sessionstate.PinSourceSessionStart); err != nil {
+		t.Fatalf("seed the agent's persisted pin: %v", err)
+	}
+	s := newPersistSession(t, store, ss, proxyID)
+	if _, err := s.repinWorkspace(context.Background(), rootX, "", false, false); err != nil {
+		t.Fatalf("connection pin to X: %v", err)
+	}
+	s.recordLogicalAgentAttach("own")
+	s.recordLogicalAgentAttach("peer")
+	ctxOwn := mcp.WithLogicalAgent(context.Background(), "own")
+	if got := s.workspaceFor(ctxOwn); got != rootW {
+		t.Fatalf("precondition: own's shard restored at %q, want %q", got, rootW)
+	}
+
+	out := runRepinReport(t, s, ctxOwn, map[string]any{"workspace": rootZ, "scope": "connection", "force": true}, "brief")
+
+	wantLines(t, out,
+		"# Workspace: "+rootW+"\n",
+		"Re-pinned this connection's pin: "+rootX+" → "+rootZ,
+		"Next relative-path call resolves against: "+rootW+" (your own pin, not the connection's)\n",
+	)
+	if got := s.workspaceFor(ctxOwn); got != rootW {
+		t.Errorf("own resolves to %q, want its restored pin %q", got, rootW)
 	}
 }
