@@ -111,10 +111,11 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	if _, err := safeWrite(to, data, perm); err != nil {
+	res, err := safeWrite(to, data, perm)
+	if err != nil {
 		return "", fmt.Errorf("copy_file: writing destination: %w", err)
 	}
-	t.copyFilePostWrite(ctx, to)
+	t.copyFilePostWrite(ctx, to, res.written)
 	return fmt.Sprintf("copied %s → %s (%d bytes)", from, to, len(data)), nil
 }
 
@@ -162,11 +163,11 @@ func copyFilePreconditions(ctx context.Context, deps WriteDeps, from, to string,
 	return data, info.Mode().Perm(), nil
 }
 
-func (t *CopyFile) copyFilePostWrite(ctx context.Context, to string) {
+func (t *CopyFile) copyFilePostWrite(ctx context.Context, to string, written fileSnapshot) {
 	if err := notifyLSP(ctx, t.deps.Client, to, protocol.FileCreated); err != nil {
 		slog.Warn("copy_file: LSP create-notify failed", "path", to, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+to)
 	t.deps.notifyTopology(to)
-	t.deps.recordWritten(ctx, to)
+	t.deps.recordWritten(ctx, to, written)
 }

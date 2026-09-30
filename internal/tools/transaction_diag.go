@@ -154,16 +154,13 @@ func txFilesWithNewErrors(rep txDiagReport) int {
 // files the rollback actually restored — a file left alone by the verification
 // still holds what the transaction wrote, so it must NOT be announced as
 // reverted.
-func (t *TransactionApply) txNotifyRestored(ctx context.Context, written []txPrepared, restored []string) {
-	restoredSet := make(map[string]bool, len(restored))
-	for _, p := range restored {
-		restoredSet[p] = true
-	}
+func (t *TransactionApply) txNotifyRestored(ctx context.Context, written []txPrepared, restored map[string]fileSnapshot) {
 	for _, p := range written {
-		if !restoredSet[p.path] {
+		v, ok := restored[p.path]
+		if !ok {
 			continue
 		}
-		t.deps.notifyReverted(ctx, p.path, "file://"+p.path, protocol.FileChanged)
+		t.deps.notifyReverted(ctx, p.path, "file://"+p.path, protocol.FileChanged, v)
 	}
 }
 
@@ -176,7 +173,11 @@ func (t *TransactionApply) txNotifyRestored(ctx context.Context, written []txPre
 // a bounded wait for a language server, so an external process has had real time
 // to write — and silently reverting someone else's change is the one outcome a
 // safety feature must not produce.
-func rollbackVerified(written []txPrepared) (restored, skipped []string) {
+//
+// restored maps each restored path to the version its restore published, so the
+// trackers record that rather than re-reading the path (issue #528).
+func rollbackVerified(written []txPrepared) (restored map[string]fileSnapshot, skipped []string) {
+	restored = make(map[string]fileSnapshot, len(written))
 	for _, p := range written {
 		cur, err := os.ReadFile(p.path)
 		if err != nil {
@@ -189,12 +190,13 @@ func rollbackVerified(written []txPrepared) (restored, skipped []string) {
 			skipped = append(skipped, p.path)
 			continue
 		}
-		if _, err := safeWrite(p.path, []byte(p.before), p.perm); err != nil {
+		res, err := safeWrite(p.path, []byte(p.before), p.perm)
+		if err != nil {
 			slog.Error("transaction_apply: rollback failed", "path", p.path, "err", err)
 			skipped = append(skipped, p.path)
 			continue
 		}
-		restored = append(restored, p.path)
+		restored[p.path] = res.written
 	}
 	return restored, skipped
 }
