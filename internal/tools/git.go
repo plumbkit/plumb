@@ -143,7 +143,7 @@ func (t *Git) Description() string {
 		"shortlog, branch/tag/stash listing) always run. Write (add, commit, " +
 		"switch, mv, merge, branch/tag create, stash push/pop) needs [git] allow_writes " +
 		"(default on). Destructive (reset, clean, checkout, restore, rebase, " +
-		"revert, cherry-pick, merge --abort/--quit, branch/tag delete, stash drop) needs " +
+		"revert, cherry-pick, branch/tag delete, stash drop) needs " +
 		"allow_destructive AND confirm:true. Network (push, fetch, pull) needs " +
 		"allow_push AND confirm:true; force-pushing a protected branch or using " +
 		"an ad-hoc URL/remote is always refused.\n\n" +
