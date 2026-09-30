@@ -70,8 +70,9 @@ const stampChannelRefusedNotice = "NOTE: state-changing calls from this session 
 	"This connection serves more than one logical agent and this call carried no per-call identity, " +
 	"so plumb cannot tell which agent's workspace a write belongs to and will not guess. Your session_id " +
 	"declaration IS recorded, but it identifies this call only. Stamp every call: on Claude Code, " +
-	"`plumb hooks install claude-code` (on Claude desktop, restart the app after upgrading plumb); a client " +
-	"whose transport can set it sends a per-call _meta identity; otherwise run one plumb serve per agent.\n"
+	"`plumb hooks install claude-code` (on Claude desktop, restart the app after upgrading plumb); if it is " +
+	"already installed, `plumb hooks` says why this call was not stamped. A client whose transport can set " +
+	"it sends a per-call _meta identity; otherwise run one plumb serve per agent.\n"
 
 // stampChannelDormantNotice is emitted when this call carried no per-call
 // identity but the connection is still single-agent. Nothing is refused yet,
@@ -79,7 +80,7 @@ const stampChannelRefusedNotice = "NOTE: state-changing calls from this session 
 const stampChannelDormantNotice = "NOTE: this call carried no per-call logical-agent identity. Nothing is " +
 	"refused while you are the only agent on this connection, but once a second agent attaches, your " +
 	"unstamped state-changing calls are refused. On Claude Code, `plumb hooks install claude-code` stamps " +
-	"every call.\n"
+	"every call; if it is already installed, `plumb hooks` says why this call was not stamped.\n"
 
 // stampChannelNote renders the disclosure, or "" when there is nothing to say:
 // the accessor is unwired, or the channel is live. Rendered alongside

@@ -39,6 +39,14 @@
 
 ### Fixed
 
+- **`session_start` no longer tells you to install a hook you already have.**
+  When a call arrived without a per-call identity, its notice only said
+  "`plumb hooks install claude-code` stamps every call". With the hook
+  installed, the usual cause is a daemon too old to accept the key Claude
+  desktop's connector passes through, so the advice sent people round in a
+  circle. The notice now adds that `plumb hooks` says why the call was not
+  stamped.
+
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside

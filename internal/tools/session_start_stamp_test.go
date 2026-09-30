@@ -165,3 +165,18 @@ func TestStampChannelNoteSilentForNonHookClientUntilShared(t *testing.T) {
 		t.Errorf("a refused non-hook client must be told: %q", got)
 	}
 }
+
+// TestStampChannelNotices_PointAnInstalledHookAtItsDiagnosis: a caller whose
+// hook IS installed but whose call still arrived unstamped (a daemon too old to
+// accept the key Claude desktop's connector passes through) must not be sent to
+// install it again. Both notices name `plumb hooks`, which reports the reason.
+func TestStampChannelNotices_PointAnInstalledHookAtItsDiagnosis(t *testing.T) {
+	for name, notice := range map[string]string{"refused": stampChannelRefusedNotice, "dormant": stampChannelDormantNotice} {
+		if !strings.Contains(notice, "plumb hooks install claude-code") {
+			t.Errorf("%s notice lost the install remedy: %q", name, notice)
+		}
+		if !strings.Contains(notice, "if it is already installed, `plumb hooks` says why this call was not stamped") {
+			t.Errorf("%s notice does not point an installed hook at `plumb hooks`: %q", name, notice)
+		}
+	}
+}
