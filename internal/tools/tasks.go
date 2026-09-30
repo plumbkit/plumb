@@ -246,7 +246,7 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 		fmt.Fprintf(&b, "note: %s\n", note)
 	}
 	for i, argv := range cmd.Steps {
-		res, err := RunArgv(ctx, ws, argv, defaultTaskTimeout)
+		res, err := RunTaskArgv(ctx, ws, argv, defaultTaskTimeout)
 		if err != nil {
 			return "", fmt.Errorf("run_task %s: %w", cmd.Slot, err)
 		}
@@ -264,6 +264,9 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 func formatStep(argv []string, res ExecResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "$ %s\n", strings.Join(argv, " "))
+	if res.GoWorkOff != "" {
+		fmt.Fprintf(&b, "(ran with GOWORK=off: %s lists another directory for this Go module; a GOWORK in the daemon's environment would be used instead)\n", res.GoWorkOff)
+	}
 	if res.TimedOut {
 		b.WriteString("(timed out)\n")
 	}

@@ -101,7 +101,7 @@ func TestLintLockHint_OnlyOnTheLiteralMarker(t *testing.T) {
 // retryable, when waiting and retrying is precisely the remedy.
 func TestGitCommandError_LintLockIsRetryableNotYourFault(t *testing.T) {
 	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t),
-		"ERROR: parallel golangci-lint is running\n", "", "")
+		"ERROR: parallel golangci-lint is running\n", "", "", "")
 
 	assertClassified(t, err, toolerror.KindGitCommandFailed, toolerror.ClassRetryAfterWait, true)
 	if !strings.Contains(err.Error(), "not a finding about this change") {
@@ -118,7 +118,7 @@ func TestGitCommandError_LintLockIsRetryableNotYourFault(t *testing.T) {
 // cannot quietly relabel every failing hook as transient.
 func TestGitCommandError_OrdinaryFailureKeepsInspectOutput(t *testing.T) {
 	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t),
-		"internal/tools/git.go:12:3: err unchecked (errcheck)\n", "", "")
+		"internal/tools/git.go:12:3: err unchecked (errcheck)\n", "", "", "")
 	assertClassified(t, err, toolerror.KindGitCommandFailed, toolerror.ClassInspectOutput, false)
 }
 

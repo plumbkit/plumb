@@ -55,7 +55,7 @@ func TestExecGitCmd_BoundsWaitWhenDescendantHoldsPipes(t *testing.T) {
 
 	var err error
 	start := time.Now()
-	runBounded(t, 12*time.Second, "execGitCmd", func() { err = execGitCmd(cmd, false, cmd.Dir) })
+	runBounded(t, 12*time.Second, "execGitCmd", func() { _, err = execGitCmd(cmd, false, cmd.Dir) })
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, exec.ErrWaitDelay) {
@@ -91,7 +91,7 @@ func TestExecGitCmd_KillsProcessGroupOnCancel(t *testing.T) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	runBounded(t, 20*time.Second, "execGitCmd", func() { _ = execGitCmd(cmd, false, dir) })
+	runBounded(t, 20*time.Second, "execGitCmd", func() { _, _ = execGitCmd(cmd, false, dir) })
 
 	// Wait past the grandchild's 1s mark; if the group was killed it never runs.
 	time.Sleep(2 * time.Second)
