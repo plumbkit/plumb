@@ -65,9 +65,10 @@ import (
 // "Same repository" is git's own answer (the common git directory), and the paths
 // compared are ones git printed, so a symlinked workspace, a case-insensitive
 // volume or a relative common directory cannot make two spellings disagree. One
-// fold applies (sameRepo): a submodule checked out inside a superproject's linked
+// refinement (gitTree.key): a submodule checked out inside a superproject's linked
 // worktree has its git directory under that worktree's, yet holds a copy of the same
-// files as the main checkout's submodule, so the two count as one repository.
+// files as the main checkout's submodule, so a submodule checkout is identified by
+// its superproject's identity plus its name, both taken from git's own answers.
 //
 // When git cannot answer for a directory (a checkout owned by another user without
 // a safe.directory entry, or no git on the daemon's PATH), the nearest .git is read
@@ -128,6 +129,14 @@ type gitTree struct {
 	// super is the work-tree root of the superproject when this work-tree is a
 	// submodule checkout, as git prints it; "" otherwise.
 	super string
+	// gitDir is this work-tree's own git directory (a linked worktree's, not the
+	// common one); "" when read from disk rather than asked of git.
+	gitDir string
+	// key identifies the repository for re-rooting, set by gitProbes.chain: the
+	// common git directory, except that a submodule checkout is keyed as its
+	// superproject's key plus "modules/<name>", so every checkout of one submodule
+	// of one superproject, main or inside a linked worktree, shares a key.
+	key string
 }
 
 // gitPlace is git's answer for one directory.
@@ -201,7 +210,7 @@ func probeGitDir(ctx context.Context, dir string) gitProbe {
 		return paths.Canonical(p)
 	}
 	gitDir, common := abs(lines[2]), abs(lines[3])
-	tree := gitTree{top: filepath.Clean(lines[0]), prefix: lines[1], common: common, linked: gitDir != common}
+	tree := gitTree{top: filepath.Clean(lines[0]), prefix: lines[1], common: common, linked: gitDir != common, gitDir: gitDir}
 	if len(lines) == 5 {
 		tree.super = filepath.Clean(lines[4])
 	}
@@ -267,7 +276,7 @@ func (t *MutationTest) rerootPlan(ctx context.Context, plan mutationPlan, target
 		}
 		run, fileTrees, lookup := probes.placement(ctx, dir), files, probes.placement
 		if shared, own, ok := probes.sharedLevel(ctx, dir, targets); ok {
-			run, fileTrees, lookup = shared, own, probes.atLevel(shared.tree.common)
+			run, fileTrees, lookup = shared, own, probes.atLevel(shared.tree.key)
 		} else if err := probes.splitLevels(ctx, dir, targets); err != nil {
 			return plan, err
 		}
@@ -338,7 +347,7 @@ func placeFile(f gitProbe, display, dir string, run gitProbe) (move bool, err er
 			dir, run.reason, display)
 	case run.place == placeTree && sameGitPath(f.tree.top, run.tree.top):
 		return false, nil
-	case run.place == placeTree && sameRepo(f.tree.common, run.tree.common):
+	case run.place == placeTree && sameGitPath(f.tree.key, run.tree.key):
 		if f.approx || run.approx {
 			return false, fmt.Errorf("mutation_test: %s is in work-tree %s, not the one the commands run in (%s), so they would have to be "+
 				"moved there — but git could not confirm either tree (%s), and plumb does not move trusted commands on a guess. "+

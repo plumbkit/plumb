@@ -82,23 +82,47 @@ func TestMutationTest_AWorktreeOfAWorktreesSubmoduleMovesToTheCheckoutsCopy(t *t
 	e.requireAllRanIn(t, lib)
 }
 
-func TestRepoKey(t *testing.T) {
-	for in, want := range map[string]string{
-		"/s/.git":                          "/s/.git",
-		"/s/.git/modules/lib":              "/s/.git/modules/lib",
-		"/s/.git/worktrees/wt/modules/lib": "/s/.git/modules/lib",
-		"/s/.git/worktrees/wt/modules/lib/modules/inner":        "/s/.git/modules/lib/modules/inner",
-		"/s/.git/modules/lib/worktrees/x/modules/inner":         "/s/.git/modules/lib/modules/inner",
-		"/s/.git/worktrees/w/modules/lib/worktrees/x/modules/i": "/s/.git/modules/lib/modules/i",
-		"/s/.git/worktrees/wt":                                  "/s/.git/worktrees/wt", // a worktree's own git dir is not a submodule's
-		"/home/worktrees/a/modules/r/.git":                      "/home/worktrees/a/modules/r/.git",
-		"/store/P.git/worktrees/w/modules/lib":                  "/store/P.git/modules/lib", // --separate-git-dir superproject
-		"/srv/bare.git":                                         "/srv/bare.git",
-	} {
-		if got := repoKey(filepath.FromSlash(in)); got != filepath.FromSlash(want) {
-			t.Errorf("repoKey(%s) = %s, want %s", in, got, want)
-		}
+// TestMutationTest_TwoSubmodulesWhosePathsLookAlikeAreDifferentRepositories:
+// submodule names may contain "/", so a submodule at worktrees/foo nesting bar has
+// the git directory <git>/modules/worktrees/foo/modules/bar, and a lexical fold of
+// "worktrees/<id>/modules/" would read it as <git>/modules/modules/bar, the git
+// directory of an unrelated submodule at modules/bar. Identity is built from
+// git's own answers instead, so the two stay two repositories: a file in the
+// nested bar has no twin in modules/bar, and the commands stay where they run.
+func TestMutationTest_TwoSubmodulesWhosePathsLookAlikeAreDifferentRepositories(t *testing.T) {
+	requireGit(t)
+	unsetEnvForTest(t, "GOWORK")
+	root := evalTempDir(t)
+	log := filepath.Join(t.TempDir(), "ran.log")
+	scripts := "echo \"$(/bin/pwd)\" >> " + shellQuote(log) + "\nexit 0\n"
+	barUp := filepath.Join(root, "bar-upstream")
+	gwWrite(t, barUp, "target.txt", worktreeTargetOriginal)
+	gwWrite(t, barUp, "compile.sh", scripts)
+	gwWrite(t, barUp, "test.sh", scripts)
+	gitInit(t, barUp)
+	fooUp := filepath.Join(root, "foo-upstream")
+	gwWrite(t, fooUp, "README", "foo\n")
+	gitInit(t, fooUp)
+	gwGit(t, fooUp, "-c", "protocol.file.allow=always", "submodule", "add", "-q", barUp, "bar")
+	gwGit(t, fooUp, "commit", "-q", "-m", "add bar")
+	super := filepath.Join(root, "super")
+	gwWrite(t, super, "README", "super\n")
+	gitInit(t, super)
+	gwGit(t, super, "-c", "protocol.file.allow=always", "submodule", "add", "-q", fooUp, "worktrees/foo")
+	gwGit(t, super, "-c", "protocol.file.allow=always", "submodule", "add", "-q", barUp, "modules/bar")
+	gwGit(t, super, "commit", "-q", "-m", "add both")
+	gwGit(t, super, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "-q")
+
+	e := &submoduleEnv{super: super, log: log}
+	out, err := executeMutants(t, e.tool(filepath.Join(super, "modules", "bar"), "", ""),
+		filepath.Join(super, "worktrees", "foo", "bar", "target.txt"))
+	if err != nil {
+		t.Fatalf("a file in an unrelated submodule's main work-tree runs where the commands are: %v", err)
 	}
+	if strings.Contains(out, "re-rooted") {
+		t.Errorf("worktrees/foo/bar is not a copy of modules/bar; nothing may be re-rooted; got:\n%s", out)
+	}
+	e.requireAllRanIn(t, filepath.Join(super, "modules", "bar"))
 }
 
 // TestMutationTest_FromANestedSubmoduleTheCommandsClimbToTheShared: from a session
@@ -117,4 +141,33 @@ func TestMutationTest_FromANestedSubmoduleTheCommandsClimbToTheShared(t *testing
 		t.Errorf("the run must be re-rooted into x; got:\n%s", out)
 	}
 	e.requireAllRanIn(t, filepath.Join(x, "inner"))
+}
+
+// TestMutationTest_ASeparateGitDirSuperprojectStillFindsTheTwin: the superproject is
+// cloned with --separate-git-dir, so no component of any git directory is named
+// ".git". From a worktree of the submodule as checked out in the superproject's
+// worktree w, the checkout's own lib is still that submodule's other copy.
+func TestMutationTest_ASeparateGitDirSuperprojectStillFindsTheTwin(t *testing.T) {
+	e := newSubmoduleEnv(t, false)
+	root := filepath.Dir(e.super)
+	p := filepath.Join(root, "P")
+	if err := os.MkdirAll(filepath.Join(root, "store"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gwGit(t, root, "clone", "-q", "--separate-git-dir", filepath.Join(root, "store", "P.git"), e.super, p)
+	gwGit(t, p, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+	w := filepath.Join(p, ".claude", "worktrees", "w")
+	gwGit(t, p, "worktree", "add", "-q", "-b", "w", w)
+	gwGit(t, w, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+	xw := filepath.Join(w, "lib", ".claude", "worktrees", "xw")
+	gwGit(t, filepath.Join(w, "lib"), "worktree", "add", "-q", "-b", "xw", xw)
+
+	out, err := executeMutants(t, e.tool(xw, "", ""), filepath.Join(p, "lib", "target.txt"))
+	if err != nil {
+		t.Fatalf("P's lib is another copy of xw's submodule; the run must move there: %v", err)
+	}
+	if !strings.Contains(out, "re-rooted") {
+		t.Errorf("the run must be re-rooted into P's lib; got:\n%s", out)
+	}
+	e.requireAllRanIn(t, filepath.Join(p, "lib"))
 }
