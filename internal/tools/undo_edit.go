@@ -40,7 +40,7 @@ type UndoEdit struct {
 // per project, so on a connection whose pin is being fought over it cannot be
 // attributed to the agent that wrote it — undoing could revert a peer's most
 // recent write.
-const undoEditContested = "undo_edit: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), so the undo snapshot cannot be attributed to the agent that wrote it and may revert a peer's most recent write. Refused rather than clobber the wrong agent's work. Identify the agents — pass session_start.session_id on every call, or run one plumb serve per agent — then re-edit the file with an absolute path instead"
+const undoEditContested = "undo_edit: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), so the undo snapshot cannot be attributed to the agent that wrote it and may revert a peer's most recent write. Refused rather than clobber the wrong agent's work. Identify the agents (" + PerCallIdentityRemedy + "), then re-edit the file with an absolute path instead"
 
 func NewUndoEdit(deps WriteDeps) *UndoEdit { return &UndoEdit{deps: deps} }
 

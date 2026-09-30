@@ -377,7 +377,7 @@ func (t *Git) defaultRepo(ctx context.Context, repo string) (string, error) {
 // connection whose pin is contested. An empty repo would fall back to the pinned
 // workspace, which is exactly the root being fought over, so the call is refused
 // rather than aimed at whichever project holds the pin right now.
-const gitContestedNoRepo = "git: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), so a git call without an explicit `repo` cannot be attributed to a project and is refused rather than aimed at whichever project holds the pin right now. Pass an absolute `repo` path to name the repository, or identify the agents — pass session_start.session_id on every call, or run one plumb serve per agent"
+const gitContestedNoRepo = "git: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), so a git call without an explicit `repo` cannot be attributed to a project and is refused rather than aimed at whichever project holds the pin right now. Pass an absolute `repo` path to name the repository, or identify the agents: " + PerCallIdentityRemedy
 
 func (t *Git) checkBoundary(ctx context.Context, a gitToolArgs) error {
 	// A resolved repo is mandatory. An empty repo here means neither an explicit

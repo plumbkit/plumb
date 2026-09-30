@@ -32,6 +32,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 const (
@@ -215,8 +216,7 @@ func (s *connSession) markContestedPin(count int, roots []string) {
 	msg := fmt.Sprintf(
 		"this connection's workspace pin has been force-taken %d times between %v in the last %s: "+
 			"several agents are multiplexing one plumb serve without declaring an identity, so plumb "+
-			"cannot keep their pins apart — pass session_start.session_id on every call, or run one "+
-			"plumb serve per agent",
+			"cannot keep their pins apart — "+tools.PerCallIdentityRemedy,
 		count, boundedForLog(roots, 4), pinContestWindow)
 	session.Patch(s.sessionID(), func(info *session.Info) {
 		if info.Health != "" && info.Health != "contested_pin" {
