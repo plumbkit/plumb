@@ -46,6 +46,9 @@ type ProjectGitStatus struct {
 	Keys       []ProjectGitKey
 	Trusted    bool
 	Unreadable bool
+	// Workspace is the root the snapshot was taken for — the path a trust grant
+	// would have to name. "" when nothing was captured.
+	Workspace string
 }
 
 // gitPolicyField splits a "git.<field>" policy key. Matched case-INSENSITIVELY

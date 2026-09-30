@@ -91,3 +91,61 @@ func (w *WriteTracker) WroteMtime(path string) (int64, bool) {
 	w.mu.Unlock()
 	return mtime, ok
 }
+
+// unchangedUnder is the before-image of a git operation plumb itself runs in
+// the repository at root: every path recorded under root whose file is still
+// exactly as plumb last left it (on-disk mtime equal to the recorded one, 0 for
+// a missing file), with that mtime. A path already changed by someone else is
+// left out, so refreshChanged can never launder an edit plumb did not make.
+// nil-safe (nil).
+func (w *WriteTracker) unchangedUnder(root string) map[string]int64 {
+	if w == nil {
+		return nil
+	}
+	rootKey := lockPathKey(root)
+	w.mu.Lock()
+	candidates := make(map[string]int64)
+	for key, mtime := range w.written {
+		if dirWithinRoot(key, rootKey) {
+			candidates[key] = mtime
+		}
+	}
+	w.mu.Unlock()
+	out := make(map[string]int64, len(candidates))
+	for key, recorded := range candidates {
+		if statMtime(key) == recorded {
+			out[key] = recorded
+		}
+	}
+	return out
+}
+
+// refreshChanged re-records every path in before (from unchangedUnder) whose
+// mtime moved while plumb's own git operation ran: that change is plumb's, so
+// the next read must not attribute it to a peer. A record some concurrent plumb
+// write already replaced is left as that write recorded it. nil-safe.
+func (w *WriteTracker) refreshChanged(before map[string]int64) {
+	if w == nil {
+		return
+	}
+	for key, was := range before {
+		now := statMtime(key)
+		if now == was {
+			continue
+		}
+		w.mu.Lock()
+		if recorded, ok := w.written[key]; ok && recorded == was {
+			w.written[key] = now
+		}
+		w.mu.Unlock()
+	}
+}
+
+// statMtime is path's mtime (UnixNano), or 0 when it cannot be stat'd — the
+// value Record stores for a missing file.
+func statMtime(path string) int64 {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime().UnixNano()
+	}
+	return 0
+}

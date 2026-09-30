@@ -260,8 +260,8 @@ and network calls additionally require `confirm: true` per call.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `branch`/`tag` create, `stash` push/pop. |
-| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
+| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `merge`, `branch`/`tag` create, `stash` push/pop. |
+| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, `merge --abort`/`--quit`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
@@ -1090,6 +1090,23 @@ The grant is **bound to content**. Each part is hashed independently, so editing
 task command does not disturb the LSP grant — but rewriting a trusted `command`
 does mean the new command is not honoured until you re-run `plumb trust`. An
 unreadable or corrupt trust store fails closed.
+
+**Linked git worktrees share their repository's grant — for identical content
+only.** A grant is keyed on the path `plumb trust` ran in, and a worktree
+(`git worktree add`, e.g. `<project>/.claude/worktrees/<name>`) is a new path.
+The two content-bound grants — the capability config (`[git]`, the exec-deciding
+`[lsp.<lang>]` fields) and the task commands — therefore also match when the
+workspace is a linked worktree of the same repository (one common git directory)
+as another trusted checkout, **and** its request hashes to what that checkout's
+grant approved. A branch that widens `[git]` or rewrites a task command is
+untrusted there exactly as anywhere else. The worktree must be one git vouches
+for: its `.git` link must name a directory whose back-link (written by git inside
+the trusted repository's own git directory) names the worktree, so a directory
+carrying a forged `.git` file does not qualify. The coarse grant behind
+`[[command]]`, `[commands]` and the Xcode build server is not content-bound, so it
+stays per path. When a tier is refused because an untrusted project config asked
+for it, the `git` tool's refusal says so and names the `plumb trust` command for
+that path.
 
 Nothing about this is silent. An untrusted request is reported by `plumb doctor`
 (a warning naming the keys and the fix), by `plumb config show` (the row's

@@ -905,7 +905,7 @@ index is disabled or empty.
 Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
 `diff`, `show`, `blame`, `shortlog`, and branch/tag/stash listing). **Write**
 needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
-branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
+`merge`, branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, …) needs
 `allow_destructive` + `confirm:true`.
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
@@ -930,6 +930,20 @@ safer-to-deny higher tier:
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.
+- `merge` (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is **write** and
+  runs `pre-merge-commit`/`commit-msg` as `commit` runs its hooks; `--abort` and
+  `--quit` (also abbreviated, as git expands them) are **destructive**.
+  `--continue`, `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused —
+  conclude a merge with `commit` and a message. A merge that stops on conflicts
+  fails naming the conflicted files and leaves git's merging state (`MERGE_HEAD`)
+  to resolve, `add`, and `commit`.
+
+A file plumb wrote this session and then changed on disk through this tool (a
+`switch`, `merge`, `restore`, `stash pop`, `reset`, `pull`, …) is re-recorded
+afterwards, so the next `read_file` does not report it as a peer's edit. A file a
+peer had already changed before the operation, or changes after it, still warns.
+When a tier is off because this workspace's untrusted project config asked for
+it, the refusal says so and names the `plumb trust` command for the path.
 
 `add` and `commit` are **typed, not pass-through**: `commit` only ever runs
 `commit -m <message>`, plus `-- <files>` when `files` is passed to limit the
@@ -948,7 +962,7 @@ commits per session (short SHA, subject, repository) from its recent-writes
 feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
 
 With `[collab] intents = true`, a **repo-state op** — every destructive-tier op,
-plus the write-tier HEAD movers `commit`/`switch`/`checkout` — also surfaces any
+plus the write-tier HEAD movers `commit`/`switch`/`checkout`/`merge` — also surfaces any
 live peer `share_intent` claims covering the repository as an advisory
 `# plumb-warning:` block naming the peer and the claim.
 

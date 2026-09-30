@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -115,8 +116,36 @@ func normaliseSwitchCreate(sub string, args []string) ([]string, string) {
 		"the short form collides with git's global -c/-C config flag, which plumb denies.\n"
 }
 
+// classifyGitCall runs the argument checks that precede tiering — the global
+// flag denylist, the duplicated-verb slip, merge's refused flags — and returns
+// the call's tier, or the refusal for a subcommand the tool does not permit.
+func classifyGitCall(a gitToolArgs) (gitTier, error) {
+	if err := checkGitGlobalFlags(a.Args); err != nil {
+		return tierReject, err
+	}
+	if err := rejectDuplicatedLeadingSubcommand(a.Subcommand, a.Args); err != nil {
+		return tierReject, err
+	}
+	if a.Subcommand == "merge" {
+		if err := checkMergeArgs(a.Args); err != nil {
+			return tierReject, err
+		}
+	}
+	tier := classifyGit(a.Subcommand, a.Args)
+	if tier != tierReject {
+		return tier, nil
+	}
+	if a.Subcommand == "stash" && len(a.Args) > 0 {
+		return tier, fmt.Errorf("git stash: sub-command %q is not permitted; use list, show, push, pop, apply, drop, or clear", a.Args[0])
+	}
+	if a.Subcommand == "rm" {
+		return tier, errors.New("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
+	}
+	return tier, fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
+}
+
 // classifyGit maps a subcommand + args to a tier. Ambiguous subcommands
-// (branch, tag, stash, checkout, switch, restore) inspect their args; the
+// (branch, tag, stash, checkout, switch, restore, merge) inspect their args; the
 // classification is safe-biased — when in doubt it returns the higher tier.
 func classifyGit(sub string, args []string) gitTier {
 	switch sub {
@@ -136,6 +165,8 @@ func classifyGit(sub string, args []string) gitTier {
 		return classifyStash(args)
 	case "checkout":
 		return classifyCheckout(args)
+	case "merge":
+		return classifyMerge(args) // git_merge.go
 	// cherry-pick is flat-classified, like rebase — its closest analogue, and the
 	// other sequencer verb here. Arg inspection (classifyStash, classifyBranch,
 	// classifyCheckout) exists only where a subcommand's arg space SPANS tiers;

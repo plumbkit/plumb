@@ -2,7 +2,39 @@
 
 ## 0.20.4 (unreleased)
 
+### Added
+
+- **The `git` tool runs `merge`.** Merging the base branch into a work branch is
+  the non-rewriting way to update it, and the tool refused it outright, forcing
+  a shell exactly where the safer operation was wanted. An ordinary merge
+  (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is now in the write tier
+  beside `commit`, runs `pre-merge-commit` and `commit-msg`, gets the same
+  GOWORK decision and `[git] env`, and honours `expected_head` and the
+  cross-session guard. `--abort` and `--quit` (and their abbreviations) are
+  destructive, as rebase's and cherry-pick's state flags are. `--continue`,
+  `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused with the route
+  that works: conclude a merge with `commit` and a message. A merge that stops
+  on conflicts fails naming the conflicted files and leaves git's merging state
+  to resolve. (#530)
+
 ### Fixed
+
+- **A linked worktree of a trusted project gets the project's approved
+  capability values.** Trust is keyed on the path, so a worktree at
+  `<project>/.claude/worktrees/<name>` had no grant and fell back to the global
+  `[git]` policy and task commands, although it reads the same checked-in
+  `.plumb/config.toml`. The content-bound grants now also match in a linked
+  worktree of the same repository whose request is identical to the approved
+  one; a branch that changes the capability config stays untrusted, and a
+  directory with a forged `.git` link does not qualify. When an untrusted
+  project config is why a git tier is off, the refusal now says so and names
+  the `plumb trust` command for that path. (#530)
+- **Plumb's own git operations are no longer reported as a peer's edits.** After
+  a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
+  the next `read_file` of a file plumb had written warned that "a peer or
+  external process may have edited it". Files the operation changed are now
+  re-recorded as plumb's; a peer's edit before or after the operation still
+  warns. (#529)
 
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of

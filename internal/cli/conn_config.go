@@ -68,6 +68,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		// is not even a `plumb trust` to reach for.
 		projectGit = tools.ProjectGitStatus{Unreadable: true}
 	}
+	// The root this snapshot belongs to, so a git tier refusal names the path a
+	// `plumb trust` would have to be run for.
+	projectGit.Workspace = workspace
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {

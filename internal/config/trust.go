@@ -140,7 +140,9 @@ func (s *TrustStore) IsTrusted(root string) bool {
 // IsTrustedForTasks reports whether root's project-supplied task commands are
 // trusted AND unchanged since trust was recorded: the recorded TaskHash must
 // match the canonical hash of cmds. A read error, an absent record, or a hash
-// mismatch (any add/remove/modify of a task command) all fail closed.
+// mismatch (any add/remove/modify of a task command) all fail closed. A linked
+// git worktree with no matching record of its own shares its repository's
+// grant for the same content (sharedWorktreeGrant).
 func (s *TrustStore) IsTrustedForTasks(root string, cmds []TaskCommandSpec) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,11 +150,12 @@ func (s *TrustStore) IsTrustedForTasks(root string, cmds []TaskCommandSpec) bool
 	if err != nil {
 		return false
 	}
-	rec, ok := m[canonRoot(root)]
-	if !ok || rec.TaskHash == "" {
-		return false
+	want := canonicalTaskHash(cmds)
+	match := func(rec trustRecord) bool { return rec.TaskHash != "" && rec.TaskHash == want }
+	if rec, ok := m[canonRoot(root)]; ok && match(rec) {
+		return true
 	}
-	return rec.TaskHash == canonicalTaskHash(cmds)
+	return sharedWorktreeGrant(m, root, match)
 }
 
 // SetTrusted records (trusted=true) or clears (false) the coarse grant for root,
@@ -186,7 +189,9 @@ func (s *TrustStore) SetTrusted(root string, trusted bool) error {
 // is trusted AND unchanged since trust was recorded: the recorded PolicyHash must
 // match the canonical hash of spec. A read error, an absent record, an absent
 // hash, or a hash mismatch (any add/remove/modify of a [git] field or an
-// exec-deciding [lsp.<lang>] field) all fail closed.
+// exec-deciding [lsp.<lang>] field) all fail closed. A linked git worktree with
+// no matching record of its own shares its repository's grant for the same
+// content (sharedWorktreeGrant).
 //
 // It never consults the coarse Trusted flag, so no other surface that grants
 // trust can incidentally have a repository's argv honoured.
@@ -197,11 +202,12 @@ func (s *TrustStore) IsTrustedForPolicy(root string, spec ProjectPolicySpec) boo
 	if err != nil {
 		return false
 	}
-	rec, ok := m[canonRoot(root)]
-	if !ok || rec.PolicyHash == "" {
-		return false
+	want := canonicalPolicyHash(spec)
+	match := func(rec trustRecord) bool { return rec.PolicyHash != "" && rec.PolicyHash == want }
+	if rec, ok := m[canonRoot(root)]; ok && match(rec) {
+		return true
 	}
-	return rec.PolicyHash == canonicalPolicyHash(spec)
+	return sharedWorktreeGrant(m, root, match)
 }
 
 // SetTrustedForProject grants trust for root and binds it to everything the

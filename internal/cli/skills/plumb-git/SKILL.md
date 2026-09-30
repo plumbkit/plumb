@@ -18,7 +18,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 
 `rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
 
-**Six subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls:
+**Seven subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls:
 
 - `checkout -b` / `-B` (branch creation) is **write**; every other `checkout` is **destructive**, since it can discard the working tree or detach HEAD. Prefer `switch` for a safe branch change.
 - `switch` is **write**, but `switch -f` / `--force` / `--discard-changes` is **destructive**.
@@ -26,6 +26,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 - `branch`: `--list` / `-l` / `-a` / `-r` / `-v` / `--show-current` / `--contains` / `--merged`, and a bare `branch`, are **read**; creating, `-m` / `-M` / `--move` / `--copy` are **write**; `-d` / `-D` / `--delete` is **destructive**.
 - `tag`: `-l` / `--list` / `-n` / `--contains` / `--merged`, and a bare `tag`, are **read**; creating is **write**; `-d` / `--delete` is **destructive**.
 - `stash`: `list` / `show` are **read**; a bare `stash` plus `push` / `save` / `pop` / `apply` / `create` / `store` are **write**; `drop` / `clear` are **destructive**; any other sub-subcommand is refused with the permitted list.
+- `merge` (`--no-ff`, `--ff-only`, `--no-edit`, `-m <message>`, `<ref>`) is **write**, like `commit`, and runs the merge hooks; `--abort` / `--quit` are **destructive**. `--continue`, `--no-verify`, `-e` / `--edit` and `-F` / `--file` are refused: conclude a merge with `commit` and a message instead. A merge that stops on conflicts names the conflicted files and leaves git's merging state: resolve, `add`, then `commit`.
 
 `session_start` prints the live policy — read it there rather than discovering a tier by being refused.
 
@@ -70,7 +71,7 @@ Three jobs that reflexively reach for git have a safer plumb answer:
 
 Before a write/destructive/network op, if a **different** plumb session moved this repo's HEAD/branch since this session last observed it, the op is refused unless re-run with `confirm:true` — the response names the peer session and the old→new refs (movement by this session, an external tool, or an unknown mover adds no friction). `expected_head` pins the exact HEAD commit an op must be at, refusing outright on a mismatch.
 
-With `[git] commit_trailer = true` (default off) every plumb commit is stamped with a `Plumb-Session: <session-name>` trailer; either way, `workspace_sessions` lists recent commits per session (short SHA, subject, repository). With `[collab] intents = true`, a repo-state op (any destructive-tier op, plus `commit`/`switch`/`checkout`) also surfaces live peer `share_intent` claims covering this repository — advisory only, never blocks the op, never requires confirmation.
+With `[git] commit_trailer = true` (default off) every plumb commit is stamped with a `Plumb-Session: <session-name>` trailer; either way, `workspace_sessions` lists recent commits per session (short SHA, subject, repository). With `[collab] intents = true`, a repo-state op (any destructive-tier op, plus `commit`/`switch`/`checkout`/`merge`) also surfaces live peer `share_intent` claims covering this repository — advisory only, never blocks the op, never requires confirmation.
 
 ## Working in a nested repository
 
