@@ -166,6 +166,20 @@ func TestGit_MergeRefusesFlagsThatEscapeTheToolsContract(t *testing.T) {
 		{[]string{"--fil=/etc/passwd", "side"}, "--file"},
 		{[]string{"--continue"}, "subcommand \"commit\""},
 		{[]string{"--cont"}, "subcommand \"commit\""},
+		// A refused flag hidden behind another option's VALUE (#540 review). git
+		// gives a value-taking option the next argument whatever it spells, so the
+		// scan must too — otherwise the "value" it skips is really the next flag.
+		{[]string{"--message", "-m", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"--message", "--", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"--mess", "-m", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"--message", "-s", "-e", "side"}, "editor"},
+		{[]string{"--into-name", "-X", "-F", "/etc/passwd", "side"}, "--file"},
+		{[]string{"--strategy", "-m", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"--strategy-option", "-m", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"--cleanup", "-m", "--no-verify", "side"}, "--no-verify"},
+		{[]string{"-nm", "x", "--no-verify", "side"}, "--no-verify"},
+		// A genuine `--` does not end the check either.
+		{[]string{"side", "--", "--no-verify"}, "--no-verify"},
 	}
 	for _, c := range cases {
 		_, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "merge", "args": c.args})
@@ -182,6 +196,30 @@ func TestGit_MergeRefusesFlagsThatEscapeTheToolsContract(t *testing.T) {
 		"subcommand": "merge", "args": []string{"--no-ff", "-m", "-e is fine here", "side"},
 	}); err != nil {
 		t.Fatalf("merge -m <message resembling a flag>: %v", err)
+	}
+}
+
+// TestCheckMergeArgs_ValuesAreNotFlags is the other direction of the scan: a
+// value git reads as a value is never inspected as a flag, so these are all
+// accepted. Over-refusal here would be harmless for safety but would make the
+// scan's model of git's parser wrong, which is what the bypasses exploited.
+func TestCheckMergeArgs_ValuesAreNotFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--message", "--no-verify is just words", "side"},
+		{"--message=--no-verify", "side"},
+		{"--mes", "-e", "side"},
+		{"-m", "--", "side"},
+		{"-m--no-verify", "side"},
+		{"--into-name", "-e", "side"},
+		{"--in", "--edit", "side"},
+		{"-X", "-F", "side"},
+		{"-s", "-e", "side"},
+		{"--cleanup", "--no-verify", "side"},
+		{"-Sekey", "side"},
+	} {
+		if err := checkMergeArgs(args); err != nil {
+			t.Errorf("checkMergeArgs(%q) = %v; git reads the flag-like token as a value, so it must be accepted", args, err)
+		}
 	}
 }
 

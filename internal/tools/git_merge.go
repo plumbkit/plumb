@@ -24,85 +24,39 @@ import (
 // and the tool's own commit concludes a merge just as well.
 
 // classifyMerge is the merge arm of classifyGit. Safe-biased like its
-// neighbours: a state flag anywhere in args lifts the whole call to destructive.
-// git expands any unambiguous prefix of a long option, so `--ab` IS --abort and
-// is matched as one — an exact match alone would let the abbreviation run the
-// reset at the write tier.
+// neighbours: a state flag anywhere in args lifts the whole call to destructive,
+// read as git reads it (git_options.go) — so `--ab` IS --abort.
 func classifyMerge(args []string) gitTier {
-	for _, a := range args {
-		name, ok := strings.CutPrefix(a, "--")
-		if !ok {
-			continue
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if isLongPrefix(name, "abort", 2) || isLongPrefix(name, "quit", 2) || isLongPrefix(name, "continue", 3) {
-			return tierDestructive
-		}
+	if mergeGrammar.has(args, false, "", "abort", "quit", "continue") {
+		return tierDestructive
 	}
 	return tierWrite
 }
 
-// mergeValueFlags are merge's short options that take their value as the rest
-// of the token or as the next argument, so the text after them is a value to
-// skip rather than more flags to inspect.
-const mergeValueFlags = "msSX"
-
 // checkMergeArgs refuses the merge flags that would step outside what the tool
-// promises of a commit-making operation. git accepts any unambiguous prefix of a
-// long option, so each long form is matched by prefix, and bundled short flags
-// (`-ne`) are unpacked.
+// promises of a commit-making operation. It reads args exactly as git's option
+// parser will (mergeGrammar.scan), because a refused flag hidden where git sees
+// a VALUE is harmless, and one hidden where the check sees a value but git sees
+// an option is a bypass. `--` does not end the check: it may be another
+// option's value, and after a genuine `--` nothing git takes can start with "-"
+// (no ref name can), so checking on costs nothing.
 func checkMergeArgs(args []string) error {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			return nil
-		}
-		if err := checkMergeArg(a); err != nil {
-			return err
-		}
-		if a == "-m" || a == "-s" || a == "-X" {
-			i++ // the next token is this flag's value, whatever it spells
-		}
-	}
-	return nil
-}
-
-func checkMergeArg(a string) error {
-	if name, ok := strings.CutPrefix(a, "--"); ok {
-		name, _, _ = strings.Cut(name, "=")
+	var err error
+	mergeGrammar.scan(args, false, func(o gitOption) bool {
 		switch {
-		case isLongPrefix(name, "no-verify", 4):
-			return errors.New("git merge: --no-verify is not permitted — the tool always runs the repository's hooks, " +
+		case o.is("", "no-verify"):
+			err = errors.New("git merge: --no-verify is not permitted — the tool always runs the repository's hooks, " +
 				"as it does for commit (pre-merge-commit and commit-msg here)")
-		case isLongPrefix(name, "edit", 1):
-			return errMergeEditor
-		case isLongPrefix(name, "file", 2):
-			return errMergeFile
-		case isLongPrefix(name, "continue", 3):
-			return errMergeContinue
+		case o.is("e", "edit"):
+			err = errMergeEditor
+		case o.is("F", "file"):
+			err = errMergeFile
+		case o.is("", "continue"):
+			err = errMergeContinue
 		}
-		return nil
-	}
-	if !strings.HasPrefix(a, "-") || len(a) < 2 {
-		return nil
-	}
-	for _, c := range a[1:] {
-		switch {
-		case c == 'e':
-			return errMergeEditor
-		case c == 'F':
-			return errMergeFile
-		case strings.ContainsRune(mergeValueFlags, c):
-			return nil // the rest of the token is this flag's value
-		}
-	}
-	return nil
-}
-
-// isLongPrefix reports whether name is an abbreviation git would expand to
-// full: a prefix of it at least minLen characters long.
-func isLongPrefix(name, full string, minLen int) bool {
-	return len(name) >= minLen && strings.HasPrefix(full, name)
+		return err == nil
+	})
+	return err
 }
 
 var (

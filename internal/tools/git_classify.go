@@ -186,8 +186,14 @@ func classifyGit(sub string, args []string) gitTier {
 	}
 }
 
+// The arms below read options through their subcommand's grammar
+// (git_options.go), so an abbreviation (`--disc`), a bundle (`-dr`) or a value
+// (`tag -m -d`) is read as git reads it. A check that RAISES a tier scans past
+// `--` (over-classifying a path that spells an option is the safe error); a
+// check that LOWERS one (restore --staged, the list-mode flags) stops there.
+
 func classifySwitch(args []string) gitTier {
-	if hasAnyFlag(args, "-f", "--force", "--discard-changes") {
+	if switchGrammar.has(args, false, "f", "force", "discard-changes") {
 		return tierDestructive
 	}
 	return tierWrite
@@ -196,8 +202,8 @@ func classifySwitch(args []string) gitTier {
 // classifyRestore: `restore --staged <path>` only touches the index (safe to
 // treat as a write); any form that touches the working tree discards changes.
 func classifyRestore(args []string) gitTier {
-	staged := hasAnyFlag(args, "--staged", "-S")
-	worktree := hasAnyFlag(args, "--worktree", "-W")
+	staged := restoreGrammar.has(args, true, "S", "staged")
+	worktree := restoreGrammar.has(args, false, "W", "worktree")
 	if staged && !worktree {
 		return tierWrite
 	}
@@ -205,17 +211,16 @@ func classifyRestore(args []string) gitTier {
 }
 
 func classifyBranch(args []string) gitTier {
-	if hasAnyFlag(args, "-d", "-D", "--delete") {
+	if branchGrammar.has(args, false, "dD", "delete") {
 		return tierDestructive
 	}
 	// -c/-C (branch copy) collide with git's -c/-C config-injection flags and are
 	// denied by the global-flag denylist before classification runs, so they are
 	// unreachable here; branch copy is reached via the long --copy form.
-	if hasAnyFlag(args, "-m", "-M", "--move", "--copy") {
+	if branchGrammar.has(args, false, "mM", "move", "copy") {
 		return tierWrite
 	}
-	if hasAnyFlag(args, "--list", "-l", "-a", "--all", "-r", "--remotes",
-		"-v", "-vv", "--show-current", "--contains", "--merged", "--no-merged") {
+	if branchGrammar.has(args, true, "larv", "list", "all", "remotes", "show-current", "contains", "merged", "no-merged") {
 		return tierRead
 	}
 	if hasNonFlagArg(args) {
@@ -225,10 +230,10 @@ func classifyBranch(args []string) gitTier {
 }
 
 func classifyTag(args []string) gitTier {
-	if hasAnyFlag(args, "-d", "--delete") {
+	if tagGrammar.has(args, false, "d", "delete") {
 		return tierDestructive
 	}
-	if hasAnyFlag(args, "-l", "--list", "-n", "--contains", "--merged") {
+	if tagGrammar.has(args, true, "ln", "list", "contains", "merged") {
 		return tierRead
 	}
 	if hasNonFlagArg(args) {
@@ -255,25 +260,13 @@ func classifyStash(args []string) gitTier {
 
 // classifyCheckout treats only pure branch creation (-b/-B) as a write; every
 // other checkout form can discard the working tree or detach HEAD, so it is
-// destructive. Prefer `switch` for safe branch changes.
+// destructive — and so is branch creation with -f, which throws away local
+// modifications. Prefer `switch` for safe branch changes.
 func classifyCheckout(args []string) gitTier {
-	if len(args) > 0 && (args[0] == "-b" || args[0] == "-B") {
+	if len(args) > 0 && (args[0] == "-b" || args[0] == "-B") && !checkoutGrammar.has(args, false, "f", "force") {
 		return tierWrite
 	}
 	return tierDestructive
-}
-
-func hasAnyFlag(args []string, flags ...string) bool {
-	set := make(map[string]bool, len(flags))
-	for _, f := range flags {
-		set[f] = true
-	}
-	for _, a := range args {
-		if set[a] {
-			return true
-		}
-	}
-	return false
 }
 
 func hasNonFlagArg(args []string) bool {
