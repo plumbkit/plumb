@@ -26,6 +26,7 @@ func TestWithIdentityProperty(t *testing.T) {
 			`{"properties":{"zebra":{},"apple":{},"mango":{},"plumb_agent":` + identityPropertySchema + `},"type":"object"}`,
 		},
 		{"not an object", `[1]`, `[1]`},
+		{"non-object schema", `{"type":"string"}`, `{"type":"string"}`},
 		{"malformed", `{"type":`, `{"type":`},
 		{"properties not an object", `{"properties":[1]}`, `{"properties":[1]}`},
 	} {
