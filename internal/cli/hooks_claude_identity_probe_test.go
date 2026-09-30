@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,9 +18,14 @@ import (
 // that glue is where the safety decision is made: sending plumb_agent to a
 // daemon that does not lift it fails every plumb call as an unknown parameter.
 
-// probeTestEnv points the control socket and the probe cache at a short
-// private directory (a unix socket path must stay under 103 bytes, which a
-// macOS t.TempDir() does not).
+// probeTestEnv points the control socket, the PID file and the probe cache at
+// a short private directory (a unix socket path must stay under 103 bytes,
+// which a macOS t.TempDir() does not). Every variable the runtime directory
+// and the wake directory resolve through is pinned: paths.RuntimeDir takes
+// XDG_RUNTIME_DIR, else os.UserCacheDir — XDG_CACHE_HOME on Linux, HOME on
+// macOS and as Linux's fallback — and wakeDir takes PLUMB_WAKE_DIR, else HOME.
+// One left unpinned and a developer's exported value would have these tests
+// unlink the real daemon's control socket and overwrite its PID file.
 func probeTestEnv(t *testing.T) {
 	t.Helper()
 	home, err := os.MkdirTemp("/tmp", "plb") //nolint:usetesting // a unix socket path must stay under 103 bytes; macOS t.TempDir() is longer
@@ -29,7 +35,28 @@ func probeTestEnv(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("PLUMB_WAKE_DIR", filepath.Join(home, "wake"))
+}
+
+// TestProbeTestEnv_IsolatesEveryDaemonPath: with the developer's own
+// variables pointing elsewhere, every path these tests write — control
+// socket, PID file, probe cache — must land inside the private directory.
+func TestProbeTestEnv_IsolatesEveryDaemonPath(t *testing.T) {
+	elsewhere := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(elsewhere, "cache"))
+	t.Setenv("PLUMB_WAKE_DIR", filepath.Join(elsewhere, "wake"))
+	probeTestEnv(t)
+	home := os.Getenv("HOME")
+	for name, p := range map[string]string{
+		"control socket": daemonCtrlSocketPath(),
+		"PID file":       daemonPIDPath(),
+		"probe cache":    filepath.Join(wakeDir(), identityProbeCacheFile),
+	} {
+		if !strings.HasPrefix(p, home+string(filepath.Separator)) {
+			t.Errorf("%s %s escapes the private directory %s", name, p, home)
+		}
+	}
 }
 
 // fakeCtrlDaemon listens on the control socket and answers each one-line
@@ -178,8 +205,9 @@ func TestIdentityProbe_DaemonSwappedInsideTheMinuteIsReprobed(t *testing.T) {
 	}
 }
 
-// TestDaemonInstanceMarker: the marker moves when either half of the
-// instance changes, and is "" — a miss — when either cannot be read.
+// TestDaemonInstanceMarker: the marker moves when any part of the instance
+// changes, falls back to the socket alone without a usable PID file, and is
+// "" — a miss — when the socket cannot be read.
 func TestDaemonInstanceMarker(t *testing.T) {
 	probeTestEnv(t)
 	if got := daemonInstanceMarker(); got != "" {
@@ -233,15 +261,52 @@ func TestDaemonInstanceMarker(t *testing.T) {
 		t.Fatalf("a new socket mtime must move the marker under the same inode: %q", c)
 	}
 
+	// No usable PID file (the daemon only warns when it cannot write one):
+	// the socket alone is the marker — stable, distinct from any marker that
+	// had a PID, and still moved by a re-bind.
+	withPID := daemonInstanceMarker()
+	_ = os.Remove(daemonPIDPath())
+	noPID := daemonInstanceMarker()
+	if noPID == "" || noPID == withPID {
+		t.Fatalf("a missing PID file must fall back to a socket-only marker distinct from %q, got %q", withPID, noPID)
+	}
 	for _, empty := range []string{"", "  \n"} {
 		writePIDFile(t, empty)
-		if got := daemonInstanceMarker(); got != "" {
-			t.Fatalf("an empty PID file (%q) must be no marker, got %q", empty, got)
+		if got := daemonInstanceMarker(); got != noPID {
+			t.Fatalf("an empty PID file (%q) must fall back like a missing one: %q, want %q", empty, got, noPID)
 		}
 	}
 	_ = os.Remove(daemonPIDPath())
+	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
+	if got := daemonInstanceMarker(); got == noPID || got == "" {
+		t.Fatalf("a re-bound socket must move the socket-only marker: %q then %q", noPID, got)
+	}
+	_ = os.Remove(daemonCtrlSocketPath())
 	if got := daemonInstanceMarker(); got != "" {
-		t.Fatalf("a missing PID file must be no marker, got %q", got)
+		t.Fatalf("no PID file and no socket must be no marker, got %q", got)
+	}
+}
+
+// TestIdentityProbe_NoPIDFileStillCaches: a daemon that could not write its
+// PID file must not cost two dials on every tool call, and a swap must still
+// be caught through the socket.
+func TestIdentityProbe_NoPIDFileStillCaches(t *testing.T) {
+	probeTestEnv(t)
+	var probes atomic.Int32
+	fakeCtrlDaemon(t, func(c net.Conn, line string) {
+		probes.Add(1)
+		currentDaemon("0.21.0")(c, line)
+	})
+	if got := probedStampKey(); got != mcp.ArgLogicalAgentDeclaredKey {
+		t.Fatalf("control: the current daemon got key %q", got)
+	}
+	first := probes.Load()
+	if got := probedStampKey(); got != mcp.ArgLogicalAgentDeclaredKey || probes.Load() != first {
+		t.Fatalf("with no PID file the second call re-probed (%d dials, then %d) — the cache never hits", first, probes.Load())
+	}
+	fakeCtrlDaemon(t, preKeysDaemon("0.20.3"))
+	if got := probedStampKey(); got != mcp.ArgLogicalAgentKey {
+		t.Fatalf("a swap with no PID file was served from the cache: key %q", got)
 	}
 }
 
