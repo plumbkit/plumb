@@ -117,24 +117,31 @@ func TestReadSnapshot_AnInPlaceRewriteMidReadIsReadAgain(t *testing.T) {
 	}
 }
 
-// TestReadSnapshot_AFileThatNeverSettlesRecordsNoHash: when every attempt is torn,
-// no SHA is recorded rather than one that matches no version the caller saw; the
-// guards then fall back to the mtime, as for any read without a hash.
-func TestReadSnapshot_AFileThatNeverSettlesRecordsNoHash(t *testing.T) {
+// TestReadSnapshot_AFileThatNeverSettlesKeepsTheLastReadsHash: when every attempt
+// is torn, the last attempt's hash is kept. It is exactly what the caller was
+// shown, so every later change differs from it and the guards refuse; recording
+// no hash would leave them only the mtime.
+func TestReadSnapshot_AFileThatNeverSettlesKeepsTheLastReadsHash(t *testing.T) {
 	path := snapshotFixture(t, "v0\n", time.Now().Add(-time.Hour))
 	n := 0
+	var lastRead []byte
 	snap, err := readSnapshot(path, func(r io.Reader) error {
 		n++
-		if _, err := io.ReadAll(r); err != nil {
+		b, err := io.ReadAll(r)
+		if err != nil {
 			return err
 		}
+		lastRead = b
 		return os.WriteFile(path, []byte(string(rune('a'+n))+" grows every time\n"), 0o644)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != snapshotAttempts || snap.sha != "" {
-		t.Errorf("after %d torn attempts (want %d) the sha must be empty; got %q", n, snapshotAttempts, snap.sha)
+	if n != snapshotAttempts {
+		t.Fatalf("consume ran %d times, want every attempt (%d)", n, snapshotAttempts)
+	}
+	if snap.sha != sha256Hex(lastRead) {
+		t.Errorf("the sha must be the hash of what the last attempt read (%s); got %q", sha256Hex(lastRead), snap.sha)
 	}
 }
 

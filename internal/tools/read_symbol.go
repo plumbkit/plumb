@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -341,7 +340,7 @@ func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name str
 		} else {
 			fmt.Fprintf(&sb, "# symbol: %s (%s) lines %d–%d\n\n", sym.Name, symbolKindName(sym.Kind), start, end)
 		}
-		sb.WriteString(readSymbolBody(fpath, start, end, lines))
+		sb.WriteString(readSymbolBody(start, end, lines))
 		if i < len(matches)-1 {
 			sb.WriteByte('\n')
 		}
@@ -349,33 +348,20 @@ func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name str
 	return sb.String(), nil
 }
 
-func readSymbolBody(fpath string, start, end int, lines []string) string {
-	if lines != nil {
-		lo := max(0, start-1)
-		hi := min(len(lines), end)
-		if lo >= hi {
-			return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
+// readSymbolBody prints lines start..end (1-based, inclusive) of the snapshot
+// formatReadSymbolResult read, with the line gutter.
+func readSymbolBody(start, end int, lines []string) string {
+	lo := max(0, start-1)
+	hi := min(len(lines), end)
+	if lo >= hi {
+		return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
+	}
+	var sb strings.Builder
+	for i := lo; i < hi; i++ {
+		if i > lo {
+			sb.WriteByte('\n')
 		}
-		var sb strings.Builder
-		for i := lo; i < hi; i++ {
-			if i > lo {
-				sb.WriteByte('\n')
-			}
-			sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
-		}
-		return withLineGutter(sb.String(), lo+1)
+		sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
 	}
-	f, ferr := os.Open(fpath)
-	if ferr != nil {
-		return fmt.Sprintf("(error reading lines: %v)\n", ferr)
-	}
-	defer f.Close()
-	src, hasLines, rerr := readContentMaybeRanged(f, &start, &end)
-	if rerr != nil {
-		return fmt.Sprintf("(error reading lines: %v)\n", rerr)
-	}
-	if hasLines {
-		src = withLineGutter(src, start)
-	}
-	return src
+	return withLineGutter(sb.String(), lo+1)
 }

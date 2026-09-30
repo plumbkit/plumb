@@ -33,10 +33,8 @@ import (
 // snapshotAttempts bounds the re-reads of a file that keeps changing in place.
 const snapshotAttempts = 3
 
-// fileSnapshot is one consistent version of a file: the mtime and SHA-256 of the
-// very bytes a read handed to its consumer. sha is "" when the file kept changing
-// through every attempt; the guards then fall back to the mtime alone, as they do
-// for any read without a hash.
+// fileSnapshot is the version of a file a read handed to its consumer: the mtime
+// its descriptor reported and the SHA-256 of exactly those bytes.
 type fileSnapshot struct {
 	mtime time.Time
 	size  int64
@@ -46,7 +44,10 @@ type fileSnapshot struct {
 // readSnapshot opens path and calls consume with a reader over its whole content,
 // then returns the version consume saw. consume may stop reading early. It is
 // called again, from the start, when the file changed during the read, so it must
-// reset whatever it builds; an error from consume is returned as is.
+// reset whatever it builds; an error from consume is returned as is. A file still
+// changing after the last attempt keeps that attempt's hash: it may match no
+// version that was ever whole on disk, but it is exactly what the caller was
+// shown, so every later change still differs from it and the guards refuse.
 func readSnapshot(path string, consume func(io.Reader) error) (fileSnapshot, error) {
 	var last fileSnapshot
 	for range snapshotAttempts {
@@ -59,7 +60,6 @@ func readSnapshot(path string, consume func(io.Reader) error) (fileSnapshot, err
 		}
 		last = snap
 	}
-	last.sha = ""
 	return last, nil
 }
 

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -46,7 +45,7 @@ type matchLine struct {
 // search-specific arguments, restricts the scan to an optional start_line/
 // end_line window, records the read (so strict mode is satisfied), and formats
 // the bounded, labelled result.
-func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.FileInfo, concurrentNote string, a readFileArgs) (string, error) {
+func (t *ReadFile) searchWithinFile(ctx context.Context, fpath, concurrentNote string, a readFileArgs) (string, error) {
 	if a.Limit != nil {
 		return "", errors.New("read_file: pattern cannot be combined with limit — use max_matches to bound search output, and start_line/end_line to restrict the searched range")
 	}
@@ -84,7 +83,7 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.F
 	mtime, sha := snap.mtime, snap.sha
 	t.readTracker(ctx).Record(fpath, mtime, sha)
 
-	return t.formatSearchOutput(fpath, mtime, sha, info.Size(), concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
+	return t.formatSearchOutput(fpath, mtime, sha, snap.size, concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
 }
 
 // compileReadFilePattern builds the matcher for search mode: literal text by
