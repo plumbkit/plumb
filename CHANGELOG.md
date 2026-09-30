@@ -61,6 +61,18 @@
   unformatted file fails the commit, is listed by name, and the message gives
   the fix (`golangci-lint run --fix ./...`, then re-stage). `make
   check-pre-commit`, part of `make verify`, pins both against a stub linter.
+- **`workspace_sessions` no longer times out when several agents list at
+  once.** (#545) The session list opened and parsed every session file on
+  every call, under an exclusive lock, and ended sessions are kept for a day so
+  a reconnecting agent can inherit its name: on a busy machine that was about a
+  thousand files and ~290 ms per list, queued behind every other caller, against
+  `workspace_sessions`' 500 ms budget, so the second of two concurrent calls
+  returned "timed out reading session or stats data". An ended session's file
+  does not change, so the list now remembers it by the file's identity (inode,
+  size and modification time) and settles it with a stat instead of an open;
+  a changed file is read again. On that directory a list now takes ~34 ms, and
+  sixteen concurrent lists finish within ~240 ms instead of 1.7 s. The budget is
+  unchanged.
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
