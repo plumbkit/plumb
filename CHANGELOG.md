@@ -51,6 +51,16 @@
   it finished, for a report nobody could receive. A run whose connection closes
   is now cancelled: the step in flight is killed, the file restored, the slot
   released, and no further mutant is started.
+- **The pre-commit hook no longer fails on a peer's lint, and no longer
+  rewrites files behind a commit.** (#545) With two agents committing at once,
+  golangci-lint refused the second with "parallel golangci-lint is running" and
+  the commit failed on contention, not a finding; the hook now passes
+  `--allow-parallel-runners`. And its `run --fix` reformatted files after the
+  commit's content was chosen, so a passing commit left a dirty tree whose
+  rewrite drifted into the next unrelated commit. The hook now only checks: an
+  unformatted file fails the commit, is listed by name, and the message gives
+  the fix (`golangci-lint run --fix ./...`, then re-stage). `make
+  check-pre-commit`, part of `make verify`, pins both against a stub linter.
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside

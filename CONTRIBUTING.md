@@ -30,7 +30,7 @@ can keep your branch current:
 git clone https://github.com/<your-username>/plumb
 cd plumb
 git remote add upstream https://github.com/plumbkit/plumb
-make install-hooks   # REQUIRED — installs the pre-commit hook (golangci-lint --fix)
+make install-hooks   # REQUIRED — installs the pre-commit hook (build + golangci-lint check)
 make build           # compile to ./plumb, version stamped from git/VERSION
 ```
 
