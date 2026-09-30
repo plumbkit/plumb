@@ -109,17 +109,20 @@
 
 - **gotreesitter v0.52.0 → v0.55.1, Go toolchain go1.26.6 → go1.26.8, and
   minor module bumps** (modernc.org/sqlite v1.60.1, modernc.org/libc v1.77.1,
-  golang.org/x/sync v0.23.0, and indirect updates). The gotreesitter line brings
-  tree handles that tolerate a second `Release`, incremental-reuse correctness
-  fixes, and faster Python, C and deeply nested parses. TS/TSX extraction is
-  unchanged: a 545-file differential sweep against the canonical grammar shows
-  no drift on either version. Swift is
-  unaffected in production because it still indexes through the WASM grammar.
-  The pure-Go Swift fallback gains five `swift-algorithms` files but regresses
-  on any `#`-token (`#if`, `#else`, `#warning`, `#Preview`, `#expect`) that
-  follows a statement. The regression is in gotreesitter's v0.54.0 scanner port,
-  because the canonical grammar at the same commit parses those files cleanly,
-  and it keeps the Swift WASM path in place (PLAN-1).
+  golang.org/x/sync v0.23.0, and indirect updates). From v0.54.0 gotreesitter
+  routes every parse through its production parser by default (the compact
+  route is now opt-in), which is the change plumb's pure-Go extractors see. The
+  line also brings faster Python, C and deeply nested parses. The 128 MB
+  per-parse memory budget is still fixed, and timeout and stop reasons behave
+  as before. TS/TSX extraction is unchanged: a 545-file differential sweep
+  against the canonical grammar shows no drift on either version.
+  Swift still indexes through the WASM grammar. Its pure-Go fallback, used when
+  the WASM runtime cannot start and per file when a WASM parse faults, gains
+  five `swift-algorithms` files but regresses on a `#` token (`#if`, `#else`,
+  `#warning`, `#Preview`, `#expect`) that follows a statement. The regression
+  arrived with gotreesitter v0.54.0's tree-sitter-swift bump; the canonical
+  grammar at the same commit parses those files cleanly. It keeps the Swift WASM
+  path in place (PLAN-1), and a new tripwire test fails when upstream fixes it.
 
 ## 0.20.2 (2026-09-21)
 

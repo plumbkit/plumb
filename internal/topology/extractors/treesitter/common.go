@@ -66,7 +66,7 @@ func parserPoolFor(lang *tsg.Language) *sync.Pool {
 // These are the only two setters plumb calls — included ranges, the logger, the
 // GLR trace and the ambiguity profile are never set, so they cannot go stale.
 // Anything added to that list must be added here too. (Upstream's own pool
-// scrubs a great deal more on checkout, including six setters and its
+// scrubs a great deal more on checkout, including eight setters and its
 // admission-switch state; a plain sync.Pool scrubs nothing, so this is the seam
 // that has to.)
 func scrubPooledParser(parser *tsg.Parser) {
@@ -160,9 +160,7 @@ func extractWith(
 		}()
 	}
 	// No else branch: scrubPooledParser above already left the flag nil, which is
-	// what a context that cannot be cancelled needs. Clearing to nil rather than
-	// pointing at a fresh zero also keeps the compact fast path eligible, which
-	// it is not while any flag is set.
+	// what a context that cannot be cancelled needs.
 
 	tree, err := parser.Parse(src)
 	// Returned here rather than by defer, and only once Parse has returned in
