@@ -108,6 +108,10 @@ func (g gitProbes) mainKey(ctx context.Context, common string) string {
 		return p.tree.key
 	}
 	key := common
+	// Seeded before the climb below: a core.worktree cycle (A names B, B names A,
+	// or a linked worktree named as its own checkout) then ends at common
+	// instead of recursing without end.
+	g[memo] = gitProbe{tree: gitTree{key: key}}
 	cmd := exec.CommandContext(ctx, "git", gitNoOptionalLocks, "--git-dir", common, "config", "--local", "--get", "core.worktree") //nolint:gosec // G204: argv is package literals plus a git directory git itself printed
 	cmd.Env = withEnvVar(os.Environ(), "LC_ALL", "C")
 	if out, err := cmd.Output(); err == nil {
@@ -115,7 +119,12 @@ func (g gitProbes) mainKey(ctx context.Context, common string) string {
 			if !filepath.IsAbs(wt) {
 				wt = filepath.Join(common, wt)
 			}
-			if c := g.chain(ctx, paths.Canonical(wt)); c[0].place == placeTree && !c[0].tree.linked && !c[0].approx {
+			// Only a checkout of THIS repository counts. core.worktree is a value in a
+			// repository's config, and a stale one (the submodule at that path was
+			// swapped for another) or a hostile one names someone else's checkout,
+			// whose key would move commands into an unrelated repository.
+			c := g.chain(ctx, paths.Canonical(wt))
+			if c[0].place == placeTree && !c[0].tree.linked && !c[0].approx && sameGitPath(c[0].tree.common, common) {
 				key = c[0].tree.key
 			}
 		}
