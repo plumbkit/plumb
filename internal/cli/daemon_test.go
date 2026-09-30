@@ -506,6 +506,9 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 
 func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	// The reaper lists every session in the registry, so this test needs one of
+	// its own rather than TestMain's shared directory.
+	t.Setenv(session.DirEnv, "")
 	cfg := config.Defaults()
 	cfg.Session.EvictionTTLMinutes = 1
 	store := config.NewStore(cfg)

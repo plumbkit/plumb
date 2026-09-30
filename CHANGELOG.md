@@ -39,6 +39,18 @@
 
 ### Fixed
 
+- **Tests no longer take the live session registry's lock.** Tests in
+  `internal/cli`, `internal/tools`, `internal/tui` and `internal/web` reached
+  the real session registry, and on macOS that meant
+  `~/Library/Application Support/plumb/sessions/.sessions.lock`. They
+  contended with the user's daemon: with several test runs going, the daemon
+  held hundreds of descriptors queued on that flock and test binaries sat in it
+  until `-timeout`. The registry can now be moved on its own with
+  `PLUMB_SESSIONS_DIR`, and each of those packages sets it to a temporary
+  directory in `TestMain`. A test binary that still resolves the registry to its
+  start-up environment's location panics, so a new package that forgets fails
+  on CI instead of stalling a developer's daemon. The check never runs outside
+  `go test`. (#551)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside

@@ -18,3 +18,13 @@ func SetGenerateNameForTest(t *testing.T, fn func() string) {
 	generateName = fn
 	t.Cleanup(func() { generateName = orig })
 }
+
+// LiveDirsForTest returns the registry locations the test binary's start-up
+// environment resolves to, which Dir refuses to return inside a test.
+func LiveDirsForTest() []string { return append([]string(nil), liveDirs...) }
+
+// IsolationErrorForTest exposes the guard's decision so its production
+// branch (testBinary false) can be exercised from a test binary.
+func IsolationErrorForTest(dir string, testBinary bool, live []string) error {
+	return testIsolationError(dir, testBinary, live)
+}

@@ -78,6 +78,14 @@ CI's two-OS matrix is the backstop, not the first line.
 must not assume their temporary path lives outside the repository. Reproduce
 the CI shape with `GOTMPDIR=$PWD/.testcache go test ./...`.
 
+**Tests never touch the live session registry.** In a test binary,
+`session.Dir` panics if it resolves to the registry that the binary's start-up
+environment points at, which is the developer's own daemon's. Every package whose
+tests reach the registry, directly or through daemon, connection, hook, TUI or
+web code, has a `TestMain` (`session_isolation_main_test.go`) that sets
+`PLUMB_SESSIONS_DIR` to a temporary directory for the whole binary. A test that
+needs an empty registry of its own sets `t.Setenv(session.DirEnv, t.TempDir())`.
+
 **Coverage and vulnerability checks are deliberately separate from `verify`.**
 Coverage re-runs the whole suite instrumented and vulnerability scanning needs
 the network. CI runs both, plus `test-race` and integration jobs. Treat the

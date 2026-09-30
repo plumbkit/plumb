@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/fsync"
-	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // endedSessionGrace is how long ended-session files are kept on disk so that
@@ -558,13 +557,6 @@ func listLocked(dir string) ([]Info, error) {
 		return infos[i].StartedAt.Before(infos[j].StartedAt)
 	})
 	return infos, nil
-}
-
-// Dir returns the path to the session file directory, under plumb's data dir
-// resolved by internal/paths (adrg/xdg). The error return is retained for API
-// compatibility with callers; resolution no longer fails.
-func Dir() (string, error) {
-	return filepath.Join(paths.DataDir(), "sessions"), nil
 }
 
 // pidAlive returns true if the process with the given PID is running.
