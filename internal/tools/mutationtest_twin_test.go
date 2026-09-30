@@ -92,6 +92,7 @@ func TestRepoKey(t *testing.T) {
 		"/s/.git/worktrees/w/modules/lib/worktrees/x/modules/i": "/s/.git/modules/lib/modules/i",
 		"/s/.git/worktrees/wt":                                  "/s/.git/worktrees/wt", // a worktree's own git dir is not a submodule's
 		"/home/worktrees/a/modules/r/.git":                      "/home/worktrees/a/modules/r/.git",
+		"/store/P.git/worktrees/w/modules/lib":                  "/store/P.git/modules/lib", // --separate-git-dir superproject
 		"/srv/bare.git":                                         "/srv/bare.git",
 	} {
 		if got := repoKey(filepath.FromSlash(in)); got != filepath.FromSlash(want) {

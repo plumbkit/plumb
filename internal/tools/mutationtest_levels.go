@@ -116,8 +116,13 @@ func sameRepo(a, b string) bool {
 
 // repoKey folds every "worktrees/<id>/modules/" segment of a git directory into
 // "modules/". Only the part below the first ".git" component is folded, so a
-// directory that merely happens to be named worktrees elsewhere in the path is left
-// alone.
+// directory that merely happens to be named worktrees above the repository is left
+// alone; a git directory with no ".git" component (--separate-git-dir, a bare
+// superproject) is folded from its start.
+//
+// Known limit: submodule names may contain "/", so a submodule at path
+// worktrees/<a> with a nested submodule <b> folds to the key of a submodule at
+// modules/<b>. Such a run still moves only into the work-tree that holds the file.
 func repoKey(gitDir string) string {
 	parts := strings.Split(filepath.ToSlash(gitDir), "/")
 	start := -1
@@ -127,10 +132,7 @@ func repoKey(gitDir string) string {
 			break
 		}
 	}
-	if start < 0 {
-		return gitDir
-	}
-	out := parts[: start+1 : start+1]
+	out := parts[: start+1 : start+1] // start == -1 keeps nothing and folds from the top
 	for i := start + 1; i < len(parts); i++ {
 		if parts[i] == "worktrees" && i+2 < len(parts) && parts[i+2] == "modules" {
 			i++ // drop "worktrees" and the id; "modules" follows
@@ -153,7 +155,13 @@ func (g gitProbes) splitLevels(ctx context.Context, dir string, targets []mutati
 			continue
 		}
 		other := targets[(i+1)%len(targets)].display
-		return spanError(targets[i].display, own[0].tree.top, other, "a tree that shares no repository with it")
+		for j := range targets {
+			if _, _, shared := g.sharedLevel(ctx, dir, targets[j:j+1]); !shared {
+				other = targets[j].display // the file that keeps no repository in common with the commands
+				break
+			}
+		}
+		return spanError(targets[i].display, own[0].tree.top, other, "a tree that shares no repository with the commands")
 	}
 	return nil
 }
