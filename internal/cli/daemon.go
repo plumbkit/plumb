@@ -322,9 +322,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		sessState = nil
 	}
 	defer sessState.Close()
-	pruneSessionState(sessState, cfg.Session.PersistStateTTLMinutes)
-	sweepLegacyWidePins(sessState)
-	reportLegacyNameConflicts(sessState)
+	// No TTL prune here: the idle reaper runs it once serves have reconnected,
+	// with connected sessions exempt (issue #525).
+	maintainSessionStateAtStart(sessState)
 
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()

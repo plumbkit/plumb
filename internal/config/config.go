@@ -391,8 +391,10 @@ type SessionConfig struct {
 	PersistState bool `toml:"persist_state"`
 	// PersistStateTTLMinutes is how long persisted per-connection state lingers
 	// before the daemon prunes it, reclaiming rows left by a serve proxy that died
-	// without reconnecting. Independent of EvictionTTLMinutes (eviction must not
-	// delete state that may be rehydrated). Default 1440 (24h).
+	// without reconnecting. The idle reaper prunes, and spares every session still
+	// connected however old its rows (issue #525). Independent of
+	// EvictionTTLMinutes (eviction must not delete state that may be rehydrated).
+	// Default 1440 (24h).
 	PersistStateTTLMinutes int `toml:"persist_state_ttl_minutes"`
 }
 
