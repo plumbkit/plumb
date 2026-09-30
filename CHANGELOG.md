@@ -2,8 +2,63 @@
 
 ## 0.20.4 (unreleased)
 
+### Added
+
+- **`[tasks.<lang>] env`: environment variables for a language's task
+  commands.** (#537) A task slot had no way to set a variable, so `run_task test`
+  could not reproduce plumb's own CI: `make test` sets `GOTMPDIR` inside the
+  checkout, `go test` under `run_task` used the system temp directory, and a test
+  depending on the difference passed locally and failed on CI. `env` applies to
+  `run_task`, `mutation_test`'s compile and test steps and `plumb build|test|…`,
+  on top of the inherited environment and before the automatic `GOWORK=off`
+  decision, so an explicit `GOWORK` there wins. Values may use `{workspace}` and
+  `{working_dir}`, which follow a command `mutation_test` re-roots into another
+  worktree; a `GOTMPDIR`/`TMPDIR` inside the workspace is created, as `make
+  test`'s prerequisite does. `run_task` lists the applied entries, credentials
+  redacted, and `plumb config show` shows each with its provenance. A project's
+  `env` is trust-gated like a command: every entry is in the `plumb trust` hash,
+  it makes every slot of the language project-supplied (except a `GOTMPDIR`
+  inside the workspace, which changes neither what runs nor where),
+  `plumb trust` flags entries such as `PATH`, `GOFLAGS` or `GIT_*` that change
+  what runs, and the loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. A
+  refused command now names the project setting that made it project-supplied.
+  plumb's own `.plumb/config.toml` is now committed and sets `GOTMPDIR` the way
+  `make test` does, with no `plumb trust` needed.
+- **`run_task` `run` and `verbose`, `mutation_test` `test_run`: run one test, or
+  a pattern.** (#538) `target` fills one positional, in practice a package, so
+  there was no way to run `go test -run 'X|Y'`, `pytest -k` or a cargo test
+  filter, or to see which tests were skipped, and every mutant paid for its whole
+  package. Two new placeholders, `{run:<flag>}` and `{verbose:<flag>}`, add
+  nothing when not asked for; the shipped defaults are now `go test {verbose:-v}
+  {run:-run} {target:./...}`, `pytest {verbose:-v} {run:-k} {target:}` and
+  `cargo test {target:} {run:--}`, and a stored earlier default is reconciled to
+  them. The filter reaches the command as one argument with no shell, allows
+  `|`, regexp characters and spaces, and may not start with `-`. A filter on a
+  command with no `{run}` is refused; a `verbose` it cannot place is noted.
+
 ### Fixed
 
+- **The identity hook re-asks a daemon that was swapped within the minute.**
+  The Claude Code identity hook caches, for a minute, the daemon's version
+  and whether it accepts `plumb_agent`. If the daemon was replaced inside
+  that minute by an older build that does not accept `plumb_agent`, the hook
+  kept stamping it from the cache and every plumb call was refused as an
+  unknown parameter until the cache expired. The cache is now tied to the
+  daemon instance (its PID file plus the control socket's inode and
+  modification time), so a restarted or swapped daemon is asked again. When
+  those cannot be read the hook asks the daemon instead of trusting the cache.
+  (#532)
+- **`plumb hooks` reports a daemon that does not accept `plumb_agent`.** A
+  daemon from 0.19.1 to 0.20.3 accepts the identity stamp only under the key
+  Claude desktop's connector strips, so desktop sessions lost their per-agent
+  identity while the status showed nothing wrong. The status now says so and
+  suggests upgrading and restarting the daemon. (#515)
+- **The tool-schema size in `session_start` counts `plumb_agent`.** For Claude
+  desktop's connector every advertised tool schema carries the `plumb_agent`
+  property, about 80 bytes per tool, but the profile surcharge measured the
+  schemas without it. It now measures the schemas as that connection is served
+  them. (#515)
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,
@@ -140,6 +195,17 @@
 
   No path is pattern-matched, and a `--separate-git-dir` superproject needs no
   special case.
+- **The Go language server in a worktree answers about the worktree.** In a git
+  worktree under an enclosing `go.work` that lists the main checkout's directory
+  for the module, gopls resolved that `go.work`, in which the worktree is not a
+  module. `workspace_symbols` answered from the main checkout or not at all, and
+  the worktree's files were never type-checked, so a post-write diagnostics pass
+  labelled "authoritative" reported clean code that `go build` rejected. When
+  plumb starts a Go language server it now makes the per-root `GOWORK=off`
+  decision that hooks, `run_task` and `mutation_test` already get, and never
+  overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
+  file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
+  naming the `go.work` when it applies (#521).
 
 ## 0.20.3 (2026-09-30)
 

@@ -73,7 +73,8 @@ func newWorktreeEnv(t *testing.T, sub string, mainKills, wtCompileRed bool) *wor
 // the main checkout's path by default, or another spelling of it.
 func (e *worktreeEnv) reopenAt(workspace string) {
 	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return workspace }}
-	e.tool = NewMutationTest(deps, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	e.tool = NewMutationTest(deps, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		argv := []string{"/bin/sh", "compile.sh"}
 		if slot == "test" {
 			argv = []string{"/bin/sh", "test.sh"}
@@ -736,7 +737,8 @@ func TestMutationTest_NoWorkTreeAtAllRunsAsBefore(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", parent)
 
 	tool := NewMutationTest(WriteDeps{WorkspaceFn: func(context.Context) string { return plain }},
-		func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+		func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+			slot := req.Slot
 			script := "compile.sh"
 			if slot == "test" {
 				script = "test.sh"

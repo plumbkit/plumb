@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // newTaskLanguageSession builds a session pinned to ws whose PRIMARY language is
@@ -38,7 +39,7 @@ func TestTaskResolver_LanguageReachesASecondaryBlock(t *testing.T) {
 	}
 	s := newTaskLanguageSession(t, ws, "typescript", tasks)
 
-	cmd, err := s.taskResolver(context.Background(), "test", "", "python")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "python"})
 	if err != nil {
 		t.Fatalf("resolving the python test command: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestTaskResolver_EmptyLanguageStillMeansPrimary(t *testing.T) {
 	}
 	s := newTaskLanguageSession(t, ws, "typescript", tasks)
 
-	cmd, err := s.taskResolver(context.Background(), "test", "", "")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test"})
 	if err != nil {
 		t.Fatalf("resolving the primary test command: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestTaskResolver_UnknownLanguageRefusedWithTheList(t *testing.T) {
 	}
 	s := newTaskLanguageSession(t, ws, "typescript", tasks)
 
-	_, err := s.taskResolver(context.Background(), "test", "", "ruby")
+	_, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "ruby"})
 	if err == nil {
 		t.Fatal("expected a refusal for a language with no task commands")
 	}
@@ -103,7 +104,7 @@ func TestTaskResolver_LanguageWithNoConfiguredSlotsIsRefused(t *testing.T) {
 	}
 	s := newTaskLanguageSession(t, ws, "typescript", tasks)
 
-	_, err := s.taskResolver(context.Background(), "test", "", "html")
+	_, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "html"})
 	if err == nil {
 		t.Fatal("expected a refusal for a language whose block configures no slots")
 	}
@@ -120,7 +121,7 @@ func TestTaskResolver_NoPrimaryNamesTheLanguagesYouCouldAskFor(t *testing.T) {
 	tasks := map[string]config.TasksConfig{"python": {Test: "pytest"}}
 	s := newTaskLanguageSession(t, ws, LanguageNone, tasks)
 
-	_, err := s.taskResolver(context.Background(), "test", "", "")
+	_, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test"})
 	if err == nil {
 		t.Fatal("expected a refusal when no language is attached")
 	}
@@ -129,7 +130,7 @@ func TestTaskResolver_NoPrimaryNamesTheLanguagesYouCouldAskFor(t *testing.T) {
 	}
 
 	// ...and naming it explicitly works even with no primary attached.
-	cmd, err := s.taskResolver(context.Background(), "test", "", "python")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "python"})
 	if err != nil {
 		t.Fatalf("explicit language with no primary attached: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestTaskResolver_LanguageDoesNotBypassTheTrustGate(t *testing.T) {
 	}
 	s := newTaskLanguageSession(t, ws, "go", tasks)
 
-	_, err := s.taskResolver(context.Background(), "test", "", "python")
+	_, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "python"})
 	if err == nil {
 		t.Fatal("an untrusted project command must be refused even when reached via `language`")
 	}
@@ -174,7 +175,7 @@ func TestTaskResolver_LanguageDoesNotBypassTheTrustGate(t *testing.T) {
 	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := s.taskResolver(context.Background(), "test", "", "python")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "test", Language: "python"})
 	if err != nil {
 		t.Fatalf("after `plumb trust`, the non-primary command must run: %v", err)
 	}

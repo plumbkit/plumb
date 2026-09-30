@@ -30,10 +30,13 @@ import (
 // main checkout legitimately NEEDS its workspace. What is needed is a decision
 // per child, made where plumb spawns the children that run a repository's own
 // configured commands: the git child that runs its hooks (execGitCmd) and the
-// stored [tasks.<lang>] commands of run_task and mutation_test (RunTaskArgv).
-// run_command is deliberately not one of them: its commands are the agent's own,
-// and one of them may be exactly `go work use .` — the fix a workspace needs,
-// which GOWORK=off would refuse.
+// stored [tasks.<lang>] commands of run_task and mutation_test (RunTaskArgv) —
+// and where the daemon's pool spawns a Go language server for a workspace root
+// (internal/cli, through GoWorkBypass), because gopls resolves the same go.work
+// and would otherwise answer every query about a worktree from the main
+// checkout (#521). run_command is deliberately not one of them: its commands
+// are the agent's own, and one of them may be exactly `go work use .` — the fix
+// a workspace needs, which GOWORK=off would refuse.
 //
 // The rule, checked against the go command rather than assumed. GOWORK=off is
 // applied only when ALL of these hold, and every doubt resolves to "leave it
@@ -76,7 +79,7 @@ import (
 // goWorkEnvKey is the environment variable the go command reads for the workspace.
 const goWorkEnvKey = "GOWORK"
 
-// applyAutoGoWork gives cmd GOWORK=off when goWorkBypass says the go.work its
+// applyAutoGoWork gives cmd GOWORK=off when GoWorkBypass says the go.work its
 // working directory would find must be switched off, and returns that go.work's
 // path ("" when cmd was left alone). The environment it sets is cmd.Environ() —
 // what the child would have run with, including the PWD os/exec adds for a nil
@@ -86,7 +89,7 @@ const goWorkEnvKey = "GOWORK"
 // Concurrency: touches only cmd, which the caller owns; safe for concurrent use
 // on distinct commands.
 func applyAutoGoWork(cmd *exec.Cmd) string {
-	workFile := goWorkBypass(cmd.Dir, cmd.Env)
+	workFile := GoWorkBypass(cmd.Dir, cmd.Env)
 	if workFile == "" {
 		return ""
 	}
@@ -130,14 +133,14 @@ func withEnvVar(env []string, key, val string) []string {
 	return append(out, prefix+val)
 }
 
-// goWorkBypass returns the go.work a go command started in dir with env (nil means
+// GoWorkBypass returns the go.work a go command started in dir with env (nil means
 // the daemon's own) would use and that the rule in the file comment says to switch
 // off, or "" to leave the environment alone.
-func goWorkBypass(dir string, env []string) string {
+func GoWorkBypass(dir string, env []string) string {
 	return goWorkBypassBelow(dir, env, "")
 }
 
-// goWorkBypassBelow is goWorkBypass with the upward go.work search stopped at
+// goWorkBypassBelow is GoWorkBypass with the upward go.work search stopped at
 // ceiling ("" means the filesystem root, which is what production passes — the go
 // command does not stop earlier either). The ceiling exists for tests: `make test`
 // puts t.TempDir() under the repository's own .testcache, where a go.work above a

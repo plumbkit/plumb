@@ -66,7 +66,8 @@ func newSubmoduleEnv(t *testing.T, worktreeKills bool) *submoduleEnv {
 // `sh <prefix>compile.sh` / `sh <prefix>test.sh` run from workdir ("" = the root).
 func (e *submoduleEnv) tool(workspace, workdir, prefix string) *MutationTest {
 	return NewMutationTest(WriteDeps{WorkspaceFn: func(context.Context) string { return workspace }},
-		func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+		func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+			slot := req.Slot
 			script := prefix + "compile.sh"
 			if slot == "test" {
 				script = prefix + "test.sh"

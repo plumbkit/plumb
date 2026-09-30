@@ -454,7 +454,20 @@ func rerootCommand(ctx context.Context, lookup func(context.Context, string) git
 			"Use a path relative to the working directory in the command or in test_target", file, dest.top, arg, from.top)
 	}
 	cmd.WorkingDir = moved
+	cmd.Root = rerootedRoot(cmd.Root, from.top, dest.top)
 	return cmd, nil
+}
+
+// rerootedRoot moves the root a [tasks.<lang>] env's {workspace} expands to along
+// with the command, so `GOTMPDIR = "{workspace}/.testcache"` lands in the
+// work-tree the tests run in rather than the one they left. A root outside the
+// tree being left (a workspace above a submodule the commands run in) is not the
+// tree's to move, and stays.
+func rerootedRoot(root, fromTop, destTop string) string {
+	if rel, ok := paths.WorkspaceRel(fromTop, root); ok {
+		return filepath.Join(destTop, filepath.FromSlash(rel))
+	}
+	return root
 }
 
 // argNamingTree finds an argv element holding an absolute path that lies in the
