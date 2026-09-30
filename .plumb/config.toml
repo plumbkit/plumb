@@ -1,5 +1,6 @@
 # plumb's own project config. Project-supplied task settings are trust-gated:
-# review this file, then run `plumb trust` in the checkout once.
+# review this file. The GOTMPDIR entry below needs no `plumb trust`: a scratch
+# directory inside the workspace changes neither what runs nor where.
 
 # `make test` sets GOTMPDIR so t.TempDir() lands in the checkout's .testcache,
 # and CI runs `make test`. Mirror it so `run_task test` reproduces CI (#537);

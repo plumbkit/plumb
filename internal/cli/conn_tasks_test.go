@@ -146,7 +146,7 @@ func TestTaskProvenance_ProjectWorkingDirGatesEverySlot(t *testing.T) {
 	}
 
 	for _, slot := range []string{"build", "test", "lint", "e2e", "verify"} {
-		label, fromProject := taskProvenance(ws, "go", slot)
+		label, fromProject, _ := taskProvenance(ws, "go", slot)
 		if !fromProject {
 			t.Errorf("slot %q reported provenance %q / fromProject=false: this project sets no %s command, "+
 				"but it does choose the directory the default one runs in, and that runs UNGATED", slot, label, slot)
@@ -156,7 +156,7 @@ func TestTaskProvenance_ProjectWorkingDirGatesEverySlot(t *testing.T) {
 	// The other direction, so the assertion above cannot be satisfied by a gate
 	// that simply always fires: a language the project said nothing about is
 	// unaffected.
-	if _, fromProject := taskProvenance(ws, "python", "test"); fromProject {
+	if _, fromProject, _ := taskProvenance(ws, "python", "test"); fromProject {
 		t.Error("a working_dir set for go marked python project-supplied too — the gate is not reading the language")
 	}
 }
@@ -176,10 +176,10 @@ func TestTaskProvenance_ProjectOverride(t *testing.T) {
 	if err := config.SetProjectValue(ws, []string{"tasks", "go", "test"}, "go test ./..."); err != nil {
 		t.Fatal(err)
 	}
-	if _, fromProject := taskProvenance(ws, "go", "test"); !fromProject {
+	if _, fromProject, _ := taskProvenance(ws, "go", "test"); !fromProject {
 		t.Error("a project-overridden slot should report fromProject=true")
 	}
-	if _, fromProject := taskProvenance(ws, "go", "build"); fromProject {
+	if _, fromProject, _ := taskProvenance(ws, "go", "build"); fromProject {
 		t.Error("a non-overridden slot should report fromProject=false (global/default)")
 	}
 }

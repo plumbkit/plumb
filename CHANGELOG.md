@@ -17,12 +17,14 @@
   test`'s prerequisite does. `run_task` lists the applied entries, credentials
   redacted, and `plumb config show` shows each with its provenance. A project's
   `env` is trust-gated like a command: every entry is in the `plumb trust` hash,
-  it makes every slot of the language project-supplied, `plumb trust` flags
-  entries such as `PATH`, `GOFLAGS` or `GIT_*` that change what runs, and the
-  loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`,
-  `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. plumb's own
-  `.plumb/config.toml` is now committed and sets `GOTMPDIR` the way `make test`
-  does; run `plumb trust` in a plumb checkout once.
+  it makes every slot of the language project-supplied (except a `GOTMPDIR` or
+  `TMPDIR` inside the workspace, which changes neither what runs nor where),
+  `plumb trust` flags entries such as `PATH`, `GOFLAGS` or `GIT_*` that change
+  what runs, and the loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. A
+  refused command now names the project setting that made it project-supplied.
+  plumb's own `.plumb/config.toml` is now committed and sets `GOTMPDIR` the way
+  `make test` does, with no `plumb trust` needed.
 - **`run_task` `run` and `verbose`, `mutation_test` `test_run`: run one test, or
   a pattern.** (#538) `target` fills one positional, in practice a package, so
   there was no way to run `go test -run 'X|Y'`, `pytest -k` or a cargo test

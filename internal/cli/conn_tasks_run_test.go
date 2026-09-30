@@ -122,18 +122,22 @@ func TestTaskNotes_CompositeSaysTheRunFilterWasDropped(t *testing.T) {
 func TestTaskResolver_EnvIsCarriedAndTrustGated(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	ws := t.TempDir()
-	if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", "GOTMPDIR"}, "{workspace}/.testcache"); err != nil {
-		t.Fatal(err)
+	for k, v := range map[string]string{"GOTMPDIR": "{workspace}/.testcache", "GOFLAGS": "-count=1"} {
+		if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", k}, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 	tasks := map[string]config.TasksConfig{"go": {
 		Build: config.DefaultTaskCommand("go", "build"),
-		Env:   map[string]string{"GOTMPDIR": "{workspace}/.testcache", "A_FIRST": "1"},
+		Env:   map[string]string{"GOTMPDIR": "{workspace}/.testcache", "GOFLAGS": "-count=1", "A_FIRST": "1"},
 	}}
 	s := newTaskTrustSession(t, ws, tasks)
 
-	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil ||
-		!strings.Contains(err.Error(), "not trusted") {
-		t.Fatalf("a project env must gate the shipped default command until trusted, got %v", err)
+	// GOFLAGS steers what runs, so the shipped default needs trust — and the
+	// refusal must say which setting made it so.
+	_, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"})
+	if err == nil || !strings.Contains(err.Error(), "not trusted") || !strings.Contains(err.Error(), "env sets GOFLAGS") {
+		t.Fatalf("a project env must gate the shipped default command until trusted, naming the setting; got %v", err)
 	}
 	cmds, err := config.ProjectTaskCommands(ws)
 	if err != nil {
@@ -146,10 +150,55 @@ func TestTaskResolver_EnvIsCarriedAndTrustGated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trusted: %v", err)
 	}
-	if strings.Join(cmd.Env, ",") != "A_FIRST=1,GOTMPDIR={workspace}/.testcache" || cmd.Root != ws {
+	if strings.Join(cmd.Env, ",") != "A_FIRST=1,GOFLAGS=-count=1,GOTMPDIR={workspace}/.testcache" || cmd.Root != ws {
 		t.Errorf("Env %v Root %q, want the sorted templates and the workspace root", cmd.Env, cmd.Root)
 	}
 	if cmd.Provenance != "project" {
 		t.Errorf("provenance = %q, want project (the env is the project's)", cmd.Provenance)
+	}
+}
+
+// TestTaskResolver_AScratchDirInsideTheWorkspaceNeedsNoTrust: a checked-in
+// GOTMPDIR = "{workspace}/.testcache" only moves temporary files inside the
+// workspace. Requiring `plumb trust` for it broke every shipped default in every
+// fresh clone and worktree. It is carried without trust; anything that could
+// leave the workspace, or a key that steers execution, is still gated.
+func TestTaskResolver_AScratchDirInsideTheWorkspaceNeedsNoTrust(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	for value, exempt := range map[string]bool{
+		"{workspace}/.testcache": true,
+		"{workspace}":            true,
+		"{workspace}/a/b":        true,
+		"{workspace}/../outside": false,
+		"/tmp/elsewhere":         false,
+		"{working_dir}/.tmp":     false,
+	} {
+		ws := t.TempDir()
+		if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", "GOTMPDIR"}, value); err != nil {
+			t.Fatal(err)
+		}
+		tasks := map[string]config.TasksConfig{"go": {Build: config.DefaultTaskCommand("go", "build"), Env: map[string]string{"GOTMPDIR": value}}}
+		s := newTaskTrustSession(t, ws, tasks)
+		cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"})
+		switch {
+		case exempt && err != nil:
+			t.Errorf("GOTMPDIR=%s stays inside the workspace and must not need trust; got %v", value, err)
+		case exempt && strings.Join(cmd.Env, ",") != "GOTMPDIR="+value:
+			t.Errorf("GOTMPDIR=%s: the env must still be carried; got %v", value, cmd.Env)
+		case !exempt && (err == nil || !strings.Contains(err.Error(), "not trusted")):
+			t.Errorf("GOTMPDIR=%s may leave the workspace and must be trust-gated; got %v", value, err)
+		}
+	}
+	// A key that is not a scratch directory is gated even with a workspace value.
+	ws := t.TempDir()
+	if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", "HOME"}, "{workspace}/.home"); err != nil {
+		t.Fatal(err)
+	}
+	s := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {
+		Build: config.DefaultTaskCommand("go", "build"),
+		Env:   map[string]string{"HOME": "{workspace}/.home"},
+	}})
+	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil {
+		t.Error("HOME steers config lookup (.gitconfig hooks); a project setting it must be trust-gated")
 	}
 }

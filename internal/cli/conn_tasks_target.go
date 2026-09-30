@@ -217,7 +217,7 @@ func targetPlaceholderRemedy(stored, shipped string) (string, bool) {
 // above points at something the caller can open. It reads provenance the same
 // way the trust gate does rather than re-deriving it.
 func taskCommandSource(ws, lang, slot, stored, shipped string) string {
-	if _, fromProject := taskProvenance(ws, lang, slot); fromProject {
+	if _, fromProject, _ := taskProvenance(ws, lang, slot); fromProject {
 		return config.ProjectConfigPath(ws)
 	}
 	if stored != strings.TrimSpace(shipped) {

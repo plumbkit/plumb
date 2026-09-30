@@ -77,6 +77,14 @@ func TestPrepareTaskEnv_ExpandsAndCreatesOnlyInsideTheWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "out")); !os.IsNotExist(err) {
 		t.Errorf("only temp-dir variables are created, but OUT's directory exists (err %v)", err)
 	}
+
+	// With no root there is no "inside": PathWithinWorkspace("", v) is true for
+	// any v, and nothing may be created on that answer.
+	noRoot := filepath.Join(t.TempDir(), "would-be-created")
+	PrepareTaskEnv([]string{"GOTMPDIR=" + noRoot}, "", "")
+	if _, err := os.Stat(noRoot); !os.IsNotExist(err) {
+		t.Errorf("with an empty root a temp dir must not be created, stat err = %v", err)
+	}
 }
 
 func TestDescribeTaskEnv_WithholdsCredentials(t *testing.T) {
@@ -137,12 +145,12 @@ func TestRunTask_RunAndVerboseReachTheResolver(t *testing.T) {
 }
 
 func TestRunFilter_Validation(t *testing.T) {
-	for _, ok := range []string{"TestA|TestB", "^TestX$", "TestFoo/sub_case", "slow and not db", "Test(A|B)[0-9]+.*"} {
+	for _, ok := range []string{"TestA|TestB", "^TestX$", "TestFoo/sub_case", "slow and not db", "Test(A|B)[0-9]+.*", "a@b"} {
 		if err := validateRunFilter("run", ok); err != nil {
 			t.Errorf("%q must be accepted: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"-exec=/tmp/x", "-v", " TestA", "a;b", "a>b", "a\nb", "a&b", strings.Repeat("a", 257)} {
+	for _, bad := range []string{"-exec=/tmp/x", "-v", " TestA", "@args.txt", "a;b", "a>b", "a\nb", "a&b", strings.Repeat("a", 257)} {
 		if err := validateRunFilter("run", bad); err == nil {
 			t.Errorf("%q must be refused", bad)
 		}
