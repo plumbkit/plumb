@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -51,6 +52,10 @@ func (s *connSession) repinRemedy() string {
 	}
 	return repinStickyRemedy
 }
+
+// errConnClosed reports a re-pin abandoned because the connection closed
+// before it could take the mutation lane (issue #514).
+var errConnClosed = errors.New("repin: the connection has closed")
 
 // repinWorkspace deliberately switches the connection to a different workspace.
 // Unlike attachWorkspace (idempotent, first-wins — the safe default for
@@ -283,7 +288,7 @@ func (s *connSession) attributeConnectionPin(ctx context.Context, root string, o
 // explicit, active session_start override — the only signal allowed to
 // re-acquire on a same-root call (see the no-op branch).
 func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic, langForced bool) (changed bool, refused error) {
-	s.mutate(func(v *sessionView) {
+	live := s.mutateLive(func(v *sessionView) {
 		prev := v.acquiredRoot
 		if err := s.refuseAnonymousForcedMove(ctx, prev, root, trigger, force); err != nil {
 			refused = err
@@ -414,6 +419,10 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// that flipped the signal.
 		s.announceContestedPin(justContested)
 	})
+	if !live {
+		// close() ran first: nothing was acquired, torn down or persisted.
+		return false, errConnClosed
+	}
 	return changed, refused
 }
 

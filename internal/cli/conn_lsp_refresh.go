@@ -68,8 +68,11 @@ func (s *connSession) refreshPrimaryIfStale(ctx context.Context) {
 // root the session no longer pins would weld the old project's language onto
 // the new workspace — the drift the refresh exists never to cause (the re-pin's
 // own attach already resolved the new root against the widened language set).
+//
+// mutateLive, like the attach paths: a close() during the detect must not be
+// followed by a language-server pin nobody releases (issue #514).
 func (s *connSession) bindRefreshedPrimary(ctx context.Context, root, language string) {
-	s.mutate(func(v *sessionView) {
+	s.mutateLive(func(v *sessionView) {
 		if !needsPrimary(*v) {
 			return // resolved by a concurrent attach while we were detecting
 		}

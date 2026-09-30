@@ -23,6 +23,10 @@ import (
 type sharedBudgets struct {
 	mu sync.Mutex
 	m  map[string]*budgetEntry
+
+	// onAcquire, when set, runs at the start of acquire. Test seam only: it
+	// lets a test prove a caller acquires under its own lock (issue #514).
+	onAcquire func()
 }
 
 type budgetEntry struct {
@@ -41,6 +45,9 @@ func newSharedBudgets() *sharedBudgets {
 func (b *sharedBudgets) acquire(key string, limit int) *tools.RateLimiter {
 	if b == nil {
 		return nil
+	}
+	if b.onAcquire != nil {
+		b.onAcquire()
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
