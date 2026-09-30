@@ -371,6 +371,10 @@ type connSession struct {
 	xcodeStarted   map[string]bool // roots already evaluated for next-session Xcode config
 	unsubscribe    func()          // removes the store-change listener on close
 
+	// initSettled closes when OnInit's attach ladder has run (conn_roots.go).
+	initSettled     chan struct{}
+	initSettledOnce sync.Once
+
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex
 
@@ -466,6 +470,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		undoStore:    tools.NewUndoStore(),
 		writeLimiter: tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
 		logger:       slog.Default().With("session_id", sessID),
+		initSettled:  make(chan struct{}),
 	}
 	// Seed the language-set generation so only a widening AFTER this connection
 	// was built triggers a primary refresh; a connection that attaches later

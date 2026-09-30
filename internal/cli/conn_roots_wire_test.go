@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/sessionstate"
@@ -44,6 +45,7 @@ func TestHandleRootsListChanged_FollowsClientFolder(t *testing.T) {
 	mustGitDir(t, rootB)
 	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
 	defer s.close()
+	s.markInitSettled()
 
 	s.handleRootsListChanged(context.Background(), rootsAnswer(t, rootA))
 	if got := s.workspace(); got != rootA {
@@ -66,6 +68,7 @@ func TestHandleRootsListChanged_ExplicitPinOutranksRoots(t *testing.T) {
 	mustGitDir(t, rootB)
 	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
 	defer s.close()
+	s.markInitSettled()
 
 	s.attachWorkspacePin(context.Background(), "file://"+rootA, sessionstate.PinSourceSessionStart)
 	if got := s.workspace(); got != rootA {
@@ -74,5 +77,64 @@ func TestHandleRootsListChanged_ExplicitPinOutranksRoots(t *testing.T) {
 	s.handleRootsListChanged(context.Background(), rootsAnswer(t, rootB))
 	if got := s.workspace(); got != rootA {
 		t.Fatalf("roots change moved an explicit session_start pin: workspace = %q, want %q", got, rootA)
+	}
+}
+
+// TestHandleRootsListChanged_WaitsForTheAttachLadder: on a reconnect the roots
+// notification and OnInit's attach ladder run in separate goroutines. A
+// handler that attached first skipped the ladder's restore of the persisted
+// session_start pin and overwrote the stored row with the client's root — the
+// silent cross-repo move TestOnInit_RootsAttachDoesNotClobberSessionStartPin
+// guards against, reopened by the newly live handler. It must wait.
+func TestHandleRootsListChanged_WaitsForTheAttachLadder(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+	calls := 0
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+	if _, err := before.repinWorkspace(context.Background(), rootB, "", false, false); err != nil {
+		t.Fatalf("repinWorkspace: %v", err)
+	}
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		after.handleRootsListChanged(context.Background(), rootsReplying(rootA, &calls))
+	}()
+	select {
+	case <-done:
+		t.Fatal("the roots handler ran before the attach ladder settled")
+	case <-time.After(100 * time.Millisecond):
+	}
+	after.setClientRequest(rootsReplying(rootA, &calls))
+	after.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+	after.markInitSettled()
+	<-done
+
+	if got := after.workspace(); got != rootB {
+		t.Fatalf("workspace = %q, want the restored session_start pin %q", got, rootB)
+	}
+	ws, _, src, ok, err := ss.LoadPin("proxyX")
+	if err != nil || !ok || ws != rootB || src != sessionstate.PinSourceSessionStart {
+		t.Fatalf("stored pin = (%q, %q, ok=%v, err=%v), want (%q, %q)", ws, src, ok, err, rootB, sessionstate.PinSourceSessionStart)
+	}
+}
+
+// TestHandleRootsListChanged_NoAttachAfterClose: an attach after close() would
+// take a language-server reference nothing will ever release.
+func TestHandleRootsListChanged_NoAttachAfterClose(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())
+	s.markInitSettled()
+	s.close()
+	s.handleRootsListChanged(context.Background(), rootsAnswer(t, root))
+	if got := s.workspace(); got != "" {
+		t.Fatalf("a closed connection attached %q", got)
 	}
 }
