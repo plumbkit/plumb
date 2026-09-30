@@ -52,7 +52,7 @@ func TestStampChannelNoteWarnsWhenSharedAndUnstamped(t *testing.T) {
 func TestStampChannelNoteWarnsBeforeTheConnectionIsShared(t *testing.T) {
 	var s SessionStart
 	s.WithStampChannel(func(context.Context) StampChannelState {
-		return StampChannelState{Shared: false, PerCallStamped: false}
+		return StampChannelState{Shared: false, PerCallStamped: false, HookClient: true}
 	})
 	got := s.stampChannelNote(context.Background())
 	if got == "" {
@@ -145,5 +145,21 @@ func TestStampChannelNote_ReadsThePerCallIdentityNotTheDeclaredOne(t *testing.T)
 	}
 	if strings.Contains(out, "NOTE: state-changing") || strings.Contains(out, "carried no per-call") {
 		t.Fatalf("control: a stamped call must get no notice:\n%s", out)
+	}
+}
+
+// A client the hook does not stamp (Codex, Gemini, …) on a single-agent
+// connection gets no dormant notice: it would repeat on every session_start
+// with a remedy that does not apply. A refusal is still reported to anyone.
+func TestStampChannelNoteSilentForNonHookClientUntilShared(t *testing.T) {
+	var s SessionStart
+	st := StampChannelState{}
+	s.WithStampChannel(func(context.Context) StampChannelState { return st })
+	if got := s.stampChannelNote(context.Background()); got != "" {
+		t.Errorf("a single-agent non-hook client got a notice: %q", got)
+	}
+	st.Shared = true
+	if got := s.stampChannelNote(context.Background()); got != stampChannelRefusedNotice {
+		t.Errorf("a refused non-hook client must be told: %q", got)
 	}
 }

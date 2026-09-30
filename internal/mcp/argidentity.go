@@ -63,29 +63,44 @@ func rawString(v json.RawMessage) string {
 }
 
 // identityPropertySchema is the property advertised under
-// ArgLogicalAgentDeclaredKey. Model-facing: it tells a model not to type it.
-const identityPropertySchema = `{"type":"string","description":"Agent identity, filled in by plumb's client hook. Leave unset."}`
+// ArgLogicalAgentDeclaredKey. Model-facing and repeated in every tool schema,
+// so it is kept short. Where plumb's hook runs it overwrites whatever the model
+// typed; elsewhere the model passes the session_id it gave session_start.
+const identityPropertySchema = `{"type":"string","description":"Your session_id; set by plumb's hook where installed."}`
 
 // withIdentityProperty returns schema with ArgLogicalAgentDeclaredKey added to
 // its top-level properties, so a host that forwards only declared arguments
-// passes the hook's stamp through. A schema that is not an object, cannot be
-// parsed, or already declares the key is returned unchanged.
+// passes the hook's stamp through. The key is appended after the tool's own
+// properties, whose order is left as published (it is the order a model reads;
+// see publishSchema). A schema that is not an object, cannot be parsed, or
+// already declares the key is returned unchanged.
 func withIdentityProperty(schema json.RawMessage) json.RawMessage {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(schema, &obj); err != nil || obj == nil {
 		return schema
 	}
-	props := map[string]json.RawMessage{}
-	if raw, ok := obj["properties"]; ok {
-		if err := json.Unmarshal(raw, &props); err != nil || props == nil {
-			return schema
-		}
+	raw := bytes.TrimSpace(obj["properties"])
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	var props map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &props); err != nil || props == nil || raw[0] != '{' {
+		return schema
 	}
 	if _, ok := props[ArgLogicalAgentDeclaredKey]; ok {
 		return schema
 	}
-	props[ArgLogicalAgentDeclaredKey] = json.RawMessage(identityPropertySchema)
-	obj["properties"] = marshalRawObject(props)
+	entry := `"` + ArgLogicalAgentDeclaredKey + `":` + identityPropertySchema
+	body := bytes.TrimSpace(raw[1 : len(raw)-1])
+	var out bytes.Buffer
+	out.WriteByte('{')
+	if len(body) > 0 {
+		out.Write(body)
+		out.WriteByte(',')
+	}
+	out.WriteString(entry)
+	out.WriteByte('}')
+	obj["properties"] = out.Bytes()
 	return marshalRawObject(obj)
 }
 
