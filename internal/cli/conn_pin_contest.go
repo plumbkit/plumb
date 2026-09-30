@@ -216,7 +216,7 @@ func (s *connSession) markContestedPin(count int, roots []string) {
 	msg := fmt.Sprintf(
 		"this connection's workspace pin has been force-taken %d times between %v in the last %s: "+
 			"several agents are multiplexing one plumb serve without declaring an identity, so plumb "+
-			"cannot keep their pins apart — "+tools.PerCallIdentityRemedy,
+			"cannot keep their pins apart. To fix it, "+tools.PerCallIdentityRemedy,
 		count, boundedForLog(roots, 4), pinContestWindow)
 	session.Patch(s.sessionID(), func(info *session.Info) {
 		if info.Health != "" && info.Health != "contested_pin" {

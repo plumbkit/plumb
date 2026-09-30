@@ -214,6 +214,12 @@ func TestShardLanguageOverride_NoOpIsNotRefused(t *testing.T) {
 // itself at 300.
 func TestRepinStickyRemedyFitsTheDashboardAlert(t *testing.T) {
 	const budget = 300
+	// The contested remedy reaches the same alert (repinRemedy). It fitted at
+	// 421 characters on 80 columns; 572 pushed every remedy into the elided
+	// middle, leaving only "force: true".
+	if n := len(repinContestedRemedy); n > 421 {
+		t.Errorf("repinContestedRemedy is %d chars, over the 421 that still fits the dashboard alert", n)
+	}
 	if n := len(repinStickyRemedy); n > budget {
 		t.Errorf("repinStickyRemedy is %d chars, over the %d-char budget — the dashboard alert elides its middle, "+
 			"so the identity and one-serve-per-agent remedies would be dropped and only `force: true` would survive", n, budget)
@@ -223,6 +229,9 @@ func TestRepinStickyRemedyFitsTheDashboardAlert(t *testing.T) {
 	for _, want := range []string{"plumb hooks install claude-code", "_meta", "plumb serve"} {
 		if !strings.Contains(repinStickyRemedy, want) {
 			t.Errorf("repinStickyRemedy no longer names %q", want)
+		}
+		if !strings.Contains(repinContestedRemedy, want) {
+			t.Errorf("repinContestedRemedy no longer names %q", want)
 		}
 	}
 }
