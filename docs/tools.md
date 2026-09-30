@@ -1091,6 +1091,52 @@ with any mutant. The dirty-file refusal below does not cover this: it guards the
 file being mutated, not the rest of the workspace. The cost is one extra
 compile+test cycle per run, not per mutant; scope it with `test_target`.
 
+**The commands run in the work-tree that holds the mutated file.** The stored
+compile and test commands are resolved for the connection's workspace and run from
+its directory, so a mutant in a **git worktree** of the same repository — the
+recommended isolation setup, usually a directory inside the workspace — used to be
+tested against the *main checkout*: every mutant read `survived` with `compile ok`
+and `tests ok`, which is indistinguishable from vacuous assertions, and worse than
+no verdict. plumb now asks git which work-tree holds each file, and which holds
+the commands' directory, and compares git's answers (never two spellings of a
+path). A file in a **submodule** is placed by its outermost superproject: the
+submodule checked out inside a worktree is that worktree's copy, and re-roots like
+any other file in it. Per command:
+
+- every file is in the commands' own work-tree, in **no** repository, or in the
+  **main** work-tree of a different repository (a submodule, a sibling module a
+  `go.work` or `make -C` reaches): nothing changes — those files have no other
+  copy for the commands to reach instead, and a file in no repository still gets
+  the "no git safety net" warning;
+- every file is in **one other work-tree of the commands' repository** (a
+  worktree, or the main checkout when the session is in a worktree): the command
+  runs from the same relative directory there, and the report says `ran in: …
+  re-rooted from …`; the baseline runs there too and names that directory if it
+  is red.
+
+Anything else is **refused before anything runs, mutates, or spends the write
+budget**, with the file, the tree the commands would have run in, and the reason:
+
+- the mutants need more than one work-tree (one call per tree);
+- a file is in a **linked worktree** the commands cannot be moved into — of a
+  different repository, or when their directory is in no repository — because that
+  worktree's twin is what the commands would reach;
+- the destination has no directory at the same relative path, or reaches it
+  through a symlink that leads somewhere else;
+- a command argument holds an absolute path into the tree being left (compared by
+  path component after resolving links; relative arguments move with the
+  directory). Best effort by construction: a path assembled inside a script cannot
+  be seen.
+
+When git cannot answer (a checkout owned by another user without a
+`safe.directory` entry, or no git on the daemon's `PATH`), the `.git` links on disk
+are read instead: a run that stays where it is proceeds as it always did, and one
+that would need moving is refused with git's own message. A worktree usually sits
+under a `go.work` that lists the main checkout and not the worktree; every task
+command (re-rooted or not, `run_task` included) gets `GOWORK=off` there by the
+rule in [`configuration.md`](configuration.md#the-git-childs-environment), the
+report says so, and a `GOWORK` you set is never overridden.
+
 **Restoration is guaranteed** on every exit path (pass, fail, compile error,
 timeout, panic, cancellation): the pre-mutation bytes are snapshotted in memory,
 rewritten under the same per-path lock the write tools use, and verified by

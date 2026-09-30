@@ -64,18 +64,34 @@ func gitFailureBody(repoRoot, headline, stdout, stderr, warning string) (string,
 // not be reported through here: see gitWriteTimeoutError.
 //
 // Success-path output is unaffected; this runs only on a failed run.
-func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr, warning string) error {
+//
+// goWorkOff is the go.work plumb switched off for this child (applyAutoGoWork), or
+// "". When it is set the failure may be the switch itself — a hook that needed a
+// module only that workspace provides — so the body and remediation say so and
+// name the setting that turns it off, instead of claiming no plumb setting matters.
+func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr, warning, goWorkOff string) error {
 	headline := fmt.Sprintf("git %s: %s", sub, gitExitDescription(runErr))
 	body, truncated := gitFailureBody(repoRoot, headline, stdout, stderr, warning)
 	if hint := lintLockHint(stdout, stderr); hint != "" {
 		body += hint
 	}
+	if goWorkOff != "" {
+		body += "\n" + goWorkOffNote(goWorkOff)
+	}
 	if truncated {
 		body += "\n" + gitRerunNote(argv, repoRoot)
 	}
 	return toolerror.New(toolerror.KindGitCommandFailed, errors.New(body),
-		gitCommandRemediation(stdout, stderr),
+		gitCommandRemediation(stdout, stderr, goWorkOff),
 		gitFailureDetails(sub, runErr, truncated)...)
+}
+
+// goWorkOffNote tells the reader of a failed git child that plumb ran it with
+// GOWORK=off, and why.
+func goWorkOffNote(workFile string) string {
+	return fmt.Sprintf("note: plumb ran this git child with GOWORK=off, because %s lists another directory for this repository's Go module "+
+		"(under it, a hook's go commands could only be refused or build that other copy). "+
+		"If a hook needs that workspace, set [git] env GOWORK — any value set there, or inherited by the daemon, is used as is.", workFile)
 }
 
 // gitWriteTimeoutError reports an index/ref-mutating git child that PLUMB ended
@@ -153,12 +169,20 @@ func lintLockHint(stdout, stderr string) string {
 // output names a cause that has nothing to do with the repository and where
 // "no plumb setting or flag changes the outcome" would send the caller looking
 // for a defect instead of simply retrying.
-func gitCommandRemediation(stdout, stderr string) toolerror.Remediation {
+func gitCommandRemediation(stdout, stderr, goWorkOff string) toolerror.Remediation {
 	if lintLockHint(stdout, stderr) != "" {
 		return toolerror.Remediation{
 			Class: toolerror.ClassRetryAfterWait,
 			Reason: "the hook failed on golangci-lint's shared cache lock, held by a concurrent run — " +
 				"a transient condition on this machine, not something in the repository or in plumb's configuration. Retry once it clears.",
+		}
+	}
+	if goWorkOff != "" {
+		return toolerror.Remediation{
+			Class: toolerror.ClassInspectOutput,
+			Reason: "git itself declined the operation; the captured stderr/stdout above names the cause. " +
+				"plumb ran the child with GOWORK=off (" + goWorkOff + " lists another directory for this module): " +
+				"if the failure is a hook's go command missing a module only that workspace provides, set [git] env GOWORK, which plumb never overrides.",
 		}
 	}
 	return toolerror.Remediation{

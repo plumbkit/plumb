@@ -781,3 +781,86 @@ func TestReachabilityNonGoLanguagesStillRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestReachabilityPolyglotScopesToGo(t *testing.T) {
+	ws := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		full := filepath.Join(ws, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []string{"src/alpha", "src/beta", "src/gamma"} {
+		write(d+"/File.cs", "using System;\nnamespace Acme."+filepath.Base(d)+" { public class Widget {} }\n")
+	}
+	write("scripts/gen.go", "package main\nfunc main() {}\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New(), treesitter.NewCSharp()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(60 * time.Second)
+	var g *topology.PackageGraph
+	for time.Now().Before(deadline) {
+		gg, gerr := s.PackageGraph(context.Background())
+		if gerr == nil && len(gg.Dirs) == 4 && gg.HasGoSignal {
+			g = gg
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if g == nil {
+		t.Fatal("timed out waiting for Go and C# packages to index")
+	}
+	view := g.GoView()
+	mainPkg, ok := view.Dirs["scripts"]
+	if len(view.Dirs) != 1 || !ok || !mainPkg.IsMain {
+		t.Fatalf("Go graph = %+v, want only the scripts/main package", view.Dirs)
+	}
+	if len(g.NonGoDirs) != 3 {
+		t.Fatalf("non-Go package directories = %d, want 3", len(g.NonGoDirs))
+	}
+
+	tool := tools.NewTopologyImpact(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"mode": "reachability"})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{
+		"scope: Go package directories only", "3 director(ies) out of scope",
+		"reachable: 1 package(s)", "unreachable: 0 package(s)", "  scripts",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "src/alpha") || strings.Contains(out, "unreachable: 3 package(s)") {
+		t.Errorf("C# package was reported as Go reachability evidence:\n%s", out)
+	}
+
+	args, _ = json.Marshal(map[string]any{"mode": "reachability", "path_to": "src/alpha"})
+	out, err = tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute path_to: %v", err)
+	}
+	if !strings.Contains(out, "out of scope (non-Go package directory)") {
+		t.Errorf("non-Go path_to must explain the scope:\n%s", out)
+	}
+
+	args, _ = json.Marshal(map[string]any{"mode": "reachability", "roots": []string{"src/alpha"}})
+	out, err = tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute non-Go root: %v", err)
+	}
+	if !strings.Contains(out, "non-Go roots out of scope: src/alpha") || strings.Contains(out, "unreachable:") {
+		t.Errorf("non-Go root must be excluded without a false reachability result:\n%s", out)
+	}
+}

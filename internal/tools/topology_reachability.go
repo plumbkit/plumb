@@ -74,6 +74,9 @@ func (t *TopologyImpact) executeReachability(ctx context.Context, store *topolog
 	if len(g.Dirs) > 1 && g.TotalEdges() == 0 && !g.HasGoSignal {
 		return fmt.Sprintf(reachabilityGoOnlyMessage, len(g.Dirs)), nil
 	}
+	if g.HasGoSignal {
+		g = g.GoView()
+	}
 
 	roots, candidateDirs, rootNote, err := t.resolveReachabilityRoots(ctx, store, g, a)
 	if err != nil {
@@ -125,7 +128,7 @@ func (t *TopologyImpact) resolveReachabilityRoots(ctx context.Context, store *to
 	}
 
 	seen := map[string]bool{}
-	var unresolved []string
+	var unresolved, outOfScope []string
 	for _, r := range a.Roots {
 		if r == "main" {
 			for _, d := range g.MainDirs() {
@@ -138,7 +141,11 @@ func (t *TopologyImpact) resolveReachabilityRoots(ctx context.Context, store *to
 		}
 		resolved, ok := g.ResolveDir(r)
 		if !ok {
-			unresolved = append(unresolved, r)
+			if g.NonGoDirs[r] {
+				outOfScope = append(outOfScope, r)
+			} else {
+				unresolved = append(unresolved, r)
+			}
 			continue
 		}
 		if !seen[resolved] {
@@ -149,6 +156,9 @@ func (t *TopologyImpact) resolveReachabilityRoots(ctx context.Context, store *to
 	sort.Strings(roots)
 	if len(unresolved) > 0 {
 		note = fmt.Sprintf(" (unresolved roots, skipped: %s)", strings.Join(unresolved, ", "))
+	}
+	if len(outOfScope) > 0 {
+		note += fmt.Sprintf(" (non-Go roots out of scope: %s)", strings.Join(outOfScope, ", "))
 	}
 	return roots, candidateDirs, note, nil
 }
@@ -201,8 +211,11 @@ func formatRootList(roots []string, candidateDirs map[string]bool) string {
 	return strings.Join(parts, ", ")
 }
 
-func writeReachabilityHeader(sb *strings.Builder, roots []string, candidateDirs map[string]bool, rootNote string) {
+func writeReachabilityHeader(sb *strings.Builder, g *topology.PackageGraph, roots []string, candidateDirs map[string]bool, rootNote string) {
 	fmt.Fprintf(sb, "topology reachability: %s\n", reachabilityConfidenceLine)
+	if g.HasGoSignal && len(g.NonGoDirs) > 0 {
+		fmt.Fprintf(sb, "scope: Go package directories only; non-Go package declarations in %d director(ies) out of scope\n", len(g.NonGoDirs))
+	}
 	fmt.Fprintf(sb, "roots (%d): %s%s\n\n", len(roots), formatRootList(roots, candidateDirs), rootNote)
 }
 
@@ -212,7 +225,7 @@ func writeReachabilityHeader(sb *strings.Builder, roots []string, candidateDirs 
 // most actionable one to notice.
 func formatReachabilitySummary(g *topology.PackageGraph, res *topology.ReachabilityResult, candidateDirs map[string]bool, rootNote string) string {
 	var sb strings.Builder
-	writeReachabilityHeader(&sb, res.Roots, candidateDirs, rootNote)
+	writeReachabilityHeader(&sb, g, res.Roots, candidateDirs, rootNote)
 
 	reached := make([]string, 0, len(res.Reachable))
 	for d := range res.Reachable {
@@ -253,11 +266,15 @@ func formatReachabilitySummary(g *topology.PackageGraph, res *topology.Reachabil
 // finding, never an error.
 func formatReachabilityPath(g *topology.PackageGraph, res *topology.ReachabilityResult, pathTo string, candidateDirs map[string]bool, rootNote string) string {
 	var sb strings.Builder
-	writeReachabilityHeader(&sb, res.Roots, candidateDirs, rootNote)
+	writeReachabilityHeader(&sb, g, res.Roots, candidateDirs, rootNote)
 
 	target, ok := g.ResolveDir(pathTo)
 	if !ok {
-		fmt.Fprintf(&sb, "path_to %q: not an indexed package directory\n", pathTo)
+		if g.NonGoDirs[pathTo] {
+			fmt.Fprintf(&sb, "path_to %q: out of scope (non-Go package directory)\n", pathTo)
+		} else {
+			fmt.Fprintf(&sb, "path_to %q: not an indexed Go package directory\n", pathTo)
+		}
 		return capReachabilityBytes(sb.String())
 	}
 	chain, found := topology.PathTo(res, target)
@@ -274,7 +291,7 @@ func formatReachabilityPath(g *topology.PackageGraph, res *topology.Reachability
 // package IS the finding — it is flagged [cycle] rather than filtered.
 func formatReachabilityLayers(g *topology.PackageGraph, res *topology.ReachabilityResult, candidateDirs map[string]bool, rootNote string) string {
 	var sb strings.Builder
-	writeReachabilityHeader(&sb, res.Roots, candidateDirs, rootNote)
+	writeReachabilityHeader(&sb, g, res.Roots, candidateDirs, rootNote)
 
 	sccs := topology.CondenseSCCs(g, res.Reachable)
 	cycles := 0

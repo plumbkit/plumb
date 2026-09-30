@@ -17,6 +17,10 @@
   the name, a kill by an unrelated flaky test read exactly like a real one. When
   no test is named (a test file that failed to compile), it still shows the tail,
   where the compile error is. (PLAN-441)
+- **Package reachability scopes polyglot workspaces to Go.** A single Go file
+  previously let `topology_impact` report C#/PHP/Elixir/Scala package directories
+  as unreachable. The Go graph now excludes other languages and names their
+  package directories as out of scope.
 
 - **A git call with an explicit `repo` is filed under that repository.** The
   documented way to commit into a nested submodule is `git` with `repo` set, but
@@ -27,6 +31,63 @@
   the tool resolved it, instead of against the daemon's working directory.
   Attribution only: `repo` still does not seed the connection's workspace pin.
   (#471)
+
+- **A commit from a git worktree no longer fails its pre-commit hook under an
+  enclosing `go.work`.** The recommended isolation setup is a worktree of the
+  repository inside the tree its main checkout sits in, under a `go.work` that
+  lists the main checkout's directory for the module. From the worktree,
+  workspace mode refuses `./...` (`directory prefix . does not contain modules
+  listed in go.work`) and resolves the module's import path to the main
+  checkout's copy, so the hook failed and the only way through was
+  `GOWORK=off git commit` in a shell. plumb now gives that one git child
+  `GOWORK=off` when the enclosing `go.work` lists **another directory for the same
+  module path** and not the repository's own — the case where workspace mode can
+  only refuse or build the wrong copy. A module the `go.work` merely does not list
+  is left alone (workspace mode still resolves other modules by import path
+  there), as is anything in doubt. Paths are compared lexically, as `go` compares
+  them; the `go.work` is read by `go`'s own grammar (`use(` included, a
+  backquoted path rejected) and only when it is a small regular file, so a
+  `go.work` committed as a link to a device cannot hang or exhaust the daemon. A
+  `GOWORK` already set — inherited, under `[git] env`, in the `go env` file or in
+  the toolchain's `$GOROOT/go.env` — always wins. A failed git command that ran with the automatic value says so
+  and names `[git] env GOWORK`. (PLAN-442)
+
+- **The same `GOWORK` decision covers `run_task` and `mutation_test`.** Their
+  stored `[tasks.<lang>]` commands, run from a worktree under such a `go.work`,
+  failed the same way — a session opened in the worktree could not `go build`.
+  They now get `GOWORK=off` by the same rule, keyed on the directory the command
+  runs in, and `run_task`'s output and `mutation_test`'s report and baseline
+  refusal say so. `run_command` is not included: an agent's own `go work use .`
+  must not be refused. (PLAN-442)
+
+- **A child plumb gives its own environment now sees the right `PWD`.** `os/exec`
+  sets `PWD` only when the environment is inherited, so a git hook under a
+  `[git] env` entry (or the automatic `GOWORK=off`) inherited the daemon's `PWD`
+  — `/` for an auto-spawned daemon — and a Makefile's `$(PWD)` or a script reading
+  `$PWD` worked in the wrong directory. `PWD` now names the directory the child
+  runs in. (PLAN-442)
+
+- **`mutation_test` on a file in a git worktree no longer tests the wrong tree.**
+  Its commands ran from the workspace's directory, so a mutant in a worktree was
+  tested against the main checkout: every mutant read SURVIVED with `compile ok`
+  and `tests ok`, indistinguishable from vacuous assertions. It now asks git which
+  work-tree holds each file and the commands' directory, comparing git's answers
+  rather than path spellings (a symlinked workspace, an in-repo link or a
+  case-insensitive volume cannot make one place look like two). A file in another
+  work-tree of the commands' repository runs the commands from the same relative
+  directory there — the baseline too — and the report says `ran in: … re-rooted
+  from …`. A file in a submodule is placed by its outermost superproject, so the
+  submodule checked out inside a worktree is tested with that worktree's copy. A file in the commands' own tree, in no repository, or in another
+  repository's main work-tree (a submodule, a sibling module) runs as before.
+  Refused before anything runs, mutates or spends the write budget: mutants that
+  need two work-trees; a file in a linked worktree the commands cannot move into;
+  a destination directory that is missing or reached through a symlink leading
+  elsewhere; a command argument holding an absolute path into the tree being left
+  (by path component, after resolving links). When git cannot answer (dubious
+  ownership, no git on `PATH`) the `.git` links on disk decide, and a run that
+  would need moving is refused with git's message rather than guessed. A failed
+  restore now prints a recovery command that works from any directory
+  (`git -C <dir> checkout -- <file>`). (PLAN-442)
 
 ## 0.20.2 (2026-09-21)
 

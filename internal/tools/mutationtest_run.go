@@ -47,6 +47,8 @@ type stepOutcome struct {
 	// = build then test) stops at its first failure, so the argv worth naming in
 	// a diagnostic is that one — not Steps[0], which may have passed.
 	step int
+	// goWorkOff is the go.work RunTaskArgv switched off for this command, or "".
+	goWorkOff string
 }
 
 // failed reports whether this step did anything other than succeed, by any
@@ -245,13 +247,11 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	// fallback. In a holder repository (go.work at the top, the module below) the
 	// root is where every command fails, so running the compile gate there made
 	// the whole tool unusable in exactly the repositories that need it.
-	ws := cmd.WorkingDir
-	if ws == "" && t.deps.WorkspaceFn != nil {
-		ws = t.deps.WorkspaceFn(ctx)
-	}
+	ws := t.commandDir(ctx, cmd)
 	for i, argv := range cmd.Steps {
 		out.step = i
-		res, err := RunArgv(ctx, ws, argv, timeout)
+		res, err := RunTaskArgv(ctx, ws, argv, timeout)
+		out.goWorkOff = firstNonEmpty(out.goWorkOff, res.GoWorkOff)
 		if err != nil {
 			out.startErr = true
 			out.exitCode = -1
@@ -311,11 +311,16 @@ func (t *MutationTest) restoreFailed(tgt mutationTarget, cause string) error {
 	if err := os.WriteFile(sidecar, tgt.original, tgt.mode); err == nil {
 		saved = "the pre-mutation content has been saved to " + sidecar
 	}
+	// The recovery command changes into the file's own directory, so it is right
+	// from any directory and in any work-tree — the display path is relative to the
+	// workspace, which is the wrong base for a file in a worktree (or anywhere but
+	// the workspace root's own repository).
+	recovery := "git -C " + shellQuote(filepath.Dir(tgt.path)) + " checkout -- " + shellQuote(filepath.Base(tgt.path))
 	return fmt.Errorf("mutation_test: RESTORE FAILED for %s — the file is still MUTATED on disk and must be restored by hand.\n"+
 		"  cause: %s\n"+
-		"  recover with: git checkout -- %s   (safe: mutation_test refused to start unless the file was clean)\n"+
+		"  recover with: %s   (safe: mutation_test refused to start unless the file was clean)\n"+
 		"  %s",
-		tgt.display, cause, tgt.display, saved)
+		tgt.display, cause, recovery, saved)
 }
 
 // gitCleanliness reports whether path sits inside a git repository and, if so,
