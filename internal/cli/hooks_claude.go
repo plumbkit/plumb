@@ -143,7 +143,7 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 		// One JSON document on stdout, or nothing at all. Exit 0 either way:
 		// only exit 2 blocks a call, and an unstamped call is the client's own
 		// behaviour, not a failure.
-		if out, ok := claudePreToolUseOutput(input, os.Getenv, claudeIdentityDaemonVersion); ok {
+		if out, ok := claudePreToolUseOutput(input, os.Getenv, claudeIdentityDaemon); ok {
 			_ = json.NewEncoder(os.Stdout).Encode(out)
 		}
 		return nil

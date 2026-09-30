@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
@@ -180,6 +181,14 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	// daemon answers `error: unknown command`, which the caller reads as "no".
 	if line == "version" {
 		fmt.Fprintf(conn, "ok %s\n", Version)
+		return
+	}
+
+	// identity-keys: the argument keys this daemon lifts as a per-call
+	// identity. The identity hook asks rather than comparing versions, because
+	// a development build carries the last release's version label.
+	if line == ctrlIdentityKeysCommand {
+		fmt.Fprint(conn, identityKeysReply())
 		return
 	}
 
@@ -409,4 +418,13 @@ func handleReloadConfig(conn net.Conn, reloadFn func() error) {
 	}
 	slog.Info("daemon: config reloaded via control socket")
 	fmt.Fprint(conn, "ok\n")
+}
+
+// ctrlIdentityKeysCommand is the control-socket command the identity hook
+// probes (hooks_claude_identity.go).
+const ctrlIdentityKeysCommand = "identity-keys"
+
+// identityKeysReply is the daemon's answer to ctrlIdentityKeysCommand.
+func identityKeysReply() string {
+	return "ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + "\n"
 }

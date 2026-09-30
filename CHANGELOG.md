@@ -72,9 +72,11 @@
   worktree with `session_start` was told it succeeded, and its next relative
   `edit_file` was written to the main checkout another agent had pinned. For
   this client the daemon now declares a stamp key, `plumb_agent`, in every
-  tool's schema, and the hook stamps under it when the daemon is 0.20.4 or
-  newer (older daemons keep getting the old key, which they accept). Restart
-  Claude desktop after upgrading so it re-reads the tool list.
+  tool's schema, and the hook stamps under it when the daemon says it accepts
+  it (a new `identity-keys` control-socket command; older daemons keep getting
+  the old key, which they accept). The hook asks rather than comparing
+  versions, so a build of main works before the release that carries it.
+  Restart Claude desktop after upgrading so it re-reads the tool list.
 
 - **`session_start` now says when your calls arrive without an identity.** The
   notice meant for this case read the identity after applying `session_start`'s
