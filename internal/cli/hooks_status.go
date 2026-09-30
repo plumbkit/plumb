@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/tui"
 )
@@ -39,7 +40,7 @@ func runHooksStatus(cmd *cobra.Command) error {
 			continue
 		}
 		report.group(t, path, states, statusAction)
-		if note := identityHookSkewNote(t, states, probeDaemonVersion); note != "" {
+		if note := identityHookSkewNote(t, states, probeDaemonIdentity); note != "" {
 			report.note(note)
 		}
 	}
@@ -47,12 +48,13 @@ func runHooksStatus(cmd *cobra.Command) error {
 	return nil
 }
 
-// identityHookSkewNote explains an identity hook that is stamping nothing:
-// absent while plumb's other hooks are present, or installed against a daemon
-// that predates the argument channel. Without it the table reports a bare
-// "missing" or a confident "installed" while every subagent write is refused,
-// and the reader has no way to connect the two.
-func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (string, error)) string {
+// identityHookSkewNote explains an identity hook that is stamping nothing, or
+// stamping a key some client strips: absent while plumb's other hooks are
+// present, installed against a daemon that predates the argument channel, or
+// against one that does not list plumb_agent. Without it the table reports a
+// bare "missing" or a confident "installed" while every subagent write is
+// refused, and the reader has no way to connect the two.
+func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (identityProbeRecord, error)) string {
 	if t.use != claudeCodeHooksTarget.use {
 		return ""
 	}
@@ -86,7 +88,8 @@ func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (strin
 	if probe == nil {
 		return ""
 	}
-	version, err := probe()
+	rec, err := probe()
+	version := rec.DaemonVersion
 	switch {
 	case errors.Is(err, errDaemonNotRunning):
 		return "Claude Code — the identity hook is installed but no daemon is running; stamping starts by itself once one is (the next plumb serve starts it)."
@@ -100,6 +103,15 @@ func identityHookSkewNote(t hooksTarget, states []hookState, probe func() (strin
 		return fmt.Sprintf("Claude Code — the identity hook is installed, but plumb could not ask the daemon whether it accepts the identity channel: %v. Stamping is off until it can.", err)
 	case !daemonVersionAcceptsStamp(version):
 		return fmt.Sprintf("Claude Code — the identity hook stamps nothing right now: the running daemon is %s, and the identity channel needs %s or later. Run `plumb restart`.", version, identityChannelMinVersion)
+	case !rec.DeclaredKey && !rec.uncertain:
+		// The daemon answered identity-keys (or refused it as unknown, which
+		// every 0.19.1–0.20.3 daemon does) without plumb_agent, so the hook
+		// falls back to the reverse-DNS key. Claude Code forwards it, but
+		// Claude desktop's connector forwards only declared arguments and drops
+		// it, so desktop sessions share one identity. An uncertain answer — the
+		// identity-keys dial failed on I/O — observed no such thing, so it says
+		// nothing rather than guess.
+		return fmt.Sprintf("Claude Code — the running daemon (%s) does not list %s among the identity keys it accepts, so the identity hook stamps a key Claude desktop's connector will strip. Upgrade plumb if needed and run `plumb restart`.", version, mcp.ArgLogicalAgentDeclaredKey)
 	}
 	return ""
 }

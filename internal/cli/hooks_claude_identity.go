@@ -205,8 +205,14 @@ type identityProbeRecord struct {
 	// version: a development build of main carries the last release's version
 	// label, so a version threshold kept the declared key off exactly the
 	// builds that had it.
-	DeclaredKey bool      `json:"declared_key,omitempty"`
-	CheckedAt   time.Time `json:"checked_at"`
+	DeclaredKey bool `json:"declared_key,omitempty"`
+	// DaemonInstance is the daemonInstanceMarker read BEFORE the probe that
+	// produced this record. A cached record answers only while the marker
+	// still matches, so a daemon swapped inside the minute — for an older
+	// build that rejects plumb_agent, say — is a cache miss, not a minute of
+	// every call refused as an unknown parameter.
+	DaemonInstance string    `json:"daemon_instance,omitempty"`
+	CheckedAt      time.Time `json:"checked_at"`
 	// uncertain marks an answer whose identity-keys probe failed on I/O (not
 	// a real "no"): it is used for this call but not cached, so the next call
 	// asks again instead of stripping stamps for a minute.
@@ -216,7 +222,7 @@ type identityProbeRecord struct {
 // claudeIdentityDaemon is the production gate: what the running daemon
 // accepts, from the cached control-socket probe (zero when it cannot be had).
 func claudeIdentityDaemon() identityProbeRecord {
-	return daemonIdentity(probeDaemonIdentity, filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
+	return daemonIdentity(probeDaemonIdentity, daemonInstanceMarker(), filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
 }
 
 // identityStampKey picks the argument key the stamp goes under for the running
@@ -240,12 +246,21 @@ func identityStampKey(daemon func() identityProbeRecord) string {
 }
 
 // daemonIdentity returns what the daemon reports — its version and whether it
-// lifts the declared key — from the cache when it is fresh, otherwise from
-// probe, refreshing the cache. Every failure (no daemon, a daemon too old to
-// answer, an unreadable cache) is the zero record, which no threshold accepts:
-// an unstamped call is what the client would have sent anyway.
-func daemonIdentity(probe func() (identityProbeRecord, error), cachePath string, now time.Time) identityProbeRecord {
-	if rec, ok := readIdentityProbe(cachePath); ok && now.Sub(rec.CheckedAt) < identityProbeTTL && now.After(rec.CheckedAt) {
+// lifts the declared key — from the cache when it is fresh AND was written for
+// the same daemon instance, otherwise from probe, refreshing the cache. Every
+// failure (no daemon, a daemon too old to answer, an unreadable cache) is the
+// zero record, which no threshold accepts: an unstamped call is what the
+// client would have sent anyway.
+//
+// instance is the daemonInstanceMarker the caller read before calling, and it
+// must be read before the probe: the probe then answers for that instance or
+// a later one, so an answer can only ever be filed under an instance at or
+// before the one that gave it — a mismatch on the next call, never a false
+// hit. An empty instance (the marker was unreadable) never hits and is never
+// written: without it the cache cannot tell one daemon from the next.
+func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePath string, now time.Time) identityProbeRecord {
+	if rec, ok := readIdentityProbe(cachePath); ok && instance != "" && rec.DaemonInstance == instance &&
+		now.Sub(rec.CheckedAt) < identityProbeTTL && now.After(rec.CheckedAt) {
 		return rec
 	}
 	if probe == nil {
@@ -255,12 +270,54 @@ func daemonIdentity(probe func() (identityProbeRecord, error), cachePath string,
 	if err != nil {
 		return identityProbeRecord{}
 	}
-	if rec.uncertain {
+	if rec.uncertain || instance == "" {
 		return rec
 	}
 	rec.CheckedAt = now
+	rec.DaemonInstance = instance
 	writeIdentityProbe(cachePath, rec)
 	return rec
+}
+
+// daemonInstanceMarker names the running daemon INSTANCE, so the probe cache
+// can tell a restarted or swapped daemon from the one it asked. It runs on
+// every plumb tool call, so it costs one small file read and one stat — no
+// dial — and it fails safe: a control socket that cannot be stat'd is "",
+// which daemonIdentity treats as a miss.
+//
+// The marker is the PID file's contents plus the control socket's inode and
+// modification time, because each alone can repeat across two daemons. A PID
+// is reused — in a container the daemon can get the same PID on every start —
+// and a filesystem hands a freed inode to the next file (ext4 does so
+// readily), while an mtime is only as fine as the filesystem's clock tick. A
+// new daemon rewrites the PID file and re-binds the socket (a fresh inode and
+// mtime), so matching all three means the same process. Asking the daemon for
+// its start time instead would cost a third dial per probe and, worse, an
+// older daemon cannot answer it — and an older daemon is the swap this
+// exists to catch. Both files are written by every daemon since the identity
+// channel, so the marker needs nothing from the daemon being asked.
+//
+// The daemon only logs a warning when it cannot write its PID file, so an
+// unreadable or empty one falls back to the socket alone rather than to "":
+// "" would never hit, and every tool call would pay two dials for as long as
+// that daemon runs. The socket half still moves on every re-bind, so the
+// fallback stays a miss across a swap, and it cannot match a marker that had
+// a PID, which always starts with one.
+func daemonInstanceMarker() string {
+	fi, err := os.Stat(daemonCtrlSocketPath())
+	if err != nil {
+		return ""
+	}
+	var ino uint64
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		ino = st.Ino
+	}
+	sock := fmt.Sprintf("ino=%d mtime=%d", ino, fi.ModTime().UnixNano())
+	pid, err := os.ReadFile(daemonPIDPath())
+	if id := strings.TrimSpace(string(pid)); err == nil && id != "" {
+		return "pid=" + id + " " + sock
+	}
+	return sock
 }
 
 // daemonVersionAcceptsStamp: a release older than the threshold does not;

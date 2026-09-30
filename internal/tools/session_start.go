@@ -114,6 +114,7 @@ type SessionStart struct {
 	toolProfile    func() (profile string, hidden int, reason string)                                                 // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
 	lspWarmingFn   func() (bool, time.Duration)                                                                       // may be nil; reports whether the primary LSP is still warming + elapsed
 	lspDiagModeFn  func() string                                                                                      // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
+	lspGoWorkFn    func() string                                                                                      // may be nil; the go.work the primary LSP was started with GOWORK=off against ("" when none)
 	purposeFn      func(purpose string)                                                                               // may be nil; persists a validated session purpose tag
 	selfSessID     func() string                                                                                      // this session's ID, excluded from the peer digest and shown as the caller's own
 	selfName       func() string                                                                                      // may be nil; this session's own current name, shown as the caller's own

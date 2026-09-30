@@ -31,6 +31,7 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 			fmt.Fprintf(sb, "%s\n", note)
 		}
 	}
+	sb.WriteString(t.lspGoWorkNote())
 	if branch := gitBranch(ws); branch != "" {
 		fmt.Fprintf(sb, "Branch:   %s\n", branch)
 	}
