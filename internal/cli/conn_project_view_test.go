@@ -160,6 +160,25 @@ func TestRunCommand_AgentPinnedElsewhereReadsItsOwnAllowList(t *testing.T) {
 	}
 }
 
+// A global [[command]] is the user's own and needs no grant anywhere. The
+// connection project's [[command]] entries make ITS allow-list project-supplied;
+// that provenance must not follow the agent into B, where it would put the
+// user's global command behind B's trust (or mislabel it "project").
+func TestRunCommand_AgentPinnedElsewhereRunsGlobalCommandsAsGlobal(t *testing.T) {
+	s, _, ctx := agentProjectSession(t, separateProject(t, ""))
+	base := config.Defaults()
+	base.Commands = []config.CommandConfig{{Name: "fmt", Exec: []string{"gofmt", "-l", "."}}}
+	s.store = config.NewStore(base)
+
+	got, err := s.commandResolver(ctx, "fmt", "")
+	if err != nil {
+		t.Fatalf("a global [[command]] was refused for the agent in B: %v", err)
+	}
+	if got.Provenance != "global" {
+		t.Errorf("provenance = %q, want \"global\" — the connection project's provenance leaked across", got.Provenance)
+	}
+}
+
 // topology_affected spells targets relative to the test command's working_dir,
 // and session_start reports the task surface: both must describe the agent's
 // project, or they hand it targets and slots for the wrong one.
