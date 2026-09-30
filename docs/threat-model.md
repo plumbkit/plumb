@@ -245,8 +245,10 @@ state-changing calls are refused once two identities have been seen — see
 declared itself through `session_start` on the connection is refused the same
 way rather than given a fresh shard of the connection's root (#513), unless
 every identity on the connection belongs to one conversation. Declarations
-persist under the proxy session and survive a daemon restart only while the
-conversation stays active within `persist_state_ttl_minutes`; with
+persist under the proxy session and survive a daemon restart only if the
+conversation called `session_start` within `persist_state_ttl_minutes`, or made
+a state-changing call within that time less one refresh interval
+(min(TTL/4, 1 h)); with
 `persist_state` off or after a longer idle, the agent is refused once and must
 call `session_start` again.
 

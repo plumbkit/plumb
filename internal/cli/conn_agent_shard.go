@@ -56,6 +56,9 @@ type agentShard struct {
 	// "did this agent choose its root?" must accept either — see the
 	// declaration-refusal marker in repinAgent.
 	restored bool
+	// parentSeeded: seeded from its conversation's PERSISTED pin (parent not in
+	// memory), so a connection move must not drag it (#513).
+	parentSeeded bool
 
 	// rosterID is the session.Info registered for THIS agent, so the workspace
 	// it actually works in lists it (issue #472). Empty until the agent holds a
@@ -304,10 +307,14 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// agent then blocks on shardsMu behind it — all waiting on one agent's disk
 	// I/O. Registered before the unlock defer so LIFO runs it AFTER sh.mu is
 	// released, and it re-takes the lock itself.
-	var syncRoot, syncLang string
+	var syncRoot, syncLang, movedFrom string
 	defer func() {
 		if syncRoot != "" {
 			s.syncAgentRoster(sh, syncRoot, syncLang)
+		}
+		// After sh.mu is released: it takes shardsMu, then each shard's mu.
+		if movedFrom != "" {
+			s.followParentShard(sh.id, movedFrom)
 		}
 	}()
 	sh.mu.Lock()
@@ -404,6 +411,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// used to wipe an agent's dirty-guard writes and undo history (PLAN-428).
 	// The connection path keeps them under the same rule.
 	if root != prev {
+		movedFrom = prev
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()
 		sh.undoStore.Reset()
@@ -470,9 +478,12 @@ func (s *connSession) followConnectionShards(prevRoot string) {
 	}
 	s.shardsMu.Lock()
 	defer s.shardsMu.Unlock()
-	for _, sh := range s.shards {
+	for id, sh := range s.shards {
+		// A subagent on its conversation's CHOSEN root stays with it (#513); the
+		// parent's flag is read BEFORE the child is locked (never nest two mus).
+		parentChose := s.parentChoseLocked(id)
 		sh.mu.Lock()
-		if sh.selfPinned || sh.root != prevRoot {
+		if sh.selfPinned || sh.parentSeeded || parentChose || sh.root != prevRoot {
 			sh.mu.Unlock()
 			continue
 		}

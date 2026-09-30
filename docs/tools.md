@@ -127,7 +127,7 @@ conversation half no successful `session_start` on the connection has declared
 (its `session_id`, or the per-call identity it ran under) is refused with that
 remedy, unless every identity on the connection belongs to one conversation. A
 subagent stamped `<conversation>/<agent>` rides its conversation's declaration
-and starts in its conversation's workspace. Pass a stable value per agent:
+and works in its conversation's workspace, following it when it re-pins. Pass a stable value per agent:
 the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
 The session **record** — the name mail is addressed to, `plumb mail
 --external-id`, name inheritance on resume — is linked to the conversation half,

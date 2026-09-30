@@ -34,6 +34,9 @@ func (s *connSession) seedFromParentLocked(sh *agentShard) {
 		root, language, origin := parent.root, parent.language, parent.pinOrigin
 		parent.mu.RUnlock()
 		if chose {
+			// No parentSeeded here: a parent in memory that chose keeps saying
+			// so (selfPinned and restored are never cleared), and
+			// followConnectionShards asks it directly.
 			sh.root, sh.language, sh.pinOrigin = root, language, origin
 		}
 		return
@@ -44,7 +47,70 @@ func (s *connSession) seedFromParentLocked(sh *agentShard) {
 	}
 	if resolved, _, intact := s.restoreRootIntact(root); intact {
 		sh.root, sh.language, sh.pinOrigin = resolved, language, origin
+		// The parent is not in memory to be asked, so the child remembers.
+		sh.parentSeeded = true
 	}
+}
+
+// followParentShard re-seeds, after conversation parentID moved its own shard
+// off prevRoot, every subagent `<parentID>/*` shard still sitting on prevRoot
+// that never chose a root of its own. Seeding at creation alone left a subagent
+// that had made any call before its parent re-pinned (a background subagent, a
+// continued one) on the old root — another conversation's checkout — for good.
+// The counterpart of followConnectionShards, for the parent's move.
+//
+// Lock order: shardsMu, then the parent's mu (read and RELEASED), then each
+// child's mu in turn. No shard's mu is held while another's is taken. Called
+// from repinAgent's post-unlock defer, so the parent's mu is not held here.
+func (s *connSession) followParentShard(parentID, prevRoot string) {
+	if prevRoot == "" || linkageIDOf(parentID) != parentID {
+		return
+	}
+	s.shardsMu.Lock()
+	defer s.shardsMu.Unlock()
+	parent, ok := s.shards[parentID]
+	if !ok {
+		return
+	}
+	parent.mu.RLock()
+	root, language, origin := parent.root, parent.language, parent.pinOrigin
+	parent.mu.RUnlock()
+	for id, sh := range s.shards {
+		if id == parentID || linkageIDOf(id) != parentID {
+			continue
+		}
+		sh.mu.Lock()
+		// The root check is defensive: a subagent that never chose a root sits
+		// where its conversation last was, so today it always equals prevRoot.
+		if sh.selfPinned || sh.restored || sh.root != prevRoot {
+			sh.mu.Unlock()
+			continue
+		}
+		sh.root, sh.language, sh.pinOrigin = root, language, origin
+		sh.policy = s.buildAgentPolicy(root, language)
+		sh.readTracker.Reset()
+		sh.writeTracker.Reset()
+		sh.undoStore.Reset()
+		sh.mu.Unlock()
+		s.rehydrateReadsForAgent(sh, root)
+	}
+}
+
+// parentChoseLocked reports whether id is a subagent whose conversation's
+// in-memory shard chose or restored its root. Caller holds shardsMu and NO
+// shard's mu; the parent's mu is taken and released here.
+func (s *connSession) parentChoseLocked(id string) bool {
+	linkage := linkageIDOf(id)
+	if linkage == id {
+		return false
+	}
+	parent, ok := s.shards[linkage]
+	if !ok {
+		return false
+	}
+	parent.mu.RLock()
+	defer parent.mu.RUnlock()
+	return parent.selfPinned || parent.restored
 }
 
 // pendingDeclarationForCall is pendingDeclarationFor as a CALL sees it: the
