@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -16,17 +15,26 @@ import (
 // mtime unchanged (a same-tick write, or a tool that preserves mtime such as
 // `cp -p` or some formatters) — a change an mtime-only comparison misses.
 //
+// Entries are keyed by lockPathKey, the key the write lock, the WriteTracker and
+// the undo store agree on, so a file read through one spelling (a symlinked
+// parent, macOS /tmp versus /private/tmp, a case variant on a volume that folds
+// case) and written through another finds its read record. Keyed on the spelled
+// path, the write guards saw "never read": the default staleness guard failed
+// open over a peer's change and strict mode failed closed (issue #524).
+//
 // Concurrency: all methods are safe for concurrent use. The optional persist
 // sink set by SetPersistSink is invoked outside the tracker lock, so it may do
 // blocking I/O without stalling concurrent reads.
 type ReadTracker struct {
 	mu      sync.RWMutex
-	entries map[string]readEntry // filepath.Clean(path) → last-read state
+	entries map[string]readEntry // lockPathKey(path) → last-read state
 	persist func(path string, mtime time.Time, sha string)
 }
 
 // ReadRecord is one path's recorded read state, used to rehydrate a tracker
-// from a persisted store (e.g. after a daemon restart).
+// from a persisted store (e.g. after a daemon restart). Path is the identity key
+// the tracker persists and Records returns, not necessarily a spelling to open:
+// on a volume that folds case it is lowercased (see paths.CanonicalKey).
 type ReadRecord struct {
 	Path  string
 	Mtime time.Time
@@ -52,15 +60,16 @@ func (r *ReadTracker) Record(path string, mtime time.Time, sha string) {
 	if r == nil {
 		return
 	}
-	clean := filepath.Clean(path)
+	// Resolve outside the lock: lockPathKey touches the filesystem.
+	key := lockPathKey(path)
 	r.mu.Lock()
-	r.entries[clean] = readEntry{mtime: mtime, sha: sha}
+	r.entries[key] = readEntry{mtime: mtime, sha: sha}
 	persist := r.persist
 	r.mu.Unlock()
 	// Persist outside the lock; last-writer-wins races on the store are benign
 	// and converge with the in-memory map.
 	if persist != nil {
-		persist(clean, mtime, sha)
+		persist(key, mtime, sha)
 	}
 }
 
@@ -79,13 +88,29 @@ func (r *ReadTracker) SetPersistSink(fn func(path string, mtime time.Time, sha s
 // Hydrate loads previously-recorded reads into the tracker without firing the
 // persist sink (the records came from the store; re-persisting them is wasted
 // work). Existing entries for the same paths are overwritten. nil-safe.
+//
+// Every record is re-keyed through lockPathKey, because a daemon that predates
+// issue #524 persisted the path as the agent spelled it. Two spellings of one
+// file then collapse onto one key, and the later read wins whatever order the
+// store returned them in: it is the newest version the session is known to have
+// seen, and keeping an older one would only make the guards refuse the session's
+// own knowledge.
 func (r *ReadTracker) Hydrate(records []ReadRecord) {
 	if r == nil || len(records) == 0 {
 		return
 	}
-	r.mu.Lock()
+	// Resolve outside the lock: lockPathKey touches the filesystem.
+	loaded := make(map[string]readEntry, len(records))
 	for _, rec := range records {
-		r.entries[filepath.Clean(rec.Path)] = readEntry{mtime: rec.Mtime, sha: rec.SHA}
+		key := lockPathKey(rec.Path)
+		if prev, dup := loaded[key]; dup && !rec.Mtime.After(prev.mtime) {
+			continue
+		}
+		loaded[key] = readEntry{mtime: rec.Mtime, sha: rec.SHA}
+	}
+	r.mu.Lock()
+	for key, e := range loaded {
+		r.entries[key] = e
 	}
 	r.mu.Unlock()
 }
@@ -110,9 +135,10 @@ func (r *ReadTracker) Mtime(path string) time.Time {
 	if r == nil {
 		return time.Time{}
 	}
+	key := lockPathKey(path)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[filepath.Clean(path)].mtime
+	return r.entries[key].mtime
 }
 
 // recorded returns the full last-read state for path and whether the session
@@ -121,9 +147,10 @@ func (r *ReadTracker) recorded(path string) (readEntry, bool) {
 	if r == nil {
 		return readEntry{}, false
 	}
+	key := lockPathKey(path)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	e, ok := r.entries[filepath.Clean(path)]
+	e, ok := r.entries[key]
 	return e, ok
 }
 
