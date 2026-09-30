@@ -17,7 +17,7 @@ import (
 func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
-		fmt.Fprintf(sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
+		fmt.Fprintf(sb, "Re-pinned: %s → %s\n\n", repinnedFrom, ws)
 	}
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)

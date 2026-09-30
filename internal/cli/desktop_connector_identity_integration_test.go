@@ -189,14 +189,26 @@ func TestDesktopConnector(t *testing.T) {
 		}
 	})
 
-	// Control: the reverse-DNS stamp through the same host. It is dropped, so
-	// the harness really reproduces the incident: the write must not reach the
-	// worktree the agent pinned (before the fix it landed in the main checkout).
-	t.Run("UndeclaredStampIsLostControl", func(t *testing.T) {
+	// The reverse-DNS stamp through the same host is dropped, as it was in the
+	// incident. The anonymous write is now refused with a remedy, and lands in
+	// neither checkout: not in the worktree (the identity is gone), and not in
+	// the main checkout another agent pinned (plumb no longer guesses). This is
+	// also the control showing the harness really drops undeclared keys.
+	t.Run("UndeclaredStampIsRefusedNotMisrouted", func(t *testing.T) {
 		c := newDesktopConn(t, mcp.ArgLogicalAgentKey)
-		_, worktree, _, _ := incident(t, c)
-		if _, err := os.Stat(filepath.Join(worktree, "PROTOCOL.md")); err == nil {
-			t.Fatal("control: an undeclared stamp survived the host simulation, so the harness proves nothing")
+		mainCheckout, worktree, text, isErr := incident(t, c)
+		if !isErr {
+			t.Fatalf("an unattributable write on a shared connection was admitted: %s", text)
+		}
+		for _, want := range []string{"cannot be attributed", mcp.ArgLogicalAgentDeclaredKey} {
+			if !strings.Contains(text, want) {
+				t.Errorf("refusal missing %q: %s", want, text)
+			}
+		}
+		for _, dir := range []string{mainCheckout, worktree} {
+			if _, err := os.Stat(filepath.Join(dir, "PROTOCOL.md")); err == nil {
+				t.Errorf("the refused write landed in %s", dir)
+			}
 		}
 	})
 }

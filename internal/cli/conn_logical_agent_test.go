@@ -79,21 +79,15 @@ func TestRefuseSharedStateChange(t *testing.T) {
 	// still gone: shardFor returns nil without a per-call identity, so the call
 	// resolves against the connection and never lands in a peer's shard.
 	//
-	// What no longer follows is refusing it. On a connection where nobody has
-	// ever stamped a call, the client cannot address its agents at all, so
-	// refusing routes nothing and costs the entire write lane — the field
-	// outage. The call is admitted, unattributed, against the connection, and
-	// the condition is reported by session_start and doctor instead.
+	// And it is refused, not admitted against the connection. Admitting it —
+	// the PLAN-440 exemption for a connection where nobody had stamped — is how
+	// a worktree edit from Claude desktop's connector landed in another agent's
+	// checkout on 2026-09-30. Two declared identities arm the ceiling.
 	var s3 connSession
 	s3.recordLogicalAgentAttach("coordinator")
 	s3.recordLogicalAgentAttach("subagent-last")
-	if err := s3.refuseSharedStateChange(context.Background(), "write_file", ""); err != nil {
-		t.Fatalf("a client that has never stamped cannot act on a refusal, so it must not be refused: %v", err)
-	}
-	// One stamped call and the ceiling arms, because now there IS an address.
-	s3.recordLogicalAgentCall("coordinator")
 	if err := s3.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
-		t.Fatal("once the per-call channel is proven, an anonymous write must refuse")
+		t.Fatal("an anonymous write on a connection two agents declared must refuse")
 	}
 	if err := s3.refuseSharedStateChange(context.Background(), "write_file", "coordinator"); err != nil {
 		t.Fatalf("an identified write must not refuse: %v", err)
