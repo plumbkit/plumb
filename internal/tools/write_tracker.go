@@ -96,7 +96,7 @@ func (w *WriteTracker) WroteMtime(path string) (int64, bool) {
 // the repository at root: every path recorded under root whose file is still
 // exactly as plumb last left it (on-disk mtime equal to the recorded one, 0 for
 // a missing file), with that mtime. A path already changed by someone else is
-// left out, so refreshChanged can never launder an edit plumb did not make.
+// left out, so a later rerecord can never launder an edit made before it.
 // nil-safe (nil).
 func (w *WriteTracker) unchangedUnder(root string) map[string]int64 {
 	if w == nil {
@@ -120,24 +120,33 @@ func (w *WriteTracker) unchangedUnder(root string) map[string]int64 {
 	return out
 }
 
-// refreshChanged re-records every path in before (from unchangedUnder) whose
-// mtime moved while plumb's own git operation ran: that change is plumb's, so
-// the next read must not attribute it to a peer. A record some concurrent plumb
-// write already replaced is left as that write recorded it. nil-safe.
-func (w *WriteTracker) refreshChanged(before map[string]int64) {
+// changedSince returns each path in before (from unchangedUnder) whose mtime
+// has moved since, with its current mtime — the candidates for re-recording
+// once the caller has decided which of those changes were its own.
+func changedSince(before map[string]int64) map[string]int64 {
+	out := make(map[string]int64)
+	for key, was := range before {
+		if now := statMtime(key); now != was {
+			out[key] = now
+		}
+	}
+	return out
+}
+
+// rerecord records each path in now at its new mtime: plumb itself made that
+// change, so the next read must not attribute it to a peer. A record some
+// concurrent plumb write already replaced since before was taken is left as
+// that write recorded it. nil-safe.
+func (w *WriteTracker) rerecord(before, now map[string]int64) {
 	if w == nil {
 		return
 	}
-	for key, was := range before {
-		now := statMtime(key)
-		if now == was {
-			continue
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for key, mtime := range now {
+		if recorded, ok := w.written[key]; ok && recorded == before[key] {
+			w.written[key] = mtime
 		}
-		w.mu.Lock()
-		if recorded, ok := w.written[key]; ok && recorded == was {
-			w.written[key] = now
-		}
-		w.mu.Unlock()
 	}
 }
 

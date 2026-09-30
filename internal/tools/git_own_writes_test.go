@@ -118,3 +118,46 @@ func TestGit_OwnConflictedMergeIsNotReportedAsAPeerEdit(t *testing.T) {
 		t.Error("read after plumb's own conflicted merge warned of a peer edit")
 	}
 }
+
+// TestGit_HookWritesDuringOwnOpStillWarn is the #540 review's N1: a hook runs
+// INSIDE the operation's window, so an mtime that moved during it is not proof
+// git wrote the file. A write by pre-merge-commit (or post-checkout) to a file
+// git did not produce keeps its warning; the file git did produce — init.txt,
+// rewritten from the other branch — is still re-recorded.
+func TestGit_HookWritesDuringOwnOpStillWarn(t *testing.T) {
+	for _, c := range []struct {
+		hook string
+		args map[string]any
+	}{
+		{"pre-merge-commit", map[string]any{"subcommand": "merge", "args": []string{"--no-ff", "--no-edit", "other"}}},
+		{"post-checkout", map[string]any{"subcommand": "switch", "args": []string{"other"}}},
+	} {
+		t.Run(c.hook, func(t *testing.T) {
+			repo, tracker, tool := ownWritesFixture(t)
+			tracked := filepath.Join(repo, "main.txt") // committed; the op leaves it alone
+			untracked := filepath.Join(repo, "notes.txt")
+			if err := os.WriteFile(untracked, []byte("plumb\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range []string{tracked, untracked} {
+				backdate(t, p, -time.Hour)
+				tracker.Record(p)
+			}
+			installHook(t, repo, c.hook, "echo hook >> main.txt\necho hook >> notes.txt\n")
+			if _, err := callGit(t, tool, c.args); err != nil {
+				t.Fatalf("git %v: %v", c.args, err)
+			}
+			for _, p := range []string{tracked, untracked} {
+				if data, _ := os.ReadFile(p); !strings.Contains(string(data), "hook") {
+					t.Fatalf("the %s hook never wrote %s, so this proves nothing", c.hook, p)
+				}
+				if !readWarns(t, tracker, p) {
+					t.Errorf("%s: a write by the %s hook was absorbed as plumb's own", filepath.Base(p), c.hook)
+				}
+			}
+			if readWarns(t, tracker, filepath.Join(repo, "init.txt")) {
+				t.Error("init.txt, which git itself rewrote, was reported as a peer edit")
+			}
+		})
+	}
+}
