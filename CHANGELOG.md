@@ -15,7 +15,13 @@
   `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused with the route
   that works: conclude a merge with `commit` and a message. A merge that stops
   on conflicts fails naming the conflicted files and leaves git's merging state
-  to resolve. (#530)
+  to resolve. The refused flags are found the way git's parser finds them: an
+  option that takes a value consumes the next argument whatever it spells, so
+  neither `--message -m --no-verify` nor `--message -- --no-verify` slips a
+  refused flag past the check. (#530)
+- **`plumb trust --revoke`** removes a workspace's grant. Run in a linked
+  worktree that shares its repository's grant, it says so and names the
+  checkout to revoke it at, since the worktree has no grant of its own. (#530)
 
 ### Fixed
 
@@ -26,15 +32,28 @@
   `.plumb/config.toml`. The content-bound grants now also match in a linked
   worktree of the same repository whose request is identical to the approved
   one; a branch that changes the capability config stays untrusted, and a
-  directory with a forged `.git` link does not qualify. When an untrusted
+  directory with a forged `.git` link does not qualify: the worktree's git
+  directory must sit inside the trusted repository's own `worktrees/`. When a
+  worktree is trusted this way, `session_start`, `plumb config show` and the
+  daemon log name the checkout the grant is shared from. When an untrusted
   project config is why a git tier is off, the refusal now says so and names
   the `plumb trust` command for that path. (#530)
+- **The `git` tool's tiers read options as git does.** The argument-dependent
+  classifiers matched options by exact spelling, but git expands abbreviations
+  and unpacks bundled short flags. So `switch --disc`, `branch --del`, `branch
+  -dr`, `tag --del`, `restore --staged --work` and `checkout -b x -f` were
+  classified a tier BELOW the operation git performed. They now match git's
+  unambiguous-prefix rule, unpack bundles and consume option values, and a
+  `--staged` after `--` or given as another option's value no longer lowers
+  `restore` to the write tier. (#530)
 - **Plumb's own git operations are no longer reported as a peer's edits.** After
   a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
   the next `read_file` of a file plumb had written warned that "a peer or
   external process may have edited it". Files the operation changed are now
   re-recorded as plumb's; a peer's edit before or after the operation still
-  warns. (#529)
+  warns, and so does a write by a hook the operation ran (merge's
+  `pre-merge-commit`, switch's `post-checkout`) to a file git did not
+  produce. (#529)
 
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version

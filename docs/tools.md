@@ -916,7 +916,10 @@ narrower plumb tool to prefer over a destructive git command (`undo_edit`,
 `file_status`, `minimal_diff_review`).
 
 **Ambiguous subcommands are classified by their arguments**, biased towards the
-safer-to-deny higher tier:
+safer-to-deny higher tier, and read the way git's own parser reads them:
+abbreviated long options (`--disc` is `--discard-changes`), bundled short flags
+(`-dr`) and option values (`tag -m -d` is a message) all count as git counts
+them.
 
 - `checkout -b`/`-B` (branch creation) is **write**; any other `checkout` is
   **destructive** (it can discard the working tree or detach HEAD). Prefer

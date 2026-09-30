@@ -1100,9 +1100,13 @@ workspace is a linked worktree of the same repository (one common git directory)
 as another trusted checkout, **and** its request hashes to what that checkout's
 grant approved. A branch that widens `[git]` or rewrites a task command is
 untrusted there exactly as anywhere else. The worktree must be one git vouches
-for: its `.git` link must name a directory whose back-link (written by git inside
-the trusted repository's own git directory) names the worktree, so a directory
-carrying a forged `.git` file does not qualify. The coarse grant behind
+for: its `.git` link must name a directory inside the trusted repository's own
+`worktrees/` whose back-link (written there by git) names the worktree, so a
+directory carrying a forged `.git` file, or a whole forged layout of its own,
+does not qualify. A shared grant lives on the checkout it was recorded for:
+`session_start`, `plumb config show` and the daemon log name that checkout, and
+`plumb trust --revoke` in the worktree removes nothing but says where to revoke
+it (`plumb trust --revoke <that checkout>`). The coarse grant behind
 `[[command]]`, `[commands]` and the Xcode build server is not content-bound, so it
 stays per path. When a tier is refused because an untrusted project config asked
 for it, the `git` tool's refusal says so and names the `plumb trust` command for

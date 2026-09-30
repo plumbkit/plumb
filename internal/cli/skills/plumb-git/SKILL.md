@@ -18,7 +18,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 
 `rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
 
-**Seven subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls:
+**Seven subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls. Options are read as git reads them: an abbreviation (`--disc`), a bundle (`-dr`) or a value (`tag -m -d`) counts exactly as git counts it:
 
 - `checkout -b` / `-B` (branch creation) is **write**; every other `checkout` is **destructive**, since it can discard the working tree or detach HEAD. Prefer `switch` for a safe branch change.
 - `switch` is **write**, but `switch -f` / `--force` / `--discard-changes` is **destructive**.
