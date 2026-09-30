@@ -60,17 +60,23 @@
   schemas without it. It now measures the schemas as that connection is served
   them. (#515)
 - **A shared connection refuses a write under an identity nobody declared.**
-  When several agents shared one `plumb serve`, a state-changing call carrying a
-  per-call identity that no `session_start` on that connection had declared (a
-  model typing `plumb_agent: "my-session"`, or a client sending `_meta` it never
-  announced) was admitted. It got a fresh per-agent state seeded from the
-  connection's workspace, so a relative write landed in whatever checkout the
-  connection held, often another agent's. Now such a call is refused, and the
-  refusal says to call `session_start` with that identity first. A subagent
-  stamped `<conversation>/<agent>` is still admitted once its conversation has
-  declared itself, reads are never refused, and a single-agent connection is
-  unaffected. Declarations are saved under the proxy session, so an agent that
-  declared before a daemon restart is not refused after it (#513).
+  When several conversations shared one `plumb serve`, a state-changing call
+  carrying a per-call identity that no `session_start` on that connection had
+  declared (a model typing `plumb_agent: "my-session"`, or a client sending
+  `_meta` it never announced) was admitted. It got a fresh per-agent state
+  seeded from the connection's workspace, so a relative write landed in whatever
+  checkout the connection held, often another agent's. Now such a call is
+  refused, and the refusal says to call `session_start` first. Reads are never
+  refused. A connection used by one conversation only (a main thread and its own
+  subagents, as in the Claude Code CLI) needs no declaration. A subagent stamped
+  `<conversation>/<agent>` is admitted on its conversation's declaration and now
+  starts in its conversation's workspace rather than the connection's, so a
+  subagent of an agent working in a worktree no longer writes into the main
+  checkout. Declarations are saved under the proxy session and restored after a
+  daemon restart, as long as the conversation made a state-changing call or
+  called `session_start` within `[session] persist_state_ttl_minutes` (24 hours
+  by default). With `persist_state` off, or after a longer idle, an agent is
+  refused once after a restart and declares again with `session_start` (#513).
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,

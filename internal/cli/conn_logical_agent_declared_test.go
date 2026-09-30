@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -172,5 +173,136 @@ func TestIdentityRecordLinkageSurvivesAPrunedDeclaration(t *testing.T) {
 	// declared_linkage row: conv-b must re-declare.
 	if err := after.refuseSharedStateChange(context.Background(), "write_file", "conv-b"); err == nil {
 		t.Error("conv-b's pruned declaration came back; the prune control is vacuous")
+	}
+}
+
+// Review of #535, item 1: the Claude Code CLI's everyday topology. A main
+// thread that never called session_start and its own hook-stamped subagents
+// share one linkage, so there is no other conversation to misroute into and
+// nothing is refused. An identity with a different linkage breaks that.
+func TestOneConversationNeedsNoDeclaration(t *testing.T) {
+	var s connSession
+	s.recordLogicalAgentCall("conv")
+	s.recordLogicalAgentCall("conv/sub") // a subagent's read, admitted and recorded
+	for _, id := range []string{"conv", "conv/sub", "conv/sub2"} {
+		if err := s.refuseSharedStateChange(context.Background(), "write_file", id); err != nil {
+			t.Errorf("one conversation: %s refused: %v", id, err)
+		}
+	}
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", ""); err == nil {
+		t.Error("an anonymous write on a shared connection must still refuse")
+	}
+	// An invented identity with another linkage is refused on its first write...
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", "made-up"); err == nil {
+		t.Fatal("an invented identity was admitted on a one-conversation connection")
+	}
+	// ...and once it has been observed (an admitted read), the connection holds
+	// two conversations, so the undeclared main thread must declare too.
+	s.recordLogicalAgentCall("made-up")
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", "conv"); err == nil {
+		t.Error("two conversations are observed; an undeclared one must be refused")
+	}
+	s.declareSessionStartCaller(idCtx("conv"), "session_start", false)
+	if err := s.refuseSharedStateChange(context.Background(), "write_file", "conv/sub"); err != nil {
+		t.Errorf("control: after conv declared, its subagent must be admitted: %v", err)
+	}
+}
+
+// Review of #535, item 4: the session_id the refusal names is the LINKAGE, so
+// for a subagent it must not claim to be the identity being stamped.
+func TestUndeclaredRefusalNamesTheConversationForASubagent(t *testing.T) {
+	var s connSession
+	s.recordLogicalAgentAttach("conv-a")
+	s.recordLogicalAgentAttach("conv-b")
+	sub := s.refuseSharedStateChange(context.Background(), "write_file", "made-up/agent-1")
+	if sub == nil {
+		t.Fatal("precondition: the subagent must be refused")
+	}
+	for _, want := range []string{`"made-up/agent-1"`, `session_id "made-up"`, "your conversation's id"} {
+		if !strings.Contains(sub.Error(), want) {
+			t.Errorf("subagent refusal missing %q: %v", want, sub)
+		}
+	}
+	if strings.Contains(sub.Error(), "the identity you are stamping") {
+		t.Errorf("subagent refusal calls the linkage the stamped identity: %v", sub)
+	}
+	plain := s.refuseSharedStateChange(context.Background(), "write_file", "made-up")
+	if plain == nil || !strings.Contains(plain.Error(), "the identity you are stamping") {
+		t.Errorf("control: a plain id's refusal names it as the stamped identity: %v", plain)
+	}
+}
+
+// Review of #535, item 3: a declared_linkage row is written by session_start
+// and reclaimed by the startup prune after the TTL, so a conversation that
+// keeps working must keep its row young. An admitted state-changing call from a
+// declared linkage refreshes it; a read does not; an undeclared linkage never
+// gains a row (update, never insert).
+func TestAdmittedWritesKeepADeclarationYoung(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-513-refresh"
+
+	before := newPersistSession(t, store, ss, proxyID)
+	before.linkExternalID("conv-a")
+	before.declareLogicalAgent("conv-b")
+	before.close()
+	if err := ss.BackdateLogicalAgents(proxyID, time.Now().Add(-48*time.Hour)); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	after := newPersistSession(t, store, ss, proxyID)
+	for _, id := range []string{"conv-a", "conv-b", "made-up"} {
+		after.recordLogicalAgentCall(id)
+	}
+	after.onBeforeTool(idCtx("conv-a/sub"), "write_file", json.RawMessage(`{}`))
+	after.onBeforeTool(idCtx("conv-b"), "read_file", json.RawMessage(`{}`))
+	after.onBeforeTool(idCtx("made-up"), "write_file", json.RawMessage(`{}`))
+
+	if err := ss.Prune(time.Now().Add(-24 * time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	got, err := ss.DeclaredLinkagesFor(proxyID)
+	if err != nil {
+		t.Fatalf("DeclaredLinkagesFor: %v", err)
+	}
+	if len(got) != 1 || got[0] != "conv-a" {
+		t.Errorf("declarations after prune = %v, want only conv-a (refreshed by its subagent's write); conv-b only read, made-up never declared", got)
+	}
+}
+
+// Review of #535, item 6: a degraded identity restore converges later, on the
+// bounded retry. Declarations written while the connection sat degraded (here,
+// by the predecessor that was still detaching) must be restored then too.
+func TestDeclarationsRestoreWhenADegradedRecoveryConverges(t *testing.T) {
+	store, ss := newOriginStore(t)
+	const proxyID = "proxy-513-degraded"
+	first := newPersistSession(t, store, ss, proxyID)
+
+	release := make(chan struct{})
+	overlapping := newPersistSessionWithBackoff(t, store, ss, proxyID, func(int) time.Duration {
+		<-release
+		return 0
+	})
+	if overlapping.recovery() != recoveryDegraded {
+		close(release)
+		t.Fatal("precondition: the overlap did not degrade")
+	}
+	first.linkExternalID("conv-late")
+	first.close()
+	close(release)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for overlapping.recovery() != recoveryRestored {
+		if time.Now().After(deadline) {
+			t.Fatal("the degraded connection never converged")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	overlapping.recordLogicalAgentCall("conv-late")
+	overlapping.recordLogicalAgentCall("other")
+	if err := overlapping.refuseSharedStateChange(context.Background(), "write_file", "conv-late"); err != nil {
+		t.Errorf("a declaration made while degraded was not restored on convergence: %v", err)
+	}
+	if err := overlapping.refuseSharedStateChange(context.Background(), "write_file", "other"); err == nil {
+		t.Error("control: an undeclared identity must be refused, or the connection is not shared")
 	}
 }

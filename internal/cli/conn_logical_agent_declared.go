@@ -12,13 +12,17 @@ package cli
 
 import (
 	"context"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // declare commits id's linkage as declared through session_start, and reports
-// the linkage it committed ("" for a blank id).
+// the linkage it committed ("" for a blank id). An existing entry keeps its
+// refresh time.
 func (l *logicalAgentState) declare(id string) string {
 	linkage := linkageIDOf(strings.TrimSpace(id))
 	if linkage == "" {
@@ -27,9 +31,11 @@ func (l *logicalAgentState) declare(id string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.declared == nil {
-		l.declared = make(map[string]struct{})
+		l.declared = make(map[string]time.Time)
 	}
-	l.declared[linkage] = struct{}{}
+	if _, ok := l.declared[linkage]; !ok {
+		l.declared[linkage] = time.Time{}
+	}
 	return linkage
 }
 
@@ -39,6 +45,40 @@ func (l *logicalAgentState) restoreDeclared(linkages []string) {
 	for _, linkage := range linkages {
 		l.declare(linkage)
 	}
+}
+
+// oneConversationLocked reports whether every identity observed on the
+// connection answers to linkage. Caller holds l.mu.
+func (l *logicalAgentState) oneConversationLocked(linkage string) bool {
+	for id := range l.seen {
+		if linkageIDOf(id) != linkage {
+			return false
+		}
+	}
+	return true
+}
+
+// markRefreshed records that linkage's durable row was written at now.
+func (l *logicalAgentState) markRefreshed(linkage string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.declared[linkage]; ok {
+		l.declared[linkage] = now
+	}
+}
+
+// refreshDue reports whether linkage is declared and its durable row was last
+// refreshed at least every ago, and if so claims the refresh (stamps now), so
+// concurrent calls do not all write. An undeclared linkage is never due.
+func (l *logicalAgentState) refreshDue(linkage string, now time.Time, every time.Duration) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	last, ok := l.declared[linkage]
+	if !ok || now.Sub(last) < every {
+		return false
+	}
+	l.declared[linkage] = now
+	return true
 }
 
 // declareLogicalAgent commits id's linkage as declared through session_start,
@@ -56,7 +96,50 @@ func (s *connSession) declareLogicalAgent(id string) {
 	}
 	if err := s.sessionState.RecordDeclaredLinkage(v.proxySessionID, linkage); err != nil {
 		s.log().Debug("daemon: recording the declared linkage failed", "linkage", logicalAgentLabel(linkage), "err", err)
+		return
 	}
+	s.logicalAgents.markRefreshed(linkage, time.Now())
+}
+
+// refreshDeclaration keeps a working conversation's durable declaration young.
+//
+// A declared_linkage row is otherwise written only by session_start, and the
+// startup prune reclaims rows older than [session] persist_state_ttl_minutes
+// (24 h by default) with no live exemption — nothing is live at startup. So a
+// conversation that declared once and then worked for a day came back from a
+// restart undeclared. An ADMITTED state-changing call from an already-declared
+// linkage now refreshes the row, at most once per refresh interval.
+//
+// UPDATE only, never insert: admission is not declaration. A call admitted
+// under the one-conversation exemption must not become durable evidence that
+// its linkage declared itself.
+func (s *connSession) refreshDeclaration(ctx context.Context, toolName string) {
+	id := mcp.LogicalAgentFromCtx(ctx)
+	if id == "" || s.sessionState == nil || !slices.Contains(tools.StateChangingToolNames(), toolName) {
+		return
+	}
+	v := s.view()
+	if !v.session.PersistState || v.proxySessionID == "" {
+		return
+	}
+	linkage := linkageIDOf(id)
+	if !s.logicalAgents.refreshDue(linkage, time.Now(), declarationRefreshEvery(v.session.PersistStateTTLMinutes)) {
+		return
+	}
+	if err := s.sessionState.TouchDeclaredLinkage(v.proxySessionID, linkage); err != nil {
+		s.log().Debug("daemon: refreshing the declared linkage failed", "linkage", logicalAgentLabel(linkage), "err", err)
+	}
+}
+
+// declarationRefreshEvery is how often an active conversation refreshes its
+// durable declaration: a quarter of the TTL, capped at an hour, so a row is
+// refreshed several times inside any TTL without a write per call.
+func declarationRefreshEvery(ttlMinutes int) time.Duration {
+	every := time.Hour
+	if q := time.Duration(ttlMinutes) * time.Minute / 4; ttlMinutes > 0 && q < every {
+		every = q
+	}
+	return every
 }
 
 // declareSessionStartCaller declares the per-call identity a SUCCESSFUL
@@ -99,11 +182,17 @@ func (s *connSession) declareSessionStartCaller(ctx context.Context, toolName st
 // deliberately NOT a source — it records every OBSERVED identity, so an
 // invented id that made one admitted read would come back declared.
 //
-// KNOWN LIMIT: a declaration older than the session-state TTL whose row a
-// restart pruned, from a conversation that is not the identity record's
-// linkage, comes back undeclared. Its next state-changing call is refused with
-// the remedy (call session_start), which re-declares it. Persistence off
-// ([session] persist_state = false) behaves the same way for every agent.
+// Retried on a converged degraded recovery (retryRestoreIdentity): the record
+// and any declaration written while the connection sat degraded are only in
+// hand then.
+//
+// KNOWN LIMITS, both of which cost one refusal whose remedy (session_start)
+// re-declares:
+//   - With [session] persist_state off nothing is saved, so nothing comes back.
+//   - declared_linkage ages out with persist_state_ttl_minutes, and the startup
+//     prune has no live exemption. refreshDeclaration keeps a WORKING
+//     conversation's row young; one idle past the TTL, that is not the identity
+//     record's linkage, comes back undeclared.
 func (s *connSession) restoreDeclaredLinkages(proxySessionID string) {
 	if s.sessionState == nil || !s.view().session.PersistState || proxySessionID == "" {
 		return

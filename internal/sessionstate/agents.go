@@ -57,6 +57,9 @@ func (s *Store) BackdateLogicalAgents(proxySessionID string, to time.Time) error
 	if _, err := s.db.Exec(`UPDATE pinned_workspace SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
 		return fmt.Errorf("sessionstate: backdate pins: %w", err)
 	}
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: backdate declarations: %w", err)
+	}
 	return nil
 }
 
@@ -125,6 +128,23 @@ func (s *Store) RecordDeclaredLinkage(proxySessionID, linkage string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("sessionstate: record declared linkage: %w", err)
+	}
+	return nil
+}
+
+// TouchDeclaredLinkage refreshes an EXISTING declaration's timestamp, so a
+// conversation that keeps working stays ahead of Prune. It never inserts: an
+// admitted call is not a declaration, and a row Prune already reclaimed stays
+// gone until session_start declares again. nil-safe.
+func (s *Store) TouchDeclaredLinkage(proxySessionID, linkage string) error {
+	if s == nil || proxySessionID == "" || linkage == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=? AND linkage=?`,
+		time.Now().UnixMilli(), proxySessionID, linkage); err != nil {
+		return fmt.Errorf("sessionstate: touch declared linkage: %w", err)
 	}
 	return nil
 }

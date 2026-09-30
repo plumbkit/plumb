@@ -180,6 +180,10 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 	if adoption == idResumed && named {
 		s.repairBlankLinkage(rec)
 		s.setRecovery(recoveryRestored)
+		// onProxySession restored declarations from what it could read THEN;
+		// the record (and any declaration written while this connection sat
+		// degraded) is only now in hand. Additive, so re-running is safe.
+		s.restoreDeclaredLinkages(proxyID)
 		return true
 	}
 	if adoption == idAbsent && named {
@@ -190,6 +194,7 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 		// connection stays degraded and the next attempt tries again.
 		s.setRecovery(recoveryEstablished)
 		if s.persistIdentity() {
+			s.restoreDeclaredLinkages(proxyID)
 			return true
 		}
 		s.log().Warn("daemon: could not record the healed legacy identity on retry; staying degraded for the next attempt")

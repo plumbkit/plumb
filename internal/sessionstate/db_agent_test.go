@@ -101,3 +101,32 @@ func containsAll(have []string, want ...string) bool {
 	}
 	return true
 }
+
+// TestTouchDeclaredLinkageRefreshesButNeverInserts: an admitted call keeps an
+// existing declaration young, but admission is not declaration, so a linkage
+// with no row never gains one.
+func TestTouchDeclaredLinkageRefreshesButNeverInserts(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.RecordDeclaredLinkage("proxyX", "conv-a"); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := s.BackdateLogicalAgents("proxyX", time.Now().Add(-48*time.Hour)); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if err := s.TouchDeclaredLinkage("proxyX", "conv-a"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	if err := s.TouchDeclaredLinkage("proxyX", "never-declared"); err != nil {
+		t.Fatalf("touch undeclared: %v", err)
+	}
+	if err := s.Prune(time.Now().Add(-24 * time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	got, err := s.DeclaredLinkagesFor("proxyX")
+	if err != nil {
+		t.Fatalf("DeclaredLinkagesFor: %v", err)
+	}
+	if len(got) != 1 || got[0] != "conv-a" {
+		t.Fatalf("after touch + prune = %v, want only the refreshed conv-a", got)
+	}
+}

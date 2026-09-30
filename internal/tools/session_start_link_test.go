@@ -68,3 +68,24 @@ func TestSessionStart_UnlinkedNotice(t *testing.T) {
 		}
 	})
 }
+
+// A session_start that fails on a malformed `detail` must not link: linking
+// declares the caller's identity on a shared connection (issue #513), and a
+// failed call must commit nothing. The valid call is the positive control.
+func TestSessionStart_InvalidDetailDoesNotLink(t *testing.T) {
+	var linked []string
+	tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil).
+		WithExternalID(func(id string) string { linked = append(linked, id); return "" })
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"abc-123","detail":"bogus"}`)); err == nil {
+		t.Fatal("an invalid detail must fail")
+	}
+	if len(linked) != 0 {
+		t.Fatalf("a failed session_start linked %v", linked)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"abc-123","detail":"brief"}`)); err != nil {
+		t.Fatalf("control: a valid session_start failed: %v", err)
+	}
+	if len(linked) != 1 || linked[0] != "abc-123" {
+		t.Fatalf("control: a valid session_start must link once, got %v", linked)
+	}
+}

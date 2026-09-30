@@ -111,6 +111,12 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		writeLimiter: tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute),
 		pinOrigin:    v.pinOrigin,
 	}
+	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
+	// where the connection happens to sit (issue #513 review). Seeding it from
+	// the connection pin sent a subagent of a parent that had re-pinned itself
+	// to a worktree into whichever checkout the connection held — another
+	// agent's — the exact misroute the declaration gate exists to prevent.
+	s.seedFromParentLocked(sh)
 	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
 	// precedence over the connection's current pin. A pin that no longer verifies
 	// is ignored, so the shard keeps the connection's root rather than resurrecting
@@ -174,7 +180,7 @@ func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy 
 // back to the connection's pin when the connection is not shared (or the call is
 // unattributed). workspace() stays the ctx-less default for background goroutines.
 func (s *connSession) workspaceFor(ctx context.Context) string {
-	if _, pending := s.pendingDeclarationFor(mcp.LogicalAgentFromCtx(ctx)); pending {
+	if _, _, pending := s.pendingDeclarationForCall(ctx); pending {
 		// A refused declaration leaves nothing trustworthy to anchor to: the
 		// shard's root is one this agent explicitly tried to leave. "" makes the
 		// implicit resolvers — relative paths, git's default repository,

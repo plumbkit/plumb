@@ -46,8 +46,10 @@ type logicalAgentState struct {
 	// root, and a relative write would land in whatever workspace the connection
 	// holds. Keyed on the linkage so a hook-stamped subagent `<conv>/<agent>`,
 	// which usually never calls session_start itself, rides its parent's
-	// declaration. Like seen, it only grows.
-	declared map[string]struct{}
+	// declaration. Like seen, it only grows. The value is when this process
+	// last refreshed the durable row (zero: never, e.g. restored after a
+	// restart); see refreshDue.
+	declared map[string]time.Time
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -239,6 +241,8 @@ func (l *logicalAgentState) refuse(callID string) bool {
 // not the full id, is what must be declared, because a hook-stamped subagent
 // `<conv>/<agent>` rarely calls session_start and is vouched for by `<conv>`.
 // session_start itself is not state-changing, so the remedy stays reachable.
+// Exempt: a connection where every observed identity, the caller's included,
+// shares one linkage (see oneConversationLocked's call site).
 func (l *logicalAgentState) refusal(callID string) refusalKind {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -253,7 +257,19 @@ func (l *logicalAgentState) refusal(callID string) refusalKind {
 	if callID == "" {
 		return refusalAnonymous
 	}
-	if _, ok := l.declared[linkageIDOf(callID)]; ok {
+	linkage := linkageIDOf(callID)
+	if _, ok := l.declared[linkage]; ok {
+		return refusalNone
+	}
+	// One conversation is not a shared connection in the sense the gate
+	// guards: a main thread that never called session_start and its own
+	// hook-stamped subagents all answer to the same linkage, so there is no
+	// OTHER conversation's workspace a call could be misrouted into. This is
+	// the Claude Code CLI's everyday topology; refusing it would lock the main
+	// thread out the moment its first subagent made any call. An identity with
+	// a different linkage — an invented one included — breaks the condition,
+	// and from then on every undeclared linkage is refused.
+	if l.oneConversationLocked(linkage) {
 		return refusalNone
 	}
 	return refusalUndeclared
@@ -391,8 +407,7 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	case refusalNone:
 		return nil
 	case refusalUndeclared:
-		return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (the identity you are stamping) first, then retry. A subagent stamped `<conversation>/<agent>` is covered once its conversation has declared itself",
-			name, stats.SanitiseAgentID(logicalAgent), stats.SanitiseAgentID(linkageIDOf(logicalAgent)))
+		return undeclaredIdentityErr(name, logicalAgent)
 	}
 	// [collab] allow_unidentified_writes used to lift this refusal. It is no
 	// longer honoured: with it set, an unattributable write resolved through
@@ -403,6 +418,21 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 		retired = " ([collab] allow_unidentified_writes is set but no longer honoured.)"
 	}
 	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s%s", name, sharedIdentityRemedy, retired)
+}
+
+// undeclaredIdentityErr is the refusal for a per-call identity whose linkage no
+// session_start on this connection declared (issue #513). The session_id it
+// names is the LINKAGE — for a hook-stamped subagent `<conv>/<agent>` that is
+// its conversation's id, not the stamp — so the wording says which.
+func undeclaredIdentityErr(name, logicalAgent string) error {
+	stamp := stats.SanitiseAgentID(logicalAgent)
+	linkage := linkageIDOf(logicalAgent)
+	which := "the identity you are stamping"
+	if linkage != logicalAgent {
+		which = "your conversation's id, the part of your stamp before `/`; a subagent is covered once its conversation has declared itself"
+	}
+	return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (%s) first, then retry",
+		name, stamp, stats.SanitiseAgentID(linkage), which)
 }
 
 // sharedIdentityRemedy names the ways an agent on a shared connection gets an
