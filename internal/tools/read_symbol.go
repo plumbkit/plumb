@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -201,7 +200,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		return t.noSymbolMessage(a.Name, fpath, syms), nil
 	}
-	return t.formatReadSymbolResult(ctx, fpath, a.Name, matches, nil)
+	return t.formatReadSymbolResult(ctx, fpath, a.Name, matches, nil, fileSnapshot{})
 }
 
 // topologyReadFallback locates the named symbol from a fresh tree-sitter parse
@@ -217,12 +216,17 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, reason symbolFall
 	if len(matchNodes) == 0 {
 		return "", false
 	}
-	lines := fileLines(fpath)
+	// The symbol ranges are computed from these very lines, so the version the read
+	// records is theirs.
+	lines, snap, err := snapshotLines(fpath)
+	if err != nil {
+		return "", false
+	}
 	matches := make([]protocol.DocumentSymbol, 0, len(matchNodes))
 	for _, n := range matchNodes {
 		matches = append(matches, nodeToDocSymbol(n, lines))
 	}
-	out, err := t.formatReadSymbolResult(ctx, fpath, name, matches, lines)
+	out, err := t.formatReadSymbolResult(ctx, fpath, name, matches, lines, snap)
 	if err != nil {
 		return "", false
 	}
@@ -292,16 +296,18 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string, wai
 	return syms, nil
 }
 
-func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name string, matches []protocol.DocumentSymbol, lines []string) (string, error) {
-	info, err := os.Stat(fpath)
-	if err != nil {
-		return "", fmt.Errorf("read_symbol: %w", err)
+// formatReadSymbolResult prints the matched symbols from lines, and records the
+// version of the file they were read from (snap, see read_snapshot.go). With no
+// lines (the language-server path) the file is read here, once, so the bodies and
+// the recorded version cannot come from two different writes.
+func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name string, matches []protocol.DocumentSymbol, lines []string, snap fileSnapshot) (string, error) {
+	if lines == nil {
+		var err error
+		if lines, snap, err = snapshotLines(fpath); err != nil {
+			return "", fmt.Errorf("read_symbol: %w", err)
+		}
 	}
-	mtime := info.ModTime()
-	sha, err := fileSHA256(fpath)
-	if err != nil {
-		slog.Warn("read_symbol: computing sha256", "path", fpath, "err", err)
-	}
+	mtime, sha := snap.mtime, snap.sha
 	t.readTracker(ctx).Record(fpath, mtime, sha)
 
 	var sb strings.Builder
@@ -309,9 +315,9 @@ func (t *ReadSymbol) formatReadSymbolResult(ctx context.Context, fpath, name str
 	// baseline is the whole-file byte size: reading one symbol instead of the whole
 	// file is the efficiency the savings scorer credits.
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s baseline=%d\n", mtimeStr, sha, info.Size())
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s baseline=%d\n", mtimeStr, sha, snap.size)
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s baseline=%d\n", mtimeStr, info.Size())
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s baseline=%d\n", mtimeStr, snap.size)
 	}
 	// For clients whose native Edit tool conflicts with plumb's read-state
 	// tracking, point at edit_file the moment the agent has the symbol body.

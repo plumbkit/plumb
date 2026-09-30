@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A read records the version it showed.** `read_file` took the file's mtime
+  from a `stat`, the content from a read, and the SHA-256 from a second read of
+  the path. `read_symbol` took the SHA only after the language-server round trip,
+  and read the symbol bodies after that. A write landing in between recorded the
+  new content's hash against what the caller had been shown. The write guards
+  ("changed since you read it", and the same-mtime check behind
+  `expected_mtime`) then let the caller overwrite a change it never saw. Reads now
+  go through one descriptor that hashes every byte it hands out, including the
+  rest of the file after a line window, and takes the mtime from that
+  descriptor. A file replaced during the read keeps the version read. One
+  rewritten in place is read again, and one that never settles records no hash.
+  Applies to `read_file` (windowed and pattern search) and `read_symbol`.
 - **On a shared connection, a write plumb cannot attribute is refused.**
   Once two agent identities have been declared on one `plumb serve`
   connection, a state-changing call that carries no per-call identity cannot
