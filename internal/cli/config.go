@@ -529,10 +529,8 @@ func contractConfigPath(p string) string {
 // the config field registry. It drifted precisely because it was an inline
 // literal: git.commit_trailer and git.write_timeout were added to the registry
 // and never gained a row, and envVarFor had no commit_trailer case either — so
-// `plumb config show` could not confirm PLUMB_GIT_COMMIT_TRAILER, which is
-// exactly the check session_start's ignored-[git] notice tells the reader to run.
-// A notice that names a variable and a command that cannot show it leave the
-// reader with no way to answer the question either one raises.
+// `plumb config show` could not confirm PLUMB_GIT_COMMIT_TRAILER — exactly the
+// check session_start's ignored-[git] notice tells the reader to run.
 //
 // The list stays hand-written rather than generated: each row needs a typed
 // accessor and its own formatting (bool, duration, slice), and the registry
@@ -545,6 +543,7 @@ func gitConfigRows(defaultsCfg, globalCfg, projectCfg config.Config, policy conf
 		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), policySourceFor(policy, "git.protected_branches", sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches))},
 		{"commit_trailer", strconv.FormatBool(projectCfg.Git.CommitTrailer), policySourceFor(policy, "git.commit_trailer", sourceFor("commit_trailer", defaultsCfg.Git.CommitTrailer, globalCfg.Git.CommitTrailer, projectCfg.Git.CommitTrailer))},
 		{"write_timeout", projectCfg.Git.WriteTimeout.String(), policySourceFor(policy, "git.write_timeout", sourceFor("write_timeout", defaultsCfg.Git.WriteTimeout, globalCfg.Git.WriteTimeout, projectCfg.Git.WriteTimeout))},
+		{"detach_after", projectCfg.Git.DetachAfter.String(), policySourceFor(policy, "git.detach_after", sourceFor("detach_after", defaultsCfg.Git.DetachAfter, globalCfg.Git.DetachAfter, projectCfg.Git.DetachAfter))},
 	}
 }
 
@@ -592,6 +591,7 @@ var fieldEnvVars = map[string]string{
 	"allow_push":                "PLUMB_GIT_ALLOW_PUSH",
 	"commit_trailer":            "PLUMB_GIT_COMMIT_TRAILER",
 	"write_timeout":             "PLUMB_GIT_WRITE_TIMEOUT",
+	"detach_after":              "PLUMB_GIT_DETACH_AFTER",
 	"timeout":                   "PLUMB_LSP_QUERY_TIMEOUT",
 }
 

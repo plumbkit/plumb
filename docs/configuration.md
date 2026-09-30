@@ -267,6 +267,7 @@ and network calls additionally require `confirm: true` per call.
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
 | `env` | table | `{}` | — | Environment variables set on the git child process. See [The git child's environment](#the-git-childs-environment) below. |
 | `write_timeout` | duration | `"10m"` | `PLUMB_GIT_WRITE_TIMEOUT` | How long plumb waits for an index/ref-mutating git child before killing it. See [When plumb stops waiting](#when-plumb-stops-waiting) below. |
+| `detach_after` | duration | `"45s"` | `PLUMB_GIT_DETACH_AFTER` | How long a write/destructive git **call** waits before returning "still running in the background" and letting the child finish. See [When the call stops waiting](#when-the-call-stops-waiting) below. |
 
 ### When plumb stops waiting
 
@@ -298,6 +299,37 @@ It is trust-gated for the same reason as the rest of `[git]`: shortening it is a
 denial of service on every commit, and lengthening it lets a hostile hook hold
 the repository lock. Neither is a choice a cloned repository's
 `.plumb/config.toml` should make unasked.
+
+### When the call stops waiting
+
+`write_timeout` bounds the git child; `detach_after` bounds the **call**. They
+differ because the MCP client has a timeout of its own — commonly 60 seconds —
+and a pre-commit hook can easily outlast it. When one did, the client reported
+`Request timed out` while the commit carried on inside the daemon and landed a
+minute later: a caller that believed the error retried, collided on
+`.git/index.lock` or, once the lock cleared, committed the same change twice.
+
+With `detach_after` (default `45s`, below that client timeout) a write- or
+destructive-tier call that is still waiting at the deadline — on the child, or
+on the per-repository lock in front of it — stops waiting. A child that is
+running is **not killed** (that strands `index.lock`); the call returns a
+success result saying the operation is **still running in the background**,
+with the child's pid, when it started and the HEAD it started from. Until it
+finishes:
+
+- every further write, destructive or network call on that repository is
+  refused with that explanation, and nothing is run;
+- reads (`status`, `log`, `diff`, …) keep working and carry a note that the
+  operation is still in flight.
+
+Once it has finished, the next `git` call from each session leads with the
+outcome — `landed as <sha> <subject>`, or `FAILED` with git's and the hook's
+output. A call whose wait for the per-repository lock reaches the deadline runs
+nothing and says so.
+
+`0` means the default. A value at or above `write_timeout` never detaches, which
+restores the old wait-it-out behaviour. It sits in `[git]`, so a project value
+needs `plumb trust` like the rest of the block.
 
 ### The git child's environment
 
@@ -1689,6 +1721,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_GIT_ALLOW_PUSH` | `git.allow_push` |
 | `PLUMB_GIT_COMMIT_TRAILER` | `git.commit_trailer` |
 | `PLUMB_GIT_WRITE_TIMEOUT` | `git.write_timeout` |
+| `PLUMB_GIT_DETACH_AFTER` | `git.detach_after` |
 | `PLUMB_AUTO_ATTACH` | `workspace.auto_attach` |
 | `PLUMB_AUTO_ATTACH_PERSIST` | `workspace.auto_attach_persist` |
 | `PLUMB_LSP_QUERY_TIMEOUT` | `lsp_query.timeout` |
@@ -1755,6 +1788,7 @@ protected_branches = ["main", "master"]     # never force-pushable
 commit_trailer     = false                  # stamp commits with a Plumb-Session: <name> trailer
 env                = {}                     # extra env for the git child (hooks see it); trust-gated
 write_timeout      = "10m"                  # bound on a mutating git child before plumb kills it; trust-gated
+detach_after       = "45s"                  # a slower write returns "still running in the background"; trust-gated
 
 [quality]                                   # GLOBAL ONLY — a project value is never read
 enabled               = false               # post-write offline analysers

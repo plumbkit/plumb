@@ -71,4 +71,14 @@ type GitConfig struct {
 	// choice a cloned repository's .plumb/config.toml should make unasked, and
 	// being inside [git] is what puts it behind `plumb trust`.
 	WriteTimeout Duration `toml:"write_timeout"`
+	// DetachAfter bounds how long a git tool CALL waits for an index/ref-mutating
+	// child, not the child: past it the call returns "still running in the
+	// background" (pid, start time, starting HEAD) and the child finishes under
+	// WriteTimeout, with its outcome reported on the next git call and further
+	// writes to the repository refused until then. Default 45s, below the 60s
+	// call timeout MCP clients commonly apply — a call that outlived its client
+	// was reported "Request timed out" while the commit landed anyway (#549).
+	// 0 means the compiled default; a value at or above write_timeout never
+	// detaches. In [git], and so trust-gated, with the rest of the git policy.
+	DetachAfter Duration `toml:"detach_after"`
 }

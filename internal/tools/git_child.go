@@ -30,11 +30,30 @@ type gitChildSpec struct {
 	// unbounded child is the one outcome that must be unreachable — such a child
 	// holds the per-repository lock and a drain token for as long as it lives.
 	WriteTimeout time.Duration
+	// DetachAfter is [git] detach_after: how long the CALL waits for an
+	// index/ref-mutating child before returning a "still running in the
+	// background" result and leaving the child to finish (git_background.go).
+	// ZERO means the compiled default, for the same reason as WriteTimeout. It
+	// bounds the caller's wait, never the child: the child stays bounded only
+	// by WriteTimeout.
+	DetachAfter time.Duration
 }
 
 // gitChildSpecFor adapts a resolved GitPolicy into the spec runGit needs.
 func gitChildSpecFor(p GitPolicy) gitChildSpec {
-	return gitChildSpec{Env: gitChildEnv(p.Env), WriteTimeout: p.WriteTimeout}
+	return gitChildSpec{Env: gitChildEnv(p.Env), WriteTimeout: p.WriteTimeout, DetachAfter: p.DetachAfter}
+}
+
+// detachAfter resolves the foreground deadline actually applied, and reports
+// whether it applies at all: a deadline at or beyond the write bound can never
+// fire before the bound kills the child, so the call simply waits the child
+// out, as it did before detaching existed.
+func (s gitChildSpec) detachAfter() (time.Duration, bool) {
+	d := s.DetachAfter
+	if d <= 0 {
+		d = defaultGitDetachAfter
+	}
+	return d, d < s.writeTimeout()
 }
 
 // writeTimeout resolves the bound actually applied, substituting the compiled
@@ -78,7 +97,7 @@ const defaultGitWriteTimeout = 10 * time.Minute
 // Returns nil when there is nothing to override, so the caller leaves cmd.Env
 // nil and os/exec inherits the daemon's environment directly — byte-for-byte
 // the previous behaviour, not a reconstruction of it. (That is this builder's
-// contract, not the child's final environment: execGitCmd may add GOWORK=off —
+// contract, not the child's final environment: startGitCmd may add GOWORK=off —
 // never over a GOWORK set here or inherited — and, whenever the environment is
 // explicit, PWD naming the repository; see git_gowork.go.)
 //
@@ -116,7 +135,7 @@ const gitChildWaitDelay = 5 * time.Second
 
 // boundGitChildWait applies the exec hygiene a git child needs, exactly as
 // RunArgv does for task commands (cmdexec.go): its own process group, a
-// group-kill on cancellation, and a WaitDelay. execGitCmd is the caller, so
+// group-kill on cancellation, and a WaitDelay. startGitCmd is the caller, so
 // every git child routed through that chokepoint gets it — which is the one
 // that runs the repository's hooks and can open an editor, i.e. the only one
 // with a realistic way to trigger the hazard below. The auxiliary read queries

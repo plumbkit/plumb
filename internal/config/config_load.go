@@ -216,6 +216,9 @@ func applyGitEnv(cfg *Config) {
 	if d, ok := envDuration("PLUMB_GIT_WRITE_TIMEOUT"); ok {
 		cfg.Git.WriteTimeout = Duration{d}
 	}
+	if d, ok := envDuration("PLUMB_GIT_DETACH_AFTER"); ok {
+		cfg.Git.DetachAfter = Duration{d}
+	}
 }
 
 // envBool reads key from the environment. ok is true when the variable is

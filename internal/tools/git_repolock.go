@@ -85,7 +85,8 @@ func lockRepo(ctx context.Context, gitDir string, maxWait time.Duration) (func()
 
 // StartRepoLockSweep launches a background goroutine that evicts idle entries
 // from repoLocks every repoLockSweepInterval, plus the idle per-repository
-// ref-movement ledgers (git_ref_guard.go) on the same tick. Called once from
+// ref-movement ledgers (git_ref_guard.go) and expired background-op reports
+// (git_background.go) on the same tick. Called once from
 // the daemon run loop with the daemon's lifetime context (mirrors
 // StartPathLockSweep).
 func StartRepoLockSweep(ctx context.Context) {
@@ -100,6 +101,7 @@ func StartRepoLockSweep(ctx context.Context) {
 				now := time.Now()
 				sweepRepoLocks(now)
 				sweepGitRefStates(now)
+				sweepGitBackgroundOps()
 			}
 		}
 	}()

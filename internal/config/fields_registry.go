@@ -175,6 +175,10 @@ var registryData = []Field{
 		Key: "git.write_timeout", Type: FieldDuration, ReloadTier: ReloadLive,
 		Description: "How long to wait for a commit/reset git child (hooks included) before killing it.",
 	},
+	{
+		Key: "git.detach_after", Type: FieldDuration, ReloadTier: ReloadLive,
+		Description: "How long a git write call waits before returning \"still running in the background\".",
+	},
 
 	// --- Session ---
 	{

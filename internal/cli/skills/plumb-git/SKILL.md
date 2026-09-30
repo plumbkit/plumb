@@ -45,6 +45,8 @@ Output is capped — 200 lines for `log` and `blame`, 100 KiB overall — so ask
 
 Pre-commit hooks always run, so a commit can fail on a hook. Read that output before retrying — re-running unchanged will fail identically.
 
+A hook slower than `[git] detach_after` (45 s by default) makes the call return **still running in the background** instead of a result. That is not a failure: do not retry. Further writes to the repository are refused until it finishes; follow it with `status` or `log -1`, and the next `git` call reports whether it landed (with the SHA) or failed (with the hook's output).
+
 ## Destructive and network subcommands
 
     git(subcommand="restore", args=["internal/tools/git.go"], confirm=true)

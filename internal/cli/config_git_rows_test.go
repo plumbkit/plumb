@@ -57,6 +57,7 @@ func TestGitConfigRows_NameTheirEnvVars(t *testing.T) {
 		"allow_push":        "PLUMB_GIT_ALLOW_PUSH",
 		"commit_trailer":    "PLUMB_GIT_COMMIT_TRAILER",
 		"write_timeout":     "PLUMB_GIT_WRITE_TIMEOUT",
+		"detach_after":      "PLUMB_GIT_DETACH_AFTER",
 	}
 	for field, env := range want {
 		if got := envVarForField(field); got != env {

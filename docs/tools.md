@@ -941,6 +941,16 @@ write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
 
+**Slow writes do not outlive the call.** A write- or destructive-tier call still
+waiting after `[git] detach_after` (default 45 s, below the usual MCP client
+call timeout) returns a success result saying the operation is **still running
+in the background** — pid, start time, starting HEAD — instead of blocking until
+the client gives up while the commit lands anyway. The child is not killed.
+Until it finishes, further non-read calls on that repository are refused (reads
+still run, with a note); afterwards the next call from each session reports
+`landed as <sha>` or the failure with git's output. See
+[Configuration → When the call stops waiting](configuration.md#when-the-call-stops-waiting).
+
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
 trailer; regardless of that knob, `workspace_sessions` always lists recent
