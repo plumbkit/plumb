@@ -62,13 +62,10 @@ func (t *SessionStart) WithStampChannel(fn func(ctx context.Context) StampChanne
 // connection is shared and this call carried no per-call identity, so writes
 // are being refused right now.
 //
-// It deliberately does NOT repeat the refusal's own remedy. That line leads
-// with `plumb hooks install claude-code`, which is correct for Claude Code's
-// terminal client and actively misleading here — the hook can be installed,
-// matched, and emitting the right document while the client drops it. Naming a
-// remedy the user has already applied is what turns a five-minute diagnosis
-// into an afternoon. The transport remedy is the one that does not depend on
-// the client honouring anything.
+// It names the hook first: since the desktop connector's schemas declare
+// plumb_agent, the hook works there too, so it is the remedy most callers can
+// apply. The transport remedy (one plumb serve per agent) follows, for a client
+// that cannot stamp at all.
 const stampChannelRefusedNotice = "NOTE: state-changing calls from this session are being refused. " +
 	"This connection serves more than one logical agent and this call carried no per-call identity, " +
 	"so plumb cannot tell which agent's workspace a write belongs to and will not guess. Your session_id " +

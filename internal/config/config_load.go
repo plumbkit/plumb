@@ -483,11 +483,10 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// field exists precisely so a project cannot influence the global value, and
 	// leaving it shared makes that a property of caller discipline rather than of
 	// this function.
-	// [collab] allow_unidentified_writes takes DOWN the shared-connection write
-	// ceiling. A cloned repository that could set it would disable, on the
-	// machine that opened it, the guard that stops one agent's write landing in
-	// another's shard — so it is the user's decision on their own machine and
-	// nobody else's. Global-only, forced to base like the roots above.
+	// [collab] allow_unidentified_writes is retired (it no longer lifts the
+	// shared-connection write ceiling), but it stays global-only, forced to base
+	// like the roots above: the refusal mentions it when it is set, and a
+	// cloned repository must not be able to make that claim.
 	merged.Collab.AllowUnidentifiedWrites = base.Collab.AllowUnidentifiedWrites
 	merged.Workspace.ExtraRoots = slices.Clone(base.Workspace.ExtraRoots)
 	merged.Workspace.ReadRoots = slices.Clone(base.Workspace.ReadRoots)

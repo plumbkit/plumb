@@ -68,14 +68,11 @@ func sharedConnectionCheck(sessions []session.Info) checkResult {
 		warn: true,
 		detail: fmt.Sprintf("%d session(s) share a connection with another agent and refuse state-changing "+
 			"calls that carry no per-call identity: %s", len(affected), strings.Join(affected, ", ")),
-		// The hook is the cheap remedy where the client honours it, and naming
-		// it alone is the misdirection the refusal text already gives: it can be
-		// installed, matched and emitting correctly while the client drops the
-		// rewrite, which is what `local-agent-mode-plumb` does. So the transport
-		// remedy is named first and unconditionally.
-		fix: "these connections have carried a per-call identity before, so the channel works on them: " +
-			"stamp every call. On Claude Code, `plumb hooks install claude-code`; otherwise a per-call " +
-			"_meta identity, or one plumb serve per logical agent. A client that can never stamp is not " +
-			"refused at all, so it will not appear here",
+		// Every connection two agents have declared on is armed, whether or not
+		// any call on it has ever been stamped, so the fix names every remedy,
+		// including the one for a client that cannot stamp at all.
+		fix: "stamp every call. On Claude Code (terminal or desktop), `plumb hooks install claude-code`, " +
+			"and restart Claude desktop after upgrading plumb; otherwise a per-call _meta identity. A client " +
+			"that cannot stamp needs one plumb serve per conversation (a client restart starts a fresh one)",
 	}
 }

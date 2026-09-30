@@ -4,22 +4,36 @@
 
 ### Fixed
 
-- **An unattributable write on a shared connection is refused, never guessed.**
-  When several agents share one `plumb serve` connection, a state-changing
-  call that carries no agent identity cannot be attributed to any of them.
-  Two exemptions used to let it through, resolved against the connection's
-  pin: a connection where no call had ever carried a per-call identity, and
-  `[collab] allow_unidentified_writes`. On Claude desktop's connector both
-  applied, and an agent's edit landed in another agent's checkout. Both are
-  gone. Such a call is refused with the remedy: the Claude Code identity hook,
-  a per-call `_meta` identity for a client whose transport can set one, or one
+- **On a shared connection, a write plumb cannot attribute is refused.**
+  Once two agent identities have been declared on one `plumb serve`
+  connection, a state-changing call that carries no per-call identity cannot
+  be attributed to either of them. Two exemptions used to let it through,
+  resolved against the connection's pin: a connection where no call had ever
+  carried a per-call identity, and `[collab] allow_unidentified_writes`. On
+  Claude desktop's connector both applied, and an agent's edit landed in
+  another agent's checkout. Both are gone. The refusal names the remedy: the
+  Claude Code identity hook, a per-call `_meta` identity, or one
   `plumb serve` per agent. **`allow_unidentified_writes` is retired**: a
-  config that sets it still loads, and the refusal says the key is ignored. A
-  single-agent connection is unaffected.
+  config that sets it still loads, and the refusal says it is ignored.
 
-- **`session_start` no longer says "Re-pinned this connection" when only your
-  own pin moved.** It now prints `Re-pinned: <from> → <to>`. The
-  no-identity notices now describe the current refusal rule.
+  **Who this affects:** a client that cannot stamp every call and runs more
+  than one conversation over one `plumb serve`. That includes Claude Code
+  without the identity hook (a subagent, or `/clear`), Codex or Gemini
+  starting a new conversation on a long-lived connection, and Claude desktop
+  **chat**, which shares the desktop connector with Code-tab conversations
+  but runs no hook. Declared identities are not forgotten while the
+  connection lives, so such a client's writes stay refused until it
+  restarts (a fresh connection) or runs one `plumb serve` per conversation.
+  Reads are never refused. On a connection where only one identity has been
+  declared, an unidentified call still resolves against the connection's
+  pin, as before.
+
+- **`session_start` says which pin a re-pin moved.** It printed "Re-pinned
+  this connection" even when only the calling agent's own pin moved. It now
+  prints `Re-pinned: <from> → <to>` for your own pin, and names the
+  connection only for `scope: "connection"`, which moves every agent without
+  its own pin. The no-identity notices and `plumb doctor`'s shared-connection
+  fix now describe the current refusal rule.
 
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one
