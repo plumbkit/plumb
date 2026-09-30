@@ -77,8 +77,11 @@
   work-tree of the commands' repository runs the commands from the same relative
   directory there — the baseline too — and the report says `ran in: … re-rooted
   from …`. A file in a submodule is placed by its outermost superproject, so the
-  submodule checked out inside a worktree is tested with that worktree's copy. A file in the commands' own tree, in no repository, or in another
-  repository's main work-tree (a submodule, a sibling module) runs as before.
+  submodule checked out inside a worktree is tested with that worktree's copy;
+  a linked worktree of the submodule itself, from a session on the submodule's
+  checkout, is the same repository and re-roots there (and back). A file in the
+  commands' own tree, in no repository, or in another repository's main
+  work-tree (a submodule, a sibling module) runs as before.
   Refused before anything runs, mutates or spends the write budget: mutants that
   need two work-trees; a file in a linked worktree the commands cannot move into;
   a destination directory that is missing or reached through a symlink leading
