@@ -24,7 +24,7 @@ func expandShippedDefault(t *testing.T, lang, slot string) string {
 	}
 	out := make([]string, 0, len(argv))
 	found := false
-	for _, a := range argv {
+	for _, a := range stripScopePlaceholders(argv) {
 		def, ok := targetPlaceholder(a)
 		if !ok {
 			out = append(out, a)

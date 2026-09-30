@@ -33,6 +33,13 @@ var taskSlotName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 // targetPattern bounds the {target} token to a single shell-safe argument.
 var targetPattern = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+$`)
 
+// runPattern bounds the {run} test-name filter (#538). The value is one argv
+// element with no shell, so `|` for a Go -run alternation, `^$*+?()[]` for the
+// rest of a regexp and spaces for a pytest -k expression (`a or b`) are inert
+// text here. What is refused is a LEADING `-` or space: a bare {run} would put the
+// value where a flag is parsed, and `-exec=…` must never reach `go test`.
+var runPattern = regexp.MustCompile(`^[A-Za-z0-9_./:@|^$*+?()\[\]][A-Za-z0-9_./:@|^$*+?()\[\] -]{0,255}$`)
+
 // taskLanguageName bounds run_task's optional `language` to the shape of a
 // [tasks.<lang>] key. Same alphabet as a slot name: these are TOML table keys
 // and config map keys, and letting an arbitrary string through would put it
@@ -83,6 +90,14 @@ type TaskCommand struct {
 	// would open a new rejection cluster, which is the failure family this whole
 	// change exists to shrink. Saying so costs a line and shrinks nothing.
 	Notes []string
+	// Env is the language's [tasks.<lang>] env as KEY=VALUE templates, sorted by
+	// key. {workspace} and {working_dir} expand where the command runs
+	// (taskEnviron), not at resolution: mutation_test may move the command into
+	// another work-tree first, and the placeholders must follow it there.
+	Env []string
+	// Root is the workspace root {workspace} expands to; empty falls back to the
+	// directory the command runs in.
+	Root string
 }
 
 // noCommandError explains an unconfigured slot in terms the caller can act on:
@@ -125,6 +140,16 @@ func noCommandError(cmd TaskCommand, slot string) error {
 // it would run against whichever project holds the pin right now.
 const runTaskContested = "run_task: this connection's workspace pin is contested (several agents are multiplexing this plumb serve without declaring an identity), and run_task has no workspace argument of its own, so it would run against whichever project holds the pin right now. Refused rather than misroute. Identify the agents (" + PerCallIdentityRemedy + "), then run the task on the connection that is pinned to your project"
 
+// TaskRequest is what a caller asks the resolver for: a slot, plus the optional
+// values the stored command's placeholders take.
+type TaskRequest struct {
+	Slot     string
+	Target   string // {target}
+	Run      string // {run}: a test-name filter
+	Verbose  bool   // {verbose:<flag>}
+	Language string // "" = the workspace's primary
+}
+
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
 // the session's workspace, applying the per-workspace trust gate. It returns an
 // error when the slot has no command, or when a project-supplied command is not
@@ -136,7 +161,7 @@ const runTaskContested = "run_task: this connection's workspace pin is contested
 // this alias is SHARED with mutation_test, and a shared seam with two shapes is
 // how the two drift. mutation_test passes "" deliberately — a mutant is only
 // meaningful against the language its source is written in.
-type TaskResolverFn = func(ctx context.Context, slot, target, language string) (TaskCommand, error)
+type TaskResolverFn = func(ctx context.Context, req TaskRequest) (TaskCommand, error)
 
 // Tasks is the run_task MCP tool.
 type Tasks struct {
@@ -157,11 +182,19 @@ var runTaskSchema = json.RawMessage(`{
     },
     "target": {
       "type": "string",
-      "description": "Optional target substituted for a {target} token in the stored command (e.g. one test name or package). Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target} slot."
+      "description": "Optional value for the {target} placeholder, e.g. a package. One shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has none."
+    },
+    "run": {
+      "type": "string",
+      "description": "Optional test-name filter for the {run} placeholder (go -run, pytest -k), e.g. TestA|TestB. Letters, digits, space, ._/:@|^$*+?()[]-; no leading - or space."
+    },
+    "verbose": {
+      "type": "boolean",
+      "description": "Fill the {verbose:<flag>} placeholder (go/pytest -v), e.g. to see skipped tests."
     },
     "language": {
       "type": "string",
-      "description": "Which [tasks.<language>] block to run, for a polyglot repo whose other languages are not the primary. Omit for the primary. A language with no commands is refused, naming those that have them."
+      "description": "Which [tasks.<language>] block to run, in a polyglot repo. Omit for the primary. A language with no commands is refused, naming those that have them."
     }
   },
   "required": ["slot"],
@@ -173,7 +206,7 @@ func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
 	return "Run a stored per-language task command — build, lint, test, e2e, verify, or a project-defined slot — configured in [tasks.<lang>]. " +
 		"It executes only the command the user saved (no shell, no agent-supplied command line), for this workspace's primary language or the one you name in `language`. " +
-		"Commands run from the workspace root, or from [tasks.<lang>] working_dir when the module lives in a subdirectory. " +
+		"Runs from the workspace root or [tasks.<lang>] working_dir, with its env. " +
 		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
 		"Pairs with topology_affected (which says WHICH tests to run; this runs them)."
 }
@@ -181,6 +214,8 @@ func (t *Tasks) Description() string {
 type runTaskArgs struct {
 	Slot     string `json:"slot"`
 	Target   string `json:"target"`
+	Run      string `json:"run"`
+	Verbose  bool   `json:"verbose"`
 	Language string `json:"language"`
 }
 
@@ -192,6 +227,9 @@ func (a runTaskArgs) validate() error {
 	}
 	if a.Target != "" && !targetPattern.MatchString(a.Target) {
 		return fmt.Errorf("run_task: target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.Target)
+	}
+	if err := validateRunFilter("run_task: run", a.Run); err != nil {
+		return err
 	}
 	// Shape only. WHICH languages this workspace actually has commands for is a
 	// question only the cli seam can answer, and it refuses with that list.
@@ -216,7 +254,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	if t.resolve == nil {
 		return "", errors.New("run_task: task commands are not available for this session")
 	}
-	cmd, err := t.resolve(ctx, a.Slot, a.Target, a.Language)
+	cmd, err := t.resolve(ctx, TaskRequest(a)) // same fields, so the args ARE the request
 	if err != nil {
 		return "", err
 	}
@@ -245,8 +283,12 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	for _, note := range cmd.Notes {
 		fmt.Fprintf(&b, "note: %s\n", note)
 	}
+	env := taskEnviron(cmd, ws)
+	if len(env) > 0 {
+		fmt.Fprintf(&b, "env: %s\n", describeTaskEnv(env))
+	}
 	for i, argv := range cmd.Steps {
-		res, err := RunTaskArgv(ctx, ws, argv, defaultTaskTimeout)
+		res, err := RunTaskArgv(ctx, ws, argv, env, defaultTaskTimeout)
 		if err != nil {
 			return "", fmt.Errorf("run_task %s: %w", cmd.Slot, err)
 		}
@@ -265,7 +307,7 @@ func formatStep(argv []string, res ExecResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "$ %s\n", strings.Join(argv, " "))
 	if res.GoWorkOff != "" {
-		fmt.Fprintf(&b, "(ran with GOWORK=off: %s lists another directory for this Go module; a GOWORK in the daemon's environment would be used instead)\n", res.GoWorkOff)
+		fmt.Fprintf(&b, "(ran with GOWORK=off: %s lists another directory for this Go module; a GOWORK in the daemon's environment or [tasks.go] env would be used instead)\n", res.GoWorkOff)
 	}
 	if res.TimedOut {
 		b.WriteString("(timed out)\n")

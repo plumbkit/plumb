@@ -63,6 +63,11 @@ type TasksConfig struct {
 	// name — and are NOT agent-writable, since agentWritableKeys is keyed by
 	// registry field and an extra has no registry entry (fail closed).
 	Extra map[string]string `toml:"-"`
+	// Env is set on every command of this language, on top of the inherited
+	// environment and after the automatic GOWORK decision, so an explicit GOWORK
+	// here wins. Values may use {workspace} and {working_dir}. Trust-gated like a
+	// command; see config_tasks_env.go.
+	Env map[string]string `toml:"env"`
 }
 
 // TaskSlots are the built-in slot names, in display order. A project may name
@@ -143,22 +148,29 @@ func ConfiguredSlotNames(t TasksConfig) []string {
 // swift and zig scope through flags whose spelling depends on the project's
 // runner, and a guess that is wrong is worse than no placeholder — those keep
 // their commands unchanged.
+//
+// The same languages carry {run:<flag>} (a test-name filter) and, where the
+// runner has a per-test listing, {verbose:<flag>} (#538). Both collapse to
+// nothing when not asked for, so an unscoped run builds the argv it always did.
+// rust's filter goes after `--` to libtest, because cargo's one positional is
+// already {target}; rust has no verbose placeholder, since cargo test already
+// lists every test, ignored ones included.
 func defaultTasks() map[string]TasksConfig {
 	return map[string]TasksConfig{
 		"go": {
 			Build: "go build ./...",
 			Lint:  "golangci-lint run",
-			Test:  "go test {target:./...}",
+			Test:  "go test {verbose:-v} {run:-run} {target:./...}",
 			E2E:   "go test -tags=integration ./...",
 		},
 		"python": {
-			Test: "pytest {target:}",
+			Test: "pytest {verbose:-v} {run:-k} {target:}",
 			Lint: "ruff check .",
 		},
 		"rust": {
 			Build: "cargo build",
 			Lint:  "cargo clippy",
-			Test:  "cargo test {target:}",
+			Test:  "cargo test {target:} {run:--}",
 		},
 		"typescript": {
 			Build: "npm run build",
@@ -192,7 +204,7 @@ func DefaultTaskCommand(lang, slot string) string {
 // Everything else under [tasks.<lang>] is an extra slot.
 var builtinTaskKeys = map[string]bool{
 	"build": true, "lint": true, "test": true, "e2e": true, "verify": true,
-	"working_dir": true,
+	"working_dir": true, TaskEnvKey: true,
 }
 
 // extraTaskSlots reads the project-named slots out of an already-decoded raw
@@ -327,6 +339,10 @@ func taskSpecsFrom(tasks map[string]any) []TaskCommandSpec {
 			continue
 		}
 		for slot, cv := range slots {
+			if env, isTable := cv.(map[string]any); isTable && strings.EqualFold(slot, TaskEnvKey) {
+				out = append(out, taskEnvSpecs(lang, slot, env)...)
+				continue
+			}
 			cmd, ok := cv.(string)
 			if !ok {
 				continue
@@ -391,11 +407,14 @@ func cloneTasks(m map[string]TasksConfig) map[string]TasksConfig {
 	// without this the Extra maps stay SHARED with the config being cloned from,
 	// and a project layer adding a slot would reach back into the global config
 	// every later load starts from.
+	//
+	// Env is cloned for Git.Env's reason too: go-toml MERGES a project's
+	// [tasks.<lang>.env] sub-table into the map already there, so a shared map
+	// would let a project write into the global config every later load reads.
 	for lang, tc := range out {
-		if tc.Extra != nil {
-			tc.Extra = maps.Clone(tc.Extra)
-			out[lang] = tc
-		}
+		tc.Extra = maps.Clone(tc.Extra)
+		tc.Env = maps.Clone(tc.Env)
+		out[lang] = tc
 	}
 	return out
 }

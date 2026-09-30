@@ -107,8 +107,10 @@ coverage.html
 # Aider chat/input history + tags cache (.aider.chat.history.md, .aider.tags.cache.*, …)
 .aider*
 
-# Plumb workspace marker (commit if you want to share context with your team)
-.plumb/
+# Plumb workspace marker (commit if you want to share context with your team).
+# config.toml is plumb's own project config and is committed (#537).
+.plumb/*
+!.plumb/config.toml
 
 # macOS
 .DS_Store

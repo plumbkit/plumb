@@ -2,6 +2,39 @@
 
 ## 0.20.4 (unreleased)
 
+### Added
+
+- **`[tasks.<lang>] env`: environment variables for a language's task
+  commands.** (#537) A task slot had no way to set a variable, so `run_task test`
+  could not reproduce plumb's own CI: `make test` sets `GOTMPDIR` inside the
+  checkout, `go test` under `run_task` used the system temp directory, and a test
+  depending on the difference passed locally and failed on CI. `env` applies to
+  `run_task`, `mutation_test`'s compile and test steps and `plumb build|test|…`,
+  on top of the inherited environment and before the automatic `GOWORK=off`
+  decision, so an explicit `GOWORK` there wins. Values may use `{workspace}` and
+  `{working_dir}`, which follow a command `mutation_test` re-roots into another
+  worktree; a `GOTMPDIR`/`TMPDIR` inside the workspace is created, as `make
+  test`'s prerequisite does. `run_task` lists the applied entries, credentials
+  redacted, and `plumb config show` shows each with its provenance. A project's
+  `env` is trust-gated like a command: every entry is in the `plumb trust` hash,
+  it makes every slot of the language project-supplied, `plumb trust` flags
+  entries such as `PATH`, `GOFLAGS` or `GIT_*` that change what runs, and the
+  loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`,
+  `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. plumb's own
+  `.plumb/config.toml` is now committed and sets `GOTMPDIR` the way `make test`
+  does; run `plumb trust` in a plumb checkout once.
+- **`run_task` `run` and `verbose`, `mutation_test` `test_run`: run one test, or
+  a pattern.** (#538) `target` fills one positional, in practice a package, so
+  there was no way to run `go test -run 'X|Y'`, `pytest -k` or a cargo test
+  filter, or to see which tests were skipped, and every mutant paid for its whole
+  package. Two new placeholders, `{run:<flag>}` and `{verbose:<flag>}`, add
+  nothing when not asked for; the shipped defaults are now `go test {verbose:-v}
+  {run:-run} {target:./...}`, `pytest {verbose:-v} {run:-k} {target:}` and
+  `cargo test {target:} {run:--}`, and a stored earlier default is reconciled to
+  them. The filter reaches the command as one argument with no shell, allows
+  `|`, regexp characters and spaces, and may not start with `-`. A filter on a
+  command with no `{run}` is refused; a `verbose` it cannot place is noted.
+
 ### Fixed
 
 - **A read records the version it showed.** `read_file` took the file's mtime

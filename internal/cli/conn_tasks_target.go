@@ -70,16 +70,24 @@ func reconcileTargetPlaceholder(argv []string, lang, slot string) []string {
 	if err != nil || def == nil {
 		return nil
 	}
-	idx, value, ok := soleDefaultedPlaceholder(def)
+	// The {run} and {verbose} placeholders vanish from an unscoped argv, so a
+	// stored command without them is the same equivalence: `go test
+	// {target:./...}`, the default shipped before #538, is what the current default
+	// builds with no run filter and no verbose, and it reconciles to that default.
+	bare := stripScopePlaceholders(def)
+	if len(bare) != len(def) && slices.Equal(argv, bare) {
+		return slices.Clone(def)
+	}
+	idx, value, ok := soleDefaultedPlaceholder(bare)
 	if !ok {
 		return nil
 	}
 	// An empty default means the shipped command spells "everything" as the
 	// ABSENCE of the operand (cargo test, pytest), so the expanded form is one
 	// element SHORTER; every other default expands in place.
-	expanded := slices.Concat(def[:idx:idx], []string{value}, def[idx+1:])
+	expanded := slices.Concat(bare[:idx:idx], []string{value}, bare[idx+1:])
 	if value == "" {
-		expanded = slices.Concat(def[:idx:idx], def[idx+1:])
+		expanded = slices.Concat(bare[:idx:idx], bare[idx+1:])
 	}
 	if !slices.Equal(argv, expanded) {
 		return nil
@@ -197,6 +205,11 @@ func targetPlaceholderRemedy(stored, shipped string) (string, bool) {
 	}
 	out := slices.Clone(argv)
 	out[at] = token
+	if slices.Equal(out, stripScopePlaceholders(def)) {
+		// No flags of the caller's own: the shipped default IS their command with
+		// the placeholders in, {run} and {verbose} included.
+		return strings.Join(def, " "), true
+	}
 	return strings.Join(out, " "), true
 }
 

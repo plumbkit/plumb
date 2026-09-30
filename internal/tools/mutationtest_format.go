@@ -69,6 +69,20 @@ func targetNote(target string, cmd TaskCommand) string {
 	return " — scoped to " + target
 }
 
+// testScopeLabel is the scope targetNote names: the {target} value, the {run}
+// filter, or both. A run filter alone is still a scoped run, so it must not fall
+// through to the WHOLE-suite line.
+func testScopeLabel(target, run string) string {
+	switch {
+	case run == "":
+		return target
+	case target == "":
+		return "tests matching " + run
+	default:
+		return target + ", tests matching " + run
+	}
+}
+
 func renderSteps(cmd TaskCommand) string {
 	parts := make([]string, 0, len(cmd.Steps))
 	for _, argv := range cmd.Steps {
