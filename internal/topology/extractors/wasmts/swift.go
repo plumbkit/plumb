@@ -12,18 +12,21 @@ import (
 // scanner, compiled to wasm32-wasi by csrc/build-swift.sh. It is committed so
 // building plumb needs only Go + wazero (no C toolchain). See csrc/NOTICE.md.
 //
-// Why WASM for Swift: the pure-Go gotreesitter port cannot reduce an
-// implicitly-unwrapped optional type (`var x: T!`) — it emits an ERROR that
-// cascades and collapses the enclosing type, dropping it and all its members
-// from the outline (pervasive in AppKit/UIKit). The canonical grammar parses it
-// cleanly.
+// Why WASM for Swift: the pure-Go gotreesitter port still diverges from the
+// canonical grammar on real Swift code, and an ERROR there drops the enclosing
+// type and its members from the outline. It first collapsed on implicitly-
+// unwrapped optionals (`var x: T!`, fixed in v0.47). Since v0.54 it fails on a
+// `#` token (`#if`, `#warning`, `#Preview`, `#expect`) that follows a statement;
+// TestSwift_HashTokenAfterStatement_GotreesitterStillBroken is the tripwire. The
+// canonical grammar parses both cleanly. The retirement gate is PLAN-1.
 //
 //go:embed swift.wasm
 var swiftWasm []byte
 
 // NewSwift returns a WASM-backed Swift extractor. Its fallback is the pure-Go
-// gotreesitter Swift extractor (which carries the byte-blanking IUO workaround),
-// used only if the wasm runtime cannot initialise.
+// gotreesitter Swift extractor. It is used when the wasm runtime cannot
+// initialise, and per file when a wasm parse faults (Extract) — which logs
+// only the first fault, so later fallbacks are silent.
 func NewSwift() *Extractor {
 	return &Extractor{
 		langName: "swift", exts: []string{".swift"},
