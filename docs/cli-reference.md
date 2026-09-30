@@ -303,13 +303,14 @@ Code gets a third:
   through. The hook asks the running daemon what it accepts (over the control
   socket, cached for a minute under `PLUMB_WAKE_DIR`): its version, and
   whether its `identity-keys` answer lists `plumb_agent`. A daemon that does
-  not list it gets the older key `dev.plumbkit/logical-agent` instead, and one
+  not list it gets the older key `dev.plumbkit/logical-agent` instead, which
+  Claude desktop's connector strips, and bare `plumb hooks` says so. One
   older than 0.19.1 would reject either as an unknown parameter, so against it
-  the hook stamps nothing and bare `plumb hooks` says so. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
+  the hook stamps nothing and bare `plumb hooks` says that too. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
   a call: normally the worst case is an unstamped call, which is what the
-  client sent anyway. The daemon's answer is cached for a minute, so if the
-  daemon is replaced by an OLDER build inside that minute, the hook can keep
-  stamping a key the new daemon rejects until the cache expires. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
+  client sent anyway. The cached answer belongs to one daemon instance (its
+  PID file and control socket), so a daemon restarted or replaced inside the
+  minute is asked again. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
   not matched. Codex is not covered: its `updatedInput` requires
   `permissionDecision: "allow"`, a permission side-effect plumb will not take
   silently. **After upgrading, re-run `plumb hooks install claude-code`** — an
