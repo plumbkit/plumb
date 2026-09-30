@@ -53,8 +53,8 @@ func (s *connSession) seedFromParentLocked(sh *agentShard) {
 }
 
 // followParentShard re-seeds, after conversation parentID moved its own shard
-// off prevRoot, every subagent `<parentID>/*` shard still sitting on prevRoot
-// that never chose a root of its own. Seeding at creation alone left a subagent
+// off prevRoot, every subagent `<parentID>/*` shard that never chose or
+// restored a root of its own, wherever it currently sits. Seeding at creation alone left a subagent
 // that had made any call before its parent re-pinned (a background subagent, a
 // continued one) on the old root — another conversation's checkout — for good.
 // The counterpart of followConnectionShards, for the parent's move.
@@ -80,9 +80,13 @@ func (s *connSession) followParentShard(parentID, prevRoot string) {
 			continue
 		}
 		sh.mu.Lock()
-		// The root check is defensive: a subagent that never chose a root sits
-		// where its conversation last was, so today it always equals prevRoot.
-		if sh.selfPinned || sh.restored || sh.root != prevRoot {
+		// No root comparison: a subagent that never chose a root always follows
+		// its conversation. Comparing against prevRoot was NOT equivalent —
+		// a concurrent connection move could drag the subagent off prevRoot
+		// between the parent's move and this follow (followConnectionShards
+		// read parentChose before the parent committed), and the check would
+		// then strand it on the connection's new root (review of #535).
+		if sh.selfPinned || sh.restored {
 			sh.mu.Unlock()
 			continue
 		}
