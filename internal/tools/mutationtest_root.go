@@ -435,18 +435,18 @@ func rerootCommand(ctx context.Context, lookup func(context.Context, string) git
 			"and plumb does not move trusted commands on a guess. Nothing was run. Fix what git reports and retry",
 			file, dest.top, moved, rel, got.reason)
 	}
-	// The destination must also BE the file's repository: git can print one
-	// work-tree root for two repositories (a core.worktree naming another
-	// repository's worktree), and the paths alone would then agree.
-	if got.place == placeTree && !sameGitPath(got.tree.key, dest.key) {
-		return cmd, fmt.Errorf("mutation_test: %s is in work-tree %s, but git places the matching directory there, %s, in a different "+
-			"repository (%s, not %s) — a core.worktree pointing at another repository's checkout? plumb never moves the commands "+
-			"into another repository. Nothing was run", file, dest.top, moved, got.tree.key, dest.key)
-	}
 	if got.place != placeTree || !sameGitPath(got.tree.top, dest.top) || !sameGitPath(got.tree.prefix, from.prefix) {
 		return cmd, fmt.Errorf("mutation_test: %s is in work-tree %s, but the matching directory there, %s, resolves to %s — not "+
 			"that work-tree's %q (a symlink on its branch?). Commands run there would test whatever it leads to. Nothing was run",
 			file, dest.top, moved, paths.Canonical(moved), rel)
+	}
+	// The paths agree; the destination must also BE the file's repository. git
+	// prints one work-tree root for two repositories when a core.worktree names
+	// another repository's worktree, and the paths alone would then agree.
+	if !sameGitPath(got.tree.key, dest.key) {
+		return cmd, fmt.Errorf("mutation_test: %s is in work-tree %s, but git places the matching directory there, %s, in a different "+
+			"repository (%s, not %s) — a core.worktree pointing at another repository's checkout? plumb never moves the commands "+
+			"into another repository. Nothing was run", file, dest.top, moved, got.tree.key, dest.key)
 	}
 	if arg, ok := argNamingTree(cmd, from.top, dest.top); ok {
 		return cmd, fmt.Errorf("mutation_test: %s is in work-tree %s, but a stored command argument names a path in the tree it would be moved away from "+
