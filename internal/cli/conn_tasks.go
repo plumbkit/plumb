@@ -6,9 +6,11 @@ package cli
 // closure pattern (config adapted into a plain tools type at the cli seam).
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -489,6 +491,11 @@ func taskProvenance(ws, lang, slot string) (label string, fromProject bool, why 
 	if err != nil {
 		return "project", true, "its task settings could not be read"
 	}
+	// The specs come from map iteration; sorted, the refusal names the same
+	// setting every time for a project that has several.
+	slices.SortFunc(cmds, func(a, b config.TaskCommandSpec) int {
+		return cmp.Or(strings.Compare(a.Lang, b.Lang), strings.Compare(a.Slot, b.Slot))
+	})
 	for _, c := range cmds {
 		if !strings.EqualFold(c.Lang, lang) {
 			continue

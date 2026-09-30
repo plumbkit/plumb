@@ -21,7 +21,7 @@ import (
 // command does, so a project's entries are part of the trusted content (see
 // taskSpecsFrom) and a project env makes every slot of that language
 // project-supplied, the rule working_dir already follows. One exception
-// (TaskEnvIsScratchDir): a temp-directory variable pointing inside the workspace
+// (TaskEnvIsScratchDir): GOTMPDIR pointing inside the workspace
 // changes neither what runs nor where, so it alone does not make the shipped
 // defaults need trust, and a checked-in `GOTMPDIR = "{workspace}/.testcache"`
 // does not break run_task in every fresh clone and worktree.
@@ -78,8 +78,10 @@ var steeringEnvKeys = map[string]bool{
 var steeringEnvPrefixes = []string{"GIT_", "DYLD_", "CGO_", "CARGO_TARGET_", "NPM_CONFIG_"}
 
 // scratchDirEnvKeys name a directory a command writes temporary files to and
-// nothing else; see TaskEnvIsScratchDir.
-var scratchDirEnvKeys = map[string]bool{"GOTMPDIR": true, "TMPDIR": true}
+// nothing else; see TaskEnvIsScratchDir. Only GOTMPDIR, the one a checked-in
+// config needs to mirror CI (#537): least privilege, since TMPDIR reaches every
+// tool of every language, not only go's build and test temp files.
+var scratchDirEnvKeys = map[string]bool{"GOTMPDIR": true}
 
 // TaskEnvIsScratchDir reports whether a [tasks.<lang>] env entry only moves
 // temporary files to a directory inside the workspace: a scratch-directory key

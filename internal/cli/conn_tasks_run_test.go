@@ -189,16 +189,40 @@ func TestTaskResolver_AScratchDirInsideTheWorkspaceNeedsNoTrust(t *testing.T) {
 			t.Errorf("GOTMPDIR=%s may leave the workspace and must be trust-gated; got %v", value, err)
 		}
 	}
-	// A key that is not a scratch directory is gated even with a workspace value.
-	ws := t.TempDir()
-	if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", "HOME"}, "{workspace}/.home"); err != nil {
-		t.Fatal(err)
+	// Any other key is gated even with a workspace value: HOME steers config lookup
+	// (.gitconfig hooks), and TMPDIR reaches every tool of every language.
+	for _, key := range []string{"HOME", "TMPDIR"} {
+		ws := t.TempDir()
+		if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", key}, "{workspace}/.x"); err != nil {
+			t.Fatal(err)
+		}
+		s := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {
+			Build: config.DefaultTaskCommand("go", "build"),
+			Env:   map[string]string{key: "{workspace}/.x"},
+		}})
+		if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil {
+			t.Errorf("%s is not GOTMPDIR; a project setting it must be trust-gated", key)
+		}
 	}
-	s := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {
-		Build: config.DefaultTaskCommand("go", "build"),
-		Env:   map[string]string{"HOME": "{workspace}/.home"},
-	}})
-	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil {
-		t.Error("HOME steers config lookup (.gitconfig hooks); a project setting it must be trust-gated")
+}
+
+// TestTaskProvenance_NamesTheSameSettingEveryTime: the project specs come from map
+// iteration, so a project with several gated settings once named a different one
+// from run to run. The refusal must be stable, and an exempt GOTMPDIR next to them
+// must not end the scan.
+func TestTaskProvenance_NamesTheSameSettingEveryTime(t *testing.T) {
+	ws := t.TempDir()
+	// Both gated keys sort AFTER GOTMPDIR, so an exempt entry that ended the scan
+	// would leave the command ungated.
+	for k, v := range map[string]string{"GOTMPDIR": "{workspace}/.testcache", "ZED": "1", "MMM": "3"} {
+		if err := config.SetProjectValue(ws, []string{"tasks", "go", "env", k}, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 20 {
+		_, fromProject, why := taskProvenance(ws, "go", "build")
+		if !fromProject || !strings.Contains(why, "env sets MMM") {
+			t.Fatalf("want the gated setting named deterministically (MMM, first in order); got fromProject=%v why=%q", fromProject, why)
+		}
 	}
 }
