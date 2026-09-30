@@ -282,8 +282,8 @@ func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePa
 // daemonInstanceMarker names the running daemon INSTANCE, so the probe cache
 // can tell a restarted or swapped daemon from the one it asked. It runs on
 // every plumb tool call, so it costs one small file read and one stat — no
-// dial — and it fails safe: anything unreadable is "", which daemonIdentity
-// treats as a miss.
+// dial — and it fails safe: a control socket that cannot be stat'd is "",
+// which daemonIdentity treats as a miss.
 //
 // The marker is the PID file's contents plus the control socket's inode and
 // modification time, because each alone can repeat across two daemons. A PID
@@ -296,15 +296,14 @@ func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePa
 // older daemon cannot answer it — and an older daemon is the swap this
 // exists to catch. Both files are written by every daemon since the identity
 // channel, so the marker needs nothing from the daemon being asked.
+//
+// The daemon only logs a warning when it cannot write its PID file, so an
+// unreadable or empty one falls back to the socket alone rather than to "":
+// "" would never hit, and every tool call would pay two dials for as long as
+// that daemon runs. The socket half still moves on every re-bind, so the
+// fallback stays a miss across a swap, and it cannot match a marker that had
+// a PID, which always starts with one.
 func daemonInstanceMarker() string {
-	pid, err := os.ReadFile(daemonPIDPath())
-	if err != nil {
-		return ""
-	}
-	id := strings.TrimSpace(string(pid))
-	if id == "" {
-		return ""
-	}
 	fi, err := os.Stat(daemonCtrlSocketPath())
 	if err != nil {
 		return ""
@@ -313,7 +312,12 @@ func daemonInstanceMarker() string {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		ino = st.Ino
 	}
-	return fmt.Sprintf("pid=%s ino=%d mtime=%d", id, ino, fi.ModTime().UnixNano())
+	sock := fmt.Sprintf("ino=%d mtime=%d", ino, fi.ModTime().UnixNano())
+	pid, err := os.ReadFile(daemonPIDPath())
+	if id := strings.TrimSpace(string(pid)); err == nil && id != "" {
+		return "pid=" + id + " " + sock
+	}
+	return sock
 }
 
 // daemonVersionAcceptsStamp: a release older than the threshold does not;
