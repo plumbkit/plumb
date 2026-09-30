@@ -48,12 +48,12 @@ func TestCheckExpectedVersion_HintSuppressedInStrict(t *testing.T) {
 		Edits:         []strEdit{{OldStr: "hello", NewStr: "world"}},
 	}
 
-	err := checkExpectedVersion(path, a, false)
+	err := checkExpectedVersion(path, a, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "reconcile: true") {
 		t.Fatalf("non-strict should include the reconcile hint, got: %v", err)
 	}
 
-	err = checkExpectedVersion(path, a, true)
+	err = checkExpectedVersion(path, a, true, nil)
 	if err == nil || strings.Contains(err.Error(), "reconcile: true") {
 		t.Fatalf("strict mode should suppress the reconcile hint, got: %v", err)
 	}

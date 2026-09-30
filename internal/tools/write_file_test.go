@@ -239,6 +239,14 @@ func TestWriteFile_ExpectedMtimeGuard(t *testing.T) {
 	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Backdate v1 so the guarded write below is guaranteed a DIFFERENT mtime. On
+	// a coarse-clock filesystem (ext4 stamps from the jiffy-granular coarse
+	// clock) two writes within one tick share an mtime, and "the write bumps the
+	// mtime" would be false — the CI flake (runs 32341896397, 32445382088).
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
 	info, _ := os.Stat(path)
 	good := info.ModTime().Format(time.RFC3339Nano)
 
