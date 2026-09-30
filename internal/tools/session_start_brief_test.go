@@ -195,7 +195,7 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 	if !strings.Contains(out, briefOrientationFooter) {
 		t.Fatalf("expected this call to auto-brief, got:\n%s", out)
 	}
-	if want := "Re-pinned this connection: " + attached + " → " + target; !strings.Contains(out, want) {
+	if want := "Re-pinned: " + attached + " → " + target; !strings.Contains(out, want) {
 		t.Errorf("brief must carry the re-pin announcement %q, got:\n%s", want, out)
 	}
 	if !strings.Contains(out, "Session:  resumed-session (resumed)") {

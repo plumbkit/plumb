@@ -81,7 +81,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
 	if repinnedFrom != "" {
-		fmt.Fprintf(&sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
+		fmt.Fprintf(&sb, "Re-pinned: %s → %s\n\n", repinnedFrom, ws)
 	}
 	if lang != "" {
 		fmt.Fprintf(&sb, "Language: %s\n", lang)

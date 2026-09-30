@@ -21,9 +21,6 @@ import (
 func TestSeedArmsTheGateBeforeAnyAgentRedeclares(t *testing.T) {
 	var l logicalAgentState
 	l.seed([]string{"coordinator", "subagent"})
-	// Restoring ids from disk says who was here, not that this client can
-	// address them. The ceiling arms on demonstrated capability, so prove it.
-	l.markStamped()
 
 	if !l.refuse("") {
 		t.Error("a connection with two persisted identities must refuse an anonymous state-changing call immediately after a restart")

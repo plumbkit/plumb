@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **An unattributable write on a shared connection is refused, never guessed.**
+  When several agents share one `plumb serve` connection, a state-changing
+  call that carries no agent identity cannot be attributed to any of them.
+  Two exemptions used to let it through, resolved against the connection's
+  pin: a connection where no call had ever carried a per-call identity, and
+  `[collab] allow_unidentified_writes`. On Claude desktop's connector both
+  applied, and an agent's edit landed in another agent's checkout. Both are
+  gone. Such a call is refused with the remedy: the Claude Code identity hook,
+  `plumb_agent` on every call for a client without the hook, or one
+  `plumb serve` per agent. **`allow_unidentified_writes` is retired**: a
+  config that sets it still loads, and the refusal says the key is ignored. A
+  single-agent connection is unaffected.
+
+- **`session_start` no longer says "Re-pinned this connection" when only your
+  own pin moved.** It now prints `Re-pinned: <from> → <to>`. The
+  no-identity notices now describe the current refusal rule.
+
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one
   `plumb serve` (`claude_desktop_config.json`, client `local-agent-mode-plumb`)
