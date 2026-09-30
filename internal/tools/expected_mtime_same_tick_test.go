@@ -110,3 +110,46 @@ func TestExpectedMtime_AnUnchangedFileIsStillWritten(t *testing.T) {
 		})
 	}
 }
+
+// TestExpectedMtime_ATokenTheCallerCanVouchForIsNotSecondGuessed pins the two
+// limits of the same-mtime check; each case must be WRITTEN.
+//   - The session read the file at one mtime and the file has moved on to another;
+//     the caller passes the new mtime. The recorded read is at another mtime, so it
+//     says nothing about this token.
+//   - A peer's same-mtime change, but the caller also passes that version's SHA:
+//     an explicit expected_sha is authoritative, and it matches.
+func TestExpectedMtime_ATokenTheCallerCanVouchForIsNotSecondGuessed(t *testing.T) {
+	t.Run("the current mtime, from a read at another", func(t *testing.T) {
+		deps, path, _ := sameTickFixture(t, false)
+		if err := os.WriteFile(path, []byte("NEXT one\nNEXT two\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		later := time.Now().Add(time.Hour)
+		if err := os.Chtimes(path, later, later); err != nil {
+			t.Fatal(err)
+		}
+		requireWritten(t, deps, path, map[string]any{"expected_mtime": later.Format(time.RFC3339Nano)})
+	})
+	t.Run("the read's mtime with the peer version's SHA", func(t *testing.T) {
+		deps, path, mtime := sameTickFixture(t, true)
+		sha, err := fileSHA256(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireWritten(t, deps, path, map[string]any{"expected_mtime": mtime, "expected_sha": sha})
+	})
+}
+
+func requireWritten(t *testing.T, deps WriteDeps, path string, guard map[string]any) {
+	t.Helper()
+	args := map[string]any{"file_path": path, "content": "mine\n"}
+	for k, v := range guard {
+		args[k] = v
+	}
+	if _, err := NewWriteFile(deps).Execute(context.Background(), mustJSON(args)); err != nil {
+		t.Fatalf("a token the caller can vouch for must be written: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "mine\n" {
+		t.Errorf("the write must land; got %q", got)
+	}
+}
