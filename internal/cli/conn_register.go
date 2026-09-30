@@ -365,6 +365,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.handleRootsListChanged(initCtx, request)
 	}
+	srv.DeclareIdentityArg = s.clientStripsUndeclaredArgs
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage, logicalAgent string) {
 		s.recordLogicalAgentCall(logicalAgent)
 		s.onBeforeTool(toolCtx, name, args)

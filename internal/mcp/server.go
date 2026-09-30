@@ -142,6 +142,12 @@ type Server struct {
 	// OnRootsChanged is called each time the client notifies that its roots changed.
 	OnRootsChanged func(ctx context.Context, request RequestFn)
 
+	// DeclareIdentityArg, if set and true when tools/list is served, adds
+	// ArgLogicalAgentDeclaredKey to every advertised inputSchema. Set for a
+	// client that forwards only declared arguments, where the identity stamp
+	// would otherwise be dropped before it reaches the daemon.
+	DeclareIdentityArg func() bool
+
 	// OnBeforeTool is called synchronously before each tools/call execution.
 	// logicalAgent is the client-declared logical-agent identity carried in the
 	// call's `_meta` (MetaLogicalAgentKey), or "" when the client supplies none.

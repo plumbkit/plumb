@@ -235,6 +235,7 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	snaps := s.snapshotTools()
 	filter := s.ToolFilter     // set before Serve; read without the lock
 	alwaysLoad := s.AlwaysLoad // set before Serve; read without the lock
+	declareIdentity := s.DeclareIdentityArg != nil && s.DeclareIdentityArg()
 	defs := make([]toolDef, 0, len(snaps))
 	for _, sn := range snaps {
 		// A filtered-out tool is hidden from the advertised list but stays
@@ -246,6 +247,9 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 			Name:        sn.name,
 			Description: sn.description,
 			InputSchema: sn.schema,
+		}
+		if declareIdentity {
+			def.InputSchema = withIdentityProperty(sn.schema)
 		}
 		// Pin the hot tools into the client's context so it never runs an MCP
 		// tool-search round-trip (or guesses parameter names) for them; the long

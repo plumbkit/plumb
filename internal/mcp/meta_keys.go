@@ -173,3 +173,15 @@ const MetaLogicalAgentKey = "dev.plumbkit/logical-agent"
 // runtime injected from one a model typed; the trust boundary stays the
 // connection, exactly as for `_meta` (docs/threat-model.md).
 const ArgLogicalAgentKey = MetaLogicalAgentKey
+
+// ArgLogicalAgentDeclaredKey is the DECLARABLE spelling of the argument-carried
+// identity, lifted exactly like ArgLogicalAgentKey. It exists because some
+// hosts forward only the arguments a tool's inputSchema declares. Claude
+// desktop's connector (clientInfo.name "local-agent-mode-<server>") applies the
+// PreToolUse hook's updatedInput — a hook-added session_id reaches the daemon —
+// but drops every undeclared key, so the reverse-DNS stamp never arrived and
+// every Code-tab conversation shared one connection pin. The reverse-DNS key
+// cannot be declared: the Anthropic API limits property names to
+// ^[a-zA-Z0-9_.-]{1,64}$. For such a client the server advertises this key in
+// every tool's schema (Server.DeclareIdentityArg); no tool declares it itself.
+const ArgLogicalAgentDeclaredKey = "plumb_agent"

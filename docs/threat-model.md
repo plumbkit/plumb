@@ -593,8 +593,8 @@ Tracked, not hidden. Each is real today.
 
 1. **Logical-agent isolation.** State is per MCP *connection* unless the
    client identifies each logical agent. With an identity — per-call `_meta`,
-   the `dev.plumbkit/logical-agent` key a client runtime stamps into
-   `arguments` (Claude Code's PreToolUse hook, the DeepSeek Harness identity
+   the `dev.plumbkit/logical-agent` or `plumb_agent` key a client runtime
+   stamps into `arguments` (Claude Code's PreToolUse hook, the DeepSeek Harness identity
    plugin), or `session_start.session_id` — the pin, read tracker, write
    tracker, undo history, write budget, **LSP routing, and the workspace-wide
    diagnostics/symbol aggregates** are per agent. Still per connection: the

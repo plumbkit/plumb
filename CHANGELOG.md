@@ -23,6 +23,27 @@
 
 ### Fixed
 
+- **Agent identity now reaches plumb through Claude desktop's connector, and a
+  worktree edit no longer lands in another checkout.** Claude desktop runs one
+  `plumb serve` (`claude_desktop_config.json`, client `local-agent-mode-plumb`)
+  for every conversation, chat and Code tab, in every project, so only the
+  per-call identity the PreToolUse hook stamps tells those conversations apart.
+  The connector forwards only the arguments a tool's schema declares, and the
+  stamp (`dev.plumbkit/logical-agent`) was undeclared, so it was dropped on
+  every call: 0 of 1,988 calls on one machine carried it. Every call then
+  resolved through the one connection pin. An agent that re-pinned itself to a
+  worktree with `session_start` was told it succeeded, and its next relative
+  `edit_file` was written to the main checkout another agent had pinned. For
+  this client the daemon now declares a stamp key, `plumb_agent`, in every
+  tool's schema, and the hook stamps under it when the daemon is 0.20.3 or
+  newer (older daemons keep getting the old key, which they accept). Restart
+  Claude desktop after upgrading so it re-reads the tool list.
+
+- **`session_start` now says when your calls arrive without an identity.** The
+  notice meant for this case read the identity after applying `session_start`'s
+  own `session_id`, which the hook always adds, so it reported the channel
+  working on exactly the client that dropped it.
+
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime
   when a caller passed `expected_mtime`, and skipped the session's recorded
