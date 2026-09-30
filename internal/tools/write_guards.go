@@ -90,23 +90,6 @@ func currentShaLine(path string) string {
 	return fmt.Sprintf("  current sha256: %s\n", sha)
 }
 
-// changedSinceSessionRead reports whether this session read path earlier (via
-// the per-connection ReadTracker) and its content has changed since — i.e. a
-// peer agent or a human edited it after this session's last read, with no
-// explicit expected_mtime/expected_sha guard to catch it.
-//
-// mtime is the cheap first signal: if it has advanced the file definitely
-// changed and no hashing is needed. When the mtime did NOT advance the content
-// can still differ (a same-tick write, or a tool that preserves mtime), so the
-// recorded read SHA is compared as the authoritative check. Hashing therefore
-// happens only in the ambiguous case, keeping the common write hash-free.
-//
-// It returns false when the file was never read this session (so creating or
-// blind-writing a brand-new file is never flagged), when reads is nil, on a
-// stat error, or when no read SHA was recorded and the mtime did not advance.
-// write_file uses it to refuse-with-override; edit_file uses it to warn (its
-// str_replace anchor already protects the edited region, but the surrounding
-// file may have moved under the caller).
 // changedAtSameMtime reports whether path's content differs from what this
 // session read at mtime want: the check behind an expected_mtime that matches.
 // An equal mtime does not prove equal content — a coarse timestamp clock (ext4
@@ -128,6 +111,23 @@ func changedAtSameMtime(reads *ReadTracker, path string, want time.Time) (readSh
 	return entry.sha, cur, true
 }
 
+// changedSinceSessionRead reports whether this session read path earlier (via
+// the per-connection ReadTracker) and its content has changed since — i.e. a
+// peer agent or a human edited it after this session's last read, with no
+// explicit expected_mtime/expected_sha guard to catch it.
+//
+// mtime is the cheap first signal: if it has advanced the file definitely
+// changed and no hashing is needed. When the mtime did NOT advance the content
+// can still differ (a same-tick write, or a tool that preserves mtime), so the
+// recorded read SHA is compared as the authoritative check. Hashing therefore
+// happens only in the ambiguous case, keeping the common write hash-free.
+//
+// It returns false when the file was never read this session (so creating or
+// blind-writing a brand-new file is never flagged), when reads is nil, on a
+// stat error, or when no read SHA was recorded and the mtime did not advance.
+// write_file uses it to refuse-with-override; edit_file uses it to warn (its
+// str_replace anchor already protects the edited region, but the surrounding
+// file may have moved under the caller).
 func changedSinceSessionRead(reads *ReadTracker, path string) bool {
 	entry, ok := reads.recorded(path)
 	if !ok {
