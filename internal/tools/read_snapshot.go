@@ -1,0 +1,105 @@
+package tools
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+)
+
+// read_snapshot.go: the version a read records is the version the caller saw.
+//
+// A read records the file's mtime and SHA-256 in the session's ReadTracker, and
+// the write guards compare them with the file later: an expected_mtime that
+// matches but content that changed is refused (changedAtSameMtime), and so is an
+// unguarded write over a file changed since the read (changedSinceSessionRead).
+// Both rest on the recorded SHA being the hash of the bytes the caller was shown.
+// Taking the mtime from one stat, the body from one read and the SHA from a second
+// read of the path broke that: a change landing between them recorded the new
+// SHA against the old body, and the guards then let the caller overwrite a change
+// it never saw. read_symbol's window was the whole language-server round trip.
+//
+// readSnapshot reads the file once, through one descriptor, handing the bytes to
+// the caller's consumer while hashing every one of them (the rest of the file is
+// drained into the hash when a windowed read stops early), and takes the mtime
+// from that descriptor. A writer that replaces the file (plumb's own writes,
+// editors that save atomically) cannot change what the descriptor reads. One that
+// rewrites it in place is caught by the descriptor's mtime and size before and
+// after the read, and the read is taken again.
+
+// snapshotAttempts bounds the re-reads of a file that keeps changing in place.
+const snapshotAttempts = 3
+
+// fileSnapshot is one consistent version of a file: the mtime and SHA-256 of the
+// very bytes a read handed to its consumer. sha is "" when the file kept changing
+// through every attempt; the guards then fall back to the mtime alone, as they do
+// for any read without a hash.
+type fileSnapshot struct {
+	mtime time.Time
+	size  int64
+	sha   string
+}
+
+// readSnapshot opens path and calls consume with a reader over its whole content,
+// then returns the version consume saw. consume may stop reading early. It is
+// called again, from the start, when the file changed during the read, so it must
+// reset whatever it builds; an error from consume is returned as is.
+func readSnapshot(path string, consume func(io.Reader) error) (fileSnapshot, error) {
+	var last fileSnapshot
+	for range snapshotAttempts {
+		snap, stable, err := readSnapshotOnce(path, consume)
+		if err != nil {
+			return fileSnapshot{}, err
+		}
+		if stable {
+			return snap, nil
+		}
+		last = snap
+	}
+	last.sha = ""
+	return last, nil
+}
+
+// snapshotLines reads path whole and splits it into lines (as fileLines does),
+// returning the version those lines are.
+func snapshotLines(path string) ([]string, fileSnapshot, error) {
+	var lines []string
+	snap, err := readSnapshot(path, func(r io.Reader) error {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		lines = strings.Split(string(data), "\n")
+		return nil
+	})
+	return lines, snap, err
+}
+
+func readSnapshotOnce(path string, consume func(io.Reader) error) (fileSnapshot, bool, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: path was resolved and boundary-checked by the calling tool
+	if err != nil {
+		return fileSnapshot{}, false, err
+	}
+	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return fileSnapshot{}, false, err
+	}
+	h := sha256.New()
+	tee := io.TeeReader(f, h)
+	if err := consume(tee); err != nil {
+		return fileSnapshot{}, false, err
+	}
+	if _, err := io.Copy(io.Discard, tee); err != nil {
+		return fileSnapshot{}, false, fmt.Errorf("hashing %q: %w", path, err)
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return fileSnapshot{}, false, err
+	}
+	stable := after.ModTime().Equal(before.ModTime()) && after.Size() == before.Size()
+	return fileSnapshot{mtime: before.ModTime(), size: before.Size(), sha: hex.EncodeToString(h.Sum(nil))}, stable, nil
+}
