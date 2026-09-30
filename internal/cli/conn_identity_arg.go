@@ -26,5 +26,5 @@ func (s *connSession) clientStripsUndeclaredArgs() bool {
 // Code itself, or Claude desktop's connector (whose Code-tab sessions run it).
 func (s *connSession) isHookClient() bool {
 	name := s.clientNameStr()
-	return name == "claude-code" || strings.HasPrefix(name, localAgentModeClientPrefix)
+	return strings.HasPrefix(name, "claude-code") || strings.HasPrefix(name, localAgentModeClientPrefix)
 }

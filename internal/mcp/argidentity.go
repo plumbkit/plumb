@@ -64,9 +64,11 @@ func rawString(v json.RawMessage) string {
 
 // identityPropertySchema is the property advertised under
 // ArgLogicalAgentDeclaredKey. Model-facing and repeated in every tool schema,
-// so it is kept short. Where plumb's hook runs it overwrites whatever the model
-// typed; elsewhere the model passes the session_id it gave session_start.
-const identityPropertySchema = `{"type":"string","description":"Your session_id; set by plumb's hook where installed."}`
+// so it is kept short. It must tell a model NOT to fill it: plumb's hook
+// overwrites a typed value, but without the hook an invented id is admitted as
+// a fresh agent resolving through the connection's root — the misrouted write
+// this key exists to prevent.
+const identityPropertySchema = `{"type":"string","description":"Set by plumb's hook. Leave unset."}`
 
 // withIdentityProperty returns schema with ArgLogicalAgentDeclaredKey added to
 // its top-level properties, so a host that forwards only declared arguments
@@ -77,6 +79,9 @@ const identityPropertySchema = `{"type":"string","description":"Your session_id;
 func withIdentityProperty(schema json.RawMessage) json.RawMessage {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(schema, &obj); err != nil || obj == nil {
+		return schema
+	}
+	if typ, ok := obj["type"]; ok && rawString(typ) != "object" {
 		return schema
 	}
 	raw := bytes.TrimSpace(obj["properties"])

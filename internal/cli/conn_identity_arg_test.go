@@ -61,5 +61,10 @@ func TestIsHookClient(t *testing.T) {
 		if got := s.isHookClient(); got != want {
 			t.Errorf("%q: %v, want %v", client, got, want)
 		}
+		// And through the production accessor session_start reads, so the
+		// HookClient field cannot silently drop out of stampChannelState.
+		if got := s.stampChannelState(context.Background()).HookClient; got != want {
+			t.Errorf("%q: stampChannelState.HookClient = %v, want %v", client, got, want)
+		}
 	}
 }
