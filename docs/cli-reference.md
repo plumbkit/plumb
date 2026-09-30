@@ -301,7 +301,7 @@ Code gets a third:
   client that forwards only declared arguments (Claude desktop's connector)
   the daemon declares `plumb_agent` in every tool's schema so the stamp gets
   through. The stamp is gated on the running daemon's version (cached for a
-  minute under `PLUMB_WAKE_DIR`): a daemon from 0.19.1 to 0.20.2 gets the
+  minute under `PLUMB_WAKE_DIR`): a daemon from 0.19.1 to 0.20.3 gets the
   older key `dev.plumbkit/logical-agent` instead, and one older than 0.19.1
   would reject either as an unknown parameter, so against it the hook stamps
   nothing and bare `plumb hooks` says so. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks

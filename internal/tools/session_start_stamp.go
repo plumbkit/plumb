@@ -42,6 +42,11 @@ type StampChannelState struct {
 	// PerCallStamped reports that THIS session_start call carried a per-call
 	// logical-agent identity — the channel the write gate reads.
 	PerCallStamped bool
+	// HookClient reports a client the Claude Code identity hook stamps. The
+	// dormant notice (nothing refused yet) is shown only to such a client,
+	// whose unstamped call means a missing or broken hook; for any other client
+	// on a single-agent connection it would be noise on every session_start.
+	HookClient bool
 }
 
 // WithStampChannel wires the accessor for the per-call identity channel's
@@ -96,6 +101,9 @@ func (t *SessionStart) stampChannelNote(ctx context.Context) string {
 	}
 	if st.Shared {
 		return stampChannelRefusedNotice
+	}
+	if !st.HookClient {
+		return ""
 	}
 	return stampChannelDormantNotice
 }

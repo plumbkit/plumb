@@ -541,7 +541,8 @@ func TestIdentityStampKey_ByDaemonVersion(t *testing.T) {
 		{"", ""},
 		{"0.19.1", mcp.ArgLogicalAgentKey},
 		{"0.20.2", mcp.ArgLogicalAgentKey},
-		{"0.20.3", mcp.ArgLogicalAgentDeclaredKey},
+		{"0.20.3", mcp.ArgLogicalAgentKey}, // released without the declared key
+		{"0.20.4", mcp.ArgLogicalAgentDeclaredKey},
 		{"0.21.0", mcp.ArgLogicalAgentDeclaredKey},
 		{"dev", mcp.ArgLogicalAgentDeclaredKey},
 	} {
@@ -555,19 +556,47 @@ func TestIdentityStampKey_ByDaemonVersion(t *testing.T) {
 	}
 }
 
-// TestClaudePreToolUse_OldDaemonGetsReverseDNSKey: the stamp a 0.20.2 daemon
+// TestClaudePreToolUse_OldDaemonGetsReverseDNSKey: the stamp a 0.20.3 daemon
 // can lift, and never the declarable key it would reject.
 func TestClaudePreToolUse_OldDaemonGetsReverseDNSKey(t *testing.T) {
 	in := claudeHookInput{SessionID: "conv-1", ToolName: "mcp__plumb__read_file", ToolInput: json.RawMessage(`{"file_path":"/w/a.go"}`)}
-	out, ok := claudePreToolUseOutput(in, noEnv, func() string { return "0.20.2" })
+	out, ok := claudePreToolUseOutput(in, noEnv, func() string { return "0.20.3" })
 	if !ok {
-		t.Fatal("a 0.20.2 daemon accepts the identity channel")
+		t.Fatal("a 0.20.3 daemon accepts the identity channel")
 	}
 	input, raw := updatedInputOf(t, out)
 	if string(input[mcp.ArgLogicalAgentKey]) != `"conv-1"` {
 		t.Fatalf("want the reverse-DNS stamp: %s", raw)
 	}
 	if _, has := input[mcp.ArgLogicalAgentDeclaredKey]; has {
-		t.Fatalf("a 0.20.2 daemon would reject %s: %s", mcp.ArgLogicalAgentDeclaredKey, raw)
+		t.Fatalf("a 0.20.3 daemon would reject %s: %s", mcp.ArgLogicalAgentDeclaredKey, raw)
+	}
+}
+
+// TestClaudePreToolUse_TypedIdentityCannotOutrankTheStamp: a model-typed value
+// under either identity key is replaced, never left beside the stamp. The
+// daemon prefers the reverse-DNS key, so a typed one left next to a plumb_agent
+// stamp would become a phantom identity and pin a shard nobody's later calls
+// reach.
+func TestClaudePreToolUse_TypedIdentityCannotOutrankTheStamp(t *testing.T) {
+	for _, version := range []string{"0.20.3", identityDeclaredKeyMinVersion} {
+		for _, typed := range []string{mcp.ArgLogicalAgentKey, mcp.ArgLogicalAgentDeclaredKey} {
+			in := claudeHookInput{
+				SessionID: "conv-1", ToolName: "mcp__plumb__session_start",
+				ToolInput: json.RawMessage(`{"` + typed + `":"subagent-7","workspace":"/w"}`),
+			}
+			v := version
+			out, ok := claudePreToolUseOutput(in, noEnv, func() string { return v })
+			if !ok {
+				t.Fatalf("daemon %s: not stamped", version)
+			}
+			input, raw := updatedInputOf(t, out)
+			if strings.Contains(raw, "subagent-7") {
+				t.Errorf("daemon %s, typed %s: the typed identity survived: %s", version, typed, raw)
+			}
+			if got := string(input[identityStampKey(func() string { return v })]); got != `"conv-1"` {
+				t.Errorf("daemon %s: stamp = %s, want \"conv-1\" (%s)", version, got, raw)
+			}
+		}
 	}
 }

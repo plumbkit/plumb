@@ -102,6 +102,12 @@ func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daem
 	if key == "" {
 		return nil, false
 	}
+	// The hook owns the identity: drop whatever the model typed under EITHER
+	// key before stamping one. The daemon prefers the reverse-DNS key, so a
+	// typed value left beside a plumb_agent stamp would outrank it and become a
+	// phantom identity; an older daemon would also reject a typed plumb_agent.
+	delete(args, mcp.ArgLogicalAgentKey)
+	delete(args, mcp.ArgLogicalAgentDeclaredKey)
 	args[key] = json.RawMessage(mustJSONString(id))
 	if input.ToolName == claudeIdentityPrefix+"session_start" {
 		args["session_id"] = json.RawMessage(mustJSONString(id))
@@ -185,7 +191,7 @@ const (
 	// identityDeclaredKeyMinVersion is the first plumb whose daemon lifts
 	// mcp.ArgLogicalAgentDeclaredKey. An older daemon would reject it as an
 	// unknown parameter, so it gets the reverse-DNS key instead.
-	identityDeclaredKeyMinVersion = "0.20.3"
+	identityDeclaredKeyMinVersion = "0.20.4"
 	identityProbeTTL              = time.Minute
 	identityProbeTimeout          = 300 * time.Millisecond
 	identityProbeCacheFile        = "daemon-identity-channel.json"

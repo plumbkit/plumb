@@ -21,3 +21,10 @@ const localAgentModeClientPrefix = "local-agent-mode-"
 func (s *connSession) clientStripsUndeclaredArgs() bool {
 	return strings.HasPrefix(s.clientNameStr(), localAgentModeClientPrefix)
 }
+
+// isHookClient reports a client the Claude Code identity hook stamps: Claude
+// Code itself, or Claude desktop's connector (whose Code-tab sessions run it).
+func (s *connSession) isHookClient() bool {
+	name := s.clientNameStr()
+	return name == "claude-code" || strings.HasPrefix(name, localAgentModeClientPrefix)
+}

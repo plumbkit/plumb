@@ -35,14 +35,20 @@
   worktree with `session_start` was told it succeeded, and its next relative
   `edit_file` was written to the main checkout another agent had pinned. For
   this client the daemon now declares a stamp key, `plumb_agent`, in every
-  tool's schema, and the hook stamps under it when the daemon is 0.20.3 or
+  tool's schema, and the hook stamps under it when the daemon is 0.20.4 or
   newer (older daemons keep getting the old key, which they accept). Restart
   Claude desktop after upgrading so it re-reads the tool list.
 
 - **`session_start` now says when your calls arrive without an identity.** The
   notice meant for this case read the identity after applying `session_start`'s
   own `session_id`, which the hook always adds, so it reported the channel
-  working on exactly the client that dropped it.
+  working on exactly the client that dropped it. The advance notice (before
+  anything is refused) goes to Claude Code and Claude desktop only, whose fix
+  is the hook; any client is told when its writes are being refused.
+
+## 0.20.3 (2026-09-30)
+
+### Fixed
 
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime

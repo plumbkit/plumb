@@ -20,6 +20,11 @@ func TestWithIdentityProperty(t *testing.T) {
 			"already declared is untouched", `{"type":"object","properties":{"plumb_agent":{"type":"string"}}}`,
 			`{"type":"object","properties":{"plumb_agent":{"type":"string"}}}`,
 		},
+		{
+			"keeps the published property order",
+			`{"type":"object","properties":{"zebra":{},"apple":{},"mango":{}}}`,
+			`{"properties":{"zebra":{},"apple":{},"mango":{},"plumb_agent":` + identityPropertySchema + `},"type":"object"}`,
+		},
 		{"not an object", `[1]`, `[1]`},
 		{"malformed", `{"type":`, `{"type":`},
 		{"properties not an object", `{"properties":[1]}`, `{"properties":[1]}`},

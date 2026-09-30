@@ -473,7 +473,7 @@ func (s *connSession) stampChannelState(ctx context.Context) tools.StampChannelS
 	// armed — and telling such a caller its writes are being refused, while they
 	// flow, would be a false warning in the one place an agent is most likely to
 	// believe it.
-	return tools.StampChannelState{Shared: s.logicalAgents.armed(id), PerCallStamped: id != ""}
+	return tools.StampChannelState{Shared: s.logicalAgents.armed(id), PerCallStamped: id != "", HookClient: s.isHookClient()}
 }
 
 // seed commits identities recovered from durable state — the per-agent pins
