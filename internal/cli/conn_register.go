@@ -271,6 +271,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLSPRouted(s.routedLanguageNames).
 		WithLSPWarmup(s.lspWarming).
 		WithLSPDiagMode(s.lspDiagMode).
+		WithLSPGoWorkOff(s.lspGoWorkOff).
 		WithXcodeHint(xcodeHintFn).
 		WithTasks(s.taskState).
 		WithProjectPolicy(s.projectGitStatus).

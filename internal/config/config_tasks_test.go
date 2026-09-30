@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaults_TasksPresentForGo(t *testing.T) {
 	got := Defaults().Tasks["go"]
@@ -12,7 +15,7 @@ func TestDefaults_TasksPresentForGo(t *testing.T) {
 	// mutation_test's test_target are refused on an unmodified install, so a
 	// mutation run costs the entire suite per mutant. The default inside it is
 	// what keeps a bare `run_task {slot: "test"}` running everything, unchanged.
-	if got.Test != "go test {target:./...}" {
+	if !strings.HasSuffix(got.Test, " {target:./...}") {
 		t.Errorf("go test default must keep a defaulted {target} placeholder, got %q", got.Test)
 	}
 	if got.Verify != "" {

@@ -386,6 +386,16 @@ hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
 `log -1`, `rev-parse`, `diff --cached`) are plumbing whose output plumb parses,
 and deliberately keep inheriting.
 
+The same `GOWORK` decision is made for the **Go language server** plumb starts
+for a workspace root, keyed on that root: gopls resolves the same `go.work`, and
+from a worktree it would otherwise answer `workspace_symbols` from the main
+checkout and never type-check the worktree's files. A `GOWORK` under
+`[lsp.go]`'s `env`, or in gopls's own `env` setting under
+`[lsp.go.initialization_options]`, is a choice and is used as is. `session_start` shows a `Go LSP:` line naming the `go.work`
+when the server runs with `GOWORK=off`, and the daemon log says so when it
+starts one. The decision is made when the server starts: a server already
+running keeps the environment it started with.
+
 **A project's entries compose with your global ones**, the way every other
 setting in this file does: the project's value wins for the names it sets, and a
 global entry it does not mention survives. Any of the three TOML spellings gives
@@ -1337,16 +1347,17 @@ any slot the project names for itself — run by the `run_task` tool and the
 [tasks.go]
 build       = "go build ./..."
 lint        = "golangci-lint run"
-test        = "go test {target:./...}"   # {target} with a default — see below
+test        = "go test {verbose:-v} {run:-run} {target:./...}"   # placeholders — see below
 e2e         = "go test -tags=integration ./..."
 working_dir = ""                         # relative to the workspace root; "" or "." is the root
+env         = { GOTMPDIR = "{workspace}/.testcache" }   # optional — see `env` below
 # verify is a COMPOSITE (build then test); it stores no command of its own
 ```
 
 A command is a **single argv executed without a shell** — shell metacharacters
 (`&&`, `;`, `|`, `$(`, backtick, redirects) are rejected (`config.ParseTaskCommand`).
 The only agent-supplied input that reaches the argv is a shell-safe `{target}`
-(`^[A-Za-z0-9._/:@-]+$`). Shipped defaults exist
+(`^[A-Za-z0-9._/:@-]+$`) and a `{run}` test-name filter (see below). Shipped defaults exist
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
 
@@ -1371,6 +1382,43 @@ is the *absence* of an argument (`cargo test`, `swift test`).
 `typescript`, `swift` and `zig` ship without a placeholder: they scope through
 runner-specific flags whose spelling depends on the project, and a wrong guess is
 worse than none. Add your own `{target}` to those slots.
+
+### `{run}` and `{verbose}` — a test-name filter and verbose output
+
+`{target}` fills one positional — in practice a package — so it cannot run one
+test, a pattern of tests, or show which tests were skipped. `run_task`'s `run`
+and `verbose` arguments (and `mutation_test`'s `test_run`) fill two more
+placeholders. Both follow `{target}`'s rule that an absent value adds nothing, so
+an unscoped run builds the argv it always did:
+
+| written | not asked for | asked for |
+|---|---|---|
+| `{run}` | omitted | the filter, as one argument |
+| `{run:-run}` | omitted | `-run <filter>` |
+| `{verbose:-v}` | omitted | `-v` |
+
+The shipped defaults carry them where the runner has one: `go test {verbose:-v}
+{run:-run} {target:./...}`, `pytest {verbose:-v} {run:-k} {target:}`, and
+`cargo test {target:} {run:--}` (the filter goes to libtest after `--`, since
+cargo's one positional is already `{target}`; cargo already lists every test, so
+rust has no `{verbose}`). `typescript`, `swift` and `zig` carry neither.
+
+The filter is validated like a target but admits what a test-name expression
+needs: letters, digits, space and `._/:@|^$*+?()[]-`, up to 256 characters, not
+starting with `-` or a space (a bare `{run}` would otherwise put a flag such as
+`-exec=…` on the command line). It reaches the command as **one** argv element and
+no shell ever sees it, so `TestA|TestB` and `slow and not db` are inert text.
+
+A filter given to a command with no `{run}` is **refused**, as a target is — an
+unfiltered run would report a green over tests nobody asked about — and the
+refusal quotes the stored command and the placeholder to add. `verbose` on a
+command with no `{verbose:<flag>}` is only **noted**: ignoring it changes how much
+is printed, never what ran. On the composite `verify`, `verbose` reaches both
+steps while `target` and `run` are not applied (and a note says so).
+
+A command stored as an earlier shipped default — `go test {target:./...}`, or
+`go test ./...` — is reconciled to the current one, by the equivalence described
+next: with nothing asked for, all three build the same argv.
 
 #### A stored command with the placeholder spelled out
 
@@ -1483,6 +1531,61 @@ untrusted and re-confirmed once on the next `plumb trust`. When it records trust
 interpreter with inline code (`bash -c`, `sh -c`, `python -c`, `node -e`,
 `perl -e`, `ruby -e`) — arbitrary code execution by design, so review it before
 trusting. Default- and global-config commands always run.
+
+### `env` — the environment the commands run with
+
+`env` sets environment variables on every command of the language — `run_task`,
+`mutation_test`'s compile and test steps, and `plumb build|test|…`:
+
+```toml
+[tasks.go.env]
+GOTMPDIR = "{workspace}/.testcache"   # what plumb's own `make test` sets
+```
+
+It exists so a stored command can run the way the project's CI does. plumb's CI
+runs `make test`, which puts `t.TempDir()` inside the checkout; `go test` under
+`run_task` put it in the system temp directory, so a test that depended on the
+difference passed locally and failed on CI. plumb's own `.plumb/config.toml` sets
+exactly the entry above.
+
+- **It extends the inherited environment**, like `[git] env`: an entry replaces
+  the inherited value of its name, and the rest survive. A project's entries
+  compose with your global ones per name, whichever TOML spelling it uses.
+- **Placeholders.** `{workspace}` is the workspace root and `{working_dir}` the
+  directory the command runs in; they expand at run time, so when `mutation_test`
+  re-roots a command into another worktree they follow it there. Any other
+  `{…}` token is rejected at load.
+- **`GOTMPDIR` / `TMPDIR` directories are created** when they lie inside the
+  workspace (checked after resolving symlinks), because `go` refuses to run
+  without them and a fresh worktree has none — the job `make test`'s
+  `$(TESTCACHE)` prerequisite does. Nothing outside the workspace is created.
+- **`GOWORK`.** The entries are in place before the automatic `GOWORK=off`
+  decision (see [`[git]`](#the-git-childs-environment)), so a `GOWORK` here is used
+  as is — the same rule an inherited `GOWORK` follows.
+- **Reported.** `run_task` prints the applied entries (`env: GOTMPDIR=…`); a value
+  whose name marks it a credential (`…TOKEN`, `…SECRET`, `…PASSWORD`, …) or that
+  the redactor recognises is shown as `[REDACTED]`. `plumb config show` lists each
+  entry with its provenance.
+
+**Trust.** An environment variable changes what a command runs as surely as the
+command does (`PATH`, `GOFLAGS=-toolexec=…`, `LD_LIBRARY_PATH`), so a project's
+`env` is trust-gated like a command: every entry is part of the hash `plumb trust`
+records, a changed value needs a new `plumb trust`, and a project `env` makes
+*every* slot of that language project-supplied, shipped defaults included — the
+rule `working_dir` follows. The one exception is Go's scratch directory inside
+the workspace: `GOTMPDIR` set to `{workspace}` or `{workspace}/<relative path>`
+moves go's temporary files and changes neither what runs nor where, so on its
+own it needs no trust (it is still hashed, and still applied); a checked-in
+`GOTMPDIR = "{workspace}/.testcache"` therefore works in every fresh clone and
+worktree. A refused command names the setting that made it project-supplied.
+`plumb trust` lists the entries and flags the ones that change which program or
+code runs (`PATH`, `GOFLAGS`, `GOENV`, `GOPROXY`, `CC`, `HOME`, `GIT_*`, `CGO_*`,
+`NODE_OPTIONS`, `PYTHONPATH`, `RUSTC_WRAPPER`, `CARGO_TARGET_*`, `DYLD_*`, …). Names must be portable
+(`^[A-Za-z_][A-Za-z0-9_]*$`), values may not contain NUL, and the dynamic-loader
+injection variables `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and
+`DYLD_FORCE_FLAT_NAMESPACE` are refused in every layer: they run extra code in
+every process a command starts, and no build or test needs them. `env` is not
+agent-writable.
 
 ## `[[command]]` / `[commands]` — safe command execution
 

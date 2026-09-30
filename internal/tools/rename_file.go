@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -120,6 +121,14 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := renameFilePreconditions(ctx, t.deps, from, to, a); err != nil {
 		return "", err
 	}
+	// The version the move publishes at `to`, read from the source through one
+	// descriptor BEFORE the rename: a rename moves the inode — bytes and mtime
+	// intact — so this is what `to` holds when it lands. rename_file writes no
+	// bytes of its own, and re-reading `to` afterwards would record whatever an
+	// outside writer had put there by then as this session's version (issue #528).
+	// A source this snapshot cannot read leaves the version unknown, which records
+	// no read state rather than a guessed one.
+	moved, _ := readSnapshot(from, func(io.Reader) error { return nil })
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
@@ -130,7 +139,7 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if filepath.Dir(to) != filepath.Dir(from) {
 		syncDirBestEffort("rename_file", filepath.Dir(to))
 	}
-	t.renameFilePostRename(ctx, from, to)
+	t.renameFilePostRename(ctx, from, to, moved)
 	return fmt.Sprintf("renamed %s → %s", from, to), nil
 }
 
@@ -173,7 +182,7 @@ func renameFilePreconditions(ctx context.Context, deps WriteDeps, from, to strin
 	return nil
 }
 
-func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) {
+func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string, moved fileSnapshot) {
 	if err := notifyLSP(ctx, t.deps.Client, from, protocol.FileDeleted); err != nil {
 		slog.Warn("rename_file: LSP delete-notify failed", "path", from, "err", err)
 	}
@@ -186,5 +195,5 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	// processDelete. Then enqueue to so the new path is indexed immediately.
 	t.deps.notifyTopology(from)
 	t.deps.notifyTopology(to)
-	t.deps.recordWritten(ctx, to)
+	t.deps.recordWritten(ctx, to, moved)
 }

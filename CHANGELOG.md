@@ -22,6 +22,38 @@
 - **`plumb trust --revoke`** removes a workspace's grant. Run in a linked
   worktree that shares its repository's grant, it says so and names the
   checkout to revoke it at, since the worktree has no grant of its own. (#530)
+- **`[tasks.<lang>] env`: environment variables for a language's task
+  commands.** (#537) A task slot had no way to set a variable, so `run_task test`
+  could not reproduce plumb's own CI: `make test` sets `GOTMPDIR` inside the
+  checkout, `go test` under `run_task` used the system temp directory, and a test
+  depending on the difference passed locally and failed on CI. `env` applies to
+  `run_task`, `mutation_test`'s compile and test steps and `plumb build|test|…`,
+  on top of the inherited environment and before the automatic `GOWORK=off`
+  decision, so an explicit `GOWORK` there wins. Values may use `{workspace}` and
+  `{working_dir}`, which follow a command `mutation_test` re-roots into another
+  worktree; a `GOTMPDIR`/`TMPDIR` inside the workspace is created, as `make
+  test`'s prerequisite does. `run_task` lists the applied entries, credentials
+  redacted, and `plumb config show` shows each with its provenance. A project's
+  `env` is trust-gated like a command: every entry is in the `plumb trust` hash,
+  it makes every slot of the language project-supplied (except a `GOTMPDIR`
+  inside the workspace, which changes neither what runs nor where),
+  `plumb trust` flags entries such as `PATH`, `GOFLAGS` or `GIT_*` that change
+  what runs, and the loader-injection variables (`LD_PRELOAD`, `LD_AUDIT`,
+  `DYLD_INSERT_LIBRARIES`, `DYLD_FORCE_FLAT_NAMESPACE`) are refused outright. A
+  refused command now names the project setting that made it project-supplied.
+  plumb's own `.plumb/config.toml` is now committed and sets `GOTMPDIR` the way
+  `make test` does, with no `plumb trust` needed.
+- **`run_task` `run` and `verbose`, `mutation_test` `test_run`: run one test, or
+  a pattern.** (#538) `target` fills one positional, in practice a package, so
+  there was no way to run `go test -run 'X|Y'`, `pytest -k` or a cargo test
+  filter, or to see which tests were skipped, and every mutant paid for its whole
+  package. Two new placeholders, `{run:<flag>}` and `{verbose:<flag>}`, add
+  nothing when not asked for; the shipped defaults are now `go test {verbose:-v}
+  {run:-run} {target:./...}`, `pytest {verbose:-v} {run:-k} {target:}` and
+  `cargo test {target:} {run:--}`, and a stored earlier default is reconciled to
+  them. The filter reaches the command as one argument with no shell, allows
+  `|`, regexp characters and spaces, and may not start with `-`. A filter on a
+  command with no `{run}` is refused; a `verbose` it cannot place is noted.
 
 ### Fixed
 
@@ -87,6 +119,33 @@
   descriptor. A file replaced during the read keeps the version read. One
   rewritten in place is read again, and one that never settles records no hash.
   Applies to `read_file` (windowed and pattern search) and `read_symbol`.
+- **A write records the version it wrote.** After a successful write, plumb
+  refreshed the session's read record by stat'ing and hashing the path again.
+  The per-path lock excludes only plumb's own writers, so a process outside
+  plumb that wrote the file in that gap had its content recorded as this
+  session's version, and the session's next write passed "changed since you
+  read it" and the same-mtime `expected_mtime` check over a change it never
+  saw. Writes now record the hash of the bytes plumb wrote and the mtime of the
+  file it wrote them to, taken from the closed staged file just before the
+  rename publishes it. `rename_file`, which writes no bytes, records the version
+  it moved, read from the source before the move. Applies to every write tool,
+  `undo_edit`, and the `fail_on_new_errors` rollbacks. `edit_file`'s reply had
+  the same gap: its `mtime:` line re-read the path after the post-write
+  diagnostics wait, so an outside write in that wait handed the caller an
+  `expected_mtime` that let its next write through. The reply now prints the
+  version plumb wrote, with or without `apply_partial` (issue #528).
+- **A file read through one spelling and written through another keeps its read
+  record.** Read tracking keyed a read on the path as spelled, while the write
+  lock, write tracking and undo resolve symlinks and fold case where the volume
+  does. A file read through a symlinked parent, macOS `/tmp` versus
+  `/private/tmp`, or a case variant, and then written through another spelling,
+  had no read record at the write: the "changed since you read it" guard let the
+  write overwrite a peer's change, and strict mode refused the edit as unread.
+  Reads are now keyed the way writes are, in memory and in the persisted
+  session state. Rows saved by an older daemon are re-keyed when they are
+  restored after a restart; where one collides with a row this version saved,
+  the newer row wins even if a tool such as `cp -p` moved the file's mtime
+  backwards (issue #524).
 - **Contested-pin messages no longer recommend `session_id` as the fix.** The
   contested-pin note in `session_start`, the boundary and re-pin refusals, and
   the `git`, `run_task` and `undo_edit` refusals told agents sharing a
@@ -184,6 +243,17 @@
 
   No path is pattern-matched, and a `--separate-git-dir` superproject needs no
   special case.
+- **The Go language server in a worktree answers about the worktree.** In a git
+  worktree under an enclosing `go.work` that lists the main checkout's directory
+  for the module, gopls resolved that `go.work`, in which the worktree is not a
+  module. `workspace_symbols` answered from the main checkout or not at all, and
+  the worktree's files were never type-checked, so a post-write diagnostics pass
+  labelled "authoritative" reported clean code that `go build` rejected. When
+  plumb starts a Go language server it now makes the per-root `GOWORK=off`
+  decision that hooks, `run_task` and `mutation_test` already get, and never
+  overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
+  file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
+  naming the `go.work` when it applies (#521).
 
 ## 0.20.3 (2026-09-30)
 

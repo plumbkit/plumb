@@ -278,7 +278,6 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"note_ttl_minutes", strconv.Itoa(col.NoteTTLMinutes), sourceFor("note_ttl_minutes", dcol.NoteTTLMinutes, gcol.NoteTTLMinutes, col.NoteTTLMinutes)},
 		{"keep_delivered_notes", strconv.FormatBool(col.KeepDeliveredNotes), sourceFor("keep_delivered_notes", dcol.KeepDeliveredNotes, gcol.KeepDeliveredNotes, col.KeepDeliveredNotes)},
 	})
-
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
@@ -295,6 +294,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 			{"env", fmt.Sprintf("%v", cfg.Env), policySourceFor(policy, prefix+"env", sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env))},
 		})
 	}
+	addTaskEnvSections(cfgTable, globalCfg, projectCfg)
 
 	fmt.Println(renderConfigShowTable(cfgTable))
 	fmt.Println(configShowMutedStyle().Render("LSP eligibility is derived from this command's merged config and PATH; use plumb debug lsp for running servers."))

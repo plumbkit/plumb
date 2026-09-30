@@ -501,7 +501,8 @@ func TestRunTask_InAShadowedWorktreeBuilds(t *testing.T) {
 	}{{f.wt, true}, {f.main, false}} {
 		dir := tc.dir
 		tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return dir }},
-			func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+			func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+				slot := req.Slot
 				return TaskCommand{Slot: slot, Steps: [][]string{{"go", "build", "./..."}}, Provenance: "default"}, nil
 			})
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"slot":"build"}`))

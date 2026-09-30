@@ -141,24 +141,26 @@ func (d WriteDeps) revertWrite(ctx context.Context, req rollbackRequest) (holds 
 		if err := os.Remove(req.path); err != nil && !os.IsNotExist(err) {
 			return "the content this call wrote (the file plumb created is still there)", fmt.Errorf("removing %q: %w", req.path, err)
 		}
-		d.notifyReverted(ctx, req.path, req.uri, protocol.FileDeleted)
+		d.notifyReverted(ctx, req.path, req.uri, protocol.FileDeleted, fileSnapshot{})
 		return "", nil
 	}
 	perm := os.FileMode(0o644)
 	if info, statErr := os.Stat(req.path); statErr == nil && info.Mode().Perm() != 0 {
 		perm = info.Mode().Perm()
 	}
-	if _, err := safeWrite(req.path, []byte(req.before), perm); err != nil {
+	res, err := safeWrite(req.path, []byte(req.before), perm)
+	if err != nil {
 		return "the content this call wrote (the restore itself failed)", fmt.Errorf("restoring %q: %w", req.path, err)
 	}
-	d.notifyReverted(ctx, req.path, req.uri, protocol.FileChanged)
+	d.notifyReverted(ctx, req.path, req.uri, protocol.FileChanged, res.written)
 	return "", nil
 }
 
 // notifyReverted mirrors the post-write notification, so the language server,
 // the symbol cache, the topology index and this session's own read/write state
-// all see the restored content rather than the reverted one.
-func (d WriteDeps) notifyReverted(ctx context.Context, path, uri string, ct protocol.FileChangeType) {
+// all see the restored content rather than the reverted one. restored is the
+// version the restoring write published (unused for a deletion).
+func (d WriteDeps) notifyReverted(ctx context.Context, path, uri string, ct protocol.FileChangeType, restored fileSnapshot) {
 	if err := notifyLSP(ctx, d.Client, path, ct); err != nil {
 		slog.Warn("fail_on_new_errors: LSP notification after rollback failed", "path", path, "err", err)
 	}
@@ -169,7 +171,7 @@ func (d WriteDeps) notifyReverted(ctx context.Context, path, uri string, ct prot
 	}
 	invalidateCache(d.Cache, uri)
 	if ct != protocol.FileDeleted {
-		d.recordWritten(ctx, path)
+		d.recordWritten(ctx, path, restored)
 	}
 	d.notifyTopology(path)
 }

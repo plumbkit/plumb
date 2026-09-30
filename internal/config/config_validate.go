@@ -251,6 +251,9 @@ func validateTasks(tasks map[string]TasksConfig) error {
 		if err := validateCommandWorkingDir(t.WorkingDir); err != nil {
 			return fmt.Errorf("tasks.%s: %w", lang, err)
 		}
+		if err := validateTaskEnv(lang, t.Env); err != nil {
+			return err
+		}
 	}
 	return nil
 }

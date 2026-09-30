@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"sync"
+	"time"
 )
 
 // WriteTracker records the set of file paths plumb has written during a single
@@ -36,19 +37,34 @@ func NewWriteTracker() *WriteTracker {
 }
 
 // Record marks path as written by plumb this session, capturing the file's
-// current mtime so a later read can spot a concurrent external edit. Called
-// after every successful write. nil-safe.
+// current mtime so a later read can spot a concurrent external edit. The write
+// tools record through recordAt (via WriteDeps.recordWritten) with the mtime
+// they wrote instead of a fresh stat. nil-safe.
 func (w *WriteTracker) Record(path string) {
 	if w == nil {
 		return
 	}
-	key := lockPathKey(path)
-	var mtime int64
+	var mtime time.Time
 	if info, err := os.Stat(path); err == nil {
-		mtime = info.ModTime().UnixNano()
+		mtime = info.ModTime()
+	}
+	w.recordAt(path, mtime)
+}
+
+// recordAt is Record with the mtime the writer already knows — the version it
+// wrote, not whatever a stat of the path would find by now (issue #528). A zero
+// mtime records the write with its mtime unknown. nil-safe.
+func (w *WriteTracker) recordAt(path string, mtime time.Time) {
+	if w == nil {
+		return
+	}
+	key := lockPathKey(path)
+	var ns int64
+	if !mtime.IsZero() {
+		ns = mtime.UnixNano()
 	}
 	w.mu.Lock()
-	w.written[key] = mtime
+	w.written[key] = ns
 	w.mu.Unlock()
 }
 

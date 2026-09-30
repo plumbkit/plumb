@@ -36,7 +36,7 @@ func TestRunTaskArgv(t *testing.T) {
 	probe := []string{"sh", "-c", `printf '%s|%s|%s' "${GOWORK-UNSET}" "$PWD" "${PLUMB_RUNARGV_PROBE-UNSET}"`}
 	ctx := context.Background()
 
-	res, err := RunTaskArgv(ctx, wt, probe, time.Minute)
+	res, err := RunTaskArgv(ctx, wt, probe, nil, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestRunTaskArgv(t *testing.T) {
 		t.Errorf("GoWorkOff = %q, want the go.work that was switched off", res.GoWorkOff)
 	}
 
-	res, err = RunTaskArgv(ctx, main, probe, time.Minute)
+	res, err = RunTaskArgv(ctx, main, probe, nil, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

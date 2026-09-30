@@ -329,6 +329,11 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// verb and leave the object open. taskProvenance therefore reports every slot
 	// of a language as project-supplied once its working_dir is project-supplied.
 	"tasks.<lang>.working_dir": ClassTrustGated,
+	// env is gated for the same reason, more so: LD_LIBRARY_PATH, PATH or
+	// GOFLAGS=-toolexec=… decide what the argv RUNS. Its entries are hashed with the
+	// commands (taskSpecsFrom), and a project env makes every slot of the language
+	// project-supplied, as working_dir does.
+	"tasks.<lang>.env": ClassTrustGated,
 	// The whole [[command]] array is one ProjectPolicySpec entry, so adding or
 	// rewriting any entry invalidates the grant. Order is part of the hash because
 	// FindCommand takes the first match by name.

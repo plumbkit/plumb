@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 var taskCmds = func() []*cobra.Command {
@@ -162,7 +163,8 @@ func runTaskCLI(slot string, args []string) error {
 	if err != nil {
 		return err
 	}
-	steps, err := taskStepsOrRefusal(root, projectCfg.Tasks[lang], lang, slot, target)
+	tc := projectCfg.Tasks[lang]
+	steps, err := taskStepsOrRefusal(root, tc, lang, slot, taskScope{target: target})
 	if err != nil {
 		return err
 	}
@@ -171,26 +173,27 @@ func runTaskCLI(slot string, args []string) error {
 			"set one under [tasks.%s] in .plumb/config.toml",
 			slot, lang, strings.Join(configuredSlots(projectCfg.Tasks[lang], lang), ", "), lang)
 	}
-	if _, fromProject := taskProvenance(root, lang, slot); fromProject {
+	if _, fromProject, why := taskProvenance(root, lang, slot); fromProject {
 		cmds, cerr := config.ProjectTaskCommands(root)
 		if cerr != nil {
 			return cerr
 		}
 		if !config.NewTrustStore().IsTrustedForTasks(root, cmds) {
-			return fmt.Errorf("the %s command for %s comes from this project's .plumb/config.toml and is not trusted "+
-				"(or the project's task commands changed since `plumb trust` was last run); run `plumb trust` in %s first", slot, lang, root)
+			return fmt.Errorf("the %s command for %s is shaped by this project's .plumb/config.toml (%s) and is not trusted "+
+				"(or the project's task settings changed since `plumb trust` was last run); run `plumb trust` in %s first", slot, lang, why, root)
 		}
 	}
-	for _, note := range taskNotes(projectCfg.Tasks[lang], lang, slot, target) {
+	for _, note := range taskNotes(tc, lang, slot, taskScope{target: target}) {
 		fmt.Fprintf(os.Stderr, "note: %s\n", note)
 	}
-	return runTaskSteps(root, slot, steps)
+	// The same [tasks.<lang>] env run_task applies; this path runs from the root.
+	return runTaskSteps(root, slot, steps, tools.PrepareTaskEnv(sortedTaskEnv(tc.Env), root, root))
 }
 
-func runTaskSteps(root, slot string, steps [][]string) error {
+func runTaskSteps(root, slot string, steps [][]string, env []string) error {
 	for i, argv := range steps {
 		fmt.Fprintf(os.Stderr, "$ %s\n", strings.Join(argv, " "))
-		if err := streamArgv(root, argv); err != nil {
+		if err := streamArgv(root, argv, env); err != nil {
 			if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 				return fmt.Errorf("%s: step %d/%d failed (exit %d)", slot, i+1, len(steps), ee.ExitCode())
 			}
@@ -202,11 +205,17 @@ func runTaskSteps(root, slot string, steps [][]string) error {
 }
 
 // streamArgv runs argv in dir with the terminal's stdio attached (no shell, no
-// output cap — a CLI run is interactive).
-func streamArgv(dir string, argv []string) error {
+// output cap — a CLI run is interactive), with env (KEY=VALUE, expanded) on top
+// of the inherited environment.
+func streamArgv(dir string, argv, env []string) error {
 	// G204: the command is the user's own configured task; trust-gated above.
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // user-configured, trust-gated task command
 	cmd.Dir = dir
+	if len(env) > 0 {
+		// os/exec keeps the LAST duplicate, so appending overrides; Environ()
+		// carries the PWD=<dir> os/exec would add for a nil Env.
+		cmd.Env = append(cmd.Environ(), env...)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

@@ -189,6 +189,12 @@ type poolEntry struct {
 	// config. Guarded by workspacePool.mu.
 	diagDowngraded bool
 
+	// goWorkOff is the go.work this entry's Go language server was started with
+	// GOWORK=off against (goLSPEnv), or "" when it runs with the environment it
+	// inherited. Set once at creation, before the entry is published; a wake reuses
+	// the same supervisor and so the same environment. Guarded by workspacePool.mu.
+	goWorkOff string
+
 	// refs counts the sessions that hold this root as their PINNED primary
 	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
 	// for a non-primary URI) deliberately do NOT pin, so a route target is never
@@ -405,10 +411,11 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	c := cache.New(p.cacheTTL, p.cacheMaxSize)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
-	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now()}
+	env, goWorkOff := goLSPEnv(language, root, lspCfg, envFor(lspCfg))
+	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now(), goWorkOff: goWorkOff}
 	proxy.touch()
 
-	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
+	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), env, lsp.SupervisorOptions{
 		OnStart: p.poolOnStart(e, rootURI, lspCfg),
 		// Run the server from the workspace it serves, not from the daemon's cwd
 		// (which is "/"). Skipped when root is not an existing directory, so a root
