@@ -162,3 +162,18 @@ func TestDefaults_TestCommandsCarryRunAndVerbose(t *testing.T) {
 		}
 	}
 }
+
+// TestTaskEnvKeyOf recognises only the env table's spelling, in any case, so a
+// trust-hash entry is never mistaken for, or confused with, a command slot.
+func TestTaskEnvKeyOf(t *testing.T) {
+	for slot, want := range map[string]string{"env.GOTMPDIR": "GOTMPDIR", "ENV.X": "X"} {
+		if got, ok := TaskEnvKeyOf(slot); !ok || got != want {
+			t.Errorf("TaskEnvKeyOf(%q) = %q, %v; want %q", slot, got, ok, want)
+		}
+	}
+	for _, slot := range []string{"test", "working_dir", "check.x", "envx.Y"} {
+		if _, ok := TaskEnvKeyOf(slot); ok {
+			t.Errorf("TaskEnvKeyOf(%q) reported an env entry", slot)
+		}
+	}
+}
