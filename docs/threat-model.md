@@ -165,14 +165,14 @@ this handshake.
 
 That fallback is not unconditional, and the cost of losing it is larger than
 it first looks. The PIN row is absent with `[session] persist_state` off, on a
-first connect, and — the case that bites in the DEFAULT configuration — once
-the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
-startup prune, which runs with no live exemption, deletes it. (The identity
-record alongside it is retained regardless of age; only the pin expires. See
-`[session] persist_state`.) When the pin row is
-gone, every lower rung refuses the wide root too, because `roots` and the
-workspace pre-pin are weaker origins than the declaration that is now missing,
-so the caller must declare the workspace again. The boundary is never
+first connect, and once the row ages past `[session] persist_state_ttl_minutes`
+(default 1440) and the reaper's sweep finds the session not connected and
+deletes it. (The sweep does not run at daemon start, when no surviving serve
+has reconnected yet to be exempted. The identity record alongside the pin is
+retained regardless of age; only the pin expires. See `[session]
+persist_state`.) When the pin row is gone, every lower rung refuses the wide
+root too, because `roots` and the workspace pre-pin are weaker origins than the
+declaration that is now missing, so the caller must declare the workspace again. The boundary is never
 **wider** — and with `serve` no longer attaching from its launch directory
 (no `--workspace`/`PLUMB_WORKSPACE` ⇒ unattached), the rungs below the
 pre-pin cannot anchor an unrelated project either: path seeding needs an
