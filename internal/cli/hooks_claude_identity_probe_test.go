@@ -205,9 +205,32 @@ func TestDaemonInstanceMarker(t *testing.T) {
 
 	// Same PID (a container restart), socket re-bound by the new process.
 	writePIDFile(t, "4101")
+	sock := daemonCtrlSocketPath()
+	before, err := os.Stat(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
 	if c := daemonInstanceMarker(); c == a || c == "" {
 		t.Fatalf("a re-bound control socket must move the marker even under the same PID: %q then %q", a, c)
+	}
+
+	// Each socket half on its own, since either can repeat: a re-bound socket
+	// whose mtime lands on the old tick still differs by inode, and a socket
+	// whose inode is handed out again still differs by mtime.
+	if err := os.Chtimes(sock, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if c := daemonInstanceMarker(); c == a {
+		t.Fatalf("a new socket inode must move the marker when the mtime repeats: %q", c)
+	}
+	sameInode := daemonInstanceMarker()
+	later := before.ModTime().Add(time.Second)
+	if err := os.Chtimes(sock, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if c := daemonInstanceMarker(); c == sameInode {
+		t.Fatalf("a new socket mtime must move the marker under the same inode: %q", c)
 	}
 
 	for _, empty := range []string{"", "  \n"} {

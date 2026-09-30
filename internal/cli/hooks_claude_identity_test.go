@@ -221,7 +221,7 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 	}
 	// A cache stamped in the future (clock stepped back, a copied home) is not
 	// fresh: it must re-probe rather than trust a record from "later".
-	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.19.1", CheckedAt: now.Add(time.Hour)})
+	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.19.1", DaemonInstance: "pid=1 ino=2 mtime=3", CheckedAt: now.Add(time.Hour)})
 	probes = 0
 	if daemonAcceptsIdentityStamp(func() (string, error) { probes++; return "0.19.0", nil }, cache, now) || probes != 1 {
 		t.Fatalf("a future-stamped cache must be re-probed: probes=%d", probes)
@@ -393,10 +393,21 @@ func TestRunClaudeHook_PreToolUseAcceptsLargeInput(t *testing.T) {
 }
 
 // runHookForTest runs runClaudeHook with stdin and stdout swapped for pipes,
-// with the daemon probe answering "current" through a pre-seeded cache.
+// with the daemon probe answering "current" through a cache pre-seeded for
+// the running instance. The runtime directory is private and the daemon a
+// fake, so the hook never reaches a real daemon on the developer's machine;
+// the fake does not list plumb_agent, so a plumb_agent stamp proves the
+// seeded cache answered.
 func runHookForTest(t *testing.T, stdin []byte) []byte {
 	t.Helper()
-	writeIdentityProbe(filepath.Join(wakeDir(), identityProbeCacheFile), identityProbeRecord{DaemonVersion: "dev", DeclaredKey: true, CheckedAt: time.Now()})
+	probeTestEnv(t)
+	writePIDFile(t, "4101")
+	fakeCtrlDaemon(t, preKeysDaemon("dev"))
+	instance := daemonInstanceMarker()
+	if instance == "" {
+		t.Fatal("the fake daemon has no instance marker")
+	}
+	writeIdentityProbe(filepath.Join(wakeDir(), identityProbeCacheFile), identityProbeRecord{DaemonVersion: "dev", DeclaredKey: true, DaemonInstance: instance, CheckedAt: time.Now()})
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
