@@ -95,3 +95,35 @@ func TestMutationTest_ACoreWorktreeCycleEnds(t *testing.T) {
 	}
 	e.requireAllRanIn(t, hw)
 }
+
+// TestMutationTest_ACoreWorktreeIntoAnotherRepositoryNeverMovesThere: J's
+// core.worktree names kw, a linked worktree of an UNRELATED repository K, so git
+// prints kw as J's work-tree root. From J's own worktree jw, a file in J matched
+// at J's level and the destination's path re-check agreed, and the commands were
+// moved into K. The re-check now also compares repository identity.
+func TestMutationTest_ACoreWorktreeIntoAnotherRepositoryNeverMovesThere(t *testing.T) {
+	requireGit(t)
+	unsetEnvForTest(t, "GOWORK")
+	root := evalTempDir(t)
+	log := filepath.Join(t.TempDir(), "ran.log")
+	k, j := filepath.Join(root, "K"), filepath.Join(root, "J")
+	loggingRepo(t, k, log)
+	loggingRepo(t, j, log)
+	kw, jw := filepath.Join(root, "ext", "kw"), filepath.Join(root, "ext", "jw")
+	gwGit(t, k, "worktree", "add", "-q", "-b", "kw", kw)
+	gwGit(t, j, "worktree", "add", "-q", "-b", "jw", jw)
+	gwGit(t, j, "config", "core.worktree", kw)
+
+	e := &submoduleEnv{super: j, log: log}
+	out, err := executeMutants(t, e.tool(jw, "", ""), filepath.Join(j, "target.txt"))
+	if err == nil && strings.Contains(out, "re-rooted") {
+		t.Fatalf("the commands must never be moved into another repository's worktree; got:\n%s", out)
+	}
+	if b, rerr := os.ReadFile(log); rerr == nil {
+		for _, d := range strings.Fields(string(b)) {
+			if d == kw {
+				t.Errorf("a command ran in %s, K's worktree", kw)
+			}
+		}
+	}
+}
