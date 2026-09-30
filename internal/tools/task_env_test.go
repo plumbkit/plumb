@@ -205,3 +205,37 @@ func TestTaskEnvPlaceholders_MatchConfig(t *testing.T) {
 			taskEnvWorkspace, taskEnvWorkingDir, config.TaskEnvWorkspace, config.TaskEnvWorkingDir)
 	}
 }
+
+// TestMutationTest_AReRootMovesTheEnvWorkspace is the end-to-end half of
+// rerootedRoot: a mutant in a linked worktree re-roots the commands there, and
+// {workspace} in their env must name that worktree, not the checkout the
+// commands were resolved for — or GOTMPDIR would point back into the tree the
+// tests are no longer running in.
+func TestMutationTest_AReRootMovesTheEnvWorkspace(t *testing.T) {
+	e := newWorktreeEnv(t, "", false, false)
+	probe := filepath.Join(t.TempDir(), "probe")
+	deps := WriteDeps{WorkspaceFn: func(context.Context) string { return e.root }}
+	e.tool = NewMutationTest(deps, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		argv := []string{"/bin/sh", "-c", `echo "$PLUMB_ROOT_PROBE" >> ` + shellQuote(probe)}
+		return TaskCommand{
+			Slot: req.Slot, Steps: [][]string{argv}, Provenance: "default",
+			Root: e.root, Env: []string{"PLUMB_ROOT_PROBE={workspace}"},
+		}, nil
+	})
+	if _, err := e.run(t, e.mutant(e.file(e.wt), "42", "43")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := strings.Fields(string(data))
+	if len(seen) == 0 {
+		t.Fatal("no command ran, so nothing was checked")
+	}
+	for _, got := range seen {
+		if got != e.wt {
+			t.Errorf("{workspace} expanded to %q in a run re-rooted into %q", got, e.wt)
+		}
+	}
+}
