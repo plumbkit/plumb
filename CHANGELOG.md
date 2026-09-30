@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **plumb now follows a client's folder change.** MCP clients announce a
+  folder change with `notifications/roots/list_changed`; plumb matched
+  `notifications/roots/listChanged` (the capability key, not the method name)
+  since 0.3.1, so the notification never reached its handler. The daemon log
+  on one machine held 499 of them and not one "roots changed" line. A
+  connection kept the root it reported at connect time until a `session_start`
+  moved it, so a client whose folder changed kept resolving relative paths
+  against the old project. The handler now runs: a connection whose pin came
+  from the client's roots follows the new folder, and a pin set by an explicit
+  `session_start` still outranks roots (issue #182).
+
 - **A matching `expected_mtime` no longer lets a same-mtime change through.**
   `write_file`, `edit_file` and `transaction_apply` compared only the mtime
   when a caller passed `expected_mtime`, and skipped the session's recorded
