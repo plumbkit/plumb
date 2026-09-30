@@ -102,11 +102,15 @@ func (p PinProvenance) DisplacementNotice(path string) string {
 	if !p.At.IsZero() {
 		when = " " + humaniseAge(time.Since(p.At)) + " ago"
 	}
+	remedy := " To keep each agent's pin separate, " + PerCallIdentityRemedy + "."
+	if p.Contested {
+		remedy = "" // repinAdvice carries the same remedy in the contested case; say it once
+	}
 	return fmt.Sprintf(
 		"NOTE: this connection was force-re-pinned away from %s%s by a session_start on this same connection. "+
 			"If that was not you, another agent is multiplexing this `plumb serve` without declaring an identity, "+
-			"and re-pinning back would displace it in turn. To keep each agent's pin separate, "+PerCallIdentityRemedy+".",
-		p.Previous, when,
+			"and re-pinning back would displace it in turn.%s",
+		p.Previous, when, remedy,
 	)
 }
 

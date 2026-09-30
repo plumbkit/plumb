@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
@@ -58,11 +59,12 @@ func classifyContestedRelative(err error) error {
 	})
 }
 
-// PerCallIdentityRemedy is the one remedy text for "several agents share this
-// connection and plumb cannot tell them apart". Every such message uses it, so
-// none can drift back to recommending session_start.session_id alone: that
+// PerCallIdentityRemedy is the remedy text for "several agents share this
+// connection and plumb cannot tell them apart", used by the contested-pin and
+// boundary messages. It never recommends session_start.session_id alone: that
 // identifies only the session_start call, and once two agents have declared
 // one, a later call without a per-call identity is refused.
+// TestNoMessageRecommendsSessionIDPerCall guards the phrasing tree-wide.
 const PerCallIdentityRemedy = "stamp every call with the agent's identity — on Claude Code (terminal or desktop), " +
-	"`plumb hooks install claude-code`; otherwise a per-call _meta identity (a session_start.session_id covers " +
-	"only its own call) — or run one plumb serve per agent"
+	"`plumb hooks install claude-code`; otherwise a per-call _meta[" + mcp.MetaLogicalAgentKey + "] identity " +
+	"(a session_start.session_id covers only its own call) — or run one plumb serve per agent"

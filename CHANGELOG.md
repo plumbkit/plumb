@@ -24,7 +24,10 @@
   later unstamped writes are refused, so following that advice led straight
   to a refusal. Every such message now names the working remedies: the Claude
   Code identity hook, a per-call `_meta` identity, or one `plumb serve` per
-  agent.
+  agent. The same correction applies to the sticky per-agent re-pin refusal,
+  `session_start`'s `session_id` parameter description and the `/orient`
+  prompt, and a displaced agent on a contested connection sees the remedy
+  once instead of twice.
 
 - **On a shared connection, a write plumb cannot attribute is refused.**
   Once two agent identities have been declared on one `plumb serve`

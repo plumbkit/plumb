@@ -189,3 +189,20 @@ func TestWorkspaceBoundaryError_ReadOnlyRootIgnoresDisplacement(t *testing.T) {
 		t.Errorf("the read-only sentence was disturbed:\n%s", msg)
 	}
 }
+
+// TestWorkspaceBoundaryError_ContestedAndDisplacedSaysTheRemedyOnce: the
+// realistic contested case is also a displacement (Forced, Previous set), and
+// the displaced agent is its likeliest reader. The remedy appears once.
+func TestWorkspaceBoundaryError_ContestedAndDisplacedSaysTheRemedyOnce(t *testing.T) {
+	got := WorkspaceBoundaryError{
+		Workspace:  "/w",
+		Path:       "/prev/x.go",
+		Provenance: PinProvenance{Source: "session_start", At: time.Now(), Forced: true, Previous: "/prev", Contested: true},
+	}.Error()
+	if n := strings.Count(got, PerCallIdentityRemedy); n != 1 {
+		t.Fatalf("remedy appears %d times, want 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "force-re-pinned away from /prev") {
+		t.Fatalf("control: the displacement notice is missing:\n%s", got)
+	}
+}

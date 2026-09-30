@@ -4,9 +4,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// literalJoin matches the seam between two concatenated Go string literals
+// ("...a " + "b..."), so a banned phrase split across source lines is still
+// found once the seams are removed.
+var literalJoin = regexp.MustCompile(`"\s*\+\s*"`)
 
 // TestNoMessageRecommendsSessionIDPerCall scans plumb's own source for the
 // remedy that stopped being true: a session_start.session_id identifies only
@@ -15,7 +21,11 @@ import (
 // session_start.session_id on every call" sent them straight into that
 // refusal. Every such message now uses tools.PerCallIdentityRemedy.
 func TestNoMessageRecommendsSessionIDPerCall(t *testing.T) {
-	const banned = "session_id on every call"
+	banned := []string{
+		"session_id on every call",
+		"identify yourself with session_start.session_id",
+		"identify itself (session_start.session_id",
+	}
 	root := filepath.Join("..")
 	var hits []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -29,8 +39,11 @@ func TestNoMessageRecommendsSessionIDPerCall(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(src), banned) {
-			hits = append(hits, path)
+		joined := literalJoin.ReplaceAllString(string(src), "")
+		for _, b := range banned {
+			if strings.Contains(joined, b) {
+				hits = append(hits, path+": "+b)
+			}
 		}
 		return nil
 	})
@@ -38,6 +51,6 @@ func TestNoMessageRecommendsSessionIDPerCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(hits) > 0 {
-		t.Errorf("source still recommends %q (use tools.PerCallIdentityRemedy): %v", banned, hits)
+		t.Errorf("source still recommends session_id as a per-call identity (use tools.PerCallIdentityRemedy): %v", hits)
 	}
 }
