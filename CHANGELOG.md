@@ -179,6 +179,18 @@
   overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
   file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
   naming the `go.work` when it applies (#521).
+- **`edit_file` range mode no longer glues a replacement onto the next line.**
+  A range edit (`start_line`/`end_line`) whose non-empty `new_string` had no
+  trailing newline was joined onto the line after the range, while an empty
+  `new_string` deleted its lines cleanly. Replacing one line with two this way
+  silently merged the second new line with the next one and broke the build.
+  Range mode now works in whole lines: a missing trailing newline is added,
+  using the line ending of the text replaced, so a CRLF file stays CRLF. A range
+  that runs to the end of a file with no final newline, and an append
+  (`start_line: -1`) to such a file, keep the file without one. Appending to a
+  file that ends with a newline now leaves it ending with one, and the separator
+  added before appending to a CRLF file with no final newline is `\r\n`. The same
+  applies with `apply_partial`. (#543)
 
 ## 0.20.3 (2026-09-30)
 
