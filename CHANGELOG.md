@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A matching `expected_mtime` no longer lets a same-mtime change through.**
+  `write_file`, `edit_file` and `transaction_apply` compared only the mtime
+  when a caller passed `expected_mtime`, and skipped the session's recorded
+  SHA that the unguarded path already checks. An mtime can repeat while the
+  content changes: a coarse timestamp clock gives two writes in one tick the
+  same mtime (ext4's coarse clock, HFS+, FAT, some network mounts), and
+  `cp -p`, `rsync -t` and `tar` restore it on purpose. A peer's change was then
+  overwritten, so following the documented read_file → `expected_mtime`
+  protocol protected less than passing no guard. When the session read the
+  file at that same mtime and the content has since changed, the write is now
+  refused ("same mtime, different content"). This also removes the Linux CI
+  flake in `TestWriteFile_ExpectedMtimeGuard`, whose two writes shared an mtime.
+
 - **`run_task`, `run_command` and `mutation_test` no longer cut the failure out
   of a red test run.** Task output was capped at its FIRST 200 lines, so a
   package that logs heavily — plumb's own `internal/cli` — filled the cap with

@@ -211,7 +211,7 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 		return dirtyWrite(fmt.Errorf("write_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to overwrite", path))
 	}
-	if err := verifyExpectedVersion("write_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
+	if err := verifyExpectedVersion("write_file", path, a.ExpectedMtime, a.ExpectedSha, t.deps.reads(ctx)); err != nil {
 		return err
 	}
 	// Automatic session-aware guard: if the caller gave no explicit version guard
