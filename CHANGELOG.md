@@ -57,6 +57,18 @@
 
 ### Fixed
 
+- **The project config watcher no longer leaks a descriptor when a workspace's
+  `.plumb` directory is created after a session has attached.** (#568) On macOS
+  and the BSDs, fsnotify's kqueue backend watches a directory created inside a
+  watched one, and the watcher's own `Add` of the new `.plumb` ran at the same
+  moment, so the two registrations raced: both opened the directory (two
+  descriptors for one path), and, depending on event timing, one of them was
+  never closed once the directory went away. The watcher now attaches `.plumb` when its debounce window closes,
+  after fsnotify's own registration is done, so the `Add` reuses the descriptor
+  that exists. This narrows the race rather than removing it, since the
+  check-then-open is inside fsnotify; fsnotify's `WatchList` cannot make the
+  `Add` idempotent because it omits those internal registrations. A reload after
+  `.plumb` appears now reads the config with the watch already live.
 - **`agent_config` no longer re-installs the old project's config on a connection
   that has since re-pinned.** (#558) The tool read the connection's cached view,
   loaded the config, and applied it outside the connection's mutation lane. A

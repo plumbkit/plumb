@@ -300,6 +300,9 @@ func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWat
 				return
 			}
 		case <-l.timer.C:
+			// Attach .plumb before dispatching, so the reload reads the file
+			// with the watch already live and a later edit cannot slip between.
+			l.attachPlumbDir()
 			m.dispatch(root)
 		}
 	}
@@ -362,21 +365,42 @@ func (l *projectWatchLoop) close() {
 func (l *projectWatchLoop) onEvent(event fsnotify.Event) {
 	if filepath.Clean(event.Name) == l.plumbDir {
 		// The .plumb entry itself changed. A remove/rename of the directory
-		// kills the OS watch on the old inode, so drop the latch first —
-		// otherwise every later config.toml edit stays silently invisible (and
-		// failed is never set, so the poll fallback never engages either).
-		// Then re-arm — a no-op while the dir is still the watched one — and
-		// reload: removing .plumb revokes what its config granted.
+		// kills the OS watch on the old inode, so drop the latch — otherwise
+		// every later config.toml edit stays silently invisible (and failed is
+		// never set, so the poll fallback never engages either). Then reload:
+		// removing .plumb revokes what its config granted.
+		//
+		// The directory is NOT re-attached here but when the debounce timer
+		// fires (attachPlumbDir). On kqueue fsnotify's own reader also
+		// registers a directory created inside a watched one, a moment after
+		// it delivers this event, and an Add made now races that registration:
+		// both open the directory, and one descriptor is never closed (#568).
+		// Waiting out the debounce window lets the reader finish first, so
+		// the Add finds the directory already registered and reuses its
+		// descriptor. fsnotify's WatchList cannot make the Add idempotent
+		// instead, because it lists only paths the caller added, not the
+		// reader's own registrations. This keeps our Add out of the reader's
+		// window rather than closing the race, which only a fix inside
+		// fsnotify's check-then-open can do.
 		if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 			l.plumbWatched = false
 		}
-		l.plumbWatched = watchPlumbDir(l.watcher, l.plumbDir, l.plumbWatched)
 		rearmProjectTimer(l.timer, l.debounce)
 		return
 	}
 	if projectConfigEvent(event.Name, l.plumbDir, event.Op) {
 		rearmProjectTimer(l.timer, l.debounce)
 	}
+}
+
+// attachPlumbDir (re-)arms the .plumb directory watch if it is not attached:
+// a no-op while the latch says it is, and when .plumb does not exist the
+// failed Add leaves the latch clear for the next attempt. The timer fire is
+// the only caller (see onEvent for why not sooner). Anything written to .plumb
+// before this lands is picked up by the dispatch that follows it, which
+// re-reads the file.
+func (l *projectWatchLoop) attachPlumbDir() {
+	l.plumbWatched = watchPlumbDir(l.watcher, l.plumbDir, l.plumbWatched)
 }
 
 // onError handles one fsnotify error and reports whether the loop should keep
