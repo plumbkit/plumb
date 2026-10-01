@@ -331,6 +331,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	// The scratchpad a tool's callbacks note their decisions in, for ToolResultMeta
 	// to read after the run (result_notes.go).
 	ctx = WithResultNotes(ctx)
+	// One id per call, minted before every hook so OnBeforeTool, the tool and
+	// OnAfterTool all see the same value — it links history rows to the stats row.
+	ctx = WithCallID(ctx, NewCallID())
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
 	}
