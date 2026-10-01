@@ -199,6 +199,23 @@ anchor file alone would guarantee nothing, since the rename's ranges are resolve
 server-side regardless of what the agent read. The dirty guard
 (`block_dirty_writes`) is what protects unreviewed work from a rename.
 
+## `[history]` — write diff history
+
+Plumb records every file change made on an agent's behalf as a timestamped unified diff in a SQLite WAL database (`~/.local/share/plumb/history.db`), linked to its MCP tool call. Sensitive files are recorded as metadata only (path, size, and SHA) with content withheld; other files have their diffs compressed with zstd and stored with automated redaction.
+
+| Field | Type | Default | Scope | Effect |
+|---|---|---|---|---|
+| `enabled` | bool | `true` | Global & Project | Whether write history is recorded. When `false`, write tools skip recording entirely. Applies live per call. |
+| `sensitive_globs` | list of string | `["**/.env*", "**/id_rsa*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.kdbx", "**/*token*", "**/*secret*", "**/*credential*"]` | Global & Project | File path patterns whose contents must never be recorded in `history.db`. Changes to matching files record path, timestamps, and hashes, but diff content is withheld (`[sensitive]`). Setting this in a project config replaces the global list. |
+| `max_content_bytes` | int | `8388608` (8 MiB) | Global | File size threshold beyond which file contents are not read into memory for diff calculation (`[too large]`). |
+| `max_diff_bytes` | int | `4194304` (4 MiB) | Global | Maximum compressed diff size stored in `history.db`. Diffs exceeding this are withheld (`[too large]`). |
+
+### Privacy and secret redaction
+
+Diffs written to `history.db` pass through plumb's automated redaction pipeline (`internal/redact`), which masks passwords, API keys, and auth tokens across 13 secret-pattern families. However, redaction relies on patterns such as assignments (`password = ...`, `api_key: ...`). Secrets written in free-form prose without assignment syntax may not be caught.
+
+For sensitive files such as credential stores, certificates, and private keys, `sensitive_globs` provides whole-file protection by withholding diff content entirely before it reaches the history queue.
+
 ## `[walk]` — filesystem-traversal safety
 
 | Field | Type | Default | Env | Effect |

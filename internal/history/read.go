@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ type Entry struct {
 	RevertsSeq   int64
 	Reason       string
 	GapBefore    bool
+	GapDropped   bool
 }
 
 // Reader provides read-only access to a history database.
@@ -249,20 +251,31 @@ func populateEntry(e *Entry, tsMs int64, kindStr, opStr, contentStr string, bSiz
 }
 
 func (r *Reader) detectGaps(scanned []scanResult) ([]Entry, error) {
-	gapStmt, err := r.db.Prepare(`SELECT after_sha FROM changes WHERE path_id=? AND seq<? ORDER BY seq DESC LIMIT 1`)
+	gapStmt, err := r.db.Prepare(`SELECT after_sha, ts_ms FROM changes WHERE path_id=? AND seq<? ORDER BY seq DESC LIMIT 1`)
 	if err != nil {
 		return nil, fmt.Errorf("history: prepare gap query: %w", err)
 	}
 	defer gapStmt.Close()
 
+	var lastDropMs int64
+	if meta, err := r.Meta(); err == nil && meta != nil {
+		if s, ok := meta["last_drop_at_ms"]; ok {
+			lastDropMs, _ = strconv.ParseInt(s, 10, 64)
+		}
+	}
+
 	out := make([]Entry, len(scanned))
 	for i, s := range scanned {
 		e := s.entry
 		var prevAfter []byte
-		err := gapStmt.QueryRow(s.pathID, e.Seq).Scan(&prevAfter)
+		var prevTsMs int64
+		err := gapStmt.QueryRow(s.pathID, e.Seq).Scan(&prevAfter, &prevTsMs)
 		if err == nil {
 			if !bytes.Equal(prevAfter, e.BeforeSHA) {
 				e.GapBefore = true
+				if lastDropMs > 0 && lastDropMs >= prevTsMs && lastDropMs <= e.At.UnixMilli() {
+					e.GapDropped = true
+				}
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("history: check gap: %w", err)

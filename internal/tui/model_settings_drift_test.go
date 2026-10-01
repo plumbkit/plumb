@@ -36,9 +36,10 @@ func TestSettingsRegistryDrift(t *testing.T) {
 
 	// Every general registry field must be reachable by a row. Per-language
 	// families backed by a TUI editor (lsp.*) are covered via their template;
-	// tasks.* is agent-writable only and has no Settings row by design.
+	// tasks.* and history.* have no Settings row by design (tasks is agent-writable;
+	// history is CLI/TOML-managed per spec §10-11).
 	for _, f := range config.Registry() {
-		if strings.HasPrefix(f.Key, "tasks.") {
+		if strings.HasPrefix(f.Key, "tasks.") || strings.HasPrefix(f.Key, "history.") {
 			continue
 		}
 		if !seen[f.Key] {
